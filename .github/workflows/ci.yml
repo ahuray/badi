@@ -24,7 +24,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: clippy, rustfmt
       - name: Check formatting
@@ -44,7 +44,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust MSRV
-        uses: dtolnay/rust-toolchain@1.85.0
+        uses: dtolnay/rust-toolchain@1.100.0
       - name: Check declared minimum version
         run: cargo check --workspace --all-targets --locked
 
