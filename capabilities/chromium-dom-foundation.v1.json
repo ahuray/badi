@@ -1,0 +1,173 @@
+{
+  "$schema": "./v1/schema.json",
+  "record_version": 1,
+  "id": "chromium-dom-foundation.v1",
+  "status": "foundation",
+  "recorded_date": "2026-08-30",
+  "protocol": {
+    "version": 1,
+    "schema": "protocol/v1/schema.json"
+  },
+  "adapter": {
+    "kind": "browser",
+    "package": "@omatype/chromium",
+    "version": "0.1.0",
+    "target": "chrome120-mv3",
+    "native_host": "io.omatype.broker",
+    "manifest": "adapters/chromium/manifest.json",
+    "build_manifest": "adapters/chromium/dist/BUILD_MANIFEST.json"
+  },
+  "evidence": {
+    "class": "simulated-dom",
+    "live_browser": false,
+    "live_native_host": false,
+    "local_environment": {
+      "os": "Linux 7.1.9-arch1-2 x86_64",
+      "omarchy": "4.0.1-1",
+      "rustc": "1.98.0 (88d9e12ae 2026-08-18)",
+      "cargo": "1.98.0 (797e8a9bc 2026-08-05)",
+      "node": "26.8.1",
+      "npm": "11.19.0",
+      "dom_harness": "jsdom 26.1.0"
+    },
+    "ci_toolchains": {
+      "runner": "ubuntu-latest",
+      "rust": "1.98.0",
+      "rust_msrv": "1.85.0",
+      "node_lts": "22.23.2 and 24.20.0"
+    },
+    "checks": [
+      {
+        "command": "cargo fmt --all --check",
+        "status": "pass"
+      },
+      {
+        "command": "cargo clippy --workspace --all-targets -- -D warnings",
+        "status": "pass"
+      },
+      {
+        "command": "cargo test --workspace",
+        "status": "pass",
+        "passed": 50,
+        "detail": "40 library, 2 broker CLI, 4 omatypectl CLI, and 4 schema tests"
+      },
+      {
+        "command": "cargo +1.85.0 check --workspace --all-targets --locked",
+        "status": "pass",
+        "detail": "Run with an isolated temporary RUSTUP_HOME; temporary toolchain removed afterward"
+      },
+      {
+        "command": "isolated daemon and omatypectl Unix-socket smoke",
+        "status": "pass",
+        "detail": "Private 0700 parent, 0600 socket, redacted status, authoritative pause/resume, clean SIGINT socket removal"
+      },
+      {
+        "command": "npm run typecheck",
+        "status": "pass"
+      },
+      {
+        "command": "npm test",
+        "status": "pass",
+        "passed": 64,
+        "detail": "Five test files, including 100 delayed stale-result schedules and silent post-display policy, DOM, visibility, and native-disconnect invalidation with zero stale display or insertion"
+      },
+      {
+        "command": "npm run build:verify",
+        "status": "pass",
+        "detail": "Three extension artifacts were byte-identical across two clean builds"
+      },
+      {
+        "command": "npm audit --audit-level=moderate",
+        "status": "pass",
+        "detail": "Zero known npm vulnerabilities reported"
+      },
+      {
+        "command": "npm run docs:check",
+        "status": "pass"
+      },
+      {
+        "command": "npm run capabilities:check",
+        "status": "pass",
+        "detail": "Receipt schema, repository links, build metadata, artifact lengths, and SHA-256 hashes"
+      },
+      {
+        "command": "git diff --check",
+        "status": "pass"
+      }
+    ]
+  },
+  "scope": {
+    "origins": [
+      "http://localhost:4173"
+    ],
+    "documents": [
+      "Exact URL http://localhost:4173/chromium.html",
+      "Top frame only"
+    ],
+    "elements": [
+      "input[type=text]",
+      "textarea"
+    ],
+    "conditions": [
+      "Connected, visible, enabled, writable light-DOM element",
+      "Unique id, in-scope name, or data-omatype-field identity",
+      "Collapsed selection and no active composition",
+      "Stable focus epoch, revision, value, selection, and fingerprint",
+      "No positively recognized sensitive purpose, ancestor opt-out, or insertion-altering constraint"
+    ],
+    "display_route": "Manifest V3 content script renders an extension-owned closed-shadow ghost anchored to the eligible field; evidence is jsdom only",
+    "insertion_route": "One DOM setRangeText edit and one InputEvent after a matching addressed broker commit.prepare and final adapter revalidation",
+    "commit_status": "dispatched-unverified"
+  },
+  "protections": [
+    "Recognized password, hidden, sensitive-autocomplete, disabled, readonly, invisible, ambiguous-identity, framed, shadow-root, and opted-out fields are denied before value capture or transport",
+    "Context is capped independently at 512 Unicode scalars before and 128 after the selection and rejects ill-formed UTF-16 before transport",
+    "Native hello negotiation, extension sender, exact fixture URL, frame, document lifecycle, and immutable session route are validated",
+    "The extension requests only nativeMessaging API permission and broadcasts its shortcut state only to frozen deduplicated routes that were previously bound from trusted content senders",
+    "Post-display field, ancestor, identity, constraint, document-visibility, DOM-lifecycle, and native-transport invalidation cancel pending work and clear the controller before later insertion",
+    "Non-global actions bind session, focus epoch, revision, fingerprint, and suggestion ID",
+    "Encoded broker frames are rejected above 65536 bytes before body allocation",
+    "Suggestion output is capped at 64 Unicode scalars and eight words and rejects controls, format characters, line separators, and unpaired surrogates",
+    "Latest-wins cancellation, receiver-local TTL expiry, addressed broker clears, and a single-use bounded commit lease fail closed",
+    "Normal broker errors and health output are content-free; health redacts locator tokens"
+  ],
+  "exclusions": [
+    "Live Chromium extension lifecycle, native-host framing, profile installation, and browser layout",
+    "Arbitrary origins, file or restricted schemes, incognito, iframes, and broad web compatibility",
+    "Search, URL, telephone, email, password, hidden, and every other non-text input type",
+    "contenteditable, shadow DOM, framework-controlled fields, anonymous or duplicate identities, and selection replacement",
+    "Verified native undo, framework state, trusted input events, or absence of autosave, validation, search, network, and application side effects",
+    "Persisted origin policy, policy epochs, and a cross-connection pause broadcast-ack or commit-revocation barrier",
+    "Routing unsolicited omatypectl request or acceptance output into a Chromium content controller",
+    "Obsidian, Firefox, Fcitx5, IBus, terminal, semantic-model, remote-provider, personalization, and production compatibility claims"
+  ],
+  "artifacts": [
+    {
+      "path": "adapters/chromium/dist/content-script.js",
+      "bytes": 48758,
+      "sha256": "6286b7f8082e7011a7e17c1da4b0ba50bf237e24d3de889d917d9c0c9a8e1fed"
+    },
+    {
+      "path": "adapters/chromium/dist/manifest.json",
+      "bytes": 750,
+      "sha256": "94ce52171e67ee7bb94fb8ac97018f5e71f5773f627bfd6b042583d4caf24514"
+    },
+    {
+      "path": "adapters/chromium/dist/service-worker.js",
+      "bytes": 32405,
+      "sha256": "5ae130c91f9719fe2412291ca08f4ea9a9e50a3b536542020cab59ee428a0eac"
+    }
+  ],
+  "notes": [
+    "No extension, native host, browser profile, desktop configuration, local model, or service was installed by this foundation",
+    "The static manifest grants http://localhost/*, while both content and service-worker runtime gates require the exact localhost:4173 origin and chromium.html path",
+    "The target page remains hostile and can observe or remove the ghost host, alter the field during event dispatch, intercept the input event, or trigger application and network side effects",
+    "An exact typed-through remainder is display-only until a fresh provider response binds it to the new revision and fingerprint",
+    "Partial word acceptance clears the old remainder and schedules a new addressed request before another acceptance",
+    "A browser-shortcut pause clears reachable controllers, but an external CLI pause can leave controllers locally unnotified; their repeated requests are rejected before provider work or new commit authorization",
+    "The M1 broker cannot prove that a commit.prepare already transmitted on another connection cannot mutate after pause acknowledgement",
+    "omatypectl request and acceptance commands exercise broker-core behavior only in M1 and do not control a Chromium page",
+    "Same-UID native-broker impersonation and unmarked secrets in ordinary text fields remain inside the declared trusted-local-component and residual-risk boundary",
+    "Omatype is an internal codename with a known public collision; public naming, technical namespaces, and source licensing remain release gates"
+  ]
+}

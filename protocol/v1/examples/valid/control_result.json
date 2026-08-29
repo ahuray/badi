@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "id": "control-3",
+  "type": "control.result",
+  "mono_ms": 53,
+  "payload": { "action": "accept_word", "accepted": true, "reason": "accepted", "paused": false }
+}

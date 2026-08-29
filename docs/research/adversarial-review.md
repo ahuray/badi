@@ -1,5 +1,10 @@
 # Adversarial review: should Omatype be built?
 
+> **Historical V1 gate:** its risks remain relevant, but
+> [Vision V2](../../VISION-V2.md) and the
+> [V2 implementation plan](../plan/vision-v2-implementation.md) supersede its
+> three-target/48-hour delivery contract.
+
 Status: research gate, 2026-08-30
 
 This is the promised grill of the current proposal. It reviews the

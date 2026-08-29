@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "id": "health-1",
+  "type": "health.request",
+  "mono_ms": 60,
+  "payload": {}
+}

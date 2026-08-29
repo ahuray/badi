@@ -1,0 +1,37 @@
+{
+  "v": 1,
+  "id": "health-1",
+  "type": "health.status",
+  "mono_ms": 61,
+  "payload": {
+    "provider": "phrase_v1",
+    "paused": false,
+    "sessions": 1,
+    "socket_mode": "0600",
+    "max_frame_bytes": 65536,
+    "metrics": {
+      "context_updates": 1,
+      "provider_calls": 1,
+      "provider_input_bytes": 9,
+      "provider_output_bytes": 14,
+      "cancellations": 0,
+      "stale_results": 0,
+      "suggestions_shown": 1,
+      "suggestions_expired": 0,
+      "denied": 0,
+      "manual_required": 0,
+      "dismissals": 0,
+      "commits_prepared": 0,
+      "commits_applied": 0,
+      "commit_failures": 0,
+      "provider_errors": 0
+    },
+    "active": {
+      "session_id": "550e8400-e29b-41d4-a716-446655440000",
+      "focus_epoch": 1,
+      "revision": 1,
+      "fingerprint": "fingerprint_000000000001",
+      "suggestion_id": "s:1234"
+    }
+  }
+}

@@ -1,5 +1,9 @@
 # Omatype vision
 
+> **Historical V1:** [Vision V2](VISION-V2.md) is the current product contract.
+> This file is retained for decision history; where scope, terminology, or
+> acceptance gates conflict, V2 supersedes it.
+
 > Working-name warning: an unrelated [OmaType dictation project](https://github.com/Aayush9029/OmaType)
 > already serves the Linux/Omarchy community. Keep `omatype` as the repository
 > codename for this research, but resolve the public name before launch.

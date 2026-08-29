@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "id": "close-1",
+  "type": "session.close",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 1,
+  "revision": 2,
+  "mono_ms": 70,
+  "payload": { "reason": "session_closed" }
+}

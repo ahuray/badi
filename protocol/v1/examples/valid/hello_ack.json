@@ -1,0 +1,17 @@
+{
+  "v": 1,
+  "id": "hello-1",
+  "type": "hello.ack",
+  "mono_ms": 11,
+  "payload": {
+    "selected_v": 1,
+    "connection_id": "c:1234",
+    "enabled_capabilities": ["context", "suggestion", "commit.applied", "control", "health"],
+    "max_frame_bytes": 65536,
+    "max_before_chars": 512,
+    "max_after_chars": 128,
+    "max_suggestion_chars": 64,
+    "max_suggestion_words": 8,
+    "paused": false
+  }
+}

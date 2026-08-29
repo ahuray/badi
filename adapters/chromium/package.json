@@ -1,0 +1,22 @@
+{
+  "name": "@omatype/chromium",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "build": "node scripts/build.mjs",
+    "build:verify": "node scripts/verify-build.mjs",
+    "fixture": "python3 -m http.server 4173 --directory ../../fixtures/web"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.32",
+    "@types/node": "^24.3.0",
+    "ajv": "^8.17.1",
+    "esbuild": "^0.25.9",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

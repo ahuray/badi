@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Omatype Chromium fixture</title>
+    <link rel="stylesheet" href="fixture.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">Controlled integration surface</p>
+        <h1>Chromium field fixture</h1>
+        <p>
+          This page contains no provider code. It exercises focus, revision races,
+          field replacement, and local sensitive-field denial in an unpacked build.
+        </p>
+      </header>
+
+      <section class="card" aria-labelledby="draft-heading">
+        <div class="heading-row">
+          <div>
+            <h2 id="draft-heading">Allowed draft</h2>
+            <p>Plain textarea with a stable identity.</p>
+          </div>
+          <span class="badge allowed">allowed</span>
+        </div>
+        <textarea id="draft" name="draft" rows="7" spellcheck="false">The local-first assistant</textarea>
+        <div class="controls">
+          <button type="button" data-action="focus-draft">Focus draft</button>
+          <button type="button" data-action="replace-draft">Replace DOM field</button>
+          <button type="button" data-action="type-through">Type one character</button>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="denied-heading">
+        <div class="heading-row">
+          <div>
+            <h2 id="denied-heading">Denied controls</h2>
+            <p>These values must never cross the content-script policy gate.</p>
+          </div>
+          <span class="badge denied">hard deny</span>
+        </div>
+        <div class="field-grid">
+          <label>
+            Password
+            <input id="password" type="password" autocomplete="current-password" value="not-a-real-secret">
+          </label>
+          <label>
+            One-time code purpose
+            <input id="otp" type="text" autocomplete="one-time-code" value="123456">
+          </label>
+        </div>
+        <div class="controls">
+          <button type="button" data-action="focus-password">Focus password</button>
+          <button type="button" data-action="focus-otp">Focus OTP</button>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="race-heading">
+        <div class="heading-row">
+          <div>
+            <h2 id="race-heading">Latest-wins race</h2>
+            <p>Dispatch 101 revisions; the first 100 become stale.</p>
+          </div>
+          <output id="race-status" class="badge">idle</output>
+        </div>
+        <label class="range-label">
+          Gap between input events
+          <span><output id="delay-value">2</output> ms</span>
+          <input id="race-delay" type="range" min="0" max="30" step="1" value="2">
+        </label>
+        <div class="controls">
+          <button type="button" data-action="run-race">Run 100 stale revisions</button>
+          <button type="button" data-action="focus-away">Move focus away</button>
+          <button type="button" data-action="clear-log">Clear event log</button>
+        </div>
+        <pre id="event-log" aria-live="polite"></pre>
+      </section>
+    </main>
+    <script type="module" src="fixture.js"></script>
+  </body>
+</html>

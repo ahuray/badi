@@ -1,5 +1,9 @@
 # Two-day delivery plan: Omarchy/Hyprland vertical slice
 
+> **Historical V1 plan:** retained as risk and fixture research. The
+> [Vision V2 implementation plan](vision-v2-implementation.md) is the active
+> execution contract and supersedes conflicting three-target/48-hour gates.
+
 Status: execution contract for a 48-hour build beginning after user approval.
 Times are wall-clock hours from kickoff (`H0`), not estimates of cumulative
 person-hours. The plan is grounded in [VISION.md](../../VISION.md), the

@@ -1,0 +1,18 @@
+{
+  "v": 1,
+  "id": "open-1",
+  "type": "session.open",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 1,
+  "revision": 0,
+  "mono_ms": 20,
+  "payload": {
+    "target": {
+      "kind": "browser",
+      "app_id": "chromium",
+      "target_id": "field-1",
+      "origin": { "scheme": "http", "host": "127.0.0.1", "port": 4173 }
+    },
+    "activation": "always"
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "v": 1,
+  "algorithm": "leading_whitespace_plus_first_unicode_word_or_grapheme_v1",
+  "cases": [
+    {
+      "name": "leading-whitespace",
+      "input": "   hello world",
+      "accepted": "   hello",
+      "remainder": " world"
+    },
+    {
+      "name": "latin-accent",
+      "input": " café noir",
+      "accepted": " café",
+      "remainder": " noir"
+    },
+    {
+      "name": "combining-mark",
+      "input": " élan vital",
+      "accepted": " élan",
+      "remainder": " vital"
+    },
+    {
+      "name": "greek",
+      "input": " κόσμε ξανά",
+      "accepted": " κόσμε",
+      "remainder": " ξανά"
+    },
+    {
+      "name": "simple-emoji",
+      "input": " 😊 next",
+      "accepted": " 😊",
+      "remainder": " next"
+    },
+    {
+      "name": "symbol",
+      "input": " § 42",
+      "accepted": " §",
+      "remainder": " 42"
+    },
+    {
+      "name": "punctuation-before-word",
+      "input": ", however",
+      "accepted": ",",
+      "remainder": " however"
+    }
+  ]
+}

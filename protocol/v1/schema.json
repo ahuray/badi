@@ -1,0 +1,665 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omatype.invalid/protocol/v1/schema.json",
+  "title": "Omatype local adapter protocol v1",
+  "description": "Normative framed-JSON protocol. A frame is a 4-byte little-endian length followed by one UTF-8 instance of this schema and is limited to 65536 bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "type", "mono_ms", "payload"],
+  "properties": {
+    "v": { "const": 1 },
+    "id": { "$ref": "#/$defs/opaqueId" },
+    "type": {
+      "enum": [
+        "hello",
+        "hello.ack",
+        "session.open",
+        "session.close",
+        "context.changed",
+        "suggest.request",
+        "suggest.cancel",
+        "suggestion.show",
+        "suggestion.clear",
+        "control.request",
+        "control.result",
+        "commit.prepare",
+        "commit.result",
+        "health.request",
+        "health.status",
+        "error"
+      ]
+    },
+    "session_id": { "$ref": "#/$defs/sessionId" },
+    "focus_epoch": { "$ref": "#/$defs/counter" },
+    "revision": { "$ref": "#/$defs/counter" },
+    "mono_ms": {
+      "allOf": [{ "$ref": "#/$defs/counter" }],
+      "description": "Sender-local monotonic timestamp for ordering and latency only; never compare epochs across processes."
+    },
+    "payload": { "type": "object" }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "type": { "const": "hello" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/helloPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "hello.ack" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/helloAckPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "session.open" },
+        "payload": { "$ref": "#/$defs/sessionOpenPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "session.close" },
+        "payload": { "$ref": "#/$defs/sessionClosePayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "context.changed" },
+        "payload": { "$ref": "#/$defs/contextChangedPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "suggest.request" },
+        "payload": { "$ref": "#/$defs/suggestRequestPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "suggest.cancel" },
+        "payload": { "$ref": "#/$defs/suggestCancelPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "suggestion.show" },
+        "payload": { "$ref": "#/$defs/suggestionShowPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "suggestion.clear" },
+        "payload": { "$ref": "#/$defs/suggestionClearPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "control.request" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/globalControlRequestPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "control.request" },
+        "payload": { "$ref": "#/$defs/sessionControlRequestPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "control.result" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/controlResultPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "commit.prepare" },
+        "payload": { "$ref": "#/$defs/commitPreparePayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "commit.result" },
+        "payload": { "$ref": "#/$defs/commitResultPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "health.request" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "health.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/healthStatusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "error" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/errorPayload" }
+      }
+    }
+  ],
+  "$defs": {
+    "counter": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "fingerprint": {
+      "type": "string",
+      "description": "Ephemeral opaque race token computed from a fresh session salt, stable target identity, bounded before/after context, and full-target UTF-16 start/end offsets. Focus epoch and revision are independent address fields that must also match. It is equality data, not adapter authentication, and must not be logged or persisted.",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "capability": {
+      "enum": [
+        "context",
+        "suggestion",
+        "commit.applied",
+        "commit.dispatched_unverified",
+        "control",
+        "health"
+      ]
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name", "version"],
+      "properties": {
+        "kind": { "enum": ["browser", "obsidian", "fcitx", "cli", "test"] },
+        "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 32 }
+      }
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scheme", "host"],
+      "properties": {
+        "scheme": { "enum": ["http", "https", "chrome-extension", "moz-extension", "file"] },
+        "host": { "type": "string", "minLength": 1, "maxLength": 253 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "app_id", "target_id"],
+      "properties": {
+        "kind": { "enum": ["browser", "obsidian", "terminal", "fixture"] },
+        "app_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "target_id": { "$ref": "#/$defs/opaqueId" },
+        "origin": { "$ref": "#/$defs/origin" }
+      }
+    },
+    "activation": { "enum": ["always", "manual", "never"] },
+    "fieldPurpose": {
+      "enum": [
+        "normal",
+        "password",
+        "pin",
+        "otp",
+        "payment_secret",
+        "terminal",
+        "email",
+        "url",
+        "search",
+        "unknown"
+      ]
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "purpose",
+        "editable",
+        "multiline",
+        "composing",
+        "sensitive",
+        "identity_known",
+        "focused",
+        "lock_screen"
+      ],
+      "properties": {
+        "purpose": { "$ref": "#/$defs/fieldPurpose" },
+        "editable": { "type": "boolean" },
+        "multiline": { "type": "boolean" },
+        "composing": { "type": "boolean" },
+        "sensitive": { "type": "boolean" },
+        "identity_known": { "type": "boolean" },
+        "focused": { "type": "boolean" },
+        "lock_screen": { "type": "boolean" }
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Full-target selection offsets in JavaScript UTF-16 code units. The broker treats these as opaque state/equality data and performs no text indexing with them.",
+      "required": ["anchor", "head", "unit"],
+      "properties": {
+        "anchor": { "$ref": "#/$defs/counter" },
+        "head": { "$ref": "#/$defs/counter" },
+        "unit": { "const": "utf16_code_units" }
+      }
+    },
+    "fingerprintedPayload": {
+      "type": "object",
+      "required": ["fingerprint"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" }
+      }
+    },
+    "reasonCode": {
+      "enum": [
+        "accepted",
+        "ambiguous_session",
+        "cancelled",
+        "dismissed",
+        "expired",
+        "field_ambiguous",
+        "field_not_editable",
+        "field_sensitive",
+        "focus_changed",
+        "invalid_capability",
+        "invalid_frame",
+        "invalid_message",
+        "invalid_output",
+        "manual_required",
+        "no_context",
+        "no_suggestion",
+        "paused",
+        "policy_never",
+        "provider_error",
+        "provider_timeout",
+        "session_closed",
+        "stale",
+        "superseded",
+        "unknown_session",
+        "unsupported_version"
+      ]
+    },
+    "helloPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_v", "max_v", "adapter", "capabilities"],
+      "properties": {
+        "min_v": { "const": 1 },
+        "max_v": { "const": 1 },
+        "adapter": { "$ref": "#/$defs/adapter" },
+        "capabilities": { "$ref": "#/$defs/capabilities" }
+      }
+    },
+    "helloAckPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selected_v",
+        "connection_id",
+        "enabled_capabilities",
+        "max_frame_bytes",
+        "max_before_chars",
+        "max_after_chars",
+        "max_suggestion_chars",
+        "max_suggestion_words",
+        "paused"
+      ],
+      "properties": {
+        "selected_v": { "const": 1 },
+        "connection_id": { "$ref": "#/$defs/opaqueId" },
+        "enabled_capabilities": { "$ref": "#/$defs/capabilities" },
+        "max_frame_bytes": { "const": 65536 },
+        "max_before_chars": { "const": 512 },
+        "max_after_chars": { "const": 128 },
+        "max_suggestion_chars": { "const": 64 },
+        "max_suggestion_words": { "const": 8 },
+        "paused": { "type": "boolean" }
+      }
+    },
+    "sessionOpenPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "activation"],
+      "properties": {
+        "target": { "$ref": "#/$defs/target" },
+        "activation": { "$ref": "#/$defs/activation" }
+      }
+    },
+    "sessionClosePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason"],
+      "properties": {
+        "reason": { "$ref": "#/$defs/reasonCode" }
+      }
+    },
+    "contextText": {
+      "type": "string",
+      "description": "Bounded editor context. Controls and line breaks are permitted; lone UTF-16 surrogate code units U+D800-U+DFFF are rejected while valid astral scalar pairs remain allowed.",
+      "pattern": "^[^\\ud800-\\udfff]*$"
+    },
+    "contextChangedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "before", "after", "selection", "field", "activation", "explicit"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "before": { "$ref": "#/$defs/contextText", "maxLength": 512, "description": "UTF-8 wire text capped at 512 Unicode scalar values immediately before the selection." },
+        "after": { "$ref": "#/$defs/contextText", "maxLength": 128, "description": "UTF-8 wire text capped at 128 Unicode scalar values immediately after the selection." },
+        "selection": { "$ref": "#/$defs/selection" },
+        "field": { "$ref": "#/$defs/field" },
+        "activation": { "$ref": "#/$defs/activation" },
+        "explicit": { "type": "boolean" },
+        "language": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 35,
+          "pattern": "^[A-Za-z0-9-]+$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": ["activation"],
+                "properties": { "activation": { "const": "never" } }
+              },
+              {
+                "required": ["field"],
+                "properties": {
+                  "field": {
+                    "anyOf": [
+                      {
+                        "required": ["sensitive"],
+                        "properties": { "sensitive": { "const": true } }
+                      },
+                      {
+                        "required": ["lock_screen"],
+                        "properties": { "lock_screen": { "const": true } }
+                      },
+                      {
+                        "required": ["purpose"],
+                        "properties": {
+                          "purpose": { "enum": ["password", "pin", "otp", "payment_secret"] }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "properties": {
+              "before": { "maxLength": 0 },
+              "after": { "maxLength": 0 }
+            }
+          }
+        }
+      ]
+    },
+    "suggestRequestPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "explicit"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "explicit": { "type": "boolean" }
+      }
+    },
+    "suggestCancelPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "reason"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "reason": { "$ref": "#/$defs/reasonCode" }
+      }
+    },
+    "safeSuggestionText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "V1 safe output text. Rejects C0/C1 controls, U+2028/U+2029, UTF-16 surrogate code units U+D800-U+DFFF, and the exact Unicode 16/17 Cf set: U+00AD, U+0600-U+0605, U+061C, U+06DD, U+070F, U+0890-U+0891, U+08E2, U+180E, U+200B-U+200F, U+202A-U+202E, U+2060-U+2064, U+2066-U+206F, U+FEFF, U+FFF9-U+FFFB, U+110BD, U+110CD, U+13430-U+1343F, U+1BCA0-U+1BCA3, U+1D173-U+1D17A, U+E0001, and U+E0020-U+E007F.",
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u00ad\\u0600-\\u0605\\u061c\\u06dd\\u070f\\u0890-\\u0891\\u08e2\\u180e\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ud800-\\udfff\\ufeff\\ufff9-\\ufffb\\u{110bd}\\u{110cd}\\u{13430}-\\u{1343f}\\u{1bca0}-\\u{1bca3}\\u{1d173}-\\u{1d17a}\\u{e0001}\\u{e0020}-\\u{e007f}]+$"
+    },
+    "suggestionShowPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fingerprint",
+        "suggestion_id",
+        "text",
+        "accept_word",
+        "ttl_ms",
+        "provider"
+      ],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "suggestion_id": { "$ref": "#/$defs/opaqueId" },
+        "text": { "$ref": "#/$defs/safeSuggestionText" },
+        "accept_word": { "$ref": "#/$defs/safeSuggestionText" },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 600, "description": "Relative receiver-local lifetime starting when this frame is received." },
+        "provider": { "enum": ["phrase_v1", "local_model"] }
+      }
+    },
+    "suggestionClearPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "reason"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "suggestion_id": { "$ref": "#/$defs/opaqueId" },
+        "reason": { "$ref": "#/$defs/reasonCode" }
+      }
+    },
+    "globalControlAction": {
+      "enum": ["pause", "resume", "pause_toggle"]
+    },
+    "sessionControlAction": {
+      "enum": ["request", "accept_word", "accept_all", "dismiss"]
+    },
+    "globalControlRequestPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action"],
+      "properties": {
+        "action": { "$ref": "#/$defs/globalControlAction" }
+      }
+    },
+    "sessionControlRequestPayload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "fingerprint"],
+          "properties": {
+            "action": { "const": "request" },
+            "fingerprint": { "$ref": "#/$defs/fingerprint" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "fingerprint", "suggestion_id"],
+          "properties": {
+            "action": { "enum": ["accept_word", "accept_all", "dismiss"] },
+            "fingerprint": { "$ref": "#/$defs/fingerprint" },
+            "suggestion_id": { "$ref": "#/$defs/opaqueId" }
+          }
+        }
+      ]
+    },
+    "controlAction": {
+      "enum": ["request", "accept_word", "accept_all", "dismiss", "pause", "resume", "pause_toggle"]
+    },
+    "controlResultPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "accepted", "reason", "paused"],
+      "properties": {
+        "action": { "$ref": "#/$defs/controlAction" },
+        "accepted": { "type": "boolean" },
+        "reason": { "$ref": "#/$defs/reasonCode" },
+        "paused": { "type": "boolean" }
+      }
+    },
+    "commitPreparePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Single-use commit authorization. The broker's receiver-local result lease defaults to 1500 ms and is hard-clamped to 5000 ms; adapters must apply and report immediately, and a matching suggestion.clear revokes an authorization not yet applied.",
+      "required": ["fingerprint", "suggestion_id", "text", "acceptance"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "suggestion_id": { "$ref": "#/$defs/opaqueId" },
+        "text": { "$ref": "#/$defs/safeSuggestionText" },
+        "acceptance": { "enum": ["word", "all"] }
+      }
+    },
+    "commitResultPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "suggestion_id", "status"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "suggestion_id": { "$ref": "#/$defs/opaqueId" },
+        "status": { "enum": ["applied", "dispatched-unverified", "stale", "blocked", "failed"] },
+        "new_revision": { "$ref": "#/$defs/counter" },
+        "new_fingerprint": { "$ref": "#/$defs/fingerprint" }
+      },
+      "dependentRequired": {
+        "new_revision": ["new_fingerprint"],
+        "new_fingerprint": ["new_revision"]
+      }
+    },
+    "emptyPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 0
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context_updates",
+        "provider_calls",
+        "provider_input_bytes",
+        "provider_output_bytes",
+        "cancellations",
+        "stale_results",
+        "suggestions_shown",
+        "suggestions_expired",
+        "denied",
+        "manual_required",
+        "dismissals",
+        "commits_prepared",
+        "commits_applied",
+        "commit_failures",
+        "provider_errors"
+      ],
+      "properties": {
+        "context_updates": { "$ref": "#/$defs/counter" },
+        "provider_calls": { "$ref": "#/$defs/counter" },
+        "provider_input_bytes": { "$ref": "#/$defs/counter" },
+        "provider_output_bytes": { "$ref": "#/$defs/counter" },
+        "cancellations": { "$ref": "#/$defs/counter" },
+        "stale_results": { "$ref": "#/$defs/counter" },
+        "suggestions_shown": { "$ref": "#/$defs/counter" },
+        "suggestions_expired": { "$ref": "#/$defs/counter" },
+        "denied": { "$ref": "#/$defs/counter" },
+        "manual_required": { "$ref": "#/$defs/counter" },
+        "dismissals": { "$ref": "#/$defs/counter" },
+        "commits_prepared": { "$ref": "#/$defs/counter" },
+        "commits_applied": { "$ref": "#/$defs/counter" },
+        "commit_failures": { "$ref": "#/$defs/counter" },
+        "provider_errors": { "$ref": "#/$defs/counter" }
+      }
+    },
+    "activeLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "focus_epoch", "revision", "fingerprint"],
+      "properties": {
+        "session_id": { "$ref": "#/$defs/sessionId" },
+        "focus_epoch": { "$ref": "#/$defs/counter" },
+        "revision": { "$ref": "#/$defs/counter" },
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "suggestion_id": { "$ref": "#/$defs/opaqueId" }
+      }
+    },
+    "healthStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "paused", "sessions", "socket_mode", "max_frame_bytes", "metrics"],
+      "properties": {
+        "provider": { "enum": ["phrase_v1", "local_model"] },
+        "paused": { "type": "boolean" },
+        "sessions": { "$ref": "#/$defs/counter" },
+        "socket_mode": { "const": "0600" },
+        "max_frame_bytes": { "const": 65536 },
+        "metrics": { "$ref": "#/$defs/metrics" },
+        "active": { "$ref": "#/$defs/activeLocator" }
+      }
+    },
+    "errorPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code"],
+      "properties": {
+        "code": { "$ref": "#/$defs/reasonCode" }
+      }
+    }
+  }
+}

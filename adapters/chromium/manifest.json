@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Omatype (development slice)",
+  "version": "0.1.0",
+  "minimum_chrome_version": "120",
+  "description": "Controlled localhost writing-suggestion slice through the Omatype native broker.",
+  "permissions": [
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "commands": {
+    "toggle-pause": {
+      "suggested_key": {
+        "default": "Alt+Shift+P"
+      },
+      "description": "Toggle broker pause state for trusted Omatype fixture controllers"
+    }
+  }
+}

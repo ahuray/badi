@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "id": "control-1",
+  "type": "control.request",
+  "mono_ms": 50,
+  "payload": { "action": "pause_toggle" }
+}
