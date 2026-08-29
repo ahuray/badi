@@ -1,0 +1,19 @@
+# Editors and local agent state
+.cursor/
+.idea/
+.vscode/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Build outputs
+build/
+dist/
+target/
+
+# OS files
+.DS_Store
+Thumbs.db
+
