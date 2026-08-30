@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use badi_broker::ipc::{
     default_socket_path, read_envelope, verify_peer_uid, verify_socket_metadata, write_envelope,
@@ -6,12 +7,17 @@ use badi_broker::ipc::{
 use badi_broker::metrics::MetricsSnapshot;
 use badi_broker::model_selection::{ModelUseCase, detect_hardware, recommend_model};
 use badi_broker::protocol::{
-    ActiveLocator, AdapterDescriptor, AdapterKind, Capability, ControlAction,
-    GlobalControlRequestPayload, HealthStatusPayload, HelloPayload, MessageType, PROTOCOL_VERSION,
-    ProviderKind, SessionControlRequestPayload, WireEnvelope,
+    ActiveLocator, AdapterDescriptor, AdapterKind, Capability, ControlAction, ControlResultPayload,
+    ErrorPayload, GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
+    MessageType, PROTOCOL_VERSION, ProviderKind, ReasonCode, SessionControlRequestPayload,
+    WireEnvelope,
 };
 use serde::Serialize;
 use tokio::net::UnixStream;
+
+const CLI_CAPABILITIES: [Capability; 2] = [Capability::Control, Capability::Health];
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[tokio::main]
 async fn main() {
@@ -54,16 +60,18 @@ async fn run() -> Result<(), CliError> {
                 0,
                 &GlobalControlRequestPayload { action },
             )?;
-            request.id = Some(new_request_id());
+            let request_id = new_request_id();
+            request.id = Some(request_id.clone());
             write_envelope(&mut stream, &request).await?;
-            print_next_response(&mut stream).await?;
+            print_control_response(&mut stream, &request_id, action).await?;
         }
         Command::Session(action) => {
             let status = request_health(&mut stream).await?;
             let active = status.active.ok_or(CliError::NoActiveSession)?;
             let request = addressed_control(action, active)?;
+            let request_id = request.id.clone().ok_or(CliError::UnexpectedResponse)?;
             write_envelope(&mut stream, &request).await?;
-            print_next_response(&mut stream).await?;
+            print_control_response(&mut stream, &request_id, action).await?;
         }
     }
     Ok(())
@@ -119,31 +127,53 @@ async fn connect(path: &Path) -> Result<UnixStream, CliError> {
                 name: "badictl".to_owned(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
             },
-            capabilities: vec![Capability::Control, Capability::Health],
+            capabilities: CLI_CAPABILITIES.to_vec(),
         },
     )?;
-    hello.id = Some(new_request_id());
-    write_envelope(&mut stream, &hello).await?;
-    let acknowledgment = read_envelope(&mut stream)
-        .await?
+    let request_id = new_request_id();
+    hello.id = Some(request_id.clone());
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, write_envelope(&mut stream, &hello))
+        .await
+        .map_err(|_| CliError::Handshake)??;
+    let acknowledgment = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_envelope(&mut stream))
+        .await
+        .map_err(|_| CliError::Handshake)??
         .ok_or(CliError::ConnectionClosed)?;
-    if acknowledgment.message_type != MessageType::HelloAck {
+    validate_handshake(&acknowledgment, &request_id)?;
+    Ok(stream)
+}
+
+fn validate_handshake(
+    acknowledgment: &WireEnvelope,
+    request_id: &str,
+) -> Result<HelloAckPayload, CliError> {
+    if acknowledgment.validate_shape().is_err()
+        || acknowledgment.message_type != MessageType::HelloAck
+        || acknowledgment.id.as_deref() != Some(request_id)
+    {
         return Err(CliError::Handshake);
     }
-    Ok(stream)
+    let payload: HelloAckPayload = acknowledgment
+        .decode_payload()
+        .map_err(|_| CliError::Handshake)?;
+    payload.validate().map_err(|_| CliError::Handshake)?;
+    if payload.enabled_capabilities.len() != CLI_CAPABILITIES.len()
+        || !CLI_CAPABILITIES
+            .iter()
+            .all(|required| payload.enabled_capabilities.contains(required))
+    {
+        return Err(CliError::Handshake);
+    }
+    Ok(payload)
 }
 
 async fn request_health(stream: &mut UnixStream) -> Result<HealthStatusPayload, CliError> {
     let mut request = WireEnvelope::global(MessageType::HealthRequest, 0, &serde_json::json!({}))?;
-    request.id = Some(new_request_id());
+    let request_id = new_request_id();
+    request.id = Some(request_id.clone());
     write_envelope(stream, &request).await?;
-    let response = read_envelope(stream)
-        .await?
-        .ok_or(CliError::ConnectionClosed)?;
-    if response.message_type != MessageType::HealthStatus {
-        return Err(CliError::UnexpectedResponse);
-    }
-    Ok(response.decode_payload()?)
+    let response = read_correlated_response(stream, &request_id, MessageType::HealthStatus).await?;
+    validate_health_response(&response, &request_id)
 }
 
 fn addressed_control(
@@ -175,16 +205,94 @@ fn addressed_control(
     Ok(envelope)
 }
 
-async fn print_next_response(stream: &mut UnixStream) -> Result<(), CliError> {
-    let response = read_envelope(stream)
-        .await?
+async fn read_correlated_response(
+    stream: &mut UnixStream,
+    request_id: &str,
+    expected_type: MessageType,
+) -> Result<WireEnvelope, CliError> {
+    let response = tokio::time::timeout(RESPONSE_TIMEOUT, read_envelope(stream))
+        .await
+        .map_err(|_| CliError::ResponseTimeout)??
         .ok_or(CliError::ConnectionClosed)?;
-    println!("{}", serde_json::to_string(&response)?);
-    if response.message_type == MessageType::Error {
-        Err(CliError::Rejected)
-    } else {
-        Ok(())
+    validate_correlated_response(&response, request_id, expected_type)?;
+    Ok(response)
+}
+
+fn validate_correlated_response(
+    response: &WireEnvelope,
+    request_id: &str,
+    expected_type: MessageType,
+) -> Result<(), CliError> {
+    if response.validate_shape().is_err() || response.id.as_deref() != Some(request_id) {
+        return Err(CliError::UnexpectedResponse);
     }
+    if response.message_type == MessageType::Error {
+        let _: ErrorPayload = response
+            .decode_payload()
+            .map_err(|_| CliError::UnexpectedResponse)?;
+        return Err(CliError::Rejected);
+    }
+    if response.message_type != expected_type {
+        return Err(CliError::UnexpectedResponse);
+    }
+    Ok(())
+}
+
+fn validate_control_response(
+    response: &WireEnvelope,
+    request_id: &str,
+    expected_action: ControlAction,
+) -> Result<ControlResultPayload, CliError> {
+    validate_correlated_response(response, request_id, MessageType::ControlResult)?;
+    let payload: ControlResultPayload = response
+        .decode_payload()
+        .map_err(|_| CliError::UnexpectedResponse)?;
+    if payload.action != expected_action
+        || !payload.accepted
+        || payload.reason != ReasonCode::Accepted
+        || match expected_action {
+            ControlAction::Pause => !payload.paused,
+            ControlAction::PauseToggle => false,
+            ControlAction::Resume
+            | ControlAction::Request
+            | ControlAction::AcceptWord
+            | ControlAction::AcceptAll
+            | ControlAction::Dismiss => payload.paused,
+        }
+    {
+        return Err(CliError::UnexpectedResponse);
+    }
+    Ok(payload)
+}
+
+fn validate_health_response(
+    response: &WireEnvelope,
+    request_id: &str,
+) -> Result<HealthStatusPayload, CliError> {
+    validate_correlated_response(response, request_id, MessageType::HealthStatus)?;
+    let payload: HealthStatusPayload = response
+        .decode_payload()
+        .map_err(|_| CliError::UnexpectedResponse)?;
+    if payload.socket_mode != "0600"
+        || payload.max_frame_bytes != badi_broker::protocol::MAX_FRAME_BYTES
+    {
+        return Err(CliError::UnexpectedResponse);
+    }
+    Ok(payload)
+}
+
+async fn print_control_response(
+    stream: &mut UnixStream,
+    request_id: &str,
+    expected_action: ControlAction,
+) -> Result<(), CliError> {
+    let response = tokio::time::timeout(RESPONSE_TIMEOUT, read_envelope(stream))
+        .await
+        .map_err(|_| CliError::ResponseTimeout)??
+        .ok_or(CliError::ConnectionClosed)?;
+    let _ = validate_control_response(&response, request_id, expected_action)?;
+    println!("{}", serde_json::to_string(&response)?);
+    Ok(())
 }
 
 fn new_request_id() -> String {
@@ -335,6 +443,8 @@ enum CliError {
     Protocol(#[from] badi_broker::protocol::ProtocolError),
     #[error("rejected")]
     Rejected,
+    #[error("response_timeout")]
+    ResponseTimeout,
     #[error("serde")]
     Serde(#[from] serde_json::Error),
     #[error("unexpected_response")]
@@ -347,16 +457,176 @@ mod tests {
 
     use super::{
         CliError, Command, LocalCommand, ParsedCommand, parse_arguments, redact_health_status,
+        validate_control_response, validate_correlated_response, validate_handshake,
+        validate_health_response,
     };
     use badi_broker::metrics::MetricsSnapshot;
     use badi_broker::model_selection::ModelUseCase;
     use badi_broker::protocol::{
-        ActiveLocator, ControlAction, HealthStatusPayload, ProviderKind, SessionId,
+        ActiveLocator, Capability, ControlAction, ControlResultPayload, HealthStatusPayload,
+        HelloAckPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SUGGESTION_CHARS,
+        MAX_SUGGESTION_WORDS, MessageType, PROTOCOL_VERSION, ProviderKind, ReasonCode, SessionId,
+        WireEnvelope,
     };
     use serde_json::json;
 
     fn arguments(values: &[&str]) -> Vec<String> {
         values.iter().map(ToString::to_string).collect()
+    }
+
+    fn hello_acknowledgment(request_id: &str) -> WireEnvelope {
+        let mut acknowledgment = WireEnvelope::global(
+            MessageType::HelloAck,
+            0,
+            &HelloAckPayload {
+                selected_v: PROTOCOL_VERSION,
+                connection_id: "c:test-connection".to_owned(),
+                enabled_capabilities: vec![Capability::Control, Capability::Health],
+                max_frame_bytes: MAX_FRAME_BYTES,
+                max_before_chars: MAX_BEFORE_CHARS,
+                max_after_chars: MAX_AFTER_CHARS,
+                max_suggestion_chars: MAX_SUGGESTION_CHARS,
+                max_suggestion_words: MAX_SUGGESTION_WORDS,
+                paused: true,
+            },
+        )
+        .expect("hello acknowledgment");
+        acknowledgment.id = Some(request_id.to_owned());
+        acknowledgment
+    }
+
+    #[test]
+    fn strict_handshake_accepts_correlated_complete_acknowledgment() {
+        let payload = validate_handshake(&hello_acknowledgment("ctl:request"), "ctl:request")
+            .expect("strict acknowledgment");
+        assert!(payload.paused);
+        assert_eq!(
+            payload.enabled_capabilities,
+            vec![Capability::Control, Capability::Health]
+        );
+    }
+
+    #[test]
+    fn strict_handshake_rejects_wrong_id_limits_capabilities_and_paused_shape() {
+        let acknowledgment = hello_acknowledgment("ctl:other");
+        assert!(matches!(
+            validate_handshake(&acknowledgment, "ctl:request"),
+            Err(CliError::Handshake)
+        ));
+
+        let mut wrong_limit = hello_acknowledgment("ctl:request");
+        wrong_limit.payload["max_frame_bytes"] = json!(MAX_FRAME_BYTES - 1);
+        assert!(matches!(
+            validate_handshake(&wrong_limit, "ctl:request"),
+            Err(CliError::Handshake)
+        ));
+
+        let mut wrong_version = hello_acknowledgment("ctl:request");
+        wrong_version.payload["selected_v"] = json!(PROTOCOL_VERSION + 1);
+        assert!(matches!(
+            validate_handshake(&wrong_version, "ctl:request"),
+            Err(CliError::Handshake)
+        ));
+
+        let mut missing_capability = hello_acknowledgment("ctl:request");
+        missing_capability.payload["enabled_capabilities"] = json!(["control"]);
+        assert!(matches!(
+            validate_handshake(&missing_capability, "ctl:request"),
+            Err(CliError::Handshake)
+        ));
+
+        let mut invalid_paused = hello_acknowledgment("ctl:request");
+        invalid_paused.payload["paused"] = json!("false");
+        assert!(matches!(
+            validate_handshake(&invalid_paused, "ctl:request"),
+            Err(CliError::Handshake)
+        ));
+    }
+
+    fn control_response(request_id: &str, action: ControlAction) -> WireEnvelope {
+        let mut response = WireEnvelope::global(
+            MessageType::ControlResult,
+            1,
+            &ControlResultPayload {
+                action,
+                accepted: true,
+                reason: ReasonCode::Accepted,
+                paused: action == ControlAction::Pause,
+            },
+        )
+        .expect("control response");
+        response.id = Some(request_id.to_owned());
+        response
+    }
+
+    #[test]
+    fn post_hello_responses_require_matching_id_type_and_control_payload() {
+        let response = control_response("ctl:request", ControlAction::Pause);
+        assert!(validate_control_response(&response, "ctl:request", ControlAction::Pause).is_ok());
+        assert!(matches!(
+            validate_correlated_response(&response, "ctl:other", MessageType::ControlResult),
+            Err(CliError::UnexpectedResponse)
+        ));
+        assert!(matches!(
+            validate_correlated_response(&response, "ctl:request", MessageType::HealthStatus),
+            Err(CliError::UnexpectedResponse)
+        ));
+        assert!(matches!(
+            validate_control_response(&response, "ctl:request", ControlAction::Resume),
+            Err(CliError::UnexpectedResponse)
+        ));
+
+        let mut contradictory_pause = control_response("ctl:request", ControlAction::Pause);
+        contradictory_pause.payload["paused"] = json!(false);
+        assert!(matches!(
+            validate_control_response(&contradictory_pause, "ctl:request", ControlAction::Pause),
+            Err(CliError::UnexpectedResponse)
+        ));
+        let mut contradictory_resume = control_response("ctl:request", ControlAction::Resume);
+        contradictory_resume.payload["paused"] = json!(true);
+        assert!(matches!(
+            validate_control_response(&contradictory_resume, "ctl:request", ControlAction::Resume),
+            Err(CliError::UnexpectedResponse)
+        ));
+
+        let mut rejected = control_response("ctl:request", ControlAction::Pause);
+        rejected.payload["accepted"] = json!(false);
+        assert!(matches!(
+            validate_control_response(&rejected, "ctl:request", ControlAction::Pause),
+            Err(CliError::UnexpectedResponse)
+        ));
+        let mut wrong_reason = control_response("ctl:request", ControlAction::Pause);
+        wrong_reason.payload["reason"] = json!("provider_error");
+        assert!(matches!(
+            validate_control_response(&wrong_reason, "ctl:request", ControlAction::Pause),
+            Err(CliError::UnexpectedResponse)
+        ));
+    }
+
+    #[test]
+    fn health_response_requires_correlated_type_and_fixed_transport_limits() {
+        let mut response = WireEnvelope::global(
+            MessageType::HealthStatus,
+            1,
+            &HealthStatusPayload {
+                provider: ProviderKind::PhraseV1,
+                paused: false,
+                sessions: 0,
+                socket_mode: "0600".to_owned(),
+                max_frame_bytes: MAX_FRAME_BYTES,
+                metrics: MetricsSnapshot::default(),
+                active: None,
+            },
+        )
+        .expect("health response");
+        response.id = Some("ctl:health".to_owned());
+        assert!(validate_health_response(&response, "ctl:health").is_ok());
+
+        response.payload["max_frame_bytes"] = json!(MAX_FRAME_BYTES - 1);
+        assert!(matches!(
+            validate_health_response(&response, "ctl:health"),
+            Err(CliError::UnexpectedResponse)
+        ));
     }
 
     #[test]

@@ -71,7 +71,9 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
             .validate()
             .expect("valid hello payload"),
         MessageType::HelloAck => {
-            let _: HelloAckPayload = decode(envelope);
+            decode::<HelloAckPayload>(envelope)
+                .validate()
+                .expect("valid hello acknowledgment");
         }
         MessageType::SessionOpen => decode::<SessionOpenPayload>(envelope)
             .target

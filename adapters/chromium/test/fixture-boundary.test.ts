@@ -4,10 +4,19 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   EXPECTED_FIXTURE_URL,
+  isTrustedFixtureBootstrapSender,
   isTrustedFixtureSender,
 } from "../src/background/fixture-boundary";
 import { SessionRouteRegistry } from "../src/background/session-routes";
-import { isContentControlMessage } from "../src/shared/runtime-messages";
+import {
+  EXPECTED_FIXTURE_ORIGIN,
+  isExpectedFixtureDocument,
+} from "../src/shared/fixture-document";
+import {
+  isContentControlMessage,
+  isRuntimeCommand,
+  parseRuntimeBootstrapReply,
+} from "../src/shared/runtime-messages";
 import {
   assertExactChromiumManifest,
   CHROMIUM_MANIFEST_TOP_LEVEL_KEYS,
@@ -44,6 +53,21 @@ function trustedSender(): chrome.runtime.MessageSender {
 }
 
 describe("localhost fixture boundary", () => {
+  it("recognizes only the exact top-level fixture document", () => {
+    const location = {
+      origin: EXPECTED_FIXTURE_ORIGIN,
+      pathname: "/chromium.html",
+      href: EXPECTED_FIXTURE_URL,
+    };
+    const window = { location } as unknown as Window;
+    Object.defineProperty(window, "top", { value: window });
+    const fixtureDocument = { defaultView: window } as unknown as Document;
+
+    expect(isExpectedFixtureDocument(fixtureDocument)).toBe(true);
+    location.href = `${EXPECTED_FIXTURE_URL}?route=other`;
+    expect(isExpectedFixtureDocument(fixtureDocument)).toBe(false);
+  });
+
   it("requires the exact extension, origin, URL, active document, tab, and top frame", () => {
     expect(isTrustedFixtureSender(trustedSender(), EXTENSION_ID)).toBe(true);
     expect(isTrustedFixtureSender({ ...trustedSender(), frameId: 1 }, EXTENSION_ID)).toBe(false);
@@ -122,6 +146,28 @@ describe("localhost fixture boundary", () => {
     ).toBe(false);
   });
 
+  it("allows only content-free bootstrap from an inactive exact document", () => {
+    const inactive = {
+      ...trustedSender(),
+      tab: { ...trustedSender().tab, active: false } as chrome.tabs.Tab,
+    };
+    expect(isTrustedFixtureBootstrapSender(inactive, EXTENSION_ID)).toBe(true);
+    expect(isTrustedFixtureSender(inactive, EXTENSION_ID)).toBe(false);
+    expect(
+      isTrustedFixtureBootstrapSender(
+        { ...inactive, url: `${EXPECTED_FIXTURE_URL}#other` },
+        EXTENSION_ID,
+      ),
+    ).toBe(false);
+    const { active: _active, ...withoutActive } = inactive.tab!;
+    expect(
+      isTrustedFixtureBootstrapSender(
+        { ...inactive, tab: withoutActive as chrome.tabs.Tab },
+        EXTENSION_ID,
+      ),
+    ).toBe(false);
+  });
+
   it("keeps exact least-privilege permissions and a top-frame localhost grant", async () => {
     const manifest = JSON.parse(
       await readFile(resolve(process.cwd(), "manifest.json"), "utf8"),
@@ -184,7 +230,7 @@ describe("localhost fixture boundary", () => {
     expect(() => assertExactChromiumManifest(extraScript)).toThrow();
   });
 
-  it("never rebinds one content session across tabs or documents", () => {
+  it("never resubscribes one content session across tabs or documents", () => {
     const routes = new SessionRouteRegistry();
     const original = { ...trustedSender(), documentId: "document-a" };
     const otherTab = {
@@ -192,24 +238,69 @@ describe("localhost fixture boundary", () => {
       documentId: "document-b",
       tab: { id: 8 } as chrome.tabs.Tab,
     };
-    expect(routes.bind("session-a", original)).toBe(true);
-    expect(routes.bind("session-a", original)).toBe(true);
-    expect(routes.bind("session-a", otherTab)).toBe(false);
+    expect(routes.subscribe("session-a", original)).toEqual({
+      displacedSessionIds: [],
+    });
+    expect(routes.subscribe("session-a", original)).toEqual({
+      displacedSessionIds: [],
+    });
+    expect(routes.subscribe("session-a", otherTab)).toBeNull();
     expect(routes.matches("session-a", otherTab)).toBe(false);
     expect(routes.get("session-a")).toEqual({
       tabId: 7,
       frameId: 0,
       documentId: "document-a",
     });
-    routes.deleteTab(7);
+    expect(routes.deleteTab(7)).toEqual(["session-a"]);
     expect(routes.get("session-a")).toBeNull();
   });
 
-  it("refuses to bind a route without a nonempty document identity", () => {
+  it("enforces one session per document and displaces old documents", () => {
+    const routes = new SessionRouteRegistry();
+    const firstDocument = { ...trustedSender(), documentId: "document-a" };
+    const replacementDocument = { ...trustedSender(), documentId: "document-b" };
+    const otherTab = {
+      ...trustedSender(),
+      documentId: "document-c",
+      tab: { ...trustedSender().tab, id: 8 } as chrome.tabs.Tab,
+    };
+
+    expect(routes.subscribe("session-a", firstDocument)).toEqual({
+      displacedSessionIds: [],
+    });
+    expect(routes.subscribe("session-a2", firstDocument)).toEqual({
+      displacedSessionIds: ["session-a"],
+    });
+    expect(routes.subscribe("session-c", otherTab)).toEqual({
+      displacedSessionIds: [],
+    });
+
+    // The route remains addressable until an explicit document replacement;
+    // broker-session close is deliberately not a registry operation.
+    expect(routes.matches("session-a", firstDocument)).toBe(false);
+    const replacement = routes.subscribe("session-b", replacementDocument);
+    if (replacement === null) throw new Error("Replacement route was rejected");
+    expect(replacement).toEqual({
+      displacedSessionIds: ["session-a2"],
+    });
+    expect(Object.isFrozen(replacement)).toBe(true);
+    expect(Object.isFrozen(replacement.displacedSessionIds)).toBe(true);
+    expect(routes.get("session-a")).toBeNull();
+    expect(routes.get("session-a2")).toBeNull();
+    expect(routes.matches("session-b", replacementDocument)).toBe(true);
+    expect(routes.matches("session-c", otherTab)).toBe(true);
+
+    expect(routes.subscribe("session-b", otherTab)).toBeNull();
+    expect(routes.matches("session-b", replacementDocument)).toBe(true);
+  });
+
+  it("refuses to subscribe a route without a nonempty document identity", () => {
     const routes = new SessionRouteRegistry();
     const { documentId: _documentId, ...withoutDocumentId } = trustedSender();
-    expect(routes.bind("session-a", withoutDocumentId)).toBe(false);
-    expect(routes.bind("session-a", { ...trustedSender(), documentId: "" })).toBe(false);
+    expect(routes.subscribe("session-a", withoutDocumentId)).toBeNull();
+    expect(
+      routes.subscribe("session-a", { ...trustedSender(), documentId: "" }),
+    ).toBeNull();
     expect(routes.get("session-a")).toBeNull();
   });
 
@@ -221,9 +312,11 @@ describe("localhost fixture boundary", () => {
       documentId: "document-b",
       tab: { id: 8 } as chrome.tabs.Tab,
     };
-    expect(routes.bind("session-a", first)).toBe(true);
-    expect(routes.bind("session-b", first)).toBe(true);
-    expect(routes.bind("session-c", second)).toBe(true);
+    expect(routes.subscribe("session-a", first)).not.toBeNull();
+    expect(routes.subscribe("session-b", first)).toEqual({
+      displacedSessionIds: ["session-a"],
+    });
+    expect(routes.subscribe("session-c", second)).not.toBeNull();
 
     const snapshot = routes.snapshot();
     expect(snapshot).toEqual([
@@ -233,14 +326,14 @@ describe("localhost fixture boundary", () => {
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(snapshot.every((route) => Object.isFrozen(route))).toBe(true);
 
-    routes.deleteTab(7);
+    expect(routes.deleteTab(7)).toEqual(["session-b"]);
     expect(snapshot).toHaveLength(2);
     expect(routes.snapshot()).toEqual([
       { tabId: 8, frameId: 0, documentId: "document-b" },
     ]);
   });
 
-  it("accepts only the exact content-safe native-disconnect runtime message", () => {
+  it("accepts only exact content-control runtime message shapes", () => {
     expect(
       isContentControlMessage({ kind: "badi.transport.disconnected.v1" }),
     ).toBe(true);
@@ -250,5 +343,47 @@ describe("localhost fixture boundary", () => {
         leakedDetail: "native error contents",
       }),
     ).toBe(false);
+    expect(
+      isContentControlMessage({ kind: "badi.control.v1", action: "pause" }),
+    ).toBe(true);
+    expect(
+      isContentControlMessage({
+        kind: "badi.control.v1",
+        action: "pause",
+        leakedDetail: "native error contents",
+      }),
+    ).toBe(false);
+    expect(isContentControlMessage({ kind: "badi.control.v1" })).toBe(false);
+    expect(
+      isContentControlMessage({ kind: "badi.control.v1", action: "unknown" }),
+    ).toBe(false);
+  });
+
+  it("accepts only typed content-free bootstrap and bound-session close shapes", () => {
+    expect(
+      isRuntimeCommand({ kind: "badi.bootstrap.v1", sessionId: "session-a" }),
+    ).toBe(true);
+    for (const malformed of [
+      { kind: "badi.bootstrap.v1" },
+      { kind: "badi.bootstrap.v1", sessionId: "" },
+      { kind: "badi.bootstrap.v1", sessionId: 7 },
+      { kind: "badi.bootstrap.v1", sessionId: "session-a", leaked: true },
+      ["badi.bootstrap.v1", "session-a"],
+      null,
+    ]) {
+      expect(isRuntimeCommand(malformed)).toBe(false);
+    }
+    expect(
+      isRuntimeCommand({ kind: "badi.session.close.v1", sessionId: "session-a" }),
+    ).toBe(true);
+    expect(isRuntimeCommand({ kind: "badi.session.close.v1", sessionId: "" })).toBe(false);
+    expect(parseRuntimeBootstrapReply({ ok: true, paused: true })).toBe(true);
+    expect(() => parseRuntimeBootstrapReply({ ok: true })).toThrow("bootstrap response");
+    expect(() =>
+      parseRuntimeBootstrapReply({ ok: true, paused: true, leaked: "content" }),
+    ).toThrow("bootstrap response");
+    expect(() => parseRuntimeBootstrapReply({ ok: true, paused: "true" })).toThrow(
+      "bootstrap response",
+    );
   });
 });

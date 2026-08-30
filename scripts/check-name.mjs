@@ -9,6 +9,15 @@ const banned = [
   "OMA" + "TYPE",
   ["io", "badi", "broker"].join("."),
 ];
+const historicalContentCounts = new Map([
+  [
+    "docs/delivery/2026-08-30-independent-adversarial-audit.md",
+    new Map([
+      ["Oma" + "type", 2],
+      ["oma" + "type", 1],
+    ]),
+  ],
+]);
 const files = execFileSync("git", ["ls-files", "-z"], {
   cwd: repository,
   encoding: "utf8",
@@ -22,8 +31,15 @@ for (const file of files) {
     if (file.includes(value)) violations.push(`${file}: path contains ${value}`);
   }
   const content = await readFile(path.join(repository, file), "utf8");
+  const expectedCounts = historicalContentCounts.get(file);
   for (const value of banned) {
-    if (content.includes(value)) violations.push(`${file}: content contains ${value}`);
+    const actualCount = content.split(value).length - 1;
+    const expectedCount = expectedCounts?.get(value) ?? 0;
+    if (actualCount !== expectedCount) {
+      violations.push(
+        `${file}: content contains ${value} ${actualCount} time(s); expected ${expectedCount}`,
+      );
+    }
   }
 }
 

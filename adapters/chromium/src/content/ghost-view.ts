@@ -37,12 +37,57 @@ export class AnchoredGhostView implements SuggestionView {
   }
 
   get visible(): boolean {
-    return (
-      this.#visible &&
-      this.#host !== null &&
-      this.#host.isConnected &&
-      !this.#host.hidden
-    );
+    const host = this.#host;
+    const panel = this.#panel;
+    if (
+      !this.#visible ||
+      host === null ||
+      panel === null ||
+      !host.isConnected ||
+      host.hidden
+    ) {
+      return false;
+    }
+    const window = this.#document.defaultView;
+    if (window === null) return false;
+    try {
+      const style = window.getComputedStyle(host);
+      const opacity = style.opacity === "" ? 1 : Number.parseFloat(style.opacity);
+      const scale = style.getPropertyValue("scale");
+      const clip = style.getPropertyValue("clip");
+      const contain = style.getPropertyValue("contain");
+      const rect = host.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.visibility !== "collapse" &&
+        style.getPropertyValue("content-visibility") !== "hidden" &&
+        (style.filter === "" || style.filter === "none") &&
+        (style.clipPath === "" || style.clipPath === "none") &&
+        (clip === "" || clip === "auto") &&
+        (style.getPropertyValue("mask-image") === "" ||
+          style.getPropertyValue("mask-image") === "none") &&
+        (style.transform === "" || style.transform === "none") &&
+        (scale === "" || scale === "none" || scale === "1") &&
+        (style.overflow === "" || style.overflow === "visible") &&
+        (style.overflowX === "" || style.overflowX === "visible") &&
+        (style.overflowY === "" || style.overflowY === "visible") &&
+        !/(?:^|\s)(?:content|paint|strict)(?:\s|$)/u.test(contain) &&
+        Number.isFinite(opacity) &&
+        opacity > 0 &&
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.right > 0 &&
+        rect.bottom > 0 &&
+        rect.left < window.innerWidth &&
+        rect.top < window.innerHeight &&
+        panelRect.width > 0 &&
+        panelRect.height > 0
+      );
+    } catch {
+      return false;
+    }
   }
 
   show(field: EditableField, text: string): void {

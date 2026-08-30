@@ -14,6 +14,14 @@ input capture and synthetic typing are not part of the architecture.
 
 ## Current status
 
+> **Review state:** this tree contains the post-audit remediation of baseline
+> `b8d6786`. GitHub Actions for the commit containing these changes is the
+> authoritative source-verification result; the durable Chromium receipt and
+> its performance figures still belong to the baseline. Treat this as an
+> incomplete M2 architecture surface, not a product demonstration, until it
+> has headed Chromium/Omarchy validation; see the
+> [remediation handoff](docs/delivery/2026-08-30-remediation-handoff.md).
+
 The repository contains the research, the M1 trust foundation, and an M2A
 isolated Chromium integration slice:
 
@@ -43,10 +51,11 @@ command accelerator, native undo, policy epochs, framework fields, arbitrary
 sites, semantic-model quality, Obsidian, and terminal support remain explicit
 gaps.
 
-The current M2A receipt records 1,000/1,000 exact insert/caret trials and
-100/100 delayed stale races. Nearest-rank p95 was 8.4 ms from trusted accept to
-observed insertion and 0.7 ms from invalidation marker to hidden UI, after 50
-warmups for each 1,000-sample distribution.
+The latest historical M2A receipt records 1,000/1,000 exact insert/caret trials
+and 100/100 delayed stale races. Nearest-rank p95 was 12.6 ms from trusted
+accept to observed insertion and 0.6 ms from invalidation marker to hidden UI,
+after 50 warmups for each 1,000-sample distribution. The receipt is linked to
+its recorded source commit; it is not a reproduction against every later tree.
 
 ## Start here
 
@@ -58,6 +67,14 @@ warmups for each 1,000-sample distribution.
   conditions.
 - [Develop branch roadmap](docs/plan/develop-roadmap.md) — the next coding
   order, architecture rules, first sprint, and promotion gates.
+- [Independent adversarial audit](docs/delivery/2026-08-30-independent-adversarial-audit.md)
+  — the immutable review of commit `b8d6786`, including findings, claim checks,
+  evidence limits, and the GrillMe verdict.
+- [Post-audit remediation handoff](docs/delivery/2026-08-30-remediation-handoff.md)
+  — the remediation fixes, pre-freeze verification results, residual risks, and
+  reviewer decision boundary.
+- [Same-UID trust decision](docs/decisions/0001-same-uid-trust-boundary.md) — why
+  local UID verification is a process boundary rather than authentication.
 - [Hardware-aware model selection](docs/architecture/model-selection.md) — the
   compact probe, conservative tiers, pinned artifacts, and runtime gates.
 - [Chromium foundation receipt](capabilities/chromium-dom-foundation.v1.json) —
@@ -100,9 +117,11 @@ cargo run --quiet --bin badictl -- models writing --json
 cargo run --quiet --bin badictl -- models code --json
 ```
 
-These commands are content-free and offline. They return pinned Hugging Face
-metadata and a non-executing download plan; semantic inference remains disabled
-until the candidate passes Badi's quality and latency gates.
+These commands are content-free and offline. When an artifact fits the
+conservative host-memory budget, they return pinned Hugging Face metadata and a
+non-executing download plan; otherwise they return an explicit `no_fit` result.
+Semantic inference remains disabled until a candidate passes Badi's quality and
+latency gates.
 
 ## Verify from a clean checkout
 
@@ -122,9 +141,12 @@ git diff --check
 
 The Chromium build is generated at `adapters/chromium/dist/` and is ignored by
 Git. Its timestamp-free `BUILD_MANIFEST.json` records stable SHA-256 hashes;
-the root check compares two clean builds byte for byte and validates local
-documentation links, receipt schemas, evidence hashes, and cross-document
-claims.
+the root check compares two clean builds byte for byte, validates local
+documentation links and receipt internals, and verifies the V2 evidence against
+its recorded Git commit. It deliberately labels that result historical. Use
+`npm run capabilities:check:current` when current sources and generated
+artifacts must match a receipt; source changes are expected to fail that stricter
+gate until a new immutable evidence identity is created.
 
 To inspect the controlled page only:
 
@@ -141,14 +163,19 @@ To reproduce the isolated live lane on Linux with system Chromium at
 
 ```sh
 npm run live:smoke --workspace @badi/chromium
-npm run live --workspace @badi/chromium
+npm run live --workspace @badi/chromium -- \
+  --evidence-id chromium-native-live-run.2026-08-30-review1.v1
 ```
 
 The smoke uses reduced counts and writes only ignored, content-free diagnostic
-JSON. The durable command runs at least 1,000 measured interactions after 50
-warmups and 100 delayed stale-result trials, then writes the schema-validated
-raw evidence document. Both commands build locally, create only disposable
-directories, and verify cleanup; neither uses the real Chromium profile.
+JSON and may be used while iterating. Run the durable command only from a clean,
+isolated clone or worktree with a unique `--evidence-id`; the runner refuses a
+dirty tree and opens the output with no-overwrite semantics. It runs at least
+1,000 measured interactions after 50 warmups and 100 delayed stale-result
+trials, then writes the schema-validated raw evidence document. A separate new
+receipt must hash-link that raw file. Both commands build locally, create only
+disposable directories, and verify cleanup; neither uses the real Chromium
+profile.
 
 ## Product order
 

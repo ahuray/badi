@@ -1,6 +1,12 @@
+// @vitest-environment-options {"url":"http://localhost:4173/chromium.html"}
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FieldController } from "../src/content/field-controller";
 import { AnchoredGhostView } from "../src/content/ghost-view";
+import {
+  EXPECTED_FIXTURE_ORIGIN,
+  isExpectedFixtureDocument,
+} from "../src/shared/fixture-document";
 import type {
   CommitAuthorization,
   CommitAuthorizationRequest,
@@ -33,6 +39,7 @@ class FakeTransport implements SuggestionTransport {
   readonly deferredAuthorizations: DeferredAuthorization[] = [];
   readonly results: CommitResultNotice[] = [];
   readonly deferred: Deferred[] = [];
+  readonly closedSessions: string[] = [];
   autoAuthorize = true;
 
   requestSuggestion(request: SuggestionRequest): Promise<SuggestionResponse> {
@@ -44,6 +51,10 @@ class FakeTransport implements SuggestionTransport {
 
   cancelSuggestion(request: SuggestionRequest): void {
     this.cancellations.push(request);
+  }
+
+  closeSession(sessionId: string): void {
+    this.closedSessions.push(sessionId);
   }
 
   dismissSuggestion(address: SuggestionAddress): void {
@@ -133,23 +144,51 @@ class RecordingView implements SuggestionView {
 
 const SESSION_ID = "0198f215-3ec0-7000-8000-000000000001";
 
-const SILENT_POLICY_MUTATIONS: ReadonlyArray<
-  readonly [string, (field: HTMLInputElement, ancestor: HTMLDivElement) => void]
-> = [
-  ["readonly", (field) => { field.readOnly = true; }],
-  ["disabled", (field) => { field.disabled = true; }],
-  ["type", (field) => { field.type = "password"; }],
-  ["autocomplete", (field) => { field.autocomplete = "one-time-code"; }],
-  ["constraint", (field) => { field.maxLength = field.value.length; }],
-  ["ancestor hidden", (_field, ancestor) => { ancestor.hidden = true; }],
-  ["ancestor opt-out", (_field, ancestor) => {
-    ancestor.setAttribute("data-badi", "off");
-  }],
-  ["ancestor style", (_field, ancestor) => { ancestor.style.display = "none"; }],
-  ["ancestor inert", (_field, ancestor) => { ancestor.setAttribute("inert", ""); }],
-  ["ancestor aria-hidden", (_field, ancestor) => {
-    ancestor.setAttribute("aria-hidden", "true");
-  }],
+interface SilentPolicyMutation {
+  readonly name: string;
+  readonly mutate: (field: HTMLInputElement, ancestor: HTMLDivElement) => void;
+  readonly expectedRequestCount?: number;
+}
+
+const SILENT_POLICY_MUTATIONS: readonly SilentPolicyMutation[] = [
+  { name: "readonly", mutate: (field) => { field.readOnly = true; } },
+  { name: "disabled", mutate: (field) => { field.disabled = true; } },
+  { name: "type", mutate: (field) => { field.type = "password"; } },
+  {
+    name: "autocomplete",
+    mutate: (field) => { field.autocomplete = "one-time-code"; },
+  },
+  // A changed constraint invalidates the old suggestion but leaves the field
+  // eligible for a fresh, constraint-aware result.
+  {
+    name: "constraint",
+    mutate: (field) => { field.maxLength = field.value.length; },
+    expectedRequestCount: 2,
+  },
+  { name: "ancestor hidden", mutate: (_field, ancestor) => { ancestor.hidden = true; } },
+  {
+    name: "ancestor opt-out",
+    mutate: (_field, ancestor) => { ancestor.setAttribute("data-badi", "off"); },
+  },
+  {
+    name: "ancestor style",
+    mutate: (field, ancestor) => {
+      ancestor.style.display = "none";
+      // jsdom has no layout engine; model Chromium's checkVisibility result.
+      Object.defineProperty(field, "checkVisibility", {
+        configurable: true,
+        value: () => false,
+      });
+    },
+  },
+  {
+    name: "ancestor inert",
+    mutate: (_field, ancestor) => { ancestor.setAttribute("inert", ""); },
+  },
+  {
+    name: "ancestor aria-hidden",
+    mutate: (_field, ancestor) => { ancestor.setAttribute("aria-hidden", "true"); },
+  },
 ];
 
 function nextIdFactory(): () => string {
@@ -195,6 +234,7 @@ async function deliverMutationObserver(): Promise<void> {
 describe("FieldController", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    history.replaceState(null, "", "/chromium.html");
     document.body.replaceChildren();
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     Object.defineProperty(HTMLElement.prototype, "checkVisibility", {
@@ -288,6 +328,140 @@ describe("FieldController", () => {
     expect(transport.requests).toHaveLength(0);
     expect(transport.cancellations).toHaveLength(0);
     expect(valueReads).toBe(0);
+    controller.dispose();
+  });
+
+  it("does not acquire text from a focused field outside the viewport", async () => {
+    const field = document.createElement("textarea");
+    field.id = "offscreen-field";
+    document.body.append(field);
+    let fieldRect = new DOMRect(-500, -500, 200, 40);
+    field.getBoundingClientRect = () => fieldRect;
+    let valueReads = 0;
+    Object.defineProperty(field, "value", {
+      configurable: true,
+      get: () => {
+        valueReads += 1;
+        return "must remain local";
+      },
+      set: () => undefined,
+    });
+    const transport = new FakeTransport();
+    const controller = new FieldController({
+      transport,
+      view: new RecordingView(),
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+    });
+    controller.start();
+
+    field.focus();
+    await dispatchRequest();
+
+    expect(valueReads).toBe(0);
+    expect(transport.requests).toHaveLength(0);
+
+    fieldRect = new DOMRect(20, 20, 200, 40);
+    field.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertText",
+        data: "x",
+      }),
+    );
+    await dispatchRequest();
+    expect(valueReads).toBeGreaterThan(0);
+    expect(transport.requests).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("does not acquire text through filtered, clipped, masked, or overflow-clipped fields", async () => {
+    const transport = new FakeTransport();
+    const controller = new FieldController({
+      transport,
+      view: new RecordingView(),
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+    });
+    controller.start();
+    let valueReads = 0;
+
+    const addField = (id: string): HTMLTextAreaElement => {
+      const field = document.createElement("textarea");
+      field.id = id;
+      Object.defineProperty(field, "value", {
+        configurable: true,
+        get: () => {
+          valueReads += 1;
+          return "must remain local";
+        },
+        set: () => undefined,
+      });
+      document.body.append(field);
+      return field;
+    };
+
+    const filtered = addField("filtered-field");
+    filtered.style.filter = "opacity(0)";
+    const clipped = addField("clipped-field");
+    clipped.style.clipPath = "inset(50%)";
+    const masked = addField("masked-field");
+    masked.style.maskImage = "linear-gradient(transparent, transparent)";
+    const transformed = addField("transformed-field");
+    transformed.style.transform = "scale(0)";
+
+    const clippingAncestor = document.createElement("div");
+    clippingAncestor.style.overflow = "hidden";
+    clippingAncestor.getBoundingClientRect = () => new DOMRect(0, 0, 10, 10);
+    const overflowClipped = document.createElement("textarea");
+    overflowClipped.id = "overflow-clipped-field";
+    overflowClipped.getBoundingClientRect = () => new DOMRect(20, 20, 200, 40);
+    Object.defineProperty(overflowClipped, "value", {
+      configurable: true,
+      get: () => {
+        valueReads += 1;
+        return "must also remain local";
+      },
+      set: () => undefined,
+    });
+    clippingAncestor.append(overflowClipped);
+    document.body.append(clippingAncestor);
+
+    const paintContainer = document.createElement("div");
+    paintContainer.style.contain = "paint";
+    paintContainer.getBoundingClientRect = () => new DOMRect(0, 0, 10, 10);
+    const paintClipped = document.createElement("textarea");
+    paintClipped.id = "paint-clipped-field";
+    paintClipped.getBoundingClientRect = () => new DOMRect(20, 20, 200, 40);
+    Object.defineProperty(paintClipped, "value", {
+      configurable: true,
+      get: () => {
+        valueReads += 1;
+        return "paint-contained secret";
+      },
+      set: () => undefined,
+    });
+    paintContainer.append(paintClipped);
+    document.body.append(paintContainer);
+
+    for (const field of [
+      filtered,
+      clipped,
+      masked,
+      transformed,
+      overflowClipped,
+      paintClipped,
+    ]) {
+      field.focus();
+      await dispatchRequest();
+    }
+
+    expect(valueReads).toBe(0);
+    expect(transport.requests).toHaveLength(0);
     controller.dispose();
   });
 
@@ -435,6 +609,320 @@ describe("FieldController", () => {
     controller.dispose();
   });
 
+  it("preserves Shift+Tab as normal page navigation", async () => {
+    const field = document.createElement("textarea");
+    field.id = "shift-tab-draft";
+    field.value = "Keep";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    const transport = new FakeTransport();
+    const view = new RecordingView();
+    const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
+      transport,
+      view,
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+    });
+    controller.start();
+    field.focus();
+    await dispatchRequest();
+    transport.resolve(0, " unchanged", " unchanged");
+    await Promise.resolve();
+
+    const shiftTab = new KeyboardEvent("keydown", {
+      key: "Tab",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    field.dispatchEvent(shiftTab);
+
+    expect(shiftTab.defaultPrevented).toBe(false);
+    expect(field.value).toBe("Keep");
+    expect(view.visible).toBe(true);
+    expect(transport.authorizationRequests).toHaveLength(0);
+    controller.dispose();
+  });
+
+  it("ignores an accept key already consumed by the page", async () => {
+    const field = document.createElement("textarea");
+    field.id = "page-consumed-tab";
+    field.value = "Keep";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    const transport = new FakeTransport();
+    const view = new RecordingView();
+    const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
+      transport,
+      view,
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+    });
+    controller.start();
+    field.focus();
+    await dispatchRequest();
+    transport.resolve(0, " unchanged", " unchanged");
+    await Promise.resolve();
+
+    const consumedTab = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    consumedTab.preventDefault();
+    field.dispatchEvent(consumedTab);
+
+    expect(consumedTab.defaultPrevented).toBe(true);
+    expect(field.value).toBe("Keep");
+    expect(view.visible).toBe(true);
+    expect(transport.authorizationRequests).toHaveLength(0);
+    controller.dispose();
+  });
+
+  it("adopts an eligible already-focused field without acquiring while initially paused", async () => {
+    const field = document.createElement("textarea");
+    field.id = "autofocus-draft";
+    field.value = "Ready";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    field.focus();
+    const transport = new FakeTransport();
+    const controller = new FieldController({
+      transport,
+      view: new RecordingView(),
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+    });
+    controller.pause();
+    controller.start();
+
+    await dispatchRequest(50);
+    expect(transport.requests).toHaveLength(0);
+    controller.resume();
+    await dispatchRequest();
+    expect(transport.requests).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("advances authority coordinates when an unchanged field pauses and resumes", async () => {
+    const field = document.createElement("textarea");
+    field.id = "pause-resume-draft";
+    field.value = "Unchanged";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    const transport = new FakeTransport();
+    const controller = new FieldController({
+      transport,
+      view: new RecordingView(),
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+    });
+    controller.start();
+    field.focus();
+    await dispatchRequest();
+    const beforePause = transport.requests[0];
+    if (beforePause === undefined) throw new Error("Initial request missing");
+
+    controller.pause();
+    controller.resume();
+    await dispatchRequest();
+    const afterResume = transport.requests[1];
+    if (afterResume === undefined) throw new Error("Resumed request missing");
+
+    expect(transport.cancellations).toEqual([beforePause]);
+    expect(afterResume.sessionId).toBe(beforePause.sessionId);
+    expect(afterResume.focusEpoch).toBe(beforePause.focusEpoch);
+    expect(afterResume.revision).toBeGreaterThan(beforePause.revision);
+    expect(afterResume.context.before).toBe(beforePause.context.before);
+    controller.dispose();
+  });
+
+  it("adopts a background document's active field only after the window gains focus", async () => {
+    const field = document.createElement("textarea");
+    field.id = "background-bootstrap-draft";
+    field.value = "Ready";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    field.focus();
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    const transport = new FakeTransport();
+    const controller = new FieldController({
+      transport,
+      view: new RecordingView(),
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+    });
+    controller.start();
+    await dispatchRequest(50);
+    expect(transport.requests).toHaveLength(0);
+    expect(document.activeElement).toBe(field);
+
+    vi.mocked(document.hasFocus).mockReturnValue(true);
+    const ownerWindow = document.defaultView;
+    if (ownerWindow === null) throw new Error("Document window missing");
+    ownerWindow.dispatchEvent(new ownerWindow.FocusEvent("focus"));
+    await dispatchRequest();
+    expect(transport.requests).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("closes a session on focusout and page lifecycle changes, then reopens cleanly", async () => {
+    const field = document.createElement("textarea");
+    field.id = "lifecycle-draft";
+    field.value = "Ready";
+    const sink = document.createElement("button");
+    document.body.append(field, sink);
+    field.setSelectionRange(field.value.length, field.value.length);
+    const transport = new FakeTransport();
+    const controller = new FieldController({
+      transport,
+      view: new RecordingView(),
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+    });
+    controller.start();
+    field.focus();
+    await dispatchRequest();
+
+    sink.focus();
+    expect(transport.closedSessions).toEqual([SESSION_ID]);
+    field.focus();
+    await dispatchRequest();
+    expect(transport.requests).toHaveLength(2);
+
+    window.dispatchEvent(new Event("pagehide"));
+    expect(transport.closedSessions).toEqual([SESSION_ID, SESSION_ID]);
+    window.dispatchEvent(new Event("pagehide"));
+    expect(transport.closedSessions).toEqual([SESSION_ID, SESSION_ID]);
+    window.dispatchEvent(new Event("pageshow"));
+    await dispatchRequest();
+    expect(transport.requests).toHaveLength(3);
+
+    controller.dispose();
+    expect(transport.closedSessions).toEqual([SESSION_ID, SESSION_ID, SESSION_ID]);
+  });
+
+  it("drops a response after a pushState route transition and closes its session", async () => {
+    const field = document.createElement("textarea");
+    field.id = "push-state-draft";
+    field.value = "Stay";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    let exactDocument = true;
+    const transport = new FakeTransport();
+    const view = new RecordingView();
+    const controller = new FieldController({
+      transport,
+      view,
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+      isCurrentDocument: () => exactDocument,
+    });
+    controller.start();
+    field.focus();
+    await dispatchRequest();
+
+    history.pushState({ route: "other" }, "");
+    exactDocument = false;
+    transport.resolve(0, " must not display");
+    await Promise.resolve();
+
+    expect(view.shown).toEqual([]);
+    expect(transport.closedSessions).toEqual([SESSION_ID]);
+    controller.dispose();
+  });
+
+  it("uses the production exact-document predicate on a real query route transition", async () => {
+    expect(isExpectedFixtureDocument(document)).toBe(true);
+    const field = document.createElement("textarea");
+    field.id = "exact-route-draft";
+    field.value = "Stay";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    const transport = new FakeTransport();
+    const view = new RecordingView();
+    const controller = new FieldController({
+      transport,
+      view,
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: EXPECTED_FIXTURE_ORIGIN,
+      isCurrentDocument: () => isExpectedFixtureDocument(document),
+    });
+    controller.start();
+    field.focus();
+    await dispatchRequest();
+
+    history.pushState({ route: "other" }, "", "/chromium.html?route=other");
+    expect(isExpectedFixtureDocument(document)).toBe(false);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    transport.resolve(0, " must not display");
+    await Promise.resolve();
+
+    expect(view.shown).toEqual([]);
+    expect(transport.closedSessions).toEqual([SESSION_ID]);
+    controller.dispose();
+  });
+
+  it("rechecks exact-document authority after authorization and before mutation", async () => {
+    const field = document.createElement("textarea");
+    field.id = "replace-state-draft";
+    field.value = "Stay";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    let exactDocument = true;
+    const transport = new FakeTransport();
+    transport.autoAuthorize = false;
+    const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
+      transport,
+      view: new RecordingView(),
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+      isCurrentDocument: () => exactDocument,
+    });
+    controller.start();
+    field.focus();
+    await dispatchRequest();
+    transport.resolve(0, " blocked");
+    await Promise.resolve();
+    field.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+    );
+    const pending = transport.deferredAuthorizations[0];
+    if (pending === undefined) throw new Error("Authorization was not deferred");
+
+    history.replaceState({ route: "other" }, "");
+    exactDocument = false;
+    pending.resolve(transport.authorizationFor(pending.request));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(field.value).toBe("Stay");
+    expect(transport.results.at(-1)?.status).toBe("stale");
+    expect(transport.closedSessions).toContain(SESSION_ID);
+    controller.dispose();
+  });
+
   it("ignores page-authored untrusted accept and dismiss keyboard events", async () => {
     const field = document.createElement("textarea");
     field.id = "hostile-keyboard-draft";
@@ -505,17 +993,19 @@ describe("FieldController", () => {
     transport.resolve(0, " for permission");
     await Promise.resolve();
 
-    const accept = (): void => {
-      field.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Tab",
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
+    const accept = (): KeyboardEvent => {
+      const event = new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true,
+      });
+      field.dispatchEvent(event);
+      return event;
     };
-    accept();
-    accept();
+    expect(accept().defaultPrevented).toBe(true);
+    // A second native shortcut is not consumed while the first authorization
+    // is unresolved; no second wire request is created.
+    expect(accept().defaultPrevented).toBe(false);
     expect(transport.authorizationRequests).toHaveLength(1);
     expect(field.value).toBe("Wait");
 
@@ -531,7 +1021,10 @@ describe("FieldController", () => {
     await dispatchRequest();
     transport.resolve(1, " insertion");
     await Promise.resolve();
-    accept();
+    const deniedKey = accept();
+    // Async MV3 denial is fail-closed: the trusted key was already consumed,
+    // but no synthetic Tab or insertion is attempted.
+    expect(deniedKey.defaultPrevented).toBe(true);
     const second = transport.deferredAuthorizations[1];
     if (second === undefined) throw new Error("Second authorization was not deferred");
     second.reject(new Error("policy paused"));
@@ -698,16 +1191,54 @@ describe("FieldController", () => {
     transport.resolve(0, " too long");
     await Promise.resolve();
     field.maxLength = field.value.length + 2;
-    field.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Tab",
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    const rejectedTab = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    field.dispatchEvent(rejectedTab);
     await Promise.resolve();
+    expect(rejectedTab.defaultPrevented).toBe(false);
     expect(transport.authorizationRequests).toHaveLength(0);
     expect(field.value).toBe("replace me");
+    controller.dispose();
+  });
+
+  it("does not consume the word shortcut when local insertion constraints fail", async () => {
+    const field = document.createElement("textarea");
+    field.id = "word-constraint";
+    field.value = "Exact";
+    field.maxLength = field.value.length + 1;
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    const transport = new FakeTransport();
+    const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
+      transport,
+      view: new RecordingView(),
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+    });
+    controller.start();
+    field.focus();
+    await dispatchRequest();
+    transport.resolve(0, " word remainder");
+    await Promise.resolve();
+
+    const rejectedWord = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    field.dispatchEvent(rejectedWord);
+    await Promise.resolve();
+
+    expect(rejectedWord.defaultPrevented).toBe(false);
+    expect(transport.authorizationRequests).toHaveLength(0);
+    expect(field.value).toBe("Exact");
     controller.dispose();
   });
 
@@ -742,6 +1273,21 @@ describe("FieldController", () => {
     expect(view.current).toBe("🙂über weiter");
     expect(view.visibleHideTransitions).toBe(hidesBeforeTyping);
 
+    const original = transport.requests[0];
+    if (original === undefined) throw new Error("Original request missing");
+    controller.clearFromBroker({
+      requestId: original.requestId,
+      sessionId: original.sessionId,
+      focusEpoch: original.focusEpoch,
+      revision: original.revision,
+      monotonicMs: 2_000,
+      fingerprint: original.context.fingerprint,
+      suggestionId: "suggestion-0",
+      reason: "superseded",
+    });
+    expect(view.current).toBe("🙂über weiter");
+    expect(view.visible).toBe(true);
+
     typeText(field, "🙂");
     await Promise.resolve();
     expect(field.value).toBe("A 🙂");
@@ -754,9 +1300,20 @@ describe("FieldController", () => {
       cancelable: true,
     });
     field.dispatchEvent(staleShortcut);
-    expect(staleShortcut.defaultPrevented).toBe(true);
+    expect(staleShortcut.defaultPrevented).toBe(false);
     expect(field.value).toBe("A 🙂");
-    expect(view.visible).toBe(false);
+    expect(view.visible).toBe(true);
+    expect(transport.authorizationRequests).toHaveLength(0);
+
+    const staleWordShortcut = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    field.dispatchEvent(staleWordShortcut);
+    expect(staleWordShortcut.defaultPrevented).toBe(false);
+    expect(view.visible).toBe(true);
     expect(transport.authorizationRequests).toHaveLength(0);
 
     await dispatchRequest();
@@ -765,7 +1322,7 @@ describe("FieldController", () => {
     expect(view.current).toBe("über weiter");
     typeText(field, "x");
     expect(view.visible).toBe(false);
-    expect(view.visibleHideTransitions).toBe(hidesBeforeTyping + 2);
+    expect(view.visibleHideTransitions).toBe(hidesBeforeTyping + 1);
     expect(field.value).toBe("A 🙂x");
     controller.dispose();
   });
@@ -864,8 +1421,8 @@ describe("FieldController", () => {
   });
 
   it.each(SILENT_POLICY_MUTATIONS)(
-    "clears before acceptance after a silent %s mutation",
-    async (_name, mutate) => {
+    "clears before acceptance after a silent $name mutation",
+    async ({ mutate, expectedRequestCount = 1 }) => {
       const ancestor = document.createElement("div");
       const field = document.createElement("input");
       field.id = "silently-mutated-field";
@@ -894,6 +1451,7 @@ describe("FieldController", () => {
 
       mutate(field, ancestor);
       await deliverMutationObserver();
+      await dispatchRequest(50);
       expect(view.visible).toBe(false);
       const accept = new KeyboardEvent("keydown", {
         key: "Tab",
@@ -903,6 +1461,7 @@ describe("FieldController", () => {
       field.dispatchEvent(accept);
       expect(accept.defaultPrevented).toBe(false);
       expect(field.value).toBe("Keep");
+      expect(transport.requests).toHaveLength(expectedRequestCount);
       expect(transport.authorizationRequests).toHaveLength(0);
       controller.dispose();
     },
@@ -1006,6 +1565,74 @@ describe("FieldController", () => {
     controller.dispose();
   });
 
+  it("re-adopts once after a benign observed mutation invalidates the field", async () => {
+    const field = document.createElement("textarea");
+    field.id = "benign-mutation";
+    field.value = "Stable";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    const transport = new FakeTransport();
+    const controller = new FieldController({
+      transport,
+      view: new RecordingView(),
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+    });
+    controller.start();
+    field.focus();
+    await dispatchRequest();
+    const first = transport.requests[0];
+    if (first === undefined) throw new Error("Initial request missing");
+
+    field.classList.add("layout-only-change");
+    await deliverMutationObserver();
+    await dispatchRequest();
+    const recovered = transport.requests[1];
+    if (recovered === undefined) throw new Error("Recovery request missing");
+
+    expect(transport.closedSessions).toEqual([SESSION_ID]);
+    expect(recovered.sessionId).toBe(first.sessionId);
+    expect(recovered.revision).toBeGreaterThan(first.revision);
+    await dispatchRequest(50);
+    expect(transport.requests).toHaveLength(2);
+    controller.dispose();
+  });
+
+  it("recovers when a focused denied field becomes eligible in a later task", async () => {
+    const field = document.createElement("textarea");
+    field.id = "restored-policy";
+    field.value = "Stable";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    const transport = new FakeTransport();
+    const controller = new FieldController({
+      transport,
+      view: new RecordingView(),
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+    });
+    controller.start();
+    field.focus();
+    await dispatchRequest();
+    expect(transport.requests).toHaveLength(1);
+
+    field.readOnly = true;
+    await deliverMutationObserver();
+    await dispatchRequest();
+    expect(transport.requests).toHaveLength(1);
+
+    field.readOnly = false;
+    await deliverMutationObserver();
+    await dispatchRequest();
+    expect(transport.requests).toHaveLength(2);
+    expect(transport.closedSessions).toEqual([SESSION_ID]);
+    controller.dispose();
+  });
+
   it("clears and blocks acceptance when the document becomes hidden", async () => {
     const field = document.createElement("textarea");
     field.id = "hidden-document";
@@ -1066,7 +1693,7 @@ describe("FieldController", () => {
     }
   });
 
-  it("clears and blocks acceptance on native transport invalidation", async () => {
+  it("clears on native transport invalidation and re-adopts the eligible field once", async () => {
     const field = document.createElement("textarea");
     field.id = "native-disconnect";
     field.value = "Stay";
@@ -1089,6 +1716,7 @@ describe("FieldController", () => {
     transport.resolve(0, " disconnected", " disconnected");
     await Promise.resolve();
     controller.invalidateTransport();
+    controller.invalidateTransport();
 
     expect(view.visible).toBe(false);
     const accept = new KeyboardEvent("keydown", {
@@ -1100,6 +1728,11 @@ describe("FieldController", () => {
     expect(accept.defaultPrevented).toBe(false);
     expect(field.value).toBe("Stay");
     expect(transport.authorizationRequests).toHaveLength(0);
+    await Promise.resolve();
+    await dispatchRequest();
+    expect(transport.requests).toHaveLength(2);
+    await dispatchRequest(50);
+    expect(transport.requests).toHaveLength(2);
     controller.dispose();
   });
 
@@ -1305,6 +1938,42 @@ describe("FieldController", () => {
     expect(host?.style.left).toBe("20px");
     expect(host?.style.top).toBe("76px");
     expect(host?.shadowRoot).toBeNull();
+    if (host === null) throw new Error("Ghost host missing");
+    host.style.opacity = "0";
+    const acceptWhileInvisible = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    field.dispatchEvent(acceptWhileInvisible);
+    expect(acceptWhileInvisible.defaultPrevented).toBe(false);
+    expect(transport.authorizationRequests).toHaveLength(0);
+    expect(field.value).toBe("Anchor");
+    host.style.opacity = "";
+    host.style.filter = "opacity(0)";
+    const acceptWhileFiltered = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    field.dispatchEvent(acceptWhileFiltered);
+    expect(acceptWhileFiltered.defaultPrevented).toBe(false);
+    expect(transport.authorizationRequests).toHaveLength(0);
+    expect(field.value).toBe("Anchor");
+    host.style.filter = "";
+    host.style.height = "1px";
+    host.style.overflow = "hidden";
+    const acceptWhileClipped = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    field.dispatchEvent(acceptWhileClipped);
+    expect(acceptWhileClipped.defaultPrevented).toBe(false);
+    expect(transport.authorizationRequests).toHaveLength(0);
+    expect(field.value).toBe("Anchor");
+    host.style.height = "";
+    host.style.overflow = "";
     host?.remove();
     const acceptAfterRemoval = new KeyboardEvent("keydown", {
       key: "Tab",

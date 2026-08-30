@@ -24,7 +24,10 @@
   "properties": {
     "$schema": { "const": "../v2/live-run.schema.json" },
     "record_version": { "const": 1 },
-    "id": { "const": "chromium-native-live-run.v1" },
+    "id": {
+      "type": "string",
+      "pattern": "^chromium-native-live-run(?:\\.[a-z0-9][a-z0-9-]{0,63})?\\.v1$"
+    },
     "recorded_at": { "$ref": "#/$defs/utcTimestamp" },
     "repository": {
       "type": "object",

@@ -59,10 +59,18 @@ describe("bounded context", () => {
     ["zero-width control", "safe\u200bhostile"],
     ["unpaired high surrogate", "safe\ud800hostile"],
     ["unpaired low surrogate", "safe\udc00hostile"],
-    ["more than 64 scalars", "x".repeat(65)],
-    ["more than eight words", "one two three four five six seven eight nine"],
   ])("rejects hostile provider output: %s", (_label, value) => {
     expect(sanitizeSuggestion(value)).toBeNull();
+  });
+
+  it("matches the broker's scalar and Unicode-word truncation", () => {
+    expect(sanitizeSuggestion("x".repeat(65))).toBe("x".repeat(64));
+    expect(
+      sanitizeSuggestion("one two three four five six seven eight nine"),
+    ).toBe("one two three four five six seven eight");
+    expect(sanitizeSuggestion("one two three four five six seven can't nine")).toBe(
+      "one two three four five six seven can't",
+    );
   });
 
   it("consumes the shared protocol accept-word fixtures directly", async () => {
@@ -81,5 +89,7 @@ describe("bounded context", () => {
       expect(accepted).toBe(testCase.accepted);
       expect(testCase.input.slice(accepted.length)).toBe(testCase.remainder);
     }
+    expect(nextSuggestionWord(" can't wait")).toBe(" can't");
+    expect(nextSuggestionWord(" 3.14 seconds")).toBe(" 3.14");
   });
 });

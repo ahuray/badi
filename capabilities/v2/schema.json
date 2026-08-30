@@ -134,7 +134,7 @@
           "required": ["base_commit", "working_tree_dirty"],
           "properties": {
             "base_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
-            "working_tree_dirty": { "type": "boolean" }
+            "working_tree_dirty": { "const": false }
           }
         },
         "isolation": {

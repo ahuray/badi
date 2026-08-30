@@ -22,6 +22,9 @@ fn hardware_report_is_local_json_without_a_runtime_directory() {
     );
     assert!(report["memory"].is_object());
     assert!(report["gpu"].is_object());
+    assert!(report["gpu"]["hybrid"].is_boolean());
+    assert!(report["gpu"].get("usable_memory_mib").is_some());
+    assert!(report["gpu"].get("backend").is_some());
 }
 
 #[test]
@@ -35,25 +38,46 @@ fn model_report_is_pinned_and_never_claims_runtime_readiness() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     let report: Value = serde_json::from_slice(&output.stdout).expect("models JSON");
-    assert_eq!(report["schema"], "badi.model-advice.v1");
+    assert_eq!(report["schema"], "badi.model-advice.v2");
     assert_eq!(report["hardware"]["schema"], "badi.hardware.v1");
     assert_eq!(report["use_case"], "code");
     assert_eq!(report["runtime_ready"], false);
-    assert_eq!(report["recommended"]["license"], "Apache-2.0");
-    assert_eq!(report["recommended"]["runtime"], "llama.cpp");
-    assert_eq!(report["download"]["tool"], "hf");
-    assert_eq!(
-        report["recommended"]["revision"]
-            .as_str()
-            .expect("revision")
-            .len(),
-        40
-    );
-    assert_eq!(
-        report["download"]["expected_sha256"]
-            .as_str()
-            .expect("digest")
-            .len(),
-        64
-    );
+    match report["status"].as_str().expect("advice status") {
+        "candidate" => {
+            assert_eq!(report["reason"], "candidate_fits_host_memory");
+            assert_eq!(report["recommended"]["license"], "Apache-2.0");
+            assert_eq!(report["recommended"]["runtime"], "llama.cpp");
+            assert_eq!(report["recommended"]["minimum_runtime_version"], "b5092");
+            assert_eq!(report["download"]["tool"], "hf");
+            assert_eq!(
+                report["recommended"]["revision"]
+                    .as_str()
+                    .expect("revision")
+                    .len(),
+                40
+            );
+            assert_eq!(
+                report["download"]["expected_sha256"]
+                    .as_str()
+                    .expect("digest")
+                    .len(),
+                64
+            );
+            assert!(
+                report["fit"]["required_host_memory_mib"]
+                    .as_u64()
+                    .is_some_and(|required| required
+                        <= report["fit"]["usable_host_memory_mib"]
+                            .as_u64()
+                            .expect("usable memory"))
+            );
+        }
+        "no_fit" => {
+            assert!(report["tier"].is_null());
+            assert!(report["recommended"].is_null());
+            assert!(report["download"].is_null());
+            assert_eq!(report["alternatives"], serde_json::json!([]));
+        }
+        status => panic!("unknown advice status {status}"),
+    }
 }

@@ -88,6 +88,7 @@ export interface FieldControllerOptions {
   readonly sessionId?: string;
   readonly origin?: string;
   readonly fingerprintSalt?: string;
+  readonly isCurrentDocument?: () => boolean;
   /** Test-only seam: jsdom cannot construct trusted keyboard events. */
   readonly allowUntrustedKeyboardForTesting?: boolean;
 }
@@ -110,6 +111,8 @@ export class FieldController {
   readonly #sessionId: string;
   readonly #origin: string;
   readonly #fingerprintSalt: string;
+  readonly #isCurrentDocument: () => boolean;
+  readonly #navigation: EventTarget | null;
   readonly #allowUntrustedKeyboardForTesting: boolean;
   readonly #states = new WeakMap<EditableField, FieldState>();
   readonly #internalMutations = new WeakSet<EditableField>();
@@ -122,6 +125,8 @@ export class FieldController {
   #activeAuthorization: PendingAuthorization | null = null;
   #paused = false;
   #started = false;
+  #sessionClosed = false;
+  #reAdoptionQueued = false;
 
   constructor(options: FieldControllerOptions) {
     this.#transport = options.transport;
@@ -133,6 +138,10 @@ export class FieldController {
     this.#sessionId = options.sessionId ?? this.#idFactory();
     this.#origin = options.origin ?? this.#document.location.origin;
     this.#fingerprintSalt = options.fingerprintSalt ?? defaultId();
+    this.#isCurrentDocument = options.isCurrentDocument ?? (() => true);
+    this.#navigation =
+      (this.#document.defaultView as (Window & { navigation?: EventTarget }) | null)
+        ?.navigation ?? null;
     this.#allowUntrustedKeyboardForTesting =
       options.allowUntrustedKeyboardForTesting ?? false;
   }
@@ -159,7 +168,17 @@ export class FieldController {
     this.#document.addEventListener("compositionstart", this.#onCompositionStart, true);
     this.#document.addEventListener("compositionend", this.#onCompositionEnd, true);
     this.#document.addEventListener("visibilitychange", this.#onVisibilityChange, true);
-    this.#document.defaultView?.addEventListener("blur", this.#onWindowBlur, true);
+    const window = this.#document.defaultView;
+    window?.addEventListener("blur", this.#onWindowBlur, true);
+    window?.addEventListener("focus", this.#onWindowFocus, true);
+    window?.addEventListener("pagehide", this.#onPageHide, true);
+    window?.addEventListener("pageshow", this.#onDocumentRouteChange, true);
+    window?.addEventListener("popstate", this.#onDocumentRouteChange, true);
+    window?.addEventListener("hashchange", this.#onDocumentRouteChange, true);
+    this.#navigation?.addEventListener(
+      "currententrychange",
+      this.#onDocumentRouteChange,
+    );
     const root = this.#document.documentElement;
     const Observer = this.#document.defaultView?.MutationObserver;
     if (root !== null && Observer !== undefined) {
@@ -171,6 +190,7 @@ export class FieldController {
         attributeFilter: [...OBSERVED_POLICY_ATTRIBUTES],
       });
     }
+    this.#adoptActiveElement();
   }
 
   pause(): void {
@@ -179,6 +199,7 @@ export class FieldController {
     }
     this.#paused = true;
     this.#cancelActiveWork();
+    this.#advanceActiveRevision();
     this.#clearSuggestion();
   }
 
@@ -188,6 +209,7 @@ export class FieldController {
     }
     this.#paused = false;
     if (this.#activeField !== null) {
+      this.#advanceActiveRevision();
       this.#schedule(this.#activeField);
     }
   }
@@ -215,7 +237,8 @@ export class FieldController {
   }
 
   invalidateTransport(): void {
-    this.#invalidateActiveState();
+    this.#invalidateActiveState(false);
+    this.#queueTrustedReAdoption();
   }
 
   revokeCommit(address: SuggestionAddress): void {
@@ -247,6 +270,7 @@ export class FieldController {
       source.fingerprint === event.fingerprint &&
       (event.suggestionId === null || source.suggestionId === event.suggestionId)
     ) {
+      if (!visible.brokerBound && event.reason === "superseded") return;
       this.#clearSuggestion();
     }
   }
@@ -258,6 +282,7 @@ export class FieldController {
     this.#started = false;
     this.#cancelActiveWork();
     this.#clearSuggestion();
+    this.#closeSession();
     this.#document.removeEventListener("focusin", this.#onFocusIn, true);
     this.#document.removeEventListener("focusout", this.#onFocusOut, true);
     this.#document.removeEventListener("input", this.#onInput, true);
@@ -267,7 +292,17 @@ export class FieldController {
     this.#document.removeEventListener("compositionstart", this.#onCompositionStart, true);
     this.#document.removeEventListener("compositionend", this.#onCompositionEnd, true);
     this.#document.removeEventListener("visibilitychange", this.#onVisibilityChange, true);
-    this.#document.defaultView?.removeEventListener("blur", this.#onWindowBlur, true);
+    const window = this.#document.defaultView;
+    window?.removeEventListener("blur", this.#onWindowBlur, true);
+    window?.removeEventListener("focus", this.#onWindowFocus, true);
+    window?.removeEventListener("pagehide", this.#onPageHide, true);
+    window?.removeEventListener("pageshow", this.#onDocumentRouteChange, true);
+    window?.removeEventListener("popstate", this.#onDocumentRouteChange, true);
+    window?.removeEventListener("hashchange", this.#onDocumentRouteChange, true);
+    this.#navigation?.removeEventListener(
+      "currententrychange",
+      this.#onDocumentRouteChange,
+    );
     this.#mutationObserver?.disconnect();
     this.#mutationObserver = null;
     this.#view.dispose();
@@ -277,7 +312,12 @@ export class FieldController {
 
   readonly #onFocusIn = (event: FocusEvent): void => {
     const target = eventField(event);
-    if (target === null) {
+    if (target !== null) this.#activateTarget(target);
+  };
+
+  #activateTarget(target: Element): void {
+    if (!this.#currentDocumentIsTrusted()) {
+      this.#invalidateActiveState();
       return;
     }
     if (this.#document.activeElement !== target || !this.#document.hasFocus()) {
@@ -285,9 +325,7 @@ export class FieldController {
     }
 
     if (this.#activeField !== null && this.#activeField !== target) {
-      this.#cancelActiveWork();
-      this.#clearSuggestion();
-      this.#activeField = null;
+      this.#invalidateActiveState();
     }
 
     // This decision deliberately precedes state/context capture.
@@ -306,23 +344,31 @@ export class FieldController {
     state.focusEpoch = ++this.#focusSequence;
     state.revision += 1;
     state.lastSelection = readSelection(field);
+    this.#sessionClosed = false;
     this.#activeField = field;
     this.#clearSuggestion();
     this.#schedule(field);
-  };
+  }
+
+  #adoptActiveElement(): void {
+    const active = this.#document.activeElement;
+    if (active instanceof Element) this.#activateTarget(active);
+  }
 
   readonly #onFocusOut = (event: FocusEvent): void => {
     if (event.target !== this.#activeField) {
       return;
     }
-    this.#cancelActiveWork();
-    this.#clearSuggestion();
-    this.#activeField = null;
+    this.#invalidateActiveState();
   };
 
   readonly #onInput = (event: Event): void => {
     const target = eventField(event);
     if (target === null) {
+      return;
+    }
+    if (!this.#currentDocumentIsTrusted()) {
+      this.#invalidateActiveState();
       return;
     }
 
@@ -332,7 +378,20 @@ export class FieldController {
       return;
     }
     const field = decision.field;
-    if (this.#internalMutations.has(field) || field !== this.#activeField) {
+    if (this.#internalMutations.has(field)) {
+      return;
+    }
+    if (field !== this.#activeField) {
+      if (
+        this.#activeField === null &&
+        this.#document.activeElement === field &&
+        this.#document.hasFocus()
+      ) {
+        // Eligibility can change through scroll/CSSOM without a DOM mutation.
+        // Re-adopt only this already policy-approved focused target; the
+        // scheduled request performs the ordinary pre-acquisition checks.
+        this.#activateTarget(field);
+      }
       return;
     }
 
@@ -356,6 +415,10 @@ export class FieldController {
   };
 
   readonly #onSelectionChange = (): void => {
+    if (!this.#currentDocumentIsTrusted()) {
+      this.#invalidateActiveState();
+      return;
+    }
     const field = this.#activeField;
     if (field === null || this.#internalMutations.has(field)) {
       return;
@@ -376,6 +439,10 @@ export class FieldController {
   };
 
   readonly #onCompositionStart = (event: CompositionEvent): void => {
+    if (!this.#currentDocumentIsTrusted()) {
+      this.#invalidateActiveState();
+      return;
+    }
     const target = eventField(event);
     const decision = target === null ? null : evaluateField(target);
     if (decision === null || !decision.allowed || decision.field !== this.#activeField) {
@@ -389,6 +456,10 @@ export class FieldController {
   };
 
   readonly #onCompositionEnd = (event: CompositionEvent): void => {
+    if (!this.#currentDocumentIsTrusted()) {
+      this.#invalidateActiveState();
+      return;
+    }
     const target = eventField(event);
     const decision = target === null ? null : evaluateField(target);
     if (decision === null || !decision.allowed || decision.field !== this.#activeField) {
@@ -404,6 +475,10 @@ export class FieldController {
   readonly #onVisibilityChange = (): void => {
     if (this.#document.visibilityState !== "visible") {
       this.#invalidateActiveState();
+      return;
+    }
+    if (this.#document.hasFocus() && this.#currentDocumentIsTrusted()) {
+      this.#adoptActiveElement();
     }
   };
 
@@ -413,9 +488,41 @@ export class FieldController {
     }
   };
 
+  readonly #onWindowFocus = (event: Event): void => {
+    // The listener is registered on the window in capture mode. Ignore focus
+    // events whose target is a field; WindowProxy identity is not stable in
+    // every browser-like test realm, so strict object identity is too brittle.
+    if (event.target instanceof Element) return;
+    if (this.#document.hasFocus() && this.#currentDocumentIsTrusted()) {
+      this.#adoptActiveElement();
+    }
+  };
+
+  readonly #onPageHide = (): void => {
+    this.#invalidateActiveState();
+  };
+
+  readonly #onDocumentRouteChange = (): void => {
+    if (!this.#currentDocumentIsTrusted()) {
+      this.#invalidateActiveState();
+      return;
+    }
+    this.#adoptActiveElement();
+  };
+
   readonly #onMutations: MutationCallback = (records): void => {
+    if (!this.#currentDocumentIsTrusted()) {
+      this.#invalidateActiveState();
+      return;
+    }
     const field = this.#activeField;
-    if (field === null) return;
+    if (field === null) {
+      // A prior policy mutation may have invalidated a still-focused field.
+      // Re-run policy without acquiring text so a later restoration can make
+      // the controller live again without requiring focus churn.
+      this.#queueTrustedReAdoption();
+      return;
+    }
 
     let needsPolicyRecheck = false;
     for (const record of records) {
@@ -427,6 +534,7 @@ export class FieldController {
           )
         ) {
           this.#invalidateActiveState();
+          this.#queueTrustedReAdoption();
           return;
         }
         needsPolicyRecheck = true;
@@ -436,6 +544,7 @@ export class FieldController {
       const target = record.target;
       if (target === field || (target instanceof Element && target.contains(field))) {
         this.#invalidateActiveState();
+        this.#queueTrustedReAdoption();
         return;
       }
       if (
@@ -448,14 +557,28 @@ export class FieldController {
 
     if (!needsPolicyRecheck) return;
     try {
-      if (!evaluateField(field).allowed) this.#invalidateActiveState();
+      if (!evaluateField(field).allowed) {
+        this.#invalidateActiveState();
+        this.#queueTrustedReAdoption();
+      }
     } catch {
       this.#invalidateActiveState();
+      this.#queueTrustedReAdoption();
     }
   };
 
   readonly #onKeyDown = (event: KeyboardEvent): void => {
-    if (event.target !== this.#activeField || !this.suggestionVisible) {
+    if (!this.#currentDocumentIsTrusted()) {
+      this.#invalidateActiveState();
+      return;
+    }
+    if (event.defaultPrevented) return;
+    const visible = this.#visible;
+    if (
+      event.target !== this.#activeField ||
+      visible === null ||
+      !this.#view.visible
+    ) {
       return;
     }
     if (!event.isTrusted && !this.#allowUntrustedKeyboardForTesting) {
@@ -468,7 +591,22 @@ export class FieldController {
       this.dismiss();
       return;
     }
-    if (event.key === "Tab" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    if (
+      event.key === "Tab" &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.shiftKey
+    ) {
+      if (!visible.brokerBound) return;
+      if (this.#activeAuthorization?.visible === visible) return;
+      if (this.#acceptanceCandidate(visible, "all") === null) {
+        this.#clearSuggestion();
+        return;
+      }
+      // MV3 native authorization is asynchronous. Once the trusted key is
+      // consumed, a later denial cannot replay native Tab navigation without
+      // synthetic input. Fail closed and leave the field unchanged instead.
       event.preventDefault();
       event.stopPropagation();
       this.#accept("all");
@@ -480,6 +618,12 @@ export class FieldController {
       !event.altKey &&
       !event.shiftKey
     ) {
+      if (!visible.brokerBound) return;
+      if (this.#activeAuthorization?.visible === visible) return;
+      if (this.#acceptanceCandidate(visible, "word") === null) {
+        this.#clearSuggestion();
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       this.#accept("word");
@@ -504,6 +648,10 @@ export class FieldController {
   }
 
   #schedule(field: EditableField): void {
+    if (!this.#currentDocumentIsTrusted()) {
+      this.#invalidateActiveState();
+      return;
+    }
     if (
       this.#paused ||
       this.#document.visibilityState !== "visible" ||
@@ -527,6 +675,10 @@ export class FieldController {
   }
 
   #request(field: EditableField, state: FieldState): void {
+    if (!this.#currentDocumentIsTrusted()) {
+      this.#invalidateActiveState();
+      return;
+    }
     if (
       this.#paused ||
       this.#document.visibilityState !== "visible" ||
@@ -607,6 +759,10 @@ export class FieldController {
       return;
     }
     state.pending = null;
+    if (!this.#currentDocumentIsTrusted()) {
+      this.#invalidateActiveState();
+      return;
+    }
     if (
       this.#paused ||
       this.#document.visibilityState !== "visible" ||
@@ -696,33 +852,27 @@ export class FieldController {
   }
 
   #accept(mode: "word" | "all"): void {
+    if (!this.#currentDocumentIsTrusted()) {
+      this.#invalidateActiveState();
+      return;
+    }
     const visible = this.#visible;
     if (visible === null || !this.#view.visible) {
       this.#clearSuggestion();
       return;
     }
     if (!visible.brokerBound) {
-      this.#clearSuggestion();
-      this.#schedule(visible.field);
-      return;
-    }
-    if (!this.#validateVisible(visible)) {
-      this.#clearSuggestion();
       return;
     }
     if (this.#activeAuthorization?.visible === visible) {
       return;
     }
-
-    const accepted =
-      mode === "all"
-        ? visible.text
-        : (visible.preferredWord ?? nextSuggestionWord(visible.text));
-    const remainder = visible.text.slice(accepted.length);
-    if (!this.#insertionSatisfiesConstraints(visible.field, visible.selection, accepted)) {
+    const candidate = this.#acceptanceCandidate(visible, mode);
+    if (candidate === null) {
       this.#clearSuggestion();
       return;
     }
+    const { accepted, remainder } = candidate;
 
     const authorizationRequest: CommitAuthorizationRequest = {
       ...this.#addressFor(visible),
@@ -746,6 +896,26 @@ export class FieldController {
     );
   }
 
+  #acceptanceCandidate(
+    visible: VisibleSuggestion,
+    mode: "word" | "all",
+  ): { readonly accepted: string; readonly remainder: string } | null {
+    if (!this.#validateVisible(visible)) {
+      return null;
+    }
+    const accepted =
+      mode === "all"
+        ? visible.text
+        : (visible.preferredWord ?? nextSuggestionWord(visible.text));
+    if (!this.#insertionSatisfiesConstraints(visible.field, visible.selection, accepted)) {
+      return null;
+    }
+    return {
+      accepted,
+      remainder: visible.text.slice(accepted.length),
+    };
+  }
+
   #applyAuthorizedCommit(
     pending: PendingAuthorization,
     authorization: CommitAuthorization,
@@ -761,6 +931,14 @@ export class FieldController {
       authorization.text === request.expectedText &&
       authorization.acceptance === request.acceptance;
     const isCurrent = this.#activeAuthorization === pending;
+    if (!this.#currentDocumentIsTrusted()) {
+      if (isCurrent) this.#activeAuthorization = null;
+      this.#invalidateActiveState();
+      void Promise.resolve(
+        this.#transport.reportCommit({ ...this.#addressFor(visible), status: "stale" }),
+      ).catch(() => undefined);
+      return;
+    }
     if (!addressMatches) {
       if (isCurrent) {
         this.#activeAuthorization = null;
@@ -838,6 +1016,7 @@ export class FieldController {
       postDispatchSelection === null ||
       field.value !== expectedValue ||
       !field.isConnected ||
+      !this.#currentDocumentIsTrusted() ||
       this.#document.activeElement !== field ||
       !selectionsEqual(updatedSelection, postDispatchSelection)
     ) {
@@ -851,8 +1030,8 @@ export class FieldController {
       return;
     }
 
-    const decision = evaluateField(field);
-    const continuedContext = decision.allowed
+    const decision = this.#currentDocumentIsTrusted() ? evaluateField(field) : null;
+    const continuedContext = decision?.allowed === true
       ? captureContextOrNull({
           field,
           purpose: decision.purpose,
@@ -864,7 +1043,7 @@ export class FieldController {
         })
       : null;
     const continuedRequest: SuggestionRequest | null =
-      decision.allowed && continuedContext !== null
+      decision?.allowed === true && continuedContext !== null
       ? {
           ...visible.request,
           revision: state.revision,
@@ -899,6 +1078,7 @@ export class FieldController {
   }
 
   #validateVisible(visible: VisibleSuggestion): boolean {
+    if (!this.#currentDocumentIsTrusted()) return false;
     const field = visible.field;
     const state = this.#states.get(field);
     const selection = readSelection(field);
@@ -975,6 +1155,7 @@ export class FieldController {
       event.data.length === 0 ||
       !this.#view.visible ||
       this.#paused ||
+      !this.#currentDocumentIsTrusted() ||
       this.#document.visibilityState !== "visible" ||
       visible.field !== field ||
       this.#activeField !== field ||
@@ -1074,9 +1255,16 @@ export class FieldController {
     }
   }
 
-  #invalidateActiveState(): void {
+  #invalidateActiveState(closeSession = true): void {
     this.#cancelActiveWork();
     this.#clearSuggestion();
+    this.#activeField = null;
+    if (closeSession) {
+      this.#closeSession();
+    } else {
+      // A disconnected native connection has already retired its sessions.
+      this.#sessionClosed = true;
+    }
   }
 
   #cancelStateWork(state: FieldState): void {
@@ -1111,6 +1299,10 @@ export class FieldController {
   }
 
   #showSuggestion(visible: VisibleSuggestion): void {
+    if (!this.#currentDocumentIsTrusted()) {
+      this.#invalidateActiveState();
+      return;
+    }
     if (this.#expiryTimer !== null) clearTimeout(this.#expiryTimer);
     this.#visible = visible;
     const remainingMs = Math.max(0, visible.expiresAt - this.#now());
@@ -1128,5 +1320,48 @@ export class FieldController {
     void Promise.resolve(
       this.#transport.dismissSuggestion?.(this.#addressFor(visible)),
     ).catch(() => undefined);
+  }
+
+  #closeSession(): void {
+    if (this.#sessionClosed) return;
+    this.#sessionClosed = true;
+    void Promise.resolve(this.#transport.closeSession?.(this.#sessionId)).catch(
+      () => undefined,
+    );
+  }
+
+  #advanceActiveRevision(): void {
+    const field = this.#activeField;
+    if (field === null) return;
+    const state = this.#stateFor(field);
+    state.revision += 1;
+    state.lastSelection = readSelection(field);
+  }
+
+  #queueTrustedReAdoption(): void {
+    if (!this.#started || this.#reAdoptionQueued) return;
+    this.#reAdoptionQueued = true;
+    queueMicrotask(() => {
+      this.#reAdoptionQueued = false;
+      if (
+        !this.#started ||
+        this.#document.visibilityState !== "visible" ||
+        !this.#document.hasFocus() ||
+        !this.#currentDocumentIsTrusted()
+      ) {
+        return;
+      }
+      // #activateTarget reruns local field policy before it captures content.
+      // One queued attempt avoids a retry loop if the field is still denied.
+      this.#adoptActiveElement();
+    });
+  }
+
+  #currentDocumentIsTrusted(): boolean {
+    try {
+      return this.#isCurrentDocument();
+    } catch {
+      return false;
+    }
   }
 }

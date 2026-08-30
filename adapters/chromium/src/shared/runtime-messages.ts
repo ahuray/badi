@@ -9,8 +9,10 @@ import type {
 } from "./model";
 
 export type RuntimeCommand =
+  | { readonly kind: "badi.bootstrap.v1"; readonly sessionId: string }
   | { readonly kind: "badi.suggest.v1"; readonly request: SuggestionRequest }
   | { readonly kind: "badi.cancel.v1"; readonly request: SuggestionRequest }
+  | { readonly kind: "badi.session.close.v1"; readonly sessionId: string }
   | { readonly kind: "badi.dismiss.v1"; readonly address: SuggestionAddress }
   | {
       readonly kind: "badi.commit.authorize.v1";
@@ -22,6 +24,7 @@ export type RuntimeReply =
   | {
       readonly ok: true;
       readonly response?: SuggestionResponse | CommitAuthorization;
+      readonly paused?: boolean;
     }
   | { readonly ok: false; readonly error: string };
 
@@ -107,9 +110,21 @@ export function isRuntimeCommand(value: unknown): value is RuntimeCommand {
     return false;
   }
   switch (value["kind"]) {
+    case "badi.bootstrap.v1":
+      return (
+        Object.keys(value).length === 2 &&
+        typeof value["sessionId"] === "string" &&
+        value["sessionId"].length > 0
+      );
     case "badi.suggest.v1":
     case "badi.cancel.v1":
       return isSuggestionRequest(value["request"]);
+    case "badi.session.close.v1":
+      return (
+        Object.keys(value).length === 2 &&
+        typeof value["sessionId"] === "string" &&
+        value["sessionId"].length > 0
+      );
     case "badi.dismiss.v1":
       return isAddress(value["address"]);
     case "badi.commit.authorize.v1": {
@@ -130,6 +145,22 @@ export function isRuntimeCommand(value: unknown): value is RuntimeCommand {
   }
 }
 
+export function parseRuntimeBootstrapReply(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 2 ||
+    value["ok"] !== true ||
+    typeof value["paused"] !== "boolean"
+  ) {
+    const error =
+      isRecord(value) && typeof value["error"] === "string"
+        ? value["error"]
+        : "Invalid bootstrap response from extension service worker";
+    throw new Error(error);
+  }
+  return value["paused"];
+}
+
 export function isContentControlMessage(value: unknown): value is ContentControlMessage {
   if (!isRecord(value)) {
     return false;
@@ -138,18 +169,19 @@ export function isContentControlMessage(value: unknown): value is ContentControl
     return Object.keys(value).length === 1;
   }
   if (value["kind"] === "badi.commit.revoke.v1") {
-    return isAddress(value["address"]);
+    return Object.keys(value).length === 2 && isAddress(value["address"]);
   }
   if (value["kind"] === "badi.suggestion.clear.v1") {
-    return isSuggestionClearEvent(value["event"]);
+    return Object.keys(value).length === 2 && isSuggestionClearEvent(value["event"]);
   }
   if (value["kind"] !== "badi.control.v1") return false;
   return (
-    value["action"] === "pause" ||
-    value["action"] === "resume" ||
-    value["action"] === "accept_word" ||
-    value["action"] === "accept_all" ||
-    value["action"] === "dismiss"
+    Object.keys(value).length === 2 &&
+    (value["action"] === "pause" ||
+      value["action"] === "resume" ||
+      value["action"] === "accept_word" ||
+      value["action"] === "accept_all" ||
+      value["action"] === "dismiss")
   );
 }
 

@@ -103,6 +103,15 @@ export function sessionOpenEnvelope(request: SuggestionRequest): WireSessionEnve
   );
 }
 
+export function sessionCloseEnvelope(request: SuggestionRequest): WireSessionEnvelope {
+  return withCoordinates(
+    { ...request, monotonicMs: Math.max(0, Math.floor(performance.now())) },
+    "session.close",
+    { reason: "session_closed" },
+    `${request.requestId}.${request.revision}.close`,
+  );
+}
+
 export function suggestionRequestEnvelopes(
   request: SuggestionRequest,
 ): readonly [WireSessionEnvelope, WireSessionEnvelope] {
@@ -555,7 +564,7 @@ export function replyMatchesRequest(value: unknown, request: SuggestionRequest):
   );
 }
 
-export function isHelloAck(value: unknown): boolean {
+export function parseHelloAckPaused(value: unknown): boolean | null {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, ["v", "id", "type", "mono_ms", "payload"]) ||
@@ -565,7 +574,7 @@ export function isHelloAck(value: unknown): boolean {
     !isCounter(value["mono_ms"]) ||
     !isRecord(value["payload"])
   ) {
-    return false;
+    return null;
   }
   const payload = value["payload"];
   if (
@@ -590,12 +599,16 @@ export function isHelloAck(value: unknown): boolean {
     typeof payload["paused"] !== "boolean" ||
     !Array.isArray(payload["enabled_capabilities"])
   ) {
-    return false;
+    return null;
   }
   const capabilities = payload["enabled_capabilities"];
-  return (
+  const capabilitiesMatch =
     capabilities.length === BROWSER_CAPABILITIES.length &&
     new Set(capabilities).size === BROWSER_CAPABILITIES.length &&
-    BROWSER_CAPABILITIES.every((capability) => capabilities.includes(capability))
-  );
+    BROWSER_CAPABILITIES.every((capability) => capabilities.includes(capability));
+  return capabilitiesMatch ? payload["paused"] : null;
+}
+
+export function isHelloAck(value: unknown): boolean {
+  return parseHelloAckPaused(value) !== null;
 }

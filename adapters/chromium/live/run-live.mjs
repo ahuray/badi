@@ -29,10 +29,6 @@ const repositoryRoot = resolve(packageRoot, "../..");
 const fixtureRoot = join(repositoryRoot, "fixtures/web");
 const distRoot = join(packageRoot, "dist");
 const liveRoot = join(packageRoot, "live");
-const evidencePath = join(
-  repositoryRoot,
-  "capabilities/evidence/chromium-native-live-run.v1.json",
-);
 const diagnosticRoot = join(repositoryRoot, "output/playwright/badi-m2a");
 const extensionId = "ckkiehcjbclcjckkkajohopoikeejkoa";
 const extensionOrigin = `chrome-extension://${extensionId}/`;
@@ -52,10 +48,13 @@ const fallbackCompletion = " and continue from there";
 const ruleCompletion = " for your time";
 const firstWordCompletion = " let";
 const DEBOUNCE_MS = 140;
+const DURABLE_EVIDENCE_ID =
+  /^chromium-native-live-run\.[a-z0-9][a-z0-9-]{0,63}\.v1$/u;
 
 function parseArguments(values) {
   const parsed = {
     smoke: false,
+    evidenceId: null,
     samples: 1_000,
     warmups: 50,
     staleTrials: 100,
@@ -70,6 +69,16 @@ function parseArguments(values) {
       continue;
     }
     const next = values[index + 1];
+    if (value === "--evidence-id") {
+      if (next === undefined || !DURABLE_EVIDENCE_ID.test(next)) {
+        throw new Error(
+          "--evidence-id must match chromium-native-live-run.<unique-slug>.v1",
+        );
+      }
+      parsed.evidenceId = next;
+      index += 1;
+      continue;
+    }
     if (value === "--samples" || value === "--warmups" || value === "--stale-trials") {
       if (next === undefined || !/^\d+$/u.test(next)) {
         throw new Error(`${value} requires a nonnegative integer`);
@@ -91,6 +100,14 @@ function parseArguments(values) {
   }
   if (!parsed.smoke && parsed.staleTrials < 100) {
     throw new Error("Durable evidence requires at least 100 stale-response trials");
+  }
+  if (!parsed.smoke && parsed.evidenceId === null) {
+    throw new Error(
+      "Durable evidence requires --evidence-id chromium-native-live-run.<unique-slug>.v1",
+    );
+  }
+  if (parsed.smoke && parsed.evidenceId !== null) {
+    throw new Error("Smoke diagnostics do not accept a durable evidence identity");
   }
   return parsed;
 }
@@ -154,6 +171,17 @@ async function command(file, args, options = {}) {
     maxBuffer: 16 * 1024 * 1024,
   });
   return { stdout: result.stdout, stderr: result.stderr };
+}
+
+async function repositoryRecord(requireClean) {
+  const baseCommit = (await command("git", ["rev-parse", "HEAD"])).stdout.trim();
+  const workingTreeDirty =
+    (await command("git", ["status", "--porcelain", "--untracked-files=all"]))
+      .stdout.length > 0;
+  if (requireClean && workingTreeDirty) {
+    throw new Error("Durable evidence requires a clean Git working tree");
+  }
+  return { base_commit: baseCommit, working_tree_dirty: workingTreeDirty };
 }
 
 async function validateRepository(commandRecords) {
@@ -1291,6 +1319,15 @@ async function artifactRecord(nativeManifest) {
 
 async function main() {
   const settings = parseArguments(process.argv.slice(2));
+  const evidencePath = settings.smoke
+    ? null
+    : join(repositoryRoot, "capabilities/evidence", `${settings.evidenceId}.json`);
+  if (evidencePath !== null && (await exists(evidencePath))) {
+    throw new Error(
+      `Refusing to overwrite existing durable evidence: ${settings.evidenceId}.json`,
+    );
+  }
+  const initialRepository = await repositoryRecord(!settings.smoke);
   await mkdir(diagnosticRoot, { recursive: true });
   const commandRecords = [];
   const scenarios = [];
@@ -1505,17 +1542,22 @@ async function main() {
   check(cleanup.processes_remaining === 0, "Isolated child processes remain");
 
   const environment = await environmentRecord(playwrightVersion);
-  const gitHead = (await command("git", ["rev-parse", "HEAD"])).stdout.trim();
-  const gitDirty = (await command("git", ["status", "--porcelain"])).stdout.length > 0;
+  const finalRepository = await repositoryRecord(!settings.smoke);
+  check(
+    finalRepository.base_commit === initialRepository.base_commit,
+    "Repository HEAD changed during the live run",
+  );
   const manifest = JSON.parse(await readFile(join(distRoot, "manifest.json"), "utf8"));
   assertExactChromiumManifest(manifest);
   const contentScript = manifest.content_scripts[0];
   const report = {
     $schema: "../v2/live-run.schema.json",
     record_version: 1,
-    id: "chromium-native-live-run.v1",
+    id: settings.smoke
+      ? "chromium-native-live-run.smoke.v1"
+      : settings.evidenceId,
     recorded_at: new Date().toISOString(),
-    repository: { base_commit: gitHead, working_tree_dirty: gitDirty },
+    repository: finalRepository,
     environment,
     extension: {
       id: extensionId,
@@ -1590,8 +1632,12 @@ async function main() {
     );
     return;
   }
+  check(evidencePath !== null, "Durable evidence path is unavailable");
   await mkdir(dirname(evidencePath), { recursive: true });
-  await writeFile(evidencePath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  await writeFile(evidencePath, `${JSON.stringify(report, null, 2)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+  });
   process.stdout.write(
     `Durable live evidence passed: ${settings.samples} measured / ${settings.warmups} warmup; ${settings.staleTrials} delayed stale trials.\n`,
   );

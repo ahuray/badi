@@ -1,7 +1,28 @@
-export const EXPECTED_FIXTURE_ORIGIN = "http://localhost:4173";
-export const EXPECTED_FIXTURE_URL = `${EXPECTED_FIXTURE_ORIGIN}/chromium.html`;
+export {
+  EXPECTED_FIXTURE_ORIGIN,
+  EXPECTED_FIXTURE_URL,
+} from "../shared/fixture-document";
+import {
+  EXPECTED_FIXTURE_ORIGIN,
+  EXPECTED_FIXTURE_URL,
+} from "../shared/fixture-document";
 
 export function isTrustedFixtureSender(
+  sender: chrome.runtime.MessageSender,
+  extensionId: string,
+): boolean {
+  return (
+    isTrustedFixtureBootstrapSender(sender, extensionId) &&
+    sender.tab?.active === true
+  );
+}
+
+/**
+ * The content-free bootstrap may subscribe an inactive exact document so it
+ * can receive pause/resume before it ever acquires text. Content-bearing and
+ * action messages must continue to use isTrustedFixtureSender.
+ */
+export function isTrustedFixtureBootstrapSender(
   sender: chrome.runtime.MessageSender,
   extensionId: string,
 ): boolean {
@@ -9,7 +30,7 @@ export function isTrustedFixtureSender(
     sender.id === extensionId &&
     sender.frameId === 0 &&
     sender.tab?.id !== undefined &&
-    sender.tab.active === true &&
+    typeof sender.tab.active === "boolean" &&
     sender.tab.incognito === false &&
     sender.tab.discarded === false &&
     sender.tab.frozen === false &&

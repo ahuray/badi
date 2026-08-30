@@ -27,10 +27,14 @@ badictl models code --json
 ```
 
 These commands are local and do not require a running broker, an XDG runtime
-directory, or network access. Their versioned JSON contracts (`badi.hardware.v1`
-and `badi.model-advice.v1`) let a future Omarchy menu, Quickshell surface,
+directory, or network access. Their formal JSON contracts
+([`badi.hardware.v1`](../../broker/schemas/badi.hardware.v1.schema.json) and
+[`badi.model-advice.v2`](../../broker/schemas/badi.model-advice.v2.schema.json))
+let a future Omarchy menu, Quickshell surface,
 installer, or package script consume the same result without duplicating
-selection policy.
+selection policy. Model advice v2 supersedes the original candidate-only v1
+shape: `tier`, `recommended`, `fit`, and `download` are nullable when
+`status: "no_fit"`.
 
 ## Observed hardware
 
@@ -39,12 +43,25 @@ The Rust probe reads only machine metadata:
 - architecture and logical CPU count;
 - AVX2 and AVX-512F availability on x86-64;
 - total and currently available memory from `/proc/meminfo`;
-- GPU vendor IDs and dedicated VRAM where Linux exposes it through DRM sysfs;
-- NVIDIA VRAM through `nvidia-smi` when available; and
+- GPU vendor IDs and detected total dedicated VRAM where Linux exposes it
+  through DRM sysfs;
+- NVIDIA total VRAM through `nvidia-smi` when available, with a two-second
+  deadline and a 16 KiB stdout cap; and
 - whether a detected battery is currently discharging.
 
-Missing data stays unknown. It is never invented from a GPU name or marketing
-label. Unknown or constrained hardware selects the compact tier.
+The timeout kills and reaps the directly invoked `nvidia-smi` process. The
+standard-library runner does not own a process group: if a future probe starts a
+descendant that inherits stdout, that descendant could keep the capture pipe
+open after the direct child exits. `nvidia-smi` is not expected to do this; a
+different probe with child processes would require explicit process-group
+supervision.
+
+Detected GPU total is not usable capacity. `usable_memory_mib` and `backend`
+remain null until a validated inference backend can report both; selection
+therefore budgets CPU host memory only. Hybrid-vendor detection and missing
+power state cap the result below quality. Missing or inconsistent memory,
+unsupported architectures, and fewer than four logical CPUs return an explicit
+`no_fit` result instead of inventing a recommendation.
 
 This follows the useful part of
 [Voxtype's hardware-aware setup](https://github.com/peteonrails/voxtype/blob/dev/docs/USER_MANUAL.md#hardware-aware-recommendations): detection and recommendation are explicit,
@@ -53,15 +70,23 @@ privileged symlink changes.
 
 ## Tiers
 
-| Tier | Conservative selection rule | Product intent |
-| --- | --- | --- |
-| Compact | Less than 6 GiB RAM, less than 1.5 GiB currently available, fewer than four logical CPUs, or x86-64 without AVX2 | Preserve responsiveness and leave room for the desktop |
-| Balanced | At least 6 GiB RAM and four logical CPUs, without enough headroom for quality | Default for ordinary laptops and integrated graphics |
-| Quality | At least 16 GiB-class RAM with 6 GiB available and eight logical CPUs, or at least 6 GiB dedicated VRAM with host headroom | Prefer usefulness when the machine can sustain it |
+The selector reserves 2 GiB from both total host capacity and currently
+available memory for the OS and desktop, then uses the lower remainder. For
+each artifact it adds 768 MiB plus 25% of the exact pinned `download_bytes` as
+conservative runtime/KV-cache headroom. A candidate must fit that per-artifact
+budget; the tier is only a ceiling.
 
-Battery discharge caps the result below `quality`. These are safe starting
-rules, not performance claims. Benchmarks may lower a recommendation; they may
-raise it only with measured evidence.
+| Ceiling | Conservative policy cap | Product intent |
+| --- | --- | --- |
+| Compact | AArch64, x86-64 without AVX2, known battery discharge, or an otherwise supported four-CPU host below the balanced floor | Preserve responsiveness without claiming unbenchmarked CPU equivalence |
+| Balanced | At least 8 GiB RAM and six logical CPUs without the known, unambiguous AC and host headroom required for quality | Default for ordinary laptops, desktops with unknown power state, and hybrid graphics |
+| Quality | x86-64 with AVX2, at least 24 GiB RAM, 8 GiB currently available, 12 logical CPUs, known non-discharging power, and no hybrid-GPU ambiguity | Expose a larger candidate only when CPU host memory is plainly sufficient |
+
+These are safe starting rules, not performance claims. Artifact fit can lower a
+use case independently—for example, writing and code artifacts at the same tier
+have different byte counts. Benchmarks may lower a recommendation; they may
+raise it only with measured evidence. A `no_fit` response has no tier, artifact,
+or download plan and always reports `runtime_ready: false`.
 
 ## Candidate catalog
 
@@ -91,6 +116,15 @@ the 3B release's non-commercial research license.
 
 Keeping the catalog static makes changes reviewable. Discovery feeds and model
 popularity never alter a user's recommendation at runtime.
+
+Every candidate records `llama.cpp` b5092 as Badi's minimum reviewed backend
+baseline. Badi's Qwen3 prompt contract uses the Qwen3 chat template with
+thinking disabled; the coder contract uses the Qwen2.5 Coder instruct chat
+template.
+Those prompt declarations are compatibility constraints, not evidence that an
+instruct GGUF performs fill-in-the-middle completion well. The JSON repeats the
+unvalidated prompt, context-size, latency, memory, and quality caveats on each
+artifact.
 
 ## Download contract
 
@@ -130,9 +164,10 @@ better fallback than a late or mediocre model.
 ## Linux and Omarchy fit
 
 The feature uses Linux facts and XDG-compatible tooling without modifying
-Omarchy's packaged files. `badictl` is the stable integration surface; future
-Omarchy UI work should consume its JSON and live in user/package-owned paths,
-never patch `/usr/share/omarchy`.
+Omarchy's packaged files. `badictl` is the schema-versioned integration surface;
+future Omarchy UI work should branch on the model-advice schema and `status`,
+consume only candidate outputs, and live in user/package-owned paths, never
+patch `/usr/share/omarchy`.
 
 ## Naming boundary
 

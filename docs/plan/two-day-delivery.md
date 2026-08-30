@@ -4,7 +4,7 @@
 > [Vision V2 implementation plan](vision-v2-implementation.md) is the active
 > execution contract and supersedes conflicting three-target/48-hour gates.
 
-Status: execution contract for a 48-hour build beginning after user approval.
+Status: archived V1 execution proposal; not an active delivery contract.
 Times are wall-clock hours from kickoff (`H0`), not estimates of cumulative
 person-hours. The plan is grounded in [VISION.md](../../VISION.md), the
 [competitive landscape](../research/competitive-landscape.md), and a read-only

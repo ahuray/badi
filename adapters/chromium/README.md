@@ -117,7 +117,8 @@ It never writes the user's normal Chromium profile or native-host directory.
 
 ```sh
 npm run live:smoke --workspace @badi/chromium
-npm run live --workspace @badi/chromium
+npm run live --workspace @badi/chromium -- \
+  --evidence-id chromium-native-live-run.2026-08-30-review1.v1
 ```
 
 The durable lane uses the real Rust host and broker for handshake/show,
@@ -130,8 +131,10 @@ broker, privacy gate, insertion, or latency.
 
 Durable evidence requires 1,000 measured interactions after 50 warmups, 100
 delayed stale trials, exact cleanup, and both p95 gates. Its raw JSON is checked
-against `capabilities/v2/live-run.schema.json` and hash-linked by the V2 receipt.
-The smoke deliberately uses smaller counts and cannot produce a live receipt.
+against `capabilities/v2/live-run.schema.json` and hash-linked by a new V2
+receipt. The explicit ID becomes both the raw document ID and filename; the
+runner refuses an existing target and never overwrites a prior run. The smoke
+deliberately uses smaller counts and cannot produce a live receipt.
 
 This is a static exact-document development proof with only the
 `nativeMessaging` API permission. Incognito is declared `not_allowed`, and the

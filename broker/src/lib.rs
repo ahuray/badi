@@ -13,7 +13,7 @@ pub mod provider;
 pub mod segment;
 pub mod server;
 
-pub use engine::{Broker, BrokerConfig, BrokerError, BrokerEvent, ContextOutcome};
+pub use engine::{Broker, BrokerConfig, BrokerError, BrokerEvent, BrokerEventSink, ContextOutcome};
 pub use metrics::{Metrics, MetricsSnapshot};
 pub use model_selection::{
     HardwareProfile, ModelAdvice, ModelArtifact, ModelTier, ModelUseCase, detect_hardware,

@@ -434,11 +434,13 @@ receipt is auditable evidence inside the declared trusted-local-component
 boundary, not a signature or proof that an unrelated binary was not substituted
 at runtime.
 
-The first recorded M2A cell passed 1,000/1,000 exact insert/caret trials and
-100/100 delayed stale races. With 50 warmups excluded from each 1,000-sample
-distribution, nearest-rank p95 was 8.4 ms from trusted accept to observed input
-and 0.7 ms from invalidation marker to hidden UI. These are controlled local
-interaction measurements, not semantic-model or end-to-end generation latency.
+The retained historical M2A cell passed 1,000/1,000 exact insert/caret trials
+and 100/100 delayed stale races. With 50 warmups excluded from each
+1,000-sample distribution, nearest-rank p95 was 12.6 ms from trusted accept to
+observed input and 0.6 ms from invalidation marker to hidden UI. These are
+source-linked controlled local interaction measurements, not a reproduction
+against every later tree and not semantic-model or end-to-end generation
+latency.
 
 M2A is not full Chromium support. Headless Chromium did not prove a visible
 runtime-origin consent prompt, background-tab visibility, the extension command

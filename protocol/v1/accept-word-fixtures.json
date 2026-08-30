@@ -15,6 +15,24 @@
       "remainder": " noir"
     },
     {
+      "name": "contraction",
+      "input": " can't wait",
+      "accepted": " can't",
+      "remainder": " wait"
+    },
+    {
+      "name": "decimal",
+      "input": " 3.14 seconds",
+      "accepted": " 3.14",
+      "remainder": " seconds"
+    },
+    {
+      "name": "underscore-word",
+      "input": " snake_case next",
+      "accepted": " snake_case",
+      "remainder": " next"
+    },
+    {
       "name": "combining-mark",
       "input": " élan vital",
       "accepted": " élan",
@@ -33,6 +51,30 @@
       "remainder": " next"
     },
     {
+      "name": "emoji-zwj",
+      "input": " 👩🏽‍💻 next",
+      "accepted": " 👩🏽‍💻",
+      "remainder": " next"
+    },
+    {
+      "name": "persian",
+      "input": " فارسی خوب",
+      "accepted": " فارسی",
+      "remainder": " خوب"
+    },
+    {
+      "name": "arabic",
+      "input": " العربية جميلة",
+      "accepted": " العربية",
+      "remainder": " جميلة"
+    },
+    {
+      "name": "single-han-word",
+      "input": " 文 next",
+      "accepted": " 文",
+      "remainder": " next"
+    },
+    {
       "name": "symbol",
       "input": " § 42",
       "accepted": " §",
@@ -43,6 +85,12 @@
       "input": ", however",
       "accepted": ",",
       "remainder": " however"
+    },
+    {
+      "name": "hyphen-before-word",
+      "input": " -ready",
+      "accepted": " -",
+      "remainder": "ready"
     }
   ]
 }
