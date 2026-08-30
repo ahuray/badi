@@ -823,7 +823,7 @@ mod tests {
         SettingsStatusPayload, WireEnvelope,
     };
     use badi_broker::settings::SettingsV1;
-    use jsonschema::Resource;
+    use jsonschema::Registry;
     use serde_json::json;
 
     fn arguments(values: &[&str]) -> Vec<String> {
@@ -868,19 +868,17 @@ mod tests {
         let advice = read_schema("badi.model-advice.v2.schema.json");
         let settings = read_schema("badi.settings.v1.schema.json");
         let schema = read_schema("badi.overview.v1.schema.json");
+        let registry = Registry::new()
+            .add("urn:badi:schema:hardware:v1", hardware)
+            .expect("hardware resource")
+            .add("urn:badi:schema:model-advice:v2", advice)
+            .expect("advice resource")
+            .add("urn:badi:schema:settings:v1", settings)
+            .expect("settings resource")
+            .prepare()
+            .expect("overview schema registry");
         let validator = jsonschema::options()
-            .with_resource(
-                "urn:badi:schema:hardware:v1",
-                Resource::from_contents(hardware).expect("hardware resource"),
-            )
-            .with_resource(
-                "urn:badi:schema:model-advice:v2",
-                Resource::from_contents(advice).expect("advice resource"),
-            )
-            .with_resource(
-                "urn:badi:schema:settings:v1",
-                Resource::from_contents(settings).expect("settings resource"),
-            )
+            .with_registry(&registry)
             .build(&schema)
             .expect("overview schema");
         if let Err(error) = validator.validate(&overview) {

@@ -18,6 +18,6 @@
     "check": "npm run typecheck && npm test && npm run build:verify && npm run live:check && npm run name:check && npm run docs:check && npm run capabilities:check"
   },
   "engines": {
-    "node": ">=22"
+    "node": "^22.20.0 || ^24.12.0 || >=25.0.0"
   }
 }

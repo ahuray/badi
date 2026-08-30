@@ -5,7 +5,7 @@ use badi_broker::model_selection::{
     AdviceStatus, CpuFeatures, GpuProfile, HardwareProfile, MemoryProfile, ModelAdvice,
     ModelUseCase, recommend_model,
 };
-use jsonschema::Resource;
+use jsonschema::Registry;
 use serde_json::Value;
 
 const HARDWARE_SCHEMA_ID: &str = "urn:badi:schema:hardware:v1";
@@ -96,11 +96,13 @@ fn representative_hardware_and_advice_outputs_match_their_formal_schemas() {
     let hardware_schema = read_json(&root.join("badi.hardware.v1.schema.json"));
     let advice_schema = read_json(&root.join("badi.model-advice.v2.schema.json"));
     let hardware_validator = jsonschema::validator_for(&hardware_schema).expect("hardware schema");
+    let registry = Registry::new()
+        .add(HARDWARE_SCHEMA_ID, hardware_schema)
+        .expect("hardware schema resource")
+        .prepare()
+        .expect("hardware schema registry");
     let advice_validator = jsonschema::options()
-        .with_resource(
-            HARDWARE_SCHEMA_ID,
-            Resource::from_contents(hardware_schema).expect("hardware schema resource"),
-        )
+        .with_registry(&registry)
         .build(&advice_schema)
         .expect("model-advice schema");
 
@@ -140,11 +142,13 @@ fn schema_rejects_runtime_readiness_and_mixed_candidate_states() {
     let root = schema_root();
     let hardware_schema = read_json(&root.join("badi.hardware.v1.schema.json"));
     let advice_schema = read_json(&root.join("badi.model-advice.v2.schema.json"));
+    let registry = Registry::new()
+        .add(HARDWARE_SCHEMA_ID, hardware_schema)
+        .expect("hardware schema resource")
+        .prepare()
+        .expect("hardware schema registry");
     let validator = jsonschema::options()
-        .with_resource(
-            HARDWARE_SCHEMA_ID,
-            Resource::from_contents(hardware_schema).expect("hardware schema resource"),
-        )
+        .with_registry(&registry)
         .build(&advice_schema)
         .expect("model-advice schema");
     let advice = recommend_model(profile(Some(16_384), Some(8_192)), ModelUseCase::Writing);
