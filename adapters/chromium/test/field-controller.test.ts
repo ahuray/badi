@@ -196,6 +196,7 @@ describe("FieldController", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     document.body.replaceChildren();
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
     Object.defineProperty(HTMLElement.prototype, "checkVisibility", {
       configurable: true,
       value: () => true,
@@ -227,6 +228,7 @@ describe("FieldController", () => {
     `;
     const transport = new FakeTransport();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view: new RecordingView(),
       debounceMs: 5,
@@ -289,6 +291,47 @@ describe("FieldController", () => {
     controller.dispose();
   });
 
+  it("does not acquire context from synthetic focus events or an unfocused document", async () => {
+    const field = document.createElement("textarea");
+    field.id = "synthetic-focus-target";
+    const focusSink = document.createElement("button");
+    document.body.append(field, focusSink);
+    focusSink.focus();
+    let valueReads = 0;
+    Object.defineProperty(field, "value", {
+      configurable: true,
+      get: () => {
+        valueReads += 1;
+        return "must remain unread";
+      },
+      set: () => undefined,
+    });
+    const transport = new FakeTransport();
+    const controller = new FieldController({
+      transport,
+      view: new RecordingView(),
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+    });
+    controller.start();
+
+    field.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    field.dispatchEvent(new InputEvent("input", { bubbles: true, data: "x" }));
+    await dispatchRequest(50);
+    expect(transport.requests).toHaveLength(0);
+    expect(valueReads).toBe(0);
+
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    field.focus();
+    field.dispatchEvent(new InputEvent("input", { bubbles: true, data: "y" }));
+    await dispatchRequest(50);
+    expect(transport.requests).toHaveLength(0);
+    expect(valueReads).toBe(0);
+    controller.dispose();
+  });
+
   it("shows, dismisses, accepts a Unicode word, accepts all, and pauses/resumes", async () => {
     const field = document.createElement("textarea");
     field.id = "draft";
@@ -298,6 +341,7 @@ describe("FieldController", () => {
     const transport = new FakeTransport();
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -391,6 +435,52 @@ describe("FieldController", () => {
     controller.dispose();
   });
 
+  it("ignores page-authored untrusted accept and dismiss keyboard events", async () => {
+    const field = document.createElement("textarea");
+    field.id = "hostile-keyboard-draft";
+    field.value = "Stable";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    const transport = new FakeTransport();
+    const view = new RecordingView();
+    const controller = new FieldController({
+      transport,
+      view,
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+      now: () => 1_000,
+    });
+    controller.start();
+    field.focus();
+    await dispatchRequest();
+    transport.resolve(0, " safe", " safe");
+    await Promise.resolve();
+
+    for (const event of [
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+      new KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    ]) {
+      expect(event.isTrusted).toBe(false);
+      field.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    await Promise.resolve();
+
+    expect(field.value).toBe("Stable");
+    expect(view.visible).toBe(true);
+    expect(transport.authorizationRequests).toHaveLength(0);
+    expect(transport.dismissals).toHaveLength(0);
+    controller.dispose();
+  });
+
   it("waits for one broker authorization, blocks double-accept, and handles denial", async () => {
     const field = document.createElement("textarea");
     field.id = "authorization-draft";
@@ -401,6 +491,7 @@ describe("FieldController", () => {
     transport.autoAuthorize = false;
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -461,6 +552,7 @@ describe("FieldController", () => {
     transport.autoAuthorize = false;
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -503,6 +595,7 @@ describe("FieldController", () => {
     transport.autoAuthorize = false;
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -545,6 +638,7 @@ describe("FieldController", () => {
     transport.autoAuthorize = false;
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -584,6 +678,7 @@ describe("FieldController", () => {
     const transport = new FakeTransport();
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -625,6 +720,7 @@ describe("FieldController", () => {
     const transport = new FakeTransport();
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -684,6 +780,7 @@ describe("FieldController", () => {
     const transport = new FakeTransport();
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -724,6 +821,7 @@ describe("FieldController", () => {
     const transport = new FakeTransport();
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -779,6 +877,7 @@ describe("FieldController", () => {
       const transport = new FakeTransport();
       const view = new RecordingView();
       const controller = new FieldController({
+        allowUntrustedKeyboardForTesting: true,
         transport,
         view,
         debounceMs: 5,
@@ -820,6 +919,7 @@ describe("FieldController", () => {
     const transport = new FakeTransport();
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -859,6 +959,7 @@ describe("FieldController", () => {
     const transport = new FakeTransport();
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -914,6 +1015,7 @@ describe("FieldController", () => {
     const transport = new FakeTransport();
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -973,6 +1075,7 @@ describe("FieldController", () => {
     const transport = new FakeTransport();
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -1011,6 +1114,7 @@ describe("FieldController", () => {
       const transport = new FakeTransport();
       const view = new RecordingView();
       const controller = new FieldController({
+        allowUntrustedKeyboardForTesting: true,
         transport,
         view,
         debounceMs: 5,
@@ -1044,6 +1148,39 @@ describe("FieldController", () => {
     },
   );
 
+  it("does not retain composing state across blur and a fresh focus epoch", async () => {
+    const field = document.createElement("textarea");
+    field.id = "composition-refocus";
+    field.value = "Before";
+    const sink = document.createElement("button");
+    document.body.append(field, sink);
+    field.setSelectionRange(field.value.length, field.value.length);
+    const transport = new FakeTransport();
+    const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
+      transport,
+      view: new RecordingView(),
+      debounceMs: 5,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+    });
+    controller.start();
+    field.focus();
+    await dispatchRequest();
+    expect(transport.requests).toHaveLength(1);
+
+    field.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    sink.focus();
+    field.focus();
+    setValue(field, "After");
+    await dispatchRequest();
+
+    expect(transport.requests).toHaveLength(2);
+    expect(transport.requests[1]?.context.field.composing).toBe(false);
+    controller.dispose();
+  });
+
   it("never carries a visible suggestion across DOM field identity replacement", async () => {
     const field = document.createElement("textarea");
     field.id = "identity-source";
@@ -1053,6 +1190,7 @@ describe("FieldController", () => {
     const transport = new FakeTransport();
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,
@@ -1092,6 +1230,7 @@ describe("FieldController", () => {
     const transport = new FakeTransport();
     const view = new RecordingView();
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 1,
@@ -1146,6 +1285,7 @@ describe("FieldController", () => {
     const transport = new FakeTransport();
     const view = new AnchoredGhostView(document);
     const controller = new FieldController({
+      allowUntrustedKeyboardForTesting: true,
       transport,
       view,
       debounceMs: 5,

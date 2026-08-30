@@ -12,7 +12,7 @@
     "kind": "browser",
     "package": "@omatype/chromium",
     "version": "0.1.0",
-    "target": "chrome120-mv3",
+    "target": "chrome132-mv3",
     "native_host": "io.omatype.broker",
     "manifest": "adapters/chromium/manifest.json",
     "build_manifest": "adapters/chromium/dist/BUILD_MANIFEST.json"
@@ -48,8 +48,8 @@
       {
         "command": "cargo test --workspace",
         "status": "pass",
-        "passed": 50,
-        "detail": "40 library, 2 broker CLI, 4 omatypectl CLI, and 4 schema tests"
+        "passed": 67,
+        "detail": "46 library, 2 broker CLI, 3 native-host CLI, 2 manifest CLI, 4 omatypectl CLI, 2 native bridge, 2 manifest integration, 2 signal-shutdown, and 4 schema tests"
       },
       {
         "command": "cargo +1.85.0 check --workspace --all-targets --locked",
@@ -68,8 +68,8 @@
       {
         "command": "npm test",
         "status": "pass",
-        "passed": 64,
-        "detail": "Five test files, including 100 delayed stale-result schedules and silent post-display policy, DOM, visibility, and native-disconnect invalidation with zero stale display or insertion"
+        "passed": 68,
+        "detail": "Five test files, including 100 delayed stale-result schedules, trusted-event gates, exact document routing, and silent post-display policy, DOM, visibility, and native-disconnect invalidation with zero stale display or insertion"
       },
       {
         "command": "npm run build:verify",
@@ -144,23 +144,23 @@
   "artifacts": [
     {
       "path": "adapters/chromium/dist/content-script.js",
-      "bytes": 48758,
-      "sha256": "6286b7f8082e7011a7e17c1da4b0ba50bf237e24d3de889d917d9c0c9a8e1fed"
+      "bytes": 49631,
+      "sha256": "5d35d31c27295cc0f9e8820d38f5de9ebe4ca975ea798115ea1f111754384496"
     },
     {
       "path": "adapters/chromium/dist/manifest.json",
-      "bytes": 750,
-      "sha256": "94ce52171e67ee7bb94fb8ac97018f5e71f5773f627bfd6b042583d4caf24514"
+      "bytes": 1202,
+      "sha256": "695797a1a0aac95aef36843cd65766aafa17a4897febe0ed68ad6c235722bc56"
     },
     {
       "path": "adapters/chromium/dist/service-worker.js",
-      "bytes": 32405,
-      "sha256": "5ae130c91f9719fe2412291ca08f4ea9a9e50a3b536542020cab59ee428a0eac"
+      "bytes": 33035,
+      "sha256": "65759522f18af6b2902b023213cf3a06668c89e46b4fe761438203f231894622"
     }
   ],
   "notes": [
     "No extension, native host, browser profile, desktop configuration, local model, or service was installed by this foundation",
-    "The static manifest grants http://localhost/*, while both content and service-worker runtime gates require the exact localhost:4173 origin and chromium.html path",
+    "The public development manifest key freezes extension ID ckkiehcjbclcjckkkajohopoikeejkoa; the static content match and both content/service-worker runtime gates require exactly http://localhost:4173/chromium.html",
     "The target page remains hostile and can observe or remove the ghost host, alter the field during event dispatch, intercept the input event, or trigger application and network side effects",
     "An exact typed-through remainder is display-only until a fresh provider response binds it to the new revision and fingerprint",
     "Partial word acceptance clears the old remainder and schedules a new addressed request before another acceptance",

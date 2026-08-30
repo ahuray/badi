@@ -1,0 +1,336 @@
+{
+  "$schema": "./v2/schema.json",
+  "record_version": 2,
+  "id": "chromium-native-live.v2",
+  "status": "live",
+  "recorded_at": "2026-08-30T01:23:49Z",
+  "protocol": {
+    "version": 1,
+    "schema": "protocol/v1/schema.json"
+  },
+  "adapter": {
+    "kind": "browser",
+    "package": "@omatype/chromium",
+    "version": "0.1.0",
+    "target": "chrome132-mv3",
+    "extension_id": "ckkiehcjbclcjckkkajohopoikeejkoa",
+    "minimum_chrome_version": "132",
+    "permission_mode": "static-exact-port",
+    "api_permissions": [
+      "nativeMessaging"
+    ],
+    "incognito": "not_allowed",
+    "host_match": "http://localhost:4173/chromium.html",
+    "native_host": "io.omatype.broker",
+    "manifest": "adapters/chromium/manifest.json",
+    "build_manifest": "adapters/chromium/dist/BUILD_MANIFEST.json"
+  },
+  "native_host": {
+    "package": "omatype-broker",
+    "version": "0.1.0",
+    "binary": "omatype-native-host",
+    "source": "broker/src/native_host.rs",
+    "manifest_example": "broker/native-messaging/io.omatype.broker.example.json",
+    "caller_origin": "chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/",
+    "max_envelope_bytes": 65536,
+    "socket_parent_mode": "0700",
+    "socket_mode": "0600",
+    "peer_uid_verified": true
+  },
+  "evidence": {
+    "class": "live-target",
+    "live_browser": true,
+    "live_native_host": true,
+    "repository": {
+      "base_commit": "ccddb788d1f69fc12c1c761c9016fb58156880dc",
+      "working_tree_dirty": true
+    },
+    "isolation": {
+      "temporary_home": true,
+      "temporary_xdg_runtime": true,
+      "temporary_profile": true,
+      "real_profile_touched": false,
+      "user_config_touched": false,
+      "system_manifest_touched": false,
+      "temporary_tree_removed": true,
+      "socket_removed": true,
+      "processes_remaining": 0
+    },
+    "privacy": {
+      "context_text_recorded": false,
+      "suggestion_text_recorded": false,
+      "context_fingerprints_recorded": false,
+      "absolute_personal_paths_recorded": false
+    },
+    "local_environment": {
+      "os": "Omarchy",
+      "kernel": "Linux 7.1.9-arch1-2",
+      "chromium": "Chromium 151.0.7922.173 Arch Linux",
+      "playwright": "1.62.1",
+      "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+      "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+      "node": "v26.8.1",
+      "npm": "11.19.0"
+    },
+    "ci_toolchains": {
+      "runner": "ubuntu-latest",
+      "rust": "1.98.0",
+      "rust_msrv": "1.85.0",
+      "node_lts": "22.23.2 and 24.20.0"
+    },
+    "checks": [
+      {
+        "id": "rust.native-host",
+        "command": "cargo build --workspace --bins && cargo test --workspace",
+        "status": "pass",
+        "passed": 67,
+        "detail": "The durable preflight built all binaries and passed 67 Rust tests, including native framing, bridge, manifest, and signal cleanup cases."
+      },
+      {
+        "id": "rust.quality",
+        "command": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings",
+        "status": "pass",
+        "detail": "Final-tree formatting and strict Clippy gates passed."
+      },
+      {
+        "id": "rust.msrv",
+        "command": "cargo +1.85.0 check --workspace --all-targets --locked",
+        "status": "pass",
+        "detail": "Ran with an isolated temporary RUSTUP_HOME and removed it afterward."
+      },
+      {
+        "id": "node.full-check",
+        "command": "npm run check",
+        "status": "pass",
+        "passed": 68,
+        "detail": "Typecheck, 68 tests, deterministic build, live syntax, docs, and both capability receipts passed."
+      },
+      {
+        "id": "dependencies.audit",
+        "command": "npm audit --audit-level=moderate",
+        "status": "pass",
+        "detail": "Zero known npm vulnerabilities reported."
+      },
+      {
+        "id": "chromium.full-chain",
+        "command": "npm run live --workspace @omatype/chromium :: chromium.full-chain",
+        "status": "pass",
+        "trials": 1,
+        "passed": 1
+      },
+      {
+        "id": "interaction.dismiss",
+        "command": "npm run live --workspace @omatype/chromium :: interaction.dismiss",
+        "status": "pass",
+        "trials": 1,
+        "passed": 1
+      },
+      {
+        "id": "commit.accept-word",
+        "command": "npm run live --workspace @omatype/chromium :: commit.accept-word",
+        "status": "pass",
+        "trials": 1,
+        "passed": 1
+      },
+      {
+        "id": "control.pause-authoritative",
+        "command": "npm run live --workspace @omatype/chromium :: control.pause-authoritative",
+        "status": "pass",
+        "trials": 3,
+        "passed": 3
+      },
+      {
+        "id": "privacy.denied-zero",
+        "command": "npm run live --workspace @omatype/chromium :: privacy.denied-zero",
+        "status": "pass",
+        "trials": 2,
+        "passed": 2
+      },
+      {
+        "id": "race.stale-100",
+        "command": "npm run live --workspace @omatype/chromium :: race.stale-100",
+        "status": "pass",
+        "trials": 100,
+        "passed": 100,
+        "detail": "The only fault-host-class check; production-chain claims do not depend on it."
+      },
+      {
+        "id": "commit.insertion-100",
+        "command": "npm run live --workspace @omatype/chromium :: commit.insertion-100",
+        "status": "pass",
+        "trials": 1000,
+        "passed": 1000,
+        "detail": "Exact value, UTF-16 caret, and one input event across five text/caret categories."
+      },
+      {
+        "id": "security.untrusted-keyboard",
+        "command": "npm run live --workspace @omatype/chromium :: security.untrusted-keyboard",
+        "status": "pass",
+        "trials": 3,
+        "passed": 3
+      },
+      {
+        "id": "security.synthetic-focus-zero",
+        "command": "npm run live --workspace @omatype/chromium :: security.synthetic-focus-zero",
+        "status": "pass",
+        "trials": 1,
+        "passed": 1
+      },
+      {
+        "id": "lifecycle.dynamic-invalidation",
+        "command": "npm run live --workspace @omatype/chromium :: lifecycle.dynamic-invalidation",
+        "status": "pass",
+        "trials": 3,
+        "passed": 3
+      },
+      {
+        "id": "lifecycle.composition",
+        "command": "npm run live --workspace @omatype/chromium :: lifecycle.composition",
+        "status": "pass",
+        "trials": 1,
+        "passed": 1,
+        "detail": "Synthetic CompositionEvent lifecycle stimulus in real Chromium; not a physical IME claim."
+      },
+      {
+        "id": "geometry.scroll-zoom",
+        "command": "npm run live --workspace @omatype/chromium :: geometry.scroll-zoom",
+        "status": "pass",
+        "trials": 3,
+        "passed": 3
+      },
+      {
+        "id": "lifecycle.navigation",
+        "command": "npm run live --workspace @omatype/chromium :: lifecycle.navigation",
+        "status": "pass",
+        "trials": 2,
+        "passed": 2
+      },
+      {
+        "id": "lifecycle.disconnect",
+        "command": "npm run live --workspace @omatype/chromium :: lifecycle.disconnect",
+        "status": "pass",
+        "trials": 1,
+        "passed": 1
+      },
+      {
+        "id": "isolation.cleanup",
+        "command": "durable live-run verified temporary tree, broker socket, and tracked processes absent",
+        "status": "pass",
+        "trials": 3,
+        "passed": 3
+      },
+      {
+        "id": "repository.validation",
+        "command": "six durable preflight command records",
+        "status": "pass",
+        "trials": 6,
+        "passed": 6
+      }
+    ],
+    "measurements": [
+      {
+        "name": "accept-to-insert",
+        "evidence_class": "real-rust-chain",
+        "unit": "milliseconds",
+        "samples": 1000,
+        "warmups": 50,
+        "statistic": "nearest-rank-p95",
+        "value": 8.3,
+        "maximum": 19.7,
+        "threshold": 30,
+        "status": "pass"
+      },
+      {
+        "name": "invalidation-to-hide",
+        "evidence_class": "real-rust-chain",
+        "unit": "milliseconds",
+        "samples": 1000,
+        "warmups": 50,
+        "statistic": "nearest-rank-p95",
+        "value": 0.7,
+        "maximum": 0.9,
+        "threshold": 32,
+        "status": "pass"
+      }
+    ]
+  },
+  "scope": {
+    "origins": [
+      "http://localhost:4173"
+    ],
+    "documents": [
+      "Exact URL http://localhost:4173/chromium.html",
+      "Top frame only",
+      "Static exact-document development match"
+    ],
+    "elements": [
+      "input[type=text]",
+      "textarea"
+    ],
+    "conditions": [
+      "Chromium 132 or later; exercised on Chromium 151.0.7922.173 Arch Linux",
+      "Connected, visible, enabled, writable light-DOM element with stable identity",
+      "Active non-incognito, non-discarded, non-frozen tab sender snapshot with focused window and active nonempty document identity",
+      "Collapsed selection, focused visible document, and no active composition",
+      "No recognized sensitive purpose, ancestor opt-out, or insertion-altering constraint"
+    ],
+    "display_route": "System Chromium content script to MV3 worker to shipped Rust native host to private peer-UID-checked Unix socket, broker, and deterministic provider",
+    "insertion_route": "Trusted keyboard gesture, addressed broker authorization, final focus/revision/fingerprint revalidation, one setRangeText edit, and one InputEvent",
+    "commit_status": "dispatched-unverified"
+  },
+  "protections": [
+    "One public development extension identity, one exact document_idle content script, nativeMessaging as the only API permission, no host or optional permissions, no fallback matching, and declaratively disabled incognito operation",
+    "The worker fails closed unless Chrome supplies exact extension/origin/URL/top-frame identity and literal active, non-incognito, non-discarded, non-frozen, active-document state plus a nonempty document ID; routes never migrate across tab/frame/document",
+    "The content controller requires real focus at acquisition, request, response, and commit, ignores untrusted keyboard actions, and clears on window blur, visibility, policy, DOM, composition, navigation, pause, or transport invalidation",
+    "Recognized password and one-time-code fields are denied before outbound context or provider work; the live run observed zero context, call, and input-byte deltas",
+    "Chrome-native and broker framing reject envelopes above 65536 bytes before body allocation and validate strict versioned envelope shapes",
+    "The native host validates the exact trailing-slash caller origin, private socket metadata, and peer UID before bridging; normal failure output is content-free",
+    "Broker actions bind session, focus epoch, revision, fingerprint, and suggestion identity with latest-wins cancellation, receiver-local TTL, and single-use commit authorization",
+    "The durable runner uses disposable HOME/XDG/profile/manifest paths, never reads the real Chromium profile, records no context/suggestion/fingerprint values or personal paths, and proves cleanup before writing evidence",
+    "The V2 receipt binds the raw run, exact extension build, fixture, runner, fault host, and manifest policy through byte counts and SHA-256 digests"
+  ],
+  "exclusions": [
+    "Runtime-granted origin permission, headed consent and revocation UX, arbitrary origins, restricted/file schemes, iframes, and incognito",
+    "Current-state tab/window arbitration after the Chrome-supplied sender snapshot, background visibility on this headless build, MV3 worker restart, and cross-connection policy epochs",
+    "Browser-native undo grouping and headed extension-command accelerator delivery, both reported unsupported by the raw run",
+    "Physical IME behavior; composition coverage uses synthetic lifecycle events inside real Chromium",
+    "contenteditable, shadow targets, framework-controlled editors, anonymous/duplicate identities, and selection replacement",
+    "Headed Wayland/compositor rendering, accessibility contrast, browser-chrome zoom, hostile-page sabotage, and broad browser/site compatibility",
+    "A trusted or authenticated localhost page server; the exact URL is a disposable development fixture boundary, not page provenance",
+    "Same-UID broker or native-host impersonation and secrets placed in ordinary unmarked text fields",
+    "Semantic/local-model quality, personalization, remote providers, Obsidian, terminal/Fcitx/IBus, packaging, production identity, naming, licensing, and release readiness"
+  ],
+  "artifacts": [
+    {
+      "path": "adapters/chromium/dist/content-script.js",
+      "bytes": 49631,
+      "sha256": "5d35d31c27295cc0f9e8820d38f5de9ebe4ca975ea798115ea1f111754384496"
+    },
+    {
+      "path": "adapters/chromium/dist/manifest.json",
+      "bytes": 1202,
+      "sha256": "695797a1a0aac95aef36843cd65766aafa17a4897febe0ed68ad6c235722bc56"
+    },
+    {
+      "path": "adapters/chromium/dist/service-worker.js",
+      "bytes": 33035,
+      "sha256": "65759522f18af6b2902b023213cf3a06668c89e46b4fe761438203f231894622"
+    }
+  ],
+  "evidence_artifacts": [
+    {
+      "path": "capabilities/evidence/chromium-native-live-run.v1.json",
+      "bytes": 12225,
+      "sha256": "5d0f2ee19bd432eab416061bb93a64f9da2b5c045b1b371119137e2ecb3ab3bb"
+    }
+  ],
+  "notes": [
+    "This first durable report was produced from base commit ccddb788d1f69fc12c1c761c9016fb58156880dc with the implementation worktree dirty; a second clean-tree evidence run is required before final push.",
+    "The delayed stale-response scenario alone uses a separately classified JavaScript fault host; full-chain, privacy, insertion, pause, lifecycle, and latency evidence use the shipped Rust host and broker.",
+    "The raw run also records a passing provisional edit-to-visible check; it is raw-only rather than promoted to a V2 release measurement.",
+    "Undo, headless background visibility, and the extension shortcut are explicitly unsupported rather than inferred from adjacent passing checks.",
+    "Fixed public fixture and completion strings remain in repository test source, but no runtime context, suggestion, or context-fingerprint value is present in the evidence JSON.",
+    "SHA-256 links expose repository drift; they are not signatures, remote attestation, or proof against substitution inside the trusted same-UID local boundary.",
+    "M2A is a controlled development integration record, not the full headed M2 capability cell or a production support claim."
+  ]
+}

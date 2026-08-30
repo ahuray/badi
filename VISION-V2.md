@@ -345,24 +345,13 @@ maintenance cost.
 
 ## The first proofs
 
-### Browser-adapter overnight foundation
+### Browser-adapter proof ladder
 
-The first implementation exercises the trust substrate and signature loop in
-a simulated controlled-DOM ordinary field:
-
-- strict versioned protocol and bounded frames;
-- positively recognized hard-denied fields create zero outbound context or
-  provider calls;
-- deterministic local suggestions;
-- adapter-owned display plus target-API dismiss, accept-word, accept-all,
-  type-through, and pause;
-- 100 induced late/focus/revision races with zero stale display or insertion;
-  and
-- reproducible Rust and TypeScript checks from pinned lockfiles.
-
-This is a working adapter foundation, not a real-Chromium native-host proof,
-proof of framework/undo semantics, proof of semantic model quality, or a broad
-Chromium compatibility claim.
+The M1 implementation exercises the trust substrate and signature loop first
+in a simulated controlled-DOM ordinary field: a strict bounded protocol,
+deny-before-acquisition fixtures, deterministic local suggestions,
+adapter-owned display and target-API actions, induced late/focus/revision
+races, and reproducible Rust/TypeScript checks.
 
 The foundation's only positive surface is a connected, visible, enabled,
 editable, stable-identity, top-level `textarea` or `input type="text"` with a
@@ -381,20 +370,64 @@ language-specific invisible controls require later named capability profiles.
 The page remains untrusted. It can detect or remove an extension-owned host,
 mutate a field during event dispatch, intercept the emitted input event, or
 perform network/application side effects. A closed shadow root is isolation,
-not secrecy. Hostile-page observation, sabotage, and navigation races are M2
-acceptance tests before any arbitrary origin is considered.
+not secrecy. Hostile-page observation and sabotage remain acceptance tests
+before any arbitrary origin is considered.
 
-Promotion of the foundation receipt requires deterministic cases for edit,
+The foundation receipt contains deterministic cases for edit,
 selection, composition, blur, visibility, DOM removal/replacement,
 policy/pause, expiry, disconnect, and accept-versus-edit, plus at least 100
 permuted late-result schedules. Stale display and stale insertion are counted
-separately. Navigation, permission loss, MV3 worker restart, active-tab/window
-arbitration, hostile-page behavior, real layout, undo, and event trust remain
-real-browser gates, not jsdom claims.
+separately. Its machine-readable record remains explicitly `simulated-dom`.
 
-A machine-readable foundation receipt records this exact surface, protocol and
-tool versions, evidence class, test commands, exclusions, and the fact that no
-live browser/native-host result exists yet.
+The M2A integration record then proves a narrower live target end to end. A
+real named Chromium build loads an unpacked extension from a disposable HOME,
+XDG tree, and profile; Chrome launches the shipped Rust native-messaging host;
+the host validates Chrome framing and the exact development origin, then
+relays strict envelopes to the private peer-UID-checked broker socket. The
+temporary host manifests, profile, socket, and processes are removed after the
+run, while the user's real profile and configuration remain untouched.
+
+M2A's positive evidence is deliberately specific:
+
+- only the exact `http://localhost:4173/chromium.html` document is matched, the
+  top frame is required, `nativeMessaging` is the only API permission, and
+  incognito operation is declaratively disabled and independently denied;
+- Chromium 132 is the minimum supported browser for this cell because the
+  fail-closed sender boundary requires an explicit non-frozen tab state;
+- the service worker requires an active nonempty document identity plus exact
+  extension, origin, URL, tab, and frame identity before binding a route;
+- trusted real-browser dismiss, accept-word, accept-all, and authoritative
+  pause/resume gestures plus navigation, policy mutation, geometry, and native
+  disconnect paths run against the Rust host and broker; composition lifecycle
+  uses synthetic `CompositionEvent`s in the real browser and is not an IME
+  claim;
+- recognized password and one-time-code fields create zero broker context,
+  provider-call, or provider-input-byte deltas;
+- repeated exact insert/caret trials cover end and mid-line positions, astral
+  text, Greek text, and a combining boundary; and
+- delayed stale-response injection is reported separately as a live-browser
+  fault-host test, never as production-host evidence.
+
+A V2 raw-run record and capability receipt bind versions, scenario counts,
+nearest-rank p95 measurements, isolation claims, and artifact hashes. The
+receipt is auditable evidence inside the declared trusted-local-component
+boundary, not a signature or proof that an unrelated binary was not substituted
+at runtime.
+
+The first recorded M2A cell passed 1,000/1,000 exact insert/caret trials and
+100/100 delayed stale races. With 50 warmups excluded from each 1,000-sample
+distribution, nearest-rank p95 was 8.3 ms from trusted accept to observed input
+and 0.7 ms from invalidation marker to hidden UI. These are controlled local
+interaction measurements, not semantic-model or end-to-end generation latency.
+
+M2A is not full Chromium support. Headless Chromium did not prove a visible
+runtime-origin consent prompt, background-tab visibility, the extension command
+accelerator, browser-native undo grouping, headed compositor/accessibility
+rendering, active-window arbitration, permission revocation, MV3 restart, or a
+cross-connection policy epoch. Framework-controlled fields, `contenteditable`,
+iframes, shadow targets, arbitrary sites, production packaging, and semantic
+model quality also remain unsupported. Those limits are product truth, not
+items inferred away by a successful controlled run.
 
 ### Closed-alpha product proof
 

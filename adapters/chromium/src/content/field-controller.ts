@@ -88,6 +88,8 @@ export interface FieldControllerOptions {
   readonly sessionId?: string;
   readonly origin?: string;
   readonly fingerprintSalt?: string;
+  /** Test-only seam: jsdom cannot construct trusted keyboard events. */
+  readonly allowUntrustedKeyboardForTesting?: boolean;
 }
 
 function defaultId(): string {
@@ -108,6 +110,7 @@ export class FieldController {
   readonly #sessionId: string;
   readonly #origin: string;
   readonly #fingerprintSalt: string;
+  readonly #allowUntrustedKeyboardForTesting: boolean;
   readonly #states = new WeakMap<EditableField, FieldState>();
   readonly #internalMutations = new WeakSet<EditableField>();
 
@@ -130,6 +133,8 @@ export class FieldController {
     this.#sessionId = options.sessionId ?? this.#idFactory();
     this.#origin = options.origin ?? this.#document.location.origin;
     this.#fingerprintSalt = options.fingerprintSalt ?? defaultId();
+    this.#allowUntrustedKeyboardForTesting =
+      options.allowUntrustedKeyboardForTesting ?? false;
   }
 
   get paused(): boolean {
@@ -154,6 +159,7 @@ export class FieldController {
     this.#document.addEventListener("compositionstart", this.#onCompositionStart, true);
     this.#document.addEventListener("compositionend", this.#onCompositionEnd, true);
     this.#document.addEventListener("visibilitychange", this.#onVisibilityChange, true);
+    this.#document.defaultView?.addEventListener("blur", this.#onWindowBlur, true);
     const root = this.#document.documentElement;
     const Observer = this.#document.defaultView?.MutationObserver;
     if (root !== null && Observer !== undefined) {
@@ -261,6 +267,7 @@ export class FieldController {
     this.#document.removeEventListener("compositionstart", this.#onCompositionStart, true);
     this.#document.removeEventListener("compositionend", this.#onCompositionEnd, true);
     this.#document.removeEventListener("visibilitychange", this.#onVisibilityChange, true);
+    this.#document.defaultView?.removeEventListener("blur", this.#onWindowBlur, true);
     this.#mutationObserver?.disconnect();
     this.#mutationObserver = null;
     this.#view.dispose();
@@ -271,6 +278,9 @@ export class FieldController {
   readonly #onFocusIn = (event: FocusEvent): void => {
     const target = eventField(event);
     if (target === null) {
+      return;
+    }
+    if (this.#document.activeElement !== target || !this.#document.hasFocus()) {
       return;
     }
 
@@ -289,6 +299,10 @@ export class FieldController {
     const field = decision.field;
     const state = this.#stateFor(field);
     this.#cancelStateWork(state);
+    // Moving focus terminates any prior IME ownership for this field. A fresh
+    // focus epoch must not inherit a compositionstart whose compositionend was
+    // suppressed by blur/navigation.
+    state.composing = false;
     state.focusEpoch = ++this.#focusSequence;
     state.revision += 1;
     state.lastSelection = readSelection(field);
@@ -393,6 +407,12 @@ export class FieldController {
     }
   };
 
+  readonly #onWindowBlur = (): void => {
+    if (!this.#document.hasFocus()) {
+      this.#invalidateActiveState();
+    }
+  };
+
   readonly #onMutations: MutationCallback = (records): void => {
     const field = this.#activeField;
     if (field === null) return;
@@ -436,6 +456,9 @@ export class FieldController {
 
   readonly #onKeyDown = (event: KeyboardEvent): void => {
     if (event.target !== this.#activeField || !this.suggestionVisible) {
+      return;
+    }
+    if (!event.isTrusted && !this.#allowUntrustedKeyboardForTesting) {
       return;
     }
 
@@ -484,6 +507,8 @@ export class FieldController {
     if (
       this.#paused ||
       this.#document.visibilityState !== "visible" ||
+      !this.#document.hasFocus() ||
+      this.#document.activeElement !== field ||
       field !== this.#activeField
     ) {
       return;
@@ -505,6 +530,8 @@ export class FieldController {
     if (
       this.#paused ||
       this.#document.visibilityState !== "visible" ||
+      !this.#document.hasFocus() ||
+      this.#document.activeElement !== field ||
       field !== this.#activeField ||
       state.composing
     ) {
@@ -583,6 +610,7 @@ export class FieldController {
     if (
       this.#paused ||
       this.#document.visibilityState !== "visible" ||
+      !this.#document.hasFocus() ||
       this.#activeField !== field ||
       this.#document.activeElement !== field ||
       !field.isConnected ||
@@ -877,6 +905,7 @@ export class FieldController {
     if (
       this.#paused ||
       this.#document.visibilityState !== "visible" ||
+      !this.#document.hasFocus() ||
       this.#visible !== visible ||
       !this.#view.visible ||
       state === undefined ||

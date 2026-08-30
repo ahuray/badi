@@ -24,9 +24,9 @@ function sendToRoute(
   route: TrustedSessionRoute,
   message: ContentControlMessage,
 ): Promise<unknown> {
-  const options: { frameId: number; documentId?: string } = {
+  const options: { frameId: number; documentId: string } = {
     frameId: route.frameId,
-    ...(route.documentId === undefined ? {} : { documentId: route.documentId }),
+    documentId: route.documentId,
   };
   return chrome.tabs.sendMessage(route.tabId, message, options);
 }
@@ -114,6 +114,19 @@ async function handle(
   }
 }
 
+async function senderWindowIsFocused(
+  sender: chrome.runtime.MessageSender,
+): Promise<boolean> {
+  const windowId = sender.tab?.windowId;
+  if (typeof windowId !== "number") return false;
+  try {
+    const window = await chrome.windows.get(windowId);
+    return window.focused === true;
+  } catch {
+    return false;
+  }
+}
+
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (!isRuntimeCommand(message)) {
     return false;
@@ -122,7 +135,12 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     sendResponse({ ok: false, error: "Untrusted Omatype message sender" } satisfies RuntimeReply);
     return false;
   }
-  void handle(message, sender).then(
+  void senderWindowIsFocused(sender).then(
+    (focused) =>
+      focused
+        ? handle(message, sender)
+        : ({ ok: false, error: "Omatype sender window is not focused" } satisfies RuntimeReply),
+  ).then(
     (reply) => sendResponse(reply),
     (error: unknown) => {
       const detail = error instanceof Error ? error.message : "Unknown native broker error";

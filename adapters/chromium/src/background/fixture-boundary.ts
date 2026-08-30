@@ -9,8 +9,15 @@ export function isTrustedFixtureSender(
     sender.id === extensionId &&
     sender.frameId === 0 &&
     sender.tab?.id !== undefined &&
+    sender.tab.active === true &&
+    sender.tab.incognito === false &&
+    sender.tab.discarded === false &&
+    sender.tab.frozen === false &&
+    typeof sender.tab.windowId === "number" &&
+    typeof sender.documentId === "string" &&
+    sender.documentId.length > 0 &&
     sender.origin === EXPECTED_FIXTURE_ORIGIN &&
     sender.url === EXPECTED_FIXTURE_URL &&
-    (sender.documentLifecycle === undefined || sender.documentLifecycle === "active")
+    sender.documentLifecycle === "active"
   );
 }

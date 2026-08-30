@@ -5,6 +5,7 @@
 pub mod engine;
 pub mod ipc;
 pub mod metrics;
+pub mod native_host;
 pub mod policy;
 pub mod protocol;
 pub mod provider;

@@ -8,7 +8,10 @@
     "test": "vitest run",
     "build": "node scripts/build.mjs",
     "build:verify": "node scripts/verify-build.mjs",
-    "fixture": "python3 -m http.server 4173 --directory ../../fixtures/web"
+    "fixture": "python3 -m http.server 4173 --directory ../../fixtures/web",
+    "live:check": "node --check scripts/manifest-policy.mjs && node --check live/run-live.mjs && node --check live/fake-native-host.mjs",
+    "live:smoke": "node live/run-live.mjs --smoke",
+    "live": "node live/run-live.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.1.32",
@@ -16,6 +19,7 @@
     "ajv": "^8.17.1",
     "esbuild": "^0.25.9",
     "jsdom": "^26.1.0",
+    "playwright": "1.62.1",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"
   }

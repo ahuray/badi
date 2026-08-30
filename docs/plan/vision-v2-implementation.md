@@ -31,22 +31,32 @@ target behavior.
 
 ## Current vertical slice
 
-The first repository slice is intentionally controlled:
+The repository now contains the M1 simulated-DOM foundation and an M2A
+isolated Chromium integration slice:
 
 - a strict JSON Schema for protocol version 1;
 - a Rust broker core with bounded frames, policy, session state, latest-wins
   cancellation, deterministic generation, segmentation, pause, and
   content-free metrics;
 - a strict TypeScript Manifest V3 Chromium adapter for ordinary `input` and
-  `textarea` elements;
-- a deterministic fake transport and controlled web fixture executed under
-  jsdom;
+  `textarea` elements on one exact development document;
+- a Linux Rust native-messaging host that validates bounded Chrome frames and
+  relays them to the peer-UID-checked private broker socket;
+- one public development key/extension ID and a print-only exact-origin native
+  manifest generator;
+- deterministic fake/jsdom tests plus a Playwright runner that creates a
+  disposable HOME, XDG runtime/config/cache tree, and Chromium profile;
+- a real system-Chromium path through the shipped host and broker, with a
+  separately labeled fault host only for delayed-response injection;
 - tests for sensitive-field non-acquisition, stale results, display,
   type-through, dismiss, accept-word, accept-all, and pause; and
-- repeatable format, lint, type, test, build, and documentation checks.
+- repeatable format, lint, type, test, deterministic build, documentation, and
+  hash-linked evidence checks.
 
-It does not yet claim production native-host packaging, arbitrary-page browser
-compatibility, semantic-model quality, Obsidian support, or terminal support.
+It does not claim production native-host installation, a headed runtime-origin
+consent flow, synchronized policy epochs, arbitrary-page compatibility,
+framework or native-undo semantics, semantic-model quality, Obsidian support,
+or terminal support.
 
 ## System boundary
 
@@ -261,11 +271,14 @@ Deliver:
 - one controlled origin with ordinary, sensitive, dynamic, and iframe cases;
 - browser-driven tests for focus, geometry, zoom, scroll, navigation,
   composition, undo, and input events; and
-- a signed capability receipt containing versions and outcomes.
+- a hash-linked, auditable capability receipt containing versions, commands,
+  artifact digests, outcomes, and explicit evidence limits. It is not a
+  cryptographic attestation of the running browser or binaries.
 
-Permissions begin empty and are runtime-granted for one exact
-scheme/host/port. M2 forbids `<all_urls>`, restricted/file/incognito access and
-arbitrary frames; validates service-worker sender tab/frame/origin; requires a
+The full headed M2 product flow begins with no origin grant and requests one
+exact scheme/host/port through visible user consent. M2 forbids `<all_urls>`,
+restricted/file/incognito access and arbitrary frames; validates service-worker
+sender tab/frame/origin; requires a
 visible document, active tab, and focused browser window; and allowlists only
 the development extension ID in the native-host manifest. Revocation,
 navigation, window/tab loss, disconnect, and MV3 worker restart cancel/clear
@@ -288,6 +301,44 @@ emphasis, and high-contrast/accessibility behavior.
 Stop if extension policy, isolated worlds, contenteditable semantics, or native
 messaging cannot uphold the invariants. Narrow the advertised capability
 instead of adding synthetic input.
+
+#### M2A — Isolated exact-document integration record
+
+M2A is the automated subset that can be proved without touching a real browser
+profile or pretending to automate a user-consent prompt. Its live receipt must
+bind all claims to the named Chromium/OS/tool versions and generated artifact
+hashes. It covers:
+
+- the unpacked MV3 extension with only `nativeMessaging` plus one static exact
+  `http://localhost:4173/chromium.html` document match and declaratively
+  disabled incognito operation;
+- a Chromium 132 minimum, with sender admission requiring explicit active,
+  non-incognito, non-discarded, and non-frozen tab state;
+- a frozen development extension identity and native manifest with one exact
+  `allowed_origins` caller;
+- native host framing, strict envelope validation, private socket modes and
+  peer UID, real broker/provider work, broker-authorized insertion, and clean
+  SIGINT/SIGTERM socket removal;
+- trusted dismiss, accept-word, and accept-all gestures; broker-authoritative
+  pause/resume; denied-field zero broker/provider deltas; dynamic policy,
+  navigation, and disconnect invalidation; synthetic composition lifecycle
+  events inside real Chromium; and controlled scroll/page-scale geometry;
+- at least 100 exact real-browser insertion/caret trials, at least 100 delayed
+  stale-result trials, and the full latency method required above; and
+- a schema-validated raw run linked byte-for-byte to a V2 capability receipt.
+
+The delayed-response permutation uses a distinctly labeled browser fault host
+because the production deterministic provider cannot deliberately violate
+cancellation timing. Full-chain behavior, insertion, denied-field evidence,
+pause, and latency use the shipped Rust host and broker.
+
+M2A does **not** satisfy full M2. The following remain explicit gates: headed
+runtime permission consent/revocation; active-tab and focused-window
+arbitration; background visibility on a browser that exposes it; MV3 restart
+and cross-connection policy-epoch synchronization; browser-native undo;
+framework-controlled fields and `contenteditable`; compositor/accessibility
+rendering; hostile arbitrary sites; packaging and production identity. A
+static exact-document development match is never relabeled as a runtime grant.
 
 ### M3 — Obsidian signature-loop proof
 
@@ -403,6 +454,13 @@ CI pins major toolchain versions, restores dependency caches only, and builds
 generated extension artifacts from source. Lockfile changes receive the same
 review as source. No workflow receives repository write permission or a
 secret for pull-request checks.
+
+The portable CI lane syntax-checks the browser runner and fault host, validates
+the committed raw live-run document against its schema, rebuilds the extension,
+and rejects any linked source/artifact hash drift. It does not relabel a fresh
+Ubuntu runner or bundled browser as the named local Chromium/Omarchy capability
+cell. Changing the runner, fixture, or extension invalidates the linked record
+and requires a new isolated durable run on the declared environment.
 
 Release candidates add schema-fixture compatibility, dependency/license and
 vulnerability review, browser-driven receipts, reproducible artifact hashes,

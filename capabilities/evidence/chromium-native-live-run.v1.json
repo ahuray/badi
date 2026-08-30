@@ -1,0 +1,362 @@
+{
+  "$schema": "../v2/live-run.schema.json",
+  "record_version": 1,
+  "id": "chromium-native-live-run.v1",
+  "recorded_at": "2026-08-30T01:21:13.204Z",
+  "repository": {
+    "base_commit": "ccddb788d1f69fc12c1c761c9016fb58156880dc",
+    "working_tree_dirty": true
+  },
+  "environment": {
+    "os": "Omarchy",
+    "kernel": "Linux 7.1.9-arch1-2",
+    "chromium": "Chromium 151.0.7922.173 Arch Linux",
+    "playwright": "1.62.1",
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+    "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+    "node": "v26.8.1",
+    "npm": "11.19.0"
+  },
+  "extension": {
+    "id": "ckkiehcjbclcjckkkajohopoikeejkoa",
+    "manifest_version": 3,
+    "minimum_chrome_version": "132",
+    "incognito": "not_allowed",
+    "permission_mode": "static-exact-port",
+    "api_permissions": [
+      "nativeMessaging"
+    ],
+    "manifest_keys": [
+      "background",
+      "commands",
+      "content_scripts",
+      "description",
+      "incognito",
+      "key",
+      "manifest_version",
+      "minimum_chrome_version",
+      "name",
+      "permissions",
+      "version"
+    ],
+    "host_match": "http://localhost:4173/chromium.html",
+    "content_script": {
+      "matches": [
+        "http://localhost:4173/chromium.html"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "match_about_blank_present": false,
+      "match_origin_as_fallback_present": false
+    },
+    "runtime_url": "http://localhost:4173/chromium.html"
+  },
+  "native": {
+    "host_name": "io.omatype.broker",
+    "caller_origin": "chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/",
+    "max_envelope_bytes": 65536,
+    "socket_parent_mode": "0700",
+    "socket_mode": "0600",
+    "peer_uid_verified": true
+  },
+  "isolation": {
+    "temporary_home": true,
+    "temporary_xdg_runtime": true,
+    "temporary_profile": true,
+    "real_profile_touched": false,
+    "user_config_touched": false,
+    "system_manifest_touched": false,
+    "temporary_tree_removed": true,
+    "socket_removed": true,
+    "processes_remaining": 0
+  },
+  "privacy": {
+    "context_text_recorded": false,
+    "suggestion_text_recorded": false,
+    "context_fingerprints_recorded": false,
+    "absolute_personal_paths_recorded": false
+  },
+  "commands": [
+    {
+      "id": "cargo-build-bins",
+      "command": "cargo build --workspace --bins",
+      "exit_code": 0
+    },
+    {
+      "id": "cargo-test-workspace",
+      "command": "cargo test --workspace",
+      "exit_code": 0
+    },
+    {
+      "id": "chromium-typecheck",
+      "command": "npm run typecheck --workspace @omatype/chromium",
+      "exit_code": 0
+    },
+    {
+      "id": "chromium-unit",
+      "command": "npm test --workspace @omatype/chromium",
+      "exit_code": 0
+    },
+    {
+      "id": "chromium-build-verify",
+      "command": "npm run build:verify --workspace @omatype/chromium",
+      "exit_code": 0
+    },
+    {
+      "id": "isolated-live-run",
+      "command": "node adapters/chromium/live/run-live.mjs (isolated $TEMP HOME/XDG/profile; system Chromium; generated host manifest; Rust broker/native host)",
+      "exit_code": 0
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "chromium.full-chain",
+      "evidence_class": "real-rust-chain",
+      "trials": 1,
+      "passed": 1,
+      "status": "pass",
+      "detail": "System Chromium loaded the unpacked worker and received a visible result through the Rust native host, private UDS, broker, and deterministic provider."
+    },
+    {
+      "id": "interaction.dismiss",
+      "evidence_class": "real-rust-chain",
+      "trials": 1,
+      "passed": 1,
+      "status": "pass",
+      "detail": "A trusted Escape gesture hid the visible extension-owned UI without mutating the field."
+    },
+    {
+      "id": "interaction.undo",
+      "evidence_class": "real-rust-chain",
+      "trials": 1,
+      "passed": 0,
+      "status": "unsupported",
+      "detail": "The vanilla setRangeText plus dispatched input path did not create a Chromium undo transaction."
+    },
+    {
+      "id": "commit.accept-word",
+      "evidence_class": "real-rust-chain",
+      "trials": 1,
+      "passed": 1,
+      "status": "pass",
+      "detail": "A trusted Ctrl-ArrowRight gesture inserted only the broker-authorized first word-part."
+    },
+    {
+      "id": "security.untrusted-keyboard",
+      "evidence_class": "real-rust-chain",
+      "trials": 3,
+      "passed": 3,
+      "status": "pass",
+      "detail": "Page-authored untrusted accept-word, accept-all, and dismiss events caused no authorization or mutation; trusted automation remained functional."
+    },
+    {
+      "id": "security.synthetic-focus-zero",
+      "evidence_class": "real-rust-chain",
+      "trials": 1,
+      "passed": 1,
+      "status": "pass",
+      "detail": "Synthetic focusin and input on an unfocused eligible field produced zero broker context updates and provider calls."
+    },
+    {
+      "id": "privacy.denied-zero",
+      "evidence_class": "real-rust-chain",
+      "trials": 2,
+      "passed": 2,
+      "status": "pass",
+      "detail": "Password and one-time-code fields caused zero context, provider-call, and provider-input-byte deltas."
+    },
+    {
+      "id": "lifecycle.dynamic-invalidation",
+      "evidence_class": "real-rust-chain",
+      "trials": 3,
+      "passed": 3,
+      "status": "pass",
+      "detail": "Readonly, ancestor opt-out, and DOM replacement each hid UI and prevented later insertion."
+    },
+    {
+      "id": "lifecycle.composition",
+      "evidence_class": "real-rust-chain",
+      "trials": 1,
+      "passed": 1,
+      "status": "pass",
+      "detail": "A synthetic CompositionEvent lifecycle stimulus in real Chromium hid the result and blocked a trusted acceptance gesture until refocus/composition end."
+    },
+    {
+      "id": "geometry.scroll-zoom",
+      "evidence_class": "real-rust-chain",
+      "trials": 3,
+      "passed": 3,
+      "status": "pass",
+      "detail": "The extension-owned host remained anchored before scroll, after scroll, and after controlled page zoom plus resize."
+    },
+    {
+      "id": "lifecycle.visibility",
+      "evidence_class": "real-rust-chain",
+      "trials": 1,
+      "passed": 0,
+      "status": "unsupported",
+      "detail": "This headless build did not expose tab-background visibility transitions."
+    },
+    {
+      "id": "lifecycle.navigation",
+      "evidence_class": "real-rust-chain",
+      "trials": 2,
+      "passed": 2,
+      "status": "pass",
+      "detail": "Navigation removed the old document UI, and the exact fixture document received a fresh isolated content lifecycle on return."
+    },
+    {
+      "id": "control.pause-authoritative",
+      "evidence_class": "real-rust-chain",
+      "trials": 3,
+      "passed": 3,
+      "status": "pass",
+      "detail": "Broker-authoritative pause cleared visible UI, blocked provider work for a later edit, and resume permitted a fresh real-chain result."
+    },
+    {
+      "id": "control.pause-shortcut",
+      "evidence_class": "real-rust-chain",
+      "trials": 1,
+      "passed": 0,
+      "status": "unsupported",
+      "detail": "Chromium headless did not deliver the extension command accelerator."
+    },
+    {
+      "id": "commit.insertion-100",
+      "evidence_class": "real-rust-chain",
+      "trials": 1000,
+      "passed": 1000,
+      "status": "pass",
+      "detail": "Real Chromium verified exact value, UTF-16 caret, and one input event across end, mid-line, astral, Greek, and combining-boundary cases."
+    },
+    {
+      "id": "latency.edit-to-visible",
+      "evidence_class": "real-rust-chain",
+      "trials": 1000,
+      "passed": 1000,
+      "status": "pass",
+      "detail": "Deterministic edit-to-visible p95 stayed within the provisional 500 ms warm interaction ceiling."
+    },
+    {
+      "id": "lifecycle.disconnect",
+      "evidence_class": "real-rust-chain",
+      "trials": 1,
+      "passed": 1,
+      "status": "pass",
+      "detail": "Terminating the tracked shipped Rust native-host process propagated through the worker's frozen document route; UI cleared under the sub-TTL deadline with no insertion."
+    },
+    {
+      "id": "race.stale-100",
+      "evidence_class": "live-browser-fault-host",
+      "trials": 100,
+      "passed": 100,
+      "status": "pass",
+      "detail": "A separately labeled fault host returned every delayed response after supersession; none of the stale results displayed or inserted, and only the latest remained eligible."
+    }
+  ],
+  "measurements": [
+    {
+      "name": "accept-to-insert",
+      "evidence_class": "real-rust-chain",
+      "unit": "milliseconds",
+      "samples": 1000,
+      "warmups": 50,
+      "statistic": "nearest-rank-p95",
+      "p95": 8.3,
+      "maximum": 19.7,
+      "threshold": 30,
+      "status": "pass"
+    },
+    {
+      "name": "invalidation-to-hide",
+      "evidence_class": "real-rust-chain",
+      "unit": "milliseconds",
+      "samples": 1000,
+      "warmups": 50,
+      "statistic": "nearest-rank-p95",
+      "p95": 0.7,
+      "maximum": 0.9,
+      "threshold": 32,
+      "status": "pass"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "broker-binary",
+      "bytes": 30854768,
+      "sha256": "6ae83dcd24129e376fd17d7523a3940e8456f045c61c2dd33ff3cf0b867e72cf"
+    },
+    {
+      "id": "native-host-binary",
+      "bytes": 28584632,
+      "sha256": "63edb51488785a18f201a626e03a368067dad0066d68543ea53ebaae50003375"
+    },
+    {
+      "id": "native-host-manifest",
+      "bytes": 269,
+      "sha256": "7e233c3612ea8e2eef985f169143c36b24b6f6e50391f1f6af51a042ea3dc78c"
+    },
+    {
+      "id": "extension-content-script",
+      "bytes": 49631,
+      "sha256": "5d35d31c27295cc0f9e8820d38f5de9ebe4ca975ea798115ea1f111754384496"
+    },
+    {
+      "id": "extension-service-worker",
+      "bytes": 33035,
+      "sha256": "65759522f18af6b2902b023213cf3a06668c89e46b4fe761438203f231894622"
+    },
+    {
+      "id": "extension-manifest",
+      "bytes": 1202,
+      "sha256": "695797a1a0aac95aef36843cd65766aafa17a4897febe0ed68ad6c235722bc56"
+    },
+    {
+      "id": "extension-build-manifest",
+      "bytes": 616,
+      "sha256": "0fc3be656eee2e4c63248d2eec5dd704b0ac39339c85e63775fda6311ea6e140"
+    },
+    {
+      "id": "fixture-html",
+      "bytes": 3267,
+      "sha256": "82ef858156880b6ed34607e6f480020ccceea5585dd462d9b60b2fa9b23b4db9"
+    },
+    {
+      "id": "fixture-js",
+      "bytes": 5922,
+      "sha256": "931f1a51e5403e789b9a200296c777dd821914a732e8004f8560b552c3370921"
+    },
+    {
+      "id": "fixture-css",
+      "bytes": 2950,
+      "sha256": "d957dd419e2e0ddeea4e25fe3f3391cc3c7541f0f5f9629102d50c9edd6bf9e5"
+    },
+    {
+      "id": "live-runner",
+      "bytes": 58842,
+      "sha256": "26a3010168cc4cc26e3ead930acce13476a4e2f109f2360525e1d8c446c2dc8e"
+    },
+    {
+      "id": "fault-host",
+      "bytes": 8280,
+      "sha256": "3802c7b8332428035a5d1cb94bc447156f741792198a661d4f760cae5cbde693"
+    },
+    {
+      "id": "manifest-policy",
+      "bytes": 2264,
+      "sha256": "17af216bf4be0e95f5f761a680ebe276ee367a70aa9500c67c024c82804e7411"
+    }
+  ],
+  "notes": [
+    "The durable full-chain checks use the shipped Rust native host and broker; the delayed-response race is separately classified as live-browser-fault-host.",
+    "Chromium headless loaded the extension but exposed no automatable browser permission prompt; this evidence therefore covers the static exact-document development boundary, not the future runtime-granted M2 policy.",
+    "Headless automation does not prove headed window-manager accelerators, compositor rendering, accessibility contrast, browser-level zoom chrome, or MV3 restart epoch synchronization.",
+    "Composition coverage uses synthetic CompositionEvent lifecycle stimuli in real Chromium; it does not claim a physical IME session.",
+    "Vanilla DOM setRangeText insertion is externally verified here but remains broker-reported as dispatched-unverified; framework editors and contenteditable remain excluded.",
+    "Latency endpoints use window.performance.now in the controlled page: trusted keydown to observed input, and pre-mutation marker to observed hidden transition; p95 is nearest-rank after warmups.",
+    "Machine profile: 12th Gen Intel(R) Core(TM) i7-12700H; 15 GiB RAM."
+  ]
+}

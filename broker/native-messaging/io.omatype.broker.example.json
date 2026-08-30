@@ -1,0 +1,9 @@
+{
+  "name": "io.omatype.broker",
+  "description": "Omatype private local broker bridge",
+  "path": "/opt/omatype/omatype-native-host",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/"
+  ]
+}

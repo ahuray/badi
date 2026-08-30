@@ -13,26 +13,37 @@ input capture and synthetic typing are not part of the architecture.
 
 ## Current status
 
-The repository contains research plus a working M1 foundation:
+The repository contains the research, the M1 trust foundation, and an M2A
+isolated Chromium integration slice:
 
 - a strict JSON Schema protocol with positive/negative examples, 64 KiB
   little-endian frames, explicit UTF-16 browser offsets, surrogate-safe bounded
   context, relative TTLs, and a shared multilingual accept-word fixture;
 - a Rust 2024 broker and `omatypectl` with fail-closed policy, secure local
   Unix socket, peer-UID checks, deterministic suggestions, latest-wins
-  cancellation, addressed commits, global pause, and content-free metrics;
-- a strict TypeScript Manifest V3 adapter limited to the localhost fixture,
+  cancellation, addressed commits, global pause, content-free metrics, and
+  graceful SIGINT/SIGTERM cleanup;
+- a bounded Rust Chrome-native-message bridge plus a deterministic print-only
+  manifest generator pinned to one public development extension identity;
+- a strict TypeScript Manifest V3 adapter limited to one exact localhost page,
   with pre-acquisition field denial, adapter-owned ghost UI, exact
   type-through, broker-authorized word/all acceptance, dismissal, and pause;
   and
-- deterministic Rust, schema, TypeScript, jsdom race, and extension-build
-  checks in CI.
+- deterministic Rust, schema, TypeScript, jsdom race, extension-build, and
+  evidence-link checks in CI, plus a repeatable isolated system-Chromium run.
 
-This is a simulated DOM-adapter foundation. No extension or native host is
-installed, no browser profile or desktop configuration is changed, and the
-current evidence does **not** prove live Chromium lifecycle, layout, framework
-state, native undo, arbitrary-site compatibility, semantic-model quality,
-Obsidian support, or terminal support.
+The live runner uses disposable HOME/XDG/profile directories and leaves no
+extension, native manifest, socket, or process installed. It proves the named
+headless Chromium build and exact controlled document, not general browser
+support. Headed permission consent, background visibility, the extension
+command accelerator, native undo, policy epochs, framework fields, arbitrary
+sites, semantic-model quality, Obsidian, and terminal support remain explicit
+gaps.
+
+The current M2A receipt records 1,000/1,000 exact insert/caret trials and
+100/100 delayed stale races. Nearest-rank p95 was 8.3 ms from trusted accept to
+observed insertion and 0.7 ms from invalidation marker to hidden UI, after 50
+warmups for each 1,000-sample distribution.
 
 ## Start here
 
@@ -45,6 +56,14 @@ Obsidian support, or terminal support.
 - [Chromium foundation receipt](capabilities/chromium-dom-foundation.v1.json) —
   machine-readable evidence class, supported surface, exclusions, versions,
   and checks.
+- [Chromium native live receipt](capabilities/chromium-native-live.v2.json) —
+  hash-linked real-browser/native-host scenarios, measurements, isolation, and
+  honest unsupported surfaces.
+- [Capability evidence guide](capabilities/README.md) — receipt classes,
+  linkage rules, validation, and attestation limits.
+- [Chromium runbook](adapters/chromium/README.md) and
+  [broker/native-bridge runbook](broker/README.md) — narrow boundaries,
+  commands, isolation, and cleanup behavior.
 
 The original [V1 vision](VISION.md),
 [Linux architecture research](docs/research/linux-architecture.md),
@@ -84,8 +103,9 @@ git diff --check
 
 The Chromium build is generated at `adapters/chromium/dist/` and is ignored by
 Git. Its timestamp-free `BUILD_MANIFEST.json` records stable SHA-256 hashes;
-the root check compares two clean builds byte for byte and validates both local
-documentation links and the machine-readable capability receipt.
+the root check compares two clean builds byte for byte and validates local
+documentation links, receipt schemas, evidence hashes, and cross-document
+claims.
 
 To inspect the controlled page only:
 
@@ -93,12 +113,28 @@ To inspect the controlled page only:
 npm run fixture --workspace @omatype/chromium
 ```
 
-Open `http://localhost:4173/chromium.html`. Suggestions still require the M2
-native-host bridge, which is intentionally not installed by this foundation.
+Open `http://localhost:4173/chromium.html`. A normal browser still needs an
+explicit native-host setup; no command in the ordinary build/test path installs
+one.
+
+To reproduce the isolated live lane on Linux with system Chromium at
+`/usr/bin/chromium`:
+
+```sh
+npm run live:smoke --workspace @omatype/chromium
+npm run live --workspace @omatype/chromium
+```
+
+The smoke uses reduced counts and writes only ignored, content-free diagnostic
+JSON. The durable command runs at least 1,000 measured interactions after 50
+warmups and 100 delayed stale-result trials, then writes the schema-validated
+raw evidence document. Both commands build locally, create only disposable
+directories, and verify cleanup; neither uses the real Chromium profile.
 
 ## Product order
 
-1. Finish a live temporary-profile Chromium/native-host proof.
+1. Preserve the narrow M2A Chromium receipt while completing the headed
+   permission/policy-epoch gates before any origin expansion.
 2. Prove the same signature loop through supported Obsidian/CodeMirror APIs.
 3. Evaluate a small local semantic suffix provider against the deterministic
    baseline.

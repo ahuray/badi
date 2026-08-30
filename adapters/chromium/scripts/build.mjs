@@ -21,7 +21,7 @@ await build({
   charset: "utf8",
   format: "iife",
   platform: "browser",
-  target: ["chrome120"],
+  target: ["chrome132"],
   legalComments: "none",
   logLevel: "silent",
   minify: false,
@@ -64,7 +64,7 @@ const buildManifest = {
   schema: 1,
   package: "@omatype/chromium",
   version: sourceManifest.version,
-  target: "chrome120-mv3",
+  target: "chrome132-mv3",
   native_host: "io.omatype.broker",
   artifacts,
 };

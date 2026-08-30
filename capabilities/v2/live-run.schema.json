@@ -1,0 +1,596 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omatype.invalid/capabilities/v2/live-run.schema.json",
+  "title": "Omatype isolated Chromium live-run evidence V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "record_version",
+    "id",
+    "recorded_at",
+    "repository",
+    "environment",
+    "extension",
+    "native",
+    "isolation",
+    "privacy",
+    "commands",
+    "scenarios",
+    "measurements",
+    "artifacts",
+    "notes"
+  ],
+  "properties": {
+    "$schema": { "const": "../v2/live-run.schema.json" },
+    "record_version": { "const": 1 },
+    "id": { "const": "chromium-native-live-run.v1" },
+    "recorded_at": { "$ref": "#/$defs/utcTimestamp" },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_commit", "working_tree_dirty"],
+      "properties": {
+        "base_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "working_tree_dirty": { "type": "boolean" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os",
+        "kernel",
+        "chromium",
+        "playwright",
+        "rustc",
+        "cargo",
+        "node",
+        "npm"
+      ],
+      "properties": {
+        "os": { "type": "string", "minLength": 1 },
+        "kernel": { "type": "string", "minLength": 1 },
+        "chromium": { "type": "string", "minLength": 1 },
+        "playwright": { "type": "string", "minLength": 1 },
+        "rustc": { "type": "string", "minLength": 1 },
+        "cargo": { "type": "string", "minLength": 1 },
+        "node": { "type": "string", "minLength": 1 },
+        "npm": { "type": "string", "minLength": 1 }
+      }
+    },
+    "extension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "manifest_version",
+        "minimum_chrome_version",
+        "permission_mode",
+        "api_permissions",
+        "incognito",
+        "manifest_keys",
+        "host_match",
+        "content_script",
+        "runtime_url"
+      ],
+      "properties": {
+        "id": { "const": "ckkiehcjbclcjckkkajohopoikeejkoa" },
+        "manifest_version": { "const": 3 },
+        "minimum_chrome_version": { "const": "132" },
+        "permission_mode": { "const": "static-exact-port" },
+        "api_permissions": {
+          "type": "array",
+          "prefixItems": [{ "const": "nativeMessaging" }],
+          "items": false,
+          "minItems": 1,
+          "maxItems": 1
+        },
+        "incognito": { "const": "not_allowed" },
+        "manifest_keys": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "background" },
+            { "const": "commands" },
+            { "const": "content_scripts" },
+            { "const": "description" },
+            { "const": "incognito" },
+            { "const": "key" },
+            { "const": "manifest_version" },
+            { "const": "minimum_chrome_version" },
+            { "const": "name" },
+            { "const": "permissions" },
+            { "const": "version" }
+          ],
+          "items": false,
+          "minItems": 11,
+          "maxItems": 11
+        },
+        "host_match": { "const": "http://localhost:4173/chromium.html" },
+        "content_script": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "matches",
+            "js",
+            "run_at",
+            "all_frames",
+            "match_about_blank_present",
+            "match_origin_as_fallback_present"
+          ],
+          "properties": {
+            "matches": {
+              "type": "array",
+              "prefixItems": [
+                { "const": "http://localhost:4173/chromium.html" }
+              ],
+              "items": false,
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "js": {
+              "type": "array",
+              "prefixItems": [{ "const": "content-script.js" }],
+              "items": false,
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "run_at": { "const": "document_idle" },
+            "all_frames": { "const": false },
+            "match_about_blank_present": { "const": false },
+            "match_origin_as_fallback_present": { "const": false }
+          }
+        },
+        "runtime_url": { "const": "http://localhost:4173/chromium.html" }
+      }
+    },
+    "native": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host_name",
+        "caller_origin",
+        "max_envelope_bytes",
+        "socket_parent_mode",
+        "socket_mode",
+        "peer_uid_verified"
+      ],
+      "properties": {
+        "host_name": { "const": "io.omatype.broker" },
+        "caller_origin": {
+          "const": "chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/"
+        },
+        "max_envelope_bytes": { "const": 65536 },
+        "socket_parent_mode": { "const": "0700" },
+        "socket_mode": { "const": "0600" },
+        "peer_uid_verified": { "const": true }
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "temporary_home",
+        "temporary_xdg_runtime",
+        "temporary_profile",
+        "real_profile_touched",
+        "user_config_touched",
+        "system_manifest_touched",
+        "temporary_tree_removed",
+        "socket_removed",
+        "processes_remaining"
+      ],
+      "properties": {
+        "temporary_home": { "const": true },
+        "temporary_xdg_runtime": { "const": true },
+        "temporary_profile": { "const": true },
+        "real_profile_touched": { "const": false },
+        "user_config_touched": { "const": false },
+        "system_manifest_touched": { "const": false },
+        "temporary_tree_removed": { "const": true },
+        "socket_removed": { "const": true },
+        "processes_remaining": { "const": 0 }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context_text_recorded",
+        "suggestion_text_recorded",
+        "context_fingerprints_recorded",
+        "absolute_personal_paths_recorded"
+      ],
+      "properties": {
+        "context_text_recorded": { "const": false },
+        "suggestion_text_recorded": { "const": false },
+        "context_fingerprints_recorded": { "const": false },
+        "absolute_personal_paths_recorded": { "const": false }
+      }
+    },
+    "commands": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "command", "exit_code"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "command": { "type": "string", "minLength": 1 },
+          "exit_code": { "const": 0 }
+        }
+      },
+      "allOf": [
+        { "$ref": "#/$defs/requiredCommands" }
+      ]
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 6,
+      "items": { "$ref": "#/$defs/scenario" },
+      "allOf": [
+        { "$ref": "#/$defs/requiredScenarios" }
+      ]
+    },
+    "measurements": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "$ref": "#/$defs/measurement" },
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "name": { "const": "invalidation-to-hide" },
+              "threshold": { "const": 32 },
+              "p95": { "type": "number", "maximum": 32 }
+            },
+            "required": ["name", "threshold", "p95"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "name": { "const": "accept-to-insert" },
+              "threshold": { "const": 30 },
+              "p95": { "type": "number", "maximum": 30 }
+            },
+            "required": ["name", "threshold", "p95"]
+          }
+        }
+      ]
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 13,
+      "items": { "$ref": "#/$defs/artifact" },
+      "allOf": [
+        { "$ref": "#/$defs/requiredArtifacts" }
+      ]
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9._-]+$" },
+    "utcTimestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "bytes", "sha256"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "requiredCommands": {
+      "type": "array",
+      "allOf": [
+        { "contains": { "type": "object", "properties": { "id": { "const": "cargo-build-bins" } }, "required": ["id"] } },
+        { "contains": { "type": "object", "properties": { "id": { "const": "cargo-test-workspace" } }, "required": ["id"] } },
+        { "contains": { "type": "object", "properties": { "id": { "const": "chromium-typecheck" } }, "required": ["id"] } },
+        { "contains": { "type": "object", "properties": { "id": { "const": "chromium-unit" } }, "required": ["id"] } },
+        { "contains": { "type": "object", "properties": { "id": { "const": "chromium-build-verify" } }, "required": ["id"] } },
+        { "contains": { "type": "object", "properties": { "id": { "const": "isolated-live-run" } }, "required": ["id"] } }
+      ]
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "evidence_class", "trials", "passed", "status"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "evidence_class": {
+          "enum": ["real-rust-chain", "live-browser-fault-host", "unit"]
+        },
+        "trials": { "type": "integer", "minimum": 1 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "status": { "enum": ["pass", "unsupported"] },
+        "detail": { "type": "string", "minLength": 1 }
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "evidence_class",
+        "unit",
+        "samples",
+        "warmups",
+        "statistic",
+        "p95",
+        "maximum",
+        "threshold",
+        "status"
+      ],
+      "properties": {
+        "name": { "$ref": "#/$defs/id" },
+        "evidence_class": { "const": "real-rust-chain" },
+        "unit": { "const": "milliseconds" },
+        "samples": { "type": "integer", "minimum": 1000 },
+        "warmups": { "type": "integer", "minimum": 50 },
+        "statistic": { "const": "nearest-rank-p95" },
+        "p95": { "type": "number", "minimum": 0 },
+        "maximum": { "type": "number", "minimum": 0 },
+        "threshold": { "type": "number", "exclusiveMinimum": 0 },
+        "status": { "const": "pass" }
+      }
+    },
+    "requiredScenarios": {
+      "type": "array",
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "chromium.full-chain" },
+              "evidence_class": { "const": "real-rust-chain" },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "status"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "interaction.dismiss" },
+              "evidence_class": { "const": "real-rust-chain" },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "status"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "commit.accept-word" },
+              "evidence_class": { "const": "real-rust-chain" },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "status"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "control.pause-authoritative" },
+              "evidence_class": { "const": "real-rust-chain" },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "status"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "privacy.denied-zero" },
+              "evidence_class": { "const": "real-rust-chain" },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "status"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "commit.insertion-100" },
+              "evidence_class": { "const": "real-rust-chain" },
+              "trials": { "type": "integer", "minimum": 100 },
+              "passed": { "type": "integer", "minimum": 100 },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "trials", "passed", "status"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "race.stale-100" },
+              "evidence_class": { "const": "live-browser-fault-host" },
+              "trials": { "type": "integer", "minimum": 100 },
+              "passed": { "type": "integer", "minimum": 100 },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "trials", "passed", "status"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "security.untrusted-keyboard" },
+              "evidence_class": { "const": "real-rust-chain" },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "status"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "security.synthetic-focus-zero" },
+              "evidence_class": { "const": "real-rust-chain" },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "status"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "lifecycle.dynamic-invalidation" },
+              "evidence_class": { "const": "real-rust-chain" },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "status"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "lifecycle.composition" },
+              "evidence_class": { "const": "real-rust-chain" },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "status"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "geometry.scroll-zoom" },
+              "evidence_class": { "const": "real-rust-chain" },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "status"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "lifecycle.navigation" },
+              "evidence_class": { "const": "real-rust-chain" },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "status"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": { "const": "lifecycle.disconnect" },
+              "evidence_class": { "const": "real-rust-chain" },
+              "status": { "const": "pass" }
+            },
+            "required": ["id", "evidence_class", "status"]
+          }
+        }
+      ]
+    },
+    "requiredArtifacts": {
+      "type": "array",
+      "allOf": [
+        { "contains": { "$ref": "#/$defs/brokerArtifact" } },
+        { "contains": { "$ref": "#/$defs/nativeHostArtifact" } },
+        { "contains": { "$ref": "#/$defs/nativeManifestArtifact" } },
+        { "contains": { "$ref": "#/$defs/contentScriptArtifact" } },
+        { "contains": { "$ref": "#/$defs/serviceWorkerArtifact" } },
+        { "contains": { "$ref": "#/$defs/extensionManifestArtifact" } },
+        { "contains": { "$ref": "#/$defs/extensionBuildManifestArtifact" } },
+        { "contains": { "$ref": "#/$defs/fixtureHtmlArtifact" } },
+        { "contains": { "$ref": "#/$defs/fixtureJsArtifact" } },
+        { "contains": { "$ref": "#/$defs/fixtureCssArtifact" } },
+        { "contains": { "$ref": "#/$defs/liveRunnerArtifact" } },
+        { "contains": { "$ref": "#/$defs/faultHostArtifact" } },
+        { "contains": { "$ref": "#/$defs/manifestPolicyArtifact" } }
+      ]
+    },
+    "brokerArtifact": {
+      "type": "object",
+      "properties": { "id": { "const": "broker-binary" } },
+      "required": ["id"]
+    },
+    "nativeHostArtifact": {
+      "type": "object",
+      "properties": { "id": { "const": "native-host-binary" } },
+      "required": ["id"]
+    },
+    "nativeManifestArtifact": {
+      "type": "object",
+      "properties": { "id": { "const": "native-host-manifest" } },
+      "required": ["id"]
+    },
+    "contentScriptArtifact": {
+      "type": "object",
+      "properties": { "id": { "const": "extension-content-script" } },
+      "required": ["id"]
+    },
+    "serviceWorkerArtifact": {
+      "type": "object",
+      "properties": { "id": { "const": "extension-service-worker" } },
+      "required": ["id"]
+    },
+    "extensionManifestArtifact": {
+      "type": "object",
+      "properties": { "id": { "const": "extension-manifest" } },
+      "required": ["id"]
+    },
+    "extensionBuildManifestArtifact": {
+      "type": "object",
+      "properties": { "id": { "const": "extension-build-manifest" } },
+      "required": ["id"]
+    },
+    "fixtureHtmlArtifact": {
+      "type": "object",
+      "properties": { "id": { "const": "fixture-html" } },
+      "required": ["id"]
+    },
+    "fixtureJsArtifact": {
+      "type": "object",
+      "properties": { "id": { "const": "fixture-js" } },
+      "required": ["id"]
+    },
+    "fixtureCssArtifact": {
+      "type": "object",
+      "properties": { "id": { "const": "fixture-css" } },
+      "required": ["id"]
+    },
+    "liveRunnerArtifact": {
+      "type": "object",
+      "properties": { "id": { "const": "live-runner" } },
+      "required": ["id"]
+    },
+    "faultHostArtifact": {
+      "type": "object",
+      "properties": { "id": { "const": "fault-host" } },
+      "required": ["id"]
+    },
+    "manifestPolicyArtifact": {
+      "type": "object",
+      "properties": { "id": { "const": "manifest-policy" } },
+      "required": ["id"]
+    }
+  }
+}

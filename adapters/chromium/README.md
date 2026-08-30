@@ -1,8 +1,9 @@
 # Omatype Chromium vertical slice
 
-This is a deliberately narrow unpacked Manifest V3 foundation. It connects only
-to the native-messaging host name `io.omatype.broker`. Building and testing do
-not register that host, modify a Chromium profile, or install the extension.
+This is a deliberately narrow unpacked Manifest V3 adapter. It connects only to
+the native-messaging host name `io.omatype.broker`. Ordinary build/unit commands
+do not register that host, modify a Chromium profile, or install the extension;
+the live commands use and remove a fully disposable profile and HOME/XDG tree.
 
 From the repository root:
 
@@ -25,13 +26,20 @@ npm run fixture --workspace @omatype/chromium
 Then open `http://localhost:4173/chromium.html`. Loading the unpacked extension
 into a browser remains a deliberate, manual action.
 
-## M1 capability boundary
+## Controlled capability boundary
 
 The content controller starts only in the top frame of the exact controlled URL
 `http://localhost:4173/chromium.html`. The service worker independently verifies
 extension id, origin, URL, top-frame id, active document lifecycle, and tab route
-before forwarding a message. Broader websites and grants belong to a later
-milestone.
+before forwarding a message. Incognito use is disabled in the manifest and an
+incognito sender is rejected independently. A nonempty Chromium `documentId` is
+mandatory and each opaque session remains frozen to its first trusted
+tab/frame/document.
+Broader websites and grants belong to a later milestone.
+
+The manifest requires Chromium 132 or later because the sender gate fails
+closed unless the Tabs API reports both `discarded === false` and the
+Chromium-132 `frozen === false` lifecycle state.
 
 An ambient M1 request requires all of the following:
 
@@ -54,12 +62,13 @@ Controlled-framework compatibility and browser-native undo behavior are also not
 yet proven. The current vanilla-DOM `setRangeText` plus `input` event path is
 reported to the broker as `dispatched-unverified`.
 
-While a controller is alive, M1 cancels work and clears visible UI on observed
+While a controller is alive, it cancels work and clears visible UI on observed
 active-field/ancestor policy mutations, identity ambiguity, DOM removal,
 document visibility loss, and a native-port disconnect delivered to its frozen
-trusted route. This is deterministic unit-level coverage, not a claim of live
-MV3 lifecycle proof. Active-tab changes, window changes, browser navigation,
-worker restarts, and routes that were never registered remain M2 work.
+trusted route. M2A proves dynamic mutation, composition, navigation, and native
+disconnect on the controlled live document. Active-tab/window changes,
+background visibility in the tested headless build, permission revocation,
+worker restarts, and routes that were never registered remain full-M2 work.
 
 Keyboard behavior while a suggestion is visible:
 
@@ -96,3 +105,38 @@ addressed suggestion before another acceptance. Unsolicited broker frames are
 not general page-control APIs: `omatypectl` request/accept commands exercise the
 broker core only and do not route `suggestion.show` or `commit.prepare` into a
 Chromium content controller in M1.
+
+## Isolated live proof
+
+The repository-pinned Playwright package drives `/usr/bin/chromium` with a
+temporary user-data directory. The runner builds the Rust binaries and
+extension, generates an exact-origin native-host manifest below the temporary
+tree, starts the broker on a private temporary runtime socket, and verifies
+that every tracked process, socket, manifest, and profile is gone afterward.
+It never writes the user's normal Chromium profile or native-host directory.
+
+```sh
+npm run live:smoke --workspace @omatype/chromium
+npm run live --workspace @omatype/chromium
+```
+
+The durable lane uses the real Rust host and broker for handshake/show,
+dismiss, accept-word/all, authoritative pause/resume, denied fields, insertion,
+latency, geometry, navigation, and disconnect. Synthetic `CompositionEvent`s
+exercise composition lifecycle inside the real browser but do not prove a real
+IME. A distinctly labeled JavaScript fault host is used only to return canceled
+responses late; it cannot be used as evidence for the production native bridge,
+broker, privacy gate, insertion, or latency.
+
+Durable evidence requires 1,000 measured interactions after 50 warmups, 100
+delayed stale trials, exact cleanup, and both p95 gates. Its raw JSON is checked
+against `capabilities/v2/live-run.schema.json` and hash-linked by the V2 receipt.
+The smoke deliberately uses smaller counts and cannot produce a live receipt.
+
+This is a static exact-document development proof with only the
+`nativeMessaging` API permission. Incognito is declared `not_allowed`, and the
+sender boundary independently rejects an incognito tab. The headless browser
+did not expose a user permission prompt, so runtime-granted origin consent
+remains unproved. The same run reports browser-native undo, tab-background
+visibility, and the extension command accelerator as unsupported rather than
+inferring them from nearby tests.

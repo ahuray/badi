@@ -1,7 +1,7 @@
 export interface TrustedSessionRoute {
   readonly tabId: number;
   readonly frameId: number;
-  readonly documentId?: string;
+  readonly documentId: string;
 }
 
 function routeFromSender(
@@ -9,13 +9,19 @@ function routeFromSender(
 ): TrustedSessionRoute | null {
   const tabId = sender.tab?.id;
   const frameId = sender.frameId;
-  if (tabId === undefined || frameId === undefined) {
+  const documentId = sender.documentId;
+  if (
+    tabId === undefined ||
+    frameId === undefined ||
+    typeof documentId !== "string" ||
+    documentId.length === 0
+  ) {
     return null;
   }
   return Object.freeze({
     tabId,
     frameId,
-    ...(sender.documentId === undefined ? {} : { documentId: sender.documentId }),
+    documentId,
   });
 }
 

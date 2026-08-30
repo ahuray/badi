@@ -1,0 +1,514 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omatype.invalid/capabilities/v2/schema.json",
+  "title": "Omatype live capability evidence receipt V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "record_version",
+    "id",
+    "status",
+    "recorded_at",
+    "protocol",
+    "adapter",
+    "native_host",
+    "evidence",
+    "scope",
+    "protections",
+    "exclusions",
+    "artifacts",
+    "evidence_artifacts",
+    "notes"
+  ],
+  "properties": {
+    "$schema": { "const": "./v2/schema.json" },
+    "record_version": { "const": 2 },
+    "id": { "type": "string", "pattern": "^[a-z0-9._-]+$" },
+    "status": { "enum": ["live", "unsupported"] },
+    "recorded_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+    },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "schema"],
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 },
+        "schema": { "$ref": "#/$defs/repositoryPath" }
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "package",
+        "version",
+        "target",
+        "extension_id",
+        "minimum_chrome_version",
+        "permission_mode",
+        "api_permissions",
+        "incognito",
+        "host_match",
+        "native_host",
+        "manifest",
+        "build_manifest"
+      ],
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 },
+        "package": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 },
+        "extension_id": { "type": "string", "pattern": "^[a-p]{32}$" },
+        "minimum_chrome_version": { "const": "132" },
+        "permission_mode": { "const": "static-exact-port" },
+        "api_permissions": {
+          "type": "array",
+          "prefixItems": [{ "const": "nativeMessaging" }],
+          "items": false,
+          "minItems": 1,
+          "maxItems": 1
+        },
+        "incognito": { "const": "not_allowed" },
+        "host_match": { "const": "http://localhost:4173/chromium.html" },
+        "native_host": { "type": "string", "pattern": "^[a-z0-9_]+(?:\\.[a-z0-9_]+)+$" },
+        "manifest": { "$ref": "#/$defs/repositoryPath" },
+        "build_manifest": { "$ref": "#/$defs/repositoryPath" }
+      }
+    },
+    "native_host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "package",
+        "version",
+        "binary",
+        "source",
+        "manifest_example",
+        "caller_origin",
+        "max_envelope_bytes",
+        "socket_parent_mode",
+        "socket_mode",
+        "peer_uid_verified"
+      ],
+      "properties": {
+        "package": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "binary": { "type": "string", "pattern": "^[a-z0-9._-]+$" },
+        "source": { "$ref": "#/$defs/repositoryPath" },
+        "manifest_example": { "$ref": "#/$defs/repositoryPath" },
+        "caller_origin": {
+          "const": "chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/"
+        },
+        "max_envelope_bytes": { "const": 65536 },
+        "socket_parent_mode": { "const": "0700" },
+        "socket_mode": { "const": "0600" },
+        "peer_uid_verified": { "const": true }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "class",
+        "live_browser",
+        "live_native_host",
+        "repository",
+        "isolation",
+        "privacy",
+        "local_environment",
+        "ci_toolchains",
+        "checks",
+        "measurements"
+      ],
+      "properties": {
+        "class": { "const": "live-target" },
+        "live_browser": { "type": "boolean" },
+        "live_native_host": { "type": "boolean" },
+        "repository": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["base_commit", "working_tree_dirty"],
+          "properties": {
+            "base_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            "working_tree_dirty": { "type": "boolean" }
+          }
+        },
+        "isolation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "temporary_home",
+            "temporary_xdg_runtime",
+            "temporary_profile",
+            "real_profile_touched",
+            "user_config_touched",
+            "system_manifest_touched",
+            "temporary_tree_removed",
+            "socket_removed",
+            "processes_remaining"
+          ],
+          "properties": {
+            "temporary_home": { "type": "boolean" },
+            "temporary_xdg_runtime": { "type": "boolean" },
+            "temporary_profile": { "type": "boolean" },
+            "real_profile_touched": { "const": false },
+            "user_config_touched": { "const": false },
+            "system_manifest_touched": { "const": false },
+            "temporary_tree_removed": { "type": "boolean" },
+            "socket_removed": { "type": "boolean" },
+            "processes_remaining": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "privacy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "context_text_recorded",
+            "suggestion_text_recorded",
+            "context_fingerprints_recorded",
+            "absolute_personal_paths_recorded"
+          ],
+          "properties": {
+            "context_text_recorded": { "const": false },
+            "suggestion_text_recorded": { "const": false },
+            "context_fingerprints_recorded": { "const": false },
+            "absolute_personal_paths_recorded": { "const": false }
+          }
+        },
+        "local_environment": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string" }
+        },
+        "ci_toolchains": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string" }
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/check" }
+        },
+        "measurements": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/measurement" }
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origins",
+        "documents",
+        "elements",
+        "conditions",
+        "display_route",
+        "insertion_route",
+        "commit_status"
+      ],
+      "properties": {
+        "origins": { "$ref": "#/$defs/stringArray" },
+        "documents": { "$ref": "#/$defs/stringArray" },
+        "elements": { "$ref": "#/$defs/stringArray" },
+        "conditions": { "$ref": "#/$defs/stringArray" },
+        "display_route": { "type": "string", "minLength": 1 },
+        "insertion_route": { "type": "string", "minLength": 1 },
+        "commit_status": { "type": "string", "minLength": 1 }
+      }
+    },
+    "protections": { "$ref": "#/$defs/stringArray" },
+    "exclusions": { "$ref": "#/$defs/stringArray" },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "evidence_artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "notes": { "$ref": "#/$defs/stringArray" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "live" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "live_browser": { "const": true },
+              "live_native_host": { "const": true },
+              "isolation": {
+                "type": "object",
+                "properties": {
+                  "temporary_home": { "const": true },
+                  "temporary_xdg_runtime": { "const": true },
+                  "temporary_profile": { "const": true },
+                  "temporary_tree_removed": { "const": true },
+                  "socket_removed": { "const": true },
+                  "processes_remaining": { "const": 0 }
+                }
+              },
+              "checks": {
+                "type": "array",
+                "minItems": 17,
+                "items": {
+                  "allOf": [
+                    { "$ref": "#/$defs/check" },
+                    {
+                      "type": "object",
+                      "properties": { "status": { "const": "pass" } }
+                    }
+                  ]
+                },
+                "allOf": [
+                  { "$ref": "#/$defs/requiredLiveChecks" }
+                ]
+              },
+              "measurements": {
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                  "allOf": [
+                    { "$ref": "#/$defs/measurement" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "samples": { "type": "integer", "minimum": 1000 },
+                        "warmups": { "type": "integer", "minimum": 50 },
+                        "status": { "const": "pass" }
+                      }
+                    }
+                  ]
+                },
+                "allOf": [
+                  {
+                    "contains": {
+                      "type": "object",
+                      "properties": {
+                        "name": { "const": "invalidation-to-hide" },
+                        "threshold": { "const": 32 },
+                        "value": { "type": "number", "maximum": 32 }
+                      },
+                      "required": ["name", "threshold", "value"]
+                    }
+                  },
+                  {
+                    "contains": {
+                      "type": "object",
+                      "properties": {
+                        "name": { "const": "accept-to-insert" },
+                        "threshold": { "const": 30 },
+                        "value": { "type": "number", "maximum": 30 }
+                      },
+                      "required": ["name", "threshold", "value"]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._@/-]+$"
+    },
+    "stringArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/repositoryPath" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "command", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9._-]+$" },
+        "command": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["pass", "fail", "not-run"] },
+        "trials": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "detail": { "type": "string" }
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "evidence_class",
+        "unit",
+        "samples",
+        "warmups",
+        "statistic",
+        "value",
+        "maximum",
+        "threshold",
+        "status"
+      ],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9._-]+$" },
+        "evidence_class": { "const": "real-rust-chain" },
+        "unit": { "enum": ["milliseconds"] },
+        "samples": { "type": "integer", "minimum": 1 },
+        "warmups": { "type": "integer", "minimum": 0 },
+        "statistic": { "const": "nearest-rank-p95" },
+        "value": { "type": "number", "minimum": 0 },
+        "maximum": { "type": "number", "minimum": 0 },
+        "threshold": { "type": "number", "exclusiveMinimum": 0 },
+        "status": { "enum": ["pass", "fail"] }
+      }
+    },
+    "requiredLiveChecks": {
+      "type": "array",
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "rust.native-host" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "chromium.full-chain" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "interaction.dismiss" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "commit.accept-word" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "control.pause-authoritative" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "privacy.denied-zero" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "race.stale-100" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "commit.insertion-100" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "security.untrusted-keyboard" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "security.synthetic-focus-zero" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "lifecycle.dynamic-invalidation" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "lifecycle.composition" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "geometry.scroll-zoom" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "lifecycle.navigation" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "lifecycle.disconnect" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "isolation.cleanup" } },
+            "required": ["id"]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": { "id": { "const": "repository.validation" } },
+            "required": ["id"]
+          }
+        }
+      ]
+    }
+  }
+}

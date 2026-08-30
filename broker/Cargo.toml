@@ -18,13 +18,21 @@ path = "src/main.rs"
 name = "omatypectl"
 path = "src/bin/omatypectl.rs"
 
+[[bin]]
+name = "omatype-native-host"
+path = "src/bin/omatype-native-host.rs"
+
+[[bin]]
+name = "omatype-native-manifest"
+path = "src/bin/omatype-native-manifest.rs"
+
 [dependencies]
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rustix = { version = "1", features = ["process"] }
 thiserror = "2"
-tokio = { version = "1.47", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.47", features = ["io-std", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 unicode-segmentation = "1.12"
 uuid = { version = "1.18", features = ["serde", "v4"] }

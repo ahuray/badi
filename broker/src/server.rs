@@ -2,6 +2,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio::net::{UnixListener, UnixStream};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
 use crate::engine::{Broker, BrokerError, BrokerEvent, SessionAuthority};
@@ -17,6 +18,11 @@ use crate::protocol::{
 };
 
 pub async fn run(socket_path: &Path, broker: Broker) -> Result<(), ServerError> {
+    // Register both handlers before binding. Once the socket is visible, either
+    // supported termination signal is therefore guaranteed to unwind through
+    // this function and drop the inode-checked SocketGuard.
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
     let (listener, _guard) = bind_secure(socket_path)?;
     loop {
         tokio::select! {
@@ -27,8 +33,10 @@ pub async fn run(socket_path: &Path, broker: Broker) -> Result<(), ServerError> 
                     let _ = serve_connection(stream, broker).await;
                 });
             }
-            signal = tokio::signal::ctrl_c() => {
-                signal?;
+            _ = interrupt.recv() => {
+                return Ok(());
+            }
+            _ = terminate.recv() => {
                 return Ok(());
             }
         }

@@ -605,6 +605,58 @@ This produces four defensible differences:
 12. **Measure retained value.** Count useful text that survives, not tokens
     generated or suggestions displayed.
 
+## Chromium integration research delta
+
+The competitor survey identifies the interaction to protect; primary Chromium
+contracts determine how narrowly the first browser proof can make that
+interaction real. These findings refine the implementation without widening
+the product claim:
+
+- Chrome native messaging is a framed JSON process boundary, not an extension
+  socket API. Chrome writes a platform-native-endian 32-bit length followed by
+  UTF-8 JSON; messages from Chrome may be at most 64 MiB and messages returned
+  to Chrome at most 1 MiB. Omatype deliberately applies its much smaller
+  65,536-byte protocol limit in both directions before allocation. The native
+  host remains a bounded relay to the private Unix socket; it does not become a
+  second policy or prediction implementation. [Chrome native messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
+- A Linux user-level native-host manifest names an absolute executable and an
+  exact `allowed_origins` extension origin. Chromium also defines a
+  profile-scoped `NativeMessagingHosts` lookup path, which enables a disposable
+  development proof without modifying the user's real configuration. A
+  print-only manifest generator is therefore safer than an installer for this
+  milestone. [Chrome native messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging),
+  [Chromium path definitions](https://chromium.googlesource.com/chromium/src/+/master/chrome/common/chrome_paths.cc)
+- An unpacked extension needs a stable identity before the native manifest can
+  use an exact origin. Chromium documents the manifest `key` mechanism, and its
+  source derives the 32-letter extension identifier from the public key. The
+  development key is public identity material, not a signing secret; changing
+  the production identity must require an explicit host rebuild and manifest
+  update. [Manifest key](https://developer.chrome.com/docs/extensions/reference/manifest/key),
+  [Chromium ID implementation](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/components/crx_file/id_util.cc)
+- The first automated proof uses one static exact-document content-script match
+  and only the `nativeMessaging` API permission. Chromium's runtime permission
+  request is a user gesture and browser-prompt contract; the headless test path
+  cannot honestly prove that consent UX. Runtime-granted origin access remains
+  a later headed product gate, while `<all_urls>`, file URLs, incognito, and
+  arbitrary frames remain excluded. [Permissions API](https://developer.chrome.com/docs/extensions/reference/api/permissions),
+  [match patterns](https://developer.chrome.com/docs/extensions/develop/concepts/match-patterns),
+  [Playwright extension testing](https://playwright.dev/docs/chrome-extensions)
+- Incognito exclusion must be declarative, not merely absent from tests.
+  Chromium's default mode is `spanning`, and a user can otherwise enable the
+  extension in incognito. The development manifest therefore pins
+  `"incognito": "not_allowed"`, while the sender gate independently rejects an
+  incognito tab. [Incognito manifest key](https://developer.chrome.com/docs/extensions/reference/manifest/incognito)
+- The sender gate fails closed unless Chromium reports the tab as explicitly
+  active, non-discarded, and non-frozen. Because `tabs.Tab.frozen` first exists
+  in Chrome 132, the development manifest and live receipt set 132 as the
+  minimum supported Chromium version rather than treating a missing lifecycle
+  signal as safe. [Chrome Tabs API](https://developer.chrome.com/docs/extensions/reference/api/tabs#type-Tab)
+- Browser automation proves the browser, extension, native host, broker, and
+  controlled DOM path on the named build. It does not prove a focused Wayland
+  window, compositor geometry, framework-controlled inputs, browser-native
+  undo grouping, or arbitrary-site behavior. Those stay separate capability
+  cells instead of being inferred from a headless success.
+
 ## Prioritized V2 feature ladder
 
 Each rung depends on the prior rung's exit gate. Later features should not be
