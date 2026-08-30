@@ -2,10 +2,10 @@
   "$schema": "../v2/live-run.schema.json",
   "record_version": 1,
   "id": "chromium-native-live-run.v1",
-  "recorded_at": "2026-08-30T01:21:13.204Z",
+  "recorded_at": "2026-08-30T01:42:01.899Z",
   "repository": {
-    "base_commit": "ccddb788d1f69fc12c1c761c9016fb58156880dc",
-    "working_tree_dirty": true
+    "base_commit": "8e86723b78c50dae52ba1714aa450de47cfeb6ee",
+    "working_tree_dirty": false
   },
   "environment": {
     "os": "Omarchy",
@@ -265,8 +265,8 @@
       "samples": 1000,
       "warmups": 50,
       "statistic": "nearest-rank-p95",
-      "p95": 8.3,
-      "maximum": 19.7,
+      "p95": 8.4,
+      "maximum": 9.7,
       "threshold": 30,
       "status": "pass"
     },
@@ -297,7 +297,7 @@
     {
       "id": "native-host-manifest",
       "bytes": 269,
-      "sha256": "7e233c3612ea8e2eef985f169143c36b24b6f6e50391f1f6af51a042ea3dc78c"
+      "sha256": "ee7a9ffd3a035645e6152c2d92a9b4ff773f71bfc4d8fd4dd0863a803415eefe"
     },
     {
       "id": "extension-content-script",

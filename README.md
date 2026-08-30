@@ -41,7 +41,7 @@ sites, semantic-model quality, Obsidian, and terminal support remain explicit
 gaps.
 
 The current M2A receipt records 1,000/1,000 exact insert/caret trials and
-100/100 delayed stale races. Nearest-rank p95 was 8.3 ms from trusted accept to
+100/100 delayed stale races. Nearest-rank p95 was 8.4 ms from trusted accept to
 observed insertion and 0.7 ms from invalidation marker to hidden UI, after 50
 warmups for each 1,000-sample distribution.
 

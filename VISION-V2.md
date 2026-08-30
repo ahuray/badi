@@ -416,7 +416,7 @@ at runtime.
 
 The first recorded M2A cell passed 1,000/1,000 exact insert/caret trials and
 100/100 delayed stale races. With 50 warmups excluded from each 1,000-sample
-distribution, nearest-rank p95 was 8.3 ms from trusted accept to observed input
+distribution, nearest-rank p95 was 8.4 ms from trusted accept to observed input
 and 0.7 ms from invalidation marker to hidden UI. These are controlled local
 interaction measurements, not semantic-model or end-to-end generation latency.
 

@@ -3,7 +3,7 @@
   "record_version": 2,
   "id": "chromium-native-live.v2",
   "status": "live",
-  "recorded_at": "2026-08-30T01:23:49Z",
+  "recorded_at": "2026-08-30T01:42:55Z",
   "protocol": {
     "version": 1,
     "schema": "protocol/v1/schema.json"
@@ -42,8 +42,8 @@
     "live_browser": true,
     "live_native_host": true,
     "repository": {
-      "base_commit": "ccddb788d1f69fc12c1c761c9016fb58156880dc",
-      "working_tree_dirty": true
+      "base_commit": "8e86723b78c50dae52ba1714aa450de47cfeb6ee",
+      "working_tree_dirty": false
     },
     "isolation": {
       "temporary_home": true,
@@ -235,8 +235,8 @@
         "samples": 1000,
         "warmups": 50,
         "statistic": "nearest-rank-p95",
-        "value": 8.3,
-        "maximum": 19.7,
+        "value": 8.4,
+        "maximum": 9.7,
         "threshold": 30,
         "status": "pass"
       },
@@ -321,11 +321,11 @@
     {
       "path": "capabilities/evidence/chromium-native-live-run.v1.json",
       "bytes": 12225,
-      "sha256": "5d0f2ee19bd432eab416061bb93a64f9da2b5c045b1b371119137e2ecb3ab3bb"
+      "sha256": "c45734fb6b081e590f7d73d51171d3e4f15624454f101af741192a53e2e32e31"
     }
   ],
   "notes": [
-    "This first durable report was produced from base commit ccddb788d1f69fc12c1c761c9016fb58156880dc with the implementation worktree dirty; a second clean-tree evidence run is required before final push.",
+    "The final durable report was produced from clean implementation commit 8e86723b78c50dae52ba1714aa450de47cfeb6ee with working_tree_dirty recorded as false before the evidence file was rewritten.",
     "The delayed stale-response scenario alone uses a separately classified JavaScript fault host; full-chain, privacy, insertion, pause, lifecycle, and latency evidence use the shipped Rust host and broker.",
     "The raw run also records a passing provisional edit-to-visible check; it is raw-only rather than promoted to a V2 release measurement.",
     "Undo, headless background visibility, and the extension shortcut are explicitly unsupported rather than inferred from adjacent passing checks.",
