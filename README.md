@@ -53,6 +53,8 @@ warmups for each 1,000-sample distribution.
 - [V2 implementation plan](docs/plan/vision-v2-implementation.md) — exact
   milestones, capability cells, agent workflow, tests, rollout, and stop
   conditions.
+- [Develop branch roadmap](docs/plan/develop-roadmap.md) — the next coding
+  order, architecture rules, first sprint, and promotion gates.
 - [Chromium foundation receipt](capabilities/chromium-dom-foundation.v1.json) —
   machine-readable evidence class, supported surface, exclusions, versions,
   and checks.
