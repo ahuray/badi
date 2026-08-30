@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use omatype_broker::native_host::{ManifestError, render_native_manifest};
+use badi_broker::native_host::{ManifestError, render_native_manifest};
 
 fn main() {
     if let Err(error) = run() {
@@ -43,10 +43,10 @@ where
     Ok(ManifestCommand::Print { host_path })
 }
 
-const MANIFEST_USAGE: &str = "Usage: omatype-native-manifest --host-path ABSOLUTE\n\
+const MANIFEST_USAGE: &str = "Usage: badi-native-manifest --host-path ABSOLUTE\n\
 Prints the deterministic Chromium NativeMessagingHosts manifest to stdout.\n\
 It never installs or writes the manifest.\n\
-Options:\n  --host-path ABSOLUTE  Exact omatype-native-host executable path\n  -h, --help            Show this help\n";
+Options:\n  --host-path ABSOLUTE  Exact badi-native-host executable path\n  -h, --help            Show this help\n";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ManifestCommand {
@@ -76,13 +76,10 @@ mod tests {
     #[test]
     fn parses_print_only_manifest_command() {
         assert_eq!(
-            parse_arguments(arguments(&[
-                "--host-path",
-                "/opt/omatype/omatype-native-host"
-            ]))
-            .expect("manifest arguments"),
+            parse_arguments(arguments(&["--host-path", "/opt/badi/badi-native-host"]))
+                .expect("manifest arguments"),
             ManifestCommand::Print {
-                host_path: PathBuf::from("/opt/omatype/omatype-native-host")
+                host_path: PathBuf::from("/opt/badi/badi-native-host")
             }
         );
         assert_eq!(

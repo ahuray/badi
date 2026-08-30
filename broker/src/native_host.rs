@@ -11,7 +11,7 @@ use crate::ipc::{
 };
 use crate::protocol::{MAX_FRAME_BYTES, WireEnvelope};
 
-pub const NATIVE_HOST_NAME: &str = "io.omatype.broker";
+pub const NATIVE_HOST_NAME: &str = "io.github.ahuray.badi";
 pub const DEVELOPMENT_EXTENSION_ID: &str = "ckkiehcjbclcjckkkajohopoikeejkoa";
 
 /// Chrome permits up to 64 MiB from Chrome to a native host.
@@ -203,7 +203,7 @@ pub fn render_native_manifest(host_path: &Path) -> Result<String, ManifestError>
     let path = validate_manifest_host_path(host_path)?;
     let manifest = NativeMessagingManifest {
         name: NATIVE_HOST_NAME,
-        description: "Omatype private local broker bridge",
+        description: "Badi private local broker bridge",
         path,
         transport_type: "stdio",
         allowed_origins: [development_extension_origin()],
@@ -299,12 +299,12 @@ mod tests {
 
     #[test]
     fn manifest_is_deterministic_and_print_only_data() {
-        let rendered = render_native_manifest(Path::new("/opt/omatype/omatype-native-host"))
-            .expect("manifest");
-        let expected = "{\n  \"name\": \"io.omatype.broker\",\n  \"description\": \"Omatype private local broker bridge\",\n  \"path\": \"/opt/omatype/omatype-native-host\",\n  \"type\": \"stdio\",\n  \"allowed_origins\": [\n    \"chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/\"\n  ]\n}\n";
+        let rendered =
+            render_native_manifest(Path::new("/opt/badi/badi-native-host")).expect("manifest");
+        let expected = "{\n  \"name\": \"io.github.ahuray.badi\",\n  \"description\": \"Badi private local broker bridge\",\n  \"path\": \"/opt/badi/badi-native-host\",\n  \"type\": \"stdio\",\n  \"allowed_origins\": [\n    \"chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/\"\n  ]\n}\n";
         assert_eq!(rendered, expected);
         assert_eq!(
-            render_native_manifest(Path::new("/opt/omatype/omatype-native-host"))
+            render_native_manifest(Path::new("/opt/badi/badi-native-host"))
                 .expect("second manifest"),
             rendered
         );

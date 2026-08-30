@@ -27,32 +27,32 @@ export class RuntimeSuggestionTransport implements SuggestionTransport {
 
   async requestSuggestion(request: SuggestionRequest): Promise<SuggestionResponse> {
     const reply = await this.#messenger.sendMessage({
-      kind: "omatype.suggest.v1",
+      kind: "badi.suggest.v1",
       request,
     } satisfies RuntimeCommand);
     return parseRuntimeSuggestionReply(reply);
   }
 
   async cancelSuggestion(request: SuggestionRequest): Promise<void> {
-    await this.#notify({ kind: "omatype.cancel.v1", request });
+    await this.#notify({ kind: "badi.cancel.v1", request });
   }
 
   async dismissSuggestion(address: SuggestionAddress): Promise<void> {
-    await this.#notify({ kind: "omatype.dismiss.v1", address });
+    await this.#notify({ kind: "badi.dismiss.v1", address });
   }
 
   async authorizeCommit(
     request: CommitAuthorizationRequest,
   ): Promise<CommitAuthorization> {
     const reply = await this.#messenger.sendMessage({
-      kind: "omatype.commit.authorize.v1",
+      kind: "badi.commit.authorize.v1",
       request,
     } satisfies RuntimeCommand);
     return parseRuntimeCommitAuthorization(reply);
   }
 
   async reportCommit(notice: CommitResultNotice): Promise<void> {
-    await this.#notify({ kind: "omatype.commit.result.v1", notice });
+    await this.#notify({ kind: "badi.commit.result.v1", notice });
   }
 
   async #notify(command: RuntimeCommand): Promise<void> {
@@ -63,7 +63,7 @@ export class RuntimeSuggestionTransport implements SuggestionTransport {
       !("ok" in value) ||
       (value as RuntimeReply).ok !== true
     ) {
-      throw new Error("Extension service worker rejected an Omatype message");
+      throw new Error("Extension service worker rejected an Badi message");
     }
   }
 }

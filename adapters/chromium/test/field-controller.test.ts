@@ -143,7 +143,7 @@ const SILENT_POLICY_MUTATIONS: ReadonlyArray<
   ["constraint", (field) => { field.maxLength = field.value.length; }],
   ["ancestor hidden", (_field, ancestor) => { ancestor.hidden = true; }],
   ["ancestor opt-out", (_field, ancestor) => {
-    ancestor.setAttribute("data-omatype", "off");
+    ancestor.setAttribute("data-badi", "off");
   }],
   ["ancestor style", (_field, ancestor) => { ancestor.style.display = "none"; }],
   ["ancestor inert", (_field, ancestor) => { ancestor.setAttribute("inert", ""); }],
@@ -211,7 +211,7 @@ describe("FieldController", () => {
     vi.restoreAllMocks();
     delete (HTMLElement.prototype as { checkVisibility?: unknown }).checkVisibility;
     document.body.replaceChildren();
-    document.querySelectorAll("[data-omatype-owned]").forEach((node) => node.remove());
+    document.querySelectorAll("[data-badi-owned]").forEach((node) => node.remove());
   });
 
   it("makes zero outbound context/provider requests for locally denied fields", async () => {
@@ -1299,7 +1299,7 @@ describe("FieldController", () => {
     transport.resolve(0, " point");
     await Promise.resolve();
 
-    const host = document.querySelector<HTMLElement>("[data-omatype-owned]");
+    const host = document.querySelector<HTMLElement>("[data-badi-owned]");
     expect(host).not.toBeNull();
     expect(host?.hidden).toBe(false);
     expect(host?.style.left).toBe("20px");

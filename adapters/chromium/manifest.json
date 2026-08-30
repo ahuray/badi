@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Omatype (development slice)",
+  "name": "Badi (development slice)",
   "version": "0.1.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAk/4WbfYlyKObOUtE5LmsVS7/u8QjttdFvBzjaiQUDtgAFF7dE79jGlxr7wTO9r7MUX0hDLmCRd2SiqUfa8Oc/V5j9Q4peNQ6WeFKxTjbJMf3mkLeZaVZr4kOYaVYtNKj31G0h9Dd7TJvo/C/YtnFK4lJmU70kbDfyxTKOvZwXNt2q4wwkLcNlwjZuO2j3sflShID3XYm2vt919wq2EoUS65jXU33Hrb85UxZ4CYnrStyAHraQMNp5l9Q6nQ0NRKoek1FYbKq0/OZ008VBEwmTzhkvDFzb4021t3B0r7aGM1MHI7v14iMCL2tc6Z6ZY29R6Z665dS192b+ZcB8kPtUwIDAQAB",
   "minimum_chrome_version": "132",
   "incognito": "not_allowed",
-  "description": "Controlled localhost writing-suggestion slice through the Omatype native broker.",
+  "description": "Controlled localhost writing-suggestion slice through the Badi native broker.",
   "permissions": [
     "nativeMessaging"
   ],
@@ -29,7 +29,7 @@
       "suggested_key": {
         "default": "Alt+Shift+P"
       },
-      "description": "Toggle broker pause state for trusted Omatype fixture controllers"
+      "description": "Toggle broker pause state for trusted Badi fixture controllers"
     }
   }
 }

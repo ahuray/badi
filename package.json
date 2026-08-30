@@ -1,19 +1,20 @@
 {
-  "name": "omatype",
+  "name": "badi",
   "version": "0.0.0",
   "private": true,
   "workspaces": [
     "adapters/chromium"
   ],
   "scripts": {
-    "typecheck": "npm run typecheck --workspace @omatype/chromium",
-    "test": "npm run test --workspace @omatype/chromium",
-    "build": "npm run build --workspace @omatype/chromium",
-    "build:verify": "npm run build:verify --workspace @omatype/chromium",
-    "live:check": "npm run live:check --workspace @omatype/chromium",
+    "typecheck": "npm run typecheck --workspace @badi/chromium",
+    "test": "npm run test --workspace @badi/chromium",
+    "build": "npm run build --workspace @badi/chromium",
+    "build:verify": "npm run build:verify --workspace @badi/chromium",
+    "live:check": "npm run live:check --workspace @badi/chromium",
+    "name:check": "node scripts/check-name.mjs",
     "docs:check": "node scripts/check-docs.mjs",
     "capabilities:check": "node scripts/check-capabilities.mjs",
-    "check": "npm run typecheck && npm test && npm run build:verify && npm run live:check && npm run docs:check && npm run capabilities:check"
+    "check": "npm run typecheck && npm test && npm run build:verify && npm run live:check && npm run name:check && npm run docs:check && npm run capabilities:check"
   },
   "engines": {
     "node": ">=22"

@@ -30,7 +30,7 @@ const EXPECTED_COMMANDS = Object.freeze({
     suggested_key: Object.freeze({
       default: "Alt+Shift+P",
     }),
-    description: "Toggle broker pause state for trusted Omatype fixture controllers",
+    description: "Toggle broker pause state for trusted Badi fixture controllers",
   }),
 });
 

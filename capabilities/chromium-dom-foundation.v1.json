@@ -10,10 +10,10 @@
   },
   "adapter": {
     "kind": "browser",
-    "package": "@omatype/chromium",
+    "package": "@badi/chromium",
     "version": "0.1.0",
     "target": "chrome132-mv3",
-    "native_host": "io.omatype.broker",
+    "native_host": "io.github.ahuray.badi",
     "manifest": "adapters/chromium/manifest.json",
     "build_manifest": "adapters/chromium/dist/BUILD_MANIFEST.json"
   },
@@ -49,7 +49,7 @@
         "command": "cargo test --workspace",
         "status": "pass",
         "passed": 67,
-        "detail": "46 library, 2 broker CLI, 3 native-host CLI, 2 manifest CLI, 4 omatypectl CLI, 2 native bridge, 2 manifest integration, 2 signal-shutdown, and 4 schema tests"
+        "detail": "46 library, 2 broker CLI, 3 native-host CLI, 2 manifest CLI, 4 badictl CLI, 2 native bridge, 2 manifest integration, 2 signal-shutdown, and 4 schema tests"
       },
       {
         "command": "cargo +1.85.0 check --workspace --all-targets --locked",
@@ -57,7 +57,7 @@
         "detail": "Run with an isolated temporary RUSTUP_HOME; temporary toolchain removed afterward"
       },
       {
-        "command": "isolated daemon and omatypectl Unix-socket smoke",
+        "command": "isolated daemon and badictl Unix-socket smoke",
         "status": "pass",
         "detail": "Private 0700 parent, 0600 socket, redacted status, authoritative pause/resume, clean SIGINT socket removal"
       },
@@ -110,7 +110,7 @@
     ],
     "conditions": [
       "Connected, visible, enabled, writable light-DOM element",
-      "Unique id, in-scope name, or data-omatype-field identity",
+      "Unique id, in-scope name, or data-badi-field identity",
       "Collapsed selection and no active composition",
       "Stable focus epoch, revision, value, selection, and fingerprint",
       "No positively recognized sensitive purpose, ancestor opt-out, or insertion-altering constraint"
@@ -138,7 +138,7 @@
     "contenteditable, shadow DOM, framework-controlled fields, anonymous or duplicate identities, and selection replacement",
     "Verified native undo, framework state, trusted input events, or absence of autosave, validation, search, network, and application side effects",
     "Persisted origin policy, policy epochs, and a cross-connection pause broadcast-ack or commit-revocation barrier",
-    "Routing unsolicited omatypectl request or acceptance output into a Chromium content controller",
+    "Routing unsolicited badictl request or acceptance output into a Chromium content controller",
     "Obsidian, Firefox, Fcitx5, IBus, terminal, semantic-model, remote-provider, personalization, and production compatibility claims"
   ],
   "artifacts": [
@@ -166,8 +166,8 @@
     "Partial word acceptance clears the old remainder and schedules a new addressed request before another acceptance",
     "A browser-shortcut pause clears reachable controllers, but an external CLI pause can leave controllers locally unnotified; their repeated requests are rejected before provider work or new commit authorization",
     "The M1 broker cannot prove that a commit.prepare already transmitted on another connection cannot mutate after pause acknowledgement",
-    "omatypectl request and acceptance commands exercise broker-core behavior only in M1 and do not control a Chromium page",
+    "badictl request and acceptance commands exercise broker-core behavior only in M1 and do not control a Chromium page",
     "Same-UID native-broker impersonation and unmarked secrets in ordinary text fields remain inside the declared trusted-local-component and residual-risk boundary",
-    "Omatype is an internal codename with a known public collision; public naming, technical namespaces, and source licensing remain release gates"
+    "Badi is the selected product name; technical IDs use owned namespaces while public package/trademark clearance and source licensing remain release gates"
   ]
 }

@@ -7,15 +7,15 @@ const ORIGIN: &str = "chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/";
 #[test]
 fn prints_one_deterministic_manifest_without_installing_anything() {
     let directory = tempfile::tempdir().expect("temporary directory");
-    let host_path = directory.path().join("omatype-native-host");
+    let host_path = directory.path().join("badi-native-host");
     assert!(!host_path.exists());
 
-    let first = Command::new(env!("CARGO_BIN_EXE_omatype-native-manifest"))
+    let first = Command::new(env!("CARGO_BIN_EXE_badi-native-manifest"))
         .arg("--host-path")
         .arg(&host_path)
         .output()
         .expect("manifest command");
-    let second = Command::new(env!("CARGO_BIN_EXE_omatype-native-manifest"))
+    let second = Command::new(env!("CARGO_BIN_EXE_badi-native-manifest"))
         .arg("--host-path")
         .arg(&host_path)
         .output()
@@ -29,11 +29,8 @@ fn prints_one_deterministic_manifest_without_installing_anything() {
     let manifest: Value = serde_json::from_slice(&first.stdout).expect("manifest JSON");
     let object = manifest.as_object().expect("manifest object");
     assert_eq!(object.len(), 5);
-    assert_eq!(manifest["name"], "io.omatype.broker");
-    assert_eq!(
-        manifest["description"],
-        "Omatype private local broker bridge"
-    );
+    assert_eq!(manifest["name"], "io.github.ahuray.badi");
+    assert_eq!(manifest["description"], "Badi private local broker bridge");
     assert_eq!(manifest["path"], host_path.to_str().expect("UTF-8 path"));
     assert_eq!(manifest["type"], "stdio");
     assert_eq!(manifest["allowed_origins"], serde_json::json!([ORIGIN]));
@@ -46,7 +43,7 @@ fn refuses_relative_paths_and_caller_controlled_origins() {
         ["--origin", "*"],
         ["--origin", ORIGIN],
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_omatype-native-manifest"))
+        let output = Command::new(env!("CARGO_BIN_EXE_badi-native-manifest"))
             .args(arguments)
             .output()
             .expect("manifest command");

@@ -1,6 +1,6 @@
 import type { EditableField, SuggestionView } from "../shared/model";
 
-const HOST_ATTRIBUTE = "data-omatype-owned";
+const HOST_ATTRIBUTE = "data-badi-owned";
 
 export class AnchoredGhostView implements SuggestionView {
   readonly #document: Document;

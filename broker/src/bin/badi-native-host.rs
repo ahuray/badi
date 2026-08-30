@@ -1,8 +1,8 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use omatype_broker::ipc::default_socket_path;
-use omatype_broker::native_host::{
+use badi_broker::ipc::default_socket_path;
+use badi_broker::native_host::{
     NativeHostError, connect_and_bridge, validate_development_caller_origin,
 };
 
@@ -57,10 +57,10 @@ where
     Ok(HostCommand::Run { socket_path })
 }
 
-const HOST_USAGE: &str = "Usage: omatype-native-host CALLER_ORIGIN [--socket ABSOLUTE]\n\
-Bridges the fixed Omatype development Chromium extension to the private broker.\n\
+const HOST_USAGE: &str = "Usage: badi-native-host CALLER_ORIGIN [--socket ABSOLUTE]\n\
+Bridges the fixed Badi development Chromium extension to the private broker.\n\
 Chrome supplies CALLER_ORIGIN as the first argument.\n\
-Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/omatype/broker.sock\n  -h, --help         Show this help\n";
+Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum HostCommand {

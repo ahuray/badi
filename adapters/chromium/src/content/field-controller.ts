@@ -28,8 +28,8 @@ const OBSERVED_POLICY_ATTRIBUTES = [
   "id",
   "name",
   "form",
-  "data-omatype",
-  "data-omatype-field",
+  "data-badi",
+  "data-badi-field",
   "style",
   "class",
   "inert",
@@ -40,7 +40,7 @@ const OBSERVED_POLICY_ATTRIBUTES = [
   "pattern",
 ] as const;
 
-const IDENTITY_ATTRIBUTES = new Set(["id", "name", "form", "data-omatype-field"]);
+const IDENTITY_ATTRIBUTES = new Set(["id", "name", "form", "data-badi-field"]);
 
 interface FieldState {
   focusEpoch: number;

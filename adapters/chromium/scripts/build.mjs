@@ -62,10 +62,10 @@ for (const path of await filesBelow(outputRoot)) {
 
 const buildManifest = {
   schema: 1,
-  package: "@omatype/chromium",
+  package: "@badi/chromium",
   version: sourceManifest.version,
   target: "chrome132-mv3",
-  native_host: "io.omatype.broker",
+  native_host: "io.github.ahuray.badi",
   artifacts,
 };
 await writeFile(

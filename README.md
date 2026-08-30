@@ -1,15 +1,16 @@
-# Omatype
+# Badi
 
-Omatype is a capability-aware local co-writing layer for Linux. It offers one
+Badi (`بعدی`, Persian for “next”) is a capability-aware local co-writing layer
+for Linux. It offers one
 short, revision-bound continuation only where an adapter can read, display,
 and edit through a tested target API. Unsupported is a valid result; raw global
 input capture and synthetic typing are not part of the architecture.
 
-> **Codename warning:** an unrelated
-> [OmaType dictation project](https://github.com/Aayush9029/OmaType) already
-> occupies the same Linux/Omarchy category. `Omatype` is an internal repository
-> codename. A distinct public name and technical namespace are release gates.
-> The project license is also deliberately unresolved pending a user decision.
+> **Naming boundary:** Badi is now the selected product name. An unrelated
+> [AI workflow CLI](https://github.com/fatihkan/badi) already uses the `badi`
+> command, so this project uses `badictl`
+> and the owned `io.github.ahuray.badi` native identity. Public package and
+> trademark clearance, plus the project license, remain release decisions.
 
 ## Current status
 
@@ -19,10 +20,12 @@ isolated Chromium integration slice:
 - a strict JSON Schema protocol with positive/negative examples, 64 KiB
   little-endian frames, explicit UTF-16 browser offsets, surrogate-safe bounded
   context, relative TTLs, and a shared multilingual accept-word fixture;
-- a Rust 2024 broker and `omatypectl` with fail-closed policy, secure local
+- a Rust 2024 broker and `badictl` with fail-closed policy, secure local
   Unix socket, peer-UID checks, deterministic suggestions, latest-wins
   cancellation, addressed commits, global pause, content-free metrics, and
   graceful SIGINT/SIGTERM cleanup;
+- content-free hardware inspection and pinned writing/code model
+  recommendations that never download or activate a model automatically;
 - a bounded Rust Chrome-native-message bridge plus a deterministic print-only
   manifest generator pinned to one public development extension identity;
 - a strict TypeScript Manifest V3 adapter limited to one exact localhost page,
@@ -55,6 +58,8 @@ warmups for each 1,000-sample distribution.
   conditions.
 - [Develop branch roadmap](docs/plan/develop-roadmap.md) — the next coding
   order, architecture rules, first sprint, and promotion gates.
+- [Hardware-aware model selection](docs/architecture/model-selection.md) — the
+  compact probe, conservative tiers, pinned artifacts, and runtime gates.
 - [Chromium foundation receipt](capabilities/chromium-dom-foundation.v1.json) —
   machine-readable evidence class, supported surface, exclusions, versions,
   and checks.
@@ -87,6 +92,18 @@ and state, prepares a commit, and never drives a keyboard. Every non-global
 action carries session, focus epoch, revision, fingerprint, and suggestion ID.
 Only pause is global. See the V2 plan for the full trust boundary.
 
+## Hardware-aware model candidates
+
+```sh
+cargo run --quiet --bin badictl -- hardware --json
+cargo run --quiet --bin badictl -- models writing --json
+cargo run --quiet --bin badictl -- models code --json
+```
+
+These commands are content-free and offline. They return pinned Hugging Face
+metadata and a non-executing download plan; semantic inference remains disabled
+until the candidate passes Badi's quality and latency gates.
+
 ## Verify from a clean checkout
 
 CI tests Node.js 22.23.2 and 24.20.0, Rust 1.98.0, and the declared Rust 1.85
@@ -112,7 +129,7 @@ claims.
 To inspect the controlled page only:
 
 ```sh
-npm run fixture --workspace @omatype/chromium
+npm run fixture --workspace @badi/chromium
 ```
 
 Open `http://localhost:4173/chromium.html`. A normal browser still needs an
@@ -123,8 +140,8 @@ To reproduce the isolated live lane on Linux with system Chromium at
 `/usr/bin/chromium`:
 
 ```sh
-npm run live:smoke --workspace @omatype/chromium
-npm run live --workspace @omatype/chromium
+npm run live:smoke --workspace @badi/chromium
+npm run live --workspace @badi/chromium
 ```
 
 The smoke uses reduced counts and writes only ignored, content-free diagnostic

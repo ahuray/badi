@@ -10,7 +10,7 @@
   },
   "adapter": {
     "kind": "browser",
-    "package": "@omatype/chromium",
+    "package": "@badi/chromium",
     "version": "0.1.0",
     "target": "chrome132-mv3",
     "extension_id": "ckkiehcjbclcjckkkajohopoikeejkoa",
@@ -21,16 +21,16 @@
     ],
     "incognito": "not_allowed",
     "host_match": "http://localhost:4173/chromium.html",
-    "native_host": "io.omatype.broker",
+    "native_host": "io.github.ahuray.badi",
     "manifest": "adapters/chromium/manifest.json",
     "build_manifest": "adapters/chromium/dist/BUILD_MANIFEST.json"
   },
   "native_host": {
-    "package": "omatype-broker",
+    "package": "badi-broker",
     "version": "0.1.0",
-    "binary": "omatype-native-host",
+    "binary": "badi-native-host",
     "source": "broker/src/native_host.rs",
-    "manifest_example": "broker/native-messaging/io.omatype.broker.example.json",
+    "manifest_example": "broker/native-messaging/io.github.ahuray.badi.example.json",
     "caller_origin": "chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/",
     "max_envelope_bytes": 65536,
     "socket_parent_mode": "0700",
@@ -113,42 +113,42 @@
       },
       {
         "id": "chromium.full-chain",
-        "command": "npm run live --workspace @omatype/chromium :: chromium.full-chain",
+        "command": "npm run live --workspace @badi/chromium :: chromium.full-chain",
         "status": "pass",
         "trials": 1,
         "passed": 1
       },
       {
         "id": "interaction.dismiss",
-        "command": "npm run live --workspace @omatype/chromium :: interaction.dismiss",
+        "command": "npm run live --workspace @badi/chromium :: interaction.dismiss",
         "status": "pass",
         "trials": 1,
         "passed": 1
       },
       {
         "id": "commit.accept-word",
-        "command": "npm run live --workspace @omatype/chromium :: commit.accept-word",
+        "command": "npm run live --workspace @badi/chromium :: commit.accept-word",
         "status": "pass",
         "trials": 1,
         "passed": 1
       },
       {
         "id": "control.pause-authoritative",
-        "command": "npm run live --workspace @omatype/chromium :: control.pause-authoritative",
+        "command": "npm run live --workspace @badi/chromium :: control.pause-authoritative",
         "status": "pass",
         "trials": 3,
         "passed": 3
       },
       {
         "id": "privacy.denied-zero",
-        "command": "npm run live --workspace @omatype/chromium :: privacy.denied-zero",
+        "command": "npm run live --workspace @badi/chromium :: privacy.denied-zero",
         "status": "pass",
         "trials": 2,
         "passed": 2
       },
       {
         "id": "race.stale-100",
-        "command": "npm run live --workspace @omatype/chromium :: race.stale-100",
+        "command": "npm run live --workspace @badi/chromium :: race.stale-100",
         "status": "pass",
         "trials": 100,
         "passed": 100,
@@ -156,7 +156,7 @@
       },
       {
         "id": "commit.insertion-100",
-        "command": "npm run live --workspace @omatype/chromium :: commit.insertion-100",
+        "command": "npm run live --workspace @badi/chromium :: commit.insertion-100",
         "status": "pass",
         "trials": 1000,
         "passed": 1000,
@@ -164,28 +164,28 @@
       },
       {
         "id": "security.untrusted-keyboard",
-        "command": "npm run live --workspace @omatype/chromium :: security.untrusted-keyboard",
+        "command": "npm run live --workspace @badi/chromium :: security.untrusted-keyboard",
         "status": "pass",
         "trials": 3,
         "passed": 3
       },
       {
         "id": "security.synthetic-focus-zero",
-        "command": "npm run live --workspace @omatype/chromium :: security.synthetic-focus-zero",
+        "command": "npm run live --workspace @badi/chromium :: security.synthetic-focus-zero",
         "status": "pass",
         "trials": 1,
         "passed": 1
       },
       {
         "id": "lifecycle.dynamic-invalidation",
-        "command": "npm run live --workspace @omatype/chromium :: lifecycle.dynamic-invalidation",
+        "command": "npm run live --workspace @badi/chromium :: lifecycle.dynamic-invalidation",
         "status": "pass",
         "trials": 3,
         "passed": 3
       },
       {
         "id": "lifecycle.composition",
-        "command": "npm run live --workspace @omatype/chromium :: lifecycle.composition",
+        "command": "npm run live --workspace @badi/chromium :: lifecycle.composition",
         "status": "pass",
         "trials": 1,
         "passed": 1,
@@ -193,21 +193,21 @@
       },
       {
         "id": "geometry.scroll-zoom",
-        "command": "npm run live --workspace @omatype/chromium :: geometry.scroll-zoom",
+        "command": "npm run live --workspace @badi/chromium :: geometry.scroll-zoom",
         "status": "pass",
         "trials": 3,
         "passed": 3
       },
       {
         "id": "lifecycle.navigation",
-        "command": "npm run live --workspace @omatype/chromium :: lifecycle.navigation",
+        "command": "npm run live --workspace @badi/chromium :: lifecycle.navigation",
         "status": "pass",
         "trials": 2,
         "passed": 2
       },
       {
         "id": "lifecycle.disconnect",
-        "command": "npm run live --workspace @omatype/chromium :: lifecycle.disconnect",
+        "command": "npm run live --workspace @badi/chromium :: lifecycle.disconnect",
         "status": "pass",
         "trials": 1,
         "passed": 1

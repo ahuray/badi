@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use omatype_broker::engine::{Broker, BrokerConfig};
-use omatype_broker::ipc::default_socket_path;
-use omatype_broker::provider::DeterministicPhraseProvider;
-use omatype_broker::server;
+use badi_broker::engine::{Broker, BrokerConfig};
+use badi_broker::ipc::default_socket_path;
+use badi_broker::provider::DeterministicPhraseProvider;
+use badi_broker::server;
 
 #[tokio::main]
 async fn main() {
@@ -28,9 +28,9 @@ async fn main() {
     }
 }
 
-const BROKER_USAGE: &str = "Usage: omatype-broker [--socket ABSOLUTE]\n\
+const BROKER_USAGE: &str = "Usage: badi-broker [--socket ABSOLUTE]\n\
 Runs the local Unix-socket suggestion broker.\n\
-Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/omatype/broker.sock\n  -h, --help         Show this help\n";
+Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n";
 
 fn parse_arguments<I>(arguments: I) -> Result<BrokerCommand, ExitError>
 where

@@ -55,7 +55,7 @@
     "runtime_url": "http://localhost:4173/chromium.html"
   },
   "native": {
-    "host_name": "io.omatype.broker",
+    "host_name": "io.github.ahuray.badi",
     "caller_origin": "chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/",
     "max_envelope_bytes": 65536,
     "socket_parent_mode": "0700",
@@ -92,17 +92,17 @@
     },
     {
       "id": "chromium-typecheck",
-      "command": "npm run typecheck --workspace @omatype/chromium",
+      "command": "npm run typecheck --workspace @badi/chromium",
       "exit_code": 0
     },
     {
       "id": "chromium-unit",
-      "command": "npm test --workspace @omatype/chromium",
+      "command": "npm test --workspace @badi/chromium",
       "exit_code": 0
     },
     {
       "id": "chromium-build-verify",
-      "command": "npm run build:verify --workspace @omatype/chromium",
+      "command": "npm run build:verify --workspace @badi/chromium",
       "exit_code": 0
     },
     {

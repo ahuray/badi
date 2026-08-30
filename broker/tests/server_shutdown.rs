@@ -24,7 +24,7 @@ fn sigint_exits_cleanly_and_removes_the_bound_socket() {
 fn assert_graceful_shutdown(signal: Signal) {
     let directory = tempfile::tempdir().expect("temporary directory");
     let socket_path = directory.path().join("private").join("broker.sock");
-    let child = Command::new(env!("CARGO_BIN_EXE_omatype-broker"))
+    let child = Command::new(env!("CARGO_BIN_EXE_badi-broker"))
         .arg("--socket")
         .arg(&socket_path)
         .stdin(Stdio::null())

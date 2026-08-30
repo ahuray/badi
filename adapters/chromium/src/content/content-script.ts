@@ -21,15 +21,15 @@ if (
     if (!isContentControlMessage(message)) {
       return;
     }
-    if (message.kind === "omatype.commit.revoke.v1") {
+    if (message.kind === "badi.commit.revoke.v1") {
       controller.revokeCommit(message.address);
       return;
     }
-    if (message.kind === "omatype.suggestion.clear.v1") {
+    if (message.kind === "badi.suggestion.clear.v1") {
       controller.clearFromBroker(message.event);
       return;
     }
-    if (message.kind === "omatype.transport.disconnected.v1") {
+    if (message.kind === "badi.transport.disconnected.v1") {
       controller.invalidateTransport();
       return;
     }

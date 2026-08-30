@@ -242,11 +242,11 @@ describe("localhost fixture boundary", () => {
 
   it("accepts only the exact content-safe native-disconnect runtime message", () => {
     expect(
-      isContentControlMessage({ kind: "omatype.transport.disconnected.v1" }),
+      isContentControlMessage({ kind: "badi.transport.disconnected.v1" }),
     ).toBe(true);
     expect(
       isContentControlMessage({
-        kind: "omatype.transport.disconnected.v1",
+        kind: "badi.transport.disconnected.v1",
         leakedDetail: "native error contents",
       }),
     ).toBe(false);

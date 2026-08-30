@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://omatype.invalid/capabilities/v2/schema.json",
-  "title": "Omatype live capability evidence receipt V2",
+  "$id": "https://badi.invalid/capabilities/v2/schema.json",
+  "title": "Badi live capability evidence receipt V2",
   "type": "object",
   "additionalProperties": false,
   "required": [

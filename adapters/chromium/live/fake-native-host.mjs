@@ -3,12 +3,12 @@
 import { appendFileSync } from "node:fs";
 
 const MAX_FRAME_BYTES = 65_536;
-const logPath = process.env["OMATYPE_LIVE_HOST_LOG"];
-const normalDelayMs = Number(process.env["OMATYPE_LIVE_NORMAL_DELAY_MS"] ?? "8");
-const staleDelayMs = Number(process.env["OMATYPE_LIVE_STALE_DELAY_MS"] ?? "500");
-const latestDelayMs = Number(process.env["OMATYPE_LIVE_LATEST_DELAY_MS"] ?? "800");
+const logPath = process.env["BADI_LIVE_HOST_LOG"];
+const normalDelayMs = Number(process.env["BADI_LIVE_NORMAL_DELAY_MS"] ?? "8");
+const staleDelayMs = Number(process.env["BADI_LIVE_STALE_DELAY_MS"] ?? "500");
+const latestDelayMs = Number(process.env["BADI_LIVE_LATEST_DELAY_MS"] ?? "800");
 const disconnectDelayMs = Number(
-  process.env["OMATYPE_LIVE_DISCONNECT_DELAY_MS"] ?? "250",
+  process.env["BADI_LIVE_DISCONNECT_DELAY_MS"] ?? "250",
 );
 
 let input = Buffer.alloc(0);

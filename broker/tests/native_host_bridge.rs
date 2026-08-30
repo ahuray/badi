@@ -3,9 +3,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use omatype_broker::ipc::{read_envelope, write_envelope};
-use omatype_broker::native_host::{bridge_streams, read_chrome_envelope, write_chrome_envelope};
-use omatype_broker::protocol::{EmptyPayload, MessageType, WireEnvelope};
+use badi_broker::ipc::{read_envelope, write_envelope};
+use badi_broker::native_host::{bridge_streams, read_chrome_envelope, write_chrome_envelope};
+use badi_broker::protocol::{EmptyPayload, MessageType, WireEnvelope};
 use tokio::io::{AsyncWrite, AsyncWriteExt as _, duplex};
 use tokio::net::UnixStream;
 use tokio::time::timeout;

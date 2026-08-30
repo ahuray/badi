@@ -1,0 +1,9 @@
+{
+  "name": "io.github.ahuray.badi",
+  "description": "Badi private local broker bridge",
+  "path": "/opt/badi/badi-native-host",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/"
+  ]
+}

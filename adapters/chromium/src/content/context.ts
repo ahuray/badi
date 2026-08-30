@@ -36,7 +36,7 @@ function stableIdentity(field: EditableField): string {
   const tag = field instanceof HTMLTextAreaElement ? "textarea" : `input:${field.type}`;
   return [
     tag,
-    field.getAttribute("data-omatype-field") ?? "",
+    field.getAttribute("data-badi-field") ?? "",
     field.id,
     field.getAttribute("name") ?? "",
   ].join("|");

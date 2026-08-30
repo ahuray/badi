@@ -207,6 +207,11 @@ versions. Expand only after the compatibility matrix and evidence suite pass.
 Add semantic intelligence behind the existing provider port; do not place model
 logic in either adapter.
 
+The content-free hardware probe and pinned candidate catalog are already a
+foundation on `develop`. They intentionally stop before download or activation;
+the following evaluation gate still decides whether any candidate becomes a
+provider.
+
 Sequence:
 
 1. Freeze deterministic text and code evaluation corpora with content-safe
@@ -296,7 +301,7 @@ stable enough to reuse.
 - The strongest browser-enforced origin/port permission claim Chromium supports.
 - Production extension identity, packaging, signing, and distribution.
 - Whether native undo can be guaranteed per supported target.
-- Product naming and license clearance.
+- Badi package/trademark and source-license clearance.
 - Semantic model/runtime choice and weight licenses.
 - Which Linux editor becomes the next capability cell after Obsidian.
 

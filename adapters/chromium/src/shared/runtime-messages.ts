@@ -9,14 +9,14 @@ import type {
 } from "./model";
 
 export type RuntimeCommand =
-  | { readonly kind: "omatype.suggest.v1"; readonly request: SuggestionRequest }
-  | { readonly kind: "omatype.cancel.v1"; readonly request: SuggestionRequest }
-  | { readonly kind: "omatype.dismiss.v1"; readonly address: SuggestionAddress }
+  | { readonly kind: "badi.suggest.v1"; readonly request: SuggestionRequest }
+  | { readonly kind: "badi.cancel.v1"; readonly request: SuggestionRequest }
+  | { readonly kind: "badi.dismiss.v1"; readonly address: SuggestionAddress }
   | {
-      readonly kind: "omatype.commit.authorize.v1";
+      readonly kind: "badi.commit.authorize.v1";
       readonly request: CommitAuthorizationRequest;
     }
-  | { readonly kind: "omatype.commit.result.v1"; readonly notice: CommitResultNotice };
+  | { readonly kind: "badi.commit.result.v1"; readonly notice: CommitResultNotice };
 
 export type RuntimeReply =
   | {
@@ -27,7 +27,7 @@ export type RuntimeReply =
 
 export type ContentControlMessage =
   | {
-      readonly kind: "omatype.control.v1";
+      readonly kind: "badi.control.v1";
       readonly action:
         | "pause"
         | "resume"
@@ -36,15 +36,15 @@ export type ContentControlMessage =
         | "dismiss";
     }
   | {
-      readonly kind: "omatype.commit.revoke.v1";
+      readonly kind: "badi.commit.revoke.v1";
       readonly address: SuggestionAddress;
     }
   | {
-      readonly kind: "omatype.suggestion.clear.v1";
+      readonly kind: "badi.suggestion.clear.v1";
       readonly event: SuggestionClearEvent;
     }
   | {
-      readonly kind: "omatype.transport.disconnected.v1";
+      readonly kind: "badi.transport.disconnected.v1";
     };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -107,12 +107,12 @@ export function isRuntimeCommand(value: unknown): value is RuntimeCommand {
     return false;
   }
   switch (value["kind"]) {
-    case "omatype.suggest.v1":
-    case "omatype.cancel.v1":
+    case "badi.suggest.v1":
+    case "badi.cancel.v1":
       return isSuggestionRequest(value["request"]);
-    case "omatype.dismiss.v1":
+    case "badi.dismiss.v1":
       return isAddress(value["address"]);
-    case "omatype.commit.authorize.v1": {
+    case "badi.commit.authorize.v1": {
       const notice = value["request"];
       return (
         isRecord(notice) &&
@@ -121,7 +121,7 @@ export function isRuntimeCommand(value: unknown): value is RuntimeCommand {
         (notice["acceptance"] === "word" || notice["acceptance"] === "all")
       );
     }
-    case "omatype.commit.result.v1": {
+    case "badi.commit.result.v1": {
       const notice = value["notice"];
       return isRecord(notice) && isAddress(notice) && typeof notice["status"] === "string";
     }
@@ -134,16 +134,16 @@ export function isContentControlMessage(value: unknown): value is ContentControl
   if (!isRecord(value)) {
     return false;
   }
-  if (value["kind"] === "omatype.transport.disconnected.v1") {
+  if (value["kind"] === "badi.transport.disconnected.v1") {
     return Object.keys(value).length === 1;
   }
-  if (value["kind"] === "omatype.commit.revoke.v1") {
+  if (value["kind"] === "badi.commit.revoke.v1") {
     return isAddress(value["address"]);
   }
-  if (value["kind"] === "omatype.suggestion.clear.v1") {
+  if (value["kind"] === "badi.suggestion.clear.v1") {
     return isSuggestionClearEvent(value["event"]);
   }
-  if (value["kind"] !== "omatype.control.v1") return false;
+  if (value["kind"] !== "badi.control.v1") return false;
   return (
     value["action"] === "pause" ||
     value["action"] === "resume" ||

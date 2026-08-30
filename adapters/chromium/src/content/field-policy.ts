@@ -96,7 +96,7 @@ function autocompleteTokens(field: EditableField): readonly string[] {
 }
 
 function hasPageOptOut(field: EditableField): boolean {
-  return field.closest("[data-omatype='off']") !== null;
+  return field.closest("[data-badi='off']") !== null;
 }
 
 function isTopLevelLightDom(field: EditableField): boolean {
@@ -150,13 +150,13 @@ export function hasStableFieldIdentity(field: EditableField): boolean {
     return false;
   }
   const document = field.ownerDocument;
-  const explicit = field.getAttribute("data-omatype-field")?.trim() ?? "";
+  const explicit = field.getAttribute("data-badi-field")?.trim() ?? "";
   if (
     explicit.length > 0 &&
     exactlyOneWithAttribute(
       document,
-      "[data-omatype-field]",
-      "data-omatype-field",
+      "[data-badi-field]",
+      "data-badi-field",
       explicit,
       field,
     )

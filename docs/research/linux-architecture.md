@@ -9,7 +9,7 @@ Status: decision-ready research, 2026-08-30
 
 ## Executive decision
 
-Build Omatype as a local Rust broker with several small, target-owned adapters. Do not build it as a Wayland keylogger plus synthetic typer.
+Build Badi as a local Rust broker with several small, target-owned adapters. Do not build it as a Wayland keylogger plus synthetic typer.
 
 The first Omarchy/Hyprland slice should prove one broker and three integrations:
 
@@ -19,7 +19,7 @@ The first Omarchy/Hyprland slice should prove one broker and three integrations:
 
 The browser and Obsidian adapters own their text context, rendering, and insertion. The Fcitx adapter owns only the terminal session it explicitly arms, renders one candidate through Fcitx, and inserts through Fcitx InputContext::commitString. Hyprland supplies shortcuts and corroborating focus events; it is not a text API.
 
-This is intentionally not a claim of universal Wayland support. On Linux, the application, toolkit, compositor, input-method route, sandbox, and field type all affect what is possible. Omatype should publish support as tested capability tuples rather than a single “Linux supported” badge.
+This is intentionally not a claim of universal Wayland support. On Linux, the application, toolkit, compositor, input-method route, sandbox, and field type all affect what is possible. Badi should publish support as tested capability tuples rather than a single “Linux supported” badge.
 
 The two-day result is a credible integration proof, not a shippable universal daemon. Browser and Obsidian can become useful quickly. Ghostty/Codex is the early go/no-go spike because it is the least certain route.
 
@@ -31,7 +31,7 @@ The two-day result is a credible integration proof, not a shippable universal da
 | Browser | Strict TypeScript MV3 extension, content script plus service worker | Chromium and Firefox builds; site-specific adapters for complex editors |
 | Obsidian | Strict TypeScript desktop-only plugin using the official Editor API and CodeMirror 6 | First-party plugins for high-value note/editing apps |
 | Terminal | C++20 Fcitx5 module; user arms it manually before typing a Codex prompt | Fcitx plus optional IBus and explicit agent/terminal bridges |
-| Global control | Hyprland bindings call omatypectl; socket2 focus events | XDG GlobalShortcuts where reliable, desktop-specific adapters where needed |
+| Global control | Hyprland bindings call badictl; socket2 focus events | XDG GlobalShortcuts where reliable, desktop-specific adapters where needed |
 | Inference | Owned llama.cpp server sidecar plus deterministic fast path | Swappable local provider interface and benchmarked model profiles |
 | UI | In-app ghost text for browser/Obsidian; Fcitx candidate panel for terminal | App-owned UI first; GTK4 layer-shell only for status or coarse fallback UI |
 | Insertion | DOM, CodeMirror transaction, or Fcitx commitString | Never silently fall through to generic synthetic typing |
@@ -61,7 +61,7 @@ The following was observed locally on the Omarchy workstation on 2026-08-29/30. 
 
 The Wayland text-input-v3 protocol lets a focused client provide surrounding text, cursor/anchor positions, content hints and purpose, and a cursor rectangle to an input method. Its content purposes include password, PIN, and terminal, while hints include hidden and sensitive data. The protocol asks clients to keep surrounding text bounded and explicitly permits them to omit it. Its preedit and commit operations are synchronized by client state and serials. These are client/input-method contracts, not a compositor-neutral API by which any daemon can inspect another application's field. See the official [text-input-v3 protocol XML](https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/unstable/text-input/text-input-unstable-v3.xml).
 
-The external zwp_input_method_v2 protocol used by wlroots-family stacks gives the compositor-selected input method commit, preedit, surrounding-text, keyboard-grab, and popup-surface operations. It permits at most one input-method object per seat. A separate Omatype input-method client would therefore compete with Fcitx rather than complement it. See the upstream wlroots [input-method-v2 protocol XML](https://github.com/swaywm/wlroots/blob/master/protocol/input-method-unstable-v2.xml). Wayland-protocols now also carries a newer, explicitly experimental [xx-input-method-v2 proposal](https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/experimental/xx-input-method/xx-input-method-v2.xml); it retains the one-input-method-per-seat constraint and is not assumed to replace the observed Hyprland/Fcitx route.
+The external zwp_input_method_v2 protocol used by wlroots-family stacks gives the compositor-selected input method commit, preedit, surrounding-text, keyboard-grab, and popup-surface operations. It permits at most one input-method object per seat. A separate Badi input-method client would therefore compete with Fcitx rather than complement it. See the upstream wlroots [input-method-v2 protocol XML](https://github.com/swaywm/wlroots/blob/master/protocol/input-method-unstable-v2.xml). Wayland-protocols now also carries a newer, explicitly experimental [xx-input-method-v2 proposal](https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/experimental/xx-input-method/xx-input-method-v2.xml); it retains the one-input-method-per-seat constraint and is not assumed to replace the observed Hyprland/Fcitx route.
 
 Layer shell creates separate compositor-managed surfaces. It does not place an inline widget inside an unrelated application's text layout. See the upstream wlroots [wlr-layer-shell protocol XML](https://github.com/swaywm/wlroots/blob/master/protocol/wlr-layer-shell-unstable-v1.xml).
 
@@ -117,14 +117,14 @@ Everything in this section is a design inference from the constraints above. It 
 
 The read-only cotype prototype is useful as a demo and risk register: it has a deterministic predictor, a basic stale-snapshot check, Hyprland focus lookup, a layer-shell pill, raw evdev capture, and wtype insertion. It should not become the production base.
 
-Its pointer position is not a caret position. Window-title substrings are not a sensitive-field guarantee. Raw input observes much more than Omatype needs, and synthetic typing cannot atomically prove field identity or revision. Keep only the lessons: latest-wins prediction, visible state, explicit pause/dismiss, and an easily replayed deterministic backend.
+Its pointer position is not a caret position. Window-title substrings are not a sensitive-field guarantee. Raw input observes much more than Badi needs, and synthetic typing cannot atomically prove field identity or revision. Keep only the lessons: latest-wins prediction, visible state, explicit pause/dismiss, and an easily replayed deterministic backend.
 
 ### Component topology
 
     Chromium content script ─ service worker ─ native host ┐
     Obsidian desktop plugin ───────────────────────────────┤
     Fcitx5 C++ module ─────────────────────────────────────┤
-    omatypectl / Hyprland bindings ────────────────────────┤
+    badictl / Hyprland bindings ────────────────────────┤
                                                            ▼
                                                 Rust broker over UDS
                                              policy · sessions · cancellation
@@ -166,7 +166,7 @@ There is no production rung for raw evdev capture, screenshots/OCR, clipboard sc
 
 Maintain one versioned JSON Schema as the source of truth. Generate Rust and TypeScript types and a small C++ DTO subset. The protocol is an adapter boundary, not a model-vendor API.
 
-The Unix transport is a filesystem socket at $XDG_RUNTIME_DIR/omatype/broker.sock. Create the parent directory as mode 0700 and the socket as 0600; reject peers whose SO_PEERCRED UID differs. Use a four-byte little-endian length followed by UTF-8 JSON and impose a 64 KiB limit in both directions.
+The Unix transport is a filesystem socket at $XDG_RUNTIME_DIR/badi/broker.sock. Create the parent directory as mode 0700 and the socket as 0600; reject peers whose SO_PEERCRED UID differs. Use a four-byte little-endian length followed by UTF-8 JSON and impose a 64 KiB limit in both directions.
 
 The Chromium native host uses the browser's native byte-order length framing externally and the same versioned JSON body. It validates the extension origin passed by the browser, then relays to the Unix socket. It never listens on TCP. Chrome's allowed_origins manifest entry is part of the installation.
 
@@ -273,9 +273,9 @@ While DISARMED, the addon sends no terminal text, keeps no key buffer, and reque
 
 The addon first denies Fcitx contexts marked password or sensitive. Ghostty generally cannot know that a TUI is showing sudo/password input, so this is not a complete password guarantee. Terminal mode is consequently forced to Manual, local inference only, no learning, no persistence, and a visible armed indicator. The residual risk is explicit user arming at a secret prompt.
 
-If another input method has active preedit or candidates, Omatype yields, clears, and does not consume the key. The addon may not disturb the active engine or change the user's input-method group. Its revalidation distinguishes its own candidate from any foreign/competing candidate state.
+If another input method has active preedit or candidates, Badi yields, clears, and does not consume the key. The addon may not disturb the active engine or change the user's input-method group. Its revalidation distinguishes its own candidate from any foreign/competing candidate state.
 
-Suggestions are one line, at most 64 Unicode scalar values and eight words. Before commit, reject all C0/C1 controls, DEL, escape, newline, carriage return, and tab; do not merely escape them. Omatype never appends Enter. A terminal completion must be inert text until the user separately submits it.
+Suggestions are one line, at most 64 Unicode scalar values and eight words. Before commit, reject all C0/C1 controls, DEL, escape, newline, carriage return, and tab; do not merely escape them. Badi never appends Enter. A terminal completion must be inert text until the user separately submits it.
 
 #### Terminal pass, fallback, and fail semantics
 
@@ -302,11 +302,11 @@ A Bash/readline hook can be researched later for ordinary interactive shell line
 
 Use explicit, configurable Hyprland bindings to invoke:
 
-- omatypectl request
-- omatypectl accept-word
-- omatypectl accept-all
-- omatypectl dismiss
-- omatypectl pause toggle
+- badictl request
+- badictl accept-word
+- badictl accept-all
+- badictl dismiss
+- badictl pause toggle
 
 The CLI sends a control request to the broker; it does not synthesize a key. App adapters may also offer local shortcuts.
 
@@ -328,7 +328,7 @@ Hard-deny before transport:
 
 - browser password/hidden fields and recognized password, OTP, PIN, or payment-secret purposes;
 - Fcitx/IBus password or sensitive capabilities;
-- active composition/preedit that Omatype does not own;
+- active composition/preedit that Badi does not own;
 - lock-screen/session-authentication surfaces;
 - any non-editable, ambiguous, or multiply focused target.
 

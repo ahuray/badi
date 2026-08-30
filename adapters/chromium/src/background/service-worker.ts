@@ -47,7 +47,7 @@ async function broadcastToRegisteredRoutes(
 
 broker.setCommitRevocationHandler((request) => {
   const message: ContentControlMessage = {
-    kind: "omatype.commit.revoke.v1",
+    kind: "badi.commit.revoke.v1",
     address: {
       requestId: request.requestId,
       sessionId: request.sessionId,
@@ -63,14 +63,14 @@ broker.setCommitRevocationHandler((request) => {
 
 broker.setSuggestionClearHandler((event) => {
   sendToSession(event.sessionId, {
-    kind: "omatype.suggestion.clear.v1",
+    kind: "badi.suggestion.clear.v1",
     event,
   });
 });
 
 broker.setDisconnectHandler(() => {
   void broadcastToRegisteredRoutes({
-    kind: "omatype.transport.disconnected.v1",
+    kind: "badi.transport.disconnected.v1",
   }).catch(() => undefined);
 });
 
@@ -79,7 +79,7 @@ async function handle(
   sender: chrome.runtime.MessageSender,
 ): Promise<RuntimeReply> {
   switch (command.kind) {
-    case "omatype.suggest.v1": {
+    case "badi.suggest.v1": {
       if (command.request.origin !== EXPECTED_FIXTURE_ORIGIN) {
         return { ok: false, error: "Suggestion origin does not match fixture" };
       }
@@ -88,24 +88,24 @@ async function handle(
       }
       return { ok: true, response: await broker.requestSuggestion(command.request) };
     }
-    case "omatype.cancel.v1":
+    case "badi.cancel.v1":
       if (!sessionRoutes.matches(command.request.sessionId, sender)) {
         return { ok: false, error: "Suggestion session route mismatch" };
       }
       await broker.cancelSuggestion(command.request);
       return { ok: true };
-    case "omatype.dismiss.v1":
+    case "badi.dismiss.v1":
       if (!sessionRoutes.matches(command.address.sessionId, sender)) {
         return { ok: false, error: "Suggestion session route mismatch" };
       }
       await broker.dismissSuggestion(command.address);
       return { ok: true };
-    case "omatype.commit.authorize.v1":
+    case "badi.commit.authorize.v1":
       if (!sessionRoutes.matches(command.request.sessionId, sender)) {
         return { ok: false, error: "Suggestion session route mismatch" };
       }
       return { ok: true, response: await broker.authorizeCommit(command.request) };
-    case "omatype.commit.result.v1":
+    case "badi.commit.result.v1":
       if (!sessionRoutes.matches(command.notice.sessionId, sender)) {
         return { ok: false, error: "Suggestion session route mismatch" };
       }
@@ -132,14 +132,14 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     return false;
   }
   if (!isTrustedFixtureSender(sender, chrome.runtime.id)) {
-    sendResponse({ ok: false, error: "Untrusted Omatype message sender" } satisfies RuntimeReply);
+    sendResponse({ ok: false, error: "Untrusted Badi message sender" } satisfies RuntimeReply);
     return false;
   }
   void senderWindowIsFocused(sender).then(
     (focused) =>
       focused
         ? handle(message, sender)
-        : ({ ok: false, error: "Omatype sender window is not focused" } satisfies RuntimeReply),
+        : ({ ok: false, error: "Badi sender window is not focused" } satisfies RuntimeReply),
   ).then(
     (reply) => sendResponse(reply),
     (error: unknown) => {
@@ -161,6 +161,6 @@ chrome.commands.onCommand.addListener((command) => {
   void (async () => {
     const paused = await broker.globalControl("pause_toggle");
     const action = paused ? "pause" : "resume";
-    await broadcastToRegisteredRoutes({ kind: "omatype.control.v1", action });
+    await broadcastToRegisteredRoutes({ kind: "badi.control.v1", action });
   })().catch(() => undefined);
 });

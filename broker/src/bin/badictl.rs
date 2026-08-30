@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use omatype_broker::ipc::{
+use badi_broker::ipc::{
     default_socket_path, read_envelope, verify_peer_uid, verify_socket_metadata, write_envelope,
 };
-use omatype_broker::metrics::MetricsSnapshot;
-use omatype_broker::protocol::{
+use badi_broker::metrics::MetricsSnapshot;
+use badi_broker::model_selection::{ModelUseCase, detect_hardware, recommend_model};
+use badi_broker::protocol::{
     ActiveLocator, AdapterDescriptor, AdapterKind, Capability, ControlAction,
     GlobalControlRequestPayload, HealthStatusPayload, HelloPayload, MessageType, PROTOCOL_VERSION,
     ProviderKind, SessionControlRequestPayload, WireEnvelope,
@@ -22,14 +23,24 @@ async fn main() {
 }
 
 async fn run() -> Result<(), CliError> {
-    let parsed = parse_arguments(std::env::args().skip(1))?;
-    let ParsedCommand::Execute {
-        socket_path,
-        command,
-    } = parsed
-    else {
-        print!("{CLI_USAGE}");
-        return Ok(());
+    let (socket_path, command) = match parse_arguments(std::env::args().skip(1))? {
+        ParsedCommand::Help => {
+            print!("{CLI_USAGE}");
+            return Ok(());
+        }
+        ParsedCommand::Local(LocalCommand::Hardware) => {
+            println!("{}", serde_json::to_string_pretty(&detect_hardware())?);
+            return Ok(());
+        }
+        ParsedCommand::Local(LocalCommand::Models(use_case)) => {
+            let advice = recommend_model(detect_hardware(), use_case);
+            println!("{}", serde_json::to_string_pretty(&advice)?);
+            return Ok(());
+        }
+        ParsedCommand::Remote {
+            socket_path,
+            command,
+        } => (socket_path, command),
     };
     let mut stream = connect(&socket_path).await?;
     match command {
@@ -105,7 +116,7 @@ async fn connect(path: &Path) -> Result<UnixStream, CliError> {
             max_v: PROTOCOL_VERSION,
             adapter: AdapterDescriptor {
                 kind: AdapterKind::Cli,
-                name: "omatypectl".to_owned(),
+                name: "badictl".to_owned(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
             },
             capabilities: vec![Capability::Control, Capability::Health],
@@ -148,7 +159,7 @@ fn addressed_control(
     }
     let mut envelope = WireEnvelope::session(
         MessageType::ControlRequest,
-        omatype_broker::protocol::Coordinates {
+        badi_broker::protocol::Coordinates {
             session_id: active.session_id,
             focus_epoch: active.focus_epoch,
             revision: active.revision,
@@ -180,9 +191,10 @@ fn new_request_id() -> String {
     format!("ctl:{}", uuid::Uuid::new_v4())
 }
 
-const CLI_USAGE: &str = "Usage: omatypectl [--socket ABSOLUTE] COMMAND\n\
-Commands:\n  status [--json]  Show content-free broker status as JSON\n  request          Request a suggestion for the sole active session\n  accept-word      Accept the authorized first word-part\n  accept-all       Accept the authorized full suggestion\n  dismiss          Dismiss the current suggestion\n  pause [MODE]     MODE is on, off, or toggle (default)\n\
-Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/omatype/broker.sock\n  -h, --help         Show this help\n";
+const CLI_USAGE: &str = "Usage: badictl [--socket ABSOLUTE] COMMAND\n\
+Local commands:\n  hardware [--json]       Inspect content-free hardware capabilities\n  models [USE] [--json]   Recommend pinned local models; USE is writing or code\n\
+Broker commands:\n  status [--json]  Show content-free broker status as JSON\n  request          Request a suggestion for the sole active session\n  accept-word      Accept the authorized first word-part\n  accept-all       Accept the authorized full suggestion\n  dismiss          Dismiss the current suggestion\n  pause [MODE]     MODE is on, off, or toggle (default)\n\
+Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n";
 
 fn parse_arguments<I>(arguments: I) -> Result<ParsedCommand, CliError>
 where
@@ -216,43 +228,68 @@ where
         None
     };
 
-    let command = match arguments.next().as_deref() {
+    let command_name = arguments.next();
+    let rest: Vec<String> = arguments.collect();
+    if command_name.as_deref() == Some("hardware") {
+        if explicit_socket.is_some() || !json_only(&rest) {
+            return Err(CliError::Arguments);
+        }
+        return Ok(ParsedCommand::Local(LocalCommand::Hardware));
+    }
+    if command_name.as_deref() == Some("models") {
+        if explicit_socket.is_some() {
+            return Err(CliError::Arguments);
+        }
+        let use_case = parse_model_use_case(&rest)?;
+        return Ok(ParsedCommand::Local(LocalCommand::Models(use_case)));
+    }
+
+    let command = match command_name.as_deref() {
         Some("--help" | "-h") => {
-            if arguments.next().is_some() {
+            if !rest.is_empty() {
                 return Err(CliError::Arguments);
             }
             return Ok(ParsedCommand::Help);
         }
         Some("status") => {
-            if arguments
-                .next()
-                .as_deref()
-                .is_some_and(|value| value != "--json")
-            {
+            if !json_only(&rest) {
                 return Err(CliError::Arguments);
             }
             Command::Status
         }
-        Some("request") => Command::Session(ControlAction::Request),
-        Some("accept-word") => Command::Session(ControlAction::AcceptWord),
-        Some("accept-all") => Command::Session(ControlAction::AcceptAll),
-        Some("dismiss") => Command::Session(ControlAction::Dismiss),
-        Some("pause") => match arguments.next().as_deref() {
-            None | Some("toggle") => Command::Global(ControlAction::PauseToggle),
-            Some("on") => Command::Global(ControlAction::Pause),
-            Some("off") => Command::Global(ControlAction::Resume),
-            Some(_) => return Err(CliError::Arguments),
+        Some("request") if rest.is_empty() => Command::Session(ControlAction::Request),
+        Some("accept-word") if rest.is_empty() => Command::Session(ControlAction::AcceptWord),
+        Some("accept-all") if rest.is_empty() => Command::Session(ControlAction::AcceptAll),
+        Some("dismiss") if rest.is_empty() => Command::Session(ControlAction::Dismiss),
+        Some("pause") => match rest.as_slice() {
+            [] => Command::Global(ControlAction::PauseToggle),
+            [value] if value == "toggle" => Command::Global(ControlAction::PauseToggle),
+            [value] if value == "on" => Command::Global(ControlAction::Pause),
+            [value] if value == "off" => Command::Global(ControlAction::Resume),
+            _ => return Err(CliError::Arguments),
         },
         _ => return Err(CliError::Arguments),
     };
-    if arguments.next().is_some() {
-        return Err(CliError::Arguments);
-    }
     let socket_path = explicit_socket.map_or_else(default_socket_path, Ok)?;
-    Ok(ParsedCommand::Execute {
+    Ok(ParsedCommand::Remote {
         socket_path,
         command,
     })
+}
+
+fn json_only(arguments: &[String]) -> bool {
+    arguments.is_empty() || arguments.len() == 1 && arguments[0] == "--json"
+}
+
+fn parse_model_use_case(arguments: &[String]) -> Result<ModelUseCase, CliError> {
+    match arguments {
+        [] => Ok(ModelUseCase::Writing),
+        [value] if value == "writing" || value == "--json" => Ok(ModelUseCase::Writing),
+        [value] if value == "code" => Ok(ModelUseCase::Code),
+        [value, format] if value == "writing" && format == "--json" => Ok(ModelUseCase::Writing),
+        [value, format] if value == "code" && format == "--json" => Ok(ModelUseCase::Code),
+        _ => Err(CliError::Arguments),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -262,12 +299,19 @@ enum Command {
     Status,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LocalCommand {
+    Hardware,
+    Models(ModelUseCase),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ParsedCommand {
-    Execute {
+    Remote {
         socket_path: PathBuf,
         command: Command,
     },
+    Local(LocalCommand),
     Help,
 }
 
@@ -278,7 +322,7 @@ enum CliError {
     #[error("connection_closed")]
     ConnectionClosed,
     #[error("frame")]
-    Frame(#[from] omatype_broker::ipc::FrameError),
+    Frame(#[from] badi_broker::ipc::FrameError),
     #[error("handshake")]
     Handshake,
     #[error("io")]
@@ -288,7 +332,7 @@ enum CliError {
     #[error("no_suggestion")]
     NoSuggestion,
     #[error("protocol")]
-    Protocol(#[from] omatype_broker::protocol::ProtocolError),
+    Protocol(#[from] badi_broker::protocol::ProtocolError),
     #[error("rejected")]
     Rejected,
     #[error("serde")]
@@ -301,9 +345,12 @@ enum CliError {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{CliError, Command, ParsedCommand, parse_arguments, redact_health_status};
-    use omatype_broker::metrics::MetricsSnapshot;
-    use omatype_broker::protocol::{
+    use super::{
+        CliError, Command, LocalCommand, ParsedCommand, parse_arguments, redact_health_status,
+    };
+    use badi_broker::metrics::MetricsSnapshot;
+    use badi_broker::model_selection::ModelUseCase;
+    use badi_broker::protocol::{
         ActiveLocator, ControlAction, HealthStatusPayload, ProviderKind, SessionId,
     };
     use serde_json::json;
@@ -330,7 +377,7 @@ mod tests {
         assert_eq!(
             parse_arguments(arguments(&["--socket", "/tmp/broker.sock", "accept-word",]))
                 .expect("accept word"),
-            ParsedCommand::Execute {
+            ParsedCommand::Remote {
                 socket_path: PathBuf::from("/tmp/broker.sock"),
                 command: Command::Session(ControlAction::AcceptWord),
             }
@@ -338,10 +385,26 @@ mod tests {
         assert_eq!(
             parse_arguments(arguments(&["--socket", "/tmp/broker.sock", "pause", "off"]))
                 .expect("pause off"),
-            ParsedCommand::Execute {
+            ParsedCommand::Remote {
                 socket_path: PathBuf::from("/tmp/broker.sock"),
                 command: Command::Global(ControlAction::Resume),
             }
+        );
+    }
+
+    #[test]
+    fn parses_local_hardware_and_model_commands_without_a_socket() {
+        assert_eq!(
+            parse_arguments(arguments(&["hardware"])).expect("hardware"),
+            ParsedCommand::Local(LocalCommand::Hardware)
+        );
+        assert_eq!(
+            parse_arguments(arguments(&["models", "code", "--json"])).expect("code models"),
+            ParsedCommand::Local(LocalCommand::Models(ModelUseCase::Code))
+        );
+        assert_eq!(
+            parse_arguments(arguments(&["models"])).expect("writing models"),
+            ParsedCommand::Local(LocalCommand::Models(ModelUseCase::Writing))
         );
     }
 
@@ -353,6 +416,10 @@ mod tests {
         ));
         assert!(matches!(
             parse_arguments(arguments(&["--help", "extra"])),
+            Err(CliError::Arguments)
+        ));
+        assert!(matches!(
+            parse_arguments(arguments(&["--socket", "/tmp/broker.sock", "hardware"])),
             Err(CliError::Arguments)
         ));
     }

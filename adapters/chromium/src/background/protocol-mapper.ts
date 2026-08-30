@@ -8,7 +8,7 @@ import type {
   SuggestionResponse,
 } from "../shared/model";
 
-export const NATIVE_HOST_NAME = "io.omatype.broker";
+export const NATIVE_HOST_NAME = "io.github.ahuray.badi";
 
 const BROWSER_CAPABILITIES = [
   "context",
@@ -80,7 +80,7 @@ export function helloEnvelope(monotonicMs: number): WireEnvelope {
     payload: {
       min_v: 1,
       max_v: 1,
-      adapter: { kind: "browser", name: "omatype-chromium", version: "0.1.0" },
+      adapter: { kind: "browser", name: "badi-chromium", version: "0.1.0" },
       capabilities: [...BROWSER_CAPABILITIES],
     },
   };

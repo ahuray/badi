@@ -1,30 +1,30 @@
 [package]
-name = "omatype-broker"
+name = "badi-broker"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Local policy and suggestion broker for the Omatype prototype"
+description = "Local policy and suggestion broker for the Badi prototype"
 publish = false
 
 [lib]
-name = "omatype_broker"
+name = "badi_broker"
 path = "src/lib.rs"
 
 [[bin]]
-name = "omatype-broker"
+name = "badi-broker"
 path = "src/main.rs"
 
 [[bin]]
-name = "omatypectl"
-path = "src/bin/omatypectl.rs"
+name = "badictl"
+path = "src/bin/badictl.rs"
 
 [[bin]]
-name = "omatype-native-host"
-path = "src/bin/omatype-native-host.rs"
+name = "badi-native-host"
+path = "src/bin/badi-native-host.rs"
 
 [[bin]]
-name = "omatype-native-manifest"
-path = "src/bin/omatype-native-manifest.rs"
+name = "badi-native-manifest"
+path = "src/bin/badi-native-manifest.rs"
 
 [dependencies]
 async-trait = "0.1"
