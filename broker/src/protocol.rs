@@ -17,6 +17,7 @@ pub const MAX_SUGGESTION_CHARS: usize = 64;
 pub const MAX_SUGGESTION_WORDS: usize = 8;
 pub const MAX_ID_CHARS: usize = 128;
 pub const DEFAULT_SUGGESTION_TTL_MS: u64 = 600;
+pub const CAPABILITY_COUNT: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SessionId(Uuid);
@@ -99,6 +100,10 @@ pub enum Capability {
     Control,
     #[serde(rename = "health")]
     Health,
+    #[serde(rename = "policy")]
+    Policy,
+    #[serde(rename = "settings")]
+    Settings,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -204,6 +209,10 @@ pub enum ReasonCode {
     ProviderError,
     ProviderTimeout,
     SessionClosed,
+    SettingsCommitUnknown,
+    SettingsCommittedDegraded,
+    SettingsConflict,
+    SettingsRejected,
     Stale,
     Superseded,
     UnknownSession,
@@ -242,6 +251,24 @@ pub enum MessageType {
     HealthRequest,
     #[serde(rename = "health.status")]
     HealthStatus,
+    #[serde(rename = "policy.query")]
+    PolicyQuery,
+    #[serde(rename = "policy.status")]
+    PolicyStatus,
+    #[serde(rename = "authority.changed")]
+    AuthorityChanged,
+    #[serde(rename = "authority.ack")]
+    AuthorityAck,
+    #[serde(rename = "settings.get")]
+    SettingsGet,
+    #[serde(rename = "settings.replace")]
+    SettingsReplace,
+    #[serde(rename = "settings.status")]
+    SettingsStatus,
+    #[serde(rename = "memory.clear")]
+    MemoryClear,
+    #[serde(rename = "memory.status")]
+    MemoryStatus,
     #[serde(rename = "error")]
     Error,
 }
@@ -339,6 +366,13 @@ impl WireEnvelope {
         if self.id.as_deref().is_some_and(|id| !valid_opaque_id(id)) {
             return Err(ProtocolError::InvalidId);
         }
+        if matches!(
+            self.message_type,
+            MessageType::AuthorityChanged | MessageType::AuthorityAck
+        ) && self.id.is_some()
+        {
+            return Err(ProtocolError::UnexpectedId);
+        }
         if !self.payload.is_object() {
             return Err(ProtocolError::PayloadNotObject);
         }
@@ -426,7 +460,7 @@ impl HelloPayload {
             || self.adapter.version.is_empty()
             || self.adapter.version.chars().count() > 32
             || self.capabilities.is_empty()
-            || self.capabilities.len() > 6
+            || self.capabilities.len() > CAPABILITY_COUNT
         {
             return Err(ProtocolError::InvalidPayload);
         }
@@ -459,7 +493,7 @@ impl HelloAckPayload {
         if self.selected_v != PROTOCOL_VERSION
             || !valid_opaque_id(&self.connection_id)
             || self.enabled_capabilities.is_empty()
-            || self.enabled_capabilities.len() > 6
+            || self.enabled_capabilities.len() > CAPABILITY_COUNT
             || self.max_frame_bytes != MAX_FRAME_BYTES
             || self.max_before_chars != MAX_BEFORE_CHARS
             || self.max_after_chars != MAX_AFTER_CHARS
@@ -524,6 +558,171 @@ impl TargetDescriptor {
         {
             return Err(ProtocolError::InvalidPayload);
         }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyResolutionReason {
+    DefaultPolicy,
+    GlobalDisabled,
+    ContextDisabled,
+    MatchedRule,
+    SuggestionsDisabled,
+    UnknownIdentity,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyQueryPayload {
+    pub target: TargetDescriptor,
+}
+
+impl PolicyQueryPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.target.validate()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+// These are independent wire permissions; collapsing them into one enum would
+// hide partial externally-authored policies from strict clients.
+#[allow(clippy::struct_excessive_bools)]
+pub struct PolicyStatusPayload {
+    pub authority_epoch: u64,
+    pub settings_revision: u64,
+    pub paused: bool,
+    pub activation: Activation,
+    pub context_allowed: bool,
+    pub display_allowed: bool,
+    pub suggestions_allowed: bool,
+    pub learning_allowed: bool,
+    pub reason: PolicyResolutionReason,
+}
+
+impl PolicyStatusPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.authority_epoch > MAX_SAFE_COUNTER
+            || self.settings_revision > MAX_SAFE_COUNTER
+            || self.suggestions_allowed && (!self.context_allowed || !self.display_allowed)
+            || self.learning_allowed
+                && (!self.context_allowed || !self.display_allowed || !self.suggestions_allowed)
+            || self.paused
+                && (self.context_allowed
+                    || self.suggestions_allowed
+                    || self.display_allowed
+                    || self.learning_allowed
+                    || self.activation != Activation::Never)
+            || !self.context_allowed && self.activation == Activation::Always
+        {
+            Err(ProtocolError::InvalidPayload)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthorityChangedPayload {
+    pub authority_epoch: u64,
+    pub settings_revision: u64,
+    pub paused: bool,
+}
+
+impl AuthorityChangedPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_authority_counter(self.authority_epoch, self.settings_revision)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthorityAckPayload {
+    pub authority_epoch: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsReplacePayload {
+    pub expected_revision: u64,
+    pub document: Value,
+}
+
+impl SettingsReplacePayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.expected_revision > MAX_SAFE_COUNTER || !self.document.is_object() {
+            Err(ProtocolError::InvalidPayload)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsStatusPayload {
+    pub document: Value,
+    pub personalization_revision: u64,
+    pub personalization_records: u64,
+    pub personalization_bytes: u64,
+    pub personalization_store_available: bool,
+    pub personalization_recorder_available: bool,
+    pub personalization_write_failures: u64,
+    pub personalization_dropped_signals: u64,
+}
+
+impl SettingsStatusPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if !self.document.is_object()
+            || self.personalization_revision > MAX_SAFE_COUNTER
+            || self.personalization_records > MAX_SAFE_COUNTER
+            || self.personalization_bytes > MAX_SAFE_COUNTER
+            || self.personalization_write_failures > MAX_SAFE_COUNTER
+            || self.personalization_dropped_signals > MAX_SAFE_COUNTER
+        {
+            Err(ProtocolError::InvalidPayload)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryStatusPayload {
+    pub revision: u64,
+    pub records: u64,
+    pub bytes: u64,
+    pub changed: bool,
+}
+
+impl MemoryStatusPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_authority_counter(self.revision, self.records)?;
+        if self.bytes > MAX_SAFE_COUNTER {
+            Err(ProtocolError::CounterOutOfRange("memory_bytes"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl AuthorityAckPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_authority_counter(self.authority_epoch, 0)
+    }
+}
+
+fn validate_authority_counter(
+    authority_epoch: u64,
+    settings_revision: u64,
+) -> Result<(), ProtocolError> {
+    if authority_epoch > MAX_SAFE_COUNTER || settings_revision > MAX_SAFE_COUNTER {
+        Err(ProtocolError::CounterOutOfRange("authority"))
+    } else {
         Ok(())
     }
 }
@@ -601,12 +800,10 @@ impl ContextChangedPayload {
             || (hard_denied && (!self.before.is_empty() || !self.after.is_empty()))
             || self.selection.anchor > MAX_SAFE_COUNTER
             || self.selection.head > MAX_SAFE_COUNTER
-            || self.language.as_ref().is_some_and(|language| {
-                !(2..=35).contains(&language.chars().count())
-                    || !language
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-            })
+            || self
+                .language
+                .as_ref()
+                .is_some_and(|language| !valid_language_tag(language))
         {
             return Err(ProtocolError::InvalidPayload);
         }
@@ -715,25 +912,13 @@ pub struct CommitResultPayload {
     pub fingerprint: String,
     pub suggestion_id: String,
     pub status: CommitStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub new_revision: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub new_fingerprint: Option<String>,
 }
 
 impl CommitResultPayload {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_fingerprint(&self.fingerprint)?;
-        if !valid_opaque_id(&self.suggestion_id)
-            || self
-                .new_revision
-                .is_some_and(|value| value > MAX_SAFE_COUNTER)
-            || self.new_revision.is_some() != self.new_fingerprint.is_some()
-        {
+        if !valid_opaque_id(&self.suggestion_id) {
             return Err(ProtocolError::InvalidPayload);
-        }
-        if let Some(fingerprint) = &self.new_fingerprint {
-            validate_fingerprint(fingerprint)?;
         }
         Ok(())
     }
@@ -748,12 +933,30 @@ pub struct EmptyPayload {}
 pub struct HealthStatusPayload {
     pub provider: ProviderKind,
     pub paused: bool,
+    pub authority_epoch: u64,
+    pub settings_revision: u64,
+    pub control_plane_degraded: bool,
     pub sessions: u64,
     pub socket_mode: String,
     pub max_frame_bytes: usize,
     pub metrics: MetricsSnapshot,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active: Option<ActiveLocator>,
+}
+
+impl HealthStatusPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_authority_counter(self.authority_epoch, self.settings_revision)?;
+        if self.sessions > MAX_SAFE_COUNTER
+            || self.socket_mode != "0600"
+            || self.max_frame_bytes != MAX_FRAME_BYTES
+            || (self.control_plane_degraded && !self.paused)
+        {
+            Err(ProtocolError::InvalidPayload)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -771,6 +974,42 @@ pub struct ActiveLocator {
 #[serde(deny_unknown_fields)]
 pub struct ErrorPayload {
     pub code: ReasonCode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub committed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control_plane_degraded: Option<bool>,
+}
+
+impl ErrorPayload {
+    #[must_use]
+    pub const fn simple(code: ReasonCode) -> Self {
+        Self {
+            code,
+            committed: None,
+            settings_revision: None,
+            control_plane_degraded: None,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let has_settings_context = self.committed.is_some()
+            || self.settings_revision.is_some()
+            || self.control_plane_degraded.is_some();
+        if has_settings_context
+            && (self.settings_revision.is_none() || self.control_plane_degraded.is_none())
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        if self
+            .settings_revision
+            .is_some_and(|revision| revision > MAX_SAFE_COUNTER)
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Error)]
@@ -789,6 +1028,8 @@ pub enum ProtocolError {
     Serde(#[from] serde_json::Error),
     #[error("unexpected_coordinates")]
     UnexpectedCoordinates,
+    #[error("unexpected_id")]
+    UnexpectedId,
     #[error("unsupported_version:{0}")]
     UnsupportedVersion(u8),
     #[error("version_negotiation_failed")]
@@ -802,6 +1043,13 @@ pub fn valid_opaque_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+}
+
+pub(crate) fn valid_language_tag(value: &str) -> bool {
+    (2..=35).contains(&value.chars().count())
+        && value.split('-').all(|subtag| {
+            !subtag.is_empty() && subtag.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
 }
 
 pub fn validate_fingerprint(value: &str) -> Result<(), ProtocolError> {
@@ -830,7 +1078,34 @@ pub fn validate_coordinate_bounds(focus_epoch: u64, revision: u64) -> Result<(),
 mod tests {
     use serde_json::json;
 
-    use super::{MAX_SAFE_COUNTER, MessageType, ProtocolError, SessionId, WireEnvelope};
+    use super::{
+        AdapterDescriptor, AdapterKind, Capability, HelloPayload, MAX_SAFE_COUNTER, MessageType,
+        PROTOCOL_VERSION, ProtocolError, SessionId, WireEnvelope, valid_language_tag,
+    };
+
+    #[test]
+    fn hello_accepts_each_capability_declared_by_the_v1_schema() {
+        let hello = HelloPayload {
+            min_v: PROTOCOL_VERSION,
+            max_v: PROTOCOL_VERSION,
+            adapter: AdapterDescriptor {
+                kind: AdapterKind::Test,
+                name: "all-capabilities".to_owned(),
+                version: "1".to_owned(),
+            },
+            capabilities: vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::CommitApplied,
+                Capability::CommitDispatchedUnverified,
+                Capability::Control,
+                Capability::Health,
+                Capability::Policy,
+                Capability::Settings,
+            ],
+        };
+        hello.validate().expect("all schema capabilities");
+    }
 
     #[test]
     fn rejects_coordinates_on_global_message() {
@@ -850,6 +1125,28 @@ mod tests {
             Err(ProtocolError::UnexpectedCoordinates)
         ));
         assert_eq!(envelope.message_type, MessageType::HealthRequest);
+    }
+
+    #[test]
+    fn authority_messages_reject_correlation_ids_for_schema_parity() {
+        for message_type in ["authority.changed", "authority.ack"] {
+            let envelope: WireEnvelope = serde_json::from_value(json!({
+                "v": 1,
+                "id": "unexpected",
+                "type": message_type,
+                "mono_ms": 4,
+                "payload": if message_type == "authority.changed" {
+                    json!({"authority_epoch": 1, "settings_revision": 1, "paused": true})
+                } else {
+                    json!({"authority_epoch": 1})
+                }
+            }))
+            .expect("wire decoding should succeed before shape validation");
+            assert!(matches!(
+                envelope.validate_shape(),
+                Err(ProtocolError::UnexpectedId)
+            ));
+        }
     }
 
     #[test]
@@ -911,5 +1208,15 @@ mod tests {
             envelope.validate_shape(),
             Err(ProtocolError::CounterOutOfRange("revision"))
         ));
+    }
+
+    #[test]
+    fn language_tags_require_nonempty_ascii_alphanumeric_subtags() {
+        for valid in ["en", "en-US", "zh-Hant-TW", "x-private"] {
+            assert!(valid_language_tag(valid), "{valid}");
+        }
+        for invalid in ["en-", "-en", "en--x", "en_US", "e", "fr-ça"] {
+            assert!(!valid_language_tag(invalid), "{invalid}");
+        }
     }
 }

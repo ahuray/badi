@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "id": "ctl:settings-get",
+  "type": "settings.status",
+  "mono_ms": 1002,
+  "payload": {
+    "document": {
+      "schema": "badi.settings.v1",
+      "revision": 1,
+      "paused": false,
+      "subjects": []
+    },
+    "personalization_revision": 0,
+    "personalization_records": 0,
+    "personalization_bytes": 0,
+    "personalization_store_available": true,
+    "personalization_recorder_available": true,
+    "personalization_write_failures": 0,
+    "personalization_dropped_signals": 0
+  }
+}

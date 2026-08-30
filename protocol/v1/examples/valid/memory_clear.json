@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "id": "ctl:memory-clear",
+  "type": "memory.clear",
+  "mono_ms": 1003,
+  "payload": {}
+}

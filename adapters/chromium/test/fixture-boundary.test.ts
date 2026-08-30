@@ -250,6 +250,7 @@ describe("localhost fixture boundary", () => {
       tabId: 7,
       frameId: 0,
       documentId: "document-a",
+      origin: EXPECTED_FIXTURE_ORIGIN,
     });
     expect(routes.deleteTab(7)).toEqual(["session-a"]);
     expect(routes.get("session-a")).toBeNull();
@@ -304,6 +305,31 @@ describe("localhost fixture boundary", () => {
     expect(routes.get("session-a")).toBeNull();
   });
 
+  it("deletes only the exact registered route when explicitly retired", () => {
+    const routes = new SessionRouteRegistry();
+    expect(routes.subscribe("session-a", trustedSender())).not.toBeNull();
+    const route = routes.get("session-a");
+    if (route === null) throw new Error("Route missing");
+    expect(
+      routes.delete("session-a", { ...route, documentId: "different-document" }),
+    ).toBe(false);
+    expect(routes.get("session-a")).toEqual(route);
+    expect(routes.delete("session-a", route)).toBe(true);
+    expect(routes.get("session-a")).toBeNull();
+  });
+
+  it("retires every route bound to an exact disconnected document", () => {
+    const routes = new SessionRouteRegistry();
+    const document = trustedSender();
+    expect(routes.subscribe("session-a", document)).not.toBeNull();
+    expect(
+      routes.deleteDocument({ ...document, documentId: "other-document" }),
+    ).toEqual([]);
+    expect(routes.matches("session-a", document)).toBe(true);
+    expect(routes.deleteDocument(document)).toEqual(["session-a"]);
+    expect(routes.get("session-a")).toBeNull();
+  });
+
   it("enumerates an immutable deduplicated route snapshot and deletes by tab", () => {
     const routes = new SessionRouteRegistry();
     const first = { ...trustedSender(), documentId: "document-a" };
@@ -320,8 +346,18 @@ describe("localhost fixture boundary", () => {
 
     const snapshot = routes.snapshot();
     expect(snapshot).toEqual([
-      { tabId: 7, frameId: 0, documentId: "document-a" },
-      { tabId: 8, frameId: 0, documentId: "document-b" },
+      {
+        tabId: 7,
+        frameId: 0,
+        documentId: "document-a",
+        origin: EXPECTED_FIXTURE_ORIGIN,
+      },
+      {
+        tabId: 8,
+        frameId: 0,
+        documentId: "document-b",
+        origin: EXPECTED_FIXTURE_ORIGIN,
+      },
     ]);
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(snapshot.every((route) => Object.isFrozen(route))).toBe(true);
@@ -329,7 +365,12 @@ describe("localhost fixture boundary", () => {
     expect(routes.deleteTab(7)).toEqual(["session-b"]);
     expect(snapshot).toHaveLength(2);
     expect(routes.snapshot()).toEqual([
-      { tabId: 8, frameId: 0, documentId: "document-b" },
+      {
+        tabId: 8,
+        frameId: 0,
+        documentId: "document-b",
+        origin: EXPECTED_FIXTURE_ORIGIN,
+      },
     ]);
   });
 
@@ -377,7 +418,32 @@ describe("localhost fixture boundary", () => {
       isRuntimeCommand({ kind: "badi.session.close.v1", sessionId: "session-a" }),
     ).toBe(true);
     expect(isRuntimeCommand({ kind: "badi.session.close.v1", sessionId: "" })).toBe(false);
-    expect(parseRuntimeBootstrapReply({ ok: true, paused: true })).toBe(true);
+    const policy = {
+      authorityEpoch: 4,
+      settingsRevision: 2,
+      paused: true,
+      activation: "never",
+      contextAllowed: false,
+      displayAllowed: false,
+      suggestionsAllowed: false,
+      learningAllowed: false,
+      reason: "global_disabled",
+    } as const;
+    expect(
+      parseRuntimeBootstrapReply({ ok: true, paused: true, policy }),
+    ).toEqual({ paused: true, policy });
+    expect(
+      isContentControlMessage({
+        kind: "badi.policy.v1",
+        policy: { ...policy, activation: "always" },
+      }),
+    ).toBe(false);
+    expect(
+      isContentControlMessage({
+        kind: "badi.policy.v1",
+        policy: { ...policy, leaked: true },
+      }),
+    ).toBe(false);
     expect(() => parseRuntimeBootstrapReply({ ok: true })).toThrow("bootstrap response");
     expect(() =>
       parseRuntimeBootstrapReply({ ok: true, paused: true, leaked: "content" }),

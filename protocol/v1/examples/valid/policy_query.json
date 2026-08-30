@@ -1,0 +1,18 @@
+{
+  "v": 1,
+  "id": "policy:fixture",
+  "type": "policy.query",
+  "mono_ms": 10,
+  "payload": {
+    "target": {
+      "kind": "browser",
+      "app_id": "chromium",
+      "target_id": "fixture-route",
+      "origin": {
+        "scheme": "http",
+        "host": "localhost",
+        "port": 4173
+      }
+    }
+  }
+}

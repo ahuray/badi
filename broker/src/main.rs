@@ -4,7 +4,7 @@ use std::sync::Arc;
 use badi_broker::engine::{Broker, BrokerConfig};
 use badi_broker::ipc::default_socket_path;
 use badi_broker::provider::DeterministicPhraseProvider;
-use badi_broker::server;
+use badi_broker::{ControlPlane, server};
 
 #[tokio::main]
 async fn main() {
@@ -15,7 +15,10 @@ async fn main() {
             return Ok(());
         };
         let provider = Arc::new(DeterministicPhraseProvider::default());
-        let broker = Broker::new(provider, BrokerConfig::default());
+        let control_plane =
+            Arc::new(ControlPlane::open_from_environment().map_err(|_| ExitError::ControlPlane)?);
+        let broker = Broker::with_control_plane(provider, BrokerConfig::default(), control_plane)
+            .map_err(|_| ExitError::ControlPlane)?;
         server::run(&socket_path, broker)
             .await
             .map_err(|_| ExitError::Server)
@@ -73,6 +76,7 @@ enum BrokerCommand {
 #[derive(Clone, Copy, Debug)]
 enum ExitError {
     Arguments,
+    ControlPlane,
     Server,
     SocketPath,
 }
@@ -81,6 +85,7 @@ impl std::fmt::Display for ExitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Arguments => formatter.write_str("arguments"),
+            Self::ControlPlane => formatter.write_str("control_plane"),
             Self::Server => formatter.write_str("server"),
             Self::SocketPath => formatter.write_str("socket_path"),
         }

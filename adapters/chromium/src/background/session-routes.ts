@@ -2,10 +2,16 @@ export interface TrustedSessionRoute {
   readonly tabId: number;
   readonly frameId: number;
   readonly documentId: string;
+  readonly origin: string;
 }
 
 export interface SessionRouteSubscription {
   readonly displacedSessionIds: readonly string[];
+}
+
+export interface TrustedSessionRouteEntry {
+  readonly sessionId: string;
+  readonly route: TrustedSessionRoute;
 }
 
 function routeFromSender(
@@ -14,11 +20,14 @@ function routeFromSender(
   const tabId = sender.tab?.id;
   const frameId = sender.frameId;
   const documentId = sender.documentId;
+  const origin = sender.origin;
   if (
     tabId === undefined ||
     frameId === undefined ||
     typeof documentId !== "string" ||
-    documentId.length === 0
+    documentId.length === 0 ||
+    typeof origin !== "string" ||
+    origin.length === 0
   ) {
     return null;
   }
@@ -26,6 +35,7 @@ function routeFromSender(
     tabId,
     frameId,
     documentId,
+    origin,
   });
 }
 
@@ -33,7 +43,8 @@ function routesEqual(left: TrustedSessionRoute, right: TrustedSessionRoute): boo
   return (
     left.tabId === right.tabId &&
     left.frameId === right.frameId &&
-    left.documentId === right.documentId
+    left.documentId === right.documentId &&
+    left.origin === right.origin
   );
 }
 
@@ -91,6 +102,34 @@ export class SessionRouteRegistry {
       }
     }
     return Object.freeze(unique);
+  }
+
+  entries(): readonly TrustedSessionRouteEntry[] {
+    return Object.freeze(
+      [...this.#routes].map(([sessionId, route]) =>
+        Object.freeze({ sessionId, route: Object.freeze({ ...route }) }),
+      ),
+    );
+  }
+
+  delete(sessionId: string, expected?: TrustedSessionRoute): boolean {
+    const current = this.#routes.get(sessionId);
+    if (current === undefined || (expected !== undefined && !routesEqual(current, expected))) {
+      return false;
+    }
+    return this.#routes.delete(sessionId);
+  }
+
+  deleteDocument(sender: chrome.runtime.MessageSender): readonly string[] {
+    const candidate = routeFromSender(sender);
+    if (candidate === null) return Object.freeze([]);
+    const deleted: string[] = [];
+    for (const [sessionId, route] of this.#routes) {
+      if (!routesEqual(route, candidate)) continue;
+      this.#routes.delete(sessionId);
+      deleted.push(sessionId);
+    }
+    return Object.freeze(deleted);
   }
 
   deleteTab(tabId: number): readonly string[] {

@@ -1,4 +1,6 @@
 import type {
+  AuthorityState,
+  BootstrapState,
   CommitAuthorization,
   CommitAuthorizationRequest,
   CommitResultNotice,
@@ -6,10 +8,12 @@ import type {
   SuggestionClearEvent,
   SuggestionRequest,
   SuggestionResponse,
+  TargetPolicy,
 } from "../shared/model";
 import {
   NATIVE_HOST_NAME,
   acceptanceControlEnvelope,
+  authorityAckEnvelope,
   cancelEnvelope,
   commitResultEnvelope,
   dismissEnvelope,
@@ -21,11 +25,14 @@ import {
   isGlobalControlRejection,
   messageId,
   parseCommitAuthorization,
+  parseAuthorityChanged,
   parseGlobalControlResult,
   parseHelloAckPaused,
+  parsePolicyStatus,
   parseSuggestionClearEvent,
   parseSuggestionReply,
   replyMatchesRequest,
+  policyQueryEnvelope,
   sessionOpenEnvelope,
   sessionCloseEnvelope,
   suggestionErrorMatchesRequest,
@@ -74,6 +81,11 @@ interface PendingGlobalControl extends TimedPendingOperation {
   readonly reject: (error: Error) => void;
 }
 
+interface PendingPolicy extends TimedPendingOperation {
+  readonly resolve: (policy: TargetPolicy) => void;
+  readonly reject: (error: Error) => void;
+}
+
 interface OpenSession {
   request: SuggestionRequest;
   opened: boolean;
@@ -88,18 +100,27 @@ export class NativeBrokerClient {
   readonly #pending = new Map<string, PendingReply>();
   readonly #pendingCommits = new Map<string, PendingCommit>();
   readonly #pendingGlobalControls = new Map<string, PendingGlobalControl>();
+  readonly #pendingPolicies = new Map<string, PendingPolicy>();
   readonly #authorizedCommits = new Map<string, CommitAuthorizationRequest>();
   readonly #sessions = new Map<string, OpenSession>();
 
   #port: NativePortLike | null = null;
+  #portMessageListener: ((message: unknown) => void) | null = null;
+  #portDisconnectListener: ((port: NativePortLike) => void) | null = null;
+  #connectionGeneration = 0;
   #ready: Promise<void> | null = null;
   #resolveReady: (() => void) | null = null;
   #rejectReady: ((error: Error) => void) | null = null;
   #controlSequence = 0;
+  #policySequence = 0;
   #paused: boolean | null = null;
+  #handledAuthorityEpoch: number | null = null;
+  #authorityState: AuthorityState | null = null;
+  #authorityTask: Promise<void> = Promise.resolve();
   #commitRevocationHandler: ((request: CommitAuthorizationRequest) => void) | null = null;
   #suggestionClearHandler: ((event: SuggestionClearEvent) => void) | null = null;
   #disconnectHandler: (() => void) | null = null;
+  #authorityChangedHandler: ((state: AuthorityState) => void | Promise<void>) | null = null;
 
   constructor(
     factory: NativePortFactory,
@@ -121,7 +142,14 @@ export class NativeBrokerClient {
       session = { request, opened: false, closed: false };
       this.#sessions.set(request.sessionId, session);
     }
-    await this.#ensureReady();
+    try {
+      await this.#awaitAuthoritySettled();
+    } catch (error) {
+      if (!session.opened && this.#sessions.get(request.sessionId) === session) {
+        this.#sessions.delete(request.sessionId);
+      }
+      throw error;
+    }
     if (session.closed || this.#sessions.get(request.sessionId) !== session) {
       throw new Error("Suggestion session closed before dispatch");
     }
@@ -179,7 +207,7 @@ export class NativeBrokerClient {
       this.#clearOperationTimer(pending);
       pending.reject(new Error("Suggestion request superseded"));
     }
-    await this.#ensureReady();
+    await this.#awaitAuthoritySettled();
     this.#post(cancelEnvelope(request));
   }
 
@@ -195,14 +223,14 @@ export class NativeBrokerClient {
   }
 
   async dismissSuggestion(address: SuggestionAddress): Promise<void> {
-    await this.#ensureReady();
+    await this.#awaitAuthoritySettled();
     this.#post(dismissEnvelope(address));
   }
 
   async authorizeCommit(
     request: CommitAuthorizationRequest,
   ): Promise<CommitAuthorization> {
-    await this.#ensureReady();
+    await this.#awaitAuthoritySettled();
     const envelope = acceptanceControlEnvelope(request);
     const id = envelope.id;
     if (id === undefined) {
@@ -245,7 +273,7 @@ export class NativeBrokerClient {
   }
 
   async reportCommit(notice: CommitResultNotice): Promise<void> {
-    await this.#ensureReady();
+    await this.#awaitAuthoritySettled();
     for (const [id, request] of this.#authorizedCommits) {
       if (
         request.sessionId === notice.sessionId &&
@@ -274,6 +302,12 @@ export class NativeBrokerClient {
 
   setDisconnectHandler(handler: (() => void) | null): void {
     this.#disconnectHandler = handler;
+  }
+
+  setAuthorityChangedHandler(
+    handler: ((state: AuthorityState) => void | Promise<void>) | null,
+  ): void {
+    this.#authorityChangedHandler = handler;
   }
 
   async globalControl(action: "pause" | "resume" | "pause_toggle"): Promise<boolean> {
@@ -321,12 +355,45 @@ export class NativeBrokerClient {
     return result;
   }
 
-  async bootstrap(): Promise<boolean> {
+  async bootstrap(): Promise<boolean>;
+  async bootstrap(sessionId: string, origin: string): Promise<BootstrapState>;
+  async bootstrap(sessionId?: string, origin?: string): Promise<boolean | BootstrapState> {
     await this.#ensureReady();
     if (this.#paused === null) {
       throw new Error("Native broker did not provide pause state");
     }
-    return this.#paused;
+    if (sessionId === undefined || origin === undefined) {
+      return this.#paused;
+    }
+    const policy = await this.resolvePolicy(sessionId, origin);
+    return { paused: policy.paused, policy };
+  }
+
+  async resolvePolicy(sessionId: string, origin: string): Promise<TargetPolicy> {
+    await this.#ensureReady();
+    const monotonicMs = Math.max(0, Math.floor(this.#now()));
+    const correlationId = `chromium.policy.${monotonicMs}.${++this.#policySequence}`;
+    let pending!: PendingPolicy;
+    const result = new Promise<TargetPolicy>((resolve, reject) => {
+      pending = { resolve, reject, operationTimer: null };
+      this.#pendingPolicies.set(correlationId, pending);
+      pending.operationTimer = this.#startOperationTimer(() => {
+        if (this.#pendingPolicies.get(correlationId) !== pending) return;
+        this.#pendingPolicies.delete(correlationId);
+        pending.operationTimer = null;
+        reject(new Error("Native broker policy operation timed out"));
+      });
+    });
+    try {
+      this.#post(policyQueryEnvelope(sessionId, origin, monotonicMs, correlationId));
+    } catch (error) {
+      if (this.#pendingPolicies.get(correlationId) === pending) {
+        this.#pendingPolicies.delete(correlationId);
+        this.#clearOperationTimer(pending);
+        pending.reject(error instanceof Error ? error : new Error("Policy dispatch failed"));
+      }
+    }
+    return result;
   }
 
   dispose(): void {
@@ -339,22 +406,47 @@ export class NativeBrokerClient {
       return this.#ready;
     }
     const port = this.#factory.connectNative(NATIVE_HOST_NAME);
+    const generation = ++this.#connectionGeneration;
+    const onMessage = (message: unknown): void => {
+      this.#handleMessage(message, port, generation);
+    };
+    const onDisconnect = (): void => {
+      this.#handleDisconnect(port, generation);
+    };
     this.#port = port;
-    port.onMessage.addListener(this.#onMessage);
-    port.onDisconnect.addListener(this.#onDisconnect);
+    this.#portMessageListener = onMessage;
+    this.#portDisconnectListener = onDisconnect;
+    port.onMessage.addListener(onMessage);
+    port.onDisconnect.addListener(onDisconnect);
     this.#ready = new Promise<void>((resolve, reject) => {
       this.#resolveReady = resolve;
       this.#rejectReady = reject;
     });
     const ready = this.#ready;
     const timeout = setTimeout(() => {
+      if (!this.#connectionIsCurrent(port, generation)) return;
       const error = new Error("Native broker handshake timed out");
       port.disconnect();
-      this.#reset(error);
+      this.#reset(error, port, generation);
     }, this.#handshakeTimeoutMs);
     void ready.finally(() => clearTimeout(timeout)).catch(() => undefined);
     this.#post(helloEnvelope(Math.max(0, Math.floor(this.#now()))));
     return ready;
+  }
+
+  async #awaitAuthoritySettled(): Promise<void> {
+    await this.#ensureReady();
+    const port = this.#port;
+    const generation = this.#connectionGeneration;
+    const authorityTask = this.#authorityTask;
+    await authorityTask;
+    if (
+      port === null ||
+      !this.#connectionIsCurrent(port, generation) ||
+      authorityTask !== this.#authorityTask
+    ) {
+      throw new Error("Broker authority changed before dispatch");
+    }
   }
 
   #post(envelope: WireEnvelope): void {
@@ -364,7 +456,12 @@ export class NativeBrokerClient {
     this.#port.postMessage(envelope);
   }
 
-  readonly #onMessage = (message: unknown): void => {
+  #handleMessage(
+    message: unknown,
+    sourcePort: NativePortLike,
+    generation: number,
+  ): void {
+    if (!this.#connectionIsCurrent(sourcePort, generation)) return;
     const helloPaused = parseHelloAckPaused(message);
     if (helloPaused !== null) {
       const resolve = this.#resolveReady;
@@ -374,11 +471,75 @@ export class NativeBrokerClient {
       resolve?.();
       return;
     }
+    const authority = parseAuthorityChanged(message);
+    if (
+      authority !== null &&
+      (this.#handledAuthorityEpoch === null ||
+        authority.authorityEpoch > this.#handledAuthorityEpoch)
+    ) {
+      this.#handledAuthorityEpoch = authority.authorityEpoch;
+      this.#authorityState = authority;
+      this.#paused = authority.paused;
+      this.#invalidateDataPlane(new Error("Broker authority changed"));
+      const task = this.#authorityTask.then(async () => {
+        if (!this.#connectionIsCurrent(sourcePort, generation)) return;
+        await this.#authorityChangedHandler?.(authority);
+        if (!this.#connectionIsCurrent(sourcePort, generation)) return;
+        sourcePort.postMessage(
+          authorityAckEnvelope(authority.authorityEpoch, Math.max(0, Math.floor(this.#now()))),
+        );
+      });
+      this.#authorityTask = task.catch((error: unknown) => {
+        if (!this.#connectionIsCurrent(sourcePort, generation)) return;
+        sourcePort.disconnect();
+        this.#reset(
+          error instanceof Error ? error : new Error("Authority change handling failed"),
+          sourcePort,
+          generation,
+        );
+      });
+      return;
+    }
     const clearEvent = parseSuggestionClearEvent(message);
     if (clearEvent !== null) {
       this.#suggestionClearHandler?.(clearEvent);
     }
     const id = messageId(message);
+    const pendingPolicy = id === null ? undefined : this.#pendingPolicies.get(id);
+    if (id !== null && pendingPolicy !== undefined) {
+      const policy = parsePolicyStatus(message, id);
+      if (policy !== null) {
+        const authorityState = this.#authorityState;
+        if (
+          authorityState !== null &&
+          (policy.authorityEpoch < authorityState.authorityEpoch ||
+            (policy.authorityEpoch === authorityState.authorityEpoch &&
+              (policy.settingsRevision !== authorityState.settingsRevision ||
+                policy.paused !== authorityState.paused)))
+        ) {
+          this.#pendingPolicies.delete(id);
+          this.#clearOperationTimer(pendingPolicy);
+          pendingPolicy.reject(new Error("Broker returned stale policy authority"));
+          return;
+        }
+        this.#pendingPolicies.delete(id);
+        this.#clearOperationTimer(pendingPolicy);
+        this.#paused = policy.paused;
+        pendingPolicy.resolve(policy);
+        return;
+      }
+      if (
+        typeof message === "object" &&
+        message !== null &&
+        "type" in message &&
+        (message.type === "policy.status" || message.type === "error")
+      ) {
+        this.#pendingPolicies.delete(id);
+        this.#clearOperationTimer(pendingPolicy);
+        pendingPolicy.reject(new Error("Broker rejected policy query"));
+        return;
+      }
+    }
     const pendingGlobal = id === null ? undefined : this.#pendingGlobalControls.get(id);
     if (id !== null && pendingGlobal !== undefined) {
       if (
@@ -472,28 +633,58 @@ export class NativeBrokerClient {
       pending.resolve(response);
       return;
     }
-  };
+  }
 
-  readonly #onDisconnect = (): void => {
+  #handleDisconnect(sourcePort: NativePortLike, generation: number): void {
+    if (!this.#connectionIsCurrent(sourcePort, generation)) return;
     const runtimeError =
       typeof chrome === "undefined" ? undefined : chrome.runtime.lastError?.message;
-    this.#reset(new Error(runtimeError ?? "Native broker disconnected"));
+    this.#reset(
+      new Error(runtimeError ?? "Native broker disconnected"),
+      sourcePort,
+      generation,
+    );
     this.#disconnectHandler?.();
-  };
+  }
 
-  #reset(error: Error): void {
+  #connectionIsCurrent(port: NativePortLike, generation: number): boolean {
+    return this.#port === port && this.#connectionGeneration === generation;
+  }
+
+  #reset(
+    error: Error,
+    expectedPort?: NativePortLike,
+    expectedGeneration?: number,
+  ): void {
+    if (
+      expectedPort !== undefined &&
+      expectedGeneration !== undefined &&
+      !this.#connectionIsCurrent(expectedPort, expectedGeneration)
+    ) {
+      return;
+    }
     const port = this.#port;
     if (port !== null) {
-      port.onMessage.removeListener(this.#onMessage);
-      port.onDisconnect.removeListener(this.#onDisconnect);
+      if (this.#portMessageListener !== null) {
+        port.onMessage.removeListener(this.#portMessageListener);
+      }
+      if (this.#portDisconnectListener !== null) {
+        port.onDisconnect.removeListener(this.#portDisconnectListener);
+      }
     }
     this.#port = null;
+    this.#portMessageListener = null;
+    this.#portDisconnectListener = null;
+    this.#connectionGeneration += 1;
     this.#rejectReady?.(error);
     this.#ready = null;
     this.#resolveReady = null;
     this.#rejectReady = null;
     this.#sessions.clear();
     this.#paused = null;
+    this.#handledAuthorityEpoch = null;
+    this.#authorityState = null;
+    this.#authorityTask = Promise.resolve();
     for (const pending of this.#pending.values()) {
       this.#clearOperationTimer(pending);
       pending.reject(error);
@@ -510,6 +701,27 @@ export class NativeBrokerClient {
       pending.reject(error);
     }
     this.#pendingGlobalControls.clear();
+    for (const pending of this.#pendingPolicies.values()) {
+      this.#clearOperationTimer(pending);
+      pending.reject(error);
+    }
+    this.#pendingPolicies.clear();
+    this.#authorizedCommits.clear();
+  }
+
+  #invalidateDataPlane(error: Error): void {
+    this.#sessions.clear();
+    for (const pending of this.#pending.values()) {
+      this.#clearOperationTimer(pending);
+      pending.reject(error);
+    }
+    this.#pending.clear();
+    for (const pending of this.#pendingCommits.values()) {
+      if (pending.grantTimer !== null) clearTimeout(pending.grantTimer);
+      this.#clearOperationTimer(pending);
+      pending.reject(error);
+    }
+    this.#pendingCommits.clear();
     this.#authorizedCommits.clear();
   }
 

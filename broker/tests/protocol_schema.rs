@@ -2,12 +2,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use badi_broker::protocol::{
-    CommitPreparePayload, CommitResultPayload, ContextChangedPayload, ControlAction,
-    ControlResultPayload, EmptyPayload, ErrorPayload, GlobalControlRequestPayload,
-    HealthStatusPayload, HelloAckPayload, HelloPayload, MessageType, SessionClosePayload,
-    SessionControlRequestPayload, SessionOpenPayload, SuggestCancelPayload, SuggestRequestPayload,
-    SuggestionClearPayload, SuggestionShowPayload, WireEnvelope, valid_opaque_id,
-    validate_fingerprint,
+    AuthorityAckPayload, AuthorityChangedPayload, CommitPreparePayload, CommitResultPayload,
+    ContextChangedPayload, ControlAction, ControlResultPayload, EmptyPayload, ErrorPayload,
+    GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
+    MemoryStatusPayload, MessageType, PolicyQueryPayload, PolicyStatusPayload, SessionClosePayload,
+    SessionControlRequestPayload, SessionOpenPayload, SettingsReplacePayload,
+    SettingsStatusPayload, SuggestCancelPayload, SuggestRequestPayload, SuggestionClearPayload,
+    SuggestionShowPayload, WireEnvelope, valid_opaque_id, validate_fingerprint,
 };
 use badi_broker::segment::{accept_word, sanitize_suggestion};
 use serde::de::DeserializeOwned;
@@ -25,7 +26,7 @@ fn rust_scalar_schema(mut schema: Value) -> Value {
     // exclusion normative, assert its presence, and compile the scalar-representable
     // remainder here; the browser/Ajv suite exercises the unmodified pattern.
     for pointer in [
-        "/$defs/safeSuggestionText/pattern",
+        "/$defs/safeSuggestionText/allOf/0/pattern",
         "/$defs/contextText/pattern",
     ] {
         let pattern = schema
@@ -65,6 +66,9 @@ fn decode<T: DeserializeOwned>(envelope: &WireEnvelope) -> T {
     envelope.decode_payload().expect("typed payload")
 }
 
+// One exhaustive match keeps Rust decoding coverage visibly aligned with the
+// protocol schema's complete message enum.
+#[allow(clippy::too_many_lines)]
 fn validate_rust_payload(envelope: &WireEnvelope) {
     match envelope.message_type {
         MessageType::Hello => decode::<HelloPayload>(envelope)
@@ -138,12 +142,33 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         MessageType::CommitResult => decode::<CommitResultPayload>(envelope)
             .validate()
             .expect("valid commit result"),
-        MessageType::HealthRequest => {
+        MessageType::HealthRequest | MessageType::SettingsGet | MessageType::MemoryClear => {
             let _: EmptyPayload = decode(envelope);
         }
         MessageType::HealthStatus => {
             let _: HealthStatusPayload = decode(envelope);
         }
+        MessageType::PolicyQuery => decode::<PolicyQueryPayload>(envelope)
+            .validate()
+            .expect("valid policy query"),
+        MessageType::PolicyStatus => decode::<PolicyStatusPayload>(envelope)
+            .validate()
+            .expect("valid policy status"),
+        MessageType::AuthorityChanged => decode::<AuthorityChangedPayload>(envelope)
+            .validate()
+            .expect("valid authority change"),
+        MessageType::AuthorityAck => decode::<AuthorityAckPayload>(envelope)
+            .validate()
+            .expect("valid authority acknowledgment"),
+        MessageType::SettingsReplace => decode::<SettingsReplacePayload>(envelope)
+            .validate()
+            .expect("valid settings replacement"),
+        MessageType::SettingsStatus => decode::<SettingsStatusPayload>(envelope)
+            .validate()
+            .expect("valid settings status"),
+        MessageType::MemoryStatus => decode::<MemoryStatusPayload>(envelope)
+            .validate()
+            .expect("valid memory status"),
         MessageType::Error => {
             let _: ErrorPayload = decode(envelope);
         }
@@ -237,6 +262,11 @@ fn schema_enforces_browser_first_character_bounds() {
     assert!(validator.is_valid(&suggestion));
     suggestion["payload"]["text"] = Value::String("é".repeat(65));
     assert!(!validator.is_valid(&suggestion));
+    for invalid_spacing in ["\u{00a0}world", " world  again", "valid "] {
+        suggestion["payload"]["text"] = Value::String(invalid_spacing.to_owned());
+        suggestion["payload"]["accept_word"] = Value::String(invalid_spacing.to_owned());
+        assert!(!validator.is_valid(&suggestion), "{invalid_spacing:?}");
+    }
 }
 
 #[test]
@@ -246,7 +276,7 @@ fn normative_ecma_schema_declares_lone_surrogates_forbidden() {
     )
     .expect("schema JSON");
     assert!(
-        schema["$defs"]["safeSuggestionText"]["pattern"]
+        schema["$defs"]["safeSuggestionText"]["allOf"][0]["pattern"]
             .as_str()
             .is_some_and(|pattern| pattern.contains(r"\ud800-\udfff"))
     );

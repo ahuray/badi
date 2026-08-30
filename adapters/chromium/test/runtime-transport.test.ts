@@ -1,8 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { RuntimeSuggestionTransport } from "../src/content/runtime-transport";
-import type { SuggestionRequest } from "../src/shared/model";
+import type { SuggestionRequest, TargetPolicy } from "../src/shared/model";
 
 const SESSION_ID = "0198f215-3ec0-7000-8000-000000000001";
+
+function policy(paused = true): TargetPolicy {
+  return {
+    authorityEpoch: 4,
+    settingsRevision: 2,
+    paused,
+    activation: paused ? "never" : "always",
+    contextAllowed: !paused,
+    displayAllowed: !paused,
+    suggestionsAllowed: !paused,
+    learningAllowed: false,
+    reason: paused ? "global_disabled" : "matched_rule",
+  };
+}
 
 class DeferredReply {
   readonly promise: Promise<unknown>;
@@ -92,11 +106,14 @@ describe("RuntimeSuggestionTransport", () => {
     const transport = new RuntimeSuggestionTransport({
       sendMessage: (message) => {
         messages.push(message);
-        return Promise.resolve({ ok: true, paused: true });
+        return Promise.resolve({ ok: true, paused: true, policy: policy() });
       },
     });
 
-    await expect(transport.bootstrap(SESSION_ID)).resolves.toBe(true);
+    await expect(transport.bootstrap(SESSION_ID)).resolves.toEqual({
+      paused: true,
+      policy: policy(),
+    });
     expect(messages).toEqual([
       { kind: "badi.bootstrap.v1", sessionId: SESSION_ID },
     ]);

@@ -43,6 +43,39 @@ describe("bounded context", () => {
     expect(otherSession.fingerprint).not.toBe(context.fingerprint);
   });
 
+  it("captures only a canonical declared language and binds it to the fingerprint", () => {
+    document.documentElement.lang = "en-us";
+    const field = document.createElement("textarea");
+    field.id = "localized-draft";
+    Object.defineProperty(field, "checkVisibility", { value: () => true });
+    field.getBoundingClientRect = () => new DOMRect(0, 0, 320, 40);
+    document.body.append(field);
+    field.value = "Thank you";
+    field.setSelectionRange(field.value.length, field.value.length);
+    const input = {
+      field,
+      purpose: "normal" as const,
+      selection: { start: field.value.length, end: field.value.length, direction: "none" as const },
+      composing: false,
+      activation: "always" as const,
+      explicit: false,
+      fingerprintSalt: "session-salt",
+    };
+
+    const english = captureContext(input);
+    expect(english.language).toBe("en-US");
+
+    document.documentElement.lang = "de";
+    const german = captureContext(input);
+    expect(german.language).toBe("de");
+    expect(german.fingerprint).not.toBe(english.fingerprint);
+
+    field.lang = "not_a_language";
+    const invalid = captureContext(input);
+    expect(invalid.language).toBeUndefined();
+    expect(invalid.fingerprint).not.toBe(german.fingerprint);
+  });
+
   it("accepts bounded plain text without rewriting it", () => {
     const safe = " one two three four five six seven eight";
     expect(sanitizeSuggestion(safe)).toBe(safe);
@@ -63,12 +96,17 @@ describe("bounded context", () => {
     expect(sanitizeSuggestion(value)).toBeNull();
   });
 
-  it("matches the broker's scalar and Unicode-word truncation", () => {
-    expect(sanitizeSuggestion("x".repeat(65))).toBe("x".repeat(64));
-    expect(
-      sanitizeSuggestion("one two three four five six seven eight nine"),
-    ).toBe("one two three four five six seven eight");
+  it("matches the broker's strict scalar and Unicode-word limits", () => {
+    expect(sanitizeSuggestion("x".repeat(65))).toBeNull();
+    expect(sanitizeSuggestion("one two three four five six seven eight nine")).toBeNull();
+    expect(sanitizeSuggestion("valid ")).toBeNull();
+    expect(sanitizeSuggestion("\u00a0world")).toBeNull();
+    expect(sanitizeSuggestion(" world\u00a0again")).toBeNull();
+    expect(sanitizeSuggestion(" world  again")).toBeNull();
     expect(sanitizeSuggestion("one two three four five six seven can't nine")).toBe(
+      null,
+    );
+    expect(sanitizeSuggestion("one two three four five six seven can't")).toBe(
       "one two three four five six seven can't",
     );
   });

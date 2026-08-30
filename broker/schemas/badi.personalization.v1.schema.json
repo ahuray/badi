@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:badi:schema:personalization:v1",
+  "title": "Badi text-free interaction metadata aggregates v1",
+  "$comment": "This format deliberately has no context, suggestion, document, request, session, fingerprint, field, URL-path, or fine-grained timestamp fields. Rust producer validation additionally enforces canonical unique identity/provider/day keys and outcomes not exceeding shown count.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "revision", "records"],
+  "properties": {
+    "schema": { "const": "badi.personalization.v1" },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "records": {
+      "type": "array",
+      "maxItems": 512,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/dailyAggregate" }
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "adapter", "scheme", "host", "port"],
+      "properties": {
+        "kind": { "const": "browser_origin" },
+        "adapter": { "const": "chromium" },
+        "scheme": { "enum": ["http", "https"] },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "pattern": "^[a-z0-9.:-]+$"
+        },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "counter": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "dailyAggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "provider",
+        "day",
+        "shown",
+        "dismissed",
+        "accepted_word",
+        "accepted_all"
+      ],
+      "properties": {
+        "identity": { "$ref": "#/$defs/identity" },
+        "provider": { "enum": ["phrase_v1", "local_model"] },
+        "day": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Whole UTC day index only; no fine-grained timestamp is retained."
+        },
+        "shown": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "dismissed": { "$ref": "#/$defs/counter" },
+        "accepted_word": { "$ref": "#/$defs/counter" },
+        "accepted_all": { "$ref": "#/$defs/counter" }
+      }
+    }
+  }
+}

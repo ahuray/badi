@@ -6,6 +6,9 @@
   "payload": {
     "provider": "phrase_v1",
     "paused": false,
+    "authority_epoch": 1,
+    "settings_revision": 1,
+    "control_plane_degraded": false,
     "sessions": 1,
     "socket_mode": "0600",
     "max_frame_bytes": 65536,

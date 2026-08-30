@@ -31,6 +31,7 @@ export interface SuggestionContext {
   readonly fingerprint: string;
   readonly before: string;
   readonly after: string;
+  readonly language?: string;
   readonly selection: SelectionSnapshot;
   readonly field: FieldDescriptor;
   readonly activation: "always" | "manual";
@@ -45,6 +46,37 @@ export interface SuggestionRequest {
   readonly revision: number;
   readonly monotonicMs: number;
   readonly context: SuggestionContext;
+}
+
+export type PolicyResolutionReason =
+  | "default_policy"
+  | "global_disabled"
+  | "context_disabled"
+  | "matched_rule"
+  | "suggestions_disabled"
+  | "unknown_identity";
+
+export interface TargetPolicy {
+  readonly authorityEpoch: number;
+  readonly settingsRevision: number;
+  readonly paused: boolean;
+  readonly activation: "always" | "manual" | "never";
+  readonly contextAllowed: boolean;
+  readonly displayAllowed: boolean;
+  readonly suggestionsAllowed: boolean;
+  readonly learningAllowed: boolean;
+  readonly reason: PolicyResolutionReason;
+}
+
+export interface AuthorityState {
+  readonly authorityEpoch: number;
+  readonly settingsRevision: number;
+  readonly paused: boolean;
+}
+
+export interface BootstrapState {
+  readonly paused: boolean;
+  readonly policy: TargetPolicy;
 }
 
 export interface SuggestionResponse {
@@ -92,8 +124,6 @@ export interface CommitAuthorization extends SuggestionAddress {
 
 export interface CommitResultNotice extends SuggestionAddress {
   readonly status: "applied" | "dispatched-unverified" | "stale" | "blocked" | "failed";
-  readonly newRevision?: number;
-  readonly newFingerprint?: string;
 }
 
 export interface SuggestionTransport {

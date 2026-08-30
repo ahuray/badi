@@ -16,7 +16,12 @@ The design has four separate steps:
 3. present a pinned, verifiable download plan; and
 4. enable inference only after Badi's quality and latency gates pass.
 
-Only the first three exist today. The output reports `runtime_ready: false`.
+The first three exist in the default build. An off-by-default
+`local-model-eval` feature contains artifact verification, a versioned receipt
+contract, deterministic quality thresholds, and a bounded loopback evaluation
+client. It is deliberately excluded from production broker wiring and the
+default binary dependency graph. Model advice therefore reports
+`runtime_ready: false`.
 
 ## Commands
 
@@ -148,15 +153,43 @@ new benchmark evidence.
 
 ## Runtime gate
 
-A candidate is not a provider until all of the following pass on a named
-hardware profile:
+A candidate is not a production provider until all of the following pass on a
+named hardware profile:
 
 - cold start, warm p50, warm p95, cancellation, and peak-memory budgets;
+- a single warm end-to-end clock from eligible adapter scheduling after input
+  through adapter view visibility, including every debounce, transport hop,
+  provider call, validation step, and display operation; p95 must be at most
+  500 ms under the hard 600 ms generation ceiling;
 - frozen writing or code usefulness corpora;
 - output sanitation and eight-word/64-scalar limits;
 - stale-result, pause, policy, and shutdown tests;
 - no context or suggestion text in logs or receipts; and
-- a clear win over the deterministic lane after interruption cost.
+- at least `+0.10` useful accepted words per interruption over the deterministic
+  lane after interruption cost; this is an absolute difference, not a bounded
+  rate, and a tie cannot pass.
+
+The evaluation-only receipt code derives readiness from those versioned
+thresholds and binds the declared artifact, backend, prompt/sampling contract,
+launch configuration hash, evaluator hash, corpus hash, hardware profile, and
+aggregate metrics. That is a gate scaffold, not current runtime evidence. The
+repository does not yet contain the declared launch-manifest producer, corpus,
+evaluator implementation, or raw evaluation run.
+
+The production Chromium adapter owns the 140 ms user-idle debounce before
+context dispatch. The broker's production default adds no second debounce;
+nonzero broker debounce remains a test/configuration seam and still counts
+against the same absolute generation deadline.
+
+Plain loopback HTTP also cannot authenticate which local process owns the port,
+prove which artifact that process loaded, or close the verify-to-use race on a
+replaceable model path. Until Badi owns and supervises the runtime boundary and
+attests the loaded artifact, `LlamaCppProvider` remains available only when
+explicitly compiling evaluation tooling:
+
+```sh
+cargo test -p badi-broker --features local-model-eval local_model
+```
 
 If no candidate passes, Badi keeps the deterministic provider. Silence is a
 better fallback than a late or mediocre model.

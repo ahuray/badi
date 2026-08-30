@@ -432,7 +432,7 @@ fn meminfo_mib(value: &str, wanted: &str) -> Option<u64> {
     })
 }
 
-fn catalog(use_case: ModelUseCase) -> &'static [ModelArtifact; 3] {
+pub(crate) fn catalog(use_case: ModelUseCase) -> &'static [ModelArtifact; 3] {
     match use_case {
         ModelUseCase::Writing => &WRITING_MODELS,
         ModelUseCase::Code => &CODE_MODELS,

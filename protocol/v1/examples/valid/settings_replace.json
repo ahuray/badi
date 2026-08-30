@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "id": "ctl:settings-replace",
+  "type": "settings.replace",
+  "mono_ms": 1001,
+  "payload": {
+    "expected_revision": 0,
+    "document": {
+      "schema": "badi.settings.v1",
+      "revision": 1,
+      "paused": false,
+      "subjects": []
+    }
+  }
+}

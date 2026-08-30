@@ -10,6 +10,7 @@ const BEFORE_LIMIT = 512;
 const AFTER_LIMIT = 128;
 const SUGGESTION_SCALAR_LIMIT = 64;
 const SUGGESTION_WORD_LIMIT = 8;
+const LANGUAGE_TAG_LIMIT = 35;
 const WORD_SEGMENTER = new Intl.Segmenter("und", { granularity: "word" });
 const GRAPHEME_SEGMENTER = new Intl.Segmenter("und", { granularity: "grapheme" });
 
@@ -69,9 +70,18 @@ export function captureContext(input: ContextCaptureInput): SuggestionContext {
   }
   const before = lastScalars(beforeSlice, BEFORE_LIMIT);
   const after = firstScalars(afterSlice, AFTER_LIMIT);
+  const language = captureLanguage(field);
   const identity = stableIdentity(field);
   const fingerprint = hash(
-    [input.fingerprintSalt, identity, before, after, selection.start, selection.end].join(
+    [
+      input.fingerprintSalt,
+      identity,
+      before,
+      after,
+      language ?? "",
+      selection.start,
+      selection.end,
+    ].join(
       "\u001f",
     ),
   );
@@ -80,6 +90,7 @@ export function captureContext(input: ContextCaptureInput): SuggestionContext {
     fingerprint,
     before,
     after,
+    ...(language === undefined ? {} : { language }),
     selection,
     field: {
       purpose,
@@ -92,6 +103,33 @@ export function captureContext(input: ContextCaptureInput): SuggestionContext {
     activation: input.activation,
     explicit: input.explicit,
   };
+}
+
+function captureLanguage(field: EditableField): string | undefined {
+  // Page language is untrusted quality metadata, never an authority signal.
+  // Resolve only the nearest declared BCP 47 tag; do not inspect page prose.
+  const languageElement = field.closest("[lang]");
+  const declared =
+    languageElement?.getAttribute("lang") ??
+    field.ownerDocument.documentElement.getAttribute("lang");
+  const candidate = declared?.trim();
+  if (
+    candidate === undefined ||
+    candidate.length < 2 ||
+    candidate.length > LANGUAGE_TAG_LIMIT ||
+    !/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/u.test(candidate)
+  ) {
+    return undefined;
+  }
+
+  try {
+    const [canonical] = Intl.getCanonicalLocales(candidate);
+    return canonical !== undefined && canonical.length <= LANGUAGE_TAG_LIMIT
+      ? canonical
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function captureContextOrNull(
@@ -126,28 +164,27 @@ export function sanitizeSuggestion(value: string): string | null {
   }
 
   for (const character of value) {
-    if (isForbiddenOutputScalar(character)) return null;
+    if (
+      isForbiddenOutputScalar(character) ||
+      (/\p{White_Space}/u.test(character) && character !== " ")
+    ) {
+      return null;
+    }
   }
 
-  let output = "";
-  let scalarCount = 0;
   let wordCount = 0;
   for (const segment of WORD_SEGMENTER.segment(value)) {
-    const boundaryWords = segment.isWordLike ? 1 : 0;
-    if (boundaryWords > 0 && wordCount + boundaryWords > SUGGESTION_WORD_LIMIT) {
-      break;
-    }
-    for (const character of segment.segment) {
-      if (scalarCount === SUGGESTION_SCALAR_LIMIT) break;
-      output += character;
-      scalarCount += 1;
-    }
-    wordCount += boundaryWords;
-    if (scalarCount === SUGGESTION_SCALAR_LIMIT) break;
+    if (segment.isWordLike) wordCount += 1;
+    if (wordCount > SUGGESTION_WORD_LIMIT) return null;
   }
-
-  output = output.replace(/\p{White_Space}+$/u, "");
-  return output.length === 0 ? null : output;
+  if (
+    Array.from(value).length > SUGGESTION_SCALAR_LIMIT ||
+    /\p{White_Space}$/u.test(value) ||
+    value.includes("  ")
+  ) {
+    return null;
+  }
+  return value;
 }
 
 export function nextSuggestionWord(value: string): string {

@@ -1,0 +1,9 @@
+singleton BadiTheme 1.0 BadiTheme.qml
+ActionButton 1.0 ActionButton.qml
+BadiClient 1.0 BadiClient.qml
+ControlCenter 1.0 ControlCenter.qml
+InfoRow 1.0 InfoRow.qml
+SectionCard 1.0 SectionCard.qml
+SettingRow 1.0 SettingRow.qml
+StatusPill 1.0 StatusPill.qml
+ToggleControl 1.0 ToggleControl.qml

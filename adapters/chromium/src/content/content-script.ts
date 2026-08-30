@@ -2,48 +2,130 @@ import { isContentControlMessage } from "../shared/runtime-messages";
 import { isExpectedFixtureDocument } from "../shared/fixture-document";
 import { FieldController } from "./field-controller";
 import { RuntimeSuggestionTransport } from "./runtime-transport";
+import type { BootstrapState, TargetPolicy } from "../shared/model";
 
 if (isExpectedFixtureDocument(document)) {
   const transport = new RuntimeSuggestionTransport();
   // The route and every later field request share this document-scoped ID.
   const sessionId = crypto.randomUUID();
   let controller: FieldController | null = null;
-  let queuedPaused: boolean | null = null;
+  let currentPaused = true;
+  let currentPolicy: TargetPolicy | null = null;
   let bootstrapping = false;
   let bootstrapAttempts = 0;
-  let completedBootstrapPaused: boolean | null = null;
+  let bootstrapCompleted = false;
+  let bootstrapGeneration = 0;
+  let completedBootstrap: BootstrapState | null = null;
+  let authorityFenced = false;
+  let lifetimePort: chrome.runtime.Port | null = null;
+  let lifetimeReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let lifetimeReconnectAttempts = 0;
   const MAX_BOOTSTRAP_ATTEMPTS = 3;
+  const MAX_LIFETIME_RECONNECT_ATTEMPTS = 5;
 
-  chrome.runtime.onMessage.addListener((message: unknown) => {
+  const policyAllowsController = (): boolean =>
+    !authorityFenced &&
+    !currentPaused &&
+    currentPolicy?.paused === false &&
+    currentPolicy.activation === "always" &&
+    currentPolicy.contextAllowed &&
+    currentPolicy.displayAllowed &&
+    currentPolicy.suggestionsAllowed;
+
+  const disposeController = (invalidateTransport = false): void => {
+    if (controller === null) return;
+    controller.pause();
+    if (invalidateTransport) controller.invalidateTransport();
+    controller.dispose();
+    controller = null;
+  };
+
+  const applyAvailability = (): void => {
+    if (controller === null) return;
+    if (policyAllowsController()) {
+      controller.resume();
+      return;
+    }
+    disposeController();
+    installRecoveryListeners();
+  };
+
+  const fenceAuthority = (clearPolicy: boolean, invalidateTransport = false): void => {
+    bootstrapGeneration += 1;
+    bootstrapCompleted = false;
+    completedBootstrap = null;
+    bootstrapping = false;
+    bootstrapAttempts = 0;
+    authorityFenced = true;
+    currentPaused = true;
+    if (clearPolicy) currentPolicy = null;
+    disposeController(invalidateTransport);
+    installRecoveryListeners();
+  };
+
+  chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+    const respond = typeof sendResponse === "function" ? sendResponse : () => undefined;
     if (!isContentControlMessage(message)) {
-      return;
+      return false;
     }
-    if (controller === null) {
-      if (message.kind === "badi.control.v1" && message.action === "pause") {
-        queuedPaused = true;
-      } else if (message.kind === "badi.control.v1" && message.action === "resume") {
-        queuedPaused = false;
+    if (message.kind === "badi.policy.v1") {
+      const accepted =
+        currentPolicy === null ||
+        message.policy.authorityEpoch >= currentPolicy.authorityEpoch;
+      if (accepted) {
+        currentPolicy = message.policy;
+        currentPaused = message.policy.paused;
+        authorityFenced = false;
+        bootstrapCompleted = true;
+        completedBootstrap = null;
+        applyAvailability();
+        startControllerFromBootstrap();
       }
-      return;
+      respond({
+        applied: accepted,
+        authorityEpoch: currentPolicy?.authorityEpoch ?? -1,
+      });
+      return false;
     }
+    if (message.kind === "badi.control.v1" && message.action === "pause") {
+      // A pause is the first half of an authority refresh. Invalidate every
+      // older bootstrap result and wait for the versioned policy that follows.
+      fenceAuthority(false);
+      respond({ applied: true, paused: true });
+      return false;
+    }
+    if (message.kind === "badi.control.v1" && message.action === "resume") {
+      // An unversioned control message cannot clear an authority fence.
+      if (!authorityFenced) {
+        currentPaused = false;
+        applyAvailability();
+        startControllerFromBootstrap();
+      }
+      respond({ applied: true, paused: !policyAllowsController() });
+      return false;
+    }
+    if (message.kind === "badi.transport.disconnected.v1") {
+      fenceAuthority(true, true);
+      tryBootstrap();
+      return false;
+    }
+    if (controller === null) return false;
     if (message.kind === "badi.commit.revoke.v1") {
       controller.revokeCommit(message.address);
-      return;
+      return false;
     }
     if (message.kind === "badi.suggestion.clear.v1") {
       controller.clearFromBroker(message.event);
-      return;
-    }
-    if (message.kind === "badi.transport.disconnected.v1") {
-      controller.invalidateTransport();
-      return;
+      return false;
     }
     switch (message.action) {
       case "pause":
-        controller.pause();
+        currentPaused = true;
+        applyAvailability();
         break;
       case "resume":
-        controller.resume();
+        currentPaused = false;
+        applyAvailability();
         break;
       case "accept_word":
         controller.acceptWord();
@@ -55,6 +137,7 @@ if (isExpectedFixtureDocument(document)) {
         controller.dismiss();
         break;
     }
+    return false;
   });
 
   const navigation = (window as Window & { navigation?: EventTarget }).navigation ?? null;
@@ -71,19 +154,31 @@ if (isExpectedFixtureDocument(document)) {
   const startControllerFromBootstrap = (): void => {
     if (
       controller !== null ||
-      completedBootstrapPaused === null ||
+      (!bootstrapCompleted && completedBootstrap === null) ||
       !isExpectedFixtureDocument(document)
     ) {
       return;
     }
-    const bootstrapPaused = completedBootstrapPaused;
-    completedBootstrapPaused = null;
+    if (completedBootstrap !== null) {
+      const bootstrap = completedBootstrap;
+      completedBootstrap = null;
+      bootstrapCompleted = true;
+      if (
+        currentPolicy === null ||
+        bootstrap.policy.authorityEpoch >= currentPolicy.authorityEpoch
+      ) {
+        currentPolicy = bootstrap.policy;
+        currentPaused = bootstrap.paused;
+        authorityFenced = false;
+      }
+    }
+    if (!policyAllowsController()) return;
     controller = new FieldController({
       transport,
       sessionId,
       isCurrentDocument: () => isExpectedFixtureDocument(document),
     });
-    if (queuedPaused ?? bootstrapPaused) controller.pause();
+    applyAvailability();
     controller.start();
     removeRecoveryListeners();
   };
@@ -99,13 +194,22 @@ if (isExpectedFixtureDocument(document)) {
     }
     bootstrapping = true;
     bootstrapAttempts += 1;
+    const generation = bootstrapGeneration;
     void transport.bootstrap(sessionId).then(
-      (bootstrapPaused) => {
+      (bootstrap) => {
+        if (generation !== bootstrapGeneration) return;
         bootstrapping = false;
-        completedBootstrapPaused = bootstrapPaused;
+        lifetimeReconnectAttempts = 0;
+        if (lifetimeReconnectTimer !== null) {
+          clearTimeout(lifetimeReconnectTimer);
+          lifetimeReconnectTimer = null;
+        }
+        reconnectPolicyLifetime();
+        completedBootstrap = bootstrap;
         startControllerFromBootstrap();
       },
       () => {
+        if (generation !== bootstrapGeneration) return;
         bootstrapping = false;
         if (bootstrapAttempts >= MAX_BOOTSTRAP_ATTEMPTS) removeRecoveryListeners();
       },
@@ -122,15 +226,51 @@ if (isExpectedFixtureDocument(document)) {
     ) {
       return;
     }
+    reconnectPolicyLifetime();
     startControllerFromBootstrap();
     tryBootstrap();
   }
 
-  window.addEventListener("focus", recoverBootstrap, true);
-  window.addEventListener("pageshow", recoverBootstrap, true);
-  window.addEventListener("popstate", recoverBootstrap, true);
-  window.addEventListener("hashchange", recoverBootstrap, true);
-  document.addEventListener("visibilitychange", recoverBootstrap, true);
-  navigation?.addEventListener("currententrychange", recoverBootstrap);
+  const installRecoveryListeners = (): void => {
+    window.addEventListener("focus", recoverBootstrap, true);
+    window.addEventListener("pageshow", recoverBootstrap, true);
+    window.addEventListener("popstate", recoverBootstrap, true);
+    window.addEventListener("hashchange", recoverBootstrap, true);
+    document.addEventListener("visibilitychange", recoverBootstrap, true);
+    navigation?.addEventListener("currententrychange", recoverBootstrap);
+  };
+
+  const reconnectPolicyLifetime = (): void => {
+    if (
+      lifetimePort !== null ||
+      lifetimeReconnectTimer !== null ||
+      lifetimeReconnectAttempts >= MAX_LIFETIME_RECONNECT_ATTEMPTS ||
+      !isExpectedFixtureDocument(document)
+    ) {
+      return;
+    }
+    lifetimeReconnectAttempts += 1;
+    const port = chrome.runtime.connect({ name: "badi-policy-lifetime-v1" });
+    lifetimePort = port;
+    port.onDisconnect.addListener(() => {
+      if (lifetimePort !== port) return;
+      lifetimePort = null;
+      fenceAuthority(true, true);
+      tryBootstrap();
+      if (
+        lifetimeReconnectAttempts < MAX_LIFETIME_RECONNECT_ATTEMPTS &&
+        isExpectedFixtureDocument(document)
+      ) {
+        const delayMs = Math.min(2_000, 100 * 2 ** (lifetimeReconnectAttempts - 1));
+        lifetimeReconnectTimer = setTimeout(() => {
+          lifetimeReconnectTimer = null;
+          reconnectPolicyLifetime();
+        }, delayMs);
+      }
+    });
+  };
+
+  installRecoveryListeners();
+  reconnectPolicyLifetime();
   tryBootstrap();
 }

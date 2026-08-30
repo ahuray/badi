@@ -1,6 +1,7 @@
 import { NativeBrokerClient } from "./native-client";
 import {
   EXPECTED_FIXTURE_ORIGIN,
+  EXPECTED_FIXTURE_URL,
   isTrustedFixtureBootstrapSender,
   isTrustedFixtureSender,
 } from "./fixture-boundary";
@@ -20,6 +21,23 @@ const broker = new NativeBrokerClient({
 });
 
 const sessionRoutes = new SessionRouteRegistry();
+const POLICY_LIFETIME_PORT = "badi-policy-lifetime-v1";
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (
+    port.name !== POLICY_LIFETIME_PORT ||
+    port.sender === undefined ||
+    !isTrustedFixtureBootstrapSender(port.sender, chrome.runtime.id)
+  ) {
+    port.disconnect();
+    return;
+  }
+  const sender = port.sender;
+  port.onDisconnect.addListener(() => {
+    const sessionIds = sessionRoutes.deleteDocument(sender);
+    void Promise.allSettled(sessionIds.map((sessionId) => broker.closeSession(sessionId)));
+  });
+});
 
 function sendToRoute(
   route: TrustedSessionRoute,
@@ -44,6 +62,35 @@ async function broadcastToRegisteredRoutes(
   await Promise.allSettled(
     sessionRoutes.snapshot().map((route) => sendToRoute(route, message)),
   );
+}
+
+function pauseWasApplied(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Object.keys(value).length === 2 &&
+    "applied" in value &&
+    value.applied === true &&
+    "paused" in value &&
+    value.paused === true
+  );
+}
+
+function policyWasApplied(value: unknown, authorityEpoch: number): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Object.keys(value).length === 2 &&
+    "applied" in value &&
+    value.applied === true &&
+    "authorityEpoch" in value &&
+    value.authorityEpoch === authorityEpoch
+  );
+}
+
+async function retireRoute(sessionId: string, route: TrustedSessionRoute): Promise<void> {
+  if (!sessionRoutes.delete(sessionId, route)) return;
+  await broker.closeSession(sessionId).catch(() => undefined);
 }
 
 broker.setCommitRevocationHandler((request) => {
@@ -75,6 +122,47 @@ broker.setDisconnectHandler(() => {
   }).catch(() => undefined);
 });
 
+broker.setAuthorityChangedHandler(async () => {
+  const entries = sessionRoutes.entries();
+  const pauses = await Promise.allSettled(
+    entries.map(({ route }) =>
+      sendToRoute(route, { kind: "badi.control.v1", action: "pause" }),
+    ),
+  );
+  const live = entries.filter((_entry, index) => {
+    const delivery = pauses[index];
+    return delivery?.status === "fulfilled" && pauseWasApplied(delivery.value);
+  });
+  await Promise.allSettled(
+    entries
+      .filter((_entry, index) => !live.includes(_entry))
+      .map(({ sessionId, route }) => retireRoute(sessionId, route)),
+  );
+  const refreshed = await Promise.all(
+    live.map(async ({ sessionId, route }) => ({
+      sessionId,
+      route,
+      policy: await broker.resolvePolicy(sessionId, route.origin),
+    })),
+  );
+  const deliveries = await Promise.allSettled(
+    refreshed.map(({ route, policy }) =>
+      sendToRoute(route, { kind: "badi.policy.v1", policy }),
+    ),
+  );
+  await Promise.allSettled(
+    refreshed
+      .filter(({ policy }, index) => {
+        const delivery = deliveries[index];
+        return !(
+          delivery?.status === "fulfilled" &&
+          policyWasApplied(delivery.value, policy.authorityEpoch)
+        );
+      })
+      .map(({ sessionId, route }) => retireRoute(sessionId, route)),
+  );
+});
+
 async function handle(
   command: RuntimeCommand,
   sender: chrome.runtime.MessageSender,
@@ -84,11 +172,15 @@ async function handle(
       if (!sessionRoutes.matches(command.sessionId, sender)) {
         return { ok: false, error: "Bootstrap session route was displaced" };
       }
-      const paused = await broker.bootstrap();
+      const route = sessionRoutes.get(command.sessionId);
+      if (route === null) {
+        return { ok: false, error: "Bootstrap route is unavailable" };
+      }
+      const bootstrap = await broker.bootstrap(command.sessionId, route.origin);
       if (!sessionRoutes.matches(command.sessionId, sender)) {
         return { ok: false, error: "Bootstrap session route was displaced" };
       }
-      return { ok: true, paused };
+      return { ok: true, paused: bootstrap.paused, policy: bootstrap.policy };
     }
     case "badi.suggest.v1": {
       if (command.request.origin !== EXPECTED_FIXTURE_ORIGIN) {
@@ -131,14 +223,25 @@ async function handle(
   }
 }
 
-async function senderWindowIsFocused(
+async function senderDocumentIsCurrentlyActive(
   sender: chrome.runtime.MessageSender,
 ): Promise<boolean> {
+  const tabId = sender.tab?.id;
   const windowId = sender.tab?.windowId;
-  if (typeof windowId !== "number") return false;
+  if (typeof tabId !== "number" || typeof windowId !== "number") return false;
   try {
-    const window = await chrome.windows.get(windowId);
-    return window.focused === true;
+    const [tab, window] = await Promise.all([
+      chrome.tabs.get(tabId),
+      chrome.windows.get(windowId),
+    ]);
+    return (
+      tab.active === true &&
+      tab.incognito === false &&
+      tab.discarded === false &&
+      tab.frozen === false &&
+      tab.url === EXPECTED_FIXTURE_URL &&
+      window.focused === true
+    );
   } catch {
     return false;
   }
@@ -179,10 +282,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   }
   let displacedSessionIds: readonly string[] = [];
   const routeSessionId = commandSessionId(message);
-  if (
-    message.kind === "badi.bootstrap.v1" ||
-    (!closingBoundSession && !sessionRoutes.matches(routeSessionId, sender))
-  ) {
+  if (message.kind === "badi.bootstrap.v1") {
     // MV3 may restart this worker while its content script remains alive.
     // Re-register only after the ordinary command passed the stricter active
     // exact-document sender check above; the broker still independently
@@ -198,12 +298,13 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     displacedSessionIds = subscription.displacedSessionIds;
   }
   if (
-    message.kind === "badi.suggest.v1" &&
-    !sessionRoutes.matches(message.request.sessionId, sender)
+    !contentFreeBootstrap &&
+    !closingBoundSession &&
+    !sessionRoutes.matches(routeSessionId, sender)
   ) {
     sendResponse({
       ok: false,
-      error: "Suggestion session is bound to another document",
+      error: "Badi policy bootstrap is required for this document",
     } satisfies RuntimeReply);
     return false;
   }
@@ -212,7 +313,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   ).then(() =>
     closingBoundSession || contentFreeBootstrap
       ? true
-      : senderWindowIsFocused(sender),
+      : senderDocumentIsCurrentlyActive(sender),
   ).then(
     (focused) =>
       focused
@@ -238,8 +339,6 @@ chrome.commands.onCommand.addListener((command) => {
     return;
   }
   void (async () => {
-    const paused = await broker.globalControl("pause_toggle");
-    const action = paused ? "pause" : "resume";
-    await broadcastToRegisteredRoutes({ kind: "badi.control.v1", action });
+    await broker.globalControl("pause_toggle");
   })().catch(() => undefined);
 });

@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:badi:schema:overview:v1",
+  "title": "Badi control-plane overview v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "broker", "settings", "privacy", "support", "models"],
+  "properties": {
+    "schema": { "const": "badi.overview.v1" },
+    "broker": { "$ref": "#/$defs/broker" },
+    "settings": { "$ref": "urn:badi:schema:settings:v1" },
+    "privacy": { "$ref": "#/$defs/privacy" },
+    "support": { "$ref": "#/$defs/support" },
+    "models": { "$ref": "#/$defs/models" }
+  },
+  "$defs": {
+    "counter": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "broker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reachable",
+        "provider",
+        "paused",
+        "authority_epoch",
+        "settings_revision",
+        "control_plane_degraded",
+        "sessions",
+        "socket_mode",
+        "max_frame_bytes"
+      ],
+      "properties": {
+        "reachable": { "const": true },
+        "provider": { "enum": ["phrase_v1", "local_model"] },
+        "paused": { "type": "boolean" },
+        "authority_epoch": { "$ref": "#/$defs/counter" },
+        "settings_revision": { "$ref": "#/$defs/counter" },
+        "control_plane_degraded": { "type": "boolean" },
+        "sessions": { "$ref": "#/$defs/counter" },
+        "socket_mode": { "const": "0600" },
+        "max_frame_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "max_before_chars",
+        "max_after_chars",
+        "clipboard",
+        "screen",
+        "network",
+        "adaptive_writing_memory",
+        "outcome_aggregates",
+        "aggregate_semantics",
+        "stored_metadata",
+        "max_retention_days",
+        "memory_records",
+        "memory_bytes",
+        "memory_store_available",
+        "memory_command_available",
+        "memory_integrity",
+        "memory_write_failures",
+        "memory_dropped_signals",
+        "learning_available"
+      ],
+      "properties": {
+        "context": { "const": "focused_supported_field_only" },
+        "max_before_chars": { "type": "integer", "minimum": 0 },
+        "max_after_chars": { "type": "integer", "minimum": 0 },
+        "clipboard": { "const": false },
+        "screen": { "const": false },
+        "network": { "const": false },
+        "adaptive_writing_memory": { "const": "not_implemented" },
+        "outcome_aggregates": {
+          "enum": ["disabled", "memory_only", "persisted"]
+        },
+        "aggregate_semantics": {
+          "const": "broker_emitted_and_commit_requested_not_delivery_confirmed"
+        },
+        "stored_metadata": { "const": "origin_provider_utc_day_counts" },
+        "max_retention_days": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 90
+        },
+        "memory_records": {
+          "anyOf": [{ "$ref": "#/$defs/counter" }, { "type": "null" }]
+        },
+        "memory_bytes": {
+          "anyOf": [{ "$ref": "#/$defs/counter" }, { "type": "null" }]
+        },
+        "memory_store_available": { "type": "boolean" },
+        "memory_command_available": { "type": "boolean" },
+        "memory_integrity": {
+          "enum": ["healthy", "degraded_since_start", "unavailable"]
+        },
+        "memory_write_failures": { "$ref": "#/$defs/counter" },
+        "memory_dropped_signals": { "$ref": "#/$defs/counter" },
+        "learning_available": { "const": false }
+      }
+    },
+    "support": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "browser_permission",
+        "badi_policy",
+        "scope",
+        "evidence_class",
+        "evidence_commit",
+        "adapters"
+      ],
+      "properties": {
+        "browser_permission": { "const": "static_exact_document" },
+        "badi_policy": { "const": "exact_origin_subjects" },
+        "scope": { "const": "http://localhost:4173/chromium.html" },
+        "evidence_class": { "const": "historical_not_current_tree_proof" },
+        "evidence_commit": { "type": ["string", "null"] },
+        "adapters": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "chromium_fixture" },
+            { "const": "obsidian_unsupported" },
+            { "const": "terminal_unsupported" }
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["writing"],
+      "properties": {
+        "writing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["advice", "configured", "installed"],
+          "properties": {
+            "advice": { "$ref": "urn:badi:schema:model-advice:v2" },
+            "configured": { "const": false },
+            "installed": { "const": false }
+          }
+        }
+      }
+    }
+  }
+}

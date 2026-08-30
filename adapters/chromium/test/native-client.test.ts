@@ -94,12 +94,55 @@ function helloAck(paused = false): unknown {
         "commit.dispatched_unverified",
         "control",
         "health",
+        "policy",
       ],
       max_frame_bytes: 65_536,
       max_before_chars: 512,
       max_after_chars: 128,
       max_suggestion_chars: 64,
       max_suggestion_words: 8,
+      paused,
+    },
+  };
+}
+
+function policyStatus(
+  id: string,
+  paused = false,
+  authorityEpoch = 4,
+  settingsRevision = 2,
+): unknown {
+  return {
+    v: 1,
+    id,
+    type: "policy.status",
+    mono_ms: 1_001,
+    payload: {
+      authority_epoch: authorityEpoch,
+      settings_revision: settingsRevision,
+      paused,
+      activation: paused ? "never" : "always",
+      context_allowed: !paused,
+      display_allowed: !paused,
+      suggestions_allowed: !paused,
+      learning_allowed: false,
+      reason: paused ? "global_disabled" : "matched_rule",
+    },
+  };
+}
+
+function authorityChanged(
+  authorityEpoch: number,
+  paused = false,
+  settingsRevision = 2,
+): unknown {
+  return {
+    v: 1,
+    type: "authority.changed",
+    mono_ms: 1_002,
+    payload: {
+      authority_epoch: authorityEpoch,
+      settings_revision: settingsRevision,
       paused,
     },
   };
@@ -140,6 +183,221 @@ describe("NativeBrokerClient", () => {
 
     await expect(pending).rejects.toThrow("Broker is paused");
     expect(port.posted).toEqual([expect.objectContaining({ type: "hello" })]);
+    client.dispose();
+  });
+
+  it("resolves trusted document policy before returning bootstrap state", async () => {
+    const port = new FakeNativePort();
+    const client = new NativeBrokerClient(
+      { connectNative: () => port },
+      { now: () => 1_000, handshakeTimeoutMs: 10_000 },
+    );
+    const pending = client.bootstrap(request().sessionId, request().origin);
+    port.onMessage.emit(helloAck());
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const query = port.posted.find(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        "type" in message &&
+        message.type === "policy.query",
+    );
+    if (
+      typeof query !== "object" ||
+      query === null ||
+      !("id" in query) ||
+      typeof query.id !== "string"
+    ) {
+      throw new Error("Policy query missing");
+    }
+    expect(query).toMatchObject({
+      payload: {
+        target: {
+          kind: "browser",
+          app_id: "chromium",
+          target_id: request().sessionId,
+          origin: { scheme: "https", host: "fixture.test", port: 8443 },
+        },
+      },
+    });
+    port.onMessage.emit(policyStatus(query.id));
+    await expect(pending).resolves.toMatchObject({
+      paused: false,
+      policy: { authorityEpoch: 4, reason: "matched_rule" },
+    });
+    client.dispose();
+  });
+
+  it("handles an authority event even when its policy response arrived first", async () => {
+    const port = new FakeNativePort();
+    const client = new NativeBrokerClient(
+      { connectNative: () => port },
+      { now: () => 1_000, handshakeTimeoutMs: 10_000 },
+    );
+    const ready = client.bootstrap();
+    port.onMessage.emit(helloAck());
+    await ready;
+
+    const earlyPolicy = client.resolvePolicy(request().sessionId, request().origin);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const query = [...port.posted].reverse().find(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        "type" in message &&
+        message.type === "policy.query",
+    );
+    if (
+      typeof query !== "object" ||
+      query === null ||
+      !("id" in query) ||
+      typeof query.id !== "string"
+    ) {
+      throw new Error("Policy query missing");
+    }
+    port.onMessage.emit(policyStatus(query.id, true, 5, 3));
+    await expect(earlyPolicy).resolves.toMatchObject({ authorityEpoch: 5 });
+
+    let finishRefresh!: () => void;
+    const refresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    client.setAuthorityChangedHandler(() => refresh);
+    port.onMessage.emit({
+      v: 1,
+      type: "authority.changed",
+      mono_ms: 1_002,
+      payload: { authority_epoch: 5, settings_revision: 3, paused: true },
+    });
+    await Promise.resolve();
+    expect(
+      port.posted.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "type" in message &&
+          message.type === "authority.ack",
+      ),
+    ).toBe(false);
+
+    finishRefresh();
+    await refresh;
+    await Promise.resolve();
+    expect(port.posted.at(-1)).toMatchObject({
+      type: "authority.ack",
+      payload: { authority_epoch: 5 },
+    });
+    client.dispose();
+  });
+
+  it("does not dispatch context until queued authority handling is acknowledged", async () => {
+    const port = new FakeNativePort();
+    const client = new NativeBrokerClient(
+      { connectNative: () => port },
+      { now: () => 1_000, handshakeTimeoutMs: 10_000 },
+    );
+    const ready = client.bootstrap();
+    port.onMessage.emit(helloAck());
+    await ready;
+
+    let finishAuthority!: () => void;
+    const authorityGate = new Promise<void>((resolve) => {
+      finishAuthority = resolve;
+    });
+    client.setAuthorityChangedHandler(() => authorityGate);
+    port.onMessage.emit(authorityChanged(5));
+
+    const suggestion = client.requestSuggestion(request());
+    await Promise.resolve();
+    expect(
+      port.posted.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "type" in message &&
+          message.type === "context.changed",
+      ),
+    ).toBe(false);
+
+    finishAuthority();
+    await authorityGate;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const types = port.posted.map((message) =>
+      typeof message === "object" && message !== null && "type" in message
+        ? message.type
+        : null,
+    );
+    expect(types.indexOf("authority.ack")).toBeGreaterThan(-1);
+    expect(types.indexOf("context.changed")).toBeGreaterThan(types.indexOf("authority.ack"));
+
+    client.dispose();
+    await expect(suggestion).rejects.toThrow("disposed");
+  });
+
+  it("accepts a fresh epoch after reconnect and never ACKs old authority on the new port", async () => {
+    const firstPort = new FakeNativePort();
+    const secondPort = new FakeNativePort();
+    const ports = [firstPort, secondPort];
+    const client = new NativeBrokerClient(
+      {
+        connectNative: () => {
+          const port = ports.shift();
+          if (port === undefined) throw new Error("Unexpected native reconnect");
+          return port;
+        },
+      },
+      { now: () => 1_000, handshakeTimeoutMs: 10_000 },
+    );
+    const firstReady = client.bootstrap();
+    firstPort.onMessage.emit(helloAck());
+    await firstReady;
+
+    let finishFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    let authorityCalls = 0;
+    client.setAuthorityChangedHandler(() => {
+      authorityCalls += 1;
+      return authorityCalls === 1 ? firstGate : Promise.resolve();
+    });
+    firstPort.onMessage.emit(authorityChanged(5, true, 3));
+    await Promise.resolve();
+    firstPort.onDisconnect.emit(firstPort);
+
+    const secondReady = client.bootstrap();
+    secondPort.onMessage.emit(helloAck());
+    await secondReady;
+    secondPort.onMessage.emit(authorityChanged(0, false, 3));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(secondPort.posted).toContainEqual(
+      expect.objectContaining({
+        type: "authority.ack",
+        payload: expect.objectContaining({ authority_epoch: 0 }),
+      }),
+    );
+
+    finishFirst();
+    await firstGate;
+    await Promise.resolve();
+    expect(
+      firstPort.posted.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "type" in message &&
+          message.type === "authority.ack",
+      ),
+    ).toBe(false);
+    expect(
+      secondPort.posted.filter(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "type" in message &&
+          message.type === "authority.ack",
+      ),
+    ).toHaveLength(1);
     client.dispose();
   });
 
@@ -187,6 +445,47 @@ describe("NativeBrokerClient", () => {
       const error = await rejected;
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toContain("suggestion operation timed out");
+      expect(vi.getTimerCount()).toBe(0);
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles a terminal suggestion clear without waiting for the operation timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = new FakeNativePort();
+      const client = new NativeBrokerClient(
+        { connectNative: () => port },
+        {
+          now: () => 1_000,
+          handshakeTimeoutMs: 10_000,
+          operationTimeoutMs: 3_000,
+        },
+      );
+      const ready = client.bootstrap();
+      port.onMessage.emit(helloAck());
+      await ready;
+
+      const pending = client.requestSuggestion(request());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(1);
+      port.onMessage.emit({
+        v: 1,
+        id: "request-1",
+        type: "suggestion.clear",
+        session_id: request().sessionId,
+        focus_epoch: 7,
+        revision: 9,
+        mono_ms: 1_001,
+        payload: {
+          fingerprint: "0123456789abcdef",
+          reason: "invalid_output",
+        },
+      });
+
+      await expect(pending).resolves.toMatchObject({ suggestion: null, suggestionId: null });
       expect(vi.getTimerCount()).toBe(0);
       client.dispose();
     } finally {

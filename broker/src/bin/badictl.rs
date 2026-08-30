@@ -5,19 +5,27 @@ use badi_broker::ipc::{
     default_socket_path, read_envelope, verify_peer_uid, verify_socket_metadata, write_envelope,
 };
 use badi_broker::metrics::MetricsSnapshot;
-use badi_broker::model_selection::{ModelUseCase, detect_hardware, recommend_model};
+use badi_broker::model_selection::{ModelAdvice, ModelUseCase, detect_hardware, recommend_model};
 use badi_broker::protocol::{
     ActiveLocator, AdapterDescriptor, AdapterKind, Capability, ControlAction, ControlResultPayload,
     ErrorPayload, GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
-    MessageType, PROTOCOL_VERSION, ProviderKind, ReasonCode, SessionControlRequestPayload,
-    WireEnvelope,
+    MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_SAFE_COUNTER, MemoryStatusPayload, MessageType,
+    PROTOCOL_VERSION, ProviderKind, ReasonCode, SessionControlRequestPayload,
+    SettingsReplacePayload, SettingsStatusPayload, WireEnvelope,
 };
+use badi_broker::settings::{PermissionDecision, RetentionPermission, SettingsV1};
 use serde::Serialize;
+use serde_json::Value;
 use tokio::net::UnixStream;
 
-const CLI_CAPABILITIES: [Capability; 2] = [Capability::Control, Capability::Health];
+const CLI_CAPABILITIES: [Capability; 3] = [
+    Capability::Control,
+    Capability::Health,
+    Capability::Settings,
+];
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
+const OVERVIEW_SNAPSHOT_ATTEMPTS: usize = 3;
 
 #[tokio::main]
 async fn main() {
@@ -54,6 +62,49 @@ async fn run() -> Result<(), CliError> {
             let status = request_health(&mut stream).await?;
             println!("{}", serde_json::to_string(&redact_health_status(&status))?);
         }
+        Command::Overview => {
+            let overview = request_coherent_overview(&mut stream).await?;
+            println!("{}", serde_json::to_string_pretty(&overview)?);
+        }
+        Command::SettingsShow => {
+            let status = request_settings(&mut stream).await?;
+            println!("{}", serde_json::to_string_pretty(&status.document)?);
+        }
+        Command::SettingsReplace {
+            expected_revision,
+            document,
+        } => {
+            let payload = SettingsReplacePayload {
+                expected_revision,
+                document,
+            };
+            let mut request = WireEnvelope::global(MessageType::SettingsReplace, 0, &payload)?;
+            let request_id = new_request_id();
+            request.id = Some(request_id.clone());
+            write_envelope(&mut stream, &request).await?;
+            let response =
+                read_correlated_response(&mut stream, &request_id, MessageType::SettingsStatus)
+                    .await?;
+            let status = validate_settings_response(&response, &request_id)?;
+            println!("{}", serde_json::to_string_pretty(&status.document)?);
+        }
+        Command::MemoryClear => {
+            let mut request =
+                WireEnvelope::global(MessageType::MemoryClear, 0, &serde_json::json!({}))?;
+            let request_id = new_request_id();
+            request.id = Some(request_id.clone());
+            write_envelope(&mut stream, &request).await?;
+            let response =
+                read_correlated_response(&mut stream, &request_id, MessageType::MemoryStatus)
+                    .await?;
+            let payload: MemoryStatusPayload = response
+                .decode_payload()
+                .map_err(|_| CliError::UnexpectedResponse)?;
+            payload
+                .validate()
+                .map_err(|_| CliError::UnexpectedResponse)?;
+            println!("{}", serde_json::to_string(&payload)?);
+        }
         Command::Global(action) => {
             let mut request = WireEnvelope::global(
                 MessageType::ControlRequest,
@@ -87,6 +138,9 @@ struct RedactedActiveStatus {
 struct RedactedHealthStatus<'a> {
     provider: ProviderKind,
     paused: bool,
+    authority_epoch: u64,
+    settings_revision: u64,
+    control_plane_degraded: bool,
     sessions: u64,
     socket_mode: &'a str,
     max_frame_bytes: usize,
@@ -94,10 +148,83 @@ struct RedactedHealthStatus<'a> {
     active: RedactedActiveStatus,
 }
 
+#[derive(Debug, Serialize)]
+struct Overview {
+    schema: &'static str,
+    broker: OverviewBroker,
+    settings: SettingsV1,
+    privacy: OverviewPrivacy,
+    support: OverviewSupport,
+    models: OverviewModels,
+}
+
+#[derive(Debug, Serialize)]
+struct OverviewBroker {
+    reachable: bool,
+    provider: ProviderKind,
+    paused: bool,
+    authority_epoch: u64,
+    settings_revision: u64,
+    control_plane_degraded: bool,
+    sessions: u64,
+    socket_mode: String,
+    max_frame_bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
+// These booleans are independent report facts in the versioned JSON contract.
+#[allow(clippy::struct_excessive_bools)]
+struct OverviewPrivacy {
+    context: &'static str,
+    max_before_chars: usize,
+    max_after_chars: usize,
+    clipboard: bool,
+    screen: bool,
+    network: bool,
+    adaptive_writing_memory: &'static str,
+    outcome_aggregates: &'static str,
+    aggregate_semantics: &'static str,
+    stored_metadata: &'static str,
+    max_retention_days: Option<u16>,
+    memory_records: Option<u64>,
+    memory_bytes: Option<u64>,
+    memory_store_available: bool,
+    memory_command_available: bool,
+    memory_integrity: &'static str,
+    memory_write_failures: u64,
+    memory_dropped_signals: u64,
+    learning_available: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct OverviewSupport {
+    browser_permission: &'static str,
+    badi_policy: &'static str,
+    scope: &'static str,
+    evidence_class: &'static str,
+    evidence_commit: Option<&'static str>,
+    adapters: [&'static str; 3],
+}
+
+#[derive(Debug, Serialize)]
+struct OverviewModels {
+    writing: OverviewModel,
+}
+
+#[derive(Debug, Serialize)]
+struct OverviewModel {
+    advice: ModelAdvice,
+    configured: bool,
+    installed: bool,
+}
+
 fn redact_health_status(status: &HealthStatusPayload) -> RedactedHealthStatus<'_> {
     RedactedHealthStatus {
         provider: status.provider,
         paused: status.paused,
+        authority_epoch: status.authority_epoch,
+        settings_revision: status.settings_revision,
+        control_plane_degraded: status.control_plane_degraded,
         sessions: status.sessions,
         socket_mode: &status.socket_mode,
         max_frame_bytes: status.max_frame_bytes,
@@ -110,6 +237,130 @@ fn redact_health_status(status: &HealthStatusPayload) -> RedactedHealthStatus<'_
                 .is_some_and(|active| active.suggestion_id.is_some()),
         },
     }
+}
+
+// Keeping assembly in one place makes the strict overview contract auditable.
+#[allow(clippy::too_many_lines)]
+fn build_overview(
+    health: HealthStatusPayload,
+    status: SettingsStatusPayload,
+) -> Result<Overview, CliError> {
+    let settings: SettingsV1 =
+        serde_json::from_value(status.document).map_err(|_| CliError::UnexpectedResponse)?;
+    settings
+        .validate()
+        .map_err(|_| CliError::UnexpectedResponse)?;
+    if health.settings_revision != settings.revision {
+        return Err(CliError::InconsistentOverview);
+    }
+    let max_retention_days = settings
+        .subjects
+        .iter()
+        .filter_map(|subject| match subject.permissions.retention {
+            RetentionPermission::None => None,
+            RetentionPermission::Bounded { days } => Some(days),
+        })
+        .max();
+    let persisted_aggregates = settings.subjects.iter().any(|subject| {
+        subject.permissions.learn == PermissionDecision::Allow
+            && matches!(
+                subject.permissions.retention,
+                RetentionPermission::Bounded { .. }
+            )
+    });
+    let memory_only_aggregates = !persisted_aggregates
+        && settings.subjects.iter().any(|subject| {
+            subject.permissions.learn == PermissionDecision::Allow
+                && matches!(subject.permissions.retention, RetentionPermission::None)
+        });
+    let recorder_integrity = if !status.personalization_store_available {
+        "unavailable"
+    } else if status.personalization_write_failures == 0
+        && status.personalization_dropped_signals == 0
+    {
+        "healthy"
+    } else {
+        "degraded_since_start"
+    };
+    let writing = recommend_model(detect_hardware(), ModelUseCase::Writing);
+    Ok(Overview {
+        schema: "badi.overview.v1",
+        broker: OverviewBroker {
+            reachable: true,
+            provider: health.provider,
+            paused: health.paused,
+            authority_epoch: health.authority_epoch,
+            settings_revision: health.settings_revision,
+            control_plane_degraded: health.control_plane_degraded,
+            sessions: health.sessions,
+            socket_mode: health.socket_mode,
+            max_frame_bytes: health.max_frame_bytes,
+        },
+        settings,
+        privacy: OverviewPrivacy {
+            context: "focused_supported_field_only",
+            max_before_chars: MAX_BEFORE_CHARS,
+            max_after_chars: MAX_AFTER_CHARS,
+            clipboard: false,
+            screen: false,
+            network: false,
+            adaptive_writing_memory: "not_implemented",
+            outcome_aggregates: if persisted_aggregates {
+                "persisted"
+            } else if memory_only_aggregates {
+                "memory_only"
+            } else {
+                "disabled"
+            },
+            aggregate_semantics: "broker_emitted_and_commit_requested_not_delivery_confirmed",
+            stored_metadata: "origin_provider_utc_day_counts",
+            max_retention_days,
+            memory_records: status
+                .personalization_store_available
+                .then_some(status.personalization_records),
+            memory_bytes: status
+                .personalization_store_available
+                .then_some(status.personalization_bytes),
+            memory_store_available: status.personalization_store_available,
+            memory_command_available: status.personalization_recorder_available,
+            memory_integrity: recorder_integrity,
+            memory_write_failures: status.personalization_write_failures,
+            memory_dropped_signals: status.personalization_dropped_signals,
+            learning_available: false,
+        },
+        support: OverviewSupport {
+            browser_permission: "static_exact_document",
+            badi_policy: "exact_origin_subjects",
+            scope: "http://localhost:4173/chromium.html",
+            evidence_class: "historical_not_current_tree_proof",
+            evidence_commit: None,
+            adapters: [
+                "chromium_fixture",
+                "obsidian_unsupported",
+                "terminal_unsupported",
+            ],
+        },
+        models: OverviewModels {
+            writing: OverviewModel {
+                advice: writing,
+                configured: false,
+                installed: false,
+            },
+        },
+    })
+}
+
+async fn request_coherent_overview(stream: &mut UnixStream) -> Result<Overview, CliError> {
+    for _ in 0..OVERVIEW_SNAPSHOT_ATTEMPTS {
+        let settings = request_settings(stream).await?;
+        let health = request_health(stream).await?;
+        match build_overview(health, settings) {
+            Ok(overview) => return Ok(overview),
+            Err(CliError::InconsistentOverview) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(CliError::InconsistentOverview)
 }
 
 async fn connect(path: &Path) -> Result<UnixStream, CliError> {
@@ -176,6 +427,35 @@ async fn request_health(stream: &mut UnixStream) -> Result<HealthStatusPayload, 
     validate_health_response(&response, &request_id)
 }
 
+async fn request_settings(stream: &mut UnixStream) -> Result<SettingsStatusPayload, CliError> {
+    let mut request = WireEnvelope::global(MessageType::SettingsGet, 0, &serde_json::json!({}))?;
+    let request_id = new_request_id();
+    request.id = Some(request_id.clone());
+    write_envelope(stream, &request).await?;
+    let response =
+        read_correlated_response(stream, &request_id, MessageType::SettingsStatus).await?;
+    validate_settings_response(&response, &request_id)
+}
+
+fn validate_settings_response(
+    response: &WireEnvelope,
+    request_id: &str,
+) -> Result<SettingsStatusPayload, CliError> {
+    validate_correlated_response(response, request_id, MessageType::SettingsStatus)?;
+    let payload: SettingsStatusPayload = response
+        .decode_payload()
+        .map_err(|_| CliError::UnexpectedResponse)?;
+    payload
+        .validate()
+        .map_err(|_| CliError::UnexpectedResponse)?;
+    let settings: SettingsV1 = serde_json::from_value(payload.document.clone())
+        .map_err(|_| CliError::UnexpectedResponse)?;
+    settings
+        .validate()
+        .map_err(|_| CliError::UnexpectedResponse)?;
+    Ok(payload)
+}
+
 fn addressed_control(
     action: ControlAction,
     active: ActiveLocator,
@@ -227,10 +507,29 @@ fn validate_correlated_response(
         return Err(CliError::UnexpectedResponse);
     }
     if response.message_type == MessageType::Error {
-        let _: ErrorPayload = response
+        let payload: ErrorPayload = response
             .decode_payload()
             .map_err(|_| CliError::UnexpectedResponse)?;
-        return Err(CliError::Rejected);
+        payload
+            .validate()
+            .map_err(|_| CliError::UnexpectedResponse)?;
+        let code = serde_json::to_value(payload.code)?
+            .as_str()
+            .ok_or(CliError::UnexpectedResponse)?
+            .to_owned();
+        if let (Some(settings_revision), Some(degraded)) =
+            (payload.settings_revision, payload.control_plane_degraded)
+        {
+            return Err(CliError::SettingsRejected {
+                code,
+                committed: payload
+                    .committed
+                    .map_or("unknown", |value| if value { "true" } else { "false" }),
+                settings_revision,
+                degraded,
+            });
+        }
+        return Err(CliError::Rejected(code));
     }
     if response.message_type != expected_type {
         return Err(CliError::UnexpectedResponse);
@@ -252,9 +551,8 @@ fn validate_control_response(
         || payload.reason != ReasonCode::Accepted
         || match expected_action {
             ControlAction::Pause => !payload.paused,
-            ControlAction::PauseToggle => false,
-            ControlAction::Resume
-            | ControlAction::Request
+            ControlAction::PauseToggle | ControlAction::Resume => false,
+            ControlAction::Request
             | ControlAction::AcceptWord
             | ControlAction::AcceptAll
             | ControlAction::Dismiss => payload.paused,
@@ -273,11 +571,9 @@ fn validate_health_response(
     let payload: HealthStatusPayload = response
         .decode_payload()
         .map_err(|_| CliError::UnexpectedResponse)?;
-    if payload.socket_mode != "0600"
-        || payload.max_frame_bytes != badi_broker::protocol::MAX_FRAME_BYTES
-    {
-        return Err(CliError::UnexpectedResponse);
-    }
+    payload
+        .validate()
+        .map_err(|_| CliError::UnexpectedResponse)?;
     Ok(payload)
 }
 
@@ -302,6 +598,7 @@ fn new_request_id() -> String {
 const CLI_USAGE: &str = "Usage: badictl [--socket ABSOLUTE] COMMAND\n\
 Local commands:\n  hardware [--json]       Inspect content-free hardware capabilities\n  models [USE] [--json]   Recommend pinned local models; USE is writing or code\n\
 Broker commands:\n  status [--json]  Show content-free broker status as JSON\n  request          Request a suggestion for the sole active session\n  accept-word      Accept the authorized first word-part\n  accept-all       Accept the authorized full suggestion\n  dismiss          Dismiss the current suggestion\n  pause [MODE]     MODE is on, off, or toggle (default)\n\
+  overview [--json]  Show broker, policy, privacy, and model readiness\n  settings show [--json]\n                    Show the strict badi.settings.v1 document\n  settings replace --if-revision N --json DOCUMENT\n                    Replace settings with compare-and-swap protection\n  memory clear      Clear local text-free origin/day interaction aggregates\n\
 Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n";
 
 fn parse_arguments<I>(arguments: I) -> Result<ParsedCommand, CliError>
@@ -365,6 +662,14 @@ where
             }
             Command::Status
         }
+        Some("overview") => {
+            if !json_only(&rest) {
+                return Err(CliError::Arguments);
+            }
+            Command::Overview
+        }
+        Some("settings") => parse_settings_command(&rest)?,
+        Some("memory") if rest == ["clear"] => Command::MemoryClear,
         Some("request") if rest.is_empty() => Command::Session(ControlAction::Request),
         Some("accept-word") if rest.is_empty() => Command::Session(ControlAction::AcceptWord),
         Some("accept-all") if rest.is_empty() => Command::Session(ControlAction::AcceptAll),
@@ -400,10 +705,48 @@ fn parse_model_use_case(arguments: &[String]) -> Result<ModelUseCase, CliError> 
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+fn parse_settings_command(arguments: &[String]) -> Result<Command, CliError> {
+    match arguments {
+        [command] if command == "show" => Ok(Command::SettingsShow),
+        [command, format] if command == "show" && format == "--json" => Ok(Command::SettingsShow),
+        [command, revision_flag, revision, json_flag, document]
+            if command == "replace"
+                && revision_flag == "--if-revision"
+                && json_flag == "--json" =>
+        {
+            let expected_revision = revision.parse::<u64>().map_err(|_| CliError::Arguments)?;
+            let document: Value =
+                serde_json::from_str(document).map_err(|_| CliError::Arguments)?;
+            let settings: SettingsV1 =
+                serde_json::from_value(document.clone()).map_err(|_| CliError::Arguments)?;
+            settings.validate().map_err(|_| CliError::Arguments)?;
+            let next_revision = expected_revision
+                .checked_add(1)
+                .filter(|revision| *revision <= MAX_SAFE_COUNTER)
+                .ok_or(CliError::Arguments)?;
+            if settings.revision != next_revision {
+                return Err(CliError::Arguments);
+            }
+            Ok(Command::SettingsReplace {
+                expected_revision,
+                document,
+            })
+        }
+        _ => Err(CliError::Arguments),
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum Command {
     Global(ControlAction),
+    MemoryClear,
+    Overview,
     Session(ControlAction),
+    SettingsReplace {
+        expected_revision: u64,
+        document: Value,
+    },
+    SettingsShow,
     Status,
 }
 
@@ -435,18 +778,29 @@ enum CliError {
     Handshake,
     #[error("io")]
     Io(#[from] std::io::Error),
+    #[error("inconsistent_overview")]
+    InconsistentOverview,
     #[error("no_active_session")]
     NoActiveSession,
     #[error("no_suggestion")]
     NoSuggestion,
     #[error("protocol")]
     Protocol(#[from] badi_broker::protocol::ProtocolError),
-    #[error("rejected")]
-    Rejected,
+    #[error("rejected:{0}")]
+    Rejected(String),
     #[error("response_timeout")]
     ResponseTimeout,
     #[error("serde")]
     Serde(#[from] serde_json::Error),
+    #[error(
+        "settings_rejected:code={code}:committed={committed}:settings_revision={settings_revision}:degraded={degraded}"
+    )]
+    SettingsRejected {
+        code: String,
+        committed: &'static str,
+        settings_revision: u64,
+        degraded: bool,
+    },
     #[error("unexpected_response")]
     UnexpectedResponse,
 }
@@ -456,22 +810,122 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        CliError, Command, LocalCommand, ParsedCommand, parse_arguments, redact_health_status,
-        validate_control_response, validate_correlated_response, validate_handshake,
-        validate_health_response,
+        CLI_CAPABILITIES, CliError, Command, LocalCommand, ParsedCommand, build_overview,
+        parse_arguments, redact_health_status, validate_control_response,
+        validate_correlated_response, validate_handshake, validate_health_response,
     };
     use badi_broker::metrics::MetricsSnapshot;
     use badi_broker::model_selection::ModelUseCase;
     use badi_broker::protocol::{
-        ActiveLocator, Capability, ControlAction, ControlResultPayload, HealthStatusPayload,
-        HelloAckPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SUGGESTION_CHARS,
+        ActiveLocator, ControlAction, ControlResultPayload, HealthStatusPayload, HelloAckPayload,
+        MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SUGGESTION_CHARS,
         MAX_SUGGESTION_WORDS, MessageType, PROTOCOL_VERSION, ProviderKind, ReasonCode, SessionId,
-        WireEnvelope,
+        SettingsStatusPayload, WireEnvelope,
     };
+    use badi_broker::settings::SettingsV1;
+    use jsonschema::Resource;
     use serde_json::json;
 
     fn arguments(values: &[&str]) -> Vec<String> {
         values.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn overview_matches_its_versioned_schema() {
+        let health = HealthStatusPayload {
+            provider: ProviderKind::PhraseV1,
+            paused: true,
+            authority_epoch: 0,
+            settings_revision: 0,
+            control_plane_degraded: false,
+            sessions: 0,
+            socket_mode: "0600".to_owned(),
+            max_frame_bytes: MAX_FRAME_BYTES,
+            metrics: MetricsSnapshot::default(),
+            active: None,
+        };
+        let settings = SettingsV1::deny_by_default();
+        let status = SettingsStatusPayload {
+            document: serde_json::to_value(settings).expect("settings json"),
+            personalization_revision: 0,
+            personalization_records: 0,
+            personalization_bytes: 0,
+            personalization_store_available: true,
+            personalization_recorder_available: true,
+            personalization_write_failures: 0,
+            personalization_dropped_signals: 0,
+        };
+        let overview = serde_json::to_value(build_overview(health, status).expect("overview"))
+            .expect("overview json");
+        let schema_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schemas");
+        let read_schema = |name: &str| {
+            serde_json::from_slice::<serde_json::Value>(
+                &std::fs::read(schema_root.join(name)).expect("read schema"),
+            )
+            .expect("parse schema")
+        };
+        let hardware = read_schema("badi.hardware.v1.schema.json");
+        let advice = read_schema("badi.model-advice.v2.schema.json");
+        let settings = read_schema("badi.settings.v1.schema.json");
+        let schema = read_schema("badi.overview.v1.schema.json");
+        let validator = jsonschema::options()
+            .with_resource(
+                "urn:badi:schema:hardware:v1",
+                Resource::from_contents(hardware).expect("hardware resource"),
+            )
+            .with_resource(
+                "urn:badi:schema:model-advice:v2",
+                Resource::from_contents(advice).expect("advice resource"),
+            )
+            .with_resource(
+                "urn:badi:schema:settings:v1",
+                Resource::from_contents(settings).expect("settings resource"),
+            )
+            .build(&schema)
+            .expect("overview schema");
+        if let Err(error) = validator.validate(&overview) {
+            panic!("overview failed schema: {error}");
+        }
+    }
+
+    #[test]
+    fn overview_requires_one_settings_revision_but_allows_runtime_pause() {
+        let settings = SettingsV1 {
+            paused: false,
+            ..SettingsV1::deny_by_default()
+        };
+        let status = SettingsStatusPayload {
+            document: serde_json::to_value(&settings).expect("settings json"),
+            personalization_revision: 0,
+            personalization_records: 0,
+            personalization_bytes: 0,
+            personalization_store_available: true,
+            personalization_recorder_available: true,
+            personalization_write_failures: 0,
+            personalization_dropped_signals: 0,
+        };
+        let health = HealthStatusPayload {
+            provider: ProviderKind::PhraseV1,
+            paused: true,
+            authority_epoch: 3,
+            settings_revision: settings.revision,
+            control_plane_degraded: false,
+            sessions: 0,
+            socket_mode: "0600".to_owned(),
+            max_frame_bytes: MAX_FRAME_BYTES,
+            metrics: MetricsSnapshot::default(),
+            active: None,
+        };
+        assert!(build_overview(health.clone(), status.clone()).is_ok());
+
+        let mismatched = HealthStatusPayload {
+            settings_revision: settings.revision + 1,
+            ..health
+        };
+        assert!(matches!(
+            build_overview(mismatched, status),
+            Err(CliError::InconsistentOverview)
+        ));
     }
 
     fn hello_acknowledgment(request_id: &str) -> WireEnvelope {
@@ -481,7 +935,7 @@ mod tests {
             &HelloAckPayload {
                 selected_v: PROTOCOL_VERSION,
                 connection_id: "c:test-connection".to_owned(),
-                enabled_capabilities: vec![Capability::Control, Capability::Health],
+                enabled_capabilities: CLI_CAPABILITIES.to_vec(),
                 max_frame_bytes: MAX_FRAME_BYTES,
                 max_before_chars: MAX_BEFORE_CHARS,
                 max_after_chars: MAX_AFTER_CHARS,
@@ -500,10 +954,7 @@ mod tests {
         let payload = validate_handshake(&hello_acknowledgment("ctl:request"), "ctl:request")
             .expect("strict acknowledgment");
         assert!(payload.paused);
-        assert_eq!(
-            payload.enabled_capabilities,
-            vec![Capability::Control, Capability::Health]
-        );
+        assert_eq!(payload.enabled_capabilities, CLI_CAPABILITIES.to_vec());
     }
 
     #[test]
@@ -582,12 +1033,16 @@ mod tests {
             validate_control_response(&contradictory_pause, "ctl:request", ControlAction::Pause),
             Err(CliError::UnexpectedResponse)
         ));
-        let mut contradictory_resume = control_response("ctl:request", ControlAction::Resume);
-        contradictory_resume.payload["paused"] = json!(true);
-        assert!(matches!(
-            validate_control_response(&contradictory_resume, "ctl:request", ControlAction::Resume),
-            Err(CliError::UnexpectedResponse)
-        ));
+        let mut still_persistently_paused = control_response("ctl:request", ControlAction::Resume);
+        still_persistently_paused.payload["paused"] = json!(true);
+        assert!(
+            validate_control_response(
+                &still_persistently_paused,
+                "ctl:request",
+                ControlAction::Resume,
+            )
+            .is_ok()
+        );
 
         let mut rejected = control_response("ctl:request", ControlAction::Pause);
         rejected.payload["accepted"] = json!(false);
@@ -611,6 +1066,9 @@ mod tests {
             &HealthStatusPayload {
                 provider: ProviderKind::PhraseV1,
                 paused: false,
+                authority_epoch: 0,
+                settings_revision: 0,
+                control_plane_degraded: false,
                 sessions: 0,
                 socket_mode: "0600".to_owned(),
                 max_frame_bytes: MAX_FRAME_BYTES,
@@ -700,6 +1158,9 @@ mod tests {
         let status = HealthStatusPayload {
             provider: ProviderKind::PhraseV1,
             paused: false,
+            authority_epoch: 7,
+            settings_revision: 11,
+            control_plane_degraded: false,
             sessions: 1,
             socket_mode: "0600".to_owned(),
             max_frame_bytes: 65_536,

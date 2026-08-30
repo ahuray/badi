@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "ctl:memory-clear",
+  "type": "memory.status",
+  "mono_ms": 1004,
+  "payload": {
+    "revision": 0,
+    "records": 0,
+    "bytes": 0,
+    "changed": false
+  }
+}

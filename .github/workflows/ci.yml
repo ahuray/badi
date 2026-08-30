@@ -30,9 +30,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Lint
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --all-features
 
   rust-msrv:
     name: Rust MSRV 1.85
@@ -46,7 +46,7 @@ jobs:
       - name: Install Rust MSRV
         uses: dtolnay/rust-toolchain@1.85.0
       - name: Check declared minimum version
-        run: cargo check --workspace --all-targets --locked
+        run: cargo check --workspace --all-targets --all-features --locked
 
   chromium:
     name: Chromium adapter / Node ${{ matrix.node }}

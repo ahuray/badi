@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "type": "authority.changed",
+  "mono_ms": 12,
+  "payload": {
+    "authority_epoch": 5,
+    "settings_revision": 4,
+    "paused": true
+  }
+}

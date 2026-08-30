@@ -227,7 +227,11 @@ The end-to-end invariant is: **only the adapter that owns the still-focused, unc
 
 Any new keystroke, selection movement, composition event, target focus change, origin navigation, policy change, pause, provider restart, or timeout cancels and clears. UI hiding should not wait for the model process to acknowledge cancellation.
 
-accept-word uses a shared Unicode word-boundary fixture. Leading whitespace attaches to the first accepted word. The unaccepted suffix may remain cached only after an app-owned adapter reports a matching applied revision. The first terminal adapter disarms after either acceptance and never carries a suffix across a commit.
+accept-word uses a shared Unicode word-boundary fixture. Leading whitespace
+attaches to the first accepted word. Every applied commit retires the old
+suggestion and its unaccepted suffix; an adapter must send fresh context and
+request a newly generated continuation for the new revision. No adapter carries
+a suffix across a commit.
 
 ### Browser adapter
 
@@ -351,7 +355,7 @@ Run two providers behind one Rust trait:
 
 Do not select a model by reputation alone. Run a short bake-off of 1–3B-class, 4-bit local models on a user-owned/synthetic browser/note/agent-prompt corpus and record first-token latency, memory, cancellation behavior, repetition, and human acceptance. The deterministic result proves plumbing; the local-model result is required before claiming useful semantic prediction.
 
-Prompts should request a short suffix, never an answer to the user's prose. Stop at newline and cap output at eight words/64 characters. The broker validates and truncates provider output again.
+Prompts should request a short suffix, never an answer to the user's prose. Stop at newline and cap output at eight words/64 characters. The broker independently validates the exact output and rejects over-limit values rather than rewriting them.
 
 ## Compatibility matrix
 

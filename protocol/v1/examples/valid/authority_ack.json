@@ -1,0 +1,8 @@
+{
+  "v": 1,
+  "type": "authority.ack",
+  "mono_ms": 13,
+  "payload": {
+    "authority_epoch": 5
+  }
+}

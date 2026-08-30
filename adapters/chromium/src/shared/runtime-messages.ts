@@ -1,4 +1,5 @@
 import type {
+  BootstrapState,
   CommitAuthorization,
   CommitAuthorizationRequest,
   CommitResultNotice,
@@ -6,6 +7,7 @@ import type {
   SuggestionClearEvent,
   SuggestionRequest,
   SuggestionResponse,
+  TargetPolicy,
 } from "./model";
 
 export type RuntimeCommand =
@@ -25,6 +27,7 @@ export type RuntimeReply =
       readonly ok: true;
       readonly response?: SuggestionResponse | CommitAuthorization;
       readonly paused?: boolean;
+      readonly policy?: TargetPolicy;
     }
   | { readonly ok: false; readonly error: string };
 
@@ -48,6 +51,10 @@ export type ContentControlMessage =
     }
   | {
       readonly kind: "badi.transport.disconnected.v1";
+    }
+  | {
+      readonly kind: "badi.policy.v1";
+      readonly policy: TargetPolicy;
     };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -56,6 +63,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isCounter(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
+  const actual = Object.keys(value);
+  return actual.length === expected.length && actual.every((key) => expected.includes(key));
 }
 
 function hasCoordinates(value: Record<string, unknown>): boolean {
@@ -145,12 +160,68 @@ export function isRuntimeCommand(value: unknown): value is RuntimeCommand {
   }
 }
 
-export function parseRuntimeBootstrapReply(value: unknown): boolean {
+function isTargetPolicy(value: unknown): value is TargetPolicy {
   if (
     !isRecord(value) ||
-    Object.keys(value).length !== 2 ||
+    !hasExactKeys(value, [
+      "authorityEpoch",
+      "settingsRevision",
+      "paused",
+      "activation",
+      "contextAllowed",
+      "displayAllowed",
+      "suggestionsAllowed",
+      "learningAllowed",
+      "reason",
+    ]) ||
+    !isCounter(value["authorityEpoch"]) ||
+    !isCounter(value["settingsRevision"]) ||
+    typeof value["paused"] !== "boolean" ||
+    !(
+      value["activation"] === "always" ||
+      value["activation"] === "manual" ||
+      value["activation"] === "never"
+    ) ||
+    typeof value["contextAllowed"] !== "boolean" ||
+    typeof value["displayAllowed"] !== "boolean" ||
+    typeof value["suggestionsAllowed"] !== "boolean" ||
+    typeof value["learningAllowed"] !== "boolean" ||
+    typeof value["reason"] !== "string" ||
+    ![
+      "default_policy",
+      "global_disabled",
+      "context_disabled",
+      "matched_rule",
+      "suggestions_disabled",
+      "unknown_identity",
+    ].includes(value["reason"]) ||
+    (value["suggestionsAllowed"] &&
+      (!value["contextAllowed"] || !value["displayAllowed"])) ||
+    (value["learningAllowed"] &&
+      (!value["contextAllowed"] ||
+        !value["displayAllowed"] ||
+        !value["suggestionsAllowed"])) ||
+    (value["paused"] &&
+      (value["activation"] !== "never" ||
+        value["contextAllowed"] ||
+        value["displayAllowed"] ||
+        value["suggestionsAllowed"] ||
+        value["learningAllowed"])) ||
+    (!value["contextAllowed"] && value["activation"] === "always")
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function parseRuntimeBootstrapReply(value: unknown): BootstrapState {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 3 ||
     value["ok"] !== true ||
-    typeof value["paused"] !== "boolean"
+    typeof value["paused"] !== "boolean" ||
+    !isTargetPolicy(value["policy"]) ||
+    value["policy"].paused !== value["paused"]
   ) {
     const error =
       isRecord(value) && typeof value["error"] === "string"
@@ -158,7 +229,7 @@ export function parseRuntimeBootstrapReply(value: unknown): boolean {
         : "Invalid bootstrap response from extension service worker";
     throw new Error(error);
   }
-  return value["paused"];
+  return { paused: value["paused"], policy: value["policy"] };
 }
 
 export function isContentControlMessage(value: unknown): value is ContentControlMessage {
@@ -167,6 +238,9 @@ export function isContentControlMessage(value: unknown): value is ContentControl
   }
   if (value["kind"] === "badi.transport.disconnected.v1") {
     return Object.keys(value).length === 1;
+  }
+  if (value["kind"] === "badi.policy.v1") {
+    return Object.keys(value).length === 2 && isTargetPolicy(value["policy"]);
   }
   if (value["kind"] === "badi.commit.revoke.v1") {
     return Object.keys(value).length === 2 && isAddress(value["address"]);

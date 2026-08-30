@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:badi:schema:model-runtime-receipt:v1",
+  "title": "Badi local-model runtime receipt v1",
+  "$comment": "A receipt records aggregate evaluation evidence only. It must not contain prompts, user context, generated text, or per-case content. runtime_ready means the recorded configuration passed this schema's evaluation gate; it does not attest loopback process ownership, prove which artifact a live server loaded, or activate production inference.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "created_at_unix_ms",
+    "identity",
+    "metrics",
+    "runtime_ready"
+  ],
+  "properties": {
+    "schema": { "const": "badi.model-runtime-receipt.v1" },
+    "created_at_unix_ms": { "type": "integer", "minimum": 1 },
+    "identity": { "$ref": "#/$defs/runtimeIdentity" },
+    "metrics": { "$ref": "#/$defs/evaluationMetrics" },
+    "runtime_ready": { "type": "boolean" }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "runtime_ready": { "const": true },
+        "metrics": { "$ref": "#/$defs/passingEvaluationMetrics" }
+      }
+    },
+    {
+      "properties": {
+        "runtime_ready": { "const": false }
+      },
+      "not": { "properties": { "metrics": { "$ref": "#/$defs/passingEvaluationMetrics" } } }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "gitCommit": {
+      "type": "string",
+      "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "runtimeIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "badi_commit",
+        "model",
+        "backend",
+        "prompt",
+        "launch",
+        "evaluation",
+        "hardware_profile_sha256"
+      ],
+      "properties": {
+        "badi_commit": { "$ref": "#/$defs/gitCommit" },
+        "model": { "$ref": "#/$defs/modelIdentity" },
+        "backend": { "$ref": "#/$defs/backendIdentity" },
+        "prompt": { "$ref": "#/$defs/promptIdentity" },
+        "launch": { "$ref": "#/$defs/launchIdentity" },
+        "evaluation": { "$ref": "#/$defs/evaluationIdentity" },
+        "hardware_profile_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "modelIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "use_case",
+        "tier",
+        "repository",
+        "revision",
+        "filename",
+        "sha256",
+        "download_bytes",
+        "quantization",
+        "runtime",
+        "minimum_runtime_version",
+        "prompt_format"
+      ],
+      "properties": {
+        "use_case": { "const": "writing" },
+        "tier": { "enum": ["compact", "balanced", "quality"] },
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+        },
+        "revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "filename": {
+          "type": "string",
+          "pattern": "^[^/\\\\]+\\.gguf$"
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "download_bytes": { "type": "integer", "minimum": 1 },
+        "quantization": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "runtime": { "const": "llama.cpp" },
+        "minimum_runtime_version": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 21,
+          "pattern": "^b[0-9]+$"
+        },
+        "prompt_format": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "backendIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime", "version", "build_commit", "binary_sha256"],
+      "properties": {
+        "runtime": { "const": "llama.cpp" },
+        "version": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 21,
+          "pattern": "^b[0-9]+$"
+        },
+        "build_commit": { "$ref": "#/$defs/gitCommit" },
+        "binary_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "promptIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_id", "contract_sha256", "sampling_sha256"],
+      "properties": {
+        "contract_id": { "const": "badi.inline-completion.qwen3.v1" },
+        "contract_sha256": { "$ref": "#/$defs/sha256" },
+        "sampling_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "launchIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "model",
+        "connect_timeout_ms",
+        "request_timeout_ms",
+        "launch_manifest_schema",
+        "launch_manifest_sha256"
+      ],
+      "properties": {
+        "transport": { "const": "bearer_loopback_http_v1" },
+        "model": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "connect_timeout_ms": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "request_timeout_ms": { "type": "integer", "minimum": 1, "maximum": 1200 },
+        "launch_manifest_schema": { "const": "badi.llama-cpp-launch.v1" },
+        "launch_manifest_sha256": {
+          "$comment": "SHA-256 of RFC 8785 canonical JSON for badi.llama-cpp-launch.v1. The manifest binds executable identity, stable argv, and inference-affecting environment while excluding secrets and the ephemeral bind address/port.",
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "evaluationIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evaluator_id",
+        "evaluator_contract_sha256",
+        "evaluator_implementation_sha256",
+        "corpus_sha256",
+        "quality_gate_id",
+        "quality_gate_sha256"
+      ],
+      "properties": {
+        "evaluator_id": { "const": "badi.local-model-evaluator.v1" },
+        "evaluator_contract_sha256": {
+          "const": "65a2ab087ee830b2f636f2d68dc7777698fbbfec4e7a1f94247556c0c2c29ee3"
+        },
+        "evaluator_implementation_sha256": { "$ref": "#/$defs/sha256" },
+        "corpus_sha256": { "$ref": "#/$defs/sha256" },
+        "quality_gate_id": { "const": "badi.local-model-quality-gate.v1" },
+        "quality_gate_sha256": {
+          "const": "b8fb42037a4608f5ea62d982410c0d9fca0a01fb63091838fa0f3fd3937e9749"
+        }
+      }
+    },
+    "evaluationMetrics": {
+      "$comment": "Warm end-to-end latency starts when the eligible adapter schedules work after input and ends only after its suggestion view reports visible; it includes adapter and broker debounce, transport, provider work, validation, and display. Runtime validation also enforces p50 <= p95 for TTFT and end-to-end latency, and cancellation p95 <= max; these cross-field relations are not expressible by the portable schema vocabulary used here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_count",
+        "cold_start_ms",
+        "warm_ttft_ms_p50",
+        "warm_ttft_ms_p95",
+        "warm_end_to_end_ms_p50",
+        "warm_end_to_end_ms_p95",
+        "cancellation_to_idle_ms_p95",
+        "cancellation_to_idle_ms_max",
+        "peak_rss_bytes",
+        "invalid_output_rate",
+        "truncated_output_rate",
+        "late_output_rate",
+        "suggestion_rate",
+        "useful_accepted_words_per_interruption",
+        "deterministic_usefulness_delta"
+      ],
+      "properties": {
+        "case_count": { "type": "integer", "minimum": 1 },
+        "cold_start_ms": { "type": "integer", "minimum": 0 },
+        "warm_ttft_ms_p50": { "type": "integer", "minimum": 0 },
+        "warm_ttft_ms_p95": { "type": "integer", "minimum": 0 },
+        "warm_end_to_end_ms_p50": { "type": "integer", "minimum": 0 },
+        "warm_end_to_end_ms_p95": { "type": "integer", "minimum": 0 },
+        "cancellation_to_idle_ms_p95": { "type": "integer", "minimum": 0 },
+        "cancellation_to_idle_ms_max": { "type": "integer", "minimum": 0 },
+        "peak_rss_bytes": { "type": "integer", "minimum": 1 },
+        "invalid_output_rate": { "$ref": "#/$defs/rate" },
+        "truncated_output_rate": { "$ref": "#/$defs/rate" },
+        "late_output_rate": { "$ref": "#/$defs/rate" },
+        "suggestion_rate": { "$ref": "#/$defs/rate" },
+        "useful_accepted_words_per_interruption": {
+          "type": "number",
+          "minimum": 0
+        },
+        "deterministic_usefulness_delta": {
+          "type": "number",
+          "$comment": "Absolute local-model minus deterministic useful accepted words per interruption. This is not a normalized rate and can exceed one in either direction."
+        }
+      }
+    },
+    "passingEvaluationMetrics": {
+      "allOf": [
+        { "$ref": "#/$defs/evaluationMetrics" },
+        {
+          "properties": {
+            "case_count": { "minimum": 100 },
+            "cold_start_ms": { "maximum": 10000 },
+            "warm_ttft_ms_p95": { "maximum": 250 },
+            "warm_end_to_end_ms_p95": { "maximum": 500 },
+            "cancellation_to_idle_ms_p95": { "maximum": 50 },
+            "cancellation_to_idle_ms_max": { "maximum": 100 },
+            "peak_rss_bytes": { "maximum": 8589934592 },
+            "invalid_output_rate": { "maximum": 0.01 },
+            "truncated_output_rate": { "maximum": 0.01 },
+            "late_output_rate": { "maximum": 0.01 },
+            "suggestion_rate": { "minimum": 0.05, "maximum": 0.8 },
+            "useful_accepted_words_per_interruption": { "minimum": 1.0 },
+            "deterministic_usefulness_delta": {
+              "$comment": "The local-model lane must add at least one useful accepted word per ten interruptions over badi.phrase-v1; a tie is not a quality win.",
+              "minimum": 0.1
+            }
+          }
+        }
+      ]
+    },
+    "rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  }
+}

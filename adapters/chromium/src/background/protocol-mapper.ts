@@ -1,4 +1,5 @@
 import type {
+  AuthorityState,
   CommitAuthorization,
   CommitAuthorizationRequest,
   CommitResultNotice,
@@ -6,6 +7,7 @@ import type {
   SuggestionClearEvent,
   SuggestionRequest,
   SuggestionResponse,
+  TargetPolicy,
 } from "../shared/model";
 
 export const NATIVE_HOST_NAME = "io.github.ahuray.badi";
@@ -16,6 +18,7 @@ const BROWSER_CAPABILITIES = [
   "commit.dispatched_unverified",
   "control",
   "health",
+  "policy",
 ] as const;
 
 type Coordinates = Pick<
@@ -86,6 +89,40 @@ export function helloEnvelope(monotonicMs: number): WireEnvelope {
   };
 }
 
+export function policyQueryEnvelope(
+  sessionId: string,
+  origin: string,
+  monotonicMs: number,
+  correlationId: string,
+): WireEnvelope {
+  return {
+    v: 1,
+    id: correlationId,
+    type: "policy.query",
+    mono_ms: monotonicMs,
+    payload: {
+      target: {
+        kind: "browser",
+        app_id: "chromium",
+        target_id: sessionId,
+        origin: parseOrigin(origin),
+      },
+    },
+  };
+}
+
+export function authorityAckEnvelope(
+  authorityEpoch: number,
+  monotonicMs: number,
+): WireEnvelope {
+  return {
+    v: 1,
+    type: "authority.ack",
+    mono_ms: monotonicMs,
+    payload: { authority_epoch: authorityEpoch },
+  };
+}
+
 export function sessionOpenEnvelope(request: SuggestionRequest): WireSessionEnvelope {
   return withCoordinates(
     request,
@@ -125,6 +162,9 @@ export function suggestionRequestEnvelopes(
       fingerprint: request.context.fingerprint,
       before: request.context.before,
       after: request.context.after,
+      ...(request.context.language === undefined
+        ? {}
+        : { language: request.context.language }),
       selection: { anchor, head, unit: "utf16_code_units" },
       field: {
         purpose: request.context.field.purpose,
@@ -204,12 +244,6 @@ export function commitResultEnvelope(notice: CommitResultNotice): WireSessionEnv
       fingerprint: notice.fingerprint,
       suggestion_id: notice.suggestionId,
       status: notice.status,
-      ...(notice.newRevision === undefined
-        ? {}
-        : {
-            new_revision: notice.newRevision,
-            new_fingerprint: notice.newFingerprint,
-          }),
     },
     `${notice.requestId}.${notice.revision}.result`,
   );
@@ -292,6 +326,107 @@ function isCounter(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
+const POLICY_REASONS = new Set([
+  "default_policy",
+  "global_disabled",
+  "context_disabled",
+  "matched_rule",
+  "suggestions_disabled",
+  "unknown_identity",
+]);
+
+export function parsePolicyStatus(value: unknown, correlationId: string): TargetPolicy | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["v", "id", "type", "mono_ms", "payload"]) ||
+    value["v"] !== 1 ||
+    value["id"] !== correlationId ||
+    value["type"] !== "policy.status" ||
+    !isCounter(value["mono_ms"]) ||
+    !isRecord(value["payload"])
+  ) {
+    return null;
+  }
+  const payload = value["payload"];
+  if (
+    !hasExactKeys(payload, [
+      "authority_epoch",
+      "settings_revision",
+      "paused",
+      "activation",
+      "context_allowed",
+      "display_allowed",
+      "suggestions_allowed",
+      "learning_allowed",
+      "reason",
+    ]) ||
+    !isCounter(payload["authority_epoch"]) ||
+    !isCounter(payload["settings_revision"]) ||
+    typeof payload["paused"] !== "boolean" ||
+    (payload["activation"] !== "always" &&
+      payload["activation"] !== "manual" &&
+      payload["activation"] !== "never") ||
+    typeof payload["context_allowed"] !== "boolean" ||
+    typeof payload["display_allowed"] !== "boolean" ||
+    typeof payload["suggestions_allowed"] !== "boolean" ||
+    typeof payload["learning_allowed"] !== "boolean" ||
+    typeof payload["reason"] !== "string" ||
+    !POLICY_REASONS.has(payload["reason"]) ||
+    (payload["suggestions_allowed"] &&
+      (!payload["context_allowed"] || !payload["display_allowed"])) ||
+    (payload["learning_allowed"] &&
+      (!payload["context_allowed"] ||
+        !payload["display_allowed"] ||
+        !payload["suggestions_allowed"])) ||
+    (payload["paused"] &&
+      (payload["activation"] !== "never" ||
+        payload["context_allowed"] ||
+        payload["display_allowed"] ||
+        payload["suggestions_allowed"] ||
+        payload["learning_allowed"]))
+  ) {
+    return null;
+  }
+  return {
+    authorityEpoch: payload["authority_epoch"],
+    settingsRevision: payload["settings_revision"],
+    paused: payload["paused"],
+    activation: payload["activation"],
+    contextAllowed: payload["context_allowed"],
+    displayAllowed: payload["display_allowed"],
+    suggestionsAllowed: payload["suggestions_allowed"],
+    learningAllowed: payload["learning_allowed"],
+    reason: payload["reason"] as TargetPolicy["reason"],
+  };
+}
+
+export function parseAuthorityChanged(value: unknown): AuthorityState | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["v", "type", "mono_ms", "payload"]) ||
+    value["v"] !== 1 ||
+    value["type"] !== "authority.changed" ||
+    !isCounter(value["mono_ms"]) ||
+    !isRecord(value["payload"])
+  ) {
+    return null;
+  }
+  const payload = value["payload"];
+  if (
+    !hasExactKeys(payload, ["authority_epoch", "settings_revision", "paused"]) ||
+    !isCounter(payload["authority_epoch"]) ||
+    !isCounter(payload["settings_revision"]) ||
+    typeof payload["paused"] !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    authorityEpoch: payload["authority_epoch"],
+    settingsRevision: payload["settings_revision"],
+    paused: payload["paused"],
+  };
+}
+
 function hasExactKeys(
   value: Record<string, unknown>,
   expected: readonly string[],
@@ -340,6 +475,10 @@ const REASON_CODES = new Set([
   "provider_error",
   "provider_timeout",
   "session_closed",
+  "settings_commit_unknown",
+  "settings_committed_degraded",
+  "settings_conflict",
+  "settings_rejected",
   "stale",
   "superseded",
   "unknown_session",

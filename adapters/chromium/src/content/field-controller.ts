@@ -38,15 +38,18 @@ const OBSERVED_POLICY_ATTRIBUTES = [
   "minlength",
   "required",
   "pattern",
+  "lang",
 ] as const;
 
 const IDENTITY_ATTRIBUTES = new Set(["id", "name", "form", "data-badi-field"]);
+const MAX_GENERATION_AGE_MS = 600;
 
 interface FieldState {
   focusEpoch: number;
   revision: number;
   composing: boolean;
   lastSelection: SelectionSnapshot | null;
+  scheduledAt: number;
   debounceTimer: ReturnType<typeof setTimeout> | null;
   pending: PendingSuggestion | null;
 }
@@ -55,6 +58,8 @@ interface PendingSuggestion {
   readonly request: SuggestionRequest;
   readonly value: string;
   readonly selection: SelectionSnapshot;
+  readonly deadlineAt: number;
+  deadlineTimer: ReturnType<typeof setTimeout> | null;
 }
 
 interface VisibleSuggestion {
@@ -640,6 +645,7 @@ export class FieldController {
       revision: 0,
       composing: false,
       lastSelection: null,
+      scheduledAt: 0,
       debounceTimer: null,
       pending: null,
     };
@@ -668,6 +674,7 @@ export class FieldController {
     if (state.debounceTimer !== null) {
       clearTimeout(state.debounceTimer);
     }
+    state.scheduledAt = this.#now();
     state.debounceTimer = setTimeout(() => {
       state.debounceTimer = null;
       this.#request(field, state);
@@ -720,6 +727,11 @@ export class FieldController {
       this.#clearSuggestion();
       return;
     }
+    const deadlineAt = state.scheduledAt + MAX_GENERATION_AGE_MS;
+    if (this.#now() >= deadlineAt) {
+      this.#clearSuggestion();
+      return;
+    }
     const request: SuggestionRequest = {
       requestId: this.#idFactory(),
       sessionId: this.#sessionId,
@@ -733,8 +745,17 @@ export class FieldController {
       request,
       value: field.value,
       selection,
+      deadlineAt,
+      deadlineTimer: null,
     };
     state.pending = pending;
+    pending.deadlineTimer = setTimeout(() => {
+      if (state.pending !== pending) return;
+      state.pending = null;
+      pending.deadlineTimer = null;
+      void Promise.resolve(this.#transport.cancelSuggestion(request)).catch(() => undefined);
+      this.#clearSuggestion();
+    }, Math.max(0, deadlineAt - this.#now()));
 
     void this.#transport.requestSuggestion(request).then(
       (response) => {
@@ -743,6 +764,7 @@ export class FieldController {
       () => {
         if (state.pending?.request.requestId === request.requestId) {
           state.pending = null;
+          this.#clearPendingDeadline(pending);
         }
       },
     );
@@ -759,6 +781,14 @@ export class FieldController {
       return;
     }
     state.pending = null;
+    this.#clearPendingDeadline(pending);
+    if (this.#now() >= pending.deadlineAt) {
+      void Promise.resolve(this.#transport.cancelSuggestion(request)).catch(
+        () => undefined,
+      );
+      this.#clearSuggestion();
+      return;
+    }
     if (!this.#currentDocumentIsTrusted()) {
       this.#invalidateActiveState();
       return;
@@ -848,7 +878,7 @@ export class FieldController {
       expiresAt: this.#now() + (response.ttlMs ?? 600),
       brokerBound: true,
       sourceAddress,
-    });
+    }, pending.deadlineAt);
   }
 
   #accept(mode: "word" | "all"): void {
@@ -1030,45 +1060,17 @@ export class FieldController {
       return;
     }
 
-    const decision = this.#currentDocumentIsTrusted() ? evaluateField(field) : null;
-    const continuedContext = decision?.allowed === true
-      ? captureContextOrNull({
-          field,
-          purpose: decision.purpose,
-          selection: updatedSelection,
-          composing: false,
-          activation: visible.request.context.activation,
-          explicit: visible.request.context.explicit,
-          fingerprintSalt: this.#fingerprintSalt,
-        })
-      : null;
-    const continuedRequest: SuggestionRequest | null =
-      decision?.allowed === true && continuedContext !== null
-      ? {
-          ...visible.request,
-          revision: state.revision,
-          monotonicMs: Math.max(0, Math.floor(this.#now())),
-          context: continuedContext,
-        }
-      : null;
     void Promise.resolve(
       this.#transport.reportCommit({
         ...this.#addressFor(visible),
         status: "dispatched-unverified",
-        ...(continuedRequest === null
-          ? {}
-          : {
-              newRevision: continuedRequest.revision,
-              newFingerprint: continuedRequest.context.fingerprint,
-            }),
       }),
     ).catch(() => undefined);
 
     this.#clearSuggestion();
     if (
       request.acceptance === "word" &&
-      remainder.length > 0 &&
-      continuedRequest !== null
+      remainder.length > 0
     ) {
       // The broker clears the accepted suggestion. Locally advanced
       // coordinates are not eligible for another commit until a fresh
@@ -1275,9 +1277,17 @@ export class FieldController {
     const pending = state.pending;
     state.pending = null;
     if (pending !== null) {
+      this.#clearPendingDeadline(pending);
       void Promise.resolve(this.#transport.cancelSuggestion(pending.request)).catch(
         () => undefined,
       );
+    }
+  }
+
+  #clearPendingDeadline(pending: PendingSuggestion): void {
+    if (pending.deadlineTimer !== null) {
+      clearTimeout(pending.deadlineTimer);
+      pending.deadlineTimer = null;
     }
   }
 
@@ -1298,9 +1308,16 @@ export class FieldController {
     } as const;
   }
 
-  #showSuggestion(visible: VisibleSuggestion): void {
+  #showSuggestion(visible: VisibleSuggestion, generationDeadlineAt?: number): void {
     if (!this.#currentDocumentIsTrusted()) {
       this.#invalidateActiveState();
+      return;
+    }
+    if (generationDeadlineAt !== undefined && this.#now() >= generationDeadlineAt) {
+      void Promise.resolve(this.#transport.cancelSuggestion(visible.request)).catch(
+        () => undefined,
+      );
+      this.#clearSuggestion();
       return;
     }
     if (this.#expiryTimer !== null) clearTimeout(this.#expiryTimer);

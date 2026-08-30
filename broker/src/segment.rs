@@ -12,40 +12,145 @@ pub struct AcceptedParts {
 pub enum OutputError {
     Empty,
     ForbiddenControl,
+    TooLong,
+    InvalidShape,
 }
 
 pub fn sanitize_suggestion(raw: &str) -> Result<String, OutputError> {
+    if raw.is_empty() || raw.chars().all(char::is_whitespace) {
+        return Err(OutputError::Empty);
+    }
     if raw.chars().any(is_forbidden_output_scalar) {
         return Err(OutputError::ForbiddenControl);
     }
+    if has_invalid_spacing(raw) {
+        return Err(OutputError::InvalidShape);
+    }
+    if raw.chars().count() > MAX_SUGGESTION_CHARS
+        || raw.unicode_words().count() > MAX_SUGGESTION_WORDS
+    {
+        return Err(OutputError::TooLong);
+    }
+    if raw.ends_with(char::is_whitespace) {
+        return Err(OutputError::InvalidShape);
+    }
+    Ok(raw.to_owned())
+}
 
-    let mut output = String::new();
-    let mut words = 0_usize;
-    for boundary in raw.split_word_bounds() {
-        let boundary_words = boundary.unicode_words().count();
-        if boundary_words > 0 && words.saturating_add(boundary_words) > MAX_SUGGESTION_WORDS {
-            break;
-        }
-        for character in boundary.chars() {
-            if output.chars().count() == MAX_SUGGESTION_CHARS {
-                break;
-            }
-            output.push(character);
-        }
-        words = words.saturating_add(boundary_words);
-        if output.chars().count() == MAX_SUGGESTION_CHARS {
-            break;
-        }
+pub fn validate_suggestion_shape(
+    before: &str,
+    after: &str,
+    suggestion: &str,
+) -> Result<(), OutputError> {
+    let first = suggestion.chars().next().ok_or(OutputError::Empty)?;
+    let last = suggestion.chars().next_back().ok_or(OutputError::Empty)?;
+    let before_last = before.chars().next_back();
+    let after_first = after.chars().next();
+
+    if (before.is_empty() && first.is_whitespace())
+        || has_invalid_spacing(suggestion)
+        || (before_last == Some(' ') && first == ' ')
+        || before_last.is_some_and(|left| needs_word_separator(left, first))
+        || after_first.is_some_and(|right| needs_word_separator(last, right))
+    {
+        return Err(OutputError::InvalidShape);
     }
 
-    while output.ends_with(char::is_whitespace) {
-        output.pop();
+    let candidate = suggestion.trim_start().to_lowercase();
+    let normalized_before = before.trim_end().to_lowercase();
+    let normalized_after = after.trim_start().to_lowercase();
+    if candidate.is_empty()
+        || has_boundary_suffix(&normalized_before, &candidate)
+        || has_boundary_prefix(&normalized_after, &candidate)
+    {
+        return Err(OutputError::InvalidShape);
     }
-    if output.is_empty() {
-        Err(OutputError::Empty)
-    } else {
-        Ok(output)
+
+    let repeats_before_token = before
+        .chars()
+        .next_back()
+        .is_some_and(char::is_alphanumeric)
+        && before
+            .unicode_words()
+            .next_back()
+            .zip(suggestion.unicode_words().next())
+            .is_some_and(|(left, right)| left.to_lowercase() == right.to_lowercase());
+    let repeats_after_token = suggestion
+        .chars()
+        .next_back()
+        .is_some_and(char::is_alphanumeric)
+        && after
+            .trim_start()
+            .chars()
+            .next()
+            .is_some_and(char::is_alphanumeric)
+        && suggestion
+            .unicode_words()
+            .next_back()
+            .zip(after.unicode_words().next())
+            .is_some_and(|(left, right)| left.to_lowercase() == right.to_lowercase());
+    if repeats_before_token || repeats_after_token {
+        return Err(OutputError::InvalidShape);
     }
+    Ok(())
+}
+
+fn has_invalid_spacing(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| character.is_whitespace() && character != ' ')
+        || value.contains("  ")
+}
+
+fn needs_word_separator(left: char, right: char) -> bool {
+    left.is_alphanumeric()
+        && right.is_alphanumeric()
+        && !(is_unspaced_script(left) && is_unspaced_script(right))
+}
+
+const fn is_unspaced_script(character: char) -> bool {
+    matches!(
+        character,
+        '\u{1100}'..='\u{11ff}'
+            | '\u{3040}'..='\u{30ff}'
+            | '\u{3100}'..='\u{312f}'
+            | '\u{3130}'..='\u{318f}'
+            | '\u{31a0}'..='\u{31bf}'
+            | '\u{31f0}'..='\u{31ff}'
+            | '\u{3400}'..='\u{4dbf}'
+            | '\u{4e00}'..='\u{9fff}'
+            | '\u{a960}'..='\u{a97f}'
+            | '\u{ac00}'..='\u{d7af}'
+            | '\u{d7b0}'..='\u{d7ff}'
+            | '\u{f900}'..='\u{faff}'
+            | '\u{ff66}'..='\u{ff9d}'
+            | '\u{20000}'..='\u{2fa1f}'
+    )
+}
+
+fn has_boundary_suffix(value: &str, candidate: &str) -> bool {
+    let Some(start) = value.len().checked_sub(candidate.len()) else {
+        return false;
+    };
+    value.ends_with(candidate)
+        && (start == 0
+            || !value[..start]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric)
+            || !candidate.chars().next().is_some_and(char::is_alphanumeric))
+}
+
+fn has_boundary_prefix(value: &str, candidate: &str) -> bool {
+    let Some(remainder) = value.strip_prefix(candidate) else {
+        return false;
+    };
+    remainder.is_empty()
+        || !candidate
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphanumeric)
+        || !remainder.chars().next().is_some_and(char::is_alphanumeric)
 }
 
 #[must_use]
@@ -107,7 +212,7 @@ mod tests {
     use serde::Deserialize;
     use unicode_segmentation::UnicodeSegmentation;
 
-    use super::{OutputError, accept_word, sanitize_suggestion};
+    use super::{OutputError, accept_word, sanitize_suggestion, validate_suggestion_shape};
 
     #[derive(Deserialize)]
     struct FixtureSet {
@@ -170,11 +275,60 @@ mod tests {
     }
 
     #[test]
-    fn output_is_bounded_by_scalars_and_words() {
+    fn output_rejects_over_limit_values_instead_of_rewriting_them() {
         let long = " one two three four five six seven eight nine ten";
-        let output = sanitize_suggestion(long).expect("safe output");
-        assert!(output.chars().count() <= 64);
-        assert_eq!(output.unicode_words().count(), 8);
+        assert_eq!(sanitize_suggestion(long), Err(OutputError::TooLong));
+        assert_eq!(
+            sanitize_suggestion(&"x".repeat(65)),
+            Err(OutputError::TooLong)
+        );
+        assert_eq!(
+            sanitize_suggestion(" one two three four five six seven eight"),
+            Ok(" one two three four five six seven eight".to_owned())
+        );
+    }
+
+    #[test]
+    fn output_rejects_trailing_whitespace_instead_of_trimming_it() {
+        assert_eq!(
+            sanitize_suggestion(" valid "),
+            Err(OutputError::InvalidShape)
+        );
+        assert_eq!(sanitize_suggestion("   "), Err(OutputError::Empty));
+    }
+
+    #[test]
+    fn context_shape_rejects_spacing_and_exact_overlap_failures() {
+        for (before, after, suggestion) in [
+            ("hello", "", "world"),
+            ("hello ", "", " world"),
+            ("hello", "world", " brave"),
+            ("hello", "", " hello"),
+            ("hello", " world", " world"),
+            ("wait for", "", " for your time"),
+            ("hello", "", "  world"),
+            ("hello", "", " world  again"),
+            ("hello", "", " \u{00a0}world"),
+            ("café", "", "noir"),
+            ("café", "", "éclair"),
+            ("hello", " time remains", " for your time"),
+        ] {
+            assert_eq!(
+                validate_suggestion_shape(before, after, suggestion),
+                Err(OutputError::InvalidShape)
+            );
+        }
+        assert_eq!(validate_suggestion_shape("hello", "", " world"), Ok(()));
+        assert_eq!(
+            validate_suggestion_shape("hello.", "", " Hello again"),
+            Ok(())
+        );
+        assert_eq!(validate_suggestion_shape("class", "", " as"), Ok(()));
+        assert_eq!(
+            validate_suggestion_shape("hello", " world", " brave"),
+            Ok(())
+        );
+        assert_eq!(validate_suggestion_shape("你", "", "好"), Ok(()));
     }
 
     #[test]
@@ -195,6 +349,16 @@ mod tests {
             sanitize_suggestion(" two\u{2028}lines"),
             Err(OutputError::ForbiddenControl)
         );
+    }
+
+    #[test]
+    fn output_rejects_ambiguous_unicode_or_repeated_spacing() {
+        for suggestion in ["\u{00a0}world", " world\u{00a0}again", " world  again"] {
+            assert_eq!(
+                sanitize_suggestion(suggestion),
+                Err(OutputError::InvalidShape)
+            );
+        }
     }
 
     #[test]

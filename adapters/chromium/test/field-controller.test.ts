@@ -165,6 +165,11 @@ const SILENT_POLICY_MUTATIONS: readonly SilentPolicyMutation[] = [
     mutate: (field) => { field.maxLength = field.value.length; },
     expectedRequestCount: 2,
   },
+  {
+    name: "ancestor language",
+    mutate: (_field, ancestor) => { ancestor.lang = "de"; },
+    expectedRequestCount: 2,
+  },
   { name: "ancestor hidden", mutate: (_field, ancestor) => { ancestor.hidden = true; } },
   {
     name: "ancestor opt-out",
@@ -1369,6 +1374,39 @@ describe("FieldController", () => {
     controller.dispose();
   });
 
+  it("never displays a result older than 600 ms from the last input schedule", async () => {
+    vi.setSystemTime(1_000);
+    const field = document.createElement("textarea");
+    field.id = "late-generation";
+    field.value = "Still current";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    const transport = new FakeTransport();
+    const view = new RecordingView();
+    const controller = new FieldController({
+      transport,
+      view,
+      debounceMs: 100,
+      sessionId: SESSION_ID,
+      idFactory: nextIdFactory(),
+      origin: "https://fixture.test",
+      now: () => Date.now(),
+    });
+    controller.start();
+    field.focus();
+    await dispatchRequest(100);
+    expect(transport.requests).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(transport.cancellations).toEqual([transport.requests[0]]);
+    transport.resolve(0, " too late", " too");
+    await Promise.resolve();
+
+    expect(view.shown).toEqual([]);
+    expect(transport.cancellations).toEqual([transport.requests[0]]);
+    controller.dispose();
+  });
+
   it("immediately applies only a broker clear addressed to the visible session", async () => {
     const field = document.createElement("textarea");
     field.id = "broker-clear";
@@ -1422,7 +1460,7 @@ describe("FieldController", () => {
 
   it.each(SILENT_POLICY_MUTATIONS)(
     "clears before acceptance after a silent $name mutation",
-    async ({ mutate, expectedRequestCount = 1 }) => {
+    async ({ name, mutate, expectedRequestCount = 1 }) => {
       const ancestor = document.createElement("div");
       const field = document.createElement("input");
       field.id = "silently-mutated-field";
@@ -1462,6 +1500,12 @@ describe("FieldController", () => {
       expect(accept.defaultPrevented).toBe(false);
       expect(field.value).toBe("Keep");
       expect(transport.requests).toHaveLength(expectedRequestCount);
+      if (name === "ancestor language") {
+        expect(transport.requests[1]?.context.language).toBe("de");
+        expect(transport.requests[1]?.context.fingerprint).not.toBe(
+          transport.requests[0]?.context.fingerprint,
+        );
+      }
       expect(transport.authorizationRequests).toHaveLength(0);
       controller.dispose();
     },

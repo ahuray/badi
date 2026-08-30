@@ -1,4 +1,5 @@
 import type {
+  BootstrapState,
   CommitAuthorization,
   CommitAuthorizationRequest,
   CommitResultNotice,
@@ -27,7 +28,7 @@ export class RuntimeSuggestionTransport implements SuggestionTransport {
     this.#messenger = messenger;
   }
 
-  async bootstrap(sessionId: string): Promise<boolean> {
+  async bootstrap(sessionId: string): Promise<BootstrapState> {
     const reply = await this.#messenger.sendMessage({
       kind: "badi.bootstrap.v1",
       sessionId,

@@ -1,5 +1,11 @@
 # Badi post-audit remediation handoff
 
+> **Historical boundary:** this handoff describes the earlier remediation
+> candidate before the later settings/control-center/personalization work in
+> the current working tree. Its command results and “no remaining defect”
+> statements must not be reused as verification of later changes. Use the
+> current tree's control-center contract and fresh verification output instead.
+
 Status: pre-freeze verification and residual-risk record
 Audit baseline: `develop` at `b8d6786a451defed5e186c3ba1fdf90a29b7099e`
 Promotion boundary: foundation-only merge after exact-SHA CI; not a product or release approval

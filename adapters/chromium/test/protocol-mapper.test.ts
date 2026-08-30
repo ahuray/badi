@@ -4,13 +4,17 @@ import Ajv2020 from "ajv/dist/2020.js";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   acceptanceControlEnvelope,
+  authorityAckEnvelope,
   cancelEnvelope,
   commitResultEnvelope,
   dismissEnvelope,
   globalControlEnvelope,
   helloEnvelope,
   isHelloAck,
+  parseAuthorityChanged,
   parseHelloAckPaused,
+  parsePolicyStatus,
+  policyQueryEnvelope,
   sessionCloseEnvelope,
   sessionOpenEnvelope,
   suggestionRequestEnvelopes,
@@ -31,6 +35,7 @@ function request(): SuggestionRequest {
       fingerprint: "0123456789abcdef",
       before: "Hello",
       after: " there",
+      language: "en-US",
       selection: { start: 5, end: 5, direction: "none" },
       field: {
         purpose: "normal",
@@ -66,6 +71,8 @@ describe("protocol v1 mapper", () => {
     } as const;
     const frames = [
       helloEnvelope(1_000),
+      policyQueryEnvelope(current.sessionId, current.origin, 1_000, "policy-1"),
+      authorityAckEnvelope(4, 1_000),
       sessionOpenEnvelope(current),
       sessionCloseEnvelope(current),
       ...suggestionRequestEnvelopes(current),
@@ -87,6 +94,68 @@ describe("protocol v1 mapper", () => {
       expect(validate(frame), JSON.stringify(validate.errors)).toBe(true);
     }
     expect(frames.some((frame) => frame.type === "commit.prepare")).toBe(false);
+    const context = frames.find((frame) => frame.type === "context.changed");
+    expect(context?.payload["language"]).toBe("en-US");
+  });
+
+  it("strictly maps pre-acquisition policy and authority messages", () => {
+    const status = {
+      v: 1,
+      id: "policy-1",
+      type: "policy.status",
+      mono_ms: 1_001,
+      payload: {
+        authority_epoch: 4,
+        settings_revision: 2,
+        paused: false,
+        activation: "always",
+        context_allowed: true,
+        display_allowed: true,
+        suggestions_allowed: true,
+        learning_allowed: false,
+        reason: "matched_rule",
+      },
+    };
+    expect(validate(status), JSON.stringify(validate.errors)).toBe(true);
+    expect(parsePolicyStatus(status, "policy-1")).toEqual({
+      authorityEpoch: 4,
+      settingsRevision: 2,
+      paused: false,
+      activation: "always",
+      contextAllowed: true,
+      displayAllowed: true,
+      suggestionsAllowed: true,
+      learningAllowed: false,
+      reason: "matched_rule",
+    });
+    expect(parsePolicyStatus({ ...status, leaked: true }, "policy-1")).toBeNull();
+    expect(
+      parsePolicyStatus(
+        {
+          ...status,
+          payload: { ...status.payload, context_allowed: false },
+        },
+        "policy-1",
+      ),
+    ).toBeNull();
+
+    const changed = {
+      v: 1,
+      type: "authority.changed",
+      mono_ms: 1_002,
+      payload: {
+        authority_epoch: 5,
+        settings_revision: 3,
+        paused: true,
+      },
+    };
+    expect(validate(changed), JSON.stringify(validate.errors)).toBe(true);
+    expect(parseAuthorityChanged(changed)).toEqual({
+      authorityEpoch: 5,
+      settingsRevision: 3,
+      paused: true,
+    });
+    expect(parseAuthorityChanged({ ...changed, id: "unsolicited" })).toBeNull();
   });
 
   it("keeps full-target UTF-16 offsets independent of capped context strings", () => {
@@ -162,6 +231,7 @@ describe("protocol v1 mapper", () => {
           "commit.dispatched_unverified",
           "control",
           "health",
+          "policy",
         ],
         max_frame_bytes: 65_536,
         max_before_chars: 512,

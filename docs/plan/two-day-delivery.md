@@ -93,7 +93,7 @@ revision check. Badi may reuse the lessons, not that global raw-key design.
 | Accept next word-part | `Alt+]` | Insert only the first broker-provided part; never insert Enter. |
 | Accept remainder | `Alt+Shift+]` | Insert the cached remaining parts only if the revision still matches. |
 | Dismiss | `Escape` | Consume Escape only while a suggestion is visible; otherwise pass it through. |
-| Global pause/resume | `badictl pause` / `badictl resume` | Hide all UI and stop requests while paused. A Hyprland shortcut is optional and user-approved. |
+| Global pause/resume | `badictl pause on` / `badictl pause off` | Hide all UI and stop requests while paused. A Hyprland shortcut is optional and user-approved. |
 
 Bindings are configuration, not hidden constants. At H0 the user either
 accepts these or chooses alternatives before the protocol and adapter keymaps

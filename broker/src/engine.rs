@@ -1,23 +1,31 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, mpsc as std_mpsc};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use thiserror::Error;
-use tokio::sync::{Mutex, Semaphore, mpsc};
+use tokio::sync::{Mutex, Semaphore, broadcast, mpsc, oneshot};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
+use crate::control_plane::{ControlPlane, ControlPlaneError, ControlPlaneSnapshot};
 use crate::metrics::{Metrics, MetricsSnapshot};
+use crate::personalization::{
+    PersonalizationProvider, PersonalizationSignal, PersonalizationStoreError,
+};
 use crate::policy::{PolicyDecision, PolicyInput, PolicyReason, evaluate};
 use crate::protocol::{
-    Acceptance, Activation, ActiveLocator, AdapterKind, Capability, CommitPreparePayload,
-    CommitResultPayload, CommitStatus, ContextChangedPayload, Coordinates,
-    DEFAULT_SUGGESTION_TTL_MS, MAX_FRAME_BYTES, MAX_SAFE_COUNTER, MessageType, ProviderKind,
-    ReasonCode, SessionControlRequestPayload, SessionId, SessionOpenPayload, SuggestCancelPayload,
-    SuggestRequestPayload, SuggestionClearPayload, SuggestionShowPayload, WireEnvelope,
+    Acceptance, Activation, ActiveLocator, AdapterKind, AuthorityChangedPayload, Capability,
+    CommitPreparePayload, CommitResultPayload, CommitStatus, ContextChangedPayload, Coordinates,
+    DEFAULT_SUGGESTION_TTL_MS, MAX_FRAME_BYTES, MAX_SAFE_COUNTER, MessageType,
+    PolicyResolutionReason, PolicyStatusPayload, ProviderKind, ReasonCode,
+    SessionControlRequestPayload, SessionId, SessionOpenPayload, SuggestCancelPayload,
+    SuggestRequestPayload, SuggestionClearPayload, SuggestionShowPayload, TargetDescriptor,
+    WireEnvelope,
 };
 use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
-use crate::segment::{OutputError, accept_word, sanitize_suggestion};
+use crate::segment::{OutputError, accept_word, sanitize_suggestion, validate_suggestion_shape};
+use crate::settings::{PrivateStorageError, SettingsStoreError, SettingsV1, StableIdentity};
 
 /// Default broker-local time allowed for an adapter to report a commit result.
 pub const DEFAULT_COMMIT_RESULT_LEASE_MS: u64 = 1_500;
@@ -27,15 +35,22 @@ pub const MAX_COMMIT_RESULT_LEASE_MS: u64 = 5_000;
 pub const DEFAULT_CONTEXT_AUTHORITY_LEASE_MS: u64 = 3_000;
 const MIN_CONTEXT_AUTHORITY_LEASE_MS: u64 = 500;
 const MAX_CONTEXT_AUTHORITY_LEASE_MS: u64 = 10_000;
+const OUTCOME_QUEUE_CAPACITY: usize = 256;
+const OUTCOME_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
+const PERSONALIZATION_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 /// Default number of provider generations allowed across the entire broker.
 pub const DEFAULT_PROVIDER_CONCURRENCY: usize = 4;
 /// Hard upper bound even when a caller supplies a larger configuration value.
 pub const MAX_PROVIDER_CONCURRENCY: usize = 16;
+/// Maximum receiver-local age from an accepted request to provider completion.
+pub const MAX_GENERATION_TIMEOUT_MS: u64 = 600;
 
 #[derive(Clone, Copy, Debug)]
 pub struct BrokerConfig {
     pub debounce: Duration,
     pub provider_timeout: Duration,
+    /// Includes broker debounce; late output is never displayed with a fresh TTL.
+    pub generation_timeout: Duration,
     /// Maximum provider generations admitted across all broker connections.
     pub provider_concurrency: usize,
     pub suggestion_ttl: Duration,
@@ -48,8 +63,11 @@ pub struct BrokerConfig {
 impl Default for BrokerConfig {
     fn default() -> Self {
         Self {
-            debounce: Duration::from_millis(120),
+            // Adapters own user-idle acquisition timing. A second production
+            // debounce here only consumes the single input-to-visible budget.
+            debounce: Duration::ZERO,
             provider_timeout: Duration::from_millis(1_300),
+            generation_timeout: Duration::from_millis(MAX_GENERATION_TIMEOUT_MS),
             provider_concurrency: DEFAULT_PROVIDER_CONCURRENCY,
             suggestion_ttl: Duration::from_millis(DEFAULT_SUGGESTION_TTL_MS),
             context_authority_lease: Duration::from_millis(DEFAULT_CONTEXT_AUTHORITY_LEASE_MS),
@@ -160,12 +178,16 @@ pub struct Broker {
 }
 
 struct BrokerInner {
+    control_plane: Option<Arc<ControlPlane>>,
+    control_plane_mutation: Mutex<()>,
     provider: Arc<dyn CompletionProvider>,
     provider_admissions: Arc<Semaphore>,
     provider_kind: ProviderKind,
     config: BrokerConfig,
     metrics: Arc<Metrics>,
     shutdown: CancellationToken,
+    authority_events: broadcast::Sender<AuthorityChangedPayload>,
+    outcome_recorder: Option<OutcomeRecorder>,
     started: Instant,
     state: Mutex<BrokerState>,
 }
@@ -173,7 +195,27 @@ struct BrokerInner {
 #[derive(Default)]
 struct BrokerState {
     paused: bool,
+    control_plane_condition: ControlPlaneCondition,
+    control_plane_mutation_in_progress: bool,
+    authority_epoch: u64,
+    settings_revision: u64,
+    settings: Option<SettingsV1>,
+    policy_clients: HashMap<String, Option<u64>>,
     sessions: HashMap<SessionId, SessionState>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ControlPlaneCondition {
+    #[default]
+    Healthy,
+    Recoverable,
+    RestartRequired,
+}
+
+impl ControlPlaneCondition {
+    const fn is_degraded(self) -> bool {
+        !matches!(self, Self::Healthy)
+    }
 }
 
 struct SessionState {
@@ -196,30 +238,262 @@ struct StoredContext {
     payload: ContextChangedPayload,
 }
 
+struct GenerationResultContext {
+    coordinates: Coordinates,
+    fingerprint: String,
+    generation: u64,
+    request_id: Option<String>,
+    deadline: Instant,
+    before: String,
+    after: String,
+}
+
 struct VisibleSuggestion {
     payload: SuggestionShowPayload,
     expires_at: Instant,
     request_id: Option<String>,
+    aggregate_day: Option<u64>,
 }
 
 struct PendingCommit {
     coordinates: Coordinates,
     fingerprint: String,
     suggestion_id: String,
-    acceptance: Acceptance,
-    remainder: String,
     request_id: Option<String>,
     expires_at: Instant,
 }
 
-struct PartialContinuation {
-    coordinates: Coordinates,
-    fingerprint: String,
+enum SettingsReplaceOutcome {
+    Updated(ControlPlaneSnapshot),
+    CommittedDegraded {
+        settings: SettingsV1,
+        error: ControlPlaneError,
+    },
+    CommitUnknown(ControlPlaneError),
+    RejectedDegraded(ControlPlaneError),
+    Rejected(ControlPlaneError),
+}
+
+#[derive(Clone)]
+struct OutcomeRecorder {
+    sender: std_mpsc::SyncSender<OutcomeCommand>,
+    available: Arc<AtomicBool>,
+    dropped_signals: Arc<AtomicU64>,
+    write_failures: Arc<AtomicU64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OutcomeRecorderHealth {
+    pub available: bool,
+    pub dropped_signals: u64,
+    pub write_failures: u64,
+}
+
+enum OutcomeCommand {
+    Signal {
+        expected_settings_revision: u64,
+        event_day: u64,
+        identity: StableIdentity,
+        provider: PersonalizationProvider,
+        signal: PersonalizationSignal,
+    },
+    Clear {
+        response: oneshot::Sender<Result<(bool, ControlPlaneSnapshot), ControlPlaneError>>,
+    },
+    Snapshot {
+        response: oneshot::Sender<Result<ControlPlaneSnapshot, ControlPlaneError>>,
+    },
+    Flush {
+        response: oneshot::Sender<()>,
+    },
+}
+
+impl OutcomeRecorder {
+    fn new(control_plane: Arc<ControlPlane>) -> Result<Self, std::io::Error> {
+        let (sender, receiver) = std_mpsc::sync_channel(OUTCOME_QUEUE_CAPACITY);
+        let available = Arc::new(AtomicBool::new(true));
+        let dropped_signals = Arc::new(AtomicU64::new(0));
+        let write_failures = Arc::new(AtomicU64::new(0));
+        let worker_available = Arc::clone(&available);
+        let worker_dropped = Arc::clone(&dropped_signals);
+        let worker_failures = Arc::clone(&write_failures);
+        std::thread::Builder::new()
+            .name("badi-outcomes".to_owned())
+            .spawn(move || {
+                let mut reported_dropped = 0;
+                let mut next_sweep = Instant::now() + PERSONALIZATION_SWEEP_INTERVAL;
+                loop {
+                    let wait = next_sweep.saturating_duration_since(Instant::now());
+                    let command = match receiver.recv_timeout(wait) {
+                        Ok(command) => command,
+                        Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                            sweep_personalization_retention(&control_plane, &worker_failures);
+                            next_sweep = Instant::now() + PERSONALIZATION_SWEEP_INTERVAL;
+                            continue;
+                        }
+                        Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
+                    match command {
+                        OutcomeCommand::Signal {
+                            expected_settings_revision,
+                            event_day,
+                            identity,
+                            provider,
+                            signal,
+                        } => {
+                            match control_plane.record_signal_at_settings_revision(
+                                expected_settings_revision,
+                                event_day,
+                                identity,
+                                provider,
+                                signal,
+                            ) {
+                                Ok(mutation) if mutation.signal_dropped => {
+                                    worker_dropped.fetch_add(1, Ordering::Relaxed);
+                                }
+                                Ok(_) => {}
+                                Err(error) => {
+                                    worker_failures.fetch_add(1, Ordering::Relaxed);
+                                    eprintln!(
+                                        "badi-broker: outcome aggregate write failed: {error}"
+                                    );
+                                }
+                            }
+                        }
+                        OutcomeCommand::Clear { response } => {
+                            let result = control_plane.clear_personalization().and_then(|mutation| {
+                                control_plane
+                                    .snapshot()
+                                    .map(|snapshot| (mutation.changed, snapshot))
+                            });
+                            let _ = response.send(result);
+                        }
+                        OutcomeCommand::Snapshot { response } => {
+                            let _ = response.send(control_plane.snapshot());
+                        }
+                        OutcomeCommand::Flush { response } => {
+                            let _ = response.send(());
+                        }
+                    }
+                    let dropped = worker_dropped.load(Ordering::Relaxed);
+                    if dropped > reported_dropped {
+                        let rejected = dropped - reported_dropped;
+                        reported_dropped = dropped;
+                        eprintln!(
+                            "badi-broker: dropped {rejected} outcome aggregate signal(s) because the recorder queue or bounded store could not admit them"
+                        );
+                    }
+                    if Instant::now() >= next_sweep {
+                        sweep_personalization_retention(&control_plane, &worker_failures);
+                        next_sweep = Instant::now() + PERSONALIZATION_SWEEP_INTERVAL;
+                    }
+                }
+                worker_available.store(false, Ordering::Relaxed);
+            })?;
+        Ok(Self {
+            sender,
+            available,
+            dropped_signals,
+            write_failures,
+        })
+    }
+
+    fn try_signal(&self, command: OutcomeCommand) -> bool {
+        match self.sender.try_send(command) {
+            Ok(()) => true,
+            Err(std_mpsc::TrySendError::Full(_)) => {
+                self.dropped_signals.fetch_add(1, Ordering::Relaxed);
+                false
+            }
+            Err(std_mpsc::TrySendError::Disconnected(_)) => {
+                self.available.store(false, Ordering::Relaxed);
+                self.dropped_signals.fetch_add(1, Ordering::Relaxed);
+                false
+            }
+        }
+    }
+
+    fn health(&self) -> OutcomeRecorderHealth {
+        OutcomeRecorderHealth {
+            available: self.available.load(Ordering::Relaxed),
+            dropped_signals: self.dropped_signals.load(Ordering::Relaxed),
+            write_failures: self.write_failures.load(Ordering::Relaxed),
+        }
+    }
+
+    async fn clear(&self) -> Result<(bool, ControlPlaneSnapshot), BrokerError> {
+        let (response, receiver) = oneshot::channel();
+        let sender = self.sender.clone();
+        tokio::task::spawn_blocking(move || sender.send(OutcomeCommand::Clear { response }))
+            .await
+            .map_err(|_| BrokerError::ControlPlaneTask)?
+            .map_err(|_| BrokerError::ControlPlaneUnavailable)?;
+        receiver
+            .await
+            .map_err(|_| BrokerError::ControlPlaneTask)?
+            .map_err(BrokerError::from)
+    }
+
+    async fn snapshot(&self) -> Result<ControlPlaneSnapshot, BrokerError> {
+        let (response, receiver) = oneshot::channel();
+        let sender = self.sender.clone();
+        tokio::task::spawn_blocking(move || sender.send(OutcomeCommand::Snapshot { response }))
+            .await
+            .map_err(|_| BrokerError::ControlPlaneTask)?
+            .map_err(|_| BrokerError::ControlPlaneUnavailable)?;
+        receiver
+            .await
+            .map_err(|_| BrokerError::ControlPlaneTask)?
+            .map_err(BrokerError::from)
+    }
+
+    async fn flush(&self) -> Result<(), BrokerError> {
+        let (response, receiver) = oneshot::channel();
+        let sender = self.sender.clone();
+        tokio::task::spawn_blocking(move || sender.send(OutcomeCommand::Flush { response }))
+            .await
+            .map_err(|_| BrokerError::ControlPlaneTask)?
+            .map_err(|_| BrokerError::ControlPlaneUnavailable)?;
+        receiver.await.map_err(|_| BrokerError::ControlPlaneTask)
+    }
+}
+
+fn sweep_personalization_retention(control_plane: &ControlPlane, write_failures: &AtomicU64) {
+    if let Err(error) = control_plane.reconcile_personalization_now() {
+        write_failures.fetch_add(1, Ordering::Relaxed);
+        eprintln!("badi-broker: periodic personalization retention reconciliation failed: {error}");
+    }
 }
 
 impl Broker {
     #[must_use]
     pub fn new(provider: Arc<dyn CompletionProvider>, config: BrokerConfig) -> Self {
+        Self::build(provider, config, None, None, None)
+    }
+
+    pub fn with_control_plane(
+        provider: Arc<dyn CompletionProvider>,
+        config: BrokerConfig,
+        control_plane: Arc<ControlPlane>,
+    ) -> Result<Self, BrokerError> {
+        let settings = control_plane.snapshot()?.settings;
+        let outcome_recorder = OutcomeRecorder::new(Arc::clone(&control_plane))?;
+        Ok(Self::build(
+            provider,
+            config,
+            Some(control_plane),
+            Some(settings),
+            Some(outcome_recorder),
+        ))
+    }
+
+    fn build(
+        provider: Arc<dyn CompletionProvider>,
+        config: BrokerConfig,
+        control_plane: Option<Arc<ControlPlane>>,
+        settings: Option<SettingsV1>,
+        outcome_recorder: Option<OutcomeRecorder>,
+    ) -> Self {
         let provider_kind = provider.kind();
         let config = BrokerConfig {
             provider_concurrency: config
@@ -228,6 +502,10 @@ impl Broker {
             suggestion_ttl: config
                 .suggestion_ttl
                 .clamp(Duration::from_millis(1), Duration::from_millis(600)),
+            generation_timeout: config.generation_timeout.clamp(
+                Duration::from_millis(1),
+                Duration::from_millis(MAX_GENERATION_TIMEOUT_MS),
+            ),
             commit_result_lease: config.commit_result_lease.clamp(
                 Duration::from_millis(1),
                 Duration::from_millis(MAX_COMMIT_RESULT_LEASE_MS),
@@ -239,16 +517,25 @@ impl Broker {
             ..config
         };
         let provider_admissions = Arc::new(Semaphore::new(config.provider_concurrency));
+        let (authority_events, _) = broadcast::channel(32);
         Self {
             inner: Arc::new(BrokerInner {
+                control_plane,
+                control_plane_mutation: Mutex::new(()),
                 provider,
                 provider_admissions,
                 provider_kind,
                 config,
                 metrics: Arc::new(Metrics::default()),
                 shutdown: CancellationToken::new(),
+                authority_events,
+                outcome_recorder,
                 started: Instant::now(),
-                state: Mutex::new(BrokerState::default()),
+                state: Mutex::new(BrokerState {
+                    settings_revision: settings.as_ref().map_or(0, |value| value.revision),
+                    settings,
+                    ..BrokerState::default()
+                }),
             }),
         }
     }
@@ -290,6 +577,24 @@ impl Broker {
         }
         if state.sessions.contains_key(&coordinates.session_id) {
             return Err(BrokerError::SessionAlreadyOpen);
+        }
+        if let Some(settings) = state.settings.as_ref() {
+            if !authority.capabilities.contains(&Capability::Policy) {
+                return Err(BrokerError::InvalidCapability);
+            }
+            let policy = policy_status(
+                runtime_control_paused(&state),
+                state.authority_epoch,
+                settings,
+                &payload.target,
+            );
+            if payload.activation != Activation::Always
+                || !policy.context_allowed
+                || !policy.display_allowed
+                || !policy.suggestions_allowed
+            {
+                return Err(BrokerError::Denied(PolicyReason::PolicyNever));
+            }
         }
         state.sessions.insert(
             coordinates.session_id,
@@ -350,6 +655,18 @@ impl Broker {
             revoke_context_authority(session, &self.inner.metrics, ReasonCode::SessionClosed);
         }
         state.sessions.clear();
+        drop(state);
+        if let Some(recorder) = self.inner.outcome_recorder.as_ref() {
+            match time::timeout(OUTCOME_FLUSH_TIMEOUT, recorder.flush()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    eprintln!("badi-broker: outcome aggregate flush failed: {error}");
+                }
+                Err(_) => {
+                    eprintln!("badi-broker: outcome aggregate flush timed out");
+                }
+            }
+        }
     }
 
     fn renew_context_authority_lease(&self, session: &mut SessionState) {
@@ -392,11 +709,18 @@ impl Broker {
     ) -> Result<ContextOutcome, BrokerError> {
         crate::protocol::validate_coordinate_bounds(coordinates.focus_epoch, coordinates.revision)?;
         let mut state = self.inner.state.lock().await;
-        let paused = state.paused;
+        let runtime_paused = runtime_control_paused(&state);
+        let settings = state.settings.clone();
+        let paused = runtime_paused || settings.as_ref().is_some_and(|value| value.paused);
         let session = state
             .sessions
             .get_mut(&coordinates.session_id)
             .ok_or(BrokerError::UnknownSession)?;
+        if let Some(settings) = settings.as_ref() {
+            if !settings_allows_data(runtime_paused, settings, &session.target.target) {
+                return Err(BrokerError::Denied(PolicyReason::PolicyNever));
+            }
+        }
         ensure_newer_context(session, coordinates)?;
         // Apply broker-owned activation before validating content. A restrictive
         // session must reject non-empty context even when an adapter claims a
@@ -450,13 +774,27 @@ impl Broker {
             return Err(BrokerError::InvalidPayload);
         }
 
-        let (provider_request, cancellation, generation, provider_permit) = {
+        let (
+            provider_request,
+            suggestion_context,
+            generation_deadline,
+            cancellation,
+            generation,
+            provider_permit,
+        ) = {
             let mut state = self.inner.state.lock().await;
-            let paused = state.paused;
+            let runtime_paused = runtime_control_paused(&state);
+            let settings = state.settings.clone();
+            let paused = runtime_paused || settings.as_ref().is_some_and(|value| value.paused);
             let session = state
                 .sessions
                 .get_mut(&coordinates.session_id)
                 .ok_or(BrokerError::UnknownSession)?;
+            if settings.as_ref().is_some_and(|settings| {
+                !settings_allows_data(runtime_paused, settings, &session.target.target)
+            }) {
+                return Err(BrokerError::Denied(PolicyReason::PolicyNever));
+            }
             ensure_coordinates(session.coordinates, coordinates)?;
             let context = session.context.clone().ok_or(BrokerError::NoContext)?;
             if context.payload.fingerprint != payload.fingerprint {
@@ -497,12 +835,18 @@ impl Broker {
             let cancellation = CancellationToken::new();
             session.cancellation = Some(cancellation.clone());
             self.renew_context_authority_lease(session);
+            let suggestion_context = (
+                context.payload.before.clone(),
+                context.payload.after.clone(),
+            );
             (
                 ProviderRequest {
                     before: context.payload.before,
                     after: context.payload.after,
                     language: context.payload.language,
                 },
+                suggestion_context,
+                Instant::now() + self.inner.config.generation_timeout,
                 cancellation,
                 generation,
                 provider_permit,
@@ -529,11 +873,13 @@ impl Broker {
                 .inner
                 .metrics
                 .record_provider_call(provider_request.byte_len());
+            let provider_deadline = Instant::now() + broker.inner.config.provider_timeout;
+            let effective_deadline = std::cmp::min(generation_deadline, provider_deadline);
             let result = tokio::select! {
                 () = cancellation.cancelled() => return,
                 () = broker.inner.shutdown.cancelled() => return,
-                result = time::timeout(
-                    broker.inner.config.provider_timeout,
+                result = time::timeout_at(
+                    effective_deadline.into(),
                     broker
                         .inner
                         .provider
@@ -542,10 +888,15 @@ impl Broker {
             };
             broker
                 .finish_generation(
-                    coordinates,
-                    payload.fingerprint,
-                    generation,
-                    request_id,
+                    GenerationResultContext {
+                        coordinates,
+                        fingerprint: payload.fingerprint,
+                        generation,
+                        request_id,
+                        deadline: generation_deadline,
+                        before: suggestion_context.0,
+                        after: suggestion_context.1,
+                    },
                     cancellation,
                     result,
                 )
@@ -554,15 +905,37 @@ impl Broker {
         Ok(())
     }
 
+    // Keeping this result-state transition contiguous makes cancellation and
+    // stale-authority auditing clearer than splitting coupled branches.
+    #[allow(clippy::too_many_lines)]
     async fn finish_generation(
         &self,
-        coordinates: Coordinates,
-        fingerprint: String,
-        generation: u64,
-        request_id: Option<String>,
+        context: GenerationResultContext,
         cancellation: CancellationToken,
         result: Result<Result<Option<String>, ProviderError>, time::error::Elapsed>,
     ) {
+        let GenerationResultContext {
+            coordinates,
+            fingerprint,
+            generation,
+            request_id,
+            deadline,
+            before,
+            after,
+        } = context;
+        if Instant::now() >= deadline {
+            cancellation.cancel();
+            self.inner.metrics.record_provider_error();
+            self.clear_failed_generation(
+                coordinates,
+                &fingerprint,
+                generation,
+                request_id,
+                ReasonCode::ProviderTimeout,
+            )
+            .await;
+            return;
+        }
         let timed_out = result.is_err();
         let output = match result {
             Ok(Ok(Some(raw))) => {
@@ -605,9 +978,38 @@ impl Broker {
             .await;
             return;
         };
+        if validate_suggestion_shape(&before, &after, &text).is_err() {
+            self.inner.metrics.record_provider_error();
+            self.clear_failed_generation(
+                coordinates,
+                &fingerprint,
+                generation,
+                request_id,
+                ReasonCode::InvalidOutput,
+            )
+            .await;
+            return;
+        }
 
         let mut state = self.inner.state.lock().await;
-        if state.paused {
+        if Instant::now() >= deadline {
+            drop(state);
+            cancellation.cancel();
+            self.inner.metrics.record_provider_error();
+            self.clear_failed_generation(
+                coordinates,
+                &fingerprint,
+                generation,
+                request_id,
+                ReasonCode::ProviderTimeout,
+            )
+            .await;
+            return;
+        }
+        let runtime_paused = runtime_control_paused(&state);
+        let settings = state.settings.clone();
+        let settings_revision = state.settings_revision;
+        if runtime_paused || settings.as_ref().is_some_and(|value| value.paused) {
             self.inner.metrics.record_stale_result();
             return;
         }
@@ -615,6 +1017,12 @@ impl Broker {
             self.inner.metrics.record_stale_result();
             return;
         };
+        if settings.as_ref().is_some_and(|settings| {
+            !settings_allows_data(runtime_paused, settings, &session.target.target)
+        }) {
+            self.inner.metrics.record_stale_result();
+            return;
+        }
         let is_current = session.generation == generation
             && session.coordinates == coordinates
             && session
@@ -638,6 +1046,21 @@ impl Broker {
             ttl_ms: duration_millis(self.inner.config.suggestion_ttl),
             provider: self.inner.provider_kind,
         };
+        if Instant::now() >= deadline {
+            cancellation.cancel();
+            self.inner.metrics.record_provider_error();
+            session.cancellation = None;
+            let _ = session.sink.send(BrokerEvent::SuggestionClear {
+                coordinates,
+                payload: SuggestionClearPayload {
+                    fingerprint: payload.fingerprint,
+                    suggestion_id: None,
+                    reason: ReasonCode::ProviderTimeout,
+                },
+                request_id,
+            });
+            return;
+        }
         if session
             .sink
             .send(BrokerEvent::SuggestionShow {
@@ -649,12 +1072,22 @@ impl Broker {
         {
             return;
         }
+        let target = session.target.target.clone();
+        self.inner.metrics.record_suggestion_shown();
+        let aggregate_day = current_unix_day().filter(|event_day| {
+            self.queue_outcome(
+                &target,
+                settings_revision,
+                *event_day,
+                PersonalizationSignal::Shown,
+            )
+        });
         session.visible = Some(VisibleSuggestion {
             payload,
             expires_at,
             request_id,
+            aggregate_day,
         });
-        self.inner.metrics.record_suggestion_shown();
         drop(state);
 
         let broker = self.clone();
@@ -791,13 +1224,20 @@ impl Broker {
         }
 
         let mut state = self.inner.state.lock().await;
-        if state.paused {
+        let runtime_paused = runtime_control_paused(&state);
+        let settings = state.settings.clone();
+        if runtime_paused || settings.as_ref().is_some_and(|value| value.paused) {
             return Err(BrokerError::Denied(PolicyReason::Paused));
         }
         let session = state
             .sessions
             .get_mut(&coordinates.session_id)
             .ok_or(BrokerError::UnknownSession)?;
+        if settings.as_ref().is_some_and(|settings| {
+            !settings_allows_data(runtime_paused, settings, &session.target.target)
+        }) {
+            return Err(BrokerError::Denied(PolicyReason::PolicyNever));
+        }
         ensure_coordinates(session.coordinates, coordinates)?;
         ensure_fingerprint(session, &payload.fingerprint)?;
         let expected_id = payload
@@ -823,9 +1263,11 @@ impl Broker {
             return Err(BrokerError::NoSuggestion);
         }
 
-        match payload.action {
+        let target = session.target.target.clone();
+        let signal = match payload.action {
             crate::protocol::ControlAction::Dismiss => {
                 let visible = session.visible.take().expect("visible suggestion checked");
+                let aggregate_day = visible.aggregate_day;
                 session.generation = session.generation.wrapping_add(1);
                 let _ = session.sink.send(BrokerEvent::SuggestionClear {
                     coordinates,
@@ -837,16 +1279,18 @@ impl Broker {
                     request_id: visible.request_id,
                 });
                 self.inner.metrics.record_dismissal();
+                aggregate_day.map(|day| (day, PersonalizationSignal::Dismissed))
             }
             crate::protocol::ControlAction::AcceptWord
             | crate::protocol::ControlAction::AcceptAll => {
                 let visible = session.visible.take().expect("visible suggestion checked");
-                let (acceptance, text, remainder) =
+                let aggregate_day = visible.aggregate_day;
+                let (acceptance, text) =
                     if payload.action == crate::protocol::ControlAction::AcceptWord {
                         let parts = accept_word(&visible.payload.text);
-                        (Acceptance::Word, parts.accepted, parts.remainder)
+                        (Acceptance::Word, parts.accepted)
                     } else {
-                        (Acceptance::All, visible.payload.text.clone(), String::new())
+                        (Acceptance::All, visible.payload.text.clone())
                     };
                 let commit = CommitPreparePayload {
                     fingerprint: visible.payload.fingerprint.clone(),
@@ -860,8 +1304,6 @@ impl Broker {
                     coordinates,
                     fingerprint: visible.payload.fingerprint,
                     suggestion_id: visible.payload.suggestion_id,
-                    acceptance,
-                    remainder,
                     request_id: request_id.clone(),
                     expires_at,
                 };
@@ -887,6 +1329,16 @@ impl Broker {
                         .expire_pending_commit(coordinates, suggestion_id, expires_at)
                         .await;
                 });
+                aggregate_day.map(|day| {
+                    (
+                        day,
+                        if acceptance == Acceptance::Word {
+                            PersonalizationSignal::AcceptedWord
+                        } else {
+                            PersonalizationSignal::AcceptedAll
+                        },
+                    )
+                })
             }
             crate::protocol::ControlAction::Request
             | crate::protocol::ControlAction::Pause
@@ -894,10 +1346,16 @@ impl Broker {
             | crate::protocol::ControlAction::PauseToggle => {
                 return Err(BrokerError::InvalidPayload);
             }
+        };
+        let settings_revision = state.settings_revision;
+        if let Some((event_day, signal)) = signal {
+            let _ = self.queue_outcome(&target, settings_revision, event_day, signal);
         }
+        drop(state);
         Ok(())
     }
 
+    // Commit lease validation and state retirement are one atomic audit path.
     pub async fn commit_result(
         &self,
         coordinates: Coordinates,
@@ -928,63 +1386,16 @@ impl Broker {
             return Err(BrokerError::CommitLeaseExpired);
         }
         validate_commit_authority(&session.authority, payload.status)?;
-        let continuation = if payload.status == CommitStatus::Applied {
-            match validate_partial_continuation(pending, coordinates, &payload) {
-                Ok(continuation) => continuation,
-                Err(error) => {
-                    self.inner.metrics.record_commit_failure();
-                    return Err(error);
-                }
-            }
-        } else {
-            None
-        };
-        let pending = session.pending.take().expect("pending commit checked");
+        session.pending.take().expect("pending commit checked");
 
         match payload.status {
             CommitStatus::Applied => {
+                // A commit mutates the document and retires every byte derived
+                // from the old revision. The adapter must provide fresh context
+                // and request a newly generated continuation; a cached suffix
+                // cannot inherit authority or restart a relative display TTL.
                 retire_applied_state(session);
                 self.inner.metrics.record_commit_applied();
-                if let Some(continuation) = continuation {
-                    session.coordinates = continuation.coordinates;
-                    session.context_seen_at_coordinates = false;
-                    let suggestion_id = format!("s:{}", uuid::Uuid::new_v4());
-                    let text = pending.remainder;
-                    let show = SuggestionShowPayload {
-                        fingerprint: continuation.fingerprint,
-                        suggestion_id: suggestion_id.clone(),
-                        accept_word: accept_word(&text).accepted,
-                        text,
-                        ttl_ms: duration_millis(self.inner.config.suggestion_ttl),
-                        provider: self.inner.provider_kind,
-                    };
-                    let expires_at = Instant::now() + self.inner.config.suggestion_ttl;
-                    if session
-                        .sink
-                        .send(BrokerEvent::SuggestionShow {
-                            coordinates: continuation.coordinates,
-                            payload: show.clone(),
-                            request_id: None,
-                        })
-                        .is_err()
-                    {
-                        return Err(BrokerError::EventSinkClosed);
-                    }
-                    session.visible = Some(VisibleSuggestion {
-                        payload: show,
-                        expires_at,
-                        request_id: None,
-                    });
-                    self.inner.metrics.record_suggestion_shown();
-                    let broker = self.clone();
-                    let generation = session.generation;
-                    tokio::spawn(async move {
-                        time::sleep(broker.inner.config.suggestion_ttl).await;
-                        broker
-                            .expire_suggestion(continuation.coordinates, generation, suggestion_id)
-                            .await;
-                    });
-                }
             }
             CommitStatus::DispatchedUnverified => {
                 invalidate_context_authority_lease(session);
@@ -998,22 +1409,367 @@ impl Broker {
                 self.inner.metrics.record_commit_failure();
             }
         }
+        drop(state);
         Ok(())
     }
 
     pub async fn set_paused(&self, paused: bool) -> bool {
         let mut state = self.inner.state.lock().await;
-        transition_paused(&mut state, paused, &self.inner.metrics)
+        let changed = transition_paused(&mut state, paused, &self.inner.metrics);
+        let effective_paused = state_effective_paused(&state);
+        let event = changed.then(|| authority_changed(&state));
+        drop(state);
+        if let Some(event) = event {
+            let _ = self.inner.authority_events.send(event);
+        }
+        if effective_paused {
+            self.flush_outcomes_before_pause_ack().await;
+        }
+        self.is_paused().await
     }
 
     pub async fn toggle_paused(&self) -> bool {
         let mut state = self.inner.state.lock().await;
         let paused = !state.paused;
-        transition_paused(&mut state, paused, &self.inner.metrics)
+        let _ = transition_paused(&mut state, paused, &self.inner.metrics);
+        let effective_paused = state_effective_paused(&state);
+        let event = authority_changed(&state);
+        drop(state);
+        let _ = self.inner.authority_events.send(event);
+        if effective_paused {
+            self.flush_outcomes_before_pause_ack().await;
+        }
+        self.is_paused().await
+    }
+
+    #[must_use]
+    pub fn subscribe_authority_changes(&self) -> broadcast::Receiver<AuthorityChangedPayload> {
+        self.inner.authority_events.subscribe()
+    }
+
+    pub async fn register_policy_client(&self, connection_id: String) {
+        let mut state = self.inner.state.lock().await;
+        state.policy_clients.insert(connection_id, None);
+    }
+
+    pub async fn unregister_policy_client(&self, connection_id: &str) {
+        self.inner
+            .state
+            .lock()
+            .await
+            .policy_clients
+            .remove(connection_id);
+    }
+
+    pub async fn acknowledge_authority(
+        &self,
+        connection_id: &str,
+        authority_epoch: u64,
+    ) -> Result<(), BrokerError> {
+        let mut state = self.inner.state.lock().await;
+        if authority_epoch > state.authority_epoch {
+            return Err(BrokerError::InvalidPayload);
+        }
+        let current_epoch = state.authority_epoch;
+        let acknowledged = state
+            .policy_clients
+            .get_mut(connection_id)
+            .ok_or(BrokerError::InvalidCapability)?;
+        let acknowledged_epoch = authority_epoch.min(current_epoch);
+        *acknowledged =
+            Some(acknowledged.map_or(acknowledged_epoch, |value| value.max(acknowledged_epoch)));
+        Ok(())
+    }
+
+    pub async fn authority_snapshot(&self) -> AuthoritySnapshot {
+        let state = self.inner.state.lock().await;
+        AuthoritySnapshot {
+            authority_epoch: state.authority_epoch,
+            settings_revision: state.settings_revision,
+            paused: state_effective_paused(&state),
+            control_plane_degraded: state.control_plane_condition.is_degraded()
+                || state.control_plane_mutation_in_progress,
+            pending_acknowledgements: state
+                .policy_clients
+                .values()
+                .filter(|acknowledged| **acknowledged != Some(state.authority_epoch))
+                .count(),
+        }
+    }
+
+    pub async fn resolve_policy(&self, target: &TargetDescriptor) -> PolicyStatusPayload {
+        let state = self.inner.state.lock().await;
+        if let Some(settings) = state.settings.as_ref() {
+            policy_status(
+                runtime_control_paused(&state),
+                state.authority_epoch,
+                settings,
+                target,
+            )
+        } else {
+            denied_policy_status(
+                state.authority_epoch,
+                state.settings_revision,
+                runtime_control_paused(&state),
+                PolicyResolutionReason::UnknownIdentity,
+            )
+        }
+    }
+
+    pub async fn control_plane_snapshot(&self) -> Result<ControlPlaneSnapshot, BrokerError> {
+        self.inner
+            .outcome_recorder
+            .clone()
+            .ok_or(BrokerError::ControlPlaneUnavailable)?
+            .snapshot()
+            .await
+    }
+
+    #[must_use]
+    pub fn outcome_recorder_health(&self) -> OutcomeRecorderHealth {
+        self.inner.outcome_recorder.as_ref().map_or(
+            OutcomeRecorderHealth {
+                available: false,
+                dropped_signals: 0,
+                write_failures: 0,
+            },
+            OutcomeRecorder::health,
+        )
+    }
+
+    pub async fn replace_settings(
+        &self,
+        expected_revision: u64,
+        next: SettingsV1,
+    ) -> Result<ControlPlaneSnapshot, BrokerError> {
+        let control_plane = self
+            .inner
+            .control_plane
+            .clone()
+            .ok_or(BrokerError::ControlPlaneUnavailable)?;
+        // Serialize the complete mutation, not merely the on-disk CAS. The
+        // broker must never reinstall an older snapshot after a newer commit.
+        let _mutation = self.inner.control_plane_mutation.lock().await;
+        self.begin_control_plane_mutation().await;
+        let committed_settings = next.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            match control_plane.replace_settings(expected_revision, next) {
+                Ok(_) => match control_plane.snapshot() {
+                    Ok(snapshot) => SettingsReplaceOutcome::Updated(snapshot),
+                    Err(error) => SettingsReplaceOutcome::CommittedDegraded {
+                        settings: committed_settings,
+                        error,
+                    },
+                },
+                Err(error @ ControlPlaneError::SettingsCommittedReconciliation { .. }) => {
+                    SettingsReplaceOutcome::CommittedDegraded {
+                        settings: committed_settings,
+                        error,
+                    }
+                }
+                Err(
+                    error @ ControlPlaneError::Settings(SettingsStoreError::CommitStateUnknown),
+                ) => SettingsReplaceOutcome::CommitUnknown(error),
+                Err(
+                    error @ ControlPlaneError::Personalization(PersonalizationStoreError::Storage(
+                        PrivateStorageError::CommitStateUnknown,
+                    )),
+                ) => SettingsReplaceOutcome::RejectedDegraded(error),
+                Err(error) => SettingsReplaceOutcome::Rejected(error),
+            }
+        })
+        .await;
+        let Ok(outcome) = outcome else {
+            // The blocking task may have panicked after the settings file
+            // committed. Its commit state is unknowable, so do not reopen
+            // the data plane until a later coherent control-plane repair.
+            self.fail_control_plane_mutation_unknown().await;
+            return Err(BrokerError::ControlPlaneTask);
+        };
+
+        match outcome {
+            SettingsReplaceOutcome::Updated(updated) => {
+                self.install_settings_authority(updated.settings.clone(), false)
+                    .await;
+                Ok(updated)
+            }
+            SettingsReplaceOutcome::CommittedDegraded { settings, error } => {
+                // The settings file is already authoritative. If retention
+                // reconciliation or the post-commit snapshot failed, revoke
+                // every live lease and force the data plane paused until a
+                // successful control-plane operation proves coherence again.
+                self.install_settings_authority(settings, true).await;
+                Err(BrokerError::SettingsCommittedDegraded(error))
+            }
+            SettingsReplaceOutcome::CommitUnknown(error) => {
+                self.fail_control_plane_mutation_unknown().await;
+                Err(BrokerError::SettingsCommitUnknown(error))
+            }
+            SettingsReplaceOutcome::RejectedDegraded(error) => {
+                self.fail_control_plane_mutation_recoverable().await;
+                Err(BrokerError::ControlPlane(error))
+            }
+            SettingsReplaceOutcome::Rejected(error) => {
+                self.reject_control_plane_mutation().await;
+                Err(BrokerError::ControlPlane(error))
+            }
+        }
+    }
+
+    pub async fn clear_personalization(&self) -> Result<(bool, ControlPlaneSnapshot), BrokerError> {
+        let _mutation = self.inner.control_plane_mutation.lock().await;
+        let recorder = self
+            .inner
+            .outcome_recorder
+            .clone()
+            .ok_or(BrokerError::ControlPlaneUnavailable)?;
+        // Hold the broker state lock across the recorder's FIFO clear barrier.
+        // Every pre-clear outcome is therefore processed before the clear, no
+        // post-clear outcome can be queued early, and visible suggestions lose
+        // their link to a Shown aggregate that no longer exists.
+        let mut state = self.inner.state.lock().await;
+        for session in state.sessions.values_mut() {
+            if let Some(visible) = session.visible.as_mut() {
+                visible.aggregate_day = None;
+            }
+        }
+        let result = recorder.clear().await?;
+        let recovered = state.control_plane_condition == ControlPlaneCondition::Recoverable;
+        if recovered {
+            state.control_plane_condition = ControlPlaneCondition::Healthy;
+            state.settings_revision = result.1.settings.revision;
+            state.settings = Some(result.1.settings.clone());
+            state.authority_epoch = state
+                .authority_epoch
+                .saturating_add(1)
+                .min(MAX_SAFE_COUNTER);
+        }
+        let event = recovered.then(|| authority_changed(&state));
+        drop(state);
+        if let Some(event) = event {
+            let _ = self.inner.authority_events.send(event);
+        }
+        Ok(result)
+    }
+
+    async fn install_settings_authority(&self, settings: SettingsV1, degraded: bool) {
+        let mut state = self.inner.state.lock().await;
+        for session in state.sessions.values_mut() {
+            revoke_context_authority(session, &self.inner.metrics, ReasonCode::PolicyNever);
+        }
+        state.sessions.clear();
+        state.control_plane_mutation_in_progress = false;
+        state.control_plane_condition = if degraded {
+            ControlPlaneCondition::Recoverable
+        } else {
+            ControlPlaneCondition::Healthy
+        };
+        state.settings_revision = settings.revision;
+        state.settings = Some(settings);
+        state.authority_epoch = state
+            .authority_epoch
+            .saturating_add(1)
+            .min(MAX_SAFE_COUNTER);
+        let event = authority_changed(&state);
+        drop(state);
+        let _ = self.inner.authority_events.send(event);
+    }
+
+    async fn begin_control_plane_mutation(&self) {
+        let mut state = self.inner.state.lock().await;
+        for session in state.sessions.values_mut() {
+            revoke_context_authority(session, &self.inner.metrics, ReasonCode::PolicyNever);
+        }
+        state.sessions.clear();
+        state.control_plane_mutation_in_progress = true;
+        state.authority_epoch = state
+            .authority_epoch
+            .saturating_add(1)
+            .min(MAX_SAFE_COUNTER);
+        let event = authority_changed(&state);
+        drop(state);
+        let _ = self.inner.authority_events.send(event);
+    }
+
+    async fn reject_control_plane_mutation(&self) {
+        let mut state = self.inner.state.lock().await;
+        state.control_plane_mutation_in_progress = false;
+        state.authority_epoch = state
+            .authority_epoch
+            .saturating_add(1)
+            .min(MAX_SAFE_COUNTER);
+        let event = authority_changed(&state);
+        drop(state);
+        let _ = self.inner.authority_events.send(event);
+    }
+
+    async fn fail_control_plane_mutation_unknown(&self) {
+        let mut state = self.inner.state.lock().await;
+        state.control_plane_mutation_in_progress = false;
+        state.control_plane_condition = ControlPlaneCondition::RestartRequired;
+        state.authority_epoch = state
+            .authority_epoch
+            .saturating_add(1)
+            .min(MAX_SAFE_COUNTER);
+        let event = authority_changed(&state);
+        drop(state);
+        let _ = self.inner.authority_events.send(event);
+    }
+
+    async fn fail_control_plane_mutation_recoverable(&self) {
+        let mut state = self.inner.state.lock().await;
+        state.control_plane_mutation_in_progress = false;
+        if state.control_plane_condition == ControlPlaneCondition::Healthy {
+            state.control_plane_condition = ControlPlaneCondition::Recoverable;
+        }
+        // Never downgrade an earlier commit-unknown state. Only a coherent
+        // settings installation (or process restart/reload) may clear it.
+        state.authority_epoch = state
+            .authority_epoch
+            .saturating_add(1)
+            .min(MAX_SAFE_COUNTER);
+        let event = authority_changed(&state);
+        drop(state);
+        let _ = self.inner.authority_events.send(event);
+    }
+
+    async fn flush_outcomes_before_pause_ack(&self) {
+        let Some(recorder) = self.inner.outcome_recorder.as_ref() else {
+            return;
+        };
+        if let Err(error) = recorder.flush().await {
+            // A disconnected recorder cannot perform later writes. Keep the
+            // pause effective and report the operational loss without logging
+            // any context or suggestion content.
+            eprintln!("badi-broker: outcome recorder pause fence failed: {error}");
+        }
+    }
+
+    fn queue_outcome(
+        &self,
+        target: &TargetDescriptor,
+        expected_settings_revision: u64,
+        event_day: u64,
+        signal: PersonalizationSignal,
+    ) -> bool {
+        let Some(recorder) = self.inner.outcome_recorder.as_ref() else {
+            return false;
+        };
+        let Ok(identity) = StableIdentity::from_target(target) else {
+            return false;
+        };
+        recorder.try_signal(OutcomeCommand::Signal {
+            expected_settings_revision,
+            event_day,
+            identity,
+            provider: PersonalizationProvider::from(self.inner.provider_kind),
+            signal,
+        })
     }
 
     pub async fn is_paused(&self) -> bool {
-        self.inner.state.lock().await.paused
+        let state = self.inner.state.lock().await;
+        state_effective_paused(&state)
     }
 
     pub async fn session_count(&self) -> u64 {
@@ -1029,7 +1785,10 @@ impl Broker {
         let state = self.inner.state.lock().await;
         HealthSnapshot {
             provider: self.provider_kind(),
-            paused: state.paused,
+            paused: state_effective_paused(&state),
+            authority_epoch: state.authority_epoch,
+            settings_revision: state.settings_revision,
+            control_plane_degraded: state.control_plane_condition.is_degraded(),
             sessions: u64::try_from(state.sessions.len()).unwrap_or(u64::MAX),
             max_frame_bytes: MAX_FRAME_BYTES,
             metrics: self.inner.metrics.snapshot(),
@@ -1038,14 +1797,33 @@ impl Broker {
     }
 }
 
+fn current_unix_day() -> Option<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|elapsed| elapsed.as_secs() / 86_400)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HealthSnapshot {
     pub provider: ProviderKind,
     pub paused: bool,
+    pub authority_epoch: u64,
+    pub settings_revision: u64,
+    pub control_plane_degraded: bool,
     pub sessions: u64,
     pub max_frame_bytes: usize,
     pub metrics: MetricsSnapshot,
     pub active: Option<ActiveLocator>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthoritySnapshot {
+    pub authority_epoch: u64,
+    pub settings_revision: u64,
+    pub paused: bool,
+    pub control_plane_degraded: bool,
+    pub pending_acknowledgements: usize,
 }
 
 fn invalidate_context_authority_lease(session: &mut SessionState) {
@@ -1062,7 +1840,7 @@ fn revoke_context_authority(session: &mut SessionState, metrics: &Metrics, reaso
 }
 
 fn active_locator_from_state(state: &BrokerState) -> Option<ActiveLocator> {
-    if state.paused {
+    if state_effective_paused(state) {
         return None;
     }
     let mut candidates = state.sessions.values().filter_map(|session| {
@@ -1139,32 +1917,6 @@ fn send_pending_clear(session: &SessionState, pending: PendingCommit, reason: Re
     });
 }
 
-fn validate_partial_continuation(
-    pending: &PendingCommit,
-    coordinates: Coordinates,
-    payload: &CommitResultPayload,
-) -> Result<Option<PartialContinuation>, BrokerError> {
-    match (payload.new_revision, payload.new_fingerprint.as_ref()) {
-        (None, None) => Ok(None),
-        (Some(new_revision), Some(new_fingerprint))
-            if pending.acceptance == Acceptance::Word && !pending.remainder.is_empty() =>
-        {
-            if new_revision <= coordinates.revision {
-                Err(BrokerError::Stale)
-            } else {
-                Ok(Some(PartialContinuation {
-                    coordinates: Coordinates {
-                        revision: new_revision,
-                        ..coordinates
-                    },
-                    fingerprint: new_fingerprint.clone(),
-                }))
-            }
-        }
-        _ => Err(BrokerError::InvalidPayload),
-    }
-}
-
 fn retire_applied_state(session: &mut SessionState) {
     invalidate_context_authority_lease(session);
     session.generation = session.generation.wrapping_add(1);
@@ -1177,15 +1929,134 @@ fn retire_applied_state(session: &mut SessionState) {
 
 fn transition_paused(state: &mut BrokerState, paused: bool, metrics: &Metrics) -> bool {
     if state.paused == paused {
-        return state.paused;
+        return false;
     }
     state.paused = paused;
-    if paused {
+    state.authority_epoch = state
+        .authority_epoch
+        .saturating_add(1)
+        .min(MAX_SAFE_COUNTER);
+    if state_effective_paused(state) {
         for session in state.sessions.values_mut() {
             revoke_context_authority(session, metrics, ReasonCode::Paused);
         }
     }
+    true
+}
+
+fn authority_changed(state: &BrokerState) -> AuthorityChangedPayload {
+    AuthorityChangedPayload {
+        authority_epoch: state.authority_epoch,
+        settings_revision: state.settings_revision,
+        paused: state_effective_paused(state),
+    }
+}
+
+fn state_effective_paused(state: &BrokerState) -> bool {
+    runtime_control_paused(state)
+        || state
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.paused)
+}
+
+fn runtime_control_paused(state: &BrokerState) -> bool {
     state.paused
+        || state.control_plane_condition.is_degraded()
+        || state.control_plane_mutation_in_progress
+}
+
+fn settings_allows_data(
+    runtime_paused: bool,
+    settings: &SettingsV1,
+    target: &TargetDescriptor,
+) -> bool {
+    let resolution = settings.resolve_target_validated(target);
+    !runtime_paused
+        && resolution.configured
+        && resolution.allows_context_read()
+        && resolution.allows_display()
+        && resolution.allows_suggestion()
+}
+
+fn policy_status(
+    runtime_paused: bool,
+    authority_epoch: u64,
+    settings: &SettingsV1,
+    target: &TargetDescriptor,
+) -> PolicyStatusPayload {
+    let resolution = settings.resolve_target_validated(target);
+    let paused = runtime_paused || resolution.paused;
+    if paused {
+        return denied_policy_status(
+            authority_epoch,
+            settings.revision,
+            true,
+            PolicyResolutionReason::GlobalDisabled,
+        );
+    }
+    if !resolution.identity_known {
+        return denied_policy_status(
+            authority_epoch,
+            settings.revision,
+            false,
+            PolicyResolutionReason::UnknownIdentity,
+        );
+    }
+    if !resolution.configured {
+        return denied_policy_status(
+            authority_epoch,
+            settings.revision,
+            false,
+            PolicyResolutionReason::DefaultPolicy,
+        );
+    }
+    if !resolution.allows_context_read() {
+        return denied_policy_status(
+            authority_epoch,
+            settings.revision,
+            false,
+            PolicyResolutionReason::ContextDisabled,
+        );
+    }
+    if !resolution.allows_display() || !resolution.allows_suggestion() {
+        return denied_policy_status(
+            authority_epoch,
+            settings.revision,
+            false,
+            PolicyResolutionReason::SuggestionsDisabled,
+        );
+    }
+    PolicyStatusPayload {
+        authority_epoch,
+        settings_revision: settings.revision,
+        paused: false,
+        activation: Activation::Always,
+        context_allowed: true,
+        display_allowed: true,
+        suggestions_allowed: true,
+        learning_allowed: resolution.allows_learning(),
+        reason: PolicyResolutionReason::MatchedRule,
+    }
+}
+
+fn denied_policy_status(
+    authority_epoch: u64,
+    settings_revision: u64,
+    paused: bool,
+    reason: PolicyResolutionReason,
+) -> PolicyStatusPayload {
+    PolicyStatusPayload {
+        authority_epoch,
+        settings_revision,
+        paused,
+        activation: Activation::Never,
+        context_allowed: false,
+        display_allowed: false,
+        suggestions_allowed: false,
+        learning_allowed: false,
+        reason,
+    }
 }
 
 fn ensure_newer_context(
@@ -1275,6 +2146,12 @@ const fn restrictive_activation(configured: Activation, claimed: Activation) -> 
 pub enum BrokerError {
     #[error("commit_lease_expired")]
     CommitLeaseExpired,
+    #[error("control_plane")]
+    ControlPlane(#[from] ControlPlaneError),
+    #[error("control_plane_task")]
+    ControlPlaneTask,
+    #[error("control_plane_unavailable")]
+    ControlPlaneUnavailable,
     #[error("denied:{0:?}")]
     Denied(PolicyReason),
     #[error("invalid_capability")]
@@ -1291,6 +2168,8 @@ pub enum BrokerError {
     NoPendingCommit,
     #[error("no_suggestion")]
     NoSuggestion,
+    #[error("outcome_recorder_thread")]
+    OutcomeRecorderThread(#[from] std::io::Error),
     #[error("protocol")]
     Protocol(#[from] crate::protocol::ProtocolError),
     #[error("provider_busy")]
@@ -1299,6 +2178,10 @@ pub enum BrokerError {
     SessionAlreadyOpen,
     #[error("shutting_down")]
     ShuttingDown,
+    #[error("settings_committed_degraded")]
+    SettingsCommittedDegraded(#[source] ControlPlaneError),
+    #[error("settings_commit_unknown")]
+    SettingsCommitUnknown(#[source] ControlPlaneError),
     #[error("stale")]
     Stale,
     #[error("unknown_session")]
@@ -1307,24 +2190,34 @@ pub enum BrokerError {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use async_trait::async_trait;
+    use tempfile::tempdir;
     use tokio::sync::{Barrier, mpsc};
     use tokio::time::{Duration, sleep, timeout};
     use tokio_util::sync::CancellationToken;
 
     use super::{
         Broker, BrokerConfig, BrokerError, BrokerEvent, BrokerEventSink, ContextOutcome,
-        MAX_PROVIDER_CONCURRENCY, SessionAuthority, validate_commit_authority,
+        ControlPlaneCondition, MAX_PROVIDER_CONCURRENCY, SessionAuthority,
+        validate_commit_authority,
     };
+    use crate::control_plane::ControlPlane;
+    use crate::personalization::PersonalizationSignal;
     use crate::protocol::{
         Activation, AdapterKind, Capability, CommitResultPayload, CommitStatus,
         ContextChangedPayload, ControlAction, Coordinates, FieldDescriptor, FieldPurpose,
-        OffsetUnit, ProviderKind, ReasonCode, Selection, SessionControlRequestPayload, SessionId,
-        SessionOpenPayload, SuggestRequestPayload, TargetDescriptor, TargetKind,
+        OffsetUnit, Origin, OriginScheme, ProviderKind, ReasonCode, Selection,
+        SessionControlRequestPayload, SessionId, SessionOpenPayload, SuggestRequestPayload,
+        TargetDescriptor, TargetKind,
     };
     use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
+    use crate::settings::{
+        BrowserAdapter, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV1,
+        StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
+    };
 
     struct CountingProvider {
         calls: AtomicU64,
@@ -1529,6 +2422,92 @@ mod tests {
             .await
             .expect("open session");
         (broker, session_id, receiver)
+    }
+
+    fn controlled_target() -> TargetDescriptor {
+        TargetDescriptor {
+            kind: TargetKind::Browser,
+            app_id: "chromium".to_owned(),
+            target_id: "controlled-field".to_owned(),
+            origin: Some(Origin {
+                scheme: OriginScheme::Http,
+                host: "localhost".to_owned(),
+                port: Some(4173),
+            }),
+        }
+    }
+
+    fn controlled_settings(revision: u64, allowed: bool, learn: bool) -> SettingsV1 {
+        let decision = if allowed {
+            PermissionDecision::Allow
+        } else {
+            PermissionDecision::Block
+        };
+        SettingsV1 {
+            schema: SETTINGS_SCHEMA.to_owned(),
+            revision,
+            paused: false,
+            subjects: vec![SubjectRule {
+                identity: StableIdentity::browser_origin(
+                    BrowserAdapter::Chromium,
+                    WebScheme::Http,
+                    "localhost",
+                    Some(4173),
+                )
+                .expect("controlled identity"),
+                permissions: SubjectPermissions {
+                    suggest: decision,
+                    display: decision,
+                    context_read: decision,
+                    learn: if allowed && learn {
+                        PermissionDecision::Allow
+                    } else {
+                        PermissionDecision::Block
+                    },
+                    retention: if allowed && learn {
+                        RetentionPermission::Bounded { days: 30 }
+                    } else {
+                        RetentionPermission::None
+                    },
+                },
+            }],
+        }
+    }
+
+    fn controlled_learning_settings(revision: u64, retention: RetentionPermission) -> SettingsV1 {
+        SettingsV1 {
+            schema: SETTINGS_SCHEMA.to_owned(),
+            revision,
+            paused: false,
+            subjects: vec![SubjectRule {
+                identity: StableIdentity::browser_origin(
+                    BrowserAdapter::Chromium,
+                    WebScheme::Http,
+                    "localhost",
+                    Some(4173),
+                )
+                .expect("controlled identity"),
+                permissions: SubjectPermissions {
+                    suggest: PermissionDecision::Allow,
+                    display: PermissionDecision::Allow,
+                    context_read: PermissionDecision::Allow,
+                    learn: PermissionDecision::Allow,
+                    retention,
+                },
+            }],
+        }
+    }
+
+    fn controlled_authority() -> SessionAuthority {
+        SessionAuthority {
+            adapter_kind: AdapterKind::Browser,
+            capabilities: vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::CommitApplied,
+                Capability::Policy,
+            ],
+        }
     }
 
     async fn prepare_commit_result_case(
@@ -1798,6 +2777,47 @@ mod tests {
         assert!(matches!(
             timeout(Duration::from_millis(50), events.recv()).await,
             Ok(Some(BrokerEvent::SuggestionClear { payload, .. }))
+                if payload.reason == ReasonCode::ProviderTimeout
+        ));
+        assert!(cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn generation_deadline_includes_debounce_and_cancels_late_work() {
+        let provider = std::sync::Arc::new(PendingProvider::new());
+        let provider_view = std::sync::Arc::clone(&provider);
+        let (broker, session_id, mut events) = setup(
+            provider,
+            BrokerConfig {
+                debounce: Duration::from_millis(2),
+                provider_timeout: Duration::from_secs(1),
+                generation_timeout: Duration::from_millis(8),
+                ..BrokerConfig::default()
+            },
+        )
+        .await;
+        let update = context(1, FieldPurpose::Normal);
+        broker
+            .update_context(coordinates(session_id, 1), update.clone())
+            .await
+            .expect("context");
+        broker
+            .request_suggestion(
+                coordinates(session_id, 1),
+                SuggestRequestPayload {
+                    fingerprint: update.fingerprint,
+                    explicit: false,
+                },
+                None,
+            )
+            .await
+            .expect("request");
+        let cancellation = wait_for_provider_token(&provider_view).await;
+        assert!(matches!(
+            timeout(Duration::from_millis(100), events.recv())
+                .await
+                .expect("timeout event"),
+            Some(BrokerEvent::SuggestionClear { payload, .. })
                 if payload.reason == ReasonCode::ProviderTimeout
         ));
         assert!(cancellation.is_cancelled());
@@ -2582,8 +3602,6 @@ mod tests {
                         fingerprint: update.fingerprint,
                         suggestion_id: payload.suggestion_id,
                         status: CommitStatus::Applied,
-                        new_revision: None,
-                        new_fingerprint: None,
                     },
                 )
                 .await,
@@ -2616,8 +3634,6 @@ mod tests {
                     fingerprint: update.fingerprint,
                     suggestion_id,
                     status: CommitStatus::Applied,
-                    new_revision: None,
-                    new_fingerprint: None,
                 },
             )
             .await
@@ -2652,8 +3668,6 @@ mod tests {
                     fingerprint: update.fingerprint,
                     suggestion_id,
                     status: CommitStatus::Applied,
-                    new_revision: None,
-                    new_fingerprint: None,
                 },
             )
             .await
@@ -2697,8 +3711,6 @@ mod tests {
                         fingerprint: update.fingerprint.clone(),
                         suggestion_id,
                         status,
-                        new_revision: None,
-                        new_fingerprint: None,
                     },
                 )
                 .await
@@ -2721,124 +3733,6 @@ mod tests {
             ));
             assert_eq!(broker.metrics().snapshot().commit_failures, 1);
         }
-    }
-
-    #[tokio::test]
-    async fn malformed_applied_rebind_retains_lease_for_a_corrected_result() {
-        let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
-        let (broker, session_id, mut events) = setup(
-            provider,
-            BrokerConfig {
-                debounce: Duration::ZERO,
-                ..BrokerConfig::default()
-            },
-        )
-        .await;
-        let (update, suggestion_id) =
-            prepare_commit_result_case(&broker, session_id, &mut events, ControlAction::AcceptWord)
-                .await;
-
-        assert!(matches!(
-            broker
-                .commit_result(
-                    coordinates(session_id, 1),
-                    CommitResultPayload {
-                        fingerprint: update.fingerprint.clone(),
-                        suggestion_id: suggestion_id.clone(),
-                        status: CommitStatus::Applied,
-                        new_revision: Some(1),
-                        new_fingerprint: Some("fingerprint_000000000002".to_owned()),
-                    },
-                )
-                .await,
-            Err(BrokerError::Stale)
-        ));
-
-        {
-            let state = broker.inner.state.lock().await;
-            let session = state.sessions.get(&session_id).expect("session");
-            assert!(session.context.is_some());
-            assert!(session.visible.is_none());
-            assert!(session.pending.is_some());
-        }
-        broker
-            .commit_result(
-                coordinates(session_id, 1),
-                CommitResultPayload {
-                    fingerprint: update.fingerprint,
-                    suggestion_id,
-                    status: CommitStatus::Applied,
-                    new_revision: Some(2),
-                    new_fingerprint: Some("fingerprint_000000000002".to_owned()),
-                },
-            )
-            .await
-            .expect("corrected result uses retained lease");
-        assert!(matches!(
-            events.recv().await,
-            Some(BrokerEvent::SuggestionShow {
-                coordinates: event_coordinates,
-                ..
-            }) if event_coordinates == coordinates(session_id, 2)
-        ));
-        let metrics = broker.metrics().snapshot();
-        assert_eq!(metrics.commits_applied, 1);
-        assert_eq!(metrics.commit_failures, 1);
-    }
-
-    #[tokio::test]
-    async fn applied_word_with_valid_rebind_installs_only_partial_remainder() {
-        let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
-        let (broker, session_id, mut events) = setup(
-            provider,
-            BrokerConfig {
-                debounce: Duration::ZERO,
-                ..BrokerConfig::default()
-            },
-        )
-        .await;
-        let (update, suggestion_id) =
-            prepare_commit_result_case(&broker, session_id, &mut events, ControlAction::AcceptWord)
-                .await;
-
-        broker
-            .commit_result(
-                coordinates(session_id, 1),
-                CommitResultPayload {
-                    fingerprint: update.fingerprint,
-                    suggestion_id,
-                    status: CommitStatus::Applied,
-                    new_revision: Some(2),
-                    new_fingerprint: Some("fingerprint_000000000002".to_owned()),
-                },
-            )
-            .await
-            .expect("valid partial rebind");
-
-        let continued = events.recv().await.expect("continued suggestion");
-        let BrokerEvent::SuggestionShow {
-            coordinates: continued_coordinates,
-            payload,
-            ..
-        } = continued
-        else {
-            panic!("expected continued suggestion")
-        };
-        assert_eq!(continued_coordinates, coordinates(session_id, 2));
-        assert_eq!(payload.fingerprint, "fingerprint_000000000002");
-        assert_eq!(payload.text, " 1");
-        assert_eq!(payload.accept_word, " 1");
-        let state = broker.inner.state.lock().await;
-        let session = state.sessions.get(&session_id).expect("session");
-        assert_eq!(session.coordinates, coordinates(session_id, 2));
-        assert!(session.context.is_none());
-        assert!(session.pending.is_none());
-        assert!(session.visible.is_some());
-        assert!(!session.context_seen_at_coordinates);
-        drop(state);
-        let metrics = broker.metrics().snapshot();
-        assert_eq!(metrics.commits_applied, 1);
-        assert_eq!(metrics.commit_failures, 0);
     }
 
     #[tokio::test]
@@ -2911,8 +3805,6 @@ mod tests {
                         fingerprint: update.fingerprint,
                         suggestion_id: payload.suggestion_id,
                         status: CommitStatus::Applied,
-                        new_revision: None,
-                        new_fingerprint: None,
                     },
                 )
                 .await,
@@ -2950,8 +3842,6 @@ mod tests {
                         fingerprint: update.fingerprint.clone(),
                         suggestion_id: "s:different".to_owned(),
                         status: CommitStatus::Applied,
-                        new_revision: None,
-                        new_fingerprint: None,
                     },
                 )
                 .await,
@@ -2970,8 +3860,6 @@ mod tests {
                     fingerprint: update.fingerprint,
                     suggestion_id,
                     status: CommitStatus::Applied,
-                    new_revision: None,
-                    new_fingerprint: None,
                 },
             )
             .await
@@ -3040,8 +3928,6 @@ mod tests {
                         fingerprint: update.fingerprint,
                         suggestion_id: payload.suggestion_id,
                         status: CommitStatus::Applied,
-                        new_revision: None,
-                        new_fingerprint: None,
                     },
                 )
                 .await,
@@ -3121,12 +4007,527 @@ mod tests {
                         fingerprint: update.fingerprint,
                         suggestion_id: payload.suggestion_id,
                         status: CommitStatus::Applied,
-                        new_revision: None,
-                        new_fingerprint: None,
                     },
                 )
                 .await,
             Err(BrokerError::NoPendingCommit)
         ));
+    }
+
+    #[tokio::test]
+    async fn persisted_policy_is_enforced_and_replacement_revokes_live_sessions() {
+        let temporary = tempdir().expect("temporary directory");
+        let paths = StoragePaths::new(
+            temporary.path().join("config/badi"),
+            temporary.path().join("data/badi"),
+        )
+        .expect("storage paths");
+        let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+        control_plane
+            .replace_settings(0, controlled_settings(1, true, false))
+            .expect("allow controlled origin");
+        let broker = Broker::with_control_plane(
+            std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+            BrokerConfig::default(),
+            std::sync::Arc::clone(&control_plane),
+        )
+        .expect("controlled broker");
+        let session_id = SessionId::new();
+        let (sink, _events) = mpsc::channel(8);
+        broker
+            .open_session(
+                coordinates(session_id, 0),
+                SessionOpenPayload {
+                    target: controlled_target(),
+                    activation: Activation::Always,
+                },
+                controlled_authority(),
+                event_sink(sink),
+            )
+            .await
+            .expect("allowed session");
+        broker
+            .update_context(coordinates(session_id, 1), context(1, FieldPurpose::Normal))
+            .await
+            .expect("allowed context");
+
+        let snapshot = broker
+            .replace_settings(1, controlled_settings(2, false, false))
+            .await
+            .expect("replace settings");
+        assert_eq!(snapshot.settings.revision, 2);
+        assert_eq!(broker.session_count().await, 0);
+        assert!(matches!(
+            broker
+                .update_context(coordinates(session_id, 2), context(2, FieldPurpose::Normal),)
+                .await,
+            Err(BrokerError::UnknownSession)
+        ));
+
+        let denied_session = SessionId::new();
+        let (sink, _events) = mpsc::channel(8);
+        assert!(matches!(
+            broker
+                .open_session(
+                    coordinates(denied_session, 0),
+                    SessionOpenPayload {
+                        target: controlled_target(),
+                        activation: Activation::Always,
+                    },
+                    controlled_authority(),
+                    event_sink(sink),
+                )
+                .await,
+            Err(BrokerError::Denied(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn broker_records_only_content_free_shown_and_dismissed_aggregates() {
+        let temporary = tempdir().expect("temporary directory");
+        let paths = StoragePaths::new(
+            temporary.path().join("config/badi"),
+            temporary.path().join("data/badi"),
+        )
+        .expect("storage paths");
+        let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+        control_plane
+            .replace_settings(0, controlled_settings(1, true, true))
+            .expect("allow aggregate recording");
+        let broker = Broker::with_control_plane(
+            std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+            BrokerConfig {
+                debounce: Duration::ZERO,
+                ..BrokerConfig::default()
+            },
+            std::sync::Arc::clone(&control_plane),
+        )
+        .expect("controlled broker");
+        let session_id = SessionId::new();
+        let (sink, mut events) = mpsc::channel(8);
+        broker
+            .open_session(
+                coordinates(session_id, 0),
+                SessionOpenPayload {
+                    target: controlled_target(),
+                    activation: Activation::Always,
+                },
+                controlled_authority(),
+                event_sink(sink),
+            )
+            .await
+            .expect("allowed session");
+        let mut private_context = context(1, FieldPurpose::Normal);
+        private_context.before = "private prose that must never persist".to_owned();
+        private_context.selection.anchor =
+            u64::try_from(private_context.before.encode_utf16().count()).expect("context length");
+        private_context.selection.head = private_context.selection.anchor;
+        broker
+            .update_context(coordinates(session_id, 1), private_context.clone())
+            .await
+            .expect("allowed context");
+        broker
+            .request_suggestion(
+                coordinates(session_id, 1),
+                SuggestRequestPayload {
+                    fingerprint: private_context.fingerprint.clone(),
+                    explicit: false,
+                },
+                None,
+            )
+            .await
+            .expect("suggestion request");
+        let shown = timeout(Duration::from_millis(100), events.recv())
+            .await
+            .expect("show timeout")
+            .expect("show event");
+        let BrokerEvent::SuggestionShow { payload, .. } = shown else {
+            panic!("expected suggestion show")
+        };
+        let suggestion_text = payload.text.clone();
+        broker
+            .session_control(
+                coordinates(session_id, 1),
+                SessionControlRequestPayload {
+                    action: ControlAction::Dismiss,
+                    fingerprint: private_context.fingerprint,
+                    suggestion_id: Some(payload.suggestion_id),
+                },
+                None,
+            )
+            .await
+            .expect("dismiss suggestion");
+
+        let snapshot = broker
+            .control_plane_snapshot()
+            .await
+            .expect("aggregate snapshot");
+        assert_eq!(snapshot.personalization.records.len(), 1);
+        let record = &snapshot.personalization.records[0];
+        assert_eq!(record.shown, 1);
+        assert_eq!(record.dismissed, 1);
+        assert_eq!(record.accepted_word, 0);
+        assert_eq!(record.accepted_all, 0);
+        let persisted =
+            std::fs::read_to_string(temporary.path().join("data/badi/personalization.json"))
+                .expect("persisted aggregate");
+        assert!(!persisted.contains(&private_context.before));
+        assert!(!persisted.contains(&suggestion_text));
+    }
+
+    #[tokio::test]
+    async fn memory_clear_detaches_live_suggestions_from_deleted_aggregates() {
+        let temporary = tempdir().expect("temporary directory");
+        let paths = StoragePaths::new(
+            temporary.path().join("config/badi"),
+            temporary.path().join("data/badi"),
+        )
+        .expect("storage paths");
+        let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+        control_plane
+            .replace_settings(0, controlled_settings(1, true, true))
+            .expect("allow aggregate recording");
+        let broker = Broker::with_control_plane(
+            std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+            BrokerConfig {
+                debounce: Duration::ZERO,
+                ..BrokerConfig::default()
+            },
+            control_plane,
+        )
+        .expect("controlled broker");
+        let session_id = SessionId::new();
+        let (sink, mut events) = mpsc::channel(8);
+        broker
+            .open_session(
+                coordinates(session_id, 0),
+                SessionOpenPayload {
+                    target: controlled_target(),
+                    activation: Activation::Always,
+                },
+                controlled_authority(),
+                event_sink(sink),
+            )
+            .await
+            .expect("allowed session");
+        let update = context(1, FieldPurpose::Normal);
+        broker
+            .update_context(coordinates(session_id, 1), update.clone())
+            .await
+            .expect("allowed context");
+        broker
+            .request_suggestion(
+                coordinates(session_id, 1),
+                SuggestRequestPayload {
+                    fingerprint: update.fingerprint.clone(),
+                    explicit: false,
+                },
+                None,
+            )
+            .await
+            .expect("suggestion request");
+        let shown = timeout(Duration::from_millis(100), events.recv())
+            .await
+            .expect("show timeout")
+            .expect("show event");
+        let BrokerEvent::SuggestionShow { payload, .. } = shown else {
+            panic!("expected suggestion show")
+        };
+
+        let (changed, cleared) = broker
+            .clear_personalization()
+            .await
+            .expect("clear personalization");
+        assert!(changed);
+        assert!(cleared.personalization.records.is_empty());
+        broker
+            .session_control(
+                coordinates(session_id, 1),
+                SessionControlRequestPayload {
+                    action: ControlAction::Dismiss,
+                    fingerprint: update.fingerprint,
+                    suggestion_id: Some(payload.suggestion_id),
+                },
+                None,
+            )
+            .await
+            .expect("dismiss still-visible suggestion");
+
+        let after_dismiss = broker
+            .control_plane_snapshot()
+            .await
+            .expect("flush aggregate queue");
+        assert!(after_dismiss.personalization.records.is_empty());
+        assert_eq!(broker.outcome_recorder_health().write_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn runtime_pause_ack_fences_pre_pause_outcome_writes() {
+        let temporary = tempdir().expect("temporary directory");
+        let paths = StoragePaths::new(
+            temporary.path().join("config/badi"),
+            temporary.path().join("data/badi"),
+        )
+        .expect("storage paths");
+        let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+        control_plane
+            .replace_settings(0, controlled_settings(1, true, true))
+            .expect("allow aggregate recording");
+        let broker = Broker::with_control_plane(
+            std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+            BrokerConfig {
+                debounce: Duration::ZERO,
+                ..BrokerConfig::default()
+            },
+            std::sync::Arc::clone(&control_plane),
+        )
+        .expect("controlled broker");
+        let session_id = SessionId::new();
+        let (sink, mut events) = mpsc::channel(8);
+        broker
+            .open_session(
+                coordinates(session_id, 0),
+                SessionOpenPayload {
+                    target: controlled_target(),
+                    activation: Activation::Always,
+                },
+                controlled_authority(),
+                event_sink(sink),
+            )
+            .await
+            .expect("allowed session");
+        let update = context(1, FieldPurpose::Normal);
+        broker
+            .update_context(coordinates(session_id, 1), update.clone())
+            .await
+            .expect("allowed context");
+        broker
+            .request_suggestion(
+                coordinates(session_id, 1),
+                SuggestRequestPayload {
+                    fingerprint: update.fingerprint,
+                    explicit: false,
+                },
+                None,
+            )
+            .await
+            .expect("suggestion request");
+        assert!(matches!(
+            timeout(Duration::from_millis(100), events.recv()).await,
+            Ok(Some(BrokerEvent::SuggestionShow { .. }))
+        ));
+
+        assert!(broker.set_paused(true).await);
+        let fenced = control_plane.snapshot().expect("direct aggregate snapshot");
+        assert_eq!(fenced.personalization.records[0].shown, 1);
+        assert_eq!(broker.outcome_recorder_health().write_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn retention_grant_scrubs_pre_consent_memory_without_post_commit_persistence() {
+        let temporary = tempdir().expect("temporary directory");
+        let data_dir = temporary.path().join("data/badi");
+        let paths = StoragePaths::new(temporary.path().join("config/badi"), &data_dir)
+            .expect("storage paths");
+        let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+        control_plane
+            .replace_settings(
+                0,
+                controlled_learning_settings(1, RetentionPermission::None),
+            )
+            .expect("allow memory-only aggregate recording");
+        control_plane
+            .record_signal(
+                StableIdentity::browser_origin(
+                    BrowserAdapter::Chromium,
+                    WebScheme::Http,
+                    "localhost",
+                    Some(4173),
+                )
+                .expect("controlled identity"),
+                crate::personalization::PersonalizationProvider::PhraseV1,
+                PersonalizationSignal::Shown,
+            )
+            .expect("record memory-only aggregate");
+        let broker = Broker::with_control_plane(
+            std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+            BrokerConfig::default(),
+            std::sync::Arc::clone(&control_plane),
+        )
+        .expect("controlled broker");
+        let session_id = SessionId::new();
+        let (sink, _events) = mpsc::channel(8);
+        broker
+            .open_session(
+                coordinates(session_id, 0),
+                SessionOpenPayload {
+                    target: controlled_target(),
+                    activation: Activation::Always,
+                },
+                controlled_authority(),
+                event_sink(sink),
+            )
+            .await
+            .expect("allowed session");
+
+        std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o500))
+            .expect("make aggregate directory read-only");
+        let replacement = broker
+            .replace_settings(
+                1,
+                controlled_learning_settings(2, RetentionPermission::Bounded { days: 30 }),
+            )
+            .await
+            .expect("retention grant does not persist pre-consent history");
+        std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("restore aggregate directory");
+        assert_eq!(replacement.settings.revision, 2);
+        assert!(replacement.personalization.records.is_empty());
+        assert_eq!(broker.session_count().await, 0);
+        assert!(!broker.is_paused().await);
+        let policy = broker.resolve_policy(&controlled_target()).await;
+        assert!(!policy.paused);
+        assert!(policy.context_allowed);
+    }
+
+    #[tokio::test]
+    async fn rejected_settings_cas_is_fail_closed_while_restoring_old_authority() {
+        let temporary = tempdir().expect("temporary directory");
+        let paths = StoragePaths::new(
+            temporary.path().join("config/badi"),
+            temporary.path().join("data/badi"),
+        )
+        .expect("storage paths");
+        let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+        control_plane
+            .replace_settings(0, controlled_settings(1, true, false))
+            .expect("allow controlled origin");
+        let broker = Broker::with_control_plane(
+            std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+            BrokerConfig::default(),
+            std::sync::Arc::clone(&control_plane),
+        )
+        .expect("controlled broker");
+        let mut changes = broker.subscribe_authority_changes();
+
+        let replacement = broker
+            .replace_settings(99, controlled_settings(100, false, false))
+            .await;
+        assert!(matches!(replacement, Err(BrokerError::ControlPlane(_))));
+
+        let gated = changes.recv().await.expect("mutation gate event");
+        let restored = changes.recv().await.expect("restored authority event");
+        assert!(gated.paused);
+        assert!(!restored.paused);
+        assert_eq!(restored.settings_revision, 1);
+        let authority = broker.authority_snapshot().await;
+        assert_eq!(authority.settings_revision, 1);
+        assert!(!authority.paused);
+        assert_eq!(
+            control_plane
+                .snapshot()
+                .expect("disk snapshot")
+                .settings
+                .revision,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_clear_cannot_downgrade_an_unknown_settings_commit() {
+        let temporary = tempdir().expect("temporary directory");
+        let paths = StoragePaths::new(
+            temporary.path().join("config/badi"),
+            temporary.path().join("data/badi"),
+        )
+        .expect("storage paths");
+        let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+        let broker = Broker::with_control_plane(
+            std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+            BrokerConfig::default(),
+            control_plane,
+        )
+        .expect("controlled broker");
+
+        broker.fail_control_plane_mutation_unknown().await;
+        broker.fail_control_plane_mutation_recoverable().await;
+        let (_, snapshot) = broker
+            .clear_personalization()
+            .await
+            .expect("memory clear remains independently available");
+
+        assert_eq!(snapshot.settings.revision, 0);
+        let health = broker.health_snapshot().await;
+        assert!(health.control_plane_degraded);
+        assert!(health.paused);
+        let state = broker.inner.state.lock().await;
+        assert_eq!(
+            state.control_plane_condition,
+            ControlPlaneCondition::RestartRequired
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_settings_replacements_are_serialized_through_authority_install() {
+        let temporary = tempdir().expect("temporary directory");
+        let paths = StoragePaths::new(
+            temporary.path().join("config/badi"),
+            temporary.path().join("data/badi"),
+        )
+        .expect("storage paths");
+        let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+        control_plane
+            .replace_settings(0, controlled_settings(1, true, false))
+            .expect("allow controlled origin");
+        let broker = Broker::with_control_plane(
+            std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+            BrokerConfig::default(),
+            std::sync::Arc::clone(&control_plane),
+        )
+        .expect("controlled broker");
+        let mut changes = broker.subscribe_authority_changes();
+
+        let first_broker = broker.clone();
+        let first = tokio::spawn(async move {
+            first_broker
+                .replace_settings(1, controlled_settings(2, true, false))
+                .await
+        });
+        assert!(changes.recv().await.expect("first mutation gate").paused);
+        let second_broker = broker.clone();
+        let second = tokio::spawn(async move {
+            second_broker
+                .replace_settings(2, controlled_settings(3, false, false))
+                .await
+        });
+
+        assert_eq!(
+            first
+                .await
+                .expect("first task")
+                .expect("first replace")
+                .settings
+                .revision,
+            2
+        );
+        assert_eq!(
+            second
+                .await
+                .expect("second task")
+                .expect("second replace")
+                .settings
+                .revision,
+            3
+        );
+        let authority = broker.authority_snapshot().await;
+        assert_eq!(authority.settings_revision, 3);
+        assert_eq!(
+            control_plane
+                .snapshot()
+                .expect("disk snapshot")
+                .settings
+                .revision,
+            3
+        );
     }
 }

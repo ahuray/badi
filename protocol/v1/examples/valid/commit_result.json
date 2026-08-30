@@ -9,8 +9,6 @@
   "payload": {
     "fingerprint": "fingerprint_000000000001",
     "suggestion_id": "s:1234",
-    "status": "applied",
-    "new_revision": 2,
-    "new_fingerprint": "fingerprint_000000000002"
+    "status": "dispatched-unverified"
   }
 }

@@ -14,13 +14,16 @@ use crate::engine::{Broker, BrokerError, BrokerEvent, BrokerEventSink, SessionAu
 use crate::ipc::{FrameError, read_envelope, verify_peer_uid, write_envelope};
 use crate::policy::PolicyReason;
 use crate::protocol::{
-    Capability, CommitResultPayload, ContextChangedPayload, ControlAction, ControlResultPayload,
-    EmptyPayload, ErrorPayload, GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload,
-    HelloPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SUGGESTION_CHARS,
-    MAX_SUGGESTION_WORDS, MessageType, PROTOCOL_VERSION, ReasonCode, SessionClosePayload,
-    SessionControlRequestPayload, SessionId, SessionOpenPayload, SuggestCancelPayload,
-    SuggestRequestPayload, WireEnvelope,
+    AuthorityAckPayload, AuthorityChangedPayload, Capability, CommitResultPayload,
+    ContextChangedPayload, ControlAction, ControlResultPayload, EmptyPayload, ErrorPayload,
+    GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
+    MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SAFE_COUNTER, MAX_SUGGESTION_CHARS,
+    MAX_SUGGESTION_WORDS, MemoryStatusPayload, MessageType, PROTOCOL_VERSION, PolicyQueryPayload,
+    ReasonCode, SessionClosePayload, SessionControlRequestPayload, SessionId, SessionOpenPayload,
+    SettingsReplacePayload, SettingsStatusPayload, SuggestCancelPayload, SuggestRequestPayload,
+    WireEnvelope,
 };
+use crate::settings::SettingsV1;
 
 const MAX_CONNECTIONS: usize = 32;
 const MAX_SESSIONS_PER_CONNECTION: usize = 64;
@@ -203,12 +206,15 @@ async fn serve_connection_with_timeouts(
         adapter_kind: hello.adapter.kind,
         capabilities: hello.capabilities.clone(),
     };
+    let connection_id = format!("c:{}", uuid::Uuid::new_v4());
+    let policy_enabled = hello.capabilities.contains(&Capability::Policy);
+    let mut authority_rx = broker.subscribe_authority_changes();
     let mut acknowledgment = WireEnvelope::global(
         MessageType::HelloAck,
         broker.mono_ms(),
         &HelloAckPayload {
             selected_v: PROTOCOL_VERSION,
-            connection_id: format!("c:{}", uuid::Uuid::new_v4()),
+            connection_id: connection_id.clone(),
             enabled_capabilities: hello.capabilities.clone(),
             max_frame_bytes: MAX_FRAME_BYTES,
             max_before_chars: MAX_BEFORE_CHARS,
@@ -226,6 +232,26 @@ async fn serve_connection_with_timeouts(
             write_envelope(&mut stream, &acknowledgment),
         ) => outgoing.map_err(|_| ServerError::HandshakeTimeout)??,
     };
+    if policy_enabled {
+        broker.register_policy_client(connection_id.clone()).await;
+        let authority = broker.authority_snapshot().await;
+        let initial = WireEnvelope::global(
+            MessageType::AuthorityChanged,
+            broker.mono_ms(),
+            &AuthorityChangedPayload {
+                authority_epoch: authority.authority_epoch,
+                settings_revision: authority.settings_revision,
+                paused: authority.paused,
+            },
+        )?;
+        tokio::select! {
+            () = shutdown.cancelled() => return Ok(()),
+            outgoing = time::timeout(
+                hello_timeout,
+                write_envelope(&mut stream, &initial),
+            ) => outgoing.map_err(|_| ServerError::HandshakeTimeout)??,
+        };
+    }
 
     let (mut reader, mut writer) = stream.into_split();
     // Keep frame decoding in one owned task. Cancelling read_envelope after it
@@ -274,6 +300,19 @@ async fn serve_connection_with_timeouts(
                     break Ok(());
                 }
             }
+            authority = authority_rx.recv(), if policy_enabled => {
+                let Ok(event) = authority else {
+                    break Ok(());
+                };
+                let envelope = WireEnvelope::global(
+                    MessageType::AuthorityChanged,
+                    broker.mono_ms(),
+                    &event,
+                )?;
+                if wire_tx.try_send(envelope).is_err() {
+                    break Ok(());
+                }
+            }
             incoming = incoming_rx.recv() => {
                 let envelope = match incoming {
                     None | Some(Ok(None)) => break Ok(()),
@@ -287,9 +326,11 @@ async fn serve_connection_with_timeouts(
                     .as_mut()
                     .reset(time::Instant::now() + idle_timeout);
                 let request_id = envelope.id.clone();
+                let request_type = envelope.message_type;
                 match handle_message(
                     &broker,
                     &authority,
+                    &connection_id,
                     &event_sink,
                     &mut owned_sessions,
                     envelope,
@@ -299,12 +340,14 @@ async fn serve_connection_with_timeouts(
                 {
                     Ok(()) => {}
                     Err(ServerError::Broker(error)) => {
-                        if send_error(
+                        if send_broker_error(
                             &wire_tx,
                             &broker,
                             request_id,
-                            reason_for_broker(&error),
+                            request_type,
+                            &error,
                         )
+                        .await
                         .is_err()
                         {
                             break Ok(());
@@ -325,6 +368,9 @@ async fn serve_connection_with_timeouts(
     };
 
     broker.close_owned_sessions(&owned_sessions).await;
+    if policy_enabled {
+        broker.unregister_policy_client(&connection_id).await;
+    }
     reader_task.abort();
     let _ = reader_task.await;
     drop(event_sink);
@@ -344,6 +390,7 @@ async fn serve_connection_with_timeouts(
 async fn handle_message(
     broker: &Broker,
     authority: &SessionAuthority,
+    connection_id: &str,
     event_sink: &BrokerEventSink,
     owned_sessions: &mut Vec<SessionId>,
     envelope: WireEnvelope,
@@ -353,6 +400,7 @@ async fn handle_message(
         MessageType::SessionOpen => {
             require_capability(authority, Capability::Context)?;
             require_capability(authority, Capability::Suggestion)?;
+            require_capability(authority, Capability::Policy)?;
             ensure_session_capacity(owned_sessions)?;
             let coordinates = envelope.coordinates()?;
             let payload: SessionOpenPayload = envelope.decode_payload()?;
@@ -453,6 +501,9 @@ async fn handle_message(
                 &HealthStatusPayload {
                     provider: health.provider,
                     paused: health.paused,
+                    authority_epoch: health.authority_epoch,
+                    settings_revision: health.settings_revision,
+                    control_plane_degraded: health.control_plane_degraded,
                     sessions: health.sessions,
                     socket_mode: "0600".to_owned(),
                     max_frame_bytes: health.max_frame_bytes,
@@ -465,6 +516,83 @@ async fn handle_message(
                 .try_send(response)
                 .map_err(|_| ServerError::ConnectionClosed)?;
         }
+        MessageType::PolicyQuery => {
+            require_capability(authority, Capability::Policy)?;
+            let payload: PolicyQueryPayload = envelope.decode_payload()?;
+            payload.validate()?;
+            let mut response = WireEnvelope::global(
+                MessageType::PolicyStatus,
+                broker.mono_ms(),
+                &broker.resolve_policy(&payload.target).await,
+            )?;
+            response.id = envelope.id;
+            wire_tx
+                .try_send(response)
+                .map_err(|_| ServerError::ConnectionClosed)?;
+        }
+        MessageType::AuthorityAck => {
+            require_capability(authority, Capability::Policy)?;
+            let payload: AuthorityAckPayload = envelope.decode_payload()?;
+            payload.validate()?;
+            broker
+                .acknowledge_authority(connection_id, payload.authority_epoch)
+                .await?;
+        }
+        MessageType::SettingsGet => {
+            require_settings_authority(authority)?;
+            let _: EmptyPayload = envelope.decode_payload()?;
+            let snapshot = broker.control_plane_snapshot().await?;
+            let mut response = WireEnvelope::global(
+                MessageType::SettingsStatus,
+                broker.mono_ms(),
+                &settings_status_payload(snapshot, broker.outcome_recorder_health())?,
+            )?;
+            response.id = envelope.id;
+            wire_tx
+                .try_send(response)
+                .map_err(|_| ServerError::ConnectionClosed)?;
+        }
+        MessageType::SettingsReplace => {
+            require_settings_authority(authority)?;
+            let payload: SettingsReplacePayload = envelope.decode_payload()?;
+            payload.validate()?;
+            let next: SettingsV1 = serde_json::from_value(payload.document)
+                .map_err(|_| ServerError::InvalidMessage)?;
+            next.validate().map_err(|_| ServerError::InvalidMessage)?;
+            let snapshot = broker
+                .replace_settings(payload.expected_revision, next)
+                .await?;
+            let mut response = WireEnvelope::global(
+                MessageType::SettingsStatus,
+                broker.mono_ms(),
+                &settings_status_payload(snapshot, broker.outcome_recorder_health())?,
+            )?;
+            response.id = envelope.id;
+            wire_tx
+                .try_send(response)
+                .map_err(|_| ServerError::ConnectionClosed)?;
+        }
+        MessageType::MemoryClear => {
+            require_settings_authority(authority)?;
+            let _: EmptyPayload = envelope.decode_payload()?;
+            let (changed, snapshot) = broker.clear_personalization().await?;
+            let payload = MemoryStatusPayload {
+                revision: snapshot.personalization.revision,
+                records: u64::try_from(snapshot.personalization.records.len())
+                    .unwrap_or(MAX_SAFE_COUNTER)
+                    .min(MAX_SAFE_COUNTER),
+                bytes: u64::try_from(snapshot.persisted_personalization_bytes)
+                    .unwrap_or(MAX_SAFE_COUNTER)
+                    .min(MAX_SAFE_COUNTER),
+                changed,
+            };
+            let mut response =
+                WireEnvelope::global(MessageType::MemoryStatus, broker.mono_ms(), &payload)?;
+            response.id = envelope.id;
+            wire_tx
+                .try_send(response)
+                .map_err(|_| ServerError::ConnectionClosed)?;
+        }
         MessageType::Hello
         | MessageType::HelloAck
         | MessageType::SuggestionShow
@@ -472,9 +600,45 @@ async fn handle_message(
         | MessageType::ControlResult
         | MessageType::CommitPrepare
         | MessageType::HealthStatus
+        | MessageType::PolicyStatus
+        | MessageType::AuthorityChanged
+        | MessageType::SettingsStatus
+        | MessageType::MemoryStatus
         | MessageType::Error => return Err(ServerError::InvalidMessage),
     }
     Ok(())
+}
+
+fn require_settings_authority(authority: &SessionAuthority) -> Result<(), ServerError> {
+    require_capability(authority, Capability::Settings)?;
+    if authority.adapter_kind == crate::protocol::AdapterKind::Cli {
+        Ok(())
+    } else {
+        Err(ServerError::InvalidCapability)
+    }
+}
+
+fn settings_status_payload(
+    snapshot: crate::control_plane::ControlPlaneSnapshot,
+    recorder: crate::engine::OutcomeRecorderHealth,
+) -> Result<SettingsStatusPayload, ServerError> {
+    let payload = SettingsStatusPayload {
+        document: serde_json::to_value(snapshot.settings)
+            .map_err(crate::protocol::ProtocolError::from)?,
+        personalization_revision: snapshot.personalization.revision,
+        personalization_records: u64::try_from(snapshot.personalization.records.len())
+            .unwrap_or(MAX_SAFE_COUNTER)
+            .min(MAX_SAFE_COUNTER),
+        personalization_bytes: u64::try_from(snapshot.persisted_personalization_bytes)
+            .unwrap_or(MAX_SAFE_COUNTER)
+            .min(MAX_SAFE_COUNTER),
+        personalization_store_available: snapshot.personalization_store_available,
+        personalization_recorder_available: recorder.available,
+        personalization_write_failures: recorder.write_failures.min(MAX_SAFE_COUNTER),
+        personalization_dropped_signals: recorder.dropped_signals.min(MAX_SAFE_COUNTER),
+    };
+    payload.validate()?;
+    Ok(payload)
 }
 
 fn require_capability(
@@ -513,8 +677,50 @@ fn send_error(
     let mut envelope = WireEnvelope::global(
         MessageType::Error,
         broker.mono_ms(),
-        &ErrorPayload { code: reason },
+        &ErrorPayload::simple(reason),
     )?;
+    envelope.id = request_id;
+    wire_tx
+        .try_send(envelope)
+        .map_err(|_| ServerError::ConnectionClosed)
+}
+
+async fn send_broker_error(
+    wire_tx: &mpsc::Sender<WireEnvelope>,
+    broker: &Broker,
+    request_id: Option<String>,
+    request_type: MessageType,
+    error: &BrokerError,
+) -> Result<(), ServerError> {
+    let mut payload = ErrorPayload::simple(reason_for_broker(error));
+    if request_type == MessageType::SettingsReplace {
+        let authority = broker.authority_snapshot().await;
+        payload.settings_revision = Some(authority.settings_revision);
+        payload.control_plane_degraded = Some(authority.control_plane_degraded);
+        match error {
+            BrokerError::SettingsCommittedDegraded(_) => {
+                payload.code = ReasonCode::SettingsCommittedDegraded;
+                payload.committed = Some(true);
+            }
+            BrokerError::SettingsCommitUnknown(_) | BrokerError::ControlPlaneTask => {
+                payload.code = ReasonCode::SettingsCommitUnknown;
+                payload.committed = None;
+            }
+            BrokerError::ControlPlane(crate::control_plane::ControlPlaneError::Settings(
+                crate::settings::SettingsStoreError::RevisionConflict { .. },
+            )) => {
+                payload.code = ReasonCode::SettingsConflict;
+                payload.committed = Some(false);
+            }
+            BrokerError::ControlPlane(_) | BrokerError::ControlPlaneUnavailable => {
+                payload.code = ReasonCode::SettingsRejected;
+                payload.committed = Some(false);
+            }
+            _ => {}
+        }
+    }
+    payload.validate()?;
+    let mut envelope = WireEnvelope::global(MessageType::Error, broker.mono_ms(), &payload)?;
     envelope.id = request_id;
     wire_tx
         .try_send(envelope)
@@ -538,6 +744,12 @@ const fn reason_for_broker(error: &BrokerError) -> ReasonCode {
         )
         | BrokerError::InvalidPayload
         | BrokerError::Protocol(_)
+        | BrokerError::ControlPlane(_)
+        | BrokerError::ControlPlaneTask
+        | BrokerError::ControlPlaneUnavailable
+        | BrokerError::OutcomeRecorderThread(_)
+        | BrokerError::SettingsCommitUnknown(_)
+        | BrokerError::SettingsCommittedDegraded(_)
         | BrokerError::SessionAlreadyOpen => ReasonCode::InvalidMessage,
         BrokerError::ManualRequired => ReasonCode::ManualRequired,
         BrokerError::NoContext => ReasonCode::NoContext,
@@ -641,10 +853,11 @@ mod tests {
     use crate::engine::{Broker, BrokerConfig};
     use crate::ipc::{read_envelope, write_envelope};
     use crate::protocol::{
-        Activation, AdapterDescriptor, AdapterKind, Capability, ContextChangedPayload, Coordinates,
-        EmptyPayload, FieldDescriptor, FieldPurpose, HelloPayload, MessageType, OffsetUnit,
-        PROTOCOL_VERSION, Selection, SessionId, SessionOpenPayload, SuggestRequestPayload,
-        TargetDescriptor, TargetKind, WireEnvelope,
+        Activation, AdapterDescriptor, AdapterKind, AuthorityAckPayload, AuthorityChangedPayload,
+        Capability, ContextChangedPayload, Coordinates, EmptyPayload, FieldDescriptor,
+        FieldPurpose, HelloPayload, MessageType, OffsetUnit, PROTOCOL_VERSION, Selection,
+        SessionId, SessionOpenPayload, SuggestRequestPayload, TargetDescriptor, TargetKind,
+        WireEnvelope,
     };
     use crate::provider::DeterministicPhraseProvider;
 
@@ -671,6 +884,7 @@ mod tests {
                     Capability::Context,
                     Capability::Suggestion,
                     Capability::Health,
+                    Capability::Policy,
                 ],
             },
         )
@@ -683,6 +897,25 @@ mod tests {
             .expect("hello acknowledgment");
         assert_eq!(acknowledgment.message_type, MessageType::HelloAck);
         assert_eq!(acknowledgment.id, hello.id);
+        let authority = read_envelope(client)
+            .await
+            .expect("read initial authority")
+            .expect("initial authority");
+        assert_eq!(authority.message_type, MessageType::AuthorityChanged);
+        let authority: AuthorityChangedPayload = authority
+            .decode_payload()
+            .expect("initial authority payload");
+        let acknowledgment = WireEnvelope::global(
+            MessageType::AuthorityAck,
+            1,
+            &AuthorityAckPayload {
+                authority_epoch: authority.authority_epoch,
+            },
+        )
+        .expect("authority acknowledgment");
+        write_envelope(client, &acknowledgment)
+            .await
+            .expect("write authority acknowledgment");
 
         let session = WireEnvelope::session(
             MessageType::SessionOpen,
@@ -873,11 +1106,11 @@ mod tests {
         };
         let context = ContextChangedPayload {
             fingerprint: "frame-race-fingerprint".to_owned(),
-            before: "Finish this".to_owned(),
+            before: "Thank you".to_owned(),
             after: String::new(),
             selection: Selection {
-                anchor: 11,
-                head: 11,
+                anchor: 9,
+                head: 9,
                 unit: OffsetUnit::Utf16CodeUnits,
             },
             field: FieldDescriptor {
