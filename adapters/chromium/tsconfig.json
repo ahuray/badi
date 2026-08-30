@@ -2,14 +2,11 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "types": [
-      "chrome",
-      "node",
-      "vitest/globals"
+      "chrome"
     ],
     "rootDir": "."
   },
   "include": [
-    "src/**/*.ts",
-    "test/**/*.ts"
+    "src/**/*.ts"
   ]
 }
