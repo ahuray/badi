@@ -307,7 +307,7 @@ fn hash_reader(file: &mut File, path: &Path) -> Result<String, ArtifactVerificat
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(encode_lower_hex(hasher.finalize()))
 }
 
 #[derive(Clone)]
@@ -804,7 +804,7 @@ pub fn prompt_contract_sha256() -> String {
         hasher.update(part.as_bytes());
         hasher.update(b"\0");
     }
-    format!("{:x}", hasher.finalize())
+    encode_lower_hex(hasher.finalize())
 }
 
 #[must_use]
@@ -825,7 +825,19 @@ pub fn quality_gate_policy_sha256() -> String {
 fn sha256_text(value: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
-    format!("{:x}", hasher.finalize())
+    encode_lower_hex(hasher.finalize())
+}
+
+fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+
+    let bytes = bytes.as_ref();
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        encoded.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        encoded.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 fn is_lower_hex(value: &str, length: usize) -> bool {
@@ -1512,6 +1524,21 @@ mod tests {
     }
 
     #[test]
+    fn lower_hex_encoding_is_fixed_width_and_preserves_contract_hashes() {
+        assert_eq!(encode_lower_hex([0x00, 0x0f, 0x10, 0xff]), "000f10ff");
+        assert_eq!(sha256_text("abc"), TEST_DIGEST);
+
+        for digest in [
+            prompt_contract_sha256(),
+            sampling_contract_sha256(),
+            evaluator_contract_sha256(),
+            quality_gate_policy_sha256(),
+        ] {
+            assert!(is_lower_hex(&digest, 64));
+        }
+    }
+
+    #[test]
     fn artifact_verifier_rejects_leaf_symlinks() {
         let directory = tempdir().expect("temporary directory");
         let target = directory.path().join("target.gguf");
@@ -2020,8 +2047,6 @@ mod tests {
             schema_limits["deterministic_usefulness_delta"]["minimum"],
             MIN_DETERMINISTIC_USEFULNESS_DELTA
         );
-        assert!(is_lower_hex(&evaluator_contract_sha256(), 64));
-        assert!(is_lower_hex(&quality_gate_policy_sha256(), 64));
     }
 
     fn test_config(endpoint: SocketAddr) -> Result<LlamaCppConfig, LocalModelError> {
