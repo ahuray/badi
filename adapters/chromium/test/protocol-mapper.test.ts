@@ -10,6 +10,8 @@ import {
   globalControlEnvelope,
   helloEnvelope,
   isHelloAck,
+  parseHelloAckPaused,
+  sessionCloseEnvelope,
   sessionOpenEnvelope,
   suggestionRequestEnvelopes,
 } from "../src/background/protocol-mapper";
@@ -65,6 +67,7 @@ describe("protocol v1 mapper", () => {
     const frames = [
       helloEnvelope(1_000),
       sessionOpenEnvelope(current),
+      sessionCloseEnvelope(current),
       ...suggestionRequestEnvelopes(current),
       cancelEnvelope(current),
       dismissEnvelope(address),
@@ -169,6 +172,13 @@ describe("protocol v1 mapper", () => {
       },
     };
     expect(isHelloAck(acknowledgment)).toBe(true);
+    expect(parseHelloAckPaused(acknowledgment)).toBe(true);
+    expect(
+      parseHelloAckPaused({
+        ...acknowledgment,
+        payload: { ...acknowledgment.payload, paused: false },
+      }),
+    ).toBe(false);
     expect(
       isHelloAck({ v: 1, type: "hello.ack", mono_ms: 11, payload: { selected_v: 1 } }),
     ).toBe(false);

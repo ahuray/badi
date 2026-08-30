@@ -1,4 +1,4 @@
-# Omatype competitive landscape
+# Badi competitive landscape
 
 Research snapshot: **2026-08-29**. This report asks a narrow question: what makes Cotypist compelling, which open-source projects are genuinely relevant, and what is still missing for a Linux-native ghostwriter that works in browsers, Obsidian, note apps, and terminal AI prompts?
 
@@ -19,7 +19,10 @@ The opportunity is therefore real, but the moat is not “connect an LLM.” It 
 
 An unrelated public repository already uses the exact name [Aayush9029/OmaType](https://github.com/Aayush9029/OmaType). It is an MIT-licensed, Omarchy-focused fork of Voxtype for **local voice dictation**, not predictive ghostwriting: tapping or holding the Home key records speech, local Parakeet/Whisper/SenseVoice models transcribe it, and the result is typed at the cursor. Its current default branch is `hybrid-hotkey`; the repository shows no releases or GitHub stars yet, although its inherited history is substantial.
 
-This does **not** make the present Omatype product concept redundant, and this report does not recommend renaming it. It does matter operationally because the products occupy the same Linux/Omarchy “type anywhere” neighborhood. Search results, issue reports, installation instructions, package names, desktop IDs, binaries, service names, and eventual domain/trademark claims could be confused even though one product is speech-to-text and the other is predictive text. Before a public launch, the project should:
+This does **not** make the product concept redundant. The collision identified
+here later prompted the rename to **Badi**. The products still occupy the same
+Linux/Omarchy “type anywhere” neighborhood, so positioning and possible voice
+interoperability remain relevant. Before a public launch, the project should:
 
 - use an unmistakable ghostwriter/autocomplete subtitle in every README and listing;
 - choose distinct technical namespaces for packages, desktop files, D-Bus services, and binaries;
@@ -39,7 +42,7 @@ The current interaction loop is unusually disciplined:
 
 Its context system has several explicit trust boundaries. According to the [privacy documentation](https://cotypist.app/help/privacy), focused-field access is required; screen OCR and clipboard context are optional; writing-history collection for personalization is off by default; stored writing is encrypted locally; and password fields are filtered. The app does send anonymous feature/performance counts and crash reports by default, but users can disable them, and the vendor says typed text is not included.
 
-Its policy controls are close to the user's stated Omatype requirement. Users can exclude an app or browser domain from writing-history collection and attach different instructions by app/domain, as documented under [personalization](https://cotypist.app/help/personalization). The distinction matters, however: excluding collection is not necessarily the same as disabling all suggestions or all context access. Omatype should expose those permissions separately and plainly.
+Its policy controls are close to the user's stated Badi requirement. Users can exclude an app or browser domain from writing-history collection and attach different instructions by app/domain, as documented under [personalization](https://cotypist.app/help/personalization). The distinction matters, however: excluding collection is not necessarily the same as disabling all suggestions or all context access. Badi should expose those permissions separately and plainly.
 
 “Every app” is positioning, not a literal guarantee. Cotypist's own [compatibility matrix](https://cotypist.app/compatibility) lists unsupported or partial cases, including Thunderbird, OneNote, Anki, Google Slides, several editors, Ghostty, Kitty, and Warp. Google Docs needs accessibility options. Terminals are particularly thoughtful: Terminal.app and iTerm activate automatically at recognized AI-agent prompts, remain quiet for ordinary shell commands, and offer a force-activate shortcut. This is a strong behavior to emulate, not merely a compatibility checkbox.
 
@@ -53,7 +56,7 @@ These are evidence-weighted conclusions, not a popularity survey. Public review 
 
 The core value is the absence of a prompt-copy-paste-edit loop. The suggestion arrives where the thought is already being written, disappears when ignored, and costs one familiar key when useful. [Daring Fireball's hands-on account](https://daringfireball.net/linked/2026/06/18/cotypist) emphasizes the native-looking inline presentation and the simplicity of Tab versus continuing to type. [Tom's Guide](https://www.tomsguide.com/ai/i-installed-a-small-llm-on-my-mac-laptop-heres-why-i-cant-go-back) similarly reports that the small interaction compounds into noticeable writing speed.
 
-**Inference:** the unit of value is not a generated paragraph; it is a low-regret next-word decision. Omatype should optimize accepted useful words per interruption, not raw token output.
+**Inference:** the unit of value is not a generated paragraph; it is a low-regret next-word decision. Badi should optimize accepted useful words per interruption, not raw token output.
 
 ### 2. Partial acceptance protects authorship
 
@@ -63,7 +66,7 @@ Cotypist's own [usage guidance](https://cotypist.app/help/tips) admits that late
 
 Privacy is repeatedly praised in [Product Hunt reviews](https://www.producthunt.com/products/cotypist), the [Tom's Guide test](https://www.tomsguide.com/ai/i-installed-a-small-llm-on-my-mac-laptop-heres-why-i-cant-go-back), and [community discussion](https://www.reddit.com/r/macapps/comments/1sugv0u/cotypist_helpful_writing_assistant_or_drunk_typing/). Local inference also removes network jitter. The official pricing FAQ makes the important performance point that a larger model can produce a worse typing experience when it cannot keep pace.
 
-**Inference:** Omatype should have a deterministic fast path and expose model latency/quality presets, rather than equating “largest” with “best.”
+**Inference:** Badi should have a deterministic fast path and expose model latency/quality presets, rather than equating “largest” with “best.”
 
 ### 4. It learns a voice across app boundaries
 
@@ -83,7 +86,7 @@ The strongest open-source Mac competitors all spend conspicuous effort on baseli
 
 “Activity” below is a repository signal, not a durability guarantee. Dates and status are those visible on 2026-08-29.
 
-| Project | Platform and interaction | Local AI / privacy | App policy and terminal behavior | License and activity signal | Fit for Omatype |
+| Project | Platform and interaction | Local AI / privacy | App policy and terminal behavior | License and activity signal | Fit for Badi |
 |---|---|---|---|---|---|
 | [Aayush9029/OmaType](https://github.com/Aayush9029/OmaType) | Linux/Omarchy voice typing; tap for accurate batch dictation or hold for live dictation, then type at the cursor | Local Parakeet, Whisper, and SenseVoice models; stores recent transcripts locally without audio | Omarchy hotkey/service integration; not predictive text and no documented per-app completion policy | MIT; fork of Voxtype, no releases and zero stars at snapshot | Adjacent input product and exact-name collision, not a Cotypist alternative; relevant to namespace, discovery, and possible voice-mode interoperability |
 | [Cotabby](https://github.com/FuJacob/cotabby) | macOS; near-direct Cotypist alternative with inline ghost text, one-word/whole-suggestion acceptance, autocorrect, screen context, emoji, and macros | Apple Intelligence or local open models; optional user-configured OpenAI-compatible endpoint; no account/telemetry required | Global pause and disabled-app list; current release stays out of terminals, although a terminal PR is open | AGPL-3.0; active beta maintained by two students, with PR activity in Aug 2026 | Best open codebase to study for the complete event loop, context capture, and UX; unusable as a Linux base without replacing the platform layer |
@@ -107,15 +110,15 @@ The strongest open-source Mac competitors all spend conspicuous effort on baseli
 
 Fcitx5 officially supports [X11 and Wayland](https://github.com/fcitx/fcitx5), but “Wayland” is not a single uniform integration path. The Fcitx documentation explains that GTK, Qt, Electron/Chromium, XWayland, compositor protocols, and sandboxed apps can expose different input capabilities; see [how applications talk to Fcitx](https://fcitx-im.org/wiki/How_does_an_application_talk_to_Fcitx) and [Fcitx on Wayland](https://fcitx-im.org/wiki/Using_Fcitx_5_on_Wayland/en).
 
-Three constraints directly affect Omatype:
+Three constraints directly affect Badi:
 
 1. **Ghost-text rendering:** Wayland clients do not provide arbitrary global positioning. Candidate surfaces can be compositor- or toolkit-mediated. IBus Typing Booster's [inline-completion documentation](https://mike-fabian.github.io/ibus-typing-booster/docs/user/#use-inline-completion) says Wayland cannot style typed and suggested preedit text differently in its current route, making ghost text hard to distinguish.
 2. **App identity:** under one Fcitx Wayland protocol, Fcitx sees a single global input context and cannot identify the application unless compositor-specific window-management protocols provide a second signal. This complicates reliable allowlists and denylists.
 3. **Surrounding text:** toolkit implementations can be incomplete or buggy. This affects mid-line completion, deletion/replacement, prompt detection, and safe context capture. Sandboxed Flatpaks add another packaging boundary.
 
-Therefore, Omatype should not promise literal universal support at launch. It should publish a tested matrix by desktop, display protocol, toolkit, and app, with explicit fallback behavior.
+Therefore, Badi should not promise literal universal support at launch. It should publish a tested matrix by desktop, display protocol, toolkit, and app, with explicit fallback behavior.
 
-## Product gap and opportunity for Omatype
+## Product gap and opportunity for Badi
 
 The following are design inferences from the evidence above, not facts about an existing implementation.
 
@@ -136,7 +139,7 @@ Expose independent controls for:
 
 Support **Always allow**, **Ask once**, and **Never** at app level; domain-level rules likely require browser-specific accessibility or extensions and should not be implied before verified. Default-deny password, secret, payment, and unknown-purpose fields. If app identity is unavailable on Wayland, fail closed for collection and cloud use, show that state, and retain a user-invoked one-shot completion.
 
-IBus Typing Booster's [autosettings and terminal controls](https://mike-fabian.github.io/ibus-typing-booster/docs/user/#autosettings) are a strong functional precedent, but its own warning about passwords being visible in preedit/history shows why Omatype needs stricter defaults.
+IBus Typing Booster's [autosettings and terminal controls](https://mike-fabian.github.io/ibus-typing-booster/docs/user/#autosettings) are a strong functional precedent, but its own warning about passwords being visible in preedit/history shows why Badi needs stricter defaults.
 
 ### 3. Treat terminal prose as a unique mode
 
@@ -160,15 +163,15 @@ Test at minimum GNOME Wayland, KDE Plasma Wayland, one wlroots compositor, and X
 
 ### 6. Win trust with inspectability
 
-Show which context sources are active, which model handled a completion, whether anything left the machine, and why Omatype is paused in the current field. Provide a panic key, per-app deletion, short retention defaults, and an audit view without storing content. Veya's permission and cloud-call transparency is an adjacent reference worth borrowing.
+Show which context sources are active, which model handled a completion, whether anything left the machine, and why Badi is paused in the current field. Provide a panic key, per-app deletion, short retention defaults, and an audit view without storing content. Veya's permission and cloud-call transparency is an adjacent reference worth borrowing.
 
 ## Adversarial check: what could invalidate this opportunity?
 
 1. **“Linux-wide” may fragment the two-day MVP beyond usefulness.** A credible first live result should name one desktop/input framework and a short app matrix, then prove the full event loop there. Cross-desktop architecture can be planned without pretending it is already portable.
-2. **The input-method route may conflict with users' existing multilingual IMEs.** Omatype must coexist, compose, or provide separate IBus and Fcitx5 engines; asking multilingual users to replace their working IME is a major adoption cost.
+2. **The input-method route may conflict with users' existing multilingual IMEs.** Badi must coexist, compose, or provide separate IBus and Fcitx5 engines; asking multilingual users to replace their working IME is a major adoption cost.
 3. **Ghost text may be visually impossible through some Wayland paths.** Candidate popup or mirror-window fallback may be necessary. That fallback must be tested for distraction rather than called equivalent.
 4. **App blocking cannot be trustworthy if app identity is missing.** Unknown identity must never inherit an “always approved” rule. Policy should be capability-based and fail closed.
-5. **Small local models may be fast but mediocre; larger ones may arrive too late.** The Reddit evidence and Cotypist's own model guidance agree on this tradeoff. Omatype needs a replayable completion benchmark, not subjective demos alone.
+5. **Small local models may be fast but mediocre; larger ones may arrive too late.** The Reddit evidence and Cotypist's own model guidance agree on this tradeoff. Badi needs a replayable completion benchmark, not subjective demos alone.
 6. **Ambient suggestions can reduce rather than improve flow.** Measure suggestion display rate, acceptance by prefix length, time-to-first-suggestion, stale-display rate, dismissals, and a user-controlled “only when paused” threshold. High generation volume is not success.
 7. **Open source does not automatically make model distribution safe.** Code license, model-weight license, tokenizer license, and downloaded training artifacts must be tracked separately.
 8. **Privacy claims require more than local inference.** Context capture, logs, crash reports, swap, model downloads, optional remote providers, and history are all part of the threat surface.

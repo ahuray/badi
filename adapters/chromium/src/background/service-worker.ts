@@ -1,6 +1,7 @@
 import { NativeBrokerClient } from "./native-client";
 import {
   EXPECTED_FIXTURE_ORIGIN,
+  isTrustedFixtureBootstrapSender,
   isTrustedFixtureSender,
 } from "./fixture-boundary";
 import {
@@ -47,7 +48,7 @@ async function broadcastToRegisteredRoutes(
 
 broker.setCommitRevocationHandler((request) => {
   const message: ContentControlMessage = {
-    kind: "omatype.commit.revoke.v1",
+    kind: "badi.commit.revoke.v1",
     address: {
       requestId: request.requestId,
       sessionId: request.sessionId,
@@ -63,14 +64,14 @@ broker.setCommitRevocationHandler((request) => {
 
 broker.setSuggestionClearHandler((event) => {
   sendToSession(event.sessionId, {
-    kind: "omatype.suggestion.clear.v1",
+    kind: "badi.suggestion.clear.v1",
     event,
   });
 });
 
 broker.setDisconnectHandler(() => {
   void broadcastToRegisteredRoutes({
-    kind: "omatype.transport.disconnected.v1",
+    kind: "badi.transport.disconnected.v1",
   }).catch(() => undefined);
 });
 
@@ -79,33 +80,49 @@ async function handle(
   sender: chrome.runtime.MessageSender,
 ): Promise<RuntimeReply> {
   switch (command.kind) {
-    case "omatype.suggest.v1": {
+    case "badi.bootstrap.v1": {
+      if (!sessionRoutes.matches(command.sessionId, sender)) {
+        return { ok: false, error: "Bootstrap session route was displaced" };
+      }
+      const paused = await broker.bootstrap();
+      if (!sessionRoutes.matches(command.sessionId, sender)) {
+        return { ok: false, error: "Bootstrap session route was displaced" };
+      }
+      return { ok: true, paused };
+    }
+    case "badi.suggest.v1": {
       if (command.request.origin !== EXPECTED_FIXTURE_ORIGIN) {
         return { ok: false, error: "Suggestion origin does not match fixture" };
       }
-      if (!sessionRoutes.bind(command.request.sessionId, sender)) {
+      if (!sessionRoutes.matches(command.request.sessionId, sender)) {
         return { ok: false, error: "Suggestion session is bound to another document" };
       }
       return { ok: true, response: await broker.requestSuggestion(command.request) };
     }
-    case "omatype.cancel.v1":
+    case "badi.cancel.v1":
       if (!sessionRoutes.matches(command.request.sessionId, sender)) {
         return { ok: false, error: "Suggestion session route mismatch" };
       }
       await broker.cancelSuggestion(command.request);
       return { ok: true };
-    case "omatype.dismiss.v1":
+    case "badi.session.close.v1":
+      if (!sessionRoutes.matches(command.sessionId, sender)) {
+        return { ok: false, error: "Suggestion session route mismatch" };
+      }
+      await broker.closeSession(command.sessionId);
+      return { ok: true };
+    case "badi.dismiss.v1":
       if (!sessionRoutes.matches(command.address.sessionId, sender)) {
         return { ok: false, error: "Suggestion session route mismatch" };
       }
       await broker.dismissSuggestion(command.address);
       return { ok: true };
-    case "omatype.commit.authorize.v1":
+    case "badi.commit.authorize.v1":
       if (!sessionRoutes.matches(command.request.sessionId, sender)) {
         return { ok: false, error: "Suggestion session route mismatch" };
       }
       return { ok: true, response: await broker.authorizeCommit(command.request) };
-    case "omatype.commit.result.v1":
+    case "badi.commit.result.v1":
       if (!sessionRoutes.matches(command.notice.sessionId, sender)) {
         return { ok: false, error: "Suggestion session route mismatch" };
       }
@@ -127,19 +144,80 @@ async function senderWindowIsFocused(
   }
 }
 
+function commandSessionId(command: RuntimeCommand): string {
+  switch (command.kind) {
+    case "badi.bootstrap.v1":
+    case "badi.session.close.v1":
+      return command.sessionId;
+    case "badi.suggest.v1":
+    case "badi.cancel.v1":
+      return command.request.sessionId;
+    case "badi.dismiss.v1":
+      return command.address.sessionId;
+    case "badi.commit.authorize.v1":
+      return command.request.sessionId;
+    case "badi.commit.result.v1":
+      return command.notice.sessionId;
+  }
+}
+
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (!isRuntimeCommand(message)) {
     return false;
   }
-  if (!isTrustedFixtureSender(sender, chrome.runtime.id)) {
-    sendResponse({ ok: false, error: "Untrusted Omatype message sender" } satisfies RuntimeReply);
+  const closingBoundSession =
+    message.kind === "badi.session.close.v1" &&
+    sender.id === chrome.runtime.id &&
+    sessionRoutes.matches(message.sessionId, sender);
+  const contentFreeBootstrap = message.kind === "badi.bootstrap.v1";
+  const trustedExactDocument = contentFreeBootstrap
+    ? isTrustedFixtureBootstrapSender(sender, chrome.runtime.id)
+    : isTrustedFixtureSender(sender, chrome.runtime.id);
+  if (!trustedExactDocument && !closingBoundSession) {
+    sendResponse({ ok: false, error: "Untrusted Badi message sender" } satisfies RuntimeReply);
     return false;
   }
-  void senderWindowIsFocused(sender).then(
+  let displacedSessionIds: readonly string[] = [];
+  const routeSessionId = commandSessionId(message);
+  if (
+    message.kind === "badi.bootstrap.v1" ||
+    (!closingBoundSession && !sessionRoutes.matches(routeSessionId, sender))
+  ) {
+    // MV3 may restart this worker while its content script remains alive.
+    // Re-register only after the ordinary command passed the stricter active
+    // exact-document sender check above; the broker still independently
+    // validates coordinates, policy, and commit authority.
+    const subscription = sessionRoutes.subscribe(routeSessionId, sender);
+    if (subscription === null) {
+      sendResponse({
+        ok: false,
+        error: "Badi session is bound to another document",
+      } satisfies RuntimeReply);
+      return false;
+    }
+    displacedSessionIds = subscription.displacedSessionIds;
+  }
+  if (
+    message.kind === "badi.suggest.v1" &&
+    !sessionRoutes.matches(message.request.sessionId, sender)
+  ) {
+    sendResponse({
+      ok: false,
+      error: "Suggestion session is bound to another document",
+    } satisfies RuntimeReply);
+    return false;
+  }
+  void Promise.allSettled(
+    displacedSessionIds.map((sessionId) => broker.closeSession(sessionId)),
+  ).then(() =>
+    closingBoundSession || contentFreeBootstrap
+      ? true
+      : senderWindowIsFocused(sender),
+  ).then(
     (focused) =>
       focused
         ? handle(message, sender)
-        : ({ ok: false, error: "Omatype sender window is not focused" } satisfies RuntimeReply),
+        : ({ ok: false, error: "Badi sender window is not focused" } satisfies RuntimeReply),
   ).then(
     (reply) => sendResponse(reply),
     (error: unknown) => {
@@ -151,7 +229,8 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  sessionRoutes.deleteTab(tabId);
+  const sessionIds = sessionRoutes.deleteTab(tabId);
+  void Promise.allSettled(sessionIds.map((sessionId) => broker.closeSession(sessionId)));
 });
 
 chrome.commands.onCommand.addListener((command) => {
@@ -161,6 +240,6 @@ chrome.commands.onCommand.addListener((command) => {
   void (async () => {
     const paused = await broker.globalControl("pause_toggle");
     const action = paused ? "pause" : "resume";
-    await broadcastToRegisteredRoutes({ kind: "omatype.control.v1", action });
+    await broadcastToRegisteredRoutes({ kind: "badi.control.v1", action });
   })().catch(() => undefined);
 });

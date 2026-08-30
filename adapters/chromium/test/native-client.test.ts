@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NativeBrokerClient, type NativeEvent, type NativePortLike } from "../src/background/native-client";
 import { NATIVE_HOST_NAME } from "../src/background/protocol-mapper";
 import type { SuggestionRequest } from "../src/shared/model";
@@ -65,6 +65,20 @@ function request(
   };
 }
 
+function commitRequest() {
+  return {
+    requestId: "request-1",
+    sessionId: request().sessionId,
+    focusEpoch: 7,
+    revision: 9,
+    monotonicMs: 1_002,
+    fingerprint: "0123456789abcdef",
+    suggestionId: "suggestion-1",
+    expectedText: " world",
+    acceptance: "all" as const,
+  };
+}
+
 function helloAck(paused = false): unknown {
   return {
     v: 1,
@@ -98,7 +112,7 @@ describe("NativeBrokerClient", () => {
       { connectNative: () => port },
       { now: () => 1_000, handshakeTimeoutMs: 10_000 },
     );
-    const pending = client.requestSuggestion(request());
+    const pending = client.bootstrap();
     port.onMessage.emit({
       v: 1,
       id: "chromium.hello",
@@ -110,25 +124,314 @@ describe("NativeBrokerClient", () => {
     expect(port.posted).toHaveLength(1);
 
     port.onMessage.emit(helloAck(true));
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(
-      port.posted.some(
+    await expect(pending).resolves.toBe(true);
+    expect(port.posted).toHaveLength(1);
+    client.dispose();
+  });
+
+  it("does not transmit session context when the hello state is already paused", async () => {
+    const port = new FakeNativePort();
+    const client = new NativeBrokerClient(
+      { connectNative: () => port },
+      { now: () => 1_000, handshakeTimeoutMs: 10_000 },
+    );
+    const pending = client.requestSuggestion(request());
+    port.onMessage.emit(helloAck(true));
+
+    await expect(pending).rejects.toThrow("Broker is paused");
+    expect(port.posted).toEqual([expect.objectContaining({ type: "hello" })]);
+    client.dispose();
+  });
+
+  it("disconnects the native port when the hello handshake times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = new FakeNativePort();
+      const client = new NativeBrokerClient(
+        { connectNative: () => port },
+        { now: () => 1_000, handshakeTimeoutMs: 20 },
+      );
+      const pending = client.bootstrap();
+      const rejected = expect(pending).rejects.toThrow("handshake timed out");
+      await vi.advanceTimersByTimeAsync(20);
+
+      expect(port.disconnected).toBe(true);
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds a silent post-handshake suggestion operation", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = new FakeNativePort();
+      const client = new NativeBrokerClient(
+        { connectNative: () => port },
+        {
+          now: () => 1_000,
+          handshakeTimeoutMs: 10_000,
+          operationTimeoutMs: 20,
+        },
+      );
+      const ready = client.bootstrap();
+      port.onMessage.emit(helloAck());
+      await ready;
+
+      const pending = client.requestSuggestion(request());
+      const rejected = pending.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(20);
+
+      const error = await rejected;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("suggestion operation timed out");
+      expect(vi.getTimerCount()).toBe(0);
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds a silent post-handshake commit operation", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = new FakeNativePort();
+      const client = new NativeBrokerClient(
+        { connectNative: () => port },
+        {
+          now: () => 1_000,
+          handshakeTimeoutMs: 10_000,
+          operationTimeoutMs: 20,
+        },
+      );
+      const ready = client.bootstrap();
+      port.onMessage.emit(helloAck());
+      await ready;
+
+      const pending = client.authorizeCommit(commitRequest());
+      const rejected = pending.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(20);
+
+      const error = await rejected;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("commit operation timed out");
+      expect(vi.getTimerCount()).toBe(0);
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears operation deadlines when suggestion and commit replies settle", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = new FakeNativePort();
+      const client = new NativeBrokerClient(
+        { connectNative: () => port },
+        {
+          now: () => 1_000,
+          handshakeTimeoutMs: 10_000,
+          operationTimeoutMs: 20,
+        },
+      );
+      const ready = client.bootstrap();
+      port.onMessage.emit(helloAck());
+      await ready;
+
+      const suggestion = client.requestSuggestion(request());
+      await vi.advanceTimersByTimeAsync(0);
+      port.onMessage.emit({
+        v: 1,
+        id: "request-1",
+        type: "suggestion.show",
+        session_id: request().sessionId,
+        focus_epoch: 7,
+        revision: 9,
+        mono_ms: 1_001,
+        payload: {
+          fingerprint: "0123456789abcdef",
+          suggestion_id: "suggestion-1",
+          text: " world",
+          accept_word: " world",
+          ttl_ms: 600,
+          provider: "phrase_v1",
+        },
+      });
+      await expect(suggestion).resolves.toMatchObject({ suggestionId: "suggestion-1" });
+      expect(vi.getTimerCount()).toBe(0);
+
+      const authorization = client.authorizeCommit(commitRequest());
+      await vi.advanceTimersByTimeAsync(0);
+      port.onMessage.emit({
+        v: 1,
+        id: "request-1.9.accept_all",
+        type: "commit.prepare",
+        session_id: request().sessionId,
+        focus_epoch: 7,
+        revision: 9,
+        mono_ms: 1_003,
+        payload: {
+          fingerprint: "0123456789abcdef",
+          suggestion_id: "suggestion-1",
+          text: " world",
+          acceptance: "all",
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(authorization).resolves.toMatchObject({ acceptance: "all" });
+      expect(vi.getTimerCount()).toBe(0);
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears operation deadlines when a session closes and when the client resets", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = new FakeNativePort();
+      const client = new NativeBrokerClient(
+        { connectNative: () => port },
+        {
+          now: () => 1_000,
+          handshakeTimeoutMs: 10_000,
+          operationTimeoutMs: 20,
+        },
+      );
+      const ready = client.bootstrap();
+      port.onMessage.emit(helloAck());
+      await ready;
+
+      const closing = client.requestSuggestion(request());
+      const closed = closing.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      await client.closeSession(request().sessionId);
+      const closeError = await closed;
+      expect(closeError).toBeInstanceOf(Error);
+      expect((closeError as Error).message).toContain("session closed");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(0);
+
+      const nextRequest = request("request-2", 10, "fedcba9876543210");
+      const suggestion = client.requestSuggestion(nextRequest);
+      const commit = client.authorizeCommit({
+        ...commitRequest(),
+        requestId: nextRequest.requestId,
+        revision: nextRequest.revision,
+        fingerprint: nextRequest.context.fingerprint,
+      });
+      const suggestionRejected = suggestion.catch((error: unknown) => error);
+      const commitRejected = commit.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(2);
+
+      client.dispose();
+      const suggestionError = await suggestionRejected;
+      const commitError = await commitRejected;
+      expect(suggestionError).toBeInstanceOf(Error);
+      expect((suggestionError as Error).message).toContain("disposed");
+      expect(commitError).toBeInstanceOf(Error);
+      expect((commitError as Error).message).toContain("disposed");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces identical global controls, rejects incompatible overlap, and bounds silence", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = new FakeNativePort();
+      const client = new NativeBrokerClient(
+        { connectNative: () => port },
+        {
+          now: () => 1_000,
+          handshakeTimeoutMs: 10_000,
+          operationTimeoutMs: 20,
+        },
+      );
+      const ready = client.bootstrap();
+      port.onMessage.emit(helloAck());
+      await ready;
+
+      const first = client.globalControl("pause");
+      const duplicate = client.globalControl("pause");
+      const incompatible = client.globalControl("resume");
+      const incompatibleRejected = incompatible.catch((error: unknown) => error);
+      const firstRejected = first.catch((error: unknown) => error);
+      const duplicateRejected = duplicate.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const incompatibleError = await incompatibleRejected;
+      expect(incompatibleError).toBeInstanceOf(Error);
+      expect((incompatibleError as Error).message).toContain(
+        "pause is already in progress",
+      );
+      expect(
+        port.posted.filter(
+          (message) =>
+            typeof message === "object" &&
+            message !== null &&
+            "type" in message &&
+            message.type === "control.request",
+        ),
+      ).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(20);
+      const firstError = await firstRejected;
+      const duplicateError = await duplicateRejected;
+      expect(firstError).toBeInstanceOf(Error);
+      expect((firstError as Error).message).toContain(
+        "global control operation timed out",
+      );
+      expect(duplicateError).toBeInstanceOf(Error);
+      expect((duplicateError as Error).message).toContain(
+        "global control operation timed out",
+      );
+      expect(vi.getTimerCount()).toBe(0);
+
+      const retry = client.globalControl("resume");
+      await vi.advanceTimersByTimeAsync(0);
+      const control = [...port.posted].reverse().find(
         (message) =>
           typeof message === "object" &&
           message !== null &&
           "type" in message &&
-          message.type === "suggest.request",
-      ),
-    ).toBe(true);
-    port.onMessage.emit({
-      v: 1,
-      id: "request-1",
-      type: "error",
-      mono_ms: 1_001,
-      payload: { code: "paused" },
-    });
-    await expect(pending).rejects.toThrow("Broker rejected suggestion request");
-    client.dispose();
+          message.type === "control.request",
+      );
+      if (
+        typeof control !== "object" ||
+        control === null ||
+        !("id" in control) ||
+        typeof control.id !== "string"
+      ) {
+        throw new Error("Global control retry missing");
+      }
+      port.onMessage.emit({
+        v: 1,
+        id: control.id,
+        type: "control.result",
+        mono_ms: 1_001,
+        payload: {
+          action: "resume",
+          accepted: true,
+          reason: "accepted",
+          paused: false,
+        },
+      });
+
+      await expect(retry).resolves.toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -327,6 +630,68 @@ describe("NativeBrokerClient", () => {
     await expect(pauseResult).resolves.toBe(true);
     client.dispose();
     expect(port.disconnected).toBe(true);
+  });
+
+  it("closes an opened session and emits a fresh open when that session is reused", async () => {
+    const port = new FakeNativePort();
+    const client = new NativeBrokerClient(
+      { connectNative: () => port },
+      { now: () => 1_000, handshakeTimeoutMs: 10_000 },
+    );
+    const first = client.requestSuggestion(request());
+    port.onMessage.emit(helloAck());
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const firstRejected = expect(first).rejects.toThrow("session closed");
+
+    await client.closeSession(request().sessionId);
+    await firstRejected;
+    expect(port.posted.at(-1)).toMatchObject({
+      type: "session.close",
+      session_id: request().sessionId,
+      focus_epoch: 7,
+      revision: 9,
+      payload: { reason: "session_closed" },
+    });
+
+    const secondRequest = request("request-2", 10, "fedcba9876543210");
+    const second = client.requestSuggestion(secondRequest);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const closeIndex = port.posted.findIndex(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        "type" in message &&
+        message.type === "session.close",
+    );
+    const reopenedIndex = port.posted.findIndex(
+      (message, index) =>
+        index > closeIndex &&
+        typeof message === "object" &&
+        message !== null &&
+        "type" in message &&
+        message.type === "session.open",
+    );
+    expect(reopenedIndex).toBeGreaterThan(closeIndex);
+
+    port.onMessage.emit({
+      v: 1,
+      id: secondRequest.requestId,
+      type: "suggestion.show",
+      session_id: secondRequest.sessionId,
+      focus_epoch: secondRequest.focusEpoch,
+      revision: secondRequest.revision,
+      mono_ms: 1_010,
+      payload: {
+        fingerprint: secondRequest.context.fingerprint,
+        suggestion_id: "suggestion-2",
+        text: " reopened",
+        accept_word: " reopened",
+        ttl_ms: 600,
+        provider: "phrase_v1",
+      },
+    });
+    await expect(second).resolves.toMatchObject({ suggestion: " reopened" });
+    client.dispose();
   });
 
   it("ignores a reply with stale coordinates even when the id matches", async () => {

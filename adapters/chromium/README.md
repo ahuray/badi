@@ -1,7 +1,7 @@
-# Omatype Chromium vertical slice
+# Badi Chromium vertical slice
 
 This is a deliberately narrow unpacked Manifest V3 adapter. It connects only to
-the native-messaging host name `io.omatype.broker`. Ordinary build/unit commands
+the native-messaging host name `io.github.ahuray.badi`. Ordinary build/unit commands
 do not register that host, modify a Chromium profile, or install the extension;
 the live commands use and remove a fully disposable profile and HOME/XDG tree.
 
@@ -11,7 +11,7 @@ From the repository root:
 npm run typecheck
 npm test
 npm run build
-npm run build:verify --workspace @omatype/chromium
+npm run build:verify --workspace @badi/chromium
 ```
 
 The unpacked artifact is generated at `adapters/chromium/dist/`. Its
@@ -20,7 +20,7 @@ The unpacked artifact is generated at `adapters/chromium/dist/`. Its
 For a controlled page, run:
 
 ```sh
-npm run fixture --workspace @omatype/chromium
+npm run fixture --workspace @badi/chromium
 ```
 
 Then open `http://localhost:4173/chromium.html`. Loading the unpacked extension
@@ -44,7 +44,7 @@ Chromium-132 `frozen === false` lifecycle state.
 An ambient M1 request requires all of the following:
 
 - a visible, enabled, writable `input[type=text]` or `textarea` in light DOM;
-- a unique `id`, unique in-scope `name`, or unique `data-omatype-field` marker;
+- a unique `id`, unique in-scope `name`, or unique `data-badi-field` marker;
 - a collapsed selection, stable focus/revision, and no active composition;
 - no sensitive autocomplete purpose, opt-out ancestor, or failing field
   constraint.
@@ -57,7 +57,7 @@ purposes are hard-denied before value access.
 
 A plain text field can still be secret-like without declaring a semantic signal;
 the adapter cannot infer that safely. Sites and fixtures must mark such regions
-with `data-omatype="off"`; this boundary is not a general secret detector.
+with `data-badi="off"`; this boundary is not a general secret detector.
 Controlled-framework compatibility and browser-native undo behavior are also not
 yet proven. The current vanilla-DOM `setRangeText` plus `input` event path is
 reported to the broker as `dispatched-unverified`.
@@ -102,7 +102,7 @@ revocation, or any intervening edit produces no insertion.
 
 After an accepted word, M1 clears any local remainder and requests a freshly
 addressed suggestion before another acceptance. Unsolicited broker frames are
-not general page-control APIs: `omatypectl` request/accept commands exercise the
+not general page-control APIs: `badictl` request/accept commands exercise the
 broker core only and do not route `suggestion.show` or `commit.prepare` into a
 Chromium content controller in M1.
 
@@ -116,8 +116,9 @@ that every tracked process, socket, manifest, and profile is gone afterward.
 It never writes the user's normal Chromium profile or native-host directory.
 
 ```sh
-npm run live:smoke --workspace @omatype/chromium
-npm run live --workspace @omatype/chromium
+npm run live:smoke --workspace @badi/chromium
+npm run live --workspace @badi/chromium -- \
+  --evidence-id chromium-native-live-run.2026-08-30-review1.v1
 ```
 
 The durable lane uses the real Rust host and broker for handshake/show,
@@ -130,8 +131,10 @@ broker, privacy gate, insertion, or latency.
 
 Durable evidence requires 1,000 measured interactions after 50 warmups, 100
 delayed stale trials, exact cleanup, and both p95 gates. Its raw JSON is checked
-against `capabilities/v2/live-run.schema.json` and hash-linked by the V2 receipt.
-The smoke deliberately uses smaller counts and cannot produce a live receipt.
+against `capabilities/v2/live-run.schema.json` and hash-linked by a new V2
+receipt. The explicit ID becomes both the raw document ID and filename; the
+runner refuses an existing target and never overwrites a prior run. The smoke
+deliberately uses smaller counts and cannot produce a live receipt.
 
 This is a static exact-document development proof with only the
 `nativeMessaging` API permission. Incognito is declared `not_allowed`, and the

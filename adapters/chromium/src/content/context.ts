@@ -8,6 +8,10 @@ import { hasStableFieldIdentity } from "./field-policy";
 
 const BEFORE_LIMIT = 512;
 const AFTER_LIMIT = 128;
+const SUGGESTION_SCALAR_LIMIT = 64;
+const SUGGESTION_WORD_LIMIT = 8;
+const WORD_SEGMENTER = new Intl.Segmenter("und", { granularity: "word" });
+const GRAPHEME_SEGMENTER = new Intl.Segmenter("und", { granularity: "grapheme" });
 
 function firstScalars(value: string, limit: number): string {
   return Array.from(value).slice(0, limit).join("");
@@ -36,7 +40,7 @@ function stableIdentity(field: EditableField): string {
   const tag = field instanceof HTMLTextAreaElement ? "textarea" : `input:${field.type}`;
   return [
     tag,
-    field.getAttribute("data-omatype-field") ?? "",
+    field.getAttribute("data-badi-field") ?? "",
     field.id,
     field.getAttribute("name") ?? "",
   ].join("|");
@@ -117,29 +121,70 @@ function hasUnpairedSurrogate(value: string): boolean {
 }
 
 export function sanitizeSuggestion(value: string): string | null {
-  if (
-    value.length === 0 ||
-    hasUnpairedSurrogate(value) ||
-    /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(value) ||
-    /\p{Cf}/u.test(value)
-  ) {
+  if (value.length === 0 || hasUnpairedSurrogate(value)) {
     return null;
   }
-  const scalars = Array.from(value);
-  if (scalars.length > 64 || (value.match(/\S+/gu) ?? []).length > 8) {
-    return null;
+
+  for (const character of value) {
+    if (isForbiddenOutputScalar(character)) return null;
   }
-  return value;
+
+  let output = "";
+  let scalarCount = 0;
+  let wordCount = 0;
+  for (const segment of WORD_SEGMENTER.segment(value)) {
+    const boundaryWords = segment.isWordLike ? 1 : 0;
+    if (boundaryWords > 0 && wordCount + boundaryWords > SUGGESTION_WORD_LIMIT) {
+      break;
+    }
+    for (const character of segment.segment) {
+      if (scalarCount === SUGGESTION_SCALAR_LIMIT) break;
+      output += character;
+      scalarCount += 1;
+    }
+    wordCount += boundaryWords;
+    if (scalarCount === SUGGESTION_SCALAR_LIMIT) break;
+  }
+
+  output = output.replace(/\p{White_Space}+$/u, "");
+  return output.length === 0 ? null : output;
 }
 
 export function nextSuggestionWord(value: string): string {
-  const word = value.match(/^\s*[\p{L}\p{N}\p{M}_]+/u);
-  if (word?.[0]) {
-    return word[0];
+  const leading = value.match(/^\p{White_Space}*/u)?.[0] ?? "";
+  const tail = value.slice(leading.length);
+  const word = WORD_SEGMENTER.segment(tail)[Symbol.iterator]().next().value;
+  if (word !== undefined && word.index === 0 && word.isWordLike) {
+    return leading + word.segment;
   }
-  const symbol = value.match(/^\s*[^\s\p{L}\p{N}\p{M}_]/u);
-  if (symbol?.[0]) {
-    return symbol[0];
-  }
-  return value;
+  const grapheme = GRAPHEME_SEGMENTER.segment(tail)[Symbol.iterator]().next().value;
+  return leading + (grapheme?.segment ?? "");
+}
+
+function isForbiddenOutputScalar(character: string): boolean {
+  const scalar = character.codePointAt(0) ?? 0;
+  return (
+    /\p{Cc}/u.test(character) ||
+    scalar === 0x00ad ||
+    (scalar >= 0x0600 && scalar <= 0x0605) ||
+    scalar === 0x061c ||
+    scalar === 0x06dd ||
+    scalar === 0x070f ||
+    (scalar >= 0x0890 && scalar <= 0x0891) ||
+    scalar === 0x08e2 ||
+    scalar === 0x180e ||
+    (scalar >= 0x200b && scalar <= 0x200f) ||
+    (scalar >= 0x2028 && scalar <= 0x202e) ||
+    (scalar >= 0x2060 && scalar <= 0x2064) ||
+    (scalar >= 0x2066 && scalar <= 0x206f) ||
+    scalar === 0xfeff ||
+    (scalar >= 0xfff9 && scalar <= 0xfffb) ||
+    scalar === 0x110bd ||
+    scalar === 0x110cd ||
+    (scalar >= 0x13430 && scalar <= 0x1343f) ||
+    (scalar >= 0x1bca0 && scalar <= 0x1bca3) ||
+    (scalar >= 0x1d173 && scalar <= 0x1d17a) ||
+    scalar === 0xe0001 ||
+    (scalar >= 0xe0020 && scalar <= 0xe007f)
+  );
 }

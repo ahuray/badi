@@ -454,6 +454,30 @@ pub struct HelloAckPayload {
     pub paused: bool,
 }
 
+impl HelloAckPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.selected_v != PROTOCOL_VERSION
+            || !valid_opaque_id(&self.connection_id)
+            || self.enabled_capabilities.is_empty()
+            || self.enabled_capabilities.len() > 6
+            || self.max_frame_bytes != MAX_FRAME_BYTES
+            || self.max_before_chars != MAX_BEFORE_CHARS
+            || self.max_after_chars != MAX_AFTER_CHARS
+            || self.max_suggestion_chars != MAX_SUGGESTION_CHARS
+            || self.max_suggestion_words != MAX_SUGGESTION_WORDS
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        let mut unique = self.enabled_capabilities.clone();
+        unique.sort_by_key(|capability| *capability as u8);
+        unique.dedup();
+        if unique.len() != self.enabled_capabilities.len() {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Origin {

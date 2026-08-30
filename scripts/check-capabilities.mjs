@@ -1,13 +1,38 @@
 import { access, readFile, readdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
-import { isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import Ajv2020 from "ajv/dist/2020.js";
 import { assertExactChromiumManifest } from "../adapters/chromium/scripts/manifest-policy.mjs";
 
 const repository = path.resolve(import.meta.dirname, "..");
 const capabilityRoot = path.join(repository, "capabilities");
+const execFileAsync = promisify(execFile);
+const maximumGitBlobBytes = 4 * 1024 * 1024;
+const liveRunIdPattern =
+  /^chromium-native-live-run(?:\.[a-z0-9][a-z0-9-]{0,63})?\.v1$/u;
+const cliArguments = process.argv.slice(2);
+if (cliArguments.includes("--help")) {
+  process.stdout.write(
+      "Usage: node scripts/check-capabilities.mjs [--require-current]\n" +
+      "Without the flag, V2 evidence is validated at its recorded Git commit.\n" +
+      "--require-current also requires current adapter artifacts and the complete Rust source/input set to match the recorded clean commit.\n" +
+      "Build the extension first when invoking this file directly.\n",
+  );
+  process.exit(0);
+}
+if (
+  cliArguments.length > 1 ||
+  (cliArguments.length === 1 && cliArguments[0] !== "--require-current")
+) {
+  process.stderr.write(
+    "Usage: node scripts/check-capabilities.mjs [--require-current]\n",
+  );
+  process.exit(2);
+}
+const requireCurrent = cliArguments[0] === "--require-current";
 const validators = new Map();
 const files = (await readdir(capabilityRoot, { withFileTypes: true }))
   .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
@@ -15,6 +40,10 @@ const files = (await readdir(capabilityRoot, { withFileTypes: true }))
   .sort();
 
 let failed = false;
+let anchoredV2 = 0;
+let unanchoredV1 = 0;
+let currentV2FullSource = 0;
+let currentV1Adapter = 0;
 if (files.length === 0) {
   failed = true;
   process.stderr.write("No capability receipts found.\n");
@@ -31,7 +60,183 @@ function resolveRepositoryPath(relativePath, label) {
   return resolved;
 }
 
-async function validateEvidenceLinks(file, value) {
+function validateDeclaredPaths(file, value) {
+  resolveRepositoryPath(value.protocol.schema, `${file} protocol.schema`);
+  resolveRepositoryPath(value.adapter.manifest, `${file} adapter.manifest`);
+  resolveRepositoryPath(
+    value.adapter.build_manifest,
+    `${file} adapter.build_manifest`,
+  );
+  requireUniqueValues(
+    file,
+    value.artifacts.map((artifact) => artifact.path),
+    "artifact path",
+  );
+  for (const artifact of value.artifacts) {
+    resolveRepositoryPath(artifact.path, `${file} artifact`);
+  }
+  if (value.record_version >= 2) {
+    resolveRepositoryPath(value.native_host.source, `${file} native_host.source`);
+    resolveRepositoryPath(
+      value.native_host.manifest_example,
+      `${file} native_host.manifest_example`,
+    );
+    for (const artifact of value.evidence_artifacts) {
+      resolveRepositoryPath(artifact.path, `${file} evidence_artifact`);
+    }
+  }
+}
+
+async function runGit(gitArguments, label, options = {}) {
+  try {
+    const result = await execFileAsync("git", gitArguments, {
+      cwd: repository,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024,
+      timeout: 5_000,
+      ...options,
+    });
+    return result.stdout;
+  } catch {
+    throw new Error(`${label}: recorded Git object is unavailable`);
+  }
+}
+
+async function requireRecordedCommit(file, commit) {
+  if (!/^[0-9a-f]{40}$/u.test(commit)) {
+    throw new Error(`${file}: recorded base commit is not a full Git object id`);
+  }
+  await runGit(
+    ["cat-file", "-e", `${commit}^{commit}`],
+    `${file} base commit ${commit}`,
+  );
+}
+
+async function readRecordedBlob(commit, relativePath, label) {
+  resolveRepositoryPath(relativePath, label);
+  const object = `${commit}:${relativePath}`;
+  const type = await runGit(["cat-file", "-t", object], label);
+  if (type.trim() !== "blob") {
+    throw new Error(`${label}: recorded Git object is not a blob`);
+  }
+  const sizeText = await runGit(["cat-file", "-s", object], label);
+  const size = Number(sizeText.trim());
+  if (
+    !Number.isSafeInteger(size) ||
+    size < 0 ||
+    size > maximumGitBlobBytes
+  ) {
+    throw new Error(`${label}: recorded Git blob has an unsupported size`);
+  }
+  const bytes = await runGit(["cat-file", "blob", object], label, {
+    encoding: null,
+    maxBuffer: size + 1024,
+  });
+  if (!Buffer.isBuffer(bytes) || bytes.byteLength !== size) {
+    throw new Error(`${label}: recorded Git blob size changed while reading`);
+  }
+  return bytes;
+}
+
+async function currentRustChainInputs() {
+  const inputs = ["Cargo.toml", "Cargo.lock"];
+  async function collect(relativeDirectory) {
+    const directory = resolveRepositoryPath(
+      relativeDirectory,
+      `current Rust input directory ${relativeDirectory}`,
+    );
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const relativePath = path.posix.join(relativeDirectory, entry.name);
+      if (entry.isDirectory()) {
+        await collect(relativePath);
+      } else if (entry.isFile()) {
+        inputs.push(relativePath);
+      }
+    }
+  }
+  await collect("broker");
+  await collect("protocol/v1");
+  return inputs.sort();
+}
+
+async function recordedRustChainInputs(file, commit) {
+  const sourceList = await runGit(
+    [
+      "ls-tree",
+      "-r",
+      "--name-only",
+      commit,
+      "--",
+      "broker",
+      "protocol/v1",
+    ],
+    `${file} recorded Rust input list`,
+  );
+  return [
+    "Cargo.toml",
+    "Cargo.lock",
+    ...sourceList
+      .split("\n")
+      .filter((relativePath) => relativePath.length > 0),
+  ].sort();
+}
+
+async function validateCurrentRustChainInputs(file, liveRun) {
+  const commit = liveRun.repository.base_commit;
+  const [currentInputs, recordedInputs] = await Promise.all([
+    currentRustChainInputs(),
+    recordedRustChainInputs(file, commit),
+  ]);
+  if (!isDeepStrictEqual(currentInputs, recordedInputs)) {
+    throw new Error(
+      `${file}: current Rust-chain source/build/test input set differs from recorded commit ${commit}`,
+    );
+  }
+  await Promise.all(
+    currentInputs.map(async (relativePath) => {
+      const [currentBytes, recordedBytes] = await Promise.all([
+        readFile(
+          resolveRepositoryPath(relativePath, `${file} current Rust-chain input`),
+        ),
+        readRecordedBlob(
+          commit,
+          relativePath,
+          `${file} recorded Rust-chain input ${relativePath}`,
+        ),
+      ]);
+      if (!currentBytes.equals(recordedBytes)) {
+        throw new Error(
+          `${file}: current Rust-chain input differs from recorded commit: ${relativePath}`,
+        );
+      }
+    }),
+  );
+}
+
+async function validateCurrentRecordedPaths(file, commit, relativePaths) {
+  await Promise.all(
+    relativePaths.map(async (relativePath) => {
+      const [currentBytes, recordedBytes] = await Promise.all([
+        readFile(
+          resolveRepositoryPath(relativePath, `${file} current declared input`),
+        ),
+        readRecordedBlob(
+          commit,
+          relativePath,
+          `${file} recorded declared input ${relativePath}`,
+        ),
+      ]);
+      if (!currentBytes.equals(recordedBytes)) {
+        throw new Error(
+          `${file}: current declared input differs from recorded commit: ${relativePath}`,
+        );
+      }
+    }),
+  );
+}
+
+async function validateCurrentLinks(file, value, liveRun) {
   const protocolSchema = resolveRepositoryPath(
     value.protocol.schema,
     `${file} protocol.schema`,
@@ -52,6 +257,14 @@ async function validateEvidenceLinks(file, value) {
 
   const extensionManifest = JSON.parse(await readFile(adapterManifest, "utf8"));
   assertExactChromiumManifest(extensionManifest);
+
+  // Check the complete native source/build/test input set before generated
+  // adapter artifacts. The validator is fail-fast per receipt, so this order
+  // ensures a changed Rust chain cannot be hidden behind the first extension
+  // hash mismatch.
+  if (value.record_version >= 2) {
+    await validateCurrentRustChainInputs(file, liveRun);
+  }
 
   const buildManifest = JSON.parse(await readFile(buildManifestPath, "utf8"));
   if (
@@ -105,16 +318,6 @@ async function validateEvidenceLinks(file, value) {
   );
 
   if (value.record_version >= 2) {
-    requireUniqueValues(
-      file,
-      value.evidence.checks.map((check) => check.id),
-      "check id",
-    );
-    requireUniqueValues(
-      file,
-      value.evidence.measurements.map((measurement) => measurement.name),
-      "measurement name",
-    );
     const nativeSource = resolveRepositoryPath(
       value.native_host.source,
       `${file} native_host.source`,
@@ -124,46 +327,150 @@ async function validateEvidenceLinks(file, value) {
       `${file} native_host.manifest_example`,
     );
     await Promise.all([access(nativeSource), access(nativeManifest)]);
-    const decodedKey = Buffer.from(extensionManifest.key ?? "", "base64");
-    const keyDigest = createHash("sha256").update(decodedKey).digest();
-    const derivedExtensionId = [...keyDigest.subarray(0, 16)]
-      .flatMap((byte) => [byte >>> 4, byte & 0x0f])
-      .map((nibble) => String.fromCharCode("a".charCodeAt(0) + nibble))
-      .join("");
-    if (derivedExtensionId !== value.adapter.extension_id) {
-      throw new Error(`${file}: manifest key differs from receipt extension id`);
-    }
-    if (
-      JSON.stringify(extensionManifest.permissions) !== JSON.stringify(["nativeMessaging"]) ||
-      extensionManifest.incognito !== "not_allowed" ||
-      extensionManifest.minimum_chrome_version !== "132"
-    ) {
-      throw new Error(`${file}: live extension permissions/runtime boundary is not exact`);
-    }
     const nativeManifestValue = JSON.parse(await readFile(nativeManifest, "utf8"));
-    const expectedOrigin = `chrome-extension://${value.adapter.extension_id}/`;
-    if (
-      nativeManifestValue.name !== value.adapter.native_host ||
-      nativeManifestValue.type !== "stdio" ||
-      !path.isAbsolute(nativeManifestValue.path ?? "") ||
-      JSON.stringify(nativeManifestValue.allowed_origins) !==
-        JSON.stringify([expectedOrigin])
-    ) {
-      throw new Error(`${file}: native manifest example differs from exact live identity`);
-    }
-    const validatedDocuments = await validateHashedArtifacts(
+    validateLiveBoundary(
       file,
-      value.evidence_artifacts,
-      "evidence_artifact",
+      value,
+      extensionManifest,
+      nativeManifestValue,
     );
-    const liveRuns = validatedDocuments.filter(
-      (document) => document.value.id === "chromium-native-live-run.v1",
+    await validateCurrentRecordedPaths(
+      file,
+      liveRun.repository.base_commit,
+      [
+        value.protocol.schema,
+        value.native_host.source,
+        value.native_host.manifest_example,
+      ],
     );
-    if (liveRuns.length !== 1) {
-      throw new Error(`${file}: expected exactly one linked Chromium live-run document`);
-    }
-    await validateLiveReceiptLink(file, value, liveRuns[0].value);
+    await validateLinkedRepositoryArtifacts(
+      file,
+      liveRun,
+      async (relativePath, label) =>
+        readFile(resolveRepositoryPath(relativePath, label)),
+      true,
+      "current checkout",
+    );
   }
+}
+
+function validateLiveBoundary(file, value, extensionManifest, nativeManifestValue) {
+  const decodedKey = Buffer.from(extensionManifest.key ?? "", "base64");
+  const keyDigest = createHash("sha256").update(decodedKey).digest();
+  const derivedExtensionId = [...keyDigest.subarray(0, 16)]
+    .flatMap((byte) => [byte >>> 4, byte & 0x0f])
+    .map((nibble) => String.fromCharCode("a".charCodeAt(0) + nibble))
+    .join("");
+  if (derivedExtensionId !== value.adapter.extension_id) {
+    throw new Error(`${file}: manifest key differs from receipt extension id`);
+  }
+  if (
+    JSON.stringify(extensionManifest.permissions) !==
+      JSON.stringify(["nativeMessaging"]) ||
+    extensionManifest.incognito !== "not_allowed" ||
+    extensionManifest.minimum_chrome_version !== "132"
+  ) {
+    throw new Error(
+      `${file}: live extension permissions/runtime boundary is not exact`,
+    );
+  }
+  const expectedOrigin = `chrome-extension://${value.adapter.extension_id}/`;
+  if (
+    nativeManifestValue.name !== value.adapter.native_host ||
+    nativeManifestValue.type !== "stdio" ||
+    !path.isAbsolute(nativeManifestValue.path ?? "") ||
+    JSON.stringify(nativeManifestValue.allowed_origins) !==
+      JSON.stringify([expectedOrigin])
+  ) {
+    throw new Error(
+      `${file}: native manifest example differs from exact live identity`,
+    );
+  }
+}
+
+async function validateHistoricalV2(file, value) {
+  requireUniqueValues(
+    file,
+    value.evidence.checks.map((check) => check.id),
+    "check id",
+  );
+  requireUniqueValues(
+    file,
+    value.evidence.measurements.map((measurement) => measurement.name),
+    "measurement name",
+  );
+  const validatedDocuments = await validateHashedArtifacts(
+    file,
+    value.evidence_artifacts,
+    "evidence_artifact",
+  );
+  const liveRuns = validatedDocuments.filter(
+    (document) => liveRunIdPattern.test(document.value.id),
+  );
+  if (liveRuns.length !== 1) {
+    throw new Error(`${file}: expected exactly one linked Chromium live-run document`);
+  }
+  const liveRun = liveRuns[0].value;
+  const expectedLiveRunPath = `capabilities/evidence/${liveRun.id}.json`;
+  if (liveRuns[0].path !== expectedLiveRunPath) {
+    throw new Error(
+      `${file}: live-run id does not match its evidence path: ${liveRuns[0].path}`,
+    );
+  }
+  await validateLiveReceiptLink(file, value, liveRun);
+
+  const commit = value.evidence.repository.base_commit;
+  await requireRecordedCommit(file, commit);
+  const [, extensionManifestBytes, , nativeManifestBytes] = await Promise.all([
+    readRecordedBlob(
+      commit,
+      value.protocol.schema,
+      `${file} recorded protocol schema`,
+    ),
+    readRecordedBlob(
+      commit,
+      value.adapter.manifest,
+      `${file} recorded adapter manifest`,
+    ),
+    readRecordedBlob(
+      commit,
+      value.native_host.source,
+      `${file} recorded native-host source`,
+    ),
+    readRecordedBlob(
+      commit,
+      value.native_host.manifest_example,
+      `${file} recorded native-host manifest`,
+    ),
+  ]);
+  const extensionManifest = JSON.parse(extensionManifestBytes.toString("utf8"));
+  const nativeManifest = JSON.parse(nativeManifestBytes.toString("utf8"));
+  assertExactChromiumManifest(extensionManifest);
+  validateLiveBoundary(file, value, extensionManifest, nativeManifest);
+  const manifestArtifacts = value.artifacts.filter(
+    (artifact) => path.posix.basename(artifact.path) === "manifest.json",
+  );
+  const manifestDigest = createHash("sha256")
+    .update(extensionManifestBytes)
+    .digest("hex");
+  if (
+    manifestArtifacts.length !== 1 ||
+    manifestArtifacts[0].bytes !== extensionManifestBytes.byteLength ||
+    manifestArtifacts[0].sha256 !== manifestDigest
+  ) {
+    throw new Error(
+      `${file}: extension manifest artifact differs at recorded commit ${commit}`,
+    );
+  }
+  await validateLinkedRepositoryArtifacts(
+    file,
+    liveRun,
+    (relativePath, label) =>
+      readRecordedBlob(commit, relativePath, label),
+    false,
+    `recorded commit ${commit}`,
+  );
+  return liveRun;
 }
 
 function requireUniqueValues(file, values, label) {
@@ -214,6 +521,12 @@ async function validateLiveReceiptLink(file, receipt, run) {
 
   if (!isDeepStrictEqual(receipt.evidence.repository, run.repository)) {
     throw new Error(`${file}: repository provenance differs from linked live run`);
+  }
+  if (
+    receipt.evidence.repository.working_tree_dirty !== false ||
+    run.repository.working_tree_dirty !== false
+  ) {
+    throw new Error(`${file}: durable evidence was not recorded from a clean tree`);
   }
   if (!isDeepStrictEqual(receipt.evidence.local_environment, run.environment)) {
     throw new Error(`${file}: local environment differs from linked live run`);
@@ -366,35 +679,53 @@ async function validateLiveReceiptLink(file, receipt, run) {
     }
   }
 
-  const repositoryRunArtifacts = new Map([
-    ["extension-build-manifest", "adapters/chromium/dist/BUILD_MANIFEST.json"],
+  if (!isDeepStrictEqual(receipt.evidence.isolation, run.isolation)) {
+    throw new Error(`${file}: isolation claims differ from linked live run`);
+  }
+}
+
+async function validateLinkedRepositoryArtifacts(
+  file,
+  run,
+  readArtifact,
+  includeGeneratedBuildManifest,
+  location,
+) {
+  const artifacts = [
     ["fixture-html", "fixtures/web/chromium.html"],
     ["fixture-js", "fixtures/web/fixture.js"],
     ["fixture-css", "fixtures/web/fixture.css"],
     ["live-runner", "adapters/chromium/live/run-live.mjs"],
     ["fault-host", "adapters/chromium/live/fake-native-host.mjs"],
     ["manifest-policy", "adapters/chromium/scripts/manifest-policy.mjs"],
-  ]);
-  for (const [id, relativePath] of repositoryRunArtifacts) {
+  ];
+  if (includeGeneratedBuildManifest) {
+    artifacts.unshift([
+      "extension-build-manifest",
+      "adapters/chromium/dist/BUILD_MANIFEST.json",
+    ]);
+  }
+  const runArtifacts = new Map(
+    run.artifacts.map((artifact) => [artifact.id, artifact]),
+  );
+  for (const [id, relativePath] of artifacts) {
     const artifact = runArtifacts.get(id);
     if (artifact === undefined) {
       throw new Error(`${file}: linked live artifact missing: ${id}`);
     }
-    const artifactPath = resolveRepositoryPath(relativePath, `${file} live artifact`);
-    const bytes = await readFile(artifactPath);
+    const bytes = await readArtifact(
+      relativePath,
+      `${file} ${location} artifact ${id}`,
+    );
     const digest = createHash("sha256").update(bytes).digest("hex");
     if (artifact.bytes !== bytes.byteLength || artifact.sha256 !== digest) {
-      throw new Error(`${file}: linked live artifact differs: ${id}`);
+      throw new Error(`${file}: linked live artifact differs at ${location}: ${id}`);
     }
-  }
-
-  if (!isDeepStrictEqual(receipt.evidence.isolation, run.isolation)) {
-    throw new Error(`${file}: isolation claims differ from linked live run`);
   }
 }
 
 function validateLiveRunSemantics(file, value) {
-  if (value.id !== "chromium-native-live-run.v1") return;
+  if (!liveRunIdPattern.test(value.id)) return;
   requireUniqueValues(file, value.commands.map((command) => command.id), "command id");
   requireUniqueValues(file, value.scenarios.map((scenario) => scenario.id), "scenario id");
   requireUniqueValues(
@@ -460,7 +791,26 @@ for (const file of files) {
     continue;
   }
   try {
-    await validateEvidenceLinks(file, value);
+    validateDeclaredPaths(file, value);
+    let liveRun;
+    if (value.record_version >= 2) {
+      liveRun = await validateHistoricalV2(file, value);
+    }
+    if (requireCurrent) {
+      await validateCurrentLinks(file, value, liveRun);
+    }
+    if (value.record_version >= 2) {
+      anchoredV2 += 1;
+    } else {
+      unanchoredV1 += 1;
+    }
+    if (requireCurrent) {
+      if (value.record_version >= 2) {
+        currentV2FullSource += 1;
+      } else {
+        currentV1Adapter += 1;
+      }
+    }
   } catch (error) {
     failed = true;
     const detail = error instanceof Error ? error.message : String(error);
@@ -471,5 +821,25 @@ for (const file of files) {
 if (failed) {
   process.exitCode = 1;
 } else {
-  process.stdout.write(`Validated ${files.length} capability receipt(s).\n`);
+  const mode = requireCurrent ? "strict-current" : "historical";
+  const currentStatus = requireCurrent
+    ? `v2_full_source_current=${currentV2FullSource}, v1_adapter_current=${currentV1Adapter}`
+    : "current_links=not-checked";
+  process.stdout.write(
+    `Validated ${files.length} capability receipt(s) ` +
+      `(mode=${mode}, v2_recorded_commit=${anchoredV2}, ` +
+      `v1_unanchored=${unanchoredV1}, ${currentStatus}).\n`,
+  );
+  if (!requireCurrent) {
+    process.stdout.write(
+      "Current linked sources and generated artifacts were not checked; " +
+        "use --require-current for that gate.\n",
+    );
+  }
+  if (unanchoredV1 > 0) {
+    process.stdout.write(
+      "V1 receipts have no recorded commit or raw run; their historical " +
+        "validation covers only schema and safe declared paths.\n",
+    );
+  }
 }

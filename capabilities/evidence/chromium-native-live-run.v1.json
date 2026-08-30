@@ -2,9 +2,9 @@
   "$schema": "../v2/live-run.schema.json",
   "record_version": 1,
   "id": "chromium-native-live-run.v1",
-  "recorded_at": "2026-08-30T01:42:01.899Z",
+  "recorded_at": "2026-08-30T10:33:09.159Z",
   "repository": {
-    "base_commit": "8e86723b78c50dae52ba1714aa450de47cfeb6ee",
+    "base_commit": "068db9fe389fd7777bd903021b9c2baf3bde5140",
     "working_tree_dirty": false
   },
   "environment": {
@@ -55,7 +55,7 @@
     "runtime_url": "http://localhost:4173/chromium.html"
   },
   "native": {
-    "host_name": "io.omatype.broker",
+    "host_name": "io.github.ahuray.badi",
     "caller_origin": "chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/",
     "max_envelope_bytes": 65536,
     "socket_parent_mode": "0700",
@@ -92,17 +92,17 @@
     },
     {
       "id": "chromium-typecheck",
-      "command": "npm run typecheck --workspace @omatype/chromium",
+      "command": "npm run typecheck --workspace @badi/chromium",
       "exit_code": 0
     },
     {
       "id": "chromium-unit",
-      "command": "npm test --workspace @omatype/chromium",
+      "command": "npm test --workspace @badi/chromium",
       "exit_code": 0
     },
     {
       "id": "chromium-build-verify",
-      "command": "npm run build:verify --workspace @omatype/chromium",
+      "command": "npm run build:verify --workspace @badi/chromium",
       "exit_code": 0
     },
     {
@@ -265,8 +265,8 @@
       "samples": 1000,
       "warmups": 50,
       "statistic": "nearest-rank-p95",
-      "p95": 8.4,
-      "maximum": 9.7,
+      "p95": 12.6,
+      "maximum": 14.5,
       "threshold": 30,
       "status": "pass"
     },
@@ -277,7 +277,7 @@
       "samples": 1000,
       "warmups": 50,
       "statistic": "nearest-rank-p95",
-      "p95": 0.7,
+      "p95": 0.6,
       "maximum": 0.9,
       "threshold": 32,
       "status": "pass"
@@ -286,48 +286,48 @@
   "artifacts": [
     {
       "id": "broker-binary",
-      "bytes": 30854768,
-      "sha256": "6ae83dcd24129e376fd17d7523a3940e8456f045c61c2dd33ff3cf0b867e72cf"
+      "bytes": 31134544,
+      "sha256": "633ee7bcf779a3e70643e3fe5a93f4e4ea55ea34349c914c5134c82388a6a149"
     },
     {
       "id": "native-host-binary",
-      "bytes": 28584632,
-      "sha256": "63edb51488785a18f201a626e03a368067dad0066d68543ea53ebaae50003375"
+      "bytes": 28876896,
+      "sha256": "a6f63c4b6fda3cecf6ae1defdb22cc588357d88b0b64f9d197aa3cfcd56fe2aa"
     },
     {
       "id": "native-host-manifest",
-      "bytes": 269,
-      "sha256": "ee7a9ffd3a035645e6152c2d92a9b4ff773f71bfc4d8fd4dd0863a803415eefe"
+      "bytes": 267,
+      "sha256": "e90e86fea6e19ea166fd3f889b3987398833306de4013ef5d58b21d47c5ea1df"
     },
     {
       "id": "extension-content-script",
-      "bytes": 49631,
-      "sha256": "5d35d31c27295cc0f9e8820d38f5de9ebe4ca975ea798115ea1f111754384496"
+      "bytes": 49565,
+      "sha256": "d6000980d1eb660a7f027d6f7979550ae1011c89c4064e7c857e56c4de8bb2d6"
     },
     {
       "id": "extension-service-worker",
-      "bytes": 33035,
-      "sha256": "65759522f18af6b2902b023213cf3a06668c89e46b4fe761438203f231894622"
+      "bytes": 32988,
+      "sha256": "ff57aec9131edad01e2faffcb2c5972b5d9c70b66caf47d4f1f552737164657c"
     },
     {
       "id": "extension-manifest",
-      "bytes": 1202,
-      "sha256": "695797a1a0aac95aef36843cd65766aafa17a4897febe0ed68ad6c235722bc56"
+      "bytes": 1193,
+      "sha256": "325047f6348b94695f65bd62f5ab6f948dad32f8bf538a0425363a49fa676021"
     },
     {
       "id": "extension-build-manifest",
-      "bytes": 616,
-      "sha256": "0fc3be656eee2e4c63248d2eec5dd704b0ac39339c85e63775fda6311ea6e140"
+      "bytes": 617,
+      "sha256": "2c3a8377bdd2a05437783ac5eed569a11df8bfa1da0e11779a674bd9cac952de"
     },
     {
       "id": "fixture-html",
-      "bytes": 3267,
-      "sha256": "82ef858156880b6ed34607e6f480020ccceea5585dd462d9b60b2fa9b23b4db9"
+      "bytes": 3264,
+      "sha256": "8f42d3cc36c8d452345e320015c41ee6fd010b0f61edb10e8ef7db539918e02a"
     },
     {
       "id": "fixture-js",
-      "bytes": 5922,
-      "sha256": "931f1a51e5403e789b9a200296c777dd821914a732e8004f8560b552c3370921"
+      "bytes": 5916,
+      "sha256": "dd5a7b50bf022aa1b2666a3d7b6f64336ec00fae6510fd5b7243c5e418b95a4e"
     },
     {
       "id": "fixture-css",
@@ -336,18 +336,18 @@
     },
     {
       "id": "live-runner",
-      "bytes": 58842,
-      "sha256": "26a3010168cc4cc26e3ead930acce13476a4e2f109f2360525e1d8c446c2dc8e"
+      "bytes": 58733,
+      "sha256": "28411fe1b8d22505762fd7a077ec5fcefa7f7bf4d45ffab91d257c554ce8a9c0"
     },
     {
       "id": "fault-host",
-      "bytes": 8280,
-      "sha256": "3802c7b8332428035a5d1cb94bc447156f741792198a661d4f760cae5cbde693"
+      "bytes": 8265,
+      "sha256": "de2d99c6792aad2e740af60c3f42cc5c890fe98f182a8f68166d6db0f0f69517"
     },
     {
       "id": "manifest-policy",
-      "bytes": 2264,
-      "sha256": "17af216bf4be0e95f5f761a680ebe276ee367a70aa9500c67c024c82804e7411"
+      "bytes": 2261,
+      "sha256": "48bb2f1252f3c489319194866c2637e8efb5f5de4769c4f8dd796b6220ef8ce5"
     }
   ],
   "notes": [

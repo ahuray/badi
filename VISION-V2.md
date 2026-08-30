@@ -1,15 +1,16 @@
-# Omatype Vision V2
+# Badi Vision V2
 
 Status: research-backed product contract, 2026-08-30
 
-> `Omatype` is a repository codename. An unrelated
-> [OmaType dictation project](https://github.com/Aayush9029/OmaType) already
-> occupies the same Linux/Omarchy input category. A distinct public name and
-> technical namespace are hard release gates.
+> Badi (`بعدی`, Persian for “next”) is the selected product name. Because an
+> unrelated [AI workflow CLI](https://github.com/fatihkan/badi) already uses the
+> `badi` command, this project uses `badictl` and owned technical namespaces.
+> Public package/trademark clearance
+> and the source license remain release gates.
 
 ## The product
 
-Omatype is the capability-aware co-writing layer Linux is missing.
+Badi is the capability-aware co-writing layer Linux is missing.
 
 It helps the user write their own next words inside the app they already use.
 One short continuation appears only when the current target can be understood
@@ -25,8 +26,21 @@ The model is replaceable. The durable product is the combination of:
 - visible, auditable evidence of what the system used and why it acted or
   stayed silent.
 
-Omatype is not a generic AI writing assistant, a chatbot floating over the
+Badi is not a generic AI writing assistant, a chatbot floating over the
 desktop, or a promise that one Linux hook works everywhere.
+
+## Product character: precise, light, native
+
+Badi follows a McLaren-like engineering rule: performance comes from removing
+avoidable mass while refining every surface that remains. The product should
+feel fast, deliberate, and mechanically honest—not feature-heavy.
+
+- One signature interaction is polished before a second interaction is added.
+- Shared contracts stay small; target-specific behavior stays in adapters.
+- Hardware and policy decisions are inspectable instead of “smart” black boxes.
+- Visual language follows the Linux desktop and Omarchy's calm, direct feel;
+  it does not imitate a macOS overlay or introduce a separate design universe.
+- A feature that cannot meet latency, safety, and usefulness gates remains off.
 
 ## The job to be done
 
@@ -41,7 +55,7 @@ agents. Their current choices are fragmented:
 - cloud assistants often ask for more context and trust than the small writing
   decision requires.
 
-Omatype's job is to preserve one co-writing habit across the Linux apps that
+Badi's job is to preserve one co-writing habit across the Linux apps that
 can prove support, while yielding cleanly everywhere else.
 
 The first user is a Linux knowledge worker who moves among Chromium, Obsidian,
@@ -52,13 +66,13 @@ behavior. Ghostty/Codex remains a separate manual feasibility experiment.
 ## The signature loop
 
 1. The user types normally in an eligible, focused field.
-2. After a short adaptive pause, Omatype may show one short suffix at the caret.
+2. After a short adaptive pause, Badi may show one short suffix at the caret.
 3. The next accepted word is visually stronger than the remaining suffix.
 4. One configurable action accepts the next word; another accepts the rest.
 5. Exact type-through reconciliation removes matching characters without
    flicker. Any contradiction, selection change, composition, focus change, or
    late result clears the suggestion.
-6. Escape dismisses only while Omatype is visible. Normal application shortcuts
+6. Escape dismisses only while Badi is visible. Normal application shortcuts
    remain normal otherwise.
 7. A capability receipt can explain the adapter, context source, activation
    mode, provider locality, learning state, retention state, and any reason for
@@ -83,7 +97,7 @@ The user remains the author because:
 - acceptance is one adapter-supported target-API transaction when the surface
   supports it;
 - no adapter retries through a second insertion mechanism; and
-- Omatype never synthesizes a submit action. A target's normal input event can
+- Badi never synthesizes a submit action. A target's normal input event can
   still trigger autosave, search, validation, or application logic, so each
   compatibility cell must test and disclose those side effects.
 
@@ -96,7 +110,7 @@ A grammatical suggestion can still be a bad product event. It may arrive late,
 appear in the wrong voice, overlap what the user already typed, or demand more
 attention than typing the words would have taken.
 
-Omatype optimizes retained useful text per interruption—not tokens generated or
+Badi optimizes retained useful text per interruption—not tokens generated or
 suggestions displayed. Quiet intelligence includes:
 
 - confidence-based abstention and tail trimming;
@@ -129,11 +143,17 @@ contract. It must meet the interaction latency and usefulness gates on named
 hardware. Streaming chunks remain provisional until they pass output,
 revision, and confidence checks.
 
+Before any model is downloaded, Badi may inspect content-free CPU, memory, GPU,
+and battery facts and recommend a conservative `compact`, `balanced`, or
+`quality` candidate for writing or code. Recommendations pin repository
+revision, artifact, license, and checksum. They do not activate inference;
+download and runtime approval remain explicit, separate steps.
+
 A larger local or remote provider may become an explicit later option. Remote
 inference requires both a provider grant and a target grant, remains visually
 distinct, and can never be enabled merely by approving an app.
 
-If the semantic lane is slow, poor, or unavailable, Omatype degrades to honest
+If the semantic lane is slow, poor, or unavailable, Badi degrades to honest
 deterministic/manual behavior—not a hidden cloud call.
 
 ## The context firewall
@@ -193,7 +213,7 @@ logging, weak IPC, model-license opacity, swap, or crash remnants.
 
 ## Linux-native means capability-native
 
-Linux is not one text API. Omatype uses this integration order:
+Linux is not one text API. Badi uses this integration order:
 
 1. **Target-API adapter** — a browser extension through supported DOM APIs, an
    app-owned Obsidian/CodeMirror plugin, or another explicit editor API owns
@@ -201,7 +221,7 @@ Linux is not one text API. Omatype uses this integration order:
    never described as app-owned.
 2. **Existing input-method framework** — Fcitx5 and later IBus provide
    conditional breadth when the real compositor/toolkit/app tuple exposes the
-   required capabilities and Omatype can coexist with the user's IME.
+   required capabilities and Badi can coexist with the user's IME.
 3. **AT-SPI observation** — optional context or geometry assistance only after
    target-specific tests; never generic edit authority.
 4. **Manual/status surface** — explains state where inline presentation is not
@@ -296,7 +316,7 @@ Personalization begins with evidence the user authored or approved:
 4. only after measured value and explicit consent, any broader source.
 
 Raw cross-app typing is not the default training set. Personalization must be
-local, inspectable, exportable, reversible, and deletable. Omatype should show
+local, inspectable, exportable, reversible, and deletable. Badi should show
 which source influenced a suggestion without exposing the source text in
 normal telemetry.
 
@@ -414,11 +434,13 @@ receipt is auditable evidence inside the declared trusted-local-component
 boundary, not a signature or proof that an unrelated binary was not substituted
 at runtime.
 
-The first recorded M2A cell passed 1,000/1,000 exact insert/caret trials and
-100/100 delayed stale races. With 50 warmups excluded from each 1,000-sample
-distribution, nearest-rank p95 was 8.4 ms from trusted accept to observed input
-and 0.7 ms from invalidation marker to hidden UI. These are controlled local
-interaction measurements, not semantic-model or end-to-end generation latency.
+The retained historical M2A cell passed 1,000/1,000 exact insert/caret trials
+and 100/100 delayed stale races. With 50 warmups excluded from each
+1,000-sample distribution, nearest-rank p95 was 12.6 ms from trusted accept to
+observed input and 0.6 ms from invalidation marker to hidden UI. These are
+source-linked controlled local interaction measurements, not a reproduction
+against every later tree and not semantic-model or end-to-end generation
+latency.
 
 M2A is not full Chromium support. Headless Chromium did not prove a visible
 runtime-origin consent prompt, background-tab visibility, the extension command
@@ -514,14 +536,14 @@ receipt.
   sync, telemetry, teams, billing, or a plugin marketplace by default;
 - voice, next-edit prediction, or polished settings before the suffix loop
   proves retained value;
-- public packages, service identifiers, domains, or launch under the colliding
-  codename; or
+- public packages, domains, or launch before Badi's package/trademark and
+  technical-namespace review is complete; or
 - importing competitor source before the user chooses a code license and all
   code/model/tokenizer/data obligations are recorded.
 
 ## What success feels like
 
-The user stops thinking about Omatype as an application. They write in a
+The user stops thinking about Badi as an application. They write in a
 supported target, occasionally accept exactly the useful connective word, and
 never wonder whether a late suggestion will land somewhere dangerous. When the
 system is quiet, blocked, manual, local, or unsupported, the reason is visible

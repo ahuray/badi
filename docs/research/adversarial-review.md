@@ -1,4 +1,4 @@
-# Adversarial review: should Omatype be built?
+# Adversarial review: should Badi be built?
 
 > **Historical V1 gate:** its risks remain relevant, but
 > [Vision V2](../../VISION-V2.md) and the
@@ -30,10 +30,10 @@ low-confidence hypothesis. Local model usefulness and latency on this
 integrated-GPU machine are also unmeasured. The build is justified only as a
 risk-first experiment with permission to report a failed terminal target.
 
-The exact `OmaType` name collision is a public-launch blocker. The repository
-may remain `omatype` while it is private development vocabulary, but package,
-binary, desktop, D-Bus, domain, and public product naming must be decided
-before distribution.
+The exact `OmaType` name collision was a public-launch blocker and prompted the
+rename to **Badi**. A separate active AI workflow CLI already uses the bare
+`badi` command, so this project uses `badictl` and owned technical identities.
+Package/trademark clearance is still required before distribution.
 
 ## Claims under pressure
 
@@ -59,7 +59,7 @@ Not yet in shipped behavior. Today it is a researched position.
 
 IBus Typing Booster already demonstrates mature, learned Linux completion.
 SmartComplete demonstrates a young Fcitx-shaped deterministic pipeline.
-Mac projects demonstrate stronger generative interaction. Omatype becomes
+Mac projects demonstrate stronger generative interaction. Badi becomes
 distinct only if it proves all of the following together:
 
 - app-owned, well-placed suggestions in high-value apps;
@@ -101,7 +101,7 @@ the broker contract and compatibility suite keep each adapter small.
 
 It reduces exposure; it does not eliminate it.
 
-Ghostty cannot reliably tell Omatype that a raw-mode TUI is currently asking
+Ghostty cannot reliably tell Badi that a raw-mode TUI is currently asking
 for a sudo, SSH, token, or password value. Fcitx sensitive-purpose flags help
 when the client supplies them, but absence is not proof of safety. A user can
 still arm the addon at the wrong prompt.
@@ -114,7 +114,7 @@ implementation notes.
 ### Does `commitString` prove a successful terminal edit?
 
 No. It proves that Fcitx dispatched text to its current input context. It does
-not give Omatype an application-level acknowledgment from the Codex TUI. That
+not give Badi an application-level acknowledgment from the Codex TUI. That
 is why terminal telemetry must say `dispatched-unverified`, never `applied`, and
 must never retry automatically.
 
@@ -178,8 +178,9 @@ Omarchy-adjacent “type anywhere” product. It performs dictation rather than
 prediction, but the overlap is close enough to confuse search, packages,
 services, issue reports, and community discussion.
 
-Do not spend the two-day research gate on branding, but do not publish install
-instructions or reserve technical namespaces under the colliding name.
+This finding drove the later rename to Badi. The adjacent dictation project
+still matters for positioning and interoperability, but its technical namespace
+is no longer reused here.
 
 ## Rejected shortcuts
 
@@ -212,15 +213,15 @@ unsupported. It does not turn a failed ghost-rendering cell into a pass.
 | Two approved local models miss latency or usefulness gates | Keep the deterministic provider for integration tests, but state that semantic completion is not ready. Stop model shopping inside the 48 hours. |
 | The user finds suggestions distracting after debounce/TTL tuning | Pivot the product default toward explicit/manual completion; do not optimize suggestion volume. |
 | Adapter exceptions force policy or insertion logic into the broker | Revisit the contract before adding more targets; the architecture is losing its main benefit. |
-| The public name remains unresolved | Do not publish packages, a website, desktop IDs, service names, or a release. |
+| Badi package/trademark clearance fails or technical IDs collide | Keep distribution private and choose cleared package/desktop/service identifiers before release. |
 
 ## Decisions still owed by the user
 
 Research can recommend defaults, but implementation should not silently choose
 these:
 
-1. Keep `omatype` only as the repository codename, or choose a distinct public
-   name before any launch work.
+1. Confirm whether the Badi brand can clear normal package, domain, and
+   trademark review before public launch; keep `badictl` as the CLI identity.
 2. Confirm the exact terminal acceptance target: a live Codex prompt in Ghostty
    is the recommended gate because it matches the original request.
 3. Approve the temporary CMake installation and backed-up user-local Fcitx

@@ -4,7 +4,7 @@
 > [Vision V2 implementation plan](vision-v2-implementation.md) is the active
 > execution contract and supersedes conflicting three-target/48-hour gates.
 
-Status: execution contract for a 48-hour build beginning after user approval.
+Status: archived V1 execution proposal; not an active delivery contract.
 Times are wall-clock hours from kickoff (`H0`), not estimates of cumulative
 person-hours. The plan is grounded in [VISION.md](../../VISION.md), the
 [competitive landscape](../research/competitive-landscape.md), and a read-only
@@ -60,7 +60,7 @@ fast deterministic provider. It also demonstrates why its production default
 must not be copied: it reads every physical keyboard through `evdev`, assumes a
 US key map, infers safety from window-title denylist text, positions from the
 mouse rather than the caret, and injects with `wtype` without an app-owned
-revision check. Omatype may reuse the lessons, not that global raw-key design.
+revision check. Badi may reuse the lessons, not that global raw-key design.
 
 ## Exact demo contract
 
@@ -68,7 +68,7 @@ revision check. Omatype may reuse the lessons, not that global raw-key design.
 
 - Run on this physical Omarchy/Hyprland machine, not only in unit tests.
 - Run one broker process as the logged-in user. Its Unix socket is
-  `$XDG_RUNTIME_DIR/omatype/broker.sock`; create the parent directory with mode
+  `$XDG_RUNTIME_DIR/badi/broker.sock`; create the parent directory with mode
   `0700` and the socket with mode `0600`.
 - Use an isolated Chromium profile with the unpacked extension, an isolated
   Obsidian scratch vault, and a disposable test conversation in a user-selected
@@ -93,7 +93,7 @@ revision check. Omatype may reuse the lessons, not that global raw-key design.
 | Accept next word-part | `Alt+]` | Insert only the first broker-provided part; never insert Enter. |
 | Accept remainder | `Alt+Shift+]` | Insert the cached remaining parts only if the revision still matches. |
 | Dismiss | `Escape` | Consume Escape only while a suggestion is visible; otherwise pass it through. |
-| Global pause/resume | `omatypectl pause` / `omatypectl resume` | Hide all UI and stop requests while paused. A Hyprland shortcut is optional and user-approved. |
+| Global pause/resume | `badictl pause` / `badictl resume` | Hide all UI and stop requests while paused. A Hyprland shortcut is optional and user-approved. |
 
 Bindings are configuration, not hidden constants. At H0 the user either
 accepts these or chooses alternatives before the protocol and adapter keymaps
@@ -128,7 +128,7 @@ which is why app-owned rendering remains the quality path.
 
 ### Demo sequence
 
-1. Start the local provider and broker; `omatypectl status --json` must name the
+1. Start the local provider and broker; `badictl status --json` must name the
    provider, model or phrase engine, socket permissions, pause state, and
    `remote_network=false`.
 2. Open the controlled Chromium fixture. Type the fixture seed, accept one
@@ -179,7 +179,7 @@ which is why app-owned rendering remains the quality path.
   Obsidian, Firefox, arbitrary Chromium sites, contenteditable parity, or
   multilingual IME coexistence claims.
 - Ambient completion in terminals, ordinary shell-command completion,
-  automatic Codex/Claude prompt detection, or selecting Omatype as the login
+  automatic Codex/Claude prompt detection, or selecting Badi as the login
   default input method.
 - Treating a Bash/Readline hook, terminal echo fixture, or GTK demo window as
   proof of Ghostty agent-TUI support. A Readline hook may remain as a protocol
@@ -191,8 +191,9 @@ which is why app-owned rendering remains the quality path.
   window-title-only safety policy, or unconditional virtual-keyboard injection.
 - Remote providers, accounts, sync, personalization, history, telemetry,
   rewriting, mid-line generation, or model fine-tuning.
-- A polished settings UI, installer, package, auto-updater, public launch, or
-  final public name. `omatype` remains a repository codename.
+- A polished settings UI, installer, package, auto-updater, or public launch.
+  The later Badi name decision does not retroactively widen this historical
+  delivery slice.
 
 ## Architecture and the contract freeze
 
@@ -212,7 +213,7 @@ provider never talks directly to an adapter.
 ### Transport and trust boundaries
 
 - Primary transport is a four-byte little-endian length followed by UTF-8 JSON
-  over `$XDG_RUNTIME_DIR/omatype/broker.sock`, with a 64 KiB frame limit in
+  over `$XDG_RUNTIME_DIR/badi/broker.sock`, with a 64 KiB frame limit in
   both directions. The broker rejects a peer whose `SO_PEERCRED` UID differs
   from its own.
 - The Chromium native host uses the browser's native byte-order length framing
@@ -286,7 +287,7 @@ Required invariants:
 Proposed repository layout after implementation:
 
 ```text
-omatype/
+badi/
 ├── package.json
 ├── package-lock.json
 ├── protocol/
@@ -313,9 +314,9 @@ omatype/
 │   ├── fcitx5/
 │   │   ├── {CMakeLists.txt,cmake/}
 │   │   ├── src/{engine,broker_client,session,candidates}.{cc,h}
-│   │   ├── data/{omatype-addon.conf.in,omatype.conf.in}
+│   │   ├── data/{badi-addon.conf.in,badi.conf.in}
 │   │   └── tests/
-│   └── bash-fixture/omatype-readline.bash
+│   └── bash-fixture/badi-readline.bash
 ├── fixtures/
 │   ├── completion/prompts.jsonl
 │   ├── traces/{stale,focus,pause,password}.jsonl
@@ -344,7 +345,7 @@ integration lead verifies that exact checkpoint and creates the integration
 branch:
 
 ```bash
-cd /path/to/omatype
+cd /path/to/badi
 git status --short
 git pull --ff-only
 git switch -c integration/two-day-slice
@@ -359,9 +360,9 @@ worktrees from `integration/two-day-slice` so the risk probes can run in
 parallel:
 
 ```bash
-git worktree add ../omatype-wt-broker -b agent/broker integration/two-day-slice
-git worktree add ../omatype-wt-apps -b agent/app-adapters integration/two-day-slice
-git worktree add ../omatype-wt-terminal -b agent/fcitx-terminal integration/two-day-slice
+git worktree add ../badi-wt-broker -b agent/broker integration/two-day-slice
+git worktree add ../badi-wt-apps -b agent/app-adapters integration/two-day-slice
+git worktree add ../badi-wt-terminal -b agent/fcitx-terminal integration/two-day-slice
 ```
 
 H0-H2 worker changes are feasibility probes only and may not define production
@@ -571,7 +572,7 @@ profile, terminal history, or notifications should appear.
 
 - **Broker:** stop the process, remove only its socket/runtime directory, and
   leave fixtures and user data untouched. A stale socket is replaced only after
-  verifying its path is exactly under `$XDG_RUNTIME_DIR/omatype/`.
+  verifying its path is exactly under `$XDG_RUNTIME_DIR/badi/`.
 - **Chromium:** close the isolated profile and delete that disposable profile
   only after validating its explicit path; remove the user-level native-host
   manifest created for the demo. Never edit or clean the normal profile.
@@ -580,7 +581,7 @@ profile, terminal history, or notifications should appear.
 - **Fcitx:** record the selected input method and checksum the existing user
   configuration; make a timestamped backup; install only under
   `$HOME/.local`; and on rollback restore the exact configuration,
-  remove only Omatype's addon/library files, restart/reload Fcitx, and verify
+  remove only Badi's addon/library files, restart/reload Fcitx, and verify
   the previously selected input method remains active. No recursive deletion
   and no edit under `/usr/share`.
 - **Hyprland shortcut, if approved:** first inspect
@@ -588,7 +589,7 @@ profile, terminal history, or notifications should appear.
   `hl.unbind(...)` before the new `o.bind(...)`; back up
   `~/.config/hypr/bindings.lua`; then validate with `hyprctl reload` followed by
   `hyprctl configerrors`. Restore the exact backup if validation is not clean.
-  The demo remains operable through `omatypectl` if the user declines a global
+  The demo remains operable through `badictl` if the user declines a global
   shortcut.
 - **Model:** stop the local server; keep or delete a downloaded model only by
   explicit user choice. Report its path, size, license, and checksum first.

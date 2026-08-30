@@ -96,7 +96,7 @@ function autocompleteTokens(field: EditableField): readonly string[] {
 }
 
 function hasPageOptOut(field: EditableField): boolean {
-  return field.closest("[data-omatype='off']") !== null;
+  return field.closest("[data-badi='off']") !== null;
 }
 
 function isTopLevelLightDom(field: EditableField): boolean {
@@ -118,18 +118,82 @@ function isVisible(field: EditableField): boolean {
   ) {
     return false;
   }
-  if (typeof field.checkVisibility === "function") {
-    if (!field.checkVisibility({
-      checkOpacity: true,
-      checkVisibilityCSS: true,
-    })) {
+  try {
+    if (typeof field.checkVisibility === "function") {
+      if (!field.checkVisibility({
+        checkOpacity: true,
+        checkVisibilityCSS: true,
+      })) {
+        return false;
+      }
+    } else if (field.getClientRects().length === 0) {
       return false;
     }
     const rect = field.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
+    return intersectsViewport(field, rect) && hasSafeRenderedPath(field, rect);
+  } catch {
+    return false;
   }
-  const rect = field.getBoundingClientRect();
-  return field.getClientRects().length > 0 && rect.width > 0 && rect.height > 0;
+}
+
+function intersectsViewport(field: EditableField, rect: DOMRect): boolean {
+  const view = field.ownerDocument.defaultView;
+  return (
+    view !== null &&
+    rect.width > 0 &&
+    rect.height > 0 &&
+    rect.right > 0 &&
+    rect.bottom > 0 &&
+    rect.left < view.innerWidth &&
+    rect.top < view.innerHeight
+  );
+}
+
+function hasSafeRenderedPath(field: EditableField, fieldRect: DOMRect): boolean {
+  const view = field.ownerDocument.defaultView;
+  if (view === null) return false;
+  for (let element: Element | null = field; element !== null; element = element.parentElement) {
+    const style = view.getComputedStyle(element);
+    const opacity = style.opacity === "" ? 1 : Number.parseFloat(style.opacity);
+    const scale = style.getPropertyValue("scale");
+    const maskImage = style.getPropertyValue("mask-image");
+    const clip = style.getPropertyValue("clip");
+    const contain = style.getPropertyValue("contain");
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.visibility === "collapse" ||
+      style.getPropertyValue("content-visibility") === "hidden" ||
+      (style.filter !== "" && style.filter !== "none") ||
+      (style.clipPath !== "" && style.clipPath !== "none") ||
+      (clip !== "" && clip !== "auto") ||
+      (maskImage !== "" && maskImage !== "none") ||
+      (style.transform !== "" && style.transform !== "none") ||
+      (scale !== "" && scale !== "none" && scale !== "1") ||
+      /(?:^|\s)(?:content|paint|strict)(?:\s|$)/u.test(contain) ||
+      !Number.isFinite(opacity) ||
+      opacity <= 0
+    ) {
+      return false;
+    }
+    if (element === field) continue;
+    const clipsBoth = style.overflow !== "" && style.overflow !== "visible";
+    const clipsHorizontally =
+      clipsBoth || (style.overflowX !== "" && style.overflowX !== "visible");
+    const clipsVertically =
+      clipsBoth || (style.overflowY !== "" && style.overflowY !== "visible");
+    if (!clipsHorizontally && !clipsVertically) continue;
+    const ancestorRect = element.getBoundingClientRect();
+    if (
+      (clipsHorizontally &&
+        (fieldRect.left < ancestorRect.left || fieldRect.right > ancestorRect.right)) ||
+      (clipsVertically &&
+        (fieldRect.top < ancestorRect.top || fieldRect.bottom > ancestorRect.bottom))
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function exactlyOneWithAttribute(
@@ -150,13 +214,13 @@ export function hasStableFieldIdentity(field: EditableField): boolean {
     return false;
   }
   const document = field.ownerDocument;
-  const explicit = field.getAttribute("data-omatype-field")?.trim() ?? "";
+  const explicit = field.getAttribute("data-badi-field")?.trim() ?? "";
   if (
     explicit.length > 0 &&
     exactlyOneWithAttribute(
       document,
-      "[data-omatype-field]",
-      "data-omatype-field",
+      "[data-badi-field]",
+      "data-badi-field",
       explicit,
       field,
     )

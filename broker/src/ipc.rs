@@ -86,7 +86,7 @@ pub fn default_socket_path() -> Result<PathBuf, FrameError> {
     if !runtime.is_absolute() {
         return Err(FrameError::InvalidRuntimeDir);
     }
-    Ok(runtime.join("omatype").join("broker.sock"))
+    Ok(runtime.join("badi").join("broker.sock"))
 }
 
 #[cfg(target_os = "linux")]

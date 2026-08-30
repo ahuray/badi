@@ -99,6 +99,7 @@ export interface CommitResultNotice extends SuggestionAddress {
 export interface SuggestionTransport {
   requestSuggestion(request: SuggestionRequest): Promise<SuggestionResponse>;
   cancelSuggestion(request: SuggestionRequest): void | Promise<void>;
+  closeSession?(sessionId: string): void | Promise<void>;
   dismissSuggestion?(address: SuggestionAddress): void | Promise<void>;
   authorizeCommit(request: CommitAuthorizationRequest): Promise<CommitAuthorization>;
   reportCommit(notice: CommitResultNotice): void | Promise<void>;

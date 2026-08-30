@@ -1,4 +1,4 @@
-# Omatype Vision V2 Implementation Plan
+# Badi Vision V2 Implementation Plan
 
 Status: execution contract, 2026-08-30
 
@@ -6,11 +6,12 @@ This plan implements [Vision V2](../../VISION-V2.md). It converts the product
 promise into narrow capability proofs. A milestone is complete only when its
 evidence is reproducible; a demo is not a compatibility claim.
 
-`Omatype` remains an internal codename. Public naming, package identifiers,
-domains, and distribution are blocked until the collision described in the
-vision is resolved. The source license is also an explicit user decision. No
-third-party implementation may be copied into this repository before that
-decision and a dependency/license review.
+`Badi` is the selected product name. The bare `badi` CLI identity is already
+used by an unrelated AI workflow tool, so this project uses `badictl` and the
+owned `io.github.ahuray.badi` native identity. Public package/trademark
+clearance and the source license remain explicit release decisions. No
+third-party implementation may be copied into this repository before the
+license decision and a dependency/license review.
 
 ## Outcome and order of proof
 
@@ -220,7 +221,7 @@ Deliver:
 
 - Vision V2 and the source-backed V2 landscape;
 - this implementation plan;
-- an explicit codename warning and unresolved-license gate; and
+- an explicit naming/namespace boundary and unresolved-license gate; and
 - protocol and capability terminology shared by code and docs.
 
 Exit evidence:
@@ -464,8 +465,8 @@ and requires a new isolated durable run on the declared environment.
 
 Release candidates add schema-fixture compatibility, dependency/license and
 vulnerability review, browser-driven receipts, reproducible artifact hashes,
-and an explicit human approval. Public release remains blocked on naming and
-license decisions.
+and an explicit human approval. Public release remains blocked on package/name
+clearance and the source-license decision.
 
 ## Multi-agent workflow
 

@@ -3,14 +3,14 @@
   "record_version": 2,
   "id": "chromium-native-live.v2",
   "status": "live",
-  "recorded_at": "2026-08-30T01:42:55Z",
+  "recorded_at": "2026-08-30T10:33:40Z",
   "protocol": {
     "version": 1,
     "schema": "protocol/v1/schema.json"
   },
   "adapter": {
     "kind": "browser",
-    "package": "@omatype/chromium",
+    "package": "@badi/chromium",
     "version": "0.1.0",
     "target": "chrome132-mv3",
     "extension_id": "ckkiehcjbclcjckkkajohopoikeejkoa",
@@ -21,16 +21,16 @@
     ],
     "incognito": "not_allowed",
     "host_match": "http://localhost:4173/chromium.html",
-    "native_host": "io.omatype.broker",
+    "native_host": "io.github.ahuray.badi",
     "manifest": "adapters/chromium/manifest.json",
     "build_manifest": "adapters/chromium/dist/BUILD_MANIFEST.json"
   },
   "native_host": {
-    "package": "omatype-broker",
+    "package": "badi-broker",
     "version": "0.1.0",
-    "binary": "omatype-native-host",
+    "binary": "badi-native-host",
     "source": "broker/src/native_host.rs",
-    "manifest_example": "broker/native-messaging/io.omatype.broker.example.json",
+    "manifest_example": "broker/native-messaging/io.github.ahuray.badi.example.json",
     "caller_origin": "chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/",
     "max_envelope_bytes": 65536,
     "socket_parent_mode": "0700",
@@ -42,7 +42,7 @@
     "live_browser": true,
     "live_native_host": true,
     "repository": {
-      "base_commit": "8e86723b78c50dae52ba1714aa450de47cfeb6ee",
+      "base_commit": "068db9fe389fd7777bd903021b9c2baf3bde5140",
       "working_tree_dirty": false
     },
     "isolation": {
@@ -83,8 +83,8 @@
         "id": "rust.native-host",
         "command": "cargo build --workspace --bins && cargo test --workspace",
         "status": "pass",
-        "passed": 67,
-        "detail": "The durable preflight built all binaries and passed 67 Rust tests, including native framing, bridge, manifest, and signal cleanup cases."
+        "passed": 75,
+        "detail": "The durable preflight built all binaries and passed 75 Rust tests, including model selection, native framing, bridge, manifest, and signal cleanup cases."
       },
       {
         "id": "rust.quality",
@@ -103,7 +103,7 @@
         "command": "npm run check",
         "status": "pass",
         "passed": 68,
-        "detail": "Typecheck, 68 tests, deterministic build, live syntax, docs, and both capability receipts passed."
+        "detail": "Typecheck, 68 tests, deterministic build, live syntax, naming, docs, and both capability receipts passed."
       },
       {
         "id": "dependencies.audit",
@@ -113,42 +113,42 @@
       },
       {
         "id": "chromium.full-chain",
-        "command": "npm run live --workspace @omatype/chromium :: chromium.full-chain",
+        "command": "npm run live --workspace @badi/chromium :: chromium.full-chain",
         "status": "pass",
         "trials": 1,
         "passed": 1
       },
       {
         "id": "interaction.dismiss",
-        "command": "npm run live --workspace @omatype/chromium :: interaction.dismiss",
+        "command": "npm run live --workspace @badi/chromium :: interaction.dismiss",
         "status": "pass",
         "trials": 1,
         "passed": 1
       },
       {
         "id": "commit.accept-word",
-        "command": "npm run live --workspace @omatype/chromium :: commit.accept-word",
+        "command": "npm run live --workspace @badi/chromium :: commit.accept-word",
         "status": "pass",
         "trials": 1,
         "passed": 1
       },
       {
         "id": "control.pause-authoritative",
-        "command": "npm run live --workspace @omatype/chromium :: control.pause-authoritative",
+        "command": "npm run live --workspace @badi/chromium :: control.pause-authoritative",
         "status": "pass",
         "trials": 3,
         "passed": 3
       },
       {
         "id": "privacy.denied-zero",
-        "command": "npm run live --workspace @omatype/chromium :: privacy.denied-zero",
+        "command": "npm run live --workspace @badi/chromium :: privacy.denied-zero",
         "status": "pass",
         "trials": 2,
         "passed": 2
       },
       {
         "id": "race.stale-100",
-        "command": "npm run live --workspace @omatype/chromium :: race.stale-100",
+        "command": "npm run live --workspace @badi/chromium :: race.stale-100",
         "status": "pass",
         "trials": 100,
         "passed": 100,
@@ -156,7 +156,7 @@
       },
       {
         "id": "commit.insertion-100",
-        "command": "npm run live --workspace @omatype/chromium :: commit.insertion-100",
+        "command": "npm run live --workspace @badi/chromium :: commit.insertion-100",
         "status": "pass",
         "trials": 1000,
         "passed": 1000,
@@ -164,28 +164,28 @@
       },
       {
         "id": "security.untrusted-keyboard",
-        "command": "npm run live --workspace @omatype/chromium :: security.untrusted-keyboard",
+        "command": "npm run live --workspace @badi/chromium :: security.untrusted-keyboard",
         "status": "pass",
         "trials": 3,
         "passed": 3
       },
       {
         "id": "security.synthetic-focus-zero",
-        "command": "npm run live --workspace @omatype/chromium :: security.synthetic-focus-zero",
+        "command": "npm run live --workspace @badi/chromium :: security.synthetic-focus-zero",
         "status": "pass",
         "trials": 1,
         "passed": 1
       },
       {
         "id": "lifecycle.dynamic-invalidation",
-        "command": "npm run live --workspace @omatype/chromium :: lifecycle.dynamic-invalidation",
+        "command": "npm run live --workspace @badi/chromium :: lifecycle.dynamic-invalidation",
         "status": "pass",
         "trials": 3,
         "passed": 3
       },
       {
         "id": "lifecycle.composition",
-        "command": "npm run live --workspace @omatype/chromium :: lifecycle.composition",
+        "command": "npm run live --workspace @badi/chromium :: lifecycle.composition",
         "status": "pass",
         "trials": 1,
         "passed": 1,
@@ -193,21 +193,21 @@
       },
       {
         "id": "geometry.scroll-zoom",
-        "command": "npm run live --workspace @omatype/chromium :: geometry.scroll-zoom",
+        "command": "npm run live --workspace @badi/chromium :: geometry.scroll-zoom",
         "status": "pass",
         "trials": 3,
         "passed": 3
       },
       {
         "id": "lifecycle.navigation",
-        "command": "npm run live --workspace @omatype/chromium :: lifecycle.navigation",
+        "command": "npm run live --workspace @badi/chromium :: lifecycle.navigation",
         "status": "pass",
         "trials": 2,
         "passed": 2
       },
       {
         "id": "lifecycle.disconnect",
-        "command": "npm run live --workspace @omatype/chromium :: lifecycle.disconnect",
+        "command": "npm run live --workspace @badi/chromium :: lifecycle.disconnect",
         "status": "pass",
         "trials": 1,
         "passed": 1
@@ -235,8 +235,8 @@
         "samples": 1000,
         "warmups": 50,
         "statistic": "nearest-rank-p95",
-        "value": 8.4,
-        "maximum": 9.7,
+        "value": 12.6,
+        "maximum": 14.5,
         "threshold": 30,
         "status": "pass"
       },
@@ -247,7 +247,7 @@
         "samples": 1000,
         "warmups": 50,
         "statistic": "nearest-rank-p95",
-        "value": 0.7,
+        "value": 0.6,
         "maximum": 0.9,
         "threshold": 32,
         "status": "pass"
@@ -303,29 +303,29 @@
   "artifacts": [
     {
       "path": "adapters/chromium/dist/content-script.js",
-      "bytes": 49631,
-      "sha256": "5d35d31c27295cc0f9e8820d38f5de9ebe4ca975ea798115ea1f111754384496"
+      "bytes": 49565,
+      "sha256": "d6000980d1eb660a7f027d6f7979550ae1011c89c4064e7c857e56c4de8bb2d6"
     },
     {
       "path": "adapters/chromium/dist/manifest.json",
-      "bytes": 1202,
-      "sha256": "695797a1a0aac95aef36843cd65766aafa17a4897febe0ed68ad6c235722bc56"
+      "bytes": 1193,
+      "sha256": "325047f6348b94695f65bd62f5ab6f948dad32f8bf538a0425363a49fa676021"
     },
     {
       "path": "adapters/chromium/dist/service-worker.js",
-      "bytes": 33035,
-      "sha256": "65759522f18af6b2902b023213cf3a06668c89e46b4fe761438203f231894622"
+      "bytes": 32988,
+      "sha256": "ff57aec9131edad01e2faffcb2c5972b5d9c70b66caf47d4f1f552737164657c"
     }
   ],
   "evidence_artifacts": [
     {
       "path": "capabilities/evidence/chromium-native-live-run.v1.json",
-      "bytes": 12225,
-      "sha256": "c45734fb6b081e590f7d73d51171d3e4f15624454f101af741192a53e2e32e31"
+      "bytes": 12222,
+      "sha256": "71c42fc59641396149b5156aa85764ca4baa01a509f36076d94ee36869088e3e"
     }
   ],
   "notes": [
-    "The final durable report was produced from clean implementation commit 8e86723b78c50dae52ba1714aa450de47cfeb6ee with working_tree_dirty recorded as false before the evidence file was rewritten.",
+    "The final durable report was produced from clean implementation commit 068db9fe389fd7777bd903021b9c2baf3bde5140 with working_tree_dirty recorded as false before the evidence file was rewritten.",
     "The delayed stale-response scenario alone uses a separately classified JavaScript fault host; full-chain, privacy, insertion, pause, lifecycle, and latency evidence use the shipped Rust host and broker.",
     "The raw run also records a passing provisional edit-to-visible check; it is raw-only rather than promoted to a V2 release measurement.",
     "Undo, headless background visibility, and the extension shortcut are explicitly unsupported rather than inferred from adjacent passing checks.",

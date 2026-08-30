@@ -1,30 +1,31 @@
-# Omatype vision
+# Badi vision
 
 > **Historical V1:** [Vision V2](VISION-V2.md) is the current product contract.
 > This file is retained for decision history; where scope, terminology, or
 > acceptance gates conflict, V2 supersedes it.
 
-> Working-name warning: an unrelated [OmaType dictation project](https://github.com/Aayush9029/OmaType)
-> already serves the Linux/Omarchy community. Keep `omatype` as the repository
-> codename for this research, but resolve the public name before launch.
+> Historical naming note: an unrelated
+> [OmaType dictation project](https://github.com/Aayush9029/OmaType) already
+> serves the Linux/Omarchy community. The project has since adopted **Badi**;
+> see Vision V2 for the current naming and technical-namespace boundary.
 
 ## The promise
 
-Omatype is the quiet co-writer Linux is missing: start a sentence in the app
+Badi is the quiet co-writer Linux is missing: start a sentence in the app
 you already use, see a short continuation, accept exactly the useful words, and
 keep moving. It should feel like part of the desktop, not like a chatbot pasted
 on top of it.
 
 It will work toward broad coverage across browsers, Obsidian and other Electron
 apps, native editors, chat clients, and terminals. “Everywhere” is a direction,
-not a dishonest compatibility claim: Omatype will show what each app can safely
+not a dishonest compatibility claim: Badi will show what each app can safely
 support and fall back gracefully when Linux cannot provide enough context.
 
 ## What makes it the real deal
 
 ### 1. Native to Linux's shape
 
-Linux is not one desktop API. Omatype uses an integration ladder: input-method
+Linux is not one desktop API. Badi uses an integration ladder: input-method
 support for broad text entry, accessibility where an app exposes reliable text
 and caret data, small first-party bridges for high-value apps, and explicit
 manual activation where ambient completion would be unsafe. Each adapter speaks
@@ -33,7 +34,7 @@ compositor or toolkit.
 
 ### 2. Quiet enough to trust
 
-A missing suggestion is cheaper than a distracting or dangerous one. Omatype
+A missing suggestion is cheaper than a distracting or dangerous one. Badi
 will suppress low-confidence, late, badly spaced, duplicate, or contextually
 unsafe completions. It will optimize for useful accepted text and avoided
 keystrokes—not for how often it manages to display AI output.
@@ -43,7 +44,7 @@ keystrokes—not for how often it manages to display AI output.
 Every app and website receives one of three policies:
 
 - **Always** — ambient suggestions are allowed.
-- **Manual** — Omatype responds only to an explicit request.
+- **Manual** — Badi responds only to an explicit request.
 - **Never** — no context collection, inference, learning, or UI.
 
 Password, PIN, hidden, and sensitive fields are always `Never` when the input
@@ -60,27 +61,27 @@ data remains local, inspectable, exportable, and deletable.
 
 ### 5. Terminal-aware, not terminal-reckless
 
-Shell completion, indentation, and command safety outrank Omatype. Ambient
+Shell completion, indentation, and command safety outrank Badi. Ambient
 completion is off at ordinary shell prompts. Natural-language agent prompts can
-opt in through a terminal or agent bridge; otherwise the user invokes Omatype
+opt in through a terminal or agent bridge; otherwise the user invokes Badi
 manually. Accepting a suggestion must never execute it.
 
 ## The interaction
 
 1. The user types normally.
-2. After a short, adaptive pause, Omatype produces at most one short suggestion.
+2. After a short, adaptive pause, Badi produces at most one short suggestion.
 3. The next accepted word is visually stronger than the remaining phrase.
 4. A configurable action accepts one word; a second action accepts the rest.
 5. Continuing to type narrows or replaces the suggestion without punishment.
 6. Escape dismisses it; the normal Tab key remains normal unless the current
-   app profile explicitly assigns it to Omatype.
+   app profile explicitly assigns it to Badi.
 
 Long-form generation and rewriting are useful later, but the defining loop is
 co-writing one small decision at a time.
 
 ## Product ideas worth protecting
 
-- **Capability receipt:** the first time Omatype appears in an app, it can show
+- **Capability receipt:** the first time Badi appears in an app, it can show
   a compact receipt: context source, insertion method, local/remote model, and
   active policy. Trust should be observable.
 - **Quiet score:** measure late suggestions, immediate dismissals, overlap,
@@ -124,5 +125,5 @@ It is not successful merely because a model can produce text in a demo window.
 
 ## North-star sentence
 
-**Omatype helps you write your own next words, everywhere Linux can support it,
+**Badi helps you write your own next words, everywhere Linux can support it,
 without making you surrender your flow or your trust.**

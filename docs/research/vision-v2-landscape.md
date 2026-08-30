@@ -1,18 +1,18 @@
-# Omatype Vision V2: product landscape and decisions
+# Badi Vision V2: product landscape and decisions
 
 Research snapshot: **2026-08-30**
 
-> **Working-name warning:** `Omatype` is already the public name of an
-> Omarchy-oriented local dictation project. In this document it means only this
-> repository's codename. A distinct public name is a release gate, not optional
-> polish.
+> **Naming update:** the exact OmaType collision identified in this research
+> prompted the project rename to **Badi**. An unrelated AI workflow CLI also
+> uses the bare `badi` command, so this project uses `badictl` and owned
+> technical identities while public package/trademark clearance remains open.
 
 ## Executive conclusion
 
 The research still supports building the product, but it sharpens what the
 product is.
 
-Omatype should **not** be positioned as a generic AI writing assistant or as a
+Badi should **not** be positioned as a generic AI writing assistant or as a
 literal system-wide clone of Cotypist. Browser extensions already combine
 autocomplete, generation, and rewriting; Linux already has mature input-method
 completion, system-wide rewrite utilities, and powerful text expanders. What is
@@ -61,7 +61,7 @@ quality, security, or long-term maintenance.
 
 ## Market map
 
-| Category | Strongest current signal | Unfilled part relevant to Omatype |
+| Category | Strongest current signal | Unfilled part relevant to Badi |
 |---|---|---|
 | Cotypist-style completion | Cotypist has the most coherent commercial interaction; Cotabby, KeyType, Pretype, and GhostType expose increasingly strong open implementations | All are macOS-only; none solves Linux capability, policy, and insertion fragmentation |
 | Linux predictive input | IBus Typing Booster is mature and multilingual; SmartComplete is a small Fcitx5-shaped prototype | Neither combines short semantic continuation, target-owned or extension-owned ghost text, strict policy, and verified insertion |
@@ -133,7 +133,7 @@ architecture documentation; runtime claims not independently tested).
 monotonic partials, seam normalization, and the idea that a partial stream may
 become accept-ready. Put the hard sensitive gate **before acquisition**, not
 merely before generation, and never let a debug facility weaken that invariant.
-Do not copy AGPL code until Omatype's own license has been chosen.
+Do not copy AGPL code until Badi's own license has been chosen.
 
 ### 3. KeyType
 
@@ -417,7 +417,7 @@ B** (official store/privacy disclosures; architecture opaque and activity stale)
 **Inference — lesson / do not copy.** It validates browser demand for Tab
 completion and shows how quickly one product accumulates autocomplete,
 generation, reply, and rewrite modes. Do not copy the feature sprawl, broad data
-surface, or vague personalization. Omatype's browser adapter should start with
+surface, or vague personalization. Badi's browser adapter should start with
 runtime-granted origins and suffix completion only.
 
 ### 14. GitHub Copilot inline suggestions in VS Code
@@ -515,12 +515,12 @@ MIT-licensed fork of Voxtype, has no GitHub release, and its `hybrid-hotkey`
 branch was active in August 2026. **Evidence A-** (small inspectable project;
 behavior not tested).
 
-**Inference — lesson / do not copy.** The exact public-name collision is severe:
-same spelling, same Linux/Omarchy neighborhood, same “input anywhere” framing.
-Keep this repository codename private and choose distinct package, binary,
-desktop, D-Bus, domain, and product names before distribution. Voice could later
-arrive through an explicit adapter, but do not merge microphone permission,
-transcript retention, or synthetic dictation into the completion core.
+**Inference — lesson / do not copy.** The exact public-name collision was
+severe: same spelling, same Linux/Omarchy neighborhood, same “input anywhere”
+framing. That finding prompted the rename to Badi and the owned
+`io.github.ahuray.badi` identity. Voice could later arrive through an explicit
+adapter, but do not merge microphone permission, transcript retention, or
+synthetic dictation into the completion core.
 
 ## Cross-product decisions for Vision V2
 
@@ -550,14 +550,14 @@ transcript retention, or synthetic dictation into the completion core.
    learning are safer than an ambient cross-app writing archive.
 7. **Policy needs more dimensions than on/off.** Products often conflate
    suggestion display, context access, learning, remote inference, and storage.
-   Omatype can make this separation a visible product advantage.
+   Badi can make this separation a visible product advantage.
 8. **Compatibility is a shipped artifact.** Cotypist's exceptions, IBus's
    Wayland caveats, and the young Fcitx projects show why exact tuples and
    failure reasons are more credible than platform logos.
 
 ### Differentiation thesis
 
-Omatype's wedge is not “open-source Cotypist” and not “AI everywhere.” It is:
+Badi's wedge is not “open-source Cotypist” and not “AI everywhere.” It is:
 
 > **The capability-aware Linux co-writing runtime:** one consistent
 > partial-acceptance loop across verified adapters, local by default, with a
@@ -596,7 +596,7 @@ This produces four defensible differences:
 8. **One reversible action.** Acceptance is one native transaction where the
    app can verify it; no retry through a second insertion mechanism.
 9. **Coexist before expanding.** IME composition, editor suggestions, shell
-   completion, undo, accessibility, and normal Tab behavior outrank Omatype.
+   completion, undo, accessibility, and normal Tab behavior outrank Badi.
 10. **Explain failure.** Unsupported and manual states should be calm, visible,
     and actionable rather than silently degraded.
 11. **Separate modes by risk.** Ambient suffix completion, manual rewrite,
@@ -615,7 +615,7 @@ the product claim:
 - Chrome native messaging is a framed JSON process boundary, not an extension
   socket API. Chrome writes a platform-native-endian 32-bit length followed by
   UTF-8 JSON; messages from Chrome may be at most 64 MiB and messages returned
-  to Chrome at most 1 MiB. Omatype deliberately applies its much smaller
+  to Chrome at most 1 MiB. Badi deliberately applies its much smaller
   65,536-byte protocol limit in both directions before allocation. The native
   host remains a bounded relay to the private Unix socket; it does not become a
   second policy or prediction implementation. [Chrome native messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
@@ -698,7 +698,7 @@ metric has a precise numerator and denominator before implementation starts.
 | Stale display / insertion | Suggestions shown or inserted after focus epoch, revision, selection, composition, target, or policy changes | **0** in deterministic race suite and live focus tests |
 | Exact target-API insert | Successful insertions whose resulting text and caret equal the prepared transaction | **100%** in 100 repeated browser and 100 Obsidian trials |
 | Terminal safety | Accepted terminal text that changes bytes, targets another context, appends a control/newline, or submits/executes | **0** in 20 positioning/commit trials |
-| IME interference | Foreign preedit/candidate events swallowed, reordered, or cleared by Omatype | **0** in supported tuples |
+| IME interference | Foreign preedit/candidate events swallowed, reordered, or cleared by Badi | **0** in supported tuples |
 
 ### Responsiveness
 
@@ -739,10 +739,12 @@ low interruption cost.
 
 ## Unresolved naming and market risks
 
-1. **Exact name collision — release blocker.** The existing
+1. **Historical exact-name collision.** The existing
    [OmaType](https://github.com/Aayush9029/OmaType) is recent, Omarchy-native,
    local, and also types into the focused target. Different modality does not
-   prevent package, search, service, support, or trademark confusion.
+   prevent search or support confusion; the project therefore moved to Badi.
+   Badi itself shares a bare CLI name with an unrelated AI workflow tool, so
+   package/trademark clearance and distinct technical IDs remain necessary.
 2. **Derivative positioning risk.** “Cotypist for Linux” explains the prototype
    but makes the product sound like a port with a replaceable model. Public
    positioning must lead with capability-aware trust and Linux coexistence.
@@ -759,14 +761,14 @@ low interruption cost.
    per retained accepted word and stop widening if compatibility cost outpaces
    user value.
 6. **Complement conflict.** Users already have IMEs, Espanso, browser grammar
-   tools, editor Copilot, and shell completion. Omatype must yield cleanly and
+   tools, editor Copilot, and shell completion. Badi must yield cleanly and
    integrate selectively; “one assistant to replace them” is the wrong promise.
 7. **Local model expectations.** Competitors on Apple Silicon benefit from a
    uniform accelerator stack. Linux CPU/iGPU performance and model licensing
    vary. “Local” must include measured hardware profiles and a graceful
    deterministic/manual fallback.
 8. **Open-source license decision.** Relevant references span MIT, GPL-3.0, and
-   AGPL-3.0. Choose Omatype's license before accepting or adapting code, and
+   AGPL-3.0. Choose Badi's license before accepting or adapting code, and
    track model, tokenizer, dataset, and generated-artifact licenses separately.
 9. **Weak demand evidence.** Product docs and repository activity establish a
    gap, not willingness to grant permissions or pay. The first prototype is a
@@ -780,7 +782,7 @@ vision.
 
 | Existing area | V2 change | Why |
 |---|---|---|
-| Title / name warning | State that `omatype` is a private repository codename and a distinct public name is a hard distribution gate; prohibit reserving package, binary, desktop, D-Bus, or domain names under the collision | The adjacent OmaType is not hypothetical and occupies the same Omarchy input category |
+| Title / name warning | Record Badi as the selected product name, retain `badictl` and owned technical IDs, and keep package/trademark clearance as a distribution gate | The OmaType collision prompted the rename; a separate AI CLI also occupies the bare `badi` command |
 | “The promise” | Replace “broad coverage” emphasis with “one consistent loop across verified adapters, and an explained unsupported state elsewhere” | Compatibility truth is a differentiator; “everywhere” is not a credible Linux capability |
 | “Native to Linux's shape” | Name target-specific API adapters as the preferred tier, input methods as conditional breadth, AT-SPI as optional observation, and unsupported as a valid terminal state | Gmail/IDE quality comes from owned surfaces; Fcitx/IBus do not provide equivalent semantics everywhere |
 | “Quiet enough to trust” | Add confidence tail trimming, abstention, per-app adaptive quieting, late-result TTL, and erase-after-accept as explicit product behavior | Competitor evidence shows ungated completion can be net-negative |

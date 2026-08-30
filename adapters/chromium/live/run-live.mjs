@@ -29,22 +29,18 @@ const repositoryRoot = resolve(packageRoot, "../..");
 const fixtureRoot = join(repositoryRoot, "fixtures/web");
 const distRoot = join(packageRoot, "dist");
 const liveRoot = join(packageRoot, "live");
-const evidencePath = join(
-  repositoryRoot,
-  "capabilities/evidence/chromium-native-live-run.v1.json",
-);
-const diagnosticRoot = join(repositoryRoot, "output/playwright/omatype-m2a");
+const diagnosticRoot = join(repositoryRoot, "output/playwright/badi-m2a");
 const extensionId = "ckkiehcjbclcjckkkajohopoikeejkoa";
 const extensionOrigin = `chrome-extension://${extensionId}/`;
 const fixtureUrl = "http://localhost:4173/chromium.html";
-const ghostSelector = "[data-omatype-owned]";
-const brokerBinary = join(repositoryRoot, "target/debug/omatype-broker");
-const nativeHostBinary = join(repositoryRoot, "target/debug/omatype-native-host");
+const ghostSelector = "[data-badi-owned]";
+const brokerBinary = join(repositoryRoot, "target/debug/badi-broker");
+const nativeHostBinary = join(repositoryRoot, "target/debug/badi-native-host");
 const nativeManifestBinary = join(
   repositoryRoot,
-  "target/debug/omatype-native-manifest",
+  "target/debug/badi-native-manifest",
 );
-const cliBinary = join(repositoryRoot, "target/debug/omatypectl");
+const cliBinary = join(repositoryRoot, "target/debug/badictl");
 const fakeHostSource = join(liveRoot, "fake-native-host.mjs");
 const runnerSource = fileURLToPath(import.meta.url);
 const manifestPolicySource = join(packageRoot, "scripts/manifest-policy.mjs");
@@ -52,10 +48,13 @@ const fallbackCompletion = " and continue from there";
 const ruleCompletion = " for your time";
 const firstWordCompletion = " let";
 const DEBOUNCE_MS = 140;
+const DURABLE_EVIDENCE_ID =
+  /^chromium-native-live-run\.[a-z0-9][a-z0-9-]{0,63}\.v1$/u;
 
 function parseArguments(values) {
   const parsed = {
     smoke: false,
+    evidenceId: null,
     samples: 1_000,
     warmups: 50,
     staleTrials: 100,
@@ -70,6 +69,16 @@ function parseArguments(values) {
       continue;
     }
     const next = values[index + 1];
+    if (value === "--evidence-id") {
+      if (next === undefined || !DURABLE_EVIDENCE_ID.test(next)) {
+        throw new Error(
+          "--evidence-id must match chromium-native-live-run.<unique-slug>.v1",
+        );
+      }
+      parsed.evidenceId = next;
+      index += 1;
+      continue;
+    }
     if (value === "--samples" || value === "--warmups" || value === "--stale-trials") {
       if (next === undefined || !/^\d+$/u.test(next)) {
         throw new Error(`${value} requires a nonnegative integer`);
@@ -91,6 +100,14 @@ function parseArguments(values) {
   }
   if (!parsed.smoke && parsed.staleTrials < 100) {
     throw new Error("Durable evidence requires at least 100 stale-response trials");
+  }
+  if (!parsed.smoke && parsed.evidenceId === null) {
+    throw new Error(
+      "Durable evidence requires --evidence-id chromium-native-live-run.<unique-slug>.v1",
+    );
+  }
+  if (parsed.smoke && parsed.evidenceId !== null) {
+    throw new Error("Smoke diagnostics do not accept a durable evidence identity");
   }
   return parsed;
 }
@@ -156,6 +173,17 @@ async function command(file, args, options = {}) {
   return { stdout: result.stdout, stderr: result.stderr };
 }
 
+async function repositoryRecord(requireClean) {
+  const baseCommit = (await command("git", ["rev-parse", "HEAD"])).stdout.trim();
+  const workingTreeDirty =
+    (await command("git", ["status", "--porcelain", "--untracked-files=all"]))
+      .stdout.length > 0;
+  if (requireClean && workingTreeDirty) {
+    throw new Error("Durable evidence requires a clean Git working tree");
+  }
+  return { base_commit: baseCommit, working_tree_dirty: workingTreeDirty };
+}
+
 async function validateRepository(commandRecords) {
   const validations = [
     {
@@ -177,21 +205,21 @@ async function validateRepository(commandRecords) {
       file: "npm",
       args: ["run", "typecheck"],
       cwd: packageRoot,
-      label: "npm run typecheck --workspace @omatype/chromium",
+      label: "npm run typecheck --workspace @badi/chromium",
     },
     {
       id: "chromium-unit",
       file: "npm",
       args: ["test"],
       cwd: packageRoot,
-      label: "npm test --workspace @omatype/chromium",
+      label: "npm test --workspace @badi/chromium",
     },
     {
       id: "chromium-build-verify",
       file: "npm",
       args: ["run", "build:verify"],
       cwd: packageRoot,
-      label: "npm run build:verify --workspace @omatype/chromium",
+      label: "npm run build:verify --workspace @badi/chromium",
     },
   ];
   for (const validation of validations) {
@@ -336,7 +364,7 @@ async function terminateRealNativeHost(callerLog) {
 }
 
 async function installNativeManifest({ profile, home, xdgConfig, manifest }) {
-  const relativeManifest = join("NativeMessagingHosts", "io.omatype.broker.json");
+  const relativeManifest = join("NativeMessagingHosts", "io.github.ahuray.badi.json");
   const destinations = [
     join(profile, relativeManifest),
     join(home, ".config/chromium", relativeManifest),
@@ -391,7 +419,7 @@ async function waitForExtensionWorker(context) {
 async function openFixture(context) {
   const page = await context.newPage();
   await page.goto(fixtureUrl, { waitUntil: "load" });
-  await page.waitForFunction(() => typeof window.__omatypeLive === "object");
+  await page.waitForFunction(() => typeof window.__badiLive === "object");
   check(await page.evaluate(() => document.hasFocus()), "Fixture document is not focused");
   return page;
 }
@@ -410,7 +438,7 @@ async function setupDraft(page, value, caret = value.length) {
       field.style.removeProperty("display");
       if (card instanceof HTMLElement) {
         card.hidden = false;
-        card.removeAttribute("data-omatype");
+        card.removeAttribute("data-badi");
         card.removeAttribute("aria-hidden");
         card.removeAttribute("inert");
         card.style.removeProperty("display");
@@ -422,7 +450,7 @@ async function setupDraft(page, value, caret = value.length) {
   await page.evaluate(() => new Promise((resolvePromise) => setTimeout(resolvePromise, 0)));
   await page.evaluate(
     ({ nextValue, nextCaret }) => {
-      const api = window.__omatypeLive;
+      const api = window.__badiLive;
       const field = document.querySelector("#draft");
       const sink = document.querySelector("button[data-action='focus-away']");
       if (!api || !(field instanceof HTMLTextAreaElement) || !(sink instanceof HTMLButtonElement)) {
@@ -472,11 +500,11 @@ async function fieldSnapshot(page) {
 }
 
 async function fixtureEvents(page) {
-  return page.evaluate(() => window.__omatypeLive?.events() ?? []);
+  return page.evaluate(() => window.__badiLive?.events() ?? []);
 }
 
 async function resetFixtureEvents(page) {
-  await page.evaluate(() => window.__omatypeLive?.resetEvents());
+  await page.evaluate(() => window.__badiLive?.resetEvents());
 }
 
 async function brokerStatus(socketPath, env) {
@@ -661,7 +689,7 @@ async function runRealChain({
     "Synthetic keyboard event reached commit authorization",
   );
   check(
-    await page.evaluate(() => !document.querySelector("[data-omatype-owned]")?.hidden),
+    await page.evaluate(() => !document.querySelector("[data-badi-owned]")?.hidden),
     "Synthetic dismiss hid the suggestion",
   );
   await page.keyboard.press("Escape");
@@ -741,10 +769,10 @@ async function runRealChain({
       });
     } else if (mutation === "ancestor-opt-out") {
       await page.evaluate(() => {
-        document.querySelector("#draft")?.closest(".card")?.setAttribute("data-omatype", "off");
+        document.querySelector("#draft")?.closest(".card")?.setAttribute("data-badi", "off");
       });
     } else {
-      await page.evaluate(() => window.__omatypeLive?.replaceDraft());
+      await page.evaluate(() => window.__badiLive?.replaceDraft());
     }
     await waitForGhostHidden(page);
     await page.keyboard.press("Tab");
@@ -766,13 +794,13 @@ async function runRealChain({
   await setupDraft(page, "composition-live");
   await waitForGhost(page);
   const compositionBefore = await fieldSnapshot(page);
-  await page.evaluate(() => window.__omatypeLive?.dispatchComposition("compositionstart", "x"));
+  await page.evaluate(() => window.__badiLive?.dispatchComposition("compositionstart", "x"));
   await waitForGhostHidden(page);
   await page.keyboard.press("Tab");
   const compositionAfter = await fieldSnapshot(page);
   check(compositionAfter.value === compositionBefore.value, "Composition invalidation inserted text");
   await page.locator("#draft").focus();
-  await page.evaluate(() => window.__omatypeLive?.dispatchComposition("compositionend", "x"));
+  await page.evaluate(() => window.__badiLive?.dispatchComposition("compositionend", "x"));
   scenarios.push(
     scenario(
       "lifecycle.composition",
@@ -786,17 +814,17 @@ async function runRealChain({
   setStep("real.geometry");
   await setupDraft(page, "geometry-live");
   await waitForGhost(page);
-  const geometryInitial = await page.evaluate(() => window.__omatypeLive?.ghostSnapshot());
+  const geometryInitial = await page.evaluate(() => window.__badiLive?.ghostSnapshot());
   check(geometryAligned(geometryInitial), "Initial ghost geometry was not anchored");
   await page.evaluate(() => window.scrollBy(0, 120));
   await page.waitForTimeout(50);
-  const geometryScrolled = await page.evaluate(() => window.__omatypeLive?.ghostSnapshot());
+  const geometryScrolled = await page.evaluate(() => window.__badiLive?.ghostSnapshot());
   check(geometryAligned(geometryScrolled), "Scrolled ghost geometry was not anchored");
   const cdp = await context.newCDPSession(page);
   await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1.15 });
   await page.evaluate(() => window.dispatchEvent(new Event("resize")));
   await page.waitForTimeout(50);
-  const geometryZoomed = await page.evaluate(() => window.__omatypeLive?.ghostSnapshot());
+  const geometryZoomed = await page.evaluate(() => window.__badiLive?.ghostSnapshot());
   if (!geometryAligned(geometryZoomed)) {
     process.stdout.write(`Geometry diagnostic: ${JSON.stringify(geometryZoomed)}\n`);
   }
@@ -852,7 +880,7 @@ async function runRealChain({
   await page.goto("http://localhost:4173/blank.html", { waitUntil: "load" });
   check((await page.locator(ghostSelector).count()) === 0, "Ghost survived document navigation");
   await page.goto(fixtureUrl, { waitUntil: "load" });
-  await page.waitForFunction(() => typeof window.__omatypeLive === "object");
+  await page.waitForFunction(() => typeof window.__badiLive === "object");
   await setupDraft(page, "navigation-return");
   await waitForGhost(page);
   await page.keyboard.press("Escape");
@@ -873,7 +901,7 @@ async function runRealChain({
   await waitForGhostHidden(page);
   const authoritativePauseBefore = await brokerStatus(socketPath, brokerEnv);
   await page.evaluate(() =>
-    window.__omatypeLive?.setDraft("authoritative-pause-blocked", 27, 27, true),
+    window.__badiLive?.setDraft("authoritative-pause-blocked", 27, 27, true),
   );
   await page.waitForTimeout(DEBOUNCE_MS + 100);
   const authoritativePauseAfter = await brokerStatus(socketPath, brokerEnv);
@@ -905,7 +933,7 @@ async function runRealChain({
   if (shortcutPaused) {
     await waitForGhostHidden(page);
     const beforePauseInput = await brokerStatus(socketPath, brokerEnv);
-    await page.evaluate(() => window.__omatypeLive?.setDraft("pause-blocked", 13, 13, true));
+    await page.evaluate(() => window.__badiLive?.setDraft("pause-blocked", 13, 13, true));
     await page.waitForTimeout(DEBOUNCE_MS + 100);
     const afterPauseInput = await brokerStatus(socketPath, brokerEnv);
     check(
@@ -934,7 +962,7 @@ async function runRealChain({
 
   const staleBefore = await brokerStatus(socketPath, brokerEnv);
   await page.evaluate(async ({ trials }) => {
-    const api = window.__omatypeLive;
+    const api = window.__badiLive;
     const field = document.querySelector("#draft");
     if (!api || !(field instanceof HTMLTextAreaElement)) throw new Error("Fixture unavailable");
     document.querySelector("button[data-action='focus-away']")?.focus();
@@ -1018,7 +1046,7 @@ async function runRealChain({
     await setupDraft(page, `invalidate-${index}`);
     await waitForGhost(page);
     await page.evaluate(() => {
-      const api = window.__omatypeLive;
+      const api = window.__badiLive;
       const field = document.querySelector("#draft");
       if (!api || !(field instanceof HTMLTextAreaElement)) throw new Error("Fixture unavailable");
       api.resetEvents();
@@ -1058,8 +1086,8 @@ async function runRealChain({
   await waitForGhost(page);
   const disconnectBefore = await fieldSnapshot(page);
   await page.evaluate(() => {
-    window.__omatypeLive?.resetEvents();
-    window.__omatypeLive?.mark("disconnect-start");
+    window.__badiLive?.resetEvents();
+    window.__badiLive?.mark("disconnect-start");
   });
   await terminateRealNativeHost(callerLog);
   await waitForGhostHidden(page, 250);
@@ -1129,9 +1157,9 @@ async function runFaultHostRace({
     xdgCache,
     runtime,
     extraEnv: {
-      OMATYPE_LIVE_HOST_LOG: hostLog,
-      OMATYPE_LIVE_STALE_DELAY_MS: "500",
-      OMATYPE_LIVE_LATEST_DELAY_MS: "800",
+      BADI_LIVE_HOST_LOG: hostLog,
+      BADI_LIVE_STALE_DELAY_MS: "500",
+      BADI_LIVE_LATEST_DELAY_MS: "800",
     },
   });
   let hostPids = [];
@@ -1140,7 +1168,7 @@ async function runFaultHostRace({
     await waitForExtensionWorker(context);
     const page = await openFixture(context);
     await page.evaluate(async ({ trials, gap }) => {
-      const api = window.__omatypeLive;
+      const api = window.__badiLive;
       const field = document.querySelector("#draft");
       if (!api || !(field instanceof HTMLTextAreaElement)) throw new Error("Fixture unavailable");
       document.querySelector("button[data-action='focus-away']")?.focus();
@@ -1291,6 +1319,15 @@ async function artifactRecord(nativeManifest) {
 
 async function main() {
   const settings = parseArguments(process.argv.slice(2));
+  const evidencePath = settings.smoke
+    ? null
+    : join(repositoryRoot, "capabilities/evidence", `${settings.evidenceId}.json`);
+  if (evidencePath !== null && (await exists(evidencePath))) {
+    throw new Error(
+      `Refusing to overwrite existing durable evidence: ${settings.evidenceId}.json`,
+    );
+  }
+  const initialRepository = await repositoryRecord(!settings.smoke);
   await mkdir(diagnosticRoot, { recursive: true });
   const commandRecords = [];
   const scenarios = [];
@@ -1316,7 +1353,7 @@ async function main() {
     await validateExtensionPolicy();
     const playwright = await loadPlaywright();
     playwrightVersion = playwright.version;
-    tempRoot = await mkdtemp(join(tmpdir(), "omatype-m2a-live-"));
+    tempRoot = await mkdtemp(join(tmpdir(), "badi-m2a-live-"));
     const runtime = join(tempRoot, "runtime");
     const realRoot = join(tempRoot, "real-chain");
     const profile = join(realRoot, "profile");
@@ -1325,7 +1362,7 @@ async function main() {
     const xdgCache = join(realRoot, "cache");
     const wrapper = join(realRoot, "native-host-wrapper");
     callerLog = join(realRoot, "caller-argv.log");
-    socketPath = join(runtime, "omatype/broker.sock");
+    socketPath = join(runtime, "badi/broker.sock");
     await Promise.all(
       [runtime, profile, home, xdgConfig, xdgCache].map((path) =>
         mkdir(path, { recursive: true, mode: 0o700 }),
@@ -1333,7 +1370,7 @@ async function main() {
     );
     await writeFile(
       wrapper,
-      '#!/bin/sh\numask 077\nprintf \'pid:%s\\narg:%s\\n\' "$$" "$1" >> "$OMATYPE_LIVE_CALLER_LOG"\nexec "$OMATYPE_LIVE_REAL_HOST" "$@"\n',
+      '#!/bin/sh\numask 077\nprintf \'pid:%s\\narg:%s\\n\' "$$" "$1" >> "$BADI_LIVE_CALLER_LOG"\nexec "$BADI_LIVE_REAL_HOST" "$@"\n',
       { encoding: "utf8", mode: 0o700 },
     );
     await chmod(wrapper, 0o700);
@@ -1379,8 +1416,8 @@ async function main() {
       xdgCache,
       runtime,
       extraEnv: {
-        OMATYPE_LIVE_CALLER_LOG: callerLog,
-        OMATYPE_LIVE_REAL_HOST: nativeHostBinary,
+        BADI_LIVE_CALLER_LOG: callerLog,
+        BADI_LIVE_REAL_HOST: nativeHostBinary,
       },
     });
     const real = await runRealChain({
@@ -1505,17 +1542,22 @@ async function main() {
   check(cleanup.processes_remaining === 0, "Isolated child processes remain");
 
   const environment = await environmentRecord(playwrightVersion);
-  const gitHead = (await command("git", ["rev-parse", "HEAD"])).stdout.trim();
-  const gitDirty = (await command("git", ["status", "--porcelain"])).stdout.length > 0;
+  const finalRepository = await repositoryRecord(!settings.smoke);
+  check(
+    finalRepository.base_commit === initialRepository.base_commit,
+    "Repository HEAD changed during the live run",
+  );
   const manifest = JSON.parse(await readFile(join(distRoot, "manifest.json"), "utf8"));
   assertExactChromiumManifest(manifest);
   const contentScript = manifest.content_scripts[0];
   const report = {
     $schema: "../v2/live-run.schema.json",
     record_version: 1,
-    id: "chromium-native-live-run.v1",
+    id: settings.smoke
+      ? "chromium-native-live-run.smoke.v1"
+      : settings.evidenceId,
     recorded_at: new Date().toISOString(),
-    repository: { base_commit: gitHead, working_tree_dirty: gitDirty },
+    repository: finalRepository,
     environment,
     extension: {
       id: extensionId,
@@ -1540,7 +1582,7 @@ async function main() {
       runtime_url: fixtureUrl,
     },
     native: {
-      host_name: "io.omatype.broker",
+      host_name: "io.github.ahuray.badi",
       caller_origin: extensionOrigin,
       max_envelope_bytes: 65_536,
       socket_parent_mode: "0700",
@@ -1590,8 +1632,12 @@ async function main() {
     );
     return;
   }
+  check(evidencePath !== null, "Durable evidence path is unavailable");
   await mkdir(dirname(evidencePath), { recursive: true });
-  await writeFile(evidencePath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  await writeFile(evidencePath, `${JSON.stringify(report, null, 2)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+  });
   process.stdout.write(
     `Durable live evidence passed: ${settings.samples} measured / ${settings.warmups} warmup; ${settings.staleTrials} delayed stale trials.\n`,
   );

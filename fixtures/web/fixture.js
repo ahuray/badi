@@ -10,7 +10,7 @@ function liveRecord(type, detail = {}) {
 }
 
 function ghostSnapshot() {
-  const host = document.querySelector("[data-omatype-owned]");
+  const host = document.querySelector("[data-badi-owned]");
   const field = document.querySelector("#draft");
   const hostRect = host instanceof HTMLElement ? host.getBoundingClientRect() : null;
   const fieldRect = field instanceof HTMLElement ? field.getBoundingClientRect() : null;
@@ -150,7 +150,7 @@ document.addEventListener("click", async (event) => {
   }
 });
 
-window.__omatypeLive = Object.freeze({
+window.__badiLive = Object.freeze({
   resetEvents() {
     liveEvents.length = 0;
     liveRecord("fixture.reset");
