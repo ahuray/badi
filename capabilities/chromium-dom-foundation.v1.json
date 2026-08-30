@@ -48,8 +48,8 @@
       {
         "command": "cargo test --workspace",
         "status": "pass",
-        "passed": 67,
-        "detail": "46 library, 2 broker CLI, 3 native-host CLI, 2 manifest CLI, 4 badictl CLI, 2 native bridge, 2 manifest integration, 2 signal-shutdown, and 4 schema tests"
+        "passed": 75,
+        "detail": "51 library, 2 broker CLI, 3 native-host CLI, 2 manifest CLI, 5 badictl CLI, 2 model-selection CLI, 2 native bridge, 2 manifest integration, 2 signal-shutdown, and 4 schema tests"
       },
       {
         "command": "cargo +1.85.0 check --workspace --all-targets --locked",
@@ -144,18 +144,18 @@
   "artifacts": [
     {
       "path": "adapters/chromium/dist/content-script.js",
-      "bytes": 49631,
-      "sha256": "5d35d31c27295cc0f9e8820d38f5de9ebe4ca975ea798115ea1f111754384496"
+      "bytes": 49565,
+      "sha256": "d6000980d1eb660a7f027d6f7979550ae1011c89c4064e7c857e56c4de8bb2d6"
     },
     {
       "path": "adapters/chromium/dist/manifest.json",
-      "bytes": 1202,
-      "sha256": "695797a1a0aac95aef36843cd65766aafa17a4897febe0ed68ad6c235722bc56"
+      "bytes": 1193,
+      "sha256": "325047f6348b94695f65bd62f5ab6f948dad32f8bf538a0425363a49fa676021"
     },
     {
       "path": "adapters/chromium/dist/service-worker.js",
-      "bytes": 33035,
-      "sha256": "65759522f18af6b2902b023213cf3a06668c89e46b4fe761438203f231894622"
+      "bytes": 32988,
+      "sha256": "ff57aec9131edad01e2faffcb2c5972b5d9c70b66caf47d4f1f552737164657c"
     }
   ],
   "notes": [
