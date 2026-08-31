@@ -97,7 +97,9 @@ cargo run -p badi-broker --features local-model-eval --bin badi-evaluator -- \
   fixture-self-test
 
 cargo run -p badi-broker --features local-model-eval --bin badi-evaluator -- \
-  pinned-development MODEL.gguf LLAMA_SERVER RELEASE_ARCHIVE.tar.gz
+  pinned-development /path/to/Qwen3-1.7B-Q4_K_M.gguf \
+  /path/to/llama-server \
+  /path/to/llama-b10726-bin-ubuntu-x64.tar.gz
 ```
 
 The pinned-development path accepts only the declared artifact names, sizes,
@@ -164,6 +166,9 @@ claims to attest.
 
 ## Start here
 
+- [GrillMe implementation handoff](docs/delivery/2026-09-01-grillme-implementation-handoff.md) —
+  exact source-review baseline, architecture, finding disposition, real-device
+  observations, reproduction commands, and remaining release gates.
 - [GrillMe product-proof plan](docs/plan/grillme-product-proof.md) — vertical
   slices, stop conditions, ownership, and the final evidence contract.
 - [Omarchy review dossier](docs/delivery/2026-08-31-omarchy-review-dossier.md) —

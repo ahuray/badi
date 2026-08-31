@@ -1,9 +1,11 @@
 # GrillMe product-proof execution plan
 
-- **Status:** implementation in progress; no V3 product-cell receipt has been
-  issued
+- **Status:** bounded implementation recorded; final qualification remains
+  open and no V3 product-cell receipt has been issued
 - **Branch:** `develop`
 - **Planning baseline:** `052e6d37144fa764b0b63486d3533d0971f37f24`
+- **Bounded source-review baseline:** `b7183efe07f244a02c62e35f24b02d0d410f6f85`
+- **Implementation handoff:** [2026-09-01 GrillMe implementation handoff](../delivery/2026-09-01-grillme-implementation-handoff.md)
 - **Source review:** [GrillMe Omarchy and suggestion-quality round](../delivery/2026-08-30-grillme-omarchy-quality-round.md)
 - **Planning synthesis:** [historical Omarchy review dossier](../delivery/2026-08-31-omarchy-review-dossier.md)
 - **Scope:** private architecture review to one honest product-showing cell
@@ -13,6 +15,11 @@ It supersedes the next-sprint ordering in the older
 [develop roadmap](develop-roadmap.md), but it does not weaken
 [Vision V2](../../VISION-V2.md), the target-owned edit boundary, or any existing
 privacy and stale-result invariant.
+
+The source-review baseline is not a future V3 `repository.commit` anchor: this
+handoff documentation follows it, while V3 permits only evidence additions
+after an anchor. Final qualification must use a later clean
+source-and-documentation SHA and an evidence-only follow-up commit.
 
 ## Outcome
 

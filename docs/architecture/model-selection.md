@@ -48,7 +48,10 @@ binary:
 
 ```sh
 cargo run -p badi-broker --features local-model-eval --bin badi-evaluator -- fixture-self-test
-cargo run -p badi-broker --features local-model-eval --bin badi-evaluator -- pinned-development MODEL.gguf LLAMA_SERVER RELEASE_ARCHIVE.tar.gz
+cargo run -p badi-broker --features local-model-eval --bin badi-evaluator -- \
+  pinned-development /path/to/Qwen3-1.7B-Q4_K_M.gguf \
+  /path/to/llama-server \
+  /path/to/llama-b10726-bin-ubuntu-x64.tar.gz
 ```
 
 Both commands emit evaluation evidence to stdout. They neither download a
