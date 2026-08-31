@@ -5,6 +5,11 @@ on:
     branches: [main, develop]
   pull_request:
   workflow_dispatch:
+    inputs:
+      capability_base_sha:
+        description: Commit before the capability evidence changes under review
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -48,6 +53,47 @@ jobs:
       - name: Check declared minimum version
         run: cargo check --workspace --all-targets --all-features --locked
 
+  omarchy-plugin:
+    name: Omarchy plugin / pinned Arch host
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure the dated Arch package snapshot
+        run: |
+          # Pacman expands these repository placeholders.
+          # shellcheck disable=SC2016
+          printf '%s\n' \
+            'Server = https://archive.archlinux.org/repos/2026/08/31/$repo/os/$arch' \
+            > /etc/pacman.d/mirrorlist
+          pacman -Syyu --noconfirm
+          pacman -S --needed --noconfirm ca-certificates git
+      - name: Check out Badi
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check out the reviewed Omarchy host
+        uses: actions/checkout@v7
+        with:
+          repository: omacom/omarchy
+          ref: 346e69e1cec6c4e8924531874af6ba010a1bc99e
+          path: .ci/omarchy
+          persist-credentials: false
+      - name: Install the reviewed QML runtime and test tools
+        run: |
+          pacman -S --needed --noconfirm \
+            jq procps-ng 'qt6-declarative=6.11.2-1' \
+            'quickshell=0.3.1-1' shellcheck util-linux
+          pacman -Q quickshell qt6-declarative
+      - name: Validate pinned host, QML, manifest, and lifecycle contracts
+        env:
+          BADI_OMARCHY_ROOT: ${{ github.workspace }}/.ci/omarchy
+        run: bash ui/omarchy-plugin/tests/check-host.sh
+
   chromium:
     name: Chromium adapter / Node ${{ matrix.node }}
     runs-on: ubuntu-latest
@@ -72,6 +118,8 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
       - name: Type, test, build reproducibly, and validate evidence
+        env:
+          CAPABILITY_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || inputs.capability_base_sha || 'missing-capability-base' }}
         run: npm run check
       - name: Check whitespace
         run: git diff --check

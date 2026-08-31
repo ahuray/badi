@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { appendFileSync } from "node:fs";
+import { FIXTURE_FAULT_PROVIDER } from "./scenario-plan.mjs";
 
 const MAX_FRAME_BYTES = 65_536;
 const logPath = process.env["BADI_LIVE_HOST_LOG"];
@@ -109,7 +110,7 @@ function handleSuggestion(frame) {
     return;
   }
 
-  const isStaleTrial = context.before.startsWith("stale-live-");
+  const isStaleTrial = context.before.startsWith("stale-live");
   const isLatestTrial = context.before === "stale-live-final";
   const isDisconnectTrial = context.before.startsWith("disconnect-live-");
   const text = isLatestTrial ? " latest" : " live";
@@ -137,7 +138,7 @@ function handleSuggestion(frame) {
         text,
         accept_word: text,
         ttl_ms: 600,
-        provider: "phrase_v1",
+        provider: FIXTURE_FAULT_PROVIDER,
       },
     });
     log("suggestion.show", {

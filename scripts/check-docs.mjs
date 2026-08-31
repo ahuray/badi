@@ -39,30 +39,39 @@ function linkTargets(markdown) {
   return targets;
 }
 
-function localPath(source, rawTarget) {
+function decodeComponent(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function localTarget(source, rawTarget) {
   const unwrapped = rawTarget.startsWith("<") && rawTarget.endsWith(">")
     ? rawTarget.slice(1, -1)
     : rawTarget;
-  if (
-    unwrapped.startsWith("#") ||
-    /^[a-z][a-z0-9+.-]*:/iu.test(unwrapped)
-  ) {
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(unwrapped)) {
     return null;
   }
 
-  const pathOnly = unwrapped.split(/[?#]/u, 1)[0];
-  if (pathOnly.length === 0) {
-    return null;
-  }
-  let decoded;
-  try {
-    decoded = decodeURIComponent(pathOnly);
-  } catch {
-    decoded = pathOnly;
-  }
-  return path.isAbsolute(decoded)
-    ? decoded
-    : path.resolve(path.dirname(source), decoded);
+  const hashIndex = unwrapped.indexOf("#");
+  const withoutFragment = hashIndex === -1
+    ? unwrapped
+    : unwrapped.slice(0, hashIndex);
+  const pathOnly = withoutFragment.split("?", 1)[0];
+  const decodedPath = decodeComponent(pathOnly);
+  const absolute = decodedPath.length === 0
+    ? source
+    : path.isAbsolute(decodedPath)
+      ? decodedPath
+      : path.resolve(path.dirname(source), decodedPath);
+  return {
+    absolute,
+    fragment: hashIndex === -1
+      ? null
+      : decodeComponent(unwrapped.slice(hashIndex + 1)),
+  };
 }
 
 async function exists(target) {
@@ -77,17 +86,74 @@ async function exists(target) {
   }
 }
 
+function lineCount(value) {
+  if (value.length === 0) return 0;
+  return value.split("\n").length - Number(value.endsWith("\n"));
+}
+
+function headingTextToSlug(value) {
+  return value
+    .replace(/<[^>]*>/gu, "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/gu, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
+    .replace(/[`*_~]/gu, "")
+    .toLocaleLowerCase("en-US")
+    .replace(/[^\p{Letter}\p{Number}\s_-]/gu, "")
+    .trim()
+    .replace(/\s+/gu, "-");
+}
+
+function markdownAnchors(markdown) {
+  const anchors = new Set();
+  const counts = new Map();
+  let fence = null;
+  for (const line of markdown.split("\n")) {
+    const fenceMatch = /^\s*(`{3,}|~{3,})/u.exec(line);
+    if (fenceMatch !== null) {
+      const marker = fenceMatch[1][0];
+      if (fence === null) fence = marker;
+      else if (fence === marker) fence = null;
+      continue;
+    }
+    if (fence !== null) continue;
+    const heading = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u.exec(line);
+    if (heading === null) continue;
+    const base = headingTextToSlug(heading[1]);
+    if (base.length === 0) continue;
+    const duplicate = counts.get(base) ?? 0;
+    counts.set(base, duplicate + 1);
+    anchors.add(duplicate === 0 ? base : `${base}-${duplicate}`);
+  }
+  return anchors;
+}
+
+async function fragmentExists(target, fragment) {
+  if (fragment === null || fragment.length === 0) return true;
+  const contents = await readFile(target, "utf8");
+  const line = /^L([1-9][0-9]*)(?:-L?([1-9][0-9]*))?$/u.exec(fragment);
+  if (line !== null) {
+    const first = Number(line[1]);
+    const last = Number(line[2] ?? line[1]);
+    return first <= last && last <= lineCount(contents);
+  }
+  if (path.extname(target).toLowerCase() !== ".md") return true;
+  return markdownAnchors(contents).has(fragment);
+}
+
 const failures = [];
 let checked = 0;
 for (const file of await markdownFiles(repository)) {
   const markdown = await readFile(file, "utf8");
   for (const rawTarget of linkTargets(markdown)) {
-    const target = localPath(file, rawTarget);
+    const target = localTarget(file, rawTarget);
     if (target === null) {
       continue;
     }
     checked += 1;
-    if (!(await exists(target))) {
+    if (
+      !(await exists(target.absolute)) ||
+      !(await fragmentExists(target.absolute, target.fragment))
+    ) {
       failures.push(
         `${path.relative(repository, file)} -> ${rawTarget}`,
       );

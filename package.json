@@ -8,15 +8,19 @@
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspace @badi/chromium",
-    "test": "npm run test --workspace @badi/chromium",
+    "test": "npm run test --workspace @badi/chromium && node --test capabilities/v3/policy.test.mjs capabilities/v3/validator.test.mjs scripts/check-v3-evidence-additions.test.mjs",
     "build": "npm run build --workspace @badi/chromium",
     "build:verify": "npm run build:verify --workspace @badi/chromium",
     "live:check": "npm run live:check --workspace @badi/chromium",
     "name:check": "node scripts/check-name.mjs",
     "docs:check": "node scripts/check-docs.mjs",
+    "omarchy:check": "bash ui/omarchy-plugin/tests/check-fast.sh",
     "capabilities:check": "node scripts/check-capabilities.mjs",
+    "capabilities:immutability": "node scripts/check-capability-immutability.mjs",
+    "capabilities:check:v3-additions": "CAPABILITY_BASE_SHA=\"${CAPABILITY_BASE_SHA:-HEAD^}\" node scripts/check-v3-evidence-additions.mjs",
     "capabilities:check:current": "npm run build && node scripts/check-capabilities.mjs --require-current",
-    "check": "npm run typecheck && npm test && npm run build:verify && npm run live:check && npm run name:check && npm run docs:check && npm run capabilities:check"
+    "capabilities:check:release": "npm run build && node scripts/check-capabilities.mjs --require-current --require-live --receipt-id",
+    "check": "npm run typecheck && npm test && npm run build:verify && npm run live:check && npm run name:check && npm run docs:check && npm run omarchy:check && npm run capabilities:check && npm run capabilities:immutability && npm run capabilities:check:v3-additions"
   },
   "engines": {
     "node": "^22.20.0 || ^24.12.0 || >=25.0.0"

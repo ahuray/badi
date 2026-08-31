@@ -1,0 +1,404 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://badi.invalid/capabilities/v3/product-cell.schema.json",
+  "title": "Badi product cell receipt V3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "record_version",
+    "id",
+    "status",
+    "recorded_at",
+    "repository",
+    "qualification",
+    "claim",
+    "compatibility",
+    "hardware",
+    "linked_evidence",
+    "artifacts",
+    "gates",
+    "approvals",
+    "exclusions",
+    "rollback",
+    "notes"
+  ],
+  "properties": {
+    "$schema": { "const": "./v3/product-cell.schema.json" },
+    "record_version": { "const": 3 },
+    "id": {
+      "type": "string",
+      "pattern": "^badi-product-cell\\.[a-z0-9][a-z0-9-]{0,63}\\.v3$"
+    },
+    "status": { "enum": ["candidate", "live", "unsupported"] },
+    "recorded_at": { "$ref": "#/$defs/utcTimestamp" },
+    "repository": { "$ref": "#/$defs/repository" },
+    "qualification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "corpus",
+        "prompt",
+        "evaluator",
+        "sampling",
+        "sha256"
+      ],
+      "properties": {
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["identity", "artifact_id"],
+          "properties": {
+            "identity": { "const": "badi.product-proof-policy.v3" },
+            "artifact_id": { "$ref": "#/$defs/id" }
+          }
+        },
+        "corpus": { "$ref": "#/$defs/qualificationComponent" },
+        "prompt": { "$ref": "#/$defs/qualificationComponent" },
+        "evaluator": { "$ref": "#/$defs/qualificationComponent" },
+        "sampling": { "$ref": "#/$defs/qualificationComponent" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product", "language", "interaction", "locality"],
+      "properties": {
+        "product": { "const": "Badi" },
+        "language": { "const": "en" },
+        "interaction": {
+          "const": "bounded plain-text suffix at a collapsed caret"
+        },
+        "locality": { "const": "local-only" }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "browser", "desktop", "model"],
+      "properties": {
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "app",
+            "version",
+            "origin",
+            "surface",
+            "editor_api",
+            "display_route",
+            "insertion_route",
+            "commit_status"
+          ],
+          "properties": {
+            "app": { "$ref": "#/$defs/nonEmpty" },
+            "version": { "$ref": "#/$defs/nonEmpty" },
+            "origin": { "$ref": "#/$defs/nonEmpty" },
+            "surface": { "$ref": "#/$defs/nonEmpty" },
+            "editor_api": { "$ref": "#/$defs/nonEmpty" },
+            "display_route": { "$ref": "#/$defs/nonEmpty" },
+            "insertion_route": { "$ref": "#/$defs/nonEmpty" },
+            "commit_status": { "enum": ["applied", "dispatched-unverified"] }
+          }
+        },
+        "browser": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "tested_version", "declared_minimum", "headed"],
+          "properties": {
+            "name": { "const": "Chromium" },
+            "tested_version": { "$ref": "#/$defs/nonEmpty" },
+            "declared_minimum": { "$ref": "#/$defs/nonEmpty" },
+            "headed": { "const": true }
+          }
+        },
+        "desktop": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "omarchy",
+            "omarchy_source",
+            "quickshell",
+            "hyprland",
+            "qt",
+            "themes",
+            "monitor_cell"
+          ],
+          "properties": {
+            "omarchy": { "$ref": "#/$defs/nonEmpty" },
+            "omarchy_source": { "$ref": "#/$defs/nonEmpty" },
+            "quickshell": { "$ref": "#/$defs/nonEmpty" },
+            "hyprland": { "$ref": "#/$defs/nonEmpty" },
+            "qt": { "$ref": "#/$defs/nonEmpty" },
+            "themes": {
+              "$ref": "#/$defs/stringArray",
+              "type": "array",
+              "minItems": 3
+            },
+            "monitor_cell": { "$ref": "#/$defs/nonEmpty" }
+          }
+        },
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "revision",
+            "artifact",
+            "license",
+            "sha256",
+            "backend",
+            "backend_revision",
+            "backend_artifact",
+            "backend_sha256"
+          ],
+          "properties": {
+            "repository": { "$ref": "#/$defs/nonEmpty" },
+            "revision": { "$ref": "#/$defs/nonEmpty" },
+            "artifact": { "$ref": "#/$defs/nonEmpty" },
+            "license": { "$ref": "#/$defs/nonEmpty" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "backend": { "$ref": "#/$defs/nonEmpty" },
+            "backend_revision": { "$ref": "#/$defs/nonEmpty" },
+            "backend_artifact": { "$ref": "#/$defs/nonEmpty" },
+            "backend_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      }
+    },
+    "hardware": { "$ref": "#/$defs/hardware" },
+    "linked_evidence": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "id", "path", "bytes", "sha256"],
+        "properties": {
+          "kind": { "enum": ["semantic", "chromium", "omarchy"] },
+          "id": {
+            "type": "string",
+            "pattern": "^badi-(?:semantic|chromium|omarchy)-run\\.[a-z0-9][a-z0-9-]{0,63}\\.v3$"
+          },
+          "path": { "$ref": "#/$defs/repositoryPath" },
+          "bytes": { "type": "integer", "minimum": 1 },
+          "sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/gate" }
+    },
+    "approvals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phase",
+          "role",
+          "status",
+          "recorded_at",
+          "qualification_sha256",
+          "detail"
+        ],
+        "properties": {
+          "phase": { "enum": ["pre-run-policy", "post-run-release"] },
+          "role": { "enum": ["owner", "omarchy-reviewer", "grillme-reviewer"] },
+          "status": { "const": "approved" },
+          "recorded_at": { "$ref": "#/$defs/utcTimestamp" },
+          "qualification_sha256": { "$ref": "#/$defs/sha256" },
+          "detail": { "$ref": "#/$defs/nonEmpty" }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "phase": { "const": "pre-run-policy" } },
+              "required": ["phase"]
+            },
+            "then": {
+              "properties": { "role": { "const": "owner" } }
+            }
+          }
+        ]
+      }
+    },
+    "exclusions": { "$ref": "#/$defs/stringArray" },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tested", "detail", "processes_remaining", "config_remaining"],
+      "properties": {
+        "tested": { "type": "boolean" },
+        "detail": { "$ref": "#/$defs/nonEmpty" },
+        "processes_remaining": { "type": "integer", "minimum": 0 },
+        "config_remaining": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "notes": { "$ref": "#/$defs/stringArray" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "live" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "approvals": { "type": "array", "minItems": 4, "maxItems": 4 },
+          "rollback": {
+            "type": "object",
+            "properties": {
+              "tested": { "const": true },
+              "processes_remaining": { "const": 0 },
+              "config_remaining": { "const": 0 }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "nonEmpty": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "utcTimestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$"
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "working_tree_dirty"],
+      "properties": {
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "working_tree_dirty": { "const": false }
+      }
+    },
+    "qualificationComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "artifact_id"],
+      "properties": {
+        "identity": { "$ref": "#/$defs/id" },
+        "artifact_id": { "$ref": "#/$defs/id" }
+      }
+    },
+    "hardware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cell_id",
+        "cpu",
+        "logical_cpus",
+        "ram_mib",
+        "gpu",
+        "stable_identity_sha256",
+        "displays"
+      ],
+      "properties": {
+        "cell_id": { "$ref": "#/$defs/id" },
+        "cpu": { "$ref": "#/$defs/nonEmpty" },
+        "logical_cpus": { "type": "integer", "minimum": 1 },
+        "ram_mib": { "type": "integer", "minimum": 1 },
+        "gpu": { "$ref": "#/$defs/nonEmpty" },
+        "stable_identity_sha256": { "$ref": "#/$defs/sha256" },
+        "displays": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "width", "height", "scale"],
+            "properties": {
+              "name": { "$ref": "#/$defs/nonEmpty" },
+              "width": { "type": "integer", "minimum": 1 },
+              "height": { "type": "integer", "minimum": 1 },
+              "scale": { "type": "number", "exclusiveMinimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "locator", "bytes", "sha256"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "role": {
+          "enum": [
+            "broker",
+            "adapter",
+            "evaluator",
+            "plugin",
+            "model",
+            "backend",
+            "policy",
+            "corpus",
+            "prompt",
+            "sampling"
+          ]
+        },
+        "locator": { "$ref": "#/$defs/nonEmpty" },
+        "repository_path": { "$ref": "#/$defs/repositoryPath" },
+        "source_repository": { "$ref": "#/$defs/nonEmpty" },
+        "source_artifact": { "$ref": "#/$defs/nonEmpty" },
+        "revision": { "$ref": "#/$defs/nonEmpty" },
+        "license": { "$ref": "#/$defs/nonEmpty" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "evidence_kind", "evidence_refs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["pass", "fail", "unsupported"] },
+        "evidence_kind": { "enum": ["semantic", "chromium", "omarchy"] },
+        "evidence_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "id"],
+            "properties": {
+              "kind": {
+                "enum": ["check", "measurement", "manual_attestation"]
+              },
+              "id": { "$ref": "#/$defs/id" }
+            }
+          }
+        }
+      }
+    },
+    "stringArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonEmpty" },
+      "uniqueItems": true
+    }
+  }
+}

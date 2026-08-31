@@ -58,28 +58,29 @@ subject-identical pause-only change remains available when the optional
 aggregate store is recoverably unavailable
 ([control-plane transaction](../../broker/src/control_plane.rs#L117)).
 
-### Quickshell control center
+### Historical Quickshell control center
 
-The control center is a repo-owned Quickshell 0.3.1 configuration under
-[`ui/quickshell/badi`](../../ui/quickshell/badi/README.md). It neither installs
+The control center was a repo-owned Quickshell 0.3.1 configuration under
+[`ui/quickshell/badi`](https://github.com/ahuray/badi/tree/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi). It neither installs
 itself nor edits Omarchy-owned configuration.
 
-It is currently a standalone `FloatingWindow` controlled through Quickshell
-IPC, not an installed tray item, Omarchy menu patch, desktop entry, or service.
-Status refreshes on launch, show, explicit refresh, and after mutations; there
-is no live subscription or periodic polling
-([shell boundary](../../ui/quickshell/badi/shell.qml#L8),
-[refresh boundary](../../ui/quickshell/badi/BadiClient.qml#L305)).
+At this report's baseline it was a standalone `FloatingWindow` controlled
+through Quickshell IPC, not an installed tray item, Omarchy menu patch, desktop
+entry, or service. Status refreshed on launch, show, explicit refresh, and
+after mutations; there was no live subscription or periodic polling
+([historical shell boundary](https://github.com/ahuray/badi/blob/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi/shell.qml#L8),
+[historical refresh boundary](https://github.com/ahuray/badi/blob/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi/BadiClient.qml#L305)).
 
-This is not yet an Omarchy-native shell integration. Current Omarchy guidance
+This was not an Omarchy-native shell integration. Current Omarchy guidance
 places menus and panels inside its one long-running Quickshell shell as plugins
 and exposes shared theme tokens rather than inviting a second shell with a
 private palette. See the official [shell plugin
 contract](https://github.com/omacom/omarchy/blob/quattro/docs/omarchy-shell.md)
 and [theme contract](https://github.com/omacom/omarchy/blob/quattro/docs/theming.md).
-The standalone surface is appropriate for isolated source review, but a real
-plugin, shared theme adoption, and headed compositor proof remain required
-before calling the UI Omarchy-quality.
+The standalone surface was appropriate for isolated source review. It has since
+been removed in favor of the current repo-local
+[`ui/omarchy-plugin`](../../ui/omarchy-plugin/README.md); headed compositor
+proof remains a current gate.
 
 The UI shows:
 
@@ -98,7 +99,7 @@ use fixed process argument arrays—never a shell—and replace a complete local
 validated settings document with a revision precondition. Reads and mutations
 are mutually serialized and have a five-second deadline followed by bounded
 termination
-([QML process boundary](../../ui/quickshell/badi/BadiClient.qml#L305),
+([historical QML process boundary](https://github.com/ahuray/badi/blob/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi/BadiClient.qml#L305),
 [overview assembly](../../broker/src/bin/badictl.rs#L242),
 [overview schema](../../broker/schemas/badi.overview.v1.schema.json)).
 
@@ -108,8 +109,8 @@ cannot be safely changed while a broker is active, the UI may issue a
 process-local `pause on`. It never toggles blindly, and it clears only that
 runtime pause with explicit `pause off` when control-plane authority is healthy;
 persisted or degraded authority may still keep the effective state paused
-([mutation gates](../../ui/quickshell/badi/BadiClient.qml#L52),
-[pause behavior](../../ui/quickshell/badi/BadiClient.qml#L358)).
+([historical mutation gates](https://github.com/ahuray/badi/blob/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi/BadiClient.qml#L52),
+[historical pause behavior](https://github.com/ahuray/badi/blob/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi/BadiClient.qml#L358)).
 
 The only editable subject today is exactly:
 
@@ -407,11 +408,13 @@ Build locally without installing:
 cargo build --workspace --all-features
 ```
 
-Run the broker in one terminal and the repo-local control center in another:
+The standalone command recorded by this historical report no longer exists.
+Validate the current disabled-by-default Omarchy artifact without installing
+or enabling it:
 
 ```sh
-target/debug/badi-broker
-PATH="$PWD/target/debug:$PATH" qs --path "$PWD/ui/quickshell/badi/shell.qml"
+npm run omarchy:check
+omarchy plugin validate ui/omarchy-plugin
 ```
 
 Inspect the machine-readable contracts directly:
@@ -429,8 +432,8 @@ Before changing policy code, read these in order:
 2. [`settings.rs`](../../broker/src/settings.rs)
 3. [`control_plane.rs`](../../broker/src/control_plane.rs)
 4. [`engine.rs`](../../broker/src/engine.rs)
-5. [`BadiClient.qml`](../../ui/quickshell/badi/BadiClient.qml)
-6. [control-center contract](../../ui/quickshell/badi/README.md)
+5. [historical `BadiClient.qml`](https://github.com/ahuray/badi/blob/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi/BadiClient.qml)
+6. [historical control-center contract](https://github.com/ahuray/badi/blob/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi/README.md)
 
 The schemas are the public machine contracts; Rust is the normative authority;
 QML is a strict consumer. Keep that dependency direction. Do not teach the UI

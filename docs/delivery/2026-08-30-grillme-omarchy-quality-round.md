@@ -29,8 +29,8 @@ field-width panel below the control rather than caret-inline ghost text
 [panel](../../adapters/chromium/src/content/ghost-view.ts#L143)). The control
 center is a second standalone `ShellRoot` with a private hardcoded palette, not
 an Omarchy shell plugin
-([shell](../../ui/quickshell/badi/shell.qml#L8),
-[theme](../../ui/quickshell/badi/BadiTheme.qml#L5)). No current clean-commit,
+([historical shell](https://github.com/ahuray/badi/blob/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi/shell.qml#L8),
+[historical theme](https://github.com/ahuray/badi/blob/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi/BadiTheme.qml#L5)). No current clean-commit,
 headed Chromium, or headed Omarchy evidence exists for this tree.
 
 ## Findings
@@ -71,8 +71,8 @@ architecture review.
 **Classification:** product-fit defect.
 
 **Evidence:** Badi owns a standalone `ShellRoot` and `FloatingWindow`
-([shell.qml:8-24](../../ui/quickshell/badi/shell.qml#L8)) plus hardcoded color and
-spacing tokens ([BadiTheme.qml:5-32](../../ui/quickshell/badi/BadiTheme.qml#L5)).
+([historical shell.qml:8-24](https://github.com/ahuray/badi/blob/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi/shell.qml#L8)) plus hardcoded color and
+spacing tokens ([historical BadiTheme.qml:5-32](https://github.com/ahuray/badi/blob/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi/BadiTheme.qml#L5)).
 Current Omarchy guidance places menus/panels inside its long-running Quickshell
 shell as plugins and provides shared theme primitives. See the official
 [Omarchy shell plugin contract](https://github.com/omacom/omarchy/blob/quattro/docs/omarchy-shell.md)
@@ -139,10 +139,10 @@ accept gesture; never synthesize the lost key.
 **Evidence:** the normal binary has no model provider, corpus, evaluator,
 supervisor, or qualifying receipt, while `local_model.rs` already defines a
 large prompt/runtime/receipt surface. Readiness still consumes caller-supplied
-aggregate metrics ([metrics contract](../../broker/src/local_model.rs#L994),
-[gate](../../broker/src/local_model.rs#L1371)). The improved evaluator contract
+aggregate metrics ([historical metrics contract](https://github.com/ahuray/badi/blob/d9e39ee7f6fb7a0a48d3cca178506569381f9167/broker/src/local_model.rs#L994),
+[historical gate](https://github.com/ahuray/badi/blob/d9e39ee7f6fb7a0a48d3cca178506569381f9167/broker/src/local_model.rs#L1371)). The improved evaluator contract
 now defines one schedule-to-visible clock and a 600 ms deadline
-([contract](../../broker/src/local_model.rs#L55)), but no implementation measures
+([historical contract](https://github.com/ahuray/badi/blob/d9e39ee7f6fb7a0a48d3cca178506569381f9167/broker/src/local_model.rs#L55)), but no implementation measures
 it. The production portions of `engine.rs` and `local_model.rs` are each well
 over one thousand lines and the field controller is also a large monolith,
 while the shipped provider still owns only four rules.
@@ -238,7 +238,7 @@ architecture review nor protection from other OS users.
 active privacy leak.
 
 **Evidence:** the UI disables subject mutation while optional aggregate state is
-unavailable ([BadiClient.qml:121-123](../../ui/quickshell/badi/BadiClient.qml#L121)).
+unavailable ([historical BadiClient.qml:121-123](https://github.com/ahuray/badi/blob/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi/BadiClient.qml#L121)).
 The control plane permits a subject-identical global pause but refuses permission
 changes until it can reconcile retained aggregates
 ([control_plane.rs:159-177](../../broker/src/control_plane.rs#L159)). The header
@@ -307,10 +307,10 @@ unspaced scripts remain unsupported model-output cells rather than silently
 claimed coverage.
 
 The evaluation-only local-model prompt asks for no wrapper quotes or markup
-([local_model.rs:52](../../broker/src/local_model.rs#L52)), but its parser does
+([historical local_model.rs:52](https://github.com/ahuray/badi/blob/d9e39ee7f6fb7a0a48d3cca178506569381f9167/broker/src/local_model.rs#L52)), but its parser does
 not yet enforce a complete wrapper grammar beyond reasoning markers, limits,
 and the shared sanitizer
-([local_model.rs:703-748](../../broker/src/local_model.rs#L703)). Quoted,
+([historical local_model.rs:703-748](https://github.com/ahuray/badi/blob/d9e39ee7f6fb7a0a48d3cca178506569381f9167/broker/src/local_model.rs#L703)). Quoted,
 backticked, or HTML-like output can therefore survive this early parser when it
 otherwise meets the safety contract. This is dormant because no model is wired
 to production. Before activation, frozen adversarial outputs and the real

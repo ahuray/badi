@@ -158,11 +158,14 @@ impl ControlPlane {
         }
         SettingsStore::preflight_replace(&next)?;
         if state.personalization.is_none() {
-            // The optional aggregate store must not disable the primary safety
-            // control. A subject-identical transition changes only global
-            // pause and requires no aggregate reinterpretation. Permission,
-            // learning, and retention changes still require explicit repair.
-            if next.subjects != state.settings.subjects {
+            // Corrupt aggregate bytes must stay unavailable and untouched
+            // until the explicit clear path repairs them. The settings store
+            // is an independent durable authority record, though, so permit a
+            // document that is strictly lower in the authority partial order.
+            // Persisting that deny before returning lets the broker revoke its
+            // live authority without waiting for aggregate repair. Any grant,
+            // mixed grant/revoke, retention growth, or no-op is rejected.
+            if !strictly_reduces_authority(&state.settings, &next) {
                 return Err(ControlPlaneError::PersonalizationUnavailable);
             }
             let replaced = state
@@ -353,6 +356,85 @@ impl ControlPlane {
     }
 }
 
+fn strictly_reduces_authority(current: &SettingsV1, next: &SettingsV1) -> bool {
+    // `paused` participates in the durable order separately from subject
+    // permissions. This rejects latent grants hidden underneath a pause and
+    // rejects unpausing even when every currently listed subject is blocked.
+    let mut reduced = !current.paused && next.paused;
+    if current.paused && !next.paused {
+        return false;
+    }
+
+    for current_rule in &current.subjects {
+        let next_permissions = next
+            .subjects
+            .binary_search_by(|rule| rule.identity.cmp(&current_rule.identity))
+            .ok()
+            .map_or_else(SubjectPermissions::deny_all, |index| {
+                next.subjects[index].permissions
+            });
+        let Some(rule_reduced) =
+            permissions_do_not_increase(current_rule.permissions, next_permissions)
+        else {
+            return false;
+        };
+        reduced |= rule_reduced;
+    }
+
+    // A newly listed subject starts from the effective deny-by-default rule.
+    // An explicit all-deny tombstone is authority-equivalent; any allowed bit
+    // or bounded retention would be an increase and invalidates the complete
+    // transition, even if another subject is revoked in the same document.
+    for next_rule in &next.subjects {
+        if current
+            .subjects
+            .binary_search_by(|rule| rule.identity.cmp(&next_rule.identity))
+            .is_err()
+            && permissions_do_not_increase(SubjectPermissions::deny_all(), next_rule.permissions)
+                .is_none()
+        {
+            return false;
+        }
+    }
+
+    reduced
+}
+
+fn permissions_do_not_increase(
+    current: SubjectPermissions,
+    next: SubjectPermissions,
+) -> Option<bool> {
+    let decisions = [
+        (current.suggest, next.suggest),
+        (current.display, next.display),
+        (current.context_read, next.context_read),
+        (current.learn, next.learn),
+    ];
+    let mut reduced = false;
+    for (current_decision, next_decision) in decisions {
+        match (current_decision, next_decision) {
+            (PermissionDecision::Block, PermissionDecision::Allow) => return None,
+            (PermissionDecision::Allow, PermissionDecision::Block) => reduced = true,
+            _ => {}
+        }
+    }
+
+    let retention_reduced = match (current.retention, next.retention) {
+        (RetentionPermission::None, RetentionPermission::Bounded { .. }) => return None,
+        (RetentionPermission::Bounded { .. }, RetentionPermission::None) => true,
+        (
+            RetentionPermission::Bounded { days: current_days },
+            RetentionPermission::Bounded { days: next_days },
+        ) if next_days > current_days => return None,
+        (
+            RetentionPermission::Bounded { days: current_days },
+            RetentionPermission::Bounded { days: next_days },
+        ) => next_days < current_days,
+        (RetentionPermission::None, RetentionPermission::None) => false,
+    };
+    Some(reduced || retention_reduced)
+}
+
 fn personalization_privacy_floor(current: &SettingsV1, next: &SettingsV1) -> SettingsV1 {
     let mut subjects = Vec::new();
     for current_rule in &current.subjects {
@@ -451,7 +533,9 @@ pub enum ControlPlaneError {
     ClockBeforeUnixEpoch,
     #[error("control-plane state lock is poisoned")]
     LockPoisoned,
-    #[error("personalization store is unavailable; explicit clear is required")]
+    #[error(
+        "personalization store is unavailable; only a strict authority reduction or explicit clear is allowed"
+    )]
     PersonalizationUnavailable,
     #[error("personalization store: {0}")]
     Personalization(#[from] PersonalizationStoreError),
@@ -478,7 +562,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{ControlPlane, ControlPlaneError, unix_day};
+    use super::{ControlPlane, ControlPlaneError, strictly_reduces_authority, unix_day};
     use crate::personalization::{PersonalizationProvider, PersonalizationSignal};
     use crate::settings::{
         BrowserAdapter, PermissionDecision, PrivateStorage, PrivateStorageError,
@@ -501,6 +585,16 @@ mod tests {
         .expect("identity")
     }
 
+    fn other_identity() -> StableIdentity {
+        StableIdentity::browser_origin(
+            BrowserAdapter::Chromium,
+            WebScheme::Https,
+            "other.example",
+            None,
+        )
+        .expect("other identity")
+    }
+
     fn learning_settings(revision: u64, retention: RetentionPermission) -> SettingsV1 {
         SettingsV1 {
             schema: SETTINGS_SCHEMA.to_owned(),
@@ -521,6 +615,69 @@ mod tests {
 
     fn granted_settings(revision: u64) -> SettingsV1 {
         learning_settings(revision, RetentionPermission::Bounded { days: 30 })
+    }
+
+    #[test]
+    fn unavailable_store_authority_order_rejects_grants_noops_and_mixed_changes() {
+        let current = granted_settings(7);
+
+        let mut blocked = current.clone();
+        blocked.revision = 8;
+        blocked.subjects[0].permissions = SubjectPermissions::deny_all();
+        assert!(strictly_reduces_authority(&current, &blocked));
+
+        let mut shorter_retention = current.clone();
+        shorter_retention.revision = 8;
+        shorter_retention.subjects[0].permissions.retention =
+            RetentionPermission::Bounded { days: 7 };
+        assert!(strictly_reduces_authority(&current, &shorter_retention));
+
+        let mut paused = current.clone();
+        paused.revision = 8;
+        paused.paused = true;
+        assert!(strictly_reduces_authority(&current, &paused));
+
+        let mut no_op = current.clone();
+        no_op.revision = 8;
+        assert!(!strictly_reduces_authority(&current, &no_op));
+
+        let mut retention_growth = shorter_retention.clone();
+        retention_growth.revision = 9;
+        retention_growth.subjects[0].permissions.retention =
+            RetentionPermission::Bounded { days: 30 };
+        assert!(!strictly_reduces_authority(
+            &shorter_retention,
+            &retention_growth
+        ));
+
+        let mut latent_grant = blocked.clone();
+        latent_grant.paused = true;
+        latent_grant.subjects.push(SubjectRule {
+            identity: other_identity(),
+            permissions: SubjectPermissions {
+                suggest: PermissionDecision::Allow,
+                display: PermissionDecision::Allow,
+                context_read: PermissionDecision::Allow,
+                learn: PermissionDecision::Block,
+                retention: RetentionPermission::None,
+            },
+        });
+        assert!(!strictly_reduces_authority(&blocked, &latent_grant));
+
+        let mut mixed = current.clone();
+        mixed.revision = 8;
+        mixed.subjects[0].permissions = SubjectPermissions::deny_all();
+        mixed.subjects.push(SubjectRule {
+            identity: other_identity(),
+            permissions: SubjectPermissions {
+                suggest: PermissionDecision::Allow,
+                display: PermissionDecision::Allow,
+                context_read: PermissionDecision::Allow,
+                learn: PermissionDecision::Block,
+                retention: RetentionPermission::None,
+            },
+        });
+        assert!(!strictly_reduces_authority(&current, &mixed));
     }
 
     #[test]
@@ -958,8 +1115,9 @@ mod tests {
         );
     }
 
+    #[allow(clippy::too_many_lines)]
     #[test]
-    fn corrupt_optional_personalization_starts_unavailable_until_explicit_clear() {
+    fn corrupt_optional_personalization_accepts_durable_deny_before_explicit_clear() {
         let temporary = tempdir().expect("temporary directory");
         let storage_paths = paths(temporary.path());
         {
@@ -997,20 +1155,41 @@ mod tests {
             ),
             Err(ControlPlaneError::PersonalizationUnavailable)
         ));
-        let mut paused = granted_settings(2);
-        paused.paused = true;
-        let replaced = control
-            .replace_settings(1, paused)
-            .expect("pause-only replacement remains available");
-        assert!(replaced.paused);
-        let permission_change = SettingsV1 {
+
+        let denied = SettingsV1 {
             schema: SETTINGS_SCHEMA.to_owned(),
-            revision: 3,
-            paused: true,
-            subjects: Vec::new(),
+            revision: 2,
+            paused: false,
+            subjects: vec![SubjectRule {
+                identity: identity(),
+                permissions: SubjectPermissions::deny_all(),
+            }],
         };
+        let replaced = control
+            .replace_settings(1, denied.clone())
+            .expect("strict deny remains available");
+        assert_eq!(replaced, denied);
+
+        // Returning from replace_settings is the acknowledgement boundary:
+        // the complete deny document and its directory entry are durable by
+        // this point, while corrupt aggregate evidence remains untouched.
+        let persisted_settings: SettingsV1 = serde_json::from_slice(
+            &fs::read(storage_paths.settings_path()).expect("persisted deny settings"),
+        )
+        .expect("valid persisted settings");
+        assert_eq!(persisted_settings, denied);
+        assert_eq!(
+            fs::read(&personalization_path).expect("preserved corrupt store after deny"),
+            corrupt_bytes
+        );
+
+        let unavailable_after_deny = control.snapshot().expect("unavailable after deny");
+        assert!(!unavailable_after_deny.personalization_store_available);
+        assert_eq!(unavailable_after_deny.settings, denied);
+
+        let grant = granted_settings(3);
         assert!(matches!(
-            control.replace_settings(2, permission_change),
+            control.replace_settings(2, grant.clone()),
             Err(ControlPlaneError::PersonalizationUnavailable)
         ));
         assert_eq!(
@@ -1020,6 +1199,17 @@ mod tests {
                 .settings
                 .revision,
             2
+        );
+
+        drop(control);
+        let control = ControlPlane::open(storage_paths.clone())
+            .expect("restart with durable deny and preserved corruption");
+        let restarted = control.snapshot().expect("restarted snapshot");
+        assert_eq!(restarted.settings, denied);
+        assert!(!restarted.personalization_store_available);
+        assert_eq!(
+            fs::read(&personalization_path).expect("corrupt store survives restart"),
+            corrupt_bytes
         );
 
         let orphaned_temporary = storage_paths
@@ -1040,6 +1230,85 @@ mod tests {
         assert_eq!(recovered.persisted_personalization_bytes, 0);
         assert!(!personalization_path.exists());
         assert!(!orphaned_temporary.exists());
+
+        let granted = control
+            .replace_settings(2, grant)
+            .expect("grant is available only after explicit repair");
+        assert_eq!(granted.revision, 3);
+    }
+
+    #[test]
+    fn corrupt_store_rejects_retention_growth_and_mixed_authority_change() {
+        let temporary = tempdir().expect("temporary directory");
+        let storage_paths = paths(temporary.path());
+        {
+            let control = ControlPlane::open(storage_paths.clone()).expect("control plane");
+            control
+                .replace_settings(
+                    0,
+                    learning_settings(1, RetentionPermission::Bounded { days: 7 }),
+                )
+                .expect("grant seven-day settings");
+            control
+                .record_signal(
+                    identity(),
+                    PersonalizationProvider::PhraseV1,
+                    PersonalizationSignal::Shown,
+                )
+                .expect("seed personalization");
+        }
+        let personalization_path = storage_paths.personalization_path();
+        fs::write(&personalization_path, b"corrupt aggregate evidence\n")
+            .expect("corrupt optional store");
+        let corrupt_bytes = fs::read(&personalization_path).expect("corrupt bytes");
+        let control = ControlPlane::open(storage_paths.clone()).expect("degraded control plane");
+
+        let retention_growth = learning_settings(2, RetentionPermission::Bounded { days: 30 });
+        assert!(matches!(
+            control.replace_settings(1, retention_growth),
+            Err(ControlPlaneError::PersonalizationUnavailable)
+        ));
+
+        let mut mixed = learning_settings(2, RetentionPermission::Bounded { days: 7 });
+        mixed.subjects[0].permissions = SubjectPermissions::deny_all();
+        mixed.subjects.push(SubjectRule {
+            identity: other_identity(),
+            permissions: SubjectPermissions {
+                suggest: PermissionDecision::Allow,
+                display: PermissionDecision::Allow,
+                context_read: PermissionDecision::Allow,
+                learn: PermissionDecision::Block,
+                retention: RetentionPermission::None,
+            },
+        });
+        assert!(matches!(
+            control.replace_settings(1, mixed),
+            Err(ControlPlaneError::PersonalizationUnavailable)
+        ));
+        assert_eq!(
+            control
+                .snapshot()
+                .expect("unchanged snapshot")
+                .settings
+                .revision,
+            1
+        );
+        assert_eq!(
+            fs::read(storage_paths.settings_path()).expect("unchanged settings bytes"),
+            serde_json::to_vec_pretty(&learning_settings(
+                1,
+                RetentionPermission::Bounded { days: 7 }
+            ))
+            .map(|mut bytes| {
+                bytes.push(b'\n');
+                bytes
+            })
+            .expect("settings JSON")
+        );
+        assert_eq!(
+            fs::read(personalization_path).expect("preserved corrupt evidence"),
+            corrupt_bytes
+        );
     }
 
     #[test]

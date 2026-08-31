@@ -2230,7 +2230,25 @@ mod tests {
         token: std::sync::Mutex<Option<CancellationToken>>,
     }
 
+    struct ReadyThenPendingProvider {
+        calls: AtomicU64,
+        token: std::sync::Mutex<Option<CancellationToken>>,
+    }
+
     impl PendingProvider {
+        fn new() -> Self {
+            Self {
+                calls: AtomicU64::new(0),
+                token: std::sync::Mutex::new(None),
+            }
+        }
+
+        fn cancellation(&self) -> Option<CancellationToken> {
+            self.token.lock().expect("provider token lock").clone()
+        }
+    }
+
+    impl ReadyThenPendingProvider {
         fn new() -> Self {
             Self {
                 calls: AtomicU64::new(0),
@@ -2339,6 +2357,27 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl CompletionProvider for ReadyThenPendingProvider {
+        fn kind(&self) -> ProviderKind {
+            ProviderKind::PhraseV1
+        }
+
+        async fn complete(
+            &self,
+            request: ProviderRequest,
+            cancellation: CancellationToken,
+        ) -> Result<Option<String>, ProviderError> {
+            let call = self.calls.fetch_add(1, Ordering::Relaxed);
+            if call == 0 {
+                return Ok(Some(format!(" revision {}", request.before)));
+            }
+            *self.token.lock().expect("provider token lock") = Some(cancellation.clone());
+            cancellation.cancelled().await;
+            Err(ProviderError::Cancelled)
+        }
+    }
+
     fn coordinates(session_id: SessionId, revision: u64) -> Coordinates {
         Coordinates {
             session_id,
@@ -2388,6 +2427,21 @@ mod tests {
         })
         .await
         .expect("provider received cancellation token")
+    }
+
+    async fn wait_for_second_provider_token(
+        provider: &ReadyThenPendingProvider,
+    ) -> CancellationToken {
+        timeout(Duration::from_millis(50), async {
+            loop {
+                if let Some(cancellation) = provider.cancellation() {
+                    break cancellation;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("second provider call received cancellation token")
     }
 
     async fn setup(
@@ -4011,6 +4065,206 @@ mod tests {
                 )
                 .await,
             Err(BrokerError::NoPendingCommit)
+        ));
+    }
+
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test]
+    async fn durable_corrupt_store_deny_ack_advances_epoch_and_revokes_all_live_authority() {
+        let temporary = tempdir().expect("temporary directory");
+        let paths = StoragePaths::new(
+            temporary.path().join("config/badi"),
+            temporary.path().join("data/badi"),
+        )
+        .expect("storage paths");
+        {
+            let control_plane = ControlPlane::open(paths.clone()).expect("control plane");
+            control_plane
+                .replace_settings(0, controlled_settings(1, true, true))
+                .expect("allow controlled origin");
+            control_plane
+                .record_signal(
+                    StableIdentity::browser_origin(
+                        BrowserAdapter::Chromium,
+                        WebScheme::Http,
+                        "localhost",
+                        Some(4173),
+                    )
+                    .expect("controlled identity"),
+                    crate::personalization::PersonalizationProvider::PhraseV1,
+                    PersonalizationSignal::Shown,
+                )
+                .expect("seed personalization");
+        }
+        let personalization_path = paths.personalization_path();
+        std::fs::write(&personalization_path, b"corrupt aggregate evidence\n")
+            .expect("corrupt aggregate store");
+        let corrupt_bytes = std::fs::read(&personalization_path).expect("corrupt bytes");
+        let control_plane =
+            std::sync::Arc::new(ControlPlane::open(paths.clone()).expect("degraded control plane"));
+        assert!(
+            !control_plane
+                .snapshot()
+                .expect("degraded snapshot")
+                .personalization_store_available
+        );
+
+        let provider = std::sync::Arc::new(ReadyThenPendingProvider::new());
+        let broker = Broker::with_control_plane(
+            provider.clone(),
+            BrokerConfig {
+                debounce: Duration::ZERO,
+                ..BrokerConfig::default()
+            },
+            std::sync::Arc::clone(&control_plane),
+        )
+        .expect("controlled broker");
+        broker
+            .register_policy_client("connection-a".to_owned())
+            .await;
+        broker
+            .register_policy_client("connection-b".to_owned())
+            .await;
+        let initial_authority = broker.authority_snapshot().await;
+        broker
+            .acknowledge_authority("connection-a", initial_authority.authority_epoch)
+            .await
+            .expect("first connection acknowledgement");
+        broker
+            .acknowledge_authority("connection-b", initial_authority.authority_epoch)
+            .await
+            .expect("second connection acknowledgement");
+        assert_eq!(
+            broker.authority_snapshot().await.pending_acknowledgements,
+            0
+        );
+
+        let commit_session = SessionId::new();
+        let (commit_sink, mut commit_events) = mpsc::channel(8);
+        broker
+            .open_session(
+                coordinates(commit_session, 0),
+                SessionOpenPayload {
+                    target: controlled_target(),
+                    activation: Activation::Always,
+                },
+                controlled_authority(),
+                event_sink(commit_sink),
+            )
+            .await
+            .expect("commit session");
+        let (commit_context, suggestion_id) = prepare_commit_result_case(
+            &broker,
+            commit_session,
+            &mut commit_events,
+            ControlAction::AcceptAll,
+        )
+        .await;
+
+        let provider_session = SessionId::new();
+        let (provider_sink, mut provider_events) = mpsc::channel(8);
+        broker
+            .open_session(
+                coordinates(provider_session, 0),
+                SessionOpenPayload {
+                    target: controlled_target(),
+                    activation: Activation::Always,
+                },
+                controlled_authority(),
+                event_sink(provider_sink),
+            )
+            .await
+            .expect("provider session");
+        let provider_context = context(1, FieldPurpose::Normal);
+        broker
+            .update_context(coordinates(provider_session, 1), provider_context.clone())
+            .await
+            .expect("provider context");
+        broker
+            .request_suggestion(
+                coordinates(provider_session, 1),
+                SuggestRequestPayload {
+                    fingerprint: provider_context.fingerprint.clone(),
+                    explicit: false,
+                },
+                None,
+            )
+            .await
+            .expect("provider request");
+        let provider_cancellation = wait_for_second_provider_token(&provider).await;
+
+        let denied = controlled_settings(2, false, false);
+        let acknowledged = broker
+            .replace_settings(1, denied.clone())
+            .await
+            .expect("durable deny acknowledgement");
+        assert_eq!(acknowledged.settings, denied);
+        let persisted: SettingsV1 =
+            serde_json::from_slice(&std::fs::read(paths.settings_path()).expect("persisted deny"))
+                .expect("valid persisted deny");
+        assert_eq!(persisted, denied);
+        assert_eq!(
+            std::fs::read(&personalization_path).expect("preserved corrupt evidence"),
+            corrupt_bytes
+        );
+
+        let authority = broker.authority_snapshot().await;
+        assert!(authority.authority_epoch > initial_authority.authority_epoch);
+        assert_eq!(authority.settings_revision, 2);
+        assert_eq!(authority.pending_acknowledgements, 2);
+        assert!(!authority.control_plane_degraded);
+        assert!(provider_cancellation.is_cancelled());
+        assert_eq!(broker.session_count().await, 0);
+
+        assert!(matches!(
+            commit_events.recv().await,
+            Some(BrokerEvent::SuggestionClear { payload, request_id, .. })
+                if payload.reason == ReasonCode::PolicyNever
+                    && request_id.as_deref() == Some("applied-case")
+        ));
+        assert!(provider_events.recv().await.is_none());
+        assert!(matches!(
+            broker
+                .commit_result(
+                    coordinates(commit_session, 1),
+                    CommitResultPayload {
+                        fingerprint: commit_context.fingerprint,
+                        suggestion_id,
+                        status: CommitStatus::Applied,
+                    },
+                )
+                .await,
+            Err(BrokerError::UnknownSession)
+        ));
+        assert!(matches!(
+            broker
+                .update_context(
+                    coordinates(provider_session, 2),
+                    context(2, FieldPurpose::Normal),
+                )
+                .await,
+            Err(BrokerError::UnknownSession)
+        ));
+        let policy = broker.resolve_policy(&controlled_target()).await;
+        assert!(!policy.context_allowed);
+        assert!(!policy.display_allowed);
+        assert!(!policy.suggestions_allowed);
+        assert!(!policy.learning_allowed);
+        let post_ack_session = SessionId::new();
+        let (post_ack_sink, _post_ack_events) = mpsc::channel(1);
+        assert!(matches!(
+            broker
+                .open_session(
+                    coordinates(post_ack_session, 0),
+                    SessionOpenPayload {
+                        target: controlled_target(),
+                        activation: Activation::Always,
+                    },
+                    controlled_authority(),
+                    event_sink(post_ack_sink),
+                )
+                .await,
+            Err(BrokerError::Denied(_))
         ));
     }
 

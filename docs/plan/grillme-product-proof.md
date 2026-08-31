@@ -1,10 +1,11 @@
 # GrillMe product-proof execution plan
 
-- **Status:** proposed execution contract; implementation has not started
+- **Status:** implementation in progress; no V3 product-cell receipt has been
+  issued
 - **Branch:** `develop`
 - **Planning baseline:** `052e6d37144fa764b0b63486d3533d0971f37f24`
 - **Source review:** [GrillMe Omarchy and suggestion-quality round](../delivery/2026-08-30-grillme-omarchy-quality-round.md)
-- **Current synthesis:** [Omarchy review dossier](../delivery/2026-08-31-omarchy-review-dossier.md)
+- **Planning synthesis:** [historical Omarchy review dossier](../delivery/2026-08-31-omarchy-review-dossier.md)
 - **Scope:** private architecture review to one honest product-showing cell
 
 This plan converts the open GrillMe findings into reviewable vertical slices.

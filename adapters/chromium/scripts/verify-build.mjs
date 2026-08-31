@@ -4,11 +4,16 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const buildManifestPath = resolve(packageRoot, "dist/BUILD_MANIFEST.json");
+function buildManifestPath(product) {
+  return resolve(packageRoot, product ? "dist-product/BUILD_MANIFEST.json" : "dist/BUILD_MANIFEST.json");
+}
 
-async function runBuild() {
+async function runBuild(product) {
   await new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, ["scripts/build.mjs"], {
+    const child = spawn(process.execPath, [
+      "scripts/build.mjs",
+      ...(product ? ["--product"] : []),
+    ], {
       cwd: packageRoot,
       stdio: "inherit",
     });
@@ -18,12 +23,16 @@ async function runBuild() {
       else reject(new Error(`Build exited with status ${String(code)}`));
     });
   });
-  return readFile(buildManifestPath, "utf8");
+  return readFile(buildManifestPath(product), "utf8");
 }
 
-const first = await runBuild();
-const second = await runBuild();
-if (first !== second) {
-  throw new Error("Chromium build is not byte-deterministic");
+for (const product of [false, true]) {
+  const first = await runBuild(product);
+  const second = await runBuild(product);
+  if (first !== second) {
+    throw new Error(
+      `Chromium ${product ? "product" : "fixture"} build is not byte-deterministic`,
+    );
+  }
 }
-process.stdout.write("Deterministic build verified across two clean builds\n");
+process.stdout.write("Deterministic fixture and product builds verified across two clean builds\n");

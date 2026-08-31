@@ -2,6 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import { createServer } from "node:http";
 import {
   access,
@@ -16,12 +17,17 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { cpus, release, tmpdir, totalmem, type as osType } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { assertExactChromiumManifest } from "../scripts/manifest-policy.mjs";
 import {
-  assertExactChromiumManifest,
-} from "../scripts/manifest-policy.mjs";
+  SCENARIO_PLAN,
+  scenarioCase,
+  scenarioDefinition,
+  validateCompletedScenarioIds,
+  validateScenarioPlan,
+} from "./scenario-plan.mjs";
 
 const execFileAsync = promisify(execFile);
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -42,25 +48,34 @@ const nativeManifestBinary = join(
 );
 const cliBinary = join(repositoryRoot, "target/debug/badictl");
 const fakeHostSource = join(liveRoot, "fake-native-host.mjs");
+const scenarioPlanSource = join(liveRoot, "scenario-plan.mjs");
 const runnerSource = fileURLToPath(import.meta.url);
 const manifestPolicySource = join(packageRoot, "scripts/manifest-policy.mjs");
-const fallbackCompletion = " and continue from there";
-const ruleCompletion = " for your time";
-const firstWordCompletion = " let";
 const DEBOUNCE_MS = 140;
 const DURABLE_EVIDENCE_ID =
   /^chromium-native-live-run\.[a-z0-9][a-z0-9-]{0,63}\.v1$/u;
 
 function parseArguments(values) {
   const parsed = {
+    describe: false,
+    headed: false,
     smoke: false,
     evidenceId: null,
     samples: 1_000,
     warmups: 50,
     staleTrials: 100,
+    chromiumExecutable: null,
   };
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
+    if (value === "--describe") {
+      parsed.describe = true;
+      continue;
+    }
+    if (value === "--headed") {
+      parsed.headed = true;
+      continue;
+    }
     if (value === "--smoke") {
       parsed.smoke = true;
       parsed.samples = 3;
@@ -79,6 +94,14 @@ function parseArguments(values) {
       index += 1;
       continue;
     }
+    if (value === "--chromium-executable") {
+      if (next === undefined || !isAbsolute(next)) {
+        throw new Error("--chromium-executable requires an absolute path");
+      }
+      parsed.chromiumExecutable = next;
+      index += 1;
+      continue;
+    }
     if (value === "--samples" || value === "--warmups" || value === "--stale-trials") {
       if (next === undefined || !/^\d+$/u.test(next)) {
         throw new Error(`${value} requires a nonnegative integer`);
@@ -94,6 +117,12 @@ function parseArguments(values) {
       continue;
     }
     throw new Error(`Unknown argument: ${String(value)}`);
+  }
+  if (parsed.describe) {
+    if (values.length !== 1) {
+      throw new Error("--describe cannot be combined with live-run arguments");
+    }
+    return parsed;
   }
   if (!parsed.smoke && (parsed.samples < 1_000 || parsed.warmups < 50)) {
     throw new Error("Durable evidence requires at least 1000 samples after 50 warmups");
@@ -152,6 +181,26 @@ async function exists(path) {
   } catch {
     return false;
   }
+}
+
+async function resolveChromiumExecutable(configuredPath) {
+  if (configuredPath !== null) {
+    await access(configuredPath, fsConstants.X_OK);
+    return configuredPath;
+  }
+  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+    if (directory.length === 0) continue;
+    const candidate = resolve(directory, "chromium");
+    try {
+      await access(candidate, fsConstants.X_OK);
+      return candidate;
+    } catch {
+      // Continue searching the current process PATH.
+    }
+  }
+  throw new Error(
+    "Chromium was not found on PATH; pass --chromium-executable ABSOLUTE_PATH",
+  );
 }
 
 async function sha256Artifact(id, path) {
@@ -376,10 +425,20 @@ async function installNativeManifest({ profile, home, xdgConfig, manifest }) {
   }
 }
 
-async function launchExtensionContext({ chromium, profile, home, xdgConfig, xdgCache, runtime, extraEnv = {} }) {
+async function launchExtensionContext({
+  chromium,
+  chromiumExecutable,
+  headed,
+  profile,
+  home,
+  xdgConfig,
+  xdgCache,
+  runtime,
+  extraEnv = {},
+}) {
   return chromium.launchPersistentContext(profile, {
-    executablePath: "/usr/bin/chromium",
-    headless: true,
+    executablePath: chromiumExecutable,
+    headless: !headed,
     ignoreDefaultArgs: ["--disable-extensions"],
     env: {
       ...process.env,
@@ -387,10 +446,13 @@ async function launchExtensionContext({ chromium, profile, home, xdgConfig, xdgC
       HOME: home,
       XDG_CONFIG_HOME: xdgConfig,
       XDG_CACHE_HOME: xdgCache,
-      XDG_RUNTIME_DIR: runtime,
+      XDG_RUNTIME_DIR:
+        headed && process.env.XDG_RUNTIME_DIR !== undefined
+          ? process.env.XDG_RUNTIME_DIR
+          : runtime,
     },
     args: [
-      "--headless=new",
+      ...(headed ? [] : ["--headless=new"]),
       `--disable-extensions-except=${distRoot}`,
       `--load-extension=${distRoot}`,
       "--no-first-run",
@@ -416,10 +478,29 @@ async function waitForExtensionWorker(context) {
   return worker;
 }
 
-async function openFixture(context) {
+async function focusFixtureWindow(worker) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const focused = await worker.evaluate(async (expectedUrl) => {
+      const tabs = await chrome.tabs.query({});
+      const tab = tabs.find((candidate) => candidate.url === expectedUrl);
+      if (tab?.id === undefined || tab.windowId === undefined) return false;
+      await chrome.tabs.update(tab.id, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true });
+      return (await chrome.windows.get(tab.windowId)).focused === true;
+    }, fixtureUrl);
+    if (focused) return;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  }
+  throw new Error("Chromium did not focus the isolated fixture window");
+}
+
+async function openFixture(context, worker) {
   const page = await context.newPage();
   await page.goto(fixtureUrl, { waitUntil: "load" });
   await page.waitForFunction(() => typeof window.__badiLive === "object");
+  await page.bringToFront();
+  await focusFixtureWindow(worker);
   check(await page.evaluate(() => document.hasFocus()), "Fixture document is not focused");
   return page;
 }
@@ -526,7 +607,54 @@ async function pollBrokerPaused(socketPath, env, expected, timeoutMs = 2_000) {
   return false;
 }
 
+async function grantIsolatedFixturePolicy(socketPath, env) {
+  const settings = {
+    schema: "badi.settings.v1",
+    revision: 1,
+    paused: false,
+    subjects: [
+      {
+        identity: {
+          kind: "browser_origin",
+          adapter: "chromium",
+          scheme: "http",
+          host: "localhost",
+          port: 4173,
+        },
+        permissions: {
+          suggest: "allow",
+          display: "allow",
+          context_read: "allow",
+          learn: "block",
+          retention: { mode: "none" },
+        },
+      },
+    ],
+  };
+  await command(
+    cliBinary,
+    [
+      "--socket",
+      socketPath,
+      "settings",
+      "replace",
+      "--if-revision",
+      "0",
+      "--json",
+      JSON.stringify(settings),
+    ],
+    { env },
+  );
+  const status = await brokerStatus(socketPath, env);
+  check(status.paused === false, "Isolated fixture policy did not resume the broker");
+}
+
 function scenario(id, evidenceClass, trials, passed, detail, status = "pass") {
+  const definition = scenarioDefinition(id);
+  check(
+    definition.evidence_class === evidenceClass,
+    `${id} runtime evidence class does not match the scenario plan`,
+  );
   return {
     id,
     evidence_class: evidenceClass,
@@ -559,12 +687,24 @@ async function runRealChain({
   setStep,
 }) {
   setStep("real.worker-and-fixture");
-  await waitForExtensionWorker(context);
-  const page = await openFixture(context);
+  const liveWorker = await waitForExtensionWorker(context);
+  const page = await openFixture(context, liveWorker);
 
   setStep("real.full-chain");
-  await setupDraft(page, "thank you");
-  await waitForGhost(page);
+  const fullChainCase = scenarioCase("chromium.full-chain");
+  try {
+    await setupDraft(page, fullChainCase.trigger);
+    await waitForGhost(page);
+  } catch (error) {
+    const status = await brokerStatus(socketPath, brokerEnv);
+    const nativeCalls = (await exists(callerLog))
+      ? (await readFile(callerLog, "utf8")).trim()
+      : "not-created";
+    const message = error instanceof Error ? error.message : "unknown ghost timeout";
+    throw new Error(
+      `${message}; content-free broker status: ${JSON.stringify(status)}; native calls: ${nativeCalls}`,
+    );
+  }
   const liveStatus = await brokerStatus(socketPath, brokerEnv);
   check(liveStatus.metrics.provider_calls >= 1, "Real provider was not reached");
   scenarios.push(
@@ -577,6 +717,9 @@ async function runRealChain({
     ),
   );
 
+  const dismissCase = scenarioCase("interaction.dismiss");
+  await setupDraft(page, dismissCase.trigger);
+  await waitForGhost(page);
   const dismissBefore = await fieldSnapshot(page);
   await page.keyboard.press("Escape");
   await waitForGhostHidden(page);
@@ -592,19 +735,20 @@ async function runRealChain({
     ),
   );
 
-  await setupDraft(page, "thank you");
+  const undoCase = scenarioCase("interaction.undo");
+  await setupDraft(page, undoCase.trigger);
   await waitForGhost(page);
   const acceptBefore = await fieldSnapshot(page);
   await resetFixtureEvents(page);
   await page.keyboard.press("Tab");
   await page.waitForFunction(
     ({ expectedLength }) => document.querySelector("#draft")?.value.length === expectedLength,
-    { expectedLength: acceptBefore.value.length + ruleCompletion.length },
+    { expectedLength: acceptBefore.value.length + undoCase.expected_output.length },
   );
   const acceptAfter = await fieldSnapshot(page);
   check(
-    acceptAfter.value === `${acceptBefore.value}${ruleCompletion}` &&
-    acceptAfter.start === acceptBefore.start + ruleCompletion.length &&
+    acceptAfter.value === `${acceptBefore.value}${undoCase.expected_output}` &&
+    acceptAfter.start === acceptBefore.start + undoCase.expected_output.length &&
       acceptAfter.end === acceptAfter.start,
     "Trusted acceptance produced the wrong caret",
   );
@@ -630,7 +774,10 @@ async function runRealChain({
     ),
   );
 
-  await setupDraft(page, "please");
+  const acceptWordCase = scenarioCase("commit.accept-word");
+  const firstWordCompletion = /^ \S+/u.exec(acceptWordCase.expected_output)?.[0];
+  check(firstWordCompletion !== undefined, "Planned accept-word output has no first word");
+  await setupDraft(page, acceptWordCase.trigger);
   await waitForGhost(page);
   const wordBefore = await fieldSnapshot(page);
   await page.keyboard.press("Control+ArrowRight");
@@ -661,7 +808,8 @@ async function runRealChain({
     await waitForGhostHidden(page);
   }
 
-  await setupDraft(page, "hostile-keyboard");
+  const untrustedKeyboardCase = scenarioCase("security.untrusted-keyboard");
+  await setupDraft(page, untrustedKeyboardCase.trigger);
   await waitForGhost(page);
   const hostileBefore = await fieldSnapshot(page);
   const hostileMetricsBefore = await brokerStatus(socketPath, brokerEnv);
@@ -703,17 +851,20 @@ async function runRealChain({
     ),
   );
 
+  const syntheticFocusCase = scenarioCase("security.synthetic-focus-zero");
   const syntheticMetricsBefore = await brokerStatus(socketPath, brokerEnv);
-  await page.evaluate(() => {
+  await page.evaluate((trigger) => {
     const field = document.querySelector("#draft");
     const sink = document.querySelector("button[data-action='focus-away']");
     if (!(field instanceof HTMLTextAreaElement) || !(sink instanceof HTMLButtonElement)) {
       throw new Error("Fixture unavailable");
     }
     sink.focus();
+    field.value = trigger;
+    field.setSelectionRange(trigger.length, trigger.length);
     field.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
     field.dispatchEvent(new InputEvent("input", { bubbles: true, data: "x" }));
-  });
+  }, syntheticFocusCase.trigger);
   await page.waitForTimeout(DEBOUNCE_MS + 80);
   const syntheticMetricsAfter = await brokerStatus(socketPath, brokerEnv);
   check(
@@ -733,7 +884,23 @@ async function runRealChain({
     ),
   );
 
+  const deniedCases = scenarioDefinition("privacy.denied-zero").cases;
   const deniedBefore = await brokerStatus(socketPath, brokerEnv);
+  await page.evaluate(
+    ({ passwordTrigger, otpTrigger }) => {
+      const password = document.querySelector("#password");
+      const otp = document.querySelector("#otp");
+      if (!(password instanceof HTMLInputElement) || !(otp instanceof HTMLInputElement)) {
+        throw new Error("Denied fixture fields unavailable");
+      }
+      password.value = passwordTrigger;
+      otp.value = otpTrigger;
+    },
+    {
+      passwordTrigger: deniedCases[0].trigger,
+      otpTrigger: deniedCases[1].trigger,
+    },
+  );
   await page.locator("#password").focus();
   await page.waitForTimeout(DEBOUNCE_MS + 80);
   await page.locator("#otp").focus();
@@ -756,10 +923,11 @@ async function runRealChain({
   );
 
   setStep("real.dynamic-invalidation");
+  const invalidationCases = scenarioDefinition("lifecycle.dynamic-invalidation").cases;
   let invalidationPasses = 0;
-  for (const mutation of ["readonly", "ancestor-opt-out", "replace"]) {
+  for (const [index, mutation] of ["readonly", "ancestor-opt-out", "replace"].entries()) {
     process.stdout.write(`Live invalidation check: ${mutation}\n`);
-    await setupDraft(page, `policy-${mutation}`);
+    await setupDraft(page, invalidationCases[index].trigger);
     await waitForGhost(page);
     const before = await fieldSnapshot(page);
     if (mutation === "readonly") {
@@ -791,7 +959,7 @@ async function runRealChain({
   );
 
   setStep("real.composition");
-  await setupDraft(page, "composition-live");
+  await setupDraft(page, scenarioCase("lifecycle.composition").trigger);
   await waitForGhost(page);
   const compositionBefore = await fieldSnapshot(page);
   await page.evaluate(() => window.__badiLive?.dispatchComposition("compositionstart", "x"));
@@ -812,7 +980,7 @@ async function runRealChain({
   );
 
   setStep("real.geometry");
-  await setupDraft(page, "geometry-live");
+  await setupDraft(page, scenarioCase("geometry.scroll-zoom").trigger);
   await waitForGhost(page);
   const geometryInitial = await page.evaluate(() => window.__badiLive?.ghostSnapshot());
   check(geometryAligned(geometryInitial), "Initial ghost geometry was not anchored");
@@ -846,7 +1014,7 @@ async function runRealChain({
     ),
   );
 
-  await setupDraft(page, "visibility-live");
+  await setupDraft(page, scenarioCase("lifecycle.visibility").trigger);
   await waitForGhost(page);
   const background = await context.newPage();
   await background.bringToFront();
@@ -875,13 +1043,14 @@ async function runRealChain({
     ),
   );
 
-  await setupDraft(page, "navigation-live");
+  const navigationCases = scenarioDefinition("lifecycle.navigation").cases;
+  await setupDraft(page, navigationCases[0].trigger);
   await waitForGhost(page);
   await page.goto("http://localhost:4173/blank.html", { waitUntil: "load" });
   check((await page.locator(ghostSelector).count()) === 0, "Ghost survived document navigation");
   await page.goto(fixtureUrl, { waitUntil: "load" });
   await page.waitForFunction(() => typeof window.__badiLive === "object");
-  await setupDraft(page, "navigation-return");
+  await setupDraft(page, navigationCases[1].trigger);
   await waitForGhost(page);
   await page.keyboard.press("Escape");
   scenarios.push(
@@ -894,15 +1063,18 @@ async function runRealChain({
     ),
   );
 
-  await setupDraft(page, "authoritative-pause-live");
+  const authoritativePauseCases = scenarioDefinition(
+    "control.pause-authoritative",
+  ).cases;
+  await setupDraft(page, authoritativePauseCases[0].trigger);
   await waitForGhost(page);
   await command(cliBinary, ["--socket", socketPath, "pause", "on"], { env: brokerEnv });
   check(await pollBrokerPaused(socketPath, brokerEnv, true), "Broker did not enter pause");
   await waitForGhostHidden(page);
   const authoritativePauseBefore = await brokerStatus(socketPath, brokerEnv);
-  await page.evaluate(() =>
-    window.__badiLive?.setDraft("authoritative-pause-blocked", 27, 27, true),
-  );
+  await page.evaluate((trigger) => {
+    window.__badiLive?.setDraft(trigger, trigger.length, trigger.length, true);
+  }, authoritativePauseCases[1].trigger);
   await page.waitForTimeout(DEBOUNCE_MS + 100);
   const authoritativePauseAfter = await brokerStatus(socketPath, brokerEnv);
   check(
@@ -912,7 +1084,7 @@ async function runRealChain({
   );
   await command(cliBinary, ["--socket", socketPath, "pause", "off"], { env: brokerEnv });
   check(await pollBrokerPaused(socketPath, brokerEnv, false), "Broker did not leave pause");
-  await setupDraft(page, "authoritative-resume-live");
+  await setupDraft(page, authoritativePauseCases[2].trigger);
   await waitForGhost(page);
   await page.keyboard.press("Escape");
   scenarios.push(
@@ -925,7 +1097,8 @@ async function runRealChain({
     ),
   );
 
-  await setupDraft(page, "pause-live");
+  const pauseShortcutCases = scenarioDefinition("control.pause-shortcut").cases;
+  await setupDraft(page, pauseShortcutCases[0].trigger);
   await waitForGhost(page);
   await page.keyboard.press("Alt+Shift+P");
   const shortcutPaused = await pollBrokerPaused(socketPath, brokerEnv, true);
@@ -933,7 +1106,9 @@ async function runRealChain({
   if (shortcutPaused) {
     await waitForGhostHidden(page);
     const beforePauseInput = await brokerStatus(socketPath, brokerEnv);
-    await page.evaluate(() => window.__badiLive?.setDraft("pause-blocked", 13, 13, true));
+    await page.evaluate((trigger) => {
+      window.__badiLive?.setDraft(trigger, trigger.length, trigger.length, true);
+    }, pauseShortcutCases[1].trigger);
     await page.waitForTimeout(DEBOUNCE_MS + 100);
     const afterPauseInput = await brokerStatus(socketPath, brokerEnv);
     check(
@@ -960,8 +1135,10 @@ async function runRealChain({
     ),
   );
 
+  const debounceCases = scenarioDefinition("schedule.debounce-latest").cases;
+  const debounceTrials = 100;
   const staleBefore = await brokerStatus(socketPath, brokerEnv);
-  await page.evaluate(async ({ trials }) => {
+  await page.evaluate(async ({ trials, triggers }) => {
     const api = window.__badiLive;
     const field = document.querySelector("#draft");
     if (!api || !(field instanceof HTMLTextAreaElement)) throw new Error("Fixture unavailable");
@@ -969,11 +1146,11 @@ async function runRealChain({
     field.focus();
     api.resetEvents();
     for (let revision = 0; revision <= trials; revision += 1) {
-      const value = `schedule-${revision}`;
+      const value = triggers[revision % triggers.length];
       api.setDraft(value, value.length, value.length, true);
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 2));
     }
-  }, { trials: Math.max(100, 100) });
+  }, { trials: debounceTrials, triggers: debounceCases.map((entry) => entry.trigger) });
   await waitForGhost(page);
   const staleAfter = await brokerStatus(socketPath, brokerEnv);
   check(
@@ -981,30 +1158,32 @@ async function runRealChain({
     "Debounced live schedule emitted more than its latest request",
   );
   await page.keyboard.press("Escape");
+  scenarios.push(
+    scenario(
+      "schedule.debounce-latest",
+      "real-rust-chain",
+      debounceTrials + 1,
+      debounceTrials + 1,
+      "Rapid edits using only supported phrase triggers coalesced to one provider call for the latest revision.",
+    ),
+  );
 
   setStep("real.insertion-latency");
   const insertionPasses = [];
   const acceptLatencies = [];
   const editVisibleLatencies = [];
-  const cases = [
-    { category: "ascii-end", value: "alpha omega", caret: 11 },
-    { category: "ascii-mid", value: "alpha omega", caret: 5 },
-    { category: "astral-boundary", value: "A🙂B", caret: 3 },
-    { category: "greek-mid", value: "γειά σου", caret: 4 },
-    { category: "combining-boundary", value: "élan", caret: 2 },
-  ];
+  const cases = scenarioDefinition("commit.insertion-100").cases;
   const totalInsertion = samples + warmups;
   for (let index = 0; index < totalInsertion; index += 1) {
     const selected = cases[index % cases.length];
-    await setupDraft(page, selected.value, selected.caret);
+    await setupDraft(page, selected.trigger);
     await waitForGhost(page);
     const visibleEvents = await fixtureEvents(page);
     const inputEvent = visibleEvents.find((event) => event.type === "field.input");
     const visibleEvent = [...visibleEvents].reverse().find((event) => event.type === "ghost.visible");
     check(inputEvent && visibleEvent, "Edit-to-visible endpoints were not observed");
     const before = await fieldSnapshot(page);
-    const expected =
-      before.value.slice(0, before.start) + fallbackCompletion + before.value.slice(before.end);
+    const expected = `${before.value}${selected.expected_output}`;
     await resetFixtureEvents(page);
     await page.keyboard.press("Tab");
     await page.waitForFunction(
@@ -1018,12 +1197,12 @@ async function runRealChain({
     check(keyEvent && insertedEvent, "Accept-to-insert endpoints were not observed");
     const passed =
       after.value === expected &&
-      after.start === before.start + fallbackCompletion.length &&
+      after.start === before.start + selected.expected_output.length &&
       after.end === after.start &&
       events.filter((event) => event.type === "field.input").length === 1;
     check(passed, `Insertion/caret trial ${index + 1} failed`);
     if (index >= warmups) {
-      insertionPasses.push({ category: selected.category, passed });
+      insertionPasses.push({ category: selected.trigger, passed });
       acceptLatencies.push(insertedEvent.at_ms - keyEvent.at_ms);
       editVisibleLatencies.push(visibleEvent.at_ms - inputEvent.at_ms);
     }
@@ -1035,7 +1214,7 @@ async function runRealChain({
       "real-rust-chain",
       insertionPasses.length,
       insertionPasses.filter((entry) => entry.passed).length,
-      "Real Chromium verified exact value, UTF-16 caret, and one input event across end, mid-line, astral, Greek, and combining-boundary cases.",
+      "Real Chromium verified exact end-caret insertion and one input event across the four supported phrase_v1 probes; broader text shapes are not claimed.",
     ),
   );
 
@@ -1043,7 +1222,7 @@ async function runRealChain({
   const invalidationLatencies = [];
   const totalInvalidation = samples + warmups;
   for (let index = 0; index < totalInvalidation; index += 1) {
-    await setupDraft(page, `invalidate-${index}`);
+    await setupDraft(page, cases[index % cases.length].trigger);
     await waitForGhost(page);
     await page.evaluate(() => {
       const api = window.__badiLive;
@@ -1082,7 +1261,7 @@ async function runRealChain({
   );
 
   setStep("real.disconnect");
-  await setupDraft(page, "disconnect-live");
+  await setupDraft(page, scenarioCase("lifecycle.disconnect").trigger);
   await waitForGhost(page);
   const disconnectBefore = await fieldSnapshot(page);
   await page.evaluate(() => {
@@ -1121,6 +1300,8 @@ async function runRealChain({
 
 async function runFaultHostRace({
   chromium,
+  chromiumExecutable,
+  headed,
   tempRoot,
   runtime,
   manifestGenerator,
@@ -1151,6 +1332,8 @@ async function runFaultHostRace({
   await installNativeManifest({ profile, home, xdgConfig, manifest: generated.stdout });
   const context = await launchExtensionContext({
     chromium,
+    chromiumExecutable,
+    headed,
     profile,
     home,
     xdgConfig,
@@ -1165,9 +1348,10 @@ async function runFaultHostRace({
   let hostPids = [];
   try {
     setStep("fault-host.stale-race");
-    await waitForExtensionWorker(context);
-    const page = await openFixture(context);
-    await page.evaluate(async ({ trials, gap }) => {
+    const faultCases = scenarioDefinition("race.stale-100").cases;
+    const worker = await waitForExtensionWorker(context);
+    const page = await openFixture(context, worker);
+    await page.evaluate(async ({ trials, gap, staleTrigger, latestTrigger }) => {
       const api = window.__badiLive;
       const field = document.querySelector("#draft");
       if (!api || !(field instanceof HTMLTextAreaElement)) throw new Error("Fixture unavailable");
@@ -1175,15 +1359,18 @@ async function runFaultHostRace({
       field.focus();
       api.resetEvents();
       for (let revision = 0; revision < trials; revision += 1) {
-        const value = `stale-live-${revision}`;
-        api.setDraft(value, value.length, value.length, true);
+        api.setDraft(staleTrigger, staleTrigger.length, staleTrigger.length, true);
         await new Promise((resolvePromise) => setTimeout(resolvePromise, gap));
       }
-      const finalValue = "stale-live-final";
-      api.setDraft(finalValue, finalValue.length, finalValue.length, true);
+      api.setDraft(latestTrigger, latestTrigger.length, latestTrigger.length, true);
       await new Promise((resolvePromise) => setTimeout(resolvePromise, gap));
       api.mark("inputs-complete");
-    }, { trials: staleTrials, gap: DEBOUNCE_MS + 15 });
+    }, {
+      trials: staleTrials,
+      gap: DEBOUNCE_MS + 15,
+      staleTrigger: faultCases[0].trigger,
+      latestTrigger: faultCases[1].trigger,
+    });
     await page.waitForTimeout(575);
     const staleWindowEvents = await fixtureEvents(page);
     const complete = staleWindowEvents.find(
@@ -1198,7 +1385,7 @@ async function runFaultHostRace({
     await waitForGhost(page, 2_000);
     const before = await fieldSnapshot(page);
     check(
-      before.value === "stale-live-final" &&
+      before.value === faultCases[1].trigger &&
         before.start === before.value.length &&
         before.end === before.start,
       "Fault race changed the final field before acceptance",
@@ -1206,12 +1393,12 @@ async function runFaultHostRace({
     await page.keyboard.press("Tab");
     await page.waitForFunction(
       ({ expectedLength }) => document.querySelector("#draft")?.value.length === expectedLength,
-      { expectedLength: before.value.length + 7 },
+      { expectedLength: before.value.length + faultCases[1].expected_output.length },
     );
     const after = await fieldSnapshot(page);
     check(
-      after.value === `${before.value} latest` &&
-        after.start === before.start + 7 &&
+      after.value === `${before.value}${faultCases[1].expected_output}` &&
+        after.start === before.start + faultCases[1].expected_output.length &&
         after.end === after.start,
       "Fault race did not accept exactly the distinct latest response",
     );
@@ -1278,14 +1465,14 @@ async function countProcessesContaining(needle) {
   return count;
 }
 
-async function environmentRecord(playwrightVersion) {
+async function environmentRecord(playwrightVersion, chromiumExecutable) {
   const osRelease = await readFile("/etc/os-release", "utf8");
   const pretty = osRelease.match(/^PRETTY_NAME=(?:"([^"]+)"|(.+))$/mu);
   const npmVersion = (await command("npm", ["--version"])).stdout.trim();
   return {
     os: pretty?.[1] ?? pretty?.[2] ?? osType(),
     kernel: `${osType()} ${release()}`,
-    chromium: (await command("/usr/bin/chromium", ["--version"])).stdout.trim(),
+    chromium: (await command(chromiumExecutable, ["--version"])).stdout.trim(),
     playwright: String(playwrightVersion),
     rustc: (await command("rustc", ["--version"])).stdout.trim(),
     cargo: (await command("cargo", ["--version"])).stdout.trim(),
@@ -1311,6 +1498,7 @@ async function artifactRecord(nativeManifest) {
     await sha256Artifact("fixture-js", join(fixtureRoot, "fixture.js")),
     await sha256Artifact("fixture-css", join(fixtureRoot, "fixture.css")),
     await sha256Artifact("live-runner", runnerSource),
+    await sha256Artifact("scenario-plan", scenarioPlanSource),
     await sha256Artifact("fault-host", fakeHostSource),
     await sha256Artifact("manifest-policy", manifestPolicySource),
   ];
@@ -1319,6 +1507,16 @@ async function artifactRecord(nativeManifest) {
 
 async function main() {
   const settings = parseArguments(process.argv.slice(2));
+  validateScenarioPlan();
+  if (settings.describe) {
+    process.stdout.write(
+      `${JSON.stringify({ record_version: 1, scenarios: SCENARIO_PLAN }, null, 2)}\n`,
+    );
+    return;
+  }
+  const chromiumExecutable = await resolveChromiumExecutable(
+    settings.chromiumExecutable,
+  );
   const evidencePath = settings.smoke
     ? null
     : join(repositoryRoot, "capabilities/evidence", `${settings.evidenceId}.json`);
@@ -1370,7 +1568,7 @@ async function main() {
     );
     await writeFile(
       wrapper,
-      '#!/bin/sh\numask 077\nprintf \'pid:%s\\narg:%s\\n\' "$$" "$1" >> "$BADI_LIVE_CALLER_LOG"\nexec "$BADI_LIVE_REAL_HOST" "$@"\n',
+      '#!/bin/sh\numask 077\nprintf \'pid:%s\\narg:%s\\n\' "$$" "$1" >> "$BADI_LIVE_CALLER_LOG"\nexec "$BADI_LIVE_REAL_HOST" "$1" --socket "$BADI_LIVE_SOCKET" 2>> "$BADI_LIVE_CALLER_LOG"\n',
       { encoding: "utf8", mode: 0o700 },
     );
     await chmod(wrapper, 0o700);
@@ -1400,16 +1598,24 @@ async function main() {
     await waitForPath(socketPath);
     check(modeString((await stat(dirname(socketPath))).mode) === "0700", "Socket parent mode mismatch");
     check(modeString((await stat(socketPath)).mode) === "0600", "Socket mode mismatch");
+    await grantIsolatedFixturePolicy(socketPath, brokerEnv);
+    commandRecords.push({
+      id: "isolated-fixture-policy",
+      command: "badictl settings replace (temporary localhost:4173 allow; learning blocked)",
+      exit_code: 0,
+    });
     fixtureServer = await startFixtureServer();
     commandRecords.push({
       id: "isolated-live-run",
       command:
-        "node adapters/chromium/live/run-live.mjs (isolated $TEMP HOME/XDG/profile; system Chromium; generated host manifest; Rust broker/native host)",
+        `node adapters/chromium/live/run-live.mjs (isolated $TEMP HOME/XDG/profile; ${settings.headed ? "headed" : "headless"} parameterized Chromium; generated host manifest; Rust broker/native host)`,
       exit_code: 0,
     });
 
     realContext = await launchExtensionContext({
       chromium: playwright.chromium,
+      chromiumExecutable,
+      headed: settings.headed,
       profile,
       home,
       xdgConfig,
@@ -1418,6 +1624,7 @@ async function main() {
       extraEnv: {
         BADI_LIVE_CALLER_LOG: callerLog,
         BADI_LIVE_REAL_HOST: nativeHostBinary,
+        BADI_LIVE_SOCKET: socketPath,
       },
     });
     const real = await runRealChain({
@@ -1458,6 +1665,8 @@ async function main() {
 
     const fault = await runFaultHostRace({
       chromium: playwright.chromium,
+      chromiumExecutable,
+      headed: settings.headed,
       tempRoot,
       runtime,
       manifestGenerator: nativeManifestBinary,
@@ -1540,8 +1749,12 @@ async function main() {
   check(cleanup.temporary_tree_removed, "Temporary tree was not removed");
   check(cleanup.socket_removed, "Broker did not remove its socket during shutdown");
   check(cleanup.processes_remaining === 0, "Isolated child processes remain");
+  validateCompletedScenarioIds(scenarios.map((entry) => entry.id));
 
-  const environment = await environmentRecord(playwrightVersion);
+  const environment = await environmentRecord(
+    playwrightVersion,
+    chromiumExecutable,
+  );
   const finalRepository = await repositoryRecord(!settings.smoke);
   check(
     finalRepository.base_commit === initialRepository.base_commit,
@@ -1612,8 +1825,10 @@ async function main() {
     artifacts: await artifactRecord(nativeManifest),
     notes: [
       "The durable full-chain checks use the shipped Rust native host and broker; the delayed-response race is separately classified as live-browser-fault-host.",
-      "Chromium headless loaded the extension but exposed no automatable browser permission prompt; this evidence therefore covers the static exact-document development boundary, not the future runtime-granted M2 policy.",
-      "Headless automation does not prove headed window-manager accelerators, compositor rendering, accessibility contrast, browser-level zoom chrome, or MV3 restart epoch synchronization.",
+      `${settings.headed ? "Headed" : "Headless"} Chromium loaded the extension but this run did not automate a browser permission prompt; this evidence therefore covers the static exact-document development boundary, not the future runtime-granted M2 policy.`,
+      settings.headed
+        ? "Headed automation used an isolated profile; it does not by itself prove physical IME, screen-reader, or human distraction quality."
+        : "Headless automation does not prove headed window-manager accelerators, compositor rendering, accessibility contrast, browser-level zoom chrome, or MV3 restart epoch synchronization.",
       "Composition coverage uses synthetic CompositionEvent lifecycle stimuli in real Chromium; it does not claim a physical IME session.",
       "Vanilla DOM setRangeText insertion is externally verified here but remains broker-reported as dispatched-unverified; framework editors and contenteditable remain excluded.",
       "Latency endpoints use window.performance.now in the controlled page: trusted keydown to observed input, and pre-mutation marker to observed hidden transition; p95 is nearest-rank after warmups.",

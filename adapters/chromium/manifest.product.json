@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Badi (Dillinger product proof)",
+  "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAk/4WbfYlyKObOUtE5LmsVS7/u8QjttdFvBzjaiQUDtgAFF7dE79jGlxr7wTO9r7MUX0hDLmCRd2SiqUfa8Oc/V5j9Q4peNQ6WeFKxTjbJMf3mkLeZaVZr4kOYaVYtNKj31G0h9Dd7TJvo/C/YtnFK4lJmU70kbDfyxTKOvZwXNt2q4wwkLcNlwjZuO2j3sflShID3XYm2vt919wq2EoUS65jXU33Hrb85UxZ4CYnrStyAHraQMNp5l9Q6nQ0NRKoek1FYbKq0/OZ008VBEwmTzhkvDFzb4021t3B0r7aGM1MHI7v14iMCL2tc6Z6ZY29R6Z665dS192b+ZcB8kPtUwIDAQAB",
+  "minimum_chrome_version": "132",
+  "incognito": "not_allowed",
+  "description": "Optional exact-site writing suggestions for the Dillinger Markdown editor.",
+  "permissions": [
+    "nativeMessaging",
+    "scripting"
+  ],
+  "optional_host_permissions": [
+    "https://dillinger.io:443/*"
+  ],
+  "background": {
+    "service_worker": "product-service-worker.js"
+  },
+  "action": {
+    "default_title": "Badi Dillinger access",
+    "default_popup": "product-access.html"
+  },
+  "commands": {
+    "accept-dillinger-suggestion": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y"
+      },
+      "description": "Accept the visible Badi suggestion in the exact Dillinger document"
+    }
+  }
+}

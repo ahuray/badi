@@ -10,11 +10,14 @@
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "build": "node scripts/build.mjs",
+    "build:product": "node scripts/build.mjs --product",
     "build:verify": "node scripts/verify-build.mjs",
     "fixture": "python3 -m http.server 4173 --directory ../../fixtures/web",
-    "live:check": "node --check scripts/manifest-policy.mjs && node --check live/run-live.mjs && node --check live/fake-native-host.mjs",
+    "live:check": "node --check scripts/manifest-policy.mjs && node --check scripts/product-manifest-policy.mjs && node --check live/scenario-plan.mjs && node --check live/run-live.mjs && node --check live/run-product-live.mjs && node --check live/run-product-monaco-proof.mjs && node --check live/fake-native-host.mjs && node live/run-live.mjs --describe",
     "live:smoke": "node live/run-live.mjs --smoke",
-    "live": "node live/run-live.mjs"
+    "live": "node live/run-live.mjs",
+    "live:product": "node live/run-product-live.mjs",
+    "live:product:probe": "node live/run-product-monaco-proof.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.2.7",

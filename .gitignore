@@ -11,6 +11,7 @@
 # Build outputs
 build/
 dist/
+dist-product/
 target/
 node_modules/
 coverage/

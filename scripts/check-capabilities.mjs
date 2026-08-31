@@ -1,49 +1,120 @@
-import { access, readFile, readdir } from "node:fs/promises";
+import { access, lstat, readFile, readdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import { isDeepStrictEqual, promisify } from "node:util";
 import Ajv2020 from "ajv/dist/2020.js";
-import { assertExactChromiumManifest } from "../adapters/chromium/scripts/manifest-policy.mjs";
+import { assertHistoricalV2ChromiumManifest } from "../capabilities/v2/manifest-policy.mjs";
+import {
+  V3_DOCUMENT_KIND,
+  assertV3LinkedProductCell,
+  assertV3PostImplementationChanges,
+  validateV3Document,
+} from "../capabilities/v3/validator.mjs";
 
 const repository = path.resolve(import.meta.dirname, "..");
 const capabilityRoot = path.join(repository, "capabilities");
+const evidenceRoot = path.join(capabilityRoot, "evidence");
 const execFileAsync = promisify(execFile);
 const maximumGitBlobBytes = 4 * 1024 * 1024;
 const liveRunIdPattern =
   /^chromium-native-live-run(?:\.[a-z0-9][a-z0-9-]{0,63})?\.v1$/u;
 const cliArguments = process.argv.slice(2);
+const usage =
+  "Usage: node scripts/check-capabilities.mjs " +
+  "[--require-current [--receipt-id ID] [--require-live]]\n";
 if (cliArguments.includes("--help")) {
   process.stdout.write(
-      "Usage: node scripts/check-capabilities.mjs [--require-current]\n" +
+      usage +
       "Without the flag, V2 evidence is validated at its recorded Git commit.\n" +
       "--require-current also requires current adapter artifacts and the complete Rust source/input set to match the recorded clean commit.\n" +
+      "--receipt-id limits strict-current validation to exactly one top-level receipt while every receipt still receives historical validation.\n" +
+      "--require-live additionally requires that selected V3 receipt to be live and fully approved.\n" +
       "Build the extension first when invoking this file directly.\n",
   );
   process.exit(0);
 }
-if (
-  cliArguments.length > 1 ||
-  (cliArguments.length === 1 && cliArguments[0] !== "--require-current")
-) {
+let requireCurrent = false;
+let requireLive = false;
+let selectedReceiptId;
+for (let index = 0; index < cliArguments.length; index += 1) {
+  const argument = cliArguments[index];
+  if (argument === "--require-current" && !requireCurrent) {
+    requireCurrent = true;
+    continue;
+  }
+  if (argument === "--receipt-id" && selectedReceiptId === undefined) {
+    const value = cliArguments[index + 1];
+    if (value === undefined || value.startsWith("--") || value.length === 0) {
+      process.stderr.write(`${usage}--receipt-id requires a value.\n`);
+      process.exit(2);
+    }
+    selectedReceiptId = value;
+    index += 1;
+    continue;
+  }
+  if (argument === "--require-live" && !requireLive) {
+    requireLive = true;
+    continue;
+  }
+  process.stderr.write(usage);
+  process.exit(2);
+}
+if (selectedReceiptId !== undefined && !requireCurrent) {
+  process.stderr.write(`${usage}--receipt-id requires --require-current.\n`);
+  process.exit(2);
+}
+if (requireLive && (!requireCurrent || selectedReceiptId === undefined)) {
   process.stderr.write(
-    "Usage: node scripts/check-capabilities.mjs [--require-current]\n",
+    `${usage}--require-live requires --require-current and --receipt-id.\n`,
   );
   process.exit(2);
 }
-const requireCurrent = cliArguments[0] === "--require-current";
 const validators = new Map();
-const files = (await readdir(capabilityRoot, { withFileTypes: true }))
-  .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-  .map((entry) => entry.name)
-  .sort();
+
+async function discoverJsonDocuments(directory, label) {
+  const names = (await readdir(directory, { withFileTypes: true }))
+    .filter((entry) => entry.name.endsWith(".json"))
+    .map((entry) => entry.name)
+    .sort();
+  for (const name of names) {
+    const metadata = await lstat(path.join(directory, name));
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      throw new Error(`${label} is not a regular file: ${name}`);
+    }
+  }
+  return names;
+}
+
+let files;
+let evidenceFiles;
+try {
+  [files, evidenceFiles] = await Promise.all([
+    discoverJsonDocuments(capabilityRoot, "Capability receipt"),
+    discoverJsonDocuments(evidenceRoot, "Capability evidence"),
+  ]);
+} catch (error) {
+  const detail = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`${detail}\n`);
+  process.exit(1);
+}
+const evidencePaths = new Set(
+  evidenceFiles.map((file) => `capabilities/evidence/${file}`),
+);
+const evidenceLinkCounts = new Map(
+  [...evidencePaths].map((evidencePath) => [evidencePath, 0]),
+);
 
 let failed = false;
 let anchoredV2 = 0;
 let unanchoredV1 = 0;
 let currentV2FullSource = 0;
 let currentV1Adapter = 0;
+let anchoredV3 = 0;
+let currentV3ProductCell = 0;
+let selectedReceiptMatches = 0;
+const receiptIds = new Set();
 if (files.length === 0) {
   failed = true;
   process.stderr.write("No capability receipts found.\n");
@@ -58,6 +129,13 @@ function resolveRepositoryPath(relativePath, label) {
     throw new Error(`${label}: path escapes the repository: ${relativePath}`);
   }
   return resolved;
+}
+
+function markEvidenceLink(file, evidencePath) {
+  if (!evidencePaths.has(evidencePath)) {
+    throw new Error(`${file}: linked raw evidence is not a validated evidence file`);
+  }
+  evidenceLinkCounts.set(evidencePath, evidenceLinkCounts.get(evidencePath) + 1);
 }
 
 function validateDeclaredPaths(file, value) {
@@ -256,7 +334,7 @@ async function validateCurrentLinks(file, value, liveRun) {
   ]);
 
   const extensionManifest = JSON.parse(await readFile(adapterManifest, "utf8"));
-  assertExactChromiumManifest(extensionManifest);
+  assertHistoricalV2ChromiumManifest(extensionManifest);
 
   // Check the complete native source/build/test input set before generated
   // adapter artifacts. The validator is fail-fast per receipt, so this order
@@ -312,7 +390,7 @@ async function validateCurrentLinks(file, value, liveRun) {
         throw new Error(`${file}: generated artifact differs: ${artifact.path}`);
       }
       if (artifact.path === path.posix.join(artifactDirectory, "manifest.json")) {
-        assertExactChromiumManifest(JSON.parse(bytes.toString("utf8")));
+        assertHistoricalV2ChromiumManifest(JSON.parse(bytes.toString("utf8")));
       }
     }),
   );
@@ -417,6 +495,7 @@ async function validateHistoricalV2(file, value) {
       `${file}: live-run id does not match its evidence path: ${liveRuns[0].path}`,
     );
   }
+  markEvidenceLink(file, liveRuns[0].path);
   await validateLiveReceiptLink(file, value, liveRun);
 
   const commit = value.evidence.repository.base_commit;
@@ -445,7 +524,7 @@ async function validateHistoricalV2(file, value) {
   ]);
   const extensionManifest = JSON.parse(extensionManifestBytes.toString("utf8"));
   const nativeManifest = JSON.parse(nativeManifestBytes.toString("utf8"));
-  assertExactChromiumManifest(extensionManifest);
+  assertHistoricalV2ChromiumManifest(extensionManifest);
   validateLiveBoundary(file, value, extensionManifest, nativeManifest);
   const manifestArtifacts = value.artifacts.filter(
     (artifact) => path.posix.basename(artifact.path) === "manifest.json",
@@ -499,7 +578,11 @@ async function validateHashedArtifacts(file, artifacts, label) {
     }
     if (artifact.path.endsWith(".json")) {
       const value = JSON.parse(bytes.toString("utf8"));
-      const validate = await validatorForDocument(artifactPath, artifact.path, value);
+      const validate = await legacyValidatorForDocument(
+        artifactPath,
+        artifact.path,
+        value,
+      );
       if (!validate(value)) {
         throw new Error(
           `${artifact.path}: ${JSON.stringify(validate.errors, null, 2)}`,
@@ -748,7 +831,89 @@ function validateLiveRunSemantics(file, value) {
   }
 }
 
-async function validatorForDocument(documentPath, file, value) {
+async function validateHistoricalV3(file, receipt) {
+  await requireRecordedCommit(file, receipt.repository.commit);
+
+  async function validateRecordedArtifact(artifact, owner) {
+    if (artifact.repository_path === undefined) return;
+    resolveRepositoryPath(artifact.repository_path, `${owner} V3 artifact`);
+    const bytes = await readRecordedBlob(
+      receipt.repository.commit,
+      artifact.repository_path,
+      `${owner} recorded V3 artifact ${artifact.id}`,
+    );
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (bytes.byteLength !== artifact.bytes || digest !== artifact.sha256) {
+      throw new Error(`${owner}: recorded V3 artifact differs: ${artifact.id}`);
+    }
+  }
+
+  const linkedRuns = new Map();
+  for (const link of receipt.linked_evidence) {
+    markEvidenceLink(file, link.path);
+    const linkedPath = resolveRepositoryPath(link.path, `${file} V3 evidence`);
+    const bytes = await readFile(linkedPath);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (bytes.byteLength !== link.bytes || digest !== link.sha256) {
+      throw new Error(`${file}: V3 evidence artifact differs: ${link.path}`);
+    }
+    const run = JSON.parse(bytes.toString("utf8"));
+    const kind = await validateV3Document(link.path, run);
+    if (kind !== V3_DOCUMENT_KIND.run) {
+      throw new Error(`${link.path}: linked V3 evidence is not a V3 run`);
+    }
+    await Promise.all(
+      run.artifacts.map((artifact) => validateRecordedArtifact(artifact, link.path)),
+    );
+    linkedRuns.set(link.kind, run);
+  }
+
+  assertV3LinkedProductCell(file, receipt, linkedRuns);
+  for (const artifact of receipt.artifacts) {
+    await validateRecordedArtifact(artifact, file);
+  }
+
+  return linkedRuns;
+}
+
+async function validateCurrentV3(file, receipt) {
+  const status = await runGit(
+    ["status", "--porcelain=v1", "--untracked-files=all"],
+    `${file} current worktree`,
+  );
+  if (status.length !== 0) {
+    throw new Error(`${file}: strict-current V3 validation requires a clean worktree`);
+  }
+  await runGit(
+    ["merge-base", "--is-ancestor", receipt.repository.commit, "HEAD"],
+    `${file} implementation commit ancestry`,
+  );
+  const changes = await runGit(
+    ["diff", "--name-status", `${receipt.repository.commit}..HEAD`],
+    `${file} post-implementation evidence diff`,
+  );
+  assertV3PostImplementationChanges(file, changes);
+  for (const artifact of receipt.artifacts) {
+    const relativePath = artifact.repository_path ??
+      (artifact.locator.startsWith("repo:") ? artifact.locator.slice(5) : undefined);
+    if (relativePath === undefined) continue;
+    const artifactPath = resolveRepositoryPath(
+      relativePath,
+      `${file} current V3 artifact`,
+    );
+    const metadata = await lstat(artifactPath);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      throw new Error(`${file}: current V3 artifact is not a regular file: ${artifact.id}`);
+    }
+    const bytes = await readFile(artifactPath);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (bytes.byteLength !== artifact.bytes || digest !== artifact.sha256) {
+      throw new Error(`${file}: current V3 artifact differs: ${artifact.id}`);
+    }
+  }
+}
+
+async function legacyValidatorForDocument(documentPath, file, value) {
   if (typeof value.$schema !== "string") {
     throw new Error(`${file}: missing $schema`);
   }
@@ -771,41 +936,159 @@ async function validatorForDocument(documentPath, file, value) {
   return validate;
 }
 
+async function validateSchemaContracts() {
+  const versionDirectories = (await readdir(capabilityRoot, {
+    withFileTypes: true,
+  }))
+    .filter((entry) => entry.isDirectory() && /^v[0-9]+$/u.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+  for (const versionDirectory of versionDirectories) {
+    const directory = path.join(capabilityRoot, versionDirectory);
+    const schemaFiles = (await readdir(directory, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => entry.name)
+      .sort();
+    for (const schemaFile of schemaFiles) {
+      const schemaPath = path.join(directory, schemaFile);
+      const schema = JSON.parse(await readFile(schemaPath, "utf8"));
+      new Ajv2020({ allErrors: true, strict: true }).compile(schema);
+    }
+  }
+}
+
+try {
+  await validateSchemaContracts();
+} catch (error) {
+  failed = true;
+  const detail = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`Capability schema contract is invalid: ${detail}\n`);
+}
+
+const rawEvidenceIds = new Set();
+
+const legacyReceiptSchemaByVersion = new Map([
+  [1, "./v1/schema.json"],
+  [2, "./v2/schema.json"],
+]);
+const legacyEvidenceSchemaByVersion = new Map([
+  [1, "../v2/live-run.schema.json"],
+]);
+
+function requireVersionedSchemaIdentity(file, value, schemaByVersion) {
+  if (!Number.isSafeInteger(value.record_version)) {
+    throw new Error(`${file}: record_version must be a safe integer`);
+  }
+  const expected = schemaByVersion.get(value.record_version);
+  if (expected === undefined || value.$schema !== expected) {
+    throw new Error(
+      `${file}: schema identity differs for record_version ${value.record_version}`,
+    );
+  }
+}
+
+for (const file of evidenceFiles) {
+  const relativePath = `capabilities/evidence/${file}`;
+  const documentPath = path.join(evidenceRoot, file);
+  try {
+    const value = JSON.parse(await readFile(documentPath, "utf8"));
+    const v3Kind = await validateV3Document(relativePath, value);
+    if (v3Kind === null) {
+      requireVersionedSchemaIdentity(
+        relativePath,
+        value,
+        legacyEvidenceSchemaByVersion,
+      );
+      const validate = await legacyValidatorForDocument(
+        documentPath,
+        relativePath,
+        value,
+      );
+      if (!validate(value)) {
+        throw new Error(
+          `${relativePath}: ${JSON.stringify(validate.errors, null, 2)}`,
+        );
+      }
+    }
+    if (rawEvidenceIds.has(value.id)) {
+      throw new Error(`${relativePath}: duplicate raw evidence id: ${value.id}`);
+    }
+    rawEvidenceIds.add(value.id);
+    if (file !== `${value.id}.json`) {
+      throw new Error(`${relativePath}: raw evidence filename differs from id`);
+    }
+    if (v3Kind === null) validateLiveRunSemantics(relativePath, value);
+  } catch (error) {
+    failed = true;
+    const detail = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${detail}\n`);
+  }
+}
+
 for (const file of files) {
+  const relativePath = `capabilities/${file}`;
   const documentPath = path.join(capabilityRoot, file);
   const value = JSON.parse(await readFile(documentPath, "utf8"));
-  let validate;
+  let v3Kind;
   try {
-    validate = await validatorForDocument(documentPath, file, value);
+    v3Kind = await validateV3Document(relativePath, value);
+    if (v3Kind === null) {
+      requireVersionedSchemaIdentity(file, value, legacyReceiptSchemaByVersion);
+      const validate = await legacyValidatorForDocument(documentPath, file, value);
+      if (!validate(value)) {
+        throw new Error(`${file}: ${JSON.stringify(validate.errors, null, 2)}`);
+      }
+    }
   } catch (error) {
     failed = true;
     const detail = error instanceof Error ? error.message : String(error);
     process.stderr.write(`${detail}\n`);
     continue;
   }
-  if (!validate(value)) {
-    failed = true;
-    process.stderr.write(
-      `${file}: ${JSON.stringify(validate.errors, null, 2)}\n`,
-    );
-    continue;
-  }
   try {
-    validateDeclaredPaths(file, value);
+    if (receiptIds.has(value.id)) {
+      throw new Error(`${file}: duplicate top-level receipt id: ${value.id}`);
+    }
+    receiptIds.add(value.id);
+    if (v3Kind === null) validateDeclaredPaths(file, value);
     let liveRun;
-    if (value.record_version >= 2) {
+    if (v3Kind === V3_DOCUMENT_KIND.productCell) {
+      await validateHistoricalV3(file, value);
+    } else if (value.record_version >= 2) {
       liveRun = await validateHistoricalV2(file, value);
     }
-    if (requireCurrent) {
-      await validateCurrentLinks(file, value, liveRun);
+    const validateCurrent =
+      requireCurrent &&
+      (selectedReceiptId === undefined || value.id === selectedReceiptId);
+    if (value.id === selectedReceiptId) {
+      selectedReceiptMatches += 1;
+      if (
+        requireLive &&
+        (v3Kind !== V3_DOCUMENT_KIND.productCell || value.status !== "live")
+      ) {
+        throw new Error(
+          `${file}: selected release receipt is not a live V3 product cell`,
+        );
+      }
     }
-    if (value.record_version >= 2) {
+    if (validateCurrent) {
+      if (v3Kind === V3_DOCUMENT_KIND.productCell) {
+        await validateCurrentV3(file, value);
+      } else {
+        await validateCurrentLinks(file, value, liveRun);
+      }
+    }
+    if (v3Kind === V3_DOCUMENT_KIND.productCell) {
+      anchoredV3 += 1;
+    } else if (value.record_version >= 2) {
       anchoredV2 += 1;
     } else {
       unanchoredV1 += 1;
     }
-    if (requireCurrent) {
-      if (value.record_version >= 2) {
+    if (validateCurrent) {
+      if (v3Kind === V3_DOCUMENT_KIND.productCell) {
+        currentV3ProductCell += 1;
+      } else if (value.record_version >= 2) {
         currentV2FullSource += 1;
       } else {
         currentV1Adapter += 1;
@@ -818,16 +1101,35 @@ for (const file of files) {
   }
 }
 
+for (const [evidencePath, linkCount] of evidenceLinkCounts) {
+  if (linkCount !== 1) {
+    failed = true;
+    process.stderr.write(
+      `${evidencePath}: raw evidence must be linked exactly once; found ${linkCount}\n`,
+    );
+  }
+}
+
+if (selectedReceiptId !== undefined && selectedReceiptMatches !== 1) {
+  failed = true;
+  process.stderr.write(
+    `Strict-current receipt selector matched ${selectedReceiptMatches} records: ${selectedReceiptId}\n`,
+  );
+}
+
 if (failed) {
   process.exitCode = 1;
 } else {
   const mode = requireCurrent ? "strict-current" : "historical";
   const currentStatus = requireCurrent
-    ? `v2_full_source_current=${currentV2FullSource}, v1_adapter_current=${currentV1Adapter}`
+    ? `selected=${selectedReceiptId ?? "all"}, ` +
+      `v3_product_cell_current=${currentV3ProductCell}, ` +
+      `v2_full_source_current=${currentV2FullSource}, v1_adapter_current=${currentV1Adapter}`
     : "current_links=not-checked";
   process.stdout.write(
-    `Validated ${files.length} capability receipt(s) ` +
-      `(mode=${mode}, v2_recorded_commit=${anchoredV2}, ` +
+    `Validated ${files.length} capability receipt(s) and ${evidenceFiles.length} raw evidence file(s) ` +
+      `(mode=${mode}, v3_product_cell=${anchoredV3}, ` +
+      `v2_recorded_commit=${anchoredV2}, ` +
       `v1_unanchored=${unanchoredV1}, ${currentStatus}).\n`,
   );
   if (!requireCurrent) {

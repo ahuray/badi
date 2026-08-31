@@ -17,11 +17,13 @@ The design has four separate steps:
 4. enable inference only after Badi's quality and latency gates pass.
 
 The first three exist in the default build. An off-by-default
-`local-model-eval` feature contains artifact verification, a versioned receipt
-contract, deterministic quality thresholds, and a bounded loopback evaluation
-client. It is deliberately excluded from production broker wiring and the
-default binary dependency graph. Model advice therefore reports
-`runtime_ready: false`.
+`local-model-eval` feature contains the pinned-candidate verifier, one bounded
+native-prefix client, an owned llama.cpp child lifecycle, and the dedicated
+development evaluator. It is excluded from the default binary dependency graph,
+and the normal broker has no model-activation flag or semantic provider wiring.
+The feature-gated production seam requires an opaque qualification value for
+which there is deliberately no public constructor. Model advice therefore
+reports `runtime_ready: false`.
 
 ## Commands
 
@@ -40,6 +42,17 @@ installer, or package script consume the same result without duplicating
 selection policy. Model advice v2 supersedes the original candidate-only v1
 shape: `tier`, `recommended`, `fit`, and `download` are nullable when
 `status: "no_fit"`.
+
+Development-only semantic checks require the explicit feature and evaluator
+binary:
+
+```sh
+cargo run -p badi-broker --features local-model-eval --bin badi-evaluator -- fixture-self-test
+cargo run -p badi-broker --features local-model-eval --bin badi-evaluator -- pinned-development MODEL.gguf LLAMA_SERVER RELEASE_ARCHIVE.tar.gz
+```
+
+Both commands emit evaluation evidence to stdout. They neither download a
+model nor expose one through the normal broker.
 
 ## Observed hardware
 
@@ -95,23 +108,24 @@ or download plan and always reports `runtime_ready: false`.
 
 ## Candidate catalog
 
-The initial catalog deliberately contains only six official Qwen GGUF artifacts
-under Apache-2.0. Every entry pins the Hugging Face repository commit, exact
-filename, byte count, and SHA-256 digest.
+The initial catalog deliberately contains only six Qwen-family GGUF artifacts
+distributed under Apache-2.0. Every entry pins the Hugging Face repository
+commit, exact filename, byte count, and SHA-256 digest.
 
 | Use case | Tier | Candidate | Quantization | Download |
 | --- | --- | --- | --- | ---: |
 | Writing | Compact | `Qwen/Qwen3-0.6B-GGUF` | Q8_0 | 639 MB |
-| Writing | Balanced | `Qwen/Qwen3-1.7B-GGUF` | Q8_0 | 1.83 GB |
+| Writing | Balanced | `ggml-org/Qwen3-1.7B-GGUF` | Q4_K_M | 1.28 GB |
 | Writing | Quality | `Qwen/Qwen3-4B-GGUF` | Q4_K_M | 2.50 GB |
 | Code | Compact | `Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF` | Q4_K_M | 491 MB |
 | Code | Balanced | `Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF` | Q4_K_M | 1.12 GB |
 | Code | Quality | `Qwen/Qwen2.5-Coder-7B-Instruct-GGUF` | Q4_K_M | 4.68 GB |
 
-The official model cards describe Qwen3's small dense models and GGUF/llama.cpp
-usage for [0.6B](https://huggingface.co/Qwen/Qwen3-0.6B-GGUF),
-[1.7B](https://huggingface.co/Qwen/Qwen3-1.7B-GGUF), and
-[4B](https://huggingface.co/Qwen/Qwen3-4B-GGUF). The
+Qwen's model cards describe the 0.6B and 4B GGUF/llama.cpp artifacts at
+[0.6B](https://huggingface.co/Qwen/Qwen3-0.6B-GGUF) and
+[4B](https://huggingface.co/Qwen/Qwen3-4B-GGUF). The balanced
+[1.7B artifact](https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF) is a
+`ggml-org` conversion whose card identifies the Qwen base model. The
 [Qwen2.5-Coder base model](https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B)
 explicitly supports fill-in-the-middle tasks; the instruct GGUF artifacts are
 initial code candidates, not a claim that they have passed Badi's completion
@@ -123,9 +137,9 @@ Keeping the catalog static makes changes reviewable. Discovery feeds and model
 popularity never alter a user's recommendation at runtime.
 
 Every candidate records `llama.cpp` b5092 as Badi's minimum reviewed backend
-baseline. Badi's Qwen3 prompt contract uses the Qwen3 chat template with
-thinking disabled; the coder contract uses the Qwen2.5 Coder instruct chat
-template.
+baseline. Badi's writing contract uses llama.cpp native prefix completion over
+bounded before-caret text; it does not pay for or rely on a chat template. The
+coder contract uses the Qwen2.5 Coder instruct chat template.
 Those prompt declarations are compatibility constraints, not evidence that an
 instruct GGUF performs fill-in-the-middle completion well. The JSON repeats the
 unvalidated prompt, context-size, latency, memory, and quality caveats on each
@@ -169,27 +183,74 @@ named hardware profile:
   lane after interruption cost; this is an absolute difference, not a bounded
   rate, and a tie cannot pass.
 
-The evaluation-only receipt code derives readiness from those versioned
-thresholds and binds the declared artifact, backend, prompt/sampling contract,
-launch configuration hash, evaluator hash, corpus hash, hardware profile, and
-aggregate metrics. That is a gate scaffold, not current runtime evidence. The
-repository does not yet contain the declared launch-manifest producer, corpus,
-evaluator implementation, or raw evaluation run.
+The feature-gated evaluator implements only the smaller semantic foundation
+needed before those product gates can be scored. It emits a
+`badi.semantic-evaluation-bundle.v1` containing a content-free raw run and an
+aggregate receipt derived from that run. The receipt binds the raw-run hash,
+model and backend provenance, prompt/sampling contract, launch identity,
+evaluator/corpus identity, aggregate metrics, and stable semantic check IDs.
+Its authority is always `evaluation_only` and `production_ready` is always
+false. The older `badi.model-runtime-receipt.v1` schema remains readable as
+legacy evaluation metadata, but `runtime_ready`, even when true, is not a
+production activation credential.
+
+The current pinned development candidate is the balanced writing artifact,
+`Qwen3-1.7B-Q4_K_M.gguf`, at the exact quantizer repository revision recorded
+in the catalog. The quantizer model card names `Qwen/Qwen3-1.7B` as the source
+but does not disclose the source revision; the evaluator records that revision
+as unreported rather than inferring it. Tokenizer provenance is recorded as
+embedded in the exact GGUF artifact. The b10726 llama.cpp release archive and
+executed loader are both size- and SHA-256-verified. A pinned, deterministic
+exact-directory manifest additionally commits to every sibling regular file's
+name, size, and SHA-256 plus each safe same-directory symbolic-link target; it
+rejects extra, missing, nested, special, or escaping entries. The evaluator
+rechecks that manifest immediately before and after spawn and records its digest
+in the runtime and backend identities. System DSOs resolved outside the release
+directory remain explicit platform dependencies rather than reviewed bundle
+members.
+
+The reviewed archive SHA-256 is
+`d3c4e406b2911c8c75d2d0858459645960f8f592c1ab372d565cf145b870c901`;
+its canonical directory-manifest SHA-256 is
+`d1dad3f66d4064b1c2a6d9dc7c824d3d50d2639f3b1d3dd22c7f4355edb99cba`.
+The archive contains 60 bundle entries (50 regular files and 10 symbolic
+links), and its tar-stream name, size, file-hash, and link-target records match
+the installed directory records exactly.
+
+The evaluator owns the runtime it measures. It starts a private IPv4 loopback
+child in a new process group with a fresh bearer credential, requires a correct
+authenticated `/tokenize` challenge and rejection of a wrong credential, and
+terminates and reaps the child. The reviewed b10726 launch contract is CPU-only
+and fixes:
+
+- `LLAMA_ARG_CTX_SIZE=512`;
+- `LLAMA_ARG_N_PARALLEL=1`;
+- `LLAMA_ARG_THREADS=18` and `LLAMA_ARG_THREADS_BATCH=18`;
+- `LLAMA_ARG_N_GPU_LAYERS=0`;
+- `LLAMA_ARG_UI=0`; and
+- `LLAMA_ARG_OFFLINE=1` and `LLAMA_ARG_CACHE_PROMPT=0`.
+
+Writing requests use llama.cpp `/completion`, the raw bounded before-caret
+prefix, an eight-token greedy contract, and period/newline stops. The English
+scope gate runs before request serialization. The response stream is drained
+normally for latency measurement; length-truncated output is rejected, and
+script, word-count, and scalar-count checks fail closed before a suggestion is
+returned. Cancellation is a separate lifecycle observation rather than a
+shortcut in latency samples.
 
 The production Chromium adapter owns the 140 ms user-idle debounce before
 context dispatch. The broker's production default adds no second debounce;
 nonzero broker debounce remains a test/configuration seam and still counts
 against the same absolute generation deadline.
 
-Plain loopback HTTP also cannot authenticate which local process owns the port,
-prove which artifact that process loaded, or close the verify-to-use race on a
-replaceable model path. Until Badi owns and supervises the runtime boundary and
-attests the loaded artifact, `LlamaCppProvider` remains available only when
-explicitly compiling evaluation tooling:
-
-```sh
-cargo test -p badi-broker --features local-model-eval local_model
-```
+`broker/src/local_model.rs` is now only the disabled production activation
+boundary; it contains no second llama.cpp integration. It accepts the same
+pinned semantic runtime only after an opaque `QualifiedSemanticActivation`,
+re-verifies the pinned bytes before and after launch, and returns the owned
+runtime as the existing `CompletionProvider`. No current evaluator receipt can
+construct that value. A frozen product corpus, end-to-end adapter measurements,
+and an immutable passing scored run still have to earn a future constructor;
+the development fixture and pinned-candidate commands cannot qualify a model.
 
 If no candidate passes, Badi keeps the deterministic provider. Silence is a
 better fallback than a late or mediocre model.

@@ -1,0 +1,20 @@
+{
+  "schema": "badi.omarchy-plugin-compatibility.v1",
+  "artifact": "io.github.ahuray.badi@0.1.0",
+  "status": "disabled_repo_local_feasibility",
+  "omarchy": {
+    "package": "4.0.2-1",
+    "source_repository": "https://github.com/omacom/omarchy.git",
+    "source_tag": "v4.0.2",
+    "source_commit": "346e69e1cec6c4e8924531874af6ba010a1bc99e",
+    "contract_files": {
+      "shell/shell.qml": "sha256:9f1db77dcc3c111ceccc860ac472d19b35d385958a63d270ea51e413ab86f1f0",
+      "shell/services/PluginRegistry.qml": "sha256:63371e4224f948e5444531282ad9f7c74ca2e578470b549f4c6b898c3a15c50f",
+      "shell/Ui/qmldir": "sha256:d6b4ac284aea719458cfdcf66afc18c63b69c20a400317ad307d029865a96886",
+      "shell/Commons/qmldir": "sha256:5593fa25d33b1e2d3ed8628ca2e0dce5074497608f2bad6652689e390727e5e8",
+      "bin/omarchy-plugin-validate": "sha256:f7507e5042eb970e3dc918bdf6bf251c7557443892a77e71a17d7019ddde72c8"
+    }
+  },
+  "quickshell": "0.3.1-1",
+  "qt6_declarative": "6.11.2-1"
+}

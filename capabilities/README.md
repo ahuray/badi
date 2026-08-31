@@ -17,6 +17,14 @@ support claims.
   or suggestion text.
 - `v1/schema.json`, `v2/schema.json`, and `v2/live-run.schema.json` define the
   corresponding machine-readable contracts.
+- `v2/manifest-policy.mjs` is the frozen validator for the historical M2A
+  manifest. Product permission changes cannot reinterpret that evidence.
+- `v3/run.schema.json` and `v3/product-cell.schema.json` define the future
+  exact product-showing cell. No V3 receipt exists until semantic, headed
+  Chromium, and headed Omarchy runs all pass on one clean implementation SHA.
+- `v3/validator.mjs` fixes V3 location/version/schema classification and
+  semantic dispatch; `v3/policy.mjs` defines the corresponding product-proof
+  semantics.
 
 ## Validation modes
 
@@ -51,11 +59,37 @@ historical source provenance or current artifact linkage; the checker reports
 it as `v1_unanchored`.
 
 When a review specifically requires the current linked files and generated
-extension to match a receipt, use the strict gate:
+extension to match one receipt, use the strict gate with an explicit selector:
 
 ```sh
-npm run capabilities:check:current
+npm run capabilities:check:current -- --receipt-id chromium-native-live.v2
 ```
+
+Without a selector, strict mode retains its legacy all-receipt behavior. New V3
+evidence always uses `--receipt-id`: ordinary validation still checks every
+committed receipt historically, while strict-current applies to exactly one
+selected top-level product cell and recursively validates its links.
+
+Raw evidence is never ignored merely because no receipt references it. Every
+JSON file under `capabilities/evidence/` must validate and be linked exactly
+once; experiments remain outside that immutable directory. A V3 receipt names
+the clean implementation commit, and strict-current permits only newly added
+V3 receipt/raw-run files after it. Any source change, evidence rewrite, rename,
+or non-regular capability document or repository artifact fails closed.
+
+For a product-showing or release decision, candidate status is insufficient:
+
+```sh
+npm run capabilities:check:release -- <v3-receipt-id>
+```
+
+That mode requires a selected `live` receipt, a pre-run owner approval record,
+post-run owner/Omarchy/GrillMe role approval records, exact
+run/artifact/compatibility bindings, and completed rollback evidence. Every
+approval and raw run repeats the receipt's canonical digest over the immutable
+V3 policy and exact corpus, prompt, evaluator, and sampling identities/artifacts.
+The checker verifies that digest and recorded chronology; human identity and
+review authority remain an out-of-band governance decision.
 
 The npm script rebuilds the extension before invoking strict mode. Strict mode
 first performs the V2 historical checks, then requires the current manifest
@@ -79,7 +113,18 @@ broker Rust source/test, or Cargo build input should make strict mode fail. That
 is expected drift, not permission to rewrite an old receipt or rerun durable
 evidence in place.
 
+`npm run capabilities:immutability` independently rejects modification,
+deletion, rename, or type-change of an already-committed top-level receipt, raw
+evidence file, versioned schema, or versioned policy relative to the event's PR
+base or pre-push commit. The versioned V3 validator is protected by the same
+gate. Local runs default to `HEAD^`; pass `--base REF` for a wider comparison.
+New evidence uses a new ID and file; a contract change uses a new
+schema/policy/validator version.
+
 Hashes make drift visible; they are not code signatures or remote attestation.
+Likewise, schemas constrain the shape of content-free claims but do not
+content-scan arbitrary human-readable detail fields; evidence producers and
+reviewers remain responsible for excluding document and suggestion text.
 The raw report also distinguishes `real-rust-chain` evidence from the narrowly
 scoped `live-browser-fault-host` used to inject canceled late responses.
 

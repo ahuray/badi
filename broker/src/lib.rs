@@ -15,6 +15,8 @@ pub mod policy;
 pub mod protocol;
 pub mod provider;
 pub mod segment;
+#[cfg(feature = "local-model-eval")]
+pub mod semantic;
 pub mod server;
 pub mod settings;
 

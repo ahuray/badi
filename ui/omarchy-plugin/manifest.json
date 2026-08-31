@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.ahuray.badi",
+  "name": "Badi controls",
+  "version": "0.1.0",
+  "author": "Badi contributors",
+  "description": "Privacy and runtime controls for the local Badi broker",
+  "kinds": [
+    "panel"
+  ],
+  "entryPoints": {
+    "panel": "Panel.qml"
+  }
+}

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:badi:schema:model-runtime-receipt:v1",
   "title": "Badi local-model runtime receipt v1",
-  "$comment": "A receipt records aggregate evaluation evidence only. It must not contain prompts, user context, generated text, or per-case content. runtime_ready means the recorded configuration passed this schema's evaluation gate; it does not attest loopback process ownership, prove which artifact a live server loaded, or activate production inference.",
+  "$comment": "Legacy V1 evaluation metadata retained for backward compatibility. It must not contain prompts, user context, generated text, or per-case content. runtime_ready, including true, only means the recorded configuration passed this legacy schema's evaluation gate; it cannot construct QualifiedSemanticActivation, is not accepted by the current production activation boundary, and cannot authorize production inference.",
   "type": "object",
   "additionalProperties": false,
   "required": [

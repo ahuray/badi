@@ -138,9 +138,9 @@ pub struct ModelAdvice {
     pub runtime_ready: bool,
 }
 
-const WRITING_PROMPT_FORMAT: &str = "qwen3_chat_template_with_thinking_disabled";
+const WRITING_PROMPT_FORMAT: &str = "llama_cpp_native_prefix_completion_v1";
 const WRITING_RUNTIME_CAVEAT: &str =
-    "Chat-template behavior, context size, latency, and inline quality are not validated by Badi.";
+    "Native-prefix context bounds, latency, and inline quality are not validated by Badi.";
 const CODE_PROMPT_FORMAT: &str = "qwen2_5_coder_instruct_chat_template";
 const CODE_RUNTIME_CAVEAT: &str = "An instruct GGUF is not proof of fill-in-the-middle quality; latency and inline quality are not validated by Badi.";
 
@@ -163,12 +163,12 @@ const WRITING_MODELS: [ModelArtifact; 3] = [
     ModelArtifact {
         use_case: ModelUseCase::Writing,
         tier: ModelTier::Balanced,
-        repository: "Qwen/Qwen3-1.7B-GGUF",
-        revision: "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
-        filename: "Qwen3-1.7B-Q8_0.gguf",
-        sha256: "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
-        download_bytes: 1_834_426_016,
-        quantization: "Q8_0",
+        repository: "ggml-org/Qwen3-1.7B-GGUF",
+        revision: "daeb8e2d528a760970442092f6bf1e55c3b659eb",
+        filename: "Qwen3-1.7B-Q4_K_M.gguf",
+        sha256: "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5",
+        download_bytes: 1_282_439_264,
+        quantization: "Q4_K_M",
         license: "Apache-2.0",
         runtime: "llama.cpp",
         minimum_runtime_version: LLAMA_CPP_MINIMUM_VERSION,
@@ -800,7 +800,7 @@ mod tests {
 
     #[test]
     fn artifact_bytes_can_downgrade_one_use_case_before_another() {
-        let hardware = profile(8_192, 4_500, 8);
+        let hardware = profile(8_192, 4_300, 8);
         assert_eq!(
             recommend_model(hardware.clone(), ModelUseCase::Writing).tier,
             Some(ModelTier::Compact)
@@ -966,6 +966,21 @@ mod tests {
             assert!(!model.prompt_format.is_empty());
             assert!(model.runtime_caveat.contains("not validated by Badi"));
         }
+    }
+
+    #[test]
+    fn balanced_writing_candidate_matches_the_qualified_artifact() {
+        let model = WRITING_MODELS[1];
+        assert_eq!(model.tier, ModelTier::Balanced);
+        assert_eq!(model.repository, "ggml-org/Qwen3-1.7B-GGUF");
+        assert_eq!(model.revision, "daeb8e2d528a760970442092f6bf1e55c3b659eb");
+        assert_eq!(model.filename, "Qwen3-1.7B-Q4_K_M.gguf");
+        assert_eq!(model.download_bytes, 1_282_439_264);
+        assert_eq!(model.prompt_format, "llama_cpp_native_prefix_completion_v1");
+        assert_eq!(
+            model.sha256,
+            "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5"
+        );
     }
 
     struct FixedNvidiaProbe(Option<u64>);

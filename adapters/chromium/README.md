@@ -11,11 +11,17 @@ From the repository root:
 npm run typecheck
 npm test
 npm run build
+npm run build:product --workspace @badi/chromium
 npm run build:verify --workspace @badi/chromium
 ```
 
-The unpacked artifact is generated at `adapters/chromium/dist/`. Its
-`BUILD_MANIFEST.json` contains stable SHA-256 hashes and no timestamp.
+The two unpacked artifacts are intentionally separate:
+
+- `adapters/chromium/dist/` is the historical localhost fixture build.
+- `adapters/chromium/dist-product/` is the opt-in Dillinger product slice.
+
+Each `BUILD_MANIFEST.json` contains stable SHA-256 hashes and no timestamp.
+Both directories are generated and ignored by Git.
 
 For a controlled page, run:
 
@@ -26,7 +32,83 @@ npm run fixture --workspace @badi/chromium
 Then open `http://localhost:4173/chromium.html`. Loading the unpacked extension
 into a browser remains a deliberate, manual action.
 
-## Controlled capability boundary
+## Exact Dillinger product slice
+
+The product manifest requests only `nativeMessaging` and `scripting` up front.
+It declares one optional Chrome host match,
+`https://dillinger.io:443/*`; the shipped runtime, content registration, MAIN-
+world bridge, and sender checks still accept only the exact top-level document
+`https://dillinger.io/` with no path, query, fragment, subframe, incognito tab,
+background tab, stale `documentId`, hidden document, or unfocused window.
+Chrome's permission UI grants the declared host match, which is necessarily
+broader than that exact runtime URL gate.
+
+After the user approves the optional host prompt, the worker registers one
+non-persistent isolated content script. The worker alone invokes the frozen
+Dillinger Monaco bridge in the MAIN world. The bridge requires one focused
+Markdown editor/model, a collapsed visible caret, an exact model URI/version/
+length/context snapshot, and a current visible/focused document. Acceptance is
+one one-shot broker-authorized Monaco transaction. Revocation, pause, route
+retirement, a new request, expiry, or worker loss invalidates its service-worker
+commit epoch before the synchronous `chrome.scripting.executeScript` boundary.
+The preview is suggestion text only—no card or shortcut hint—and is a fixed,
+caret-relative overlay with viewport and five-point stacking checks. It is not
+a Monaco inline decoration, so this slice does not close the product-showing/M4
+gate.
+
+The default acceptance command is `Ctrl+Shift+Y`. Chromium can leave a command
+unassigned when there is a collision; users can inspect or remap it at
+`chrome://extensions/shortcuts`. On the tested Omarchy device there was no exact
+`Ctrl+Shift+Y` compositor binding, and an unextended Dillinger editor preserved
+value, caret, focus, and scroll for that key.
+
+### Disposable real-device commands
+
+This focused, non-release probe loads the product worker/popup/bundles in an
+isolated profile and compiles the exact repository MAIN-world/view source for a
+real `https://dillinger.io/` Monaco insertion, undo, redo, viewport, occlusion,
+focus, caret, scroll, restoration, and cleanup check. It deliberately does not
+grant host access or exercise native messaging/content routing:
+
+```sh
+npm run live:product:probe --workspace @badi/chromium -- \
+  --chromium-executable /usr/bin/chromium
+```
+
+For the full disposable chain, including a generated native-host manifest,
+private broker socket, exact HTTPS policy, optional-permission click, dynamic
+registration, `phrase_v1`, command acceptance, revoke, undo/redo, and verified
+process/profile cleanup:
+
+```sh
+npm run live:product --workspace @badi/chromium -- \
+  --chromium-executable /usr/bin/chromium
+```
+
+Approve Chromium's exact Dillinger prompt when the runner asks, then click the
+Dillinger editor when it asks for focus. The automated mode types the fixed
+English case `thank you`, waits for the ` for your time` preview, presses
+`Ctrl+Shift+Y`, and checks the transaction. To use the disposable product by
+hand instead, add `--interactive`; type `thank you` yourself, accept it, then
+return to the terminal and press Enter. `Ctrl-C` also closes the browser,
+broker, native host, socket, manifest tree, and disposable profile.
+
+The headed end-to-end runner remains a manual proof boundary: browser-native
+permission confirmation and OS window focus cannot be truthfully synthesized
+by Playwright. In the current Codex-controlled Hyprland session, the exact host
+grant and registration succeeded, but Ghostty retained compositor focus, so the
+strict product gate stopped before the broker-to-insertion chain. The focused
+probe above passed on real Chromium, but it is not a substitute for completing
+that headed gesture. Neither command writes a capability receipt or establishes
+release readiness.
+
+This slice does not claim generic Monaco support, arbitrary Dillinger URLs,
+multiple editors/models, non-English language inference, browser-store
+packaging, other sites/apps, or production compatibility. Its English `en`
+request language is a frozen product-cell contract, not an inference from
+Monaco's `markdown` model id.
+
+## Localhost fixture capability boundary
 
 The content controller starts only in the top frame of the exact controlled URL
 `http://localhost:4173/chromium.html`. The service worker independently verifies

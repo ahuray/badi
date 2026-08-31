@@ -209,7 +209,7 @@ Later changes should return to smaller boundary-scoped commits.
   README points to both the immutable baseline audit and this remediation
   boundary. The same-UID decision is explicit rather than called
   authentication
-  ([`README.md`](../../README.md#current-status),
+  ([`README.md`](../../README.md#current-state),
   [`VISION-V2.md`](../../VISION-V2.md#L437),
   [ADR 0001](../decisions/0001-same-uid-trust-boundary.md)).
 

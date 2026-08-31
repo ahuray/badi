@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+scenario=${BADI_FAKE_SCENARIO:-healthy}
+
+if [[ -n ${BADI_FAKE_CALL_LOG:-} ]]; then
+  printf '%s\n' "$*" >>"$BADI_FAKE_CALL_LOG"
+fi
+
+if [[ ${1:-} == overview && ${2:-} == --json ]]; then
+  case "$scenario" in
+  term-ignoring)
+    trap '' TERM
+    if [[ -n ${BADI_FAKE_PID_LOG:-} ]]; then
+      printf '%s\n' "$$" >>"$BADI_FAKE_PID_LOG"
+    fi
+    exec sleep 300
+    ;;
+  timeout)
+    sleep 8
+    exit 0
+    ;;
+  malformed)
+    printf '%s\n' '{not-json'
+    exit 0
+    ;;
+  stale)
+    broker_revision=8
+    settings_revision=7
+    store_available=true
+    command_available=true
+    degraded=false
+    capacity=false
+    ;;
+  unavailable)
+    broker_revision=7
+    settings_revision=7
+    store_available=false
+    command_available=false
+    degraded=false
+    capacity=false
+    ;;
+  degraded)
+    broker_revision=7
+    settings_revision=7
+    store_available=true
+    command_available=true
+    degraded=true
+    capacity=false
+    ;;
+  capacity)
+    broker_revision=7
+    settings_revision=7
+    store_available=true
+    command_available=true
+    degraded=false
+    capacity=true
+    ;;
+  memory-repair)
+    broker_revision=7
+    settings_revision=7
+    store_available=false
+    command_available=true
+    degraded=false
+    capacity=false
+    ;;
+  healthy | term-ignoring-mutation)
+    broker_revision=7
+    settings_revision=7
+    store_available=true
+    command_available=true
+    degraded=false
+    capacity=false
+    ;;
+  *)
+    printf 'unknown fake scenario: %s\n' "$scenario" >&2
+    exit 64
+    ;;
+  esac
+
+  jq -n \
+    --argjson broker_revision "$broker_revision" \
+    --argjson settings_revision "$settings_revision" \
+    --argjson store_available "$store_available" \
+    --argjson command_available "$command_available" \
+    --argjson degraded "$degraded" \
+    --argjson capacity "$capacity" '
+    {
+      schema: "badi.overview.v1",
+      broker: {
+        reachable: true,
+        provider: "phrase_v1",
+        paused: false,
+        authority_epoch: 11,
+        settings_revision: $broker_revision,
+        control_plane_degraded: $degraded,
+        sessions: 0,
+        socket_mode: "0600",
+        max_frame_bytes: 65536
+      },
+      settings: {
+        schema: "badi.settings.v1",
+        revision: $settings_revision,
+        paused: false,
+        subjects: (if $capacity then [
+          range(0; 64) as $index |
+          {
+            identity: {
+              kind: "browser_origin",
+              adapter: "chromium",
+              scheme: "https",
+              host: ("subject-" + (($index + 100) | tostring) + ".example"),
+              port: 443
+            },
+            permissions: {
+              suggest: "block",
+              display: "block",
+              context_read: "block",
+              learn: "block",
+              retention: {mode: "none"}
+            }
+          }
+        ] else [
+          {
+            identity: {
+              kind: "browser_origin",
+              adapter: "chromium",
+              scheme: "https",
+              host: "dillinger.io",
+              port: 443
+            },
+            permissions: {
+              suggest: "allow",
+              display: "allow",
+              context_read: "allow",
+              learn: "block",
+              retention: {mode: "none"}
+            }
+          }
+        ] end)
+      },
+      privacy: {
+        memory_store_available: $store_available,
+        memory_command_available: $command_available,
+        memory_integrity: (if $store_available then "healthy" else "unavailable" end),
+        memory_records: (if $store_available then 0 else null end),
+        memory_bytes: (if $store_available then 0 else null end)
+      }
+    }
+  '
+  exit 0
+fi
+
+if [[ ${1:-} == settings && ${2:-} == replace ]]; then
+  [[ ${3:-} == --if-revision && ${5:-} == --json && -n ${4:-} && -n ${6:-} ]]
+  jq -e . <<<"$6" >/dev/null
+  exit 0
+fi
+
+if [[ ${1:-} == memory && ${2:-} == clear ]]; then
+  if [[ $scenario == term-ignoring-mutation ]]; then
+    trap '' TERM
+    if [[ -n ${BADI_FAKE_PID_LOG:-} ]]; then
+      printf '%s\n' "$$" >>"$BADI_FAKE_PID_LOG"
+    fi
+    exec sleep 300
+  fi
+  exit 0
+fi
+
+printf 'unsupported fake badictl argv\n' >&2
+exit 64

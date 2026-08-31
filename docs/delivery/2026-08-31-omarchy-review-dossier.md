@@ -4,8 +4,8 @@
 > - **Prepared:** 2026-08-31
 > - **Branch:** `develop`
 > - **Implementation baseline:** `211982f643b00db5c7af46ef8dee4311ce6fead3`
-> - **Review state:** ready for private source and architecture critique; not
->   ready for a product or interaction showing
+> - **Review state:** historical pre-implementation snapshot; superseded for
+>   current status by the [GrillMe product-proof plan](../plan/grillme-product-proof.md)
 
 ## Executive verdict
 
@@ -103,11 +103,12 @@ time and must not be rewritten retroactively.
 4. [GrillMe Omarchy and suggestion-quality round](2026-08-30-grillme-omarchy-quality-round.md)
    tests whether passing code and CI are being mistaken for a good product.
 
-This dossier is the current synthesis. When it differs from an older report on
-repository state, the newer dated state wins; historical measurements remain
-bound to their original receipt and commit.
+This dossier is the dated planning synthesis at its recorded baseline, not a
+description of the current tree. When it differs from a newer plan or handoff,
+the newer dated state wins; historical measurements remain bound to their
+original receipt and commit.
 
-## Current GrillMe delta
+## Baseline GrillMe delta
 
 | Challenge | Status now | What remains |
 | --- | --- | --- |
