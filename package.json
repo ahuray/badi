@@ -1,6 +1,7 @@
 {
   "name": "badi",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "workspaces": [
     "adapters/chromium"

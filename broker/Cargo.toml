@@ -3,6 +3,7 @@ name = "badi-broker"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 description = "Local policy and suggestion broker for the Badi prototype"
 publish = false
 

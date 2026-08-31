@@ -9,9 +9,9 @@ evidence is reproducible; a demo is not a compatibility claim.
 `Badi` is the selected product name. The bare `badi` CLI identity is already
 used by an unrelated AI workflow tool, so this project uses `badictl` and the
 owned `io.github.ahuray.badi` native identity. Public package/trademark
-clearance and the source license remain explicit release decisions. No
-third-party implementation may be copied into this repository before the
-license decision and a dependency/license review.
+clearance remains an explicit release decision. Badi-owned source and
+documentation are MIT-licensed; third-party implementation still requires a
+license-compatibility and dependency review before inclusion.
 
 ## Outcome and order of proof
 
@@ -466,7 +466,7 @@ and requires a new isolated durable run on the declared environment.
 Release candidates add schema-fixture compatibility, dependency/license and
 vulnerability review, browser-driven receipts, reproducible artifact hashes,
 and an explicit human approval. Public release remains blocked on package/name
-clearance and the source-license decision.
+clearance.
 
 ## Multi-agent workflow
 
@@ -532,7 +532,7 @@ silently changing the insertion mechanism.
 Before public distribution, the user must choose:
 
 - the public product and technical namespace;
-- the source license and contribution model;
+- the contribution and release model;
 - the first semantic model and its distribution posture;
 - whether remote providers exist at all;
 - whether Tab is offered per adapter while a suggestion is visible; and

@@ -5,8 +5,8 @@ Status: research-backed product contract, 2026-08-30
 > Badi (`بعدی`, Persian for “next”) is the selected product name. Because an
 > unrelated [AI workflow CLI](https://github.com/fatihkan/badi) already uses the
 > `badi` command, this project uses `badictl` and owned technical namespaces.
-> Public package/trademark clearance
-> and the source license remain release gates.
+> Badi-owned source and documentation are MIT-licensed. Public package and
+> trademark clearance remain release gates.
 
 ## The product
 
@@ -538,8 +538,8 @@ receipt.
   proves retained value;
 - public packages, domains, or launch before Badi's package/trademark and
   technical-namespace review is complete; or
-- importing competitor source before the user chooses a code license and all
-  code/model/tokenizer/data obligations are recorded.
+- importing third-party source without license-compatibility review or without
+  recording all code/model/tokenizer/data obligations.
 
 ## What success feels like
 

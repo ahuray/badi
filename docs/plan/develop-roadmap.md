@@ -301,7 +301,7 @@ stable enough to reuse.
 - The strongest browser-enforced origin/port permission claim Chromium supports.
 - Production extension identity, packaging, signing, and distribution.
 - Whether native undo can be guaranteed per supported target.
-- Badi package/trademark and source-license clearance.
+- Badi package/trademark clearance; the source license is MIT.
 - Semantic model/runtime choice and weight licenses.
 - Which Linux editor becomes the next capability cell after Obsidian.
 

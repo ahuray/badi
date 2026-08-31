@@ -1,8 +1,8 @@
 # Badi
 
 Badi (`بعدی`, Persian for “next”) is a capability-aware local co-writing layer
-for Linux. It offers one
-short, revision-bound continuation only where an adapter can read, display,
+for Linux. It offers one short, revision-bound continuation only where an
+adapter can read, display,
 and edit through a tested target API. Unsupported is a valid result; raw global
 input capture and synthetic typing are not part of the architecture.
 
@@ -10,7 +10,8 @@ input capture and synthetic typing are not part of the architecture.
 > [AI workflow CLI](https://github.com/fatihkan/badi) already uses the `badi`
 > command, so this project uses `badictl`
 > and the owned `io.github.ahuray.badi` native identity. Public package and
-> trademark clearance, plus the project license, remain release decisions.
+> trademark clearance remains a release decision. Badi-owned source and
+> documentation are licensed under MIT.
 
 ## Current status
 
@@ -73,6 +74,9 @@ its recorded source commit; it is not a reproduction against every later tree.
 
 ## Start here
 
+- [Omarchy review dossier](docs/delivery/2026-08-31-omarchy-review-dossier.md)
+  — the current architecture, evidence, GrillMe delta, readiness path, and
+  reviewer questions in one compact handoff.
 - [Vision V2](VISION-V2.md) — the current product and trust contract.
 - [V2 landscape](docs/research/vision-v2-landscape.md) — primary-source review
   of Cotypist and sixteen direct or adjacent products/projects.
@@ -95,6 +99,8 @@ its recorded source commit; it is not a reproduction against every later tree.
   blockers, and tests that can pass while the real experience remains broken.
 - [Same-UID trust decision](docs/decisions/0001-same-uid-trust-boundary.md) — why
   local UID verification is a process boundary rather than authentication.
+- [MIT source-license decision](docs/decisions/0002-mit-source-license.md) — the
+  covered material, independent artifact licenses, and remaining release gates.
 - [Hardware-aware model selection](docs/architecture/model-selection.md) — the
   compact probe, conservative tiers, pinned artifacts, and runtime gates.
 - [Quickshell control center](ui/quickshell/badi/README.md) — the versioned
@@ -241,3 +247,10 @@ profile.
 
 There is no fallback to `evdev`, `wtype`, clipboard insertion, `xdotool`, or a
 shell-only demonstration.
+
+## License
+
+Badi-owned source code and documentation are available under the
+[MIT License](LICENSE), the same license used by Omarchy. Model weights,
+tokenizers, datasets, dependencies, generated artifacts, names, and trademarks
+retain their independent terms; see [ADR 0002](docs/decisions/0002-mit-source-license.md).
