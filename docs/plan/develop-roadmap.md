@@ -1,10 +1,14 @@
 # Develop branch roadmap
 
-- Status: active development plan
+- Status: architecture roadmap; next-sprint order superseded on 2026-08-31
 - Branch: `develop`
 - Baseline: `0a1aaf37c2b561b2c415ddc8437f0e853d4c65e0`
 - Source of truth: [Vision V2](../../VISION-V2.md) and the
   [V2 implementation plan](vision-v2-implementation.md)
+
+> **Execution update:** the [GrillMe product-proof plan](grillme-product-proof.md)
+> governs the next implementation slices. This document remains architecture
+> and decision history; its old first-sprint order is not the active queue.
 
 ## Purpose
 

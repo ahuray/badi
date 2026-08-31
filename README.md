@@ -77,6 +77,9 @@ its recorded source commit; it is not a reproduction against every later tree.
 - [Omarchy review dossier](docs/delivery/2026-08-31-omarchy-review-dossier.md)
   — the current architecture, evidence, GrillMe delta, readiness path, and
   reviewer questions in one compact handoff.
+- [GrillMe product-proof plan](docs/plan/grillme-product-proof.md) — the
+  implementation slices, agent ownership, quality gates, evidence workflow,
+  and hard stop conditions for the next build.
 - [Vision V2](VISION-V2.md) — the current product and trust contract.
 - [V2 landscape](docs/research/vision-v2-landscape.md) — primary-source review
   of Cotypist and sixteen direct or adjacent products/projects.

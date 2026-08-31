@@ -200,5 +200,8 @@ candidate without automatic activation. If it cannot beat the deterministic
 baseline on usefulness, quietness, safety, and latency, delete the unused
 runtime scaffold instead of adding abstractions.
 
+The implementation sequence, team boundaries, evidence gates, and stop rules
+are defined in the [GrillMe product-proof execution plan](../plan/grillme-product-proof.md).
+
 That is the shortest path from an elegant foundation to evidence that Badi is
 worth integrating into Omarchy.
