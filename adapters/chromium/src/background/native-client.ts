@@ -111,6 +111,7 @@ export class NativeBrokerClient {
   #ready: Promise<void> | null = null;
   #resolveReady: (() => void) | null = null;
   #rejectReady: ((error: Error) => void) | null = null;
+  #helloAcknowledged = false;
   #controlSequence = 0;
   #policySequence = 0;
   #paused: boolean | null = null;
@@ -464,30 +465,40 @@ export class NativeBrokerClient {
     if (!this.#connectionIsCurrent(sourcePort, generation)) return;
     const helloPaused = parseHelloAckPaused(message);
     if (helloPaused !== null) {
-      const resolve = this.#resolveReady;
+      if (this.#helloAcknowledged) return;
+      this.#helloAcknowledged = true;
       this.#paused = helloPaused;
-      this.#resolveReady = null;
-      this.#rejectReady = null;
-      resolve?.();
       return;
     }
     const authority = parseAuthorityChanged(message);
     if (
+      this.#helloAcknowledged &&
       authority !== null &&
       (this.#handledAuthorityEpoch === null ||
         authority.authorityEpoch > this.#handledAuthorityEpoch)
     ) {
+      // Policy-capable connections receive one mandatory baseline snapshot
+      // after hello. It establishes authority; only newer epochs revoke it.
+      const initialSnapshot = this.#handledAuthorityEpoch === null;
       this.#handledAuthorityEpoch = authority.authorityEpoch;
       this.#authorityState = authority;
       this.#paused = authority.paused;
-      this.#invalidateDataPlane(new Error("Broker authority changed"));
+      if (!initialSnapshot) {
+        this.#invalidateDataPlane(new Error("Broker authority changed"));
+      }
       const task = this.#authorityTask.then(async () => {
         if (!this.#connectionIsCurrent(sourcePort, generation)) return;
-        await this.#authorityChangedHandler?.(authority);
+        if (!initialSnapshot) await this.#authorityChangedHandler?.(authority);
         if (!this.#connectionIsCurrent(sourcePort, generation)) return;
         sourcePort.postMessage(
           authorityAckEnvelope(authority.authorityEpoch, Math.max(0, Math.floor(this.#now()))),
         );
+        if (initialSnapshot) {
+          const resolve = this.#resolveReady;
+          this.#resolveReady = null;
+          this.#rejectReady = null;
+          resolve?.();
+        }
       });
       this.#authorityTask = task.catch((error: unknown) => {
         if (!this.#connectionIsCurrent(sourcePort, generation)) return;
@@ -680,6 +691,7 @@ export class NativeBrokerClient {
     this.#ready = null;
     this.#resolveReady = null;
     this.#rejectReady = null;
+    this.#helloAcknowledged = false;
     this.#sessions.clear();
     this.#paused = null;
     this.#handledAuthorityEpoch = null;

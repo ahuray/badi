@@ -18,12 +18,12 @@ use crate::protocol::{
     ContextChangedPayload, ControlAction, ControlResultPayload, EmptyPayload, ErrorPayload,
     GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
     MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SAFE_COUNTER, MAX_SUGGESTION_CHARS,
-    MAX_SUGGESTION_WORDS, MemoryStatusPayload, MessageType, PROTOCOL_VERSION, PolicyQueryPayload,
-    ReasonCode, SessionClosePayload, SessionControlRequestPayload, SessionId, SessionOpenPayload,
+    MAX_SUGGESTION_WORDS, MemoryStatusPayload, MessageType, PolicyQueryPayload, ReasonCode,
+    SessionClosePayload, SessionControlRequestPayload, SessionId, SessionOpenPayload,
     SettingsReplacePayload, SettingsStatusPayload, SuggestCancelPayload, SuggestRequestPayload,
     WireEnvelope,
 };
-use crate::settings::SettingsV1;
+use crate::settings::{SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsV1};
 
 const MAX_CONNECTIONS: usize = 32;
 const MAX_SESSIONS_PER_CONNECTION: usize = 64;
@@ -201,7 +201,10 @@ async fn serve_connection_with_timeouts(
         return Err(ServerError::HelloRequired);
     }
     let hello: HelloPayload = first.decode_payload()?;
-    hello.validate()?;
+    hello.validate_for_frame(first.v)?;
+    let selected_version = hello
+        .select_version()
+        .ok_or(crate::protocol::ProtocolError::VersionNegotiationFailed)?;
     let authority = SessionAuthority {
         adapter_kind: hello.adapter.kind,
         capabilities: hello.capabilities.clone(),
@@ -213,7 +216,7 @@ async fn serve_connection_with_timeouts(
         MessageType::HelloAck,
         broker.mono_ms(),
         &HelloAckPayload {
-            selected_v: PROTOCOL_VERSION,
+            selected_v: selected_version,
             connection_id: connection_id.clone(),
             enabled_capabilities: hello.capabilities.clone(),
             max_frame_bytes: MAX_FRAME_BYTES,
@@ -223,7 +226,8 @@ async fn serve_connection_with_timeouts(
             max_suggestion_words: MAX_SUGGESTION_WORDS,
             paused: broker.is_paused().await,
         },
-    )?;
+    )?
+    .at_version(selected_version)?;
     acknowledgment.id = first.id;
     tokio::select! {
         () = shutdown.cancelled() => return Ok(()),
@@ -243,7 +247,8 @@ async fn serve_connection_with_timeouts(
                 settings_revision: authority.settings_revision,
                 paused: authority.paused,
             },
-        )?;
+        )?
+        .at_version(selected_version)?;
         tokio::select! {
             () = shutdown.cancelled() => return Ok(()),
             outgoing = time::timeout(
@@ -270,7 +275,8 @@ async fn serve_connection_with_timeouts(
     });
     let (wire_tx, mut wire_rx) = mpsc::channel::<WireEnvelope>(WIRE_QUEUE_CAPACITY);
     let mut writer_task = tokio::spawn(async move {
-        while let Some(envelope) = wire_rx.recv().await {
+        while let Some(mut envelope) = wire_rx.recv().await {
+            envelope.v = selected_version;
             write_envelope(&mut writer, &envelope).await?;
         }
         Ok::<(), FrameError>(())
@@ -322,6 +328,15 @@ async fn serve_connection_with_timeouts(
                         break Ok(());
                     }
                 };
+                if envelope.v != selected_version {
+                    let _ = send_error(
+                        &wire_tx,
+                        &broker,
+                        envelope.id,
+                        ReasonCode::UnsupportedVersion,
+                    );
+                    break Ok(());
+                }
                 idle_deadline
                     .as_mut()
                     .reset(time::Instant::now() + idle_timeout);
@@ -333,6 +348,7 @@ async fn serve_connection_with_timeouts(
                     &connection_id,
                     &event_sink,
                     &mut owned_sessions,
+                    selected_version,
                     envelope,
                     &wire_tx,
                 )
@@ -386,13 +402,14 @@ async fn serve_connection_with_timeouts(
     outcome
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn handle_message(
     broker: &Broker,
     authority: &SessionAuthority,
     connection_id: &str,
     event_sink: &BrokerEventSink,
     owned_sessions: &mut Vec<SessionId>,
+    protocol_version: u8,
     envelope: WireEnvelope,
     wire_tx: &mpsc::Sender<WireEnvelope>,
 ) -> Result<(), ServerError> {
@@ -404,6 +421,7 @@ async fn handle_message(
             ensure_session_capacity(owned_sessions)?;
             let coordinates = envelope.coordinates()?;
             let payload: SessionOpenPayload = envelope.decode_payload()?;
+            payload.target.validate_for_version(protocol_version)?;
             broker
                 .open_session(coordinates, payload, authority.clone(), event_sink.clone())
                 .await?;
@@ -421,6 +439,7 @@ async fn handle_message(
             let coordinates = envelope.coordinates()?;
             ensure_owned(owned_sessions, coordinates.session_id)?;
             let payload: ContextChangedPayload = envelope.decode_payload()?;
+            payload.validate_for_version(protocol_version)?;
             let _ = broker.update_context(coordinates, payload).await?;
         }
         MessageType::SuggestRequest => {
@@ -519,7 +538,7 @@ async fn handle_message(
         MessageType::PolicyQuery => {
             require_capability(authority, Capability::Policy)?;
             let payload: PolicyQueryPayload = envelope.decode_payload()?;
-            payload.validate()?;
+            payload.validate_for_version(protocol_version)?;
             let mut response = WireEnvelope::global(
                 MessageType::PolicyStatus,
                 broker.mono_ms(),
@@ -545,7 +564,11 @@ async fn handle_message(
             let mut response = WireEnvelope::global(
                 MessageType::SettingsStatus,
                 broker.mono_ms(),
-                &settings_status_payload(snapshot, broker.outcome_recorder_health())?,
+                &settings_status_payload(
+                    &snapshot,
+                    broker.outcome_recorder_health(),
+                    protocol_version,
+                )?,
             )?;
             response.id = envelope.id;
             wire_tx
@@ -556,8 +579,25 @@ async fn handle_message(
             require_settings_authority(authority)?;
             let payload: SettingsReplacePayload = envelope.decode_payload()?;
             payload.validate()?;
-            let next: SettingsV1 = serde_json::from_value(payload.document)
+            let source_schema = payload
+                .document
+                .get("schema")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(ServerError::InvalidMessage)?;
+            let expected_schema = if protocol_version == crate::protocol::PROTOCOL_VERSION {
+                SETTINGS_SCHEMA_V1
+            } else {
+                SETTINGS_SCHEMA
+            };
+            if source_schema != expected_schema {
+                return Err(ServerError::InvalidMessage);
+            }
+            let mut next: SettingsV1 = serde_json::from_value(payload.document)
                 .map_err(|_| ServerError::InvalidMessage)?;
+            if protocol_version == crate::protocol::PROTOCOL_VERSION {
+                let current = broker.control_plane_snapshot().await?;
+                next = next.preserving_linux_rules_from(&current.settings);
+            }
             next.validate().map_err(|_| ServerError::InvalidMessage)?;
             let snapshot = broker
                 .replace_settings(payload.expected_revision, next)
@@ -565,7 +605,11 @@ async fn handle_message(
             let mut response = WireEnvelope::global(
                 MessageType::SettingsStatus,
                 broker.mono_ms(),
-                &settings_status_payload(snapshot, broker.outcome_recorder_health())?,
+                &settings_status_payload(
+                    &snapshot,
+                    broker.outcome_recorder_health(),
+                    protocol_version,
+                )?,
             )?;
             response.id = envelope.id;
             wire_tx
@@ -619,11 +663,14 @@ fn require_settings_authority(authority: &SessionAuthority) -> Result<(), Server
 }
 
 fn settings_status_payload(
-    snapshot: crate::control_plane::ControlPlaneSnapshot,
+    snapshot: &crate::control_plane::ControlPlaneSnapshot,
     recorder: crate::engine::OutcomeRecorderHealth,
+    protocol_version: u8,
 ) -> Result<SettingsStatusPayload, ServerError> {
     let payload = SettingsStatusPayload {
-        document: serde_json::to_value(snapshot.settings)
+        document: snapshot
+            .settings
+            .wire_document(protocol_version)
             .map_err(crate::protocol::ProtocolError::from)?,
         personalization_revision: snapshot.personalization.revision,
         personalization_records: u64::try_from(snapshot.personalization.records.len())
@@ -850,16 +897,21 @@ mod tests {
         MAX_CONNECTIONS, MAX_SESSIONS_PER_CONNECTION, ServerError, bind_secure,
         ensure_session_capacity, serve_connection_with_timeouts,
     };
+    use crate::control_plane::ControlPlane;
     use crate::engine::{Broker, BrokerConfig};
     use crate::ipc::{read_envelope, write_envelope};
     use crate::protocol::{
         Activation, AdapterDescriptor, AdapterKind, AuthorityAckPayload, AuthorityChangedPayload,
-        Capability, ContextChangedPayload, Coordinates, EmptyPayload, FieldDescriptor,
-        FieldPurpose, HelloPayload, MessageType, OffsetUnit, PROTOCOL_VERSION, Selection,
-        SessionId, SessionOpenPayload, SuggestRequestPayload, TargetDescriptor, TargetKind,
-        WireEnvelope,
+        CURRENT_PROTOCOL_VERSION, Capability, ContextChangedPayload, Coordinates, EmptyPayload,
+        FieldDescriptor, FieldPurpose, HelloAckPayload, HelloPayload, MessageType, OffsetUnit,
+        PROTOCOL_VERSION, Selection, SessionId, SessionOpenPayload, SettingsReplacePayload,
+        SettingsStatusPayload, SuggestRequestPayload, TargetDescriptor, TargetKind, WireEnvelope,
     };
     use crate::provider::DeterministicPhraseProvider;
+    use crate::settings::{
+        BrowserAdapter, LinuxAdapter, SETTINGS_SCHEMA, SettingsV1, StableIdentity, StoragePaths,
+        SubjectPermissions, SubjectRule, WebScheme,
+    };
 
     fn broker() -> Broker {
         Broker::new(
@@ -993,6 +1045,260 @@ mod tests {
         )
         .await;
         assert!(matches!(result, Err(ServerError::HandshakeTimeout)));
+    }
+
+    #[tokio::test]
+    async fn v2_negotiation_versions_every_frame_and_rejects_a_v1_rebind() {
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                broker(),
+                CancellationToken::new(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+        });
+        let hello = WireEnvelope::global(
+            MessageType::Hello,
+            0,
+            &HelloPayload {
+                min_v: CURRENT_PROTOCOL_VERSION,
+                max_v: CURRENT_PROTOCOL_VERSION,
+                adapter: AdapterDescriptor {
+                    kind: AdapterKind::Fcitx,
+                    name: "badi-fcitx5".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                capabilities: vec![
+                    Capability::Context,
+                    Capability::Suggestion,
+                    Capability::Policy,
+                ],
+            },
+        )
+        .expect("v2 hello")
+        .at_version(CURRENT_PROTOCOL_VERSION)
+        .expect("versioned v2 hello");
+        write_envelope(&mut client, &hello)
+            .await
+            .expect("write v2 hello");
+
+        let acknowledgment = read_envelope(&mut client)
+            .await
+            .expect("read v2 acknowledgment")
+            .expect("v2 acknowledgment");
+        assert_eq!(acknowledgment.v, CURRENT_PROTOCOL_VERSION);
+        let payload: HelloAckPayload = acknowledgment
+            .decode_payload()
+            .expect("hello acknowledgment payload");
+        assert_eq!(payload.selected_v, CURRENT_PROTOCOL_VERSION);
+        payload.validate().expect("valid v2 acknowledgment");
+
+        let authority = read_envelope(&mut client)
+            .await
+            .expect("read v2 authority")
+            .expect("v2 authority");
+        assert_eq!(authority.v, CURRENT_PROTOCOL_VERSION);
+        assert_eq!(authority.message_type, MessageType::AuthorityChanged);
+
+        let wrong_version = WireEnvelope::global(
+            MessageType::AuthorityAck,
+            1,
+            &AuthorityAckPayload { authority_epoch: 0 },
+        )
+        .expect("legacy authority acknowledgment");
+        write_envelope(&mut client, &wrong_version)
+            .await
+            .expect("write wrong-version frame");
+        let error = read_envelope(&mut client)
+            .await
+            .expect("read version error")
+            .expect("version error");
+        assert_eq!(error.v, CURRENT_PROTOCOL_VERSION);
+        assert_eq!(error.message_type, MessageType::Error);
+
+        connection
+            .await
+            .expect("connection task")
+            .expect("clean version rejection");
+    }
+
+    #[tokio::test]
+    async fn handshake_rejects_a_mixed_range_that_matches_no_versioned_schema() {
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                broker(),
+                CancellationToken::new(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+        });
+        let hello = WireEnvelope::global(
+            MessageType::Hello,
+            0,
+            &HelloPayload {
+                min_v: PROTOCOL_VERSION,
+                max_v: CURRENT_PROTOCOL_VERSION,
+                adapter: AdapterDescriptor {
+                    kind: AdapterKind::Test,
+                    name: "mixed-range".to_owned(),
+                    version: "1".to_owned(),
+                },
+                capabilities: vec![Capability::Health],
+            },
+        )
+        .expect("structurally supported hello");
+        write_envelope(&mut client, &hello)
+            .await
+            .expect("write mixed-range hello");
+        drop(client);
+
+        assert!(matches!(
+            connection.await.expect("connection task"),
+            Err(ServerError::Protocol(
+                crate::protocol::ProtocolError::VersionNegotiationFailed
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn v1_settings_roundtrip_projects_browser_rules_and_preserves_native_rules() {
+        let temporary = tempdir().expect("temporary directory");
+        let paths = StoragePaths::new(
+            temporary.path().join("config/badi"),
+            temporary.path().join("data/badi"),
+        )
+        .expect("storage paths");
+        let control_plane = Arc::new(ControlPlane::open(paths).expect("control plane"));
+        control_plane
+            .replace_settings(
+                0,
+                SettingsV1 {
+                    schema: SETTINGS_SCHEMA.to_owned(),
+                    revision: 1,
+                    paused: false,
+                    subjects: vec![
+                        SubjectRule {
+                            identity: StableIdentity::browser_origin(
+                                BrowserAdapter::Chromium,
+                                WebScheme::Https,
+                                "example.com",
+                                None,
+                            )
+                            .expect("browser identity"),
+                            permissions: SubjectPermissions::deny_all(),
+                        },
+                        SubjectRule {
+                            identity: StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite")
+                                .expect("Linux identity"),
+                            permissions: SubjectPermissions::deny_all(),
+                        },
+                    ],
+                },
+            )
+            .expect("seed mixed settings");
+        let broker = Broker::with_control_plane(
+            Arc::new(DeterministicPhraseProvider::default()),
+            BrokerConfig::default(),
+            Arc::clone(&control_plane),
+        )
+        .expect("controlled broker");
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                broker,
+                CancellationToken::new(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+        });
+        let hello = WireEnvelope::global(
+            MessageType::Hello,
+            0,
+            &HelloPayload {
+                min_v: PROTOCOL_VERSION,
+                max_v: PROTOCOL_VERSION,
+                adapter: AdapterDescriptor {
+                    kind: AdapterKind::Cli,
+                    name: "legacy-cli".to_owned(),
+                    version: "1".to_owned(),
+                },
+                capabilities: vec![Capability::Settings],
+            },
+        )
+        .expect("legacy hello");
+        write_envelope(&mut client, &hello)
+            .await
+            .expect("write legacy hello");
+        let _ = read_envelope(&mut client)
+            .await
+            .expect("read hello acknowledgment")
+            .expect("hello acknowledgment");
+
+        let mut get = WireEnvelope::global(MessageType::SettingsGet, 1, &EmptyPayload {})
+            .expect("settings get");
+        get.id = Some("settings:get".to_owned());
+        write_envelope(&mut client, &get)
+            .await
+            .expect("write settings get");
+        let response = read_envelope(&mut client)
+            .await
+            .expect("read settings status")
+            .expect("settings status");
+        let status: SettingsStatusPayload = response.decode_payload().expect("settings payload");
+        assert_eq!(status.document["schema"], "badi.settings.v1");
+        assert_eq!(
+            status.document["subjects"]
+                .as_array()
+                .expect("subjects")
+                .len(),
+            1
+        );
+
+        let mut replace = WireEnvelope::global(
+            MessageType::SettingsReplace,
+            2,
+            &SettingsReplacePayload {
+                expected_revision: 1,
+                document: serde_json::json!({
+                    "schema": "badi.settings.v1",
+                    "revision": 2,
+                    "paused": false,
+                    "subjects": []
+                }),
+            },
+        )
+        .expect("legacy replace");
+        replace.id = Some("settings:replace".to_owned());
+        write_envelope(&mut client, &replace)
+            .await
+            .expect("write legacy replacement");
+        let response = read_envelope(&mut client)
+            .await
+            .expect("read replacement status")
+            .expect("replacement status");
+        assert_eq!(response.message_type, MessageType::SettingsStatus);
+        drop(client);
+        connection
+            .await
+            .expect("connection task")
+            .expect("legacy connection shutdown");
+
+        let snapshot = control_plane.snapshot().expect("final settings");
+        assert_eq!(snapshot.settings.revision, 2);
+        assert_eq!(snapshot.settings.subjects.len(), 1);
+        assert!(matches!(
+            snapshot.settings.subjects[0].identity,
+            StableIdentity::LinuxApp { .. }
+        ));
     }
 
     #[tokio::test]

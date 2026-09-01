@@ -7,13 +7,13 @@ use badi_broker::ipc::{
 use badi_broker::metrics::MetricsSnapshot;
 use badi_broker::model_selection::{ModelAdvice, ModelUseCase, detect_hardware, recommend_model};
 use badi_broker::protocol::{
-    ActiveLocator, AdapterDescriptor, AdapterKind, Capability, ControlAction, ControlResultPayload,
-    ErrorPayload, GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
-    MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_SAFE_COUNTER, MemoryStatusPayload, MessageType,
-    PROTOCOL_VERSION, ProviderKind, ReasonCode, SessionControlRequestPayload,
-    SettingsReplacePayload, SettingsStatusPayload, WireEnvelope,
+    ActiveLocator, AdapterDescriptor, AdapterKind, CURRENT_PROTOCOL_VERSION, Capability,
+    ControlAction, ControlResultPayload, Coordinates, ErrorPayload, GlobalControlRequestPayload,
+    HealthStatusPayload, HelloAckPayload, HelloPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS,
+    MAX_SAFE_COUNTER, MemoryStatusPayload, MessageType, ProviderKind, ReasonCode,
+    SessionControlRequestPayload, SettingsReplacePayload, SettingsStatusPayload, WireEnvelope,
 };
-use badi_broker::settings::{PermissionDecision, RetentionPermission, SettingsV1};
+use badi_broker::settings::{PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV1};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::net::UnixStream;
@@ -78,7 +78,7 @@ async fn run() -> Result<(), CliError> {
                 expected_revision,
                 document,
             };
-            let mut request = WireEnvelope::global(MessageType::SettingsReplace, 0, &payload)?;
+            let mut request = cli_global(MessageType::SettingsReplace, &payload)?;
             let request_id = new_request_id();
             request.id = Some(request_id.clone());
             write_envelope(&mut stream, &request).await?;
@@ -89,8 +89,7 @@ async fn run() -> Result<(), CliError> {
             println!("{}", serde_json::to_string_pretty(&status.document)?);
         }
         Command::MemoryClear => {
-            let mut request =
-                WireEnvelope::global(MessageType::MemoryClear, 0, &serde_json::json!({}))?;
+            let mut request = cli_global(MessageType::MemoryClear, &serde_json::json!({}))?;
             let request_id = new_request_id();
             request.id = Some(request_id.clone());
             write_envelope(&mut stream, &request).await?;
@@ -106,9 +105,8 @@ async fn run() -> Result<(), CliError> {
             println!("{}", serde_json::to_string(&payload)?);
         }
         Command::Global(action) => {
-            let mut request = WireEnvelope::global(
+            let mut request = cli_global(
                 MessageType::ControlRequest,
-                0,
                 &GlobalControlRequestPayload { action },
             )?;
             let request_id = new_request_id();
@@ -198,12 +196,24 @@ struct OverviewPrivacy {
 
 #[derive(Debug, Serialize)]
 struct OverviewSupport {
-    browser_permission: &'static str,
-    badi_policy: &'static str,
     scope: &'static str,
+    generalization: &'static str,
+    authorization: &'static str,
+    verified_cells: [OverviewSupportCell; 3],
+}
+
+#[derive(Debug, Serialize)]
+struct OverviewSupportCell {
+    id: &'static str,
+    adapter: &'static str,
+    application: &'static str,
+    application_version: Option<&'static str>,
+    toolkit: &'static str,
+    test_surface: &'static str,
+    required_policy_subject: &'static str,
+    required_activation: &'static str,
     evidence_class: &'static str,
-    evidence_commit: Option<&'static str>,
-    adapters: [&'static str; 3],
+    verified_trials: Option<u8>,
 }
 
 #[derive(Debug, Serialize)]
@@ -245,6 +255,9 @@ fn build_overview(
     health: HealthStatusPayload,
     status: SettingsStatusPayload,
 ) -> Result<Overview, CliError> {
+    if !has_current_settings_schema(&status.document) {
+        return Err(CliError::UnexpectedResponse);
+    }
     let settings: SettingsV1 =
         serde_json::from_value(status.document).map_err(|_| CliError::UnexpectedResponse)?;
     settings
@@ -284,7 +297,7 @@ fn build_overview(
     };
     let writing = recommend_model(detect_hardware(), ModelUseCase::Writing);
     Ok(Overview {
-        schema: "badi.overview.v1",
+        schema: "badi.overview.v2",
         broker: OverviewBroker {
             reachable: true,
             provider: health.provider,
@@ -329,15 +342,46 @@ fn build_overview(
             learning_available: false,
         },
         support: OverviewSupport {
-            browser_permission: "static_exact_document",
-            badi_policy: "exact_origin_subjects",
-            scope: "http://localhost:4173/chromium.html",
-            evidence_class: "historical_not_current_tree_proof",
-            evidence_commit: None,
-            adapters: [
-                "chromium_fixture",
-                "obsidian_unsupported",
-                "terminal_unsupported",
+            scope: "verified_test_cells_only",
+            generalization: "none",
+            authorization: "not_granted_by_evidence",
+            verified_cells: [
+                OverviewSupportCell {
+                    id: "chromium_fixture",
+                    adapter: "chromium",
+                    application: "badi_fixture",
+                    application_version: None,
+                    toolkit: "web_platform",
+                    test_surface: "http://localhost:4173/chromium.html :: HTMLTextAreaElement#draft",
+                    required_policy_subject: "http://localhost:4173",
+                    required_activation: "always",
+                    evidence_class: "historical_not_current_tree_proof",
+                    verified_trials: None,
+                },
+                OverviewSupportCell {
+                    id: "omawrite_0_5_0_qt6",
+                    adapter: "fcitx",
+                    application: "Omawrite",
+                    application_version: Some("0.5.0"),
+                    toolkit: "qt6",
+                    test_surface: "markdown_editor",
+                    required_policy_subject: "omawrite",
+                    required_activation: "explicit_manual",
+                    evidence_class: "live_native_application_proof",
+                    verified_trials: Some(20),
+                },
+                OverviewSupportCell {
+                    id: "xournalpp_1_3_7_gtk3_text_tool",
+                    adapter: "fcitx",
+                    application: "Xournal++",
+                    application_version: Some("1.3.7"),
+                    toolkit: "gtk3",
+                    test_surface: "text_tool_canvas",
+                    required_policy_subject: "com.github.xournalpp.xournalpp",
+                    required_activation: "explicit_manual",
+                    evidence_class: "live_native_application_proof",
+                    verified_trials: Some(20),
+                },
             ],
         },
         models: OverviewModels {
@@ -367,12 +411,11 @@ async fn connect(path: &Path) -> Result<UnixStream, CliError> {
     verify_socket_metadata(path)?;
     let mut stream = UnixStream::connect(path).await?;
     verify_peer_uid(&stream)?;
-    let mut hello = WireEnvelope::global(
+    let mut hello = cli_global(
         MessageType::Hello,
-        0,
         &HelloPayload {
-            min_v: PROTOCOL_VERSION,
-            max_v: PROTOCOL_VERSION,
+            min_v: CURRENT_PROTOCOL_VERSION,
+            max_v: CURRENT_PROTOCOL_VERSION,
             adapter: AdapterDescriptor {
                 kind: AdapterKind::Cli,
                 name: "badictl".to_owned(),
@@ -398,7 +441,8 @@ fn validate_handshake(
     acknowledgment: &WireEnvelope,
     request_id: &str,
 ) -> Result<HelloAckPayload, CliError> {
-    if acknowledgment.validate_shape().is_err()
+    if acknowledgment.v != CURRENT_PROTOCOL_VERSION
+        || acknowledgment.validate_shape().is_err()
         || acknowledgment.message_type != MessageType::HelloAck
         || acknowledgment.id.as_deref() != Some(request_id)
     {
@@ -408,7 +452,8 @@ fn validate_handshake(
         .decode_payload()
         .map_err(|_| CliError::Handshake)?;
     payload.validate().map_err(|_| CliError::Handshake)?;
-    if payload.enabled_capabilities.len() != CLI_CAPABILITIES.len()
+    if payload.selected_v != CURRENT_PROTOCOL_VERSION
+        || payload.enabled_capabilities.len() != CLI_CAPABILITIES.len()
         || !CLI_CAPABILITIES
             .iter()
             .all(|required| payload.enabled_capabilities.contains(required))
@@ -419,7 +464,7 @@ fn validate_handshake(
 }
 
 async fn request_health(stream: &mut UnixStream) -> Result<HealthStatusPayload, CliError> {
-    let mut request = WireEnvelope::global(MessageType::HealthRequest, 0, &serde_json::json!({}))?;
+    let mut request = cli_global(MessageType::HealthRequest, &serde_json::json!({}))?;
     let request_id = new_request_id();
     request.id = Some(request_id.clone());
     write_envelope(stream, &request).await?;
@@ -428,7 +473,7 @@ async fn request_health(stream: &mut UnixStream) -> Result<HealthStatusPayload, 
 }
 
 async fn request_settings(stream: &mut UnixStream) -> Result<SettingsStatusPayload, CliError> {
-    let mut request = WireEnvelope::global(MessageType::SettingsGet, 0, &serde_json::json!({}))?;
+    let mut request = cli_global(MessageType::SettingsGet, &serde_json::json!({}))?;
     let request_id = new_request_id();
     request.id = Some(request_id.clone());
     write_envelope(stream, &request).await?;
@@ -448,12 +493,19 @@ fn validate_settings_response(
     payload
         .validate()
         .map_err(|_| CliError::UnexpectedResponse)?;
+    if !has_current_settings_schema(&payload.document) {
+        return Err(CliError::UnexpectedResponse);
+    }
     let settings: SettingsV1 = serde_json::from_value(payload.document.clone())
         .map_err(|_| CliError::UnexpectedResponse)?;
     settings
         .validate()
         .map_err(|_| CliError::UnexpectedResponse)?;
     Ok(payload)
+}
+
+fn has_current_settings_schema(document: &Value) -> bool {
+    document.get("schema").and_then(Value::as_str) == Some(SETTINGS_SCHEMA)
 }
 
 fn addressed_control(
@@ -467,14 +519,13 @@ fn addressed_control(
     if needs_suggestion && active.suggestion_id.is_none() {
         return Err(CliError::NoSuggestion);
     }
-    let mut envelope = WireEnvelope::session(
+    let mut envelope = cli_session(
         MessageType::ControlRequest,
-        badi_broker::protocol::Coordinates {
+        Coordinates {
             session_id: active.session_id,
             focus_epoch: active.focus_epoch,
             revision: active.revision,
         },
-        0,
         &SessionControlRequestPayload {
             action,
             fingerprint: active.fingerprint,
@@ -503,7 +554,10 @@ fn validate_correlated_response(
     request_id: &str,
     expected_type: MessageType,
 ) -> Result<(), CliError> {
-    if response.validate_shape().is_err() || response.id.as_deref() != Some(request_id) {
+    if response.v != CURRENT_PROTOCOL_VERSION
+        || response.validate_shape().is_err()
+        || response.id.as_deref() != Some(request_id)
+    {
         return Err(CliError::UnexpectedResponse);
     }
     if response.message_type == MessageType::Error {
@@ -595,10 +649,26 @@ fn new_request_id() -> String {
     format!("ctl:{}", uuid::Uuid::new_v4())
 }
 
+fn cli_global<P: Serialize>(
+    message_type: MessageType,
+    payload: &P,
+) -> Result<WireEnvelope, badi_broker::protocol::ProtocolError> {
+    WireEnvelope::global(message_type, 0, payload)?.at_version(CURRENT_PROTOCOL_VERSION)
+}
+
+fn cli_session<P: Serialize>(
+    message_type: MessageType,
+    coordinates: Coordinates,
+    payload: &P,
+) -> Result<WireEnvelope, badi_broker::protocol::ProtocolError> {
+    WireEnvelope::session(message_type, coordinates, 0, payload)?
+        .at_version(CURRENT_PROTOCOL_VERSION)
+}
+
 const CLI_USAGE: &str = "Usage: badictl [--socket ABSOLUTE] COMMAND\n\
 Local commands:\n  hardware [--json]       Inspect content-free hardware capabilities\n  models [USE] [--json]   Recommend pinned local models; USE is writing or code\n\
 Broker commands:\n  status [--json]  Show content-free broker status as JSON\n  request          Request a suggestion for the sole active session\n  accept-word      Accept the authorized first word-part\n  accept-all       Accept the authorized full suggestion\n  dismiss          Dismiss the current suggestion\n  pause [MODE]     MODE is on, off, or toggle (default)\n\
-  overview [--json]  Show broker, policy, privacy, and model readiness\n  settings show [--json]\n                    Show the strict badi.settings.v1 document\n  settings replace --if-revision N --json DOCUMENT\n                    Replace settings with compare-and-swap protection\n  memory clear      Clear local text-free origin/day interaction aggregates\n\
+  overview [--json]  Show broker, policy, privacy, and model readiness\n  settings show [--json]\n                    Show the strict badi.settings.v2 document\n  settings replace --if-revision N --json DOCUMENT\n                    Replace settings with compare-and-swap protection\n  memory clear      Clear local text-free origin/day interaction aggregates\n\
 Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n";
 
 fn parse_arguments<I>(arguments: I) -> Result<ParsedCommand, CliError>
@@ -717,6 +787,9 @@ fn parse_settings_command(arguments: &[String]) -> Result<Command, CliError> {
             let expected_revision = revision.parse::<u64>().map_err(|_| CliError::Arguments)?;
             let document: Value =
                 serde_json::from_str(document).map_err(|_| CliError::Arguments)?;
+            if !has_current_settings_schema(&document) {
+                return Err(CliError::Arguments);
+            }
             let settings: SettingsV1 =
                 serde_json::from_value(document.clone()).map_err(|_| CliError::Arguments)?;
             settings.validate().map_err(|_| CliError::Arguments)?;
@@ -813,14 +886,15 @@ mod tests {
         CLI_CAPABILITIES, CliError, Command, LocalCommand, ParsedCommand, build_overview,
         parse_arguments, redact_health_status, validate_control_response,
         validate_correlated_response, validate_handshake, validate_health_response,
+        validate_settings_response,
     };
     use badi_broker::metrics::MetricsSnapshot;
     use badi_broker::model_selection::ModelUseCase;
     use badi_broker::protocol::{
-        ActiveLocator, ControlAction, ControlResultPayload, HealthStatusPayload, HelloAckPayload,
-        MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SUGGESTION_CHARS,
-        MAX_SUGGESTION_WORDS, MessageType, PROTOCOL_VERSION, ProviderKind, ReasonCode, SessionId,
-        SettingsStatusPayload, WireEnvelope,
+        ActiveLocator, CURRENT_PROTOCOL_VERSION, ControlAction, ControlResultPayload,
+        HealthStatusPayload, HelloAckPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES,
+        MAX_SUGGESTION_CHARS, MAX_SUGGESTION_WORDS, MessageType, ProviderKind, ReasonCode,
+        SessionId, SettingsStatusPayload, WireEnvelope,
     };
     use badi_broker::settings::SettingsV1;
     use jsonschema::Registry;
@@ -866,14 +940,14 @@ mod tests {
         };
         let hardware = read_schema("badi.hardware.v1.schema.json");
         let advice = read_schema("badi.model-advice.v2.schema.json");
-        let settings = read_schema("badi.settings.v1.schema.json");
-        let schema = read_schema("badi.overview.v1.schema.json");
+        let settings = read_schema("badi.settings.v2.schema.json");
+        let schema = read_schema("badi.overview.v2.schema.json");
         let registry = Registry::new()
             .add("urn:badi:schema:hardware:v1", hardware)
             .expect("hardware resource")
             .add("urn:badi:schema:model-advice:v2", advice)
             .expect("advice resource")
-            .add("urn:badi:schema:settings:v1", settings)
+            .add("urn:badi:schema:settings:v2", settings)
             .expect("settings resource")
             .prepare()
             .expect("overview schema registry");
@@ -884,6 +958,44 @@ mod tests {
         if let Err(error) = validator.validate(&overview) {
             panic!("overview failed schema: {error}");
         }
+        assert_eq!(
+            overview.pointer("/support/scope"),
+            Some(&json!("verified_test_cells_only"))
+        );
+        assert_eq!(
+            overview.pointer("/support/generalization"),
+            Some(&json!("none"))
+        );
+        assert_eq!(
+            overview.pointer("/support/authorization"),
+            Some(&json!("not_granted_by_evidence"))
+        );
+        assert_eq!(
+            overview.pointer("/support/verified_cells/0/required_activation"),
+            Some(&json!("always"))
+        );
+        assert_eq!(
+            overview.pointer("/support/verified_cells/1/required_activation"),
+            Some(&json!("explicit_manual"))
+        );
+        assert_eq!(
+            overview.pointer("/support/verified_cells/1/required_policy_subject"),
+            Some(&json!("omawrite"))
+        );
+        assert_eq!(
+            overview.pointer("/support/verified_cells/2/required_policy_subject"),
+            Some(&json!("com.github.xournalpp.xournalpp"))
+        );
+
+        let mut generalized = overview.clone();
+        generalized["support"]["generalization"] = json!("all_fcitx5_apps");
+        assert!(!validator.is_valid(&generalized));
+        let mut self_authorizing = overview.clone();
+        self_authorizing["support"]["authorization"] = json!("granted_by_test_evidence");
+        assert!(!validator.is_valid(&self_authorizing));
+        let mut widened_cell = overview;
+        widened_cell["support"]["verified_cells"][1]["application_version"] = json!("any");
+        assert!(!validator.is_valid(&widened_cell));
     }
 
     #[test]
@@ -931,7 +1043,7 @@ mod tests {
             MessageType::HelloAck,
             0,
             &HelloAckPayload {
-                selected_v: PROTOCOL_VERSION,
+                selected_v: CURRENT_PROTOCOL_VERSION,
                 connection_id: "c:test-connection".to_owned(),
                 enabled_capabilities: CLI_CAPABILITIES.to_vec(),
                 max_frame_bytes: MAX_FRAME_BYTES,
@@ -942,7 +1054,9 @@ mod tests {
                 paused: true,
             },
         )
-        .expect("hello acknowledgment");
+        .expect("hello acknowledgment")
+        .at_version(CURRENT_PROTOCOL_VERSION)
+        .expect("v2 hello acknowledgment");
         acknowledgment.id = Some(request_id.to_owned());
         acknowledgment
     }
@@ -971,7 +1085,7 @@ mod tests {
         ));
 
         let mut wrong_version = hello_acknowledgment("ctl:request");
-        wrong_version.payload["selected_v"] = json!(PROTOCOL_VERSION + 1);
+        wrong_version.payload["selected_v"] = json!(CURRENT_PROTOCOL_VERSION - 1);
         assert!(matches!(
             validate_handshake(&wrong_version, "ctl:request"),
             Err(CliError::Handshake)
@@ -992,6 +1106,38 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn v2_settings_response_rejects_a_legacy_document() {
+        let mut response = WireEnvelope::global(
+            MessageType::SettingsStatus,
+            1,
+            &SettingsStatusPayload {
+                document: json!({
+                    "schema": "badi.settings.v1",
+                    "revision": 0,
+                    "paused": true,
+                    "subjects": []
+                }),
+                personalization_revision: 0,
+                personalization_records: 0,
+                personalization_bytes: 0,
+                personalization_store_available: true,
+                personalization_recorder_available: true,
+                personalization_write_failures: 0,
+                personalization_dropped_signals: 0,
+            },
+        )
+        .expect("settings response")
+        .at_version(CURRENT_PROTOCOL_VERSION)
+        .expect("v2 settings response");
+        response.id = Some("ctl:settings".to_owned());
+
+        assert!(matches!(
+            validate_settings_response(&response, "ctl:settings"),
+            Err(CliError::UnexpectedResponse)
+        ));
+    }
+
     fn control_response(request_id: &str, action: ControlAction) -> WireEnvelope {
         let mut response = WireEnvelope::global(
             MessageType::ControlResult,
@@ -1003,7 +1149,9 @@ mod tests {
                 paused: action == ControlAction::Pause,
             },
         )
-        .expect("control response");
+        .expect("control response")
+        .at_version(CURRENT_PROTOCOL_VERSION)
+        .expect("v2 control response");
         response.id = Some(request_id.to_owned());
         response
     }
@@ -1074,7 +1222,9 @@ mod tests {
                 active: None,
             },
         )
-        .expect("health response");
+        .expect("health response")
+        .at_version(CURRENT_PROTOCOL_VERSION)
+        .expect("v2 health response");
         response.id = Some("ctl:health".to_owned());
         assert!(validate_health_response(&response, "ctl:health").is_ok());
 
@@ -1116,6 +1266,41 @@ mod tests {
                 command: Command::Global(ControlAction::Resume),
             }
         );
+    }
+
+    #[test]
+    fn settings_replace_accepts_only_the_current_v2_schema() {
+        let mut current = SettingsV1::deny_by_default();
+        current.revision = 1;
+        let current = serde_json::to_string(&current).expect("current settings JSON");
+        assert!(
+            parse_arguments(arguments(&[
+                "--socket",
+                "/tmp/broker.sock",
+                "settings",
+                "replace",
+                "--if-revision",
+                "0",
+                "--json",
+                &current,
+            ]))
+            .is_ok()
+        );
+
+        let legacy = r#"{"schema":"badi.settings.v1","revision":1,"paused":true,"subjects":[]}"#;
+        assert!(matches!(
+            parse_arguments(arguments(&[
+                "--socket",
+                "/tmp/broker.sock",
+                "settings",
+                "replace",
+                "--if-revision",
+                "0",
+                "--json",
+                legacy,
+            ])),
+            Err(CliError::Arguments)
+        ));
     }
 
     #[test]

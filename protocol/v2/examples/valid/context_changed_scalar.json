@@ -1,0 +1,27 @@
+{
+  "v": 2,
+  "type": "context.changed",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 4,
+  "revision": 8,
+  "mono_ms": 3,
+  "payload": {
+    "fingerprint": "desktop_context_0001",
+    "before": "Write this 🚀",
+    "after": "",
+    "selection": { "anchor": 12, "head": 12, "unit": "unicode_scalar_values" },
+    "field": {
+      "purpose": "normal",
+      "editable": true,
+      "multiline": true,
+      "composing": false,
+      "sensitive": false,
+      "identity_known": true,
+      "focused": true,
+      "lock_screen": false
+    },
+    "activation": "manual",
+    "explicit": true,
+    "language": "en"
+  }
+}

@@ -14,7 +14,7 @@ typing are outside the architecture.
 
 ## Current state
 
-Badi is pre-release. This tree contains one narrow product path and keeps its
+Badi is pre-release. This tree contains two narrow product paths and keeps its
 remaining claims deliberately smaller than its code:
 
 - **Dillinger product slice:** an MV3 extension requests only the optional
@@ -22,6 +22,14 @@ remaining claims deliberately smaller than its code:
   only after consent, reads and edits the one exact Dillinger Monaco document,
   renders caret-relative ghost text, and accepts with `Ctrl+Shift+Y` as one
   target-native undoable transaction.
+- **Native Fcitx5 slice:** a cooperative module observes the active input
+  method without replacing it, stays manual-only, and uses Fcitx's candidate
+  and `commitString` APIs. The tested Omawrite 0.5.0/Qt6 editor and Xournal++
+  1.3.7/GTK3 text-tool cells passed 20 visible accept/clear/undo trials each on
+  Fcitx5 5.1.21 under Hyprland 0.56.2. Runtime authorization is the exact
+  process identity plus an explicit chord and an eligible native text context;
+  Fcitx does not expose a stable widget identity. No behavior outside those
+  verified cells is claimed.
 - **Local semantic evaluation:** a feature-gated evaluator can supervise one
   pinned `llama.cpp` child and one pinned Qwen3 1.7B GGUF artifact through a
   private, fresh-bearer-gated loopback boundary. It is development evidence only.
@@ -43,10 +51,12 @@ avoids a second resident shell.
 ## Trust boundary
 
 ```text
-exact target API <-> Chromium adapter <-> native host <-> Rust broker
-      |                    |                    |            |
- Monaco edit        optional consent      bounded IPC   policy/provider
- caret ghost        document fences       exact origin  private settings
+exact target API <-> Chromium adapter <-> native host ---\
+                                                       +--> Rust broker
+Fcitx InputContext <-> cooperative Fcitx module -------/       |
+       |                       |                                |
+native candidate        exact app allowlist               policy/provider
+native commitString     explicit eligible-context gate    private settings
 
 evaluation only: verified model + verified runtime bundle -> owned llama.cpp
 control only:    Omarchy panel -> fixed badictl argv -> broker contract
@@ -57,6 +67,10 @@ bound to session, focus epoch, revision, fingerprint, and suggestion ID. The
 broker owns policy, cancellation, commit authorization, and content-free
 metrics. Same-UID IPC is process isolation, not authentication against a
 malicious process running as the same user.
+
+The Fcitx module uses protocol v2 directly over the private broker socket. It
+never registers an input method and never uses raw input capture, clipboard
+insertion, or synthetic typing as a product fallback.
 
 ## Try the current product slice
 
@@ -86,6 +100,19 @@ npm run live:product --workspace @badi/chromium
 Chromium still requires a real permission decision. Window-manager focus
 transfer may require one manual click. The disposable run proves one exact
 browser/editor cell, not arbitrary websites or all Chromium versions.
+
+## Try the exact native-app slice
+
+Build and test the cooperative addon with:
+
+```sh
+npm run fcitx5:check
+```
+
+User-local evaluation changes the live Fcitx process, so follow the scoped
+[install, verification, and rollback runbook](adapters/fcitx5/README.md). The
+runbook keeps `keyboard-us` selected and limits policy to the two verified app
+IDs. It is not a claim that arbitrary Qt, GTK, terminal, or Electron cells work.
 
 ## Evaluate the local-model boundary
 
@@ -147,6 +174,7 @@ cargo test --workspace --all-features
 cargo +1.85.0 check --workspace --all-targets --all-features --locked
 npm ci
 npm run check
+npm run fcitx5:check
 git diff --check
 ```
 
@@ -178,6 +206,11 @@ claims to attest.
   candidate, runtime, evaluator, and activation boundaries.
 - [Chromium runbook](adapters/chromium/README.md) — historical fixture lane and
   current exact-Dillinger product runner.
+- [Fcitx5 native-app handoff](docs/delivery/2026-09-01-fcitx5-native-app-handoff.md) —
+  architecture, exact compatibility cells, live proof, install boundary, and
+  rollback.
+- [Fcitx5 module runbook](adapters/fcitx5/README.md) — build, user-local
+  evaluation, shortcuts, and removal.
 - [Omarchy artifact](ui/omarchy-plugin/README.md) — host contract, isolation,
   lifecycle proof, and current limits.
 - [Capability evidence guide](capabilities/README.md) — immutable V1/V2 history
@@ -194,7 +227,8 @@ plan.
 
 ## Explicit non-goals for this milestone
 
-- No arbitrary-site, Obsidian, terminal, Fcitx5, or multilingual product claim.
+- No arbitrary-site, Obsidian, terminal, generic Fcitx5, generic Qt/GTK, or
+  multilingual product claim.
 - No network model provider, automatic model download, personalization, or
   prose retention.
 - No `evdev`, `wtype`, clipboard, `xdotool`, synthetic-key, or global-input

@@ -11,12 +11,15 @@ use std::str::FromStr as _;
 use std::sync::{Arc, Mutex};
 
 use rustix::fs::{FlockOperation, flock};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
-use crate::protocol::{MAX_SAFE_COUNTER, OriginScheme, TargetDescriptor, TargetKind};
+use crate::protocol::{
+    MAX_SAFE_COUNTER, OriginScheme, TargetDescriptor, TargetKind, valid_linux_app_id,
+};
 
-pub const SETTINGS_SCHEMA: &str = "badi.settings.v1";
+pub const SETTINGS_SCHEMA_V1: &str = "badi.settings.v1";
+pub const SETTINGS_SCHEMA: &str = "badi.settings.v2";
 pub const MAX_SETTINGS_BYTES: usize = 65_536;
 // Proven by a maximum-shape regression to fit both the 64 KiB wire frame and
 // the private settings file, including full-length origin identities.
@@ -34,6 +37,12 @@ const TEMPORARY_NONCE_HEX_LENGTH: usize = 32;
 #[serde(rename_all = "snake_case")]
 pub enum BrowserAdapter {
     Chromium,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinuxAdapter {
+    Fcitx,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -62,6 +71,10 @@ pub enum StableIdentity {
         host: String,
         port: u16,
     },
+    LinuxApp {
+        adapter: LinuxAdapter,
+        app_id: String,
+    },
 }
 
 impl StableIdentity {
@@ -84,19 +97,34 @@ impl StableIdentity {
         })
     }
 
-    pub fn from_target(target: &TargetDescriptor) -> Result<Self, IdentityError> {
-        if target.kind != TargetKind::Browser || target.app_id != "chromium" {
-            return Err(IdentityError::UnsupportedTarget);
+    pub fn linux_app(adapter: LinuxAdapter, app_id: &str) -> Result<Self, IdentityError> {
+        if !valid_linux_app_id(app_id) {
+            return Err(IdentityError::InvalidAppId);
         }
-        let origin = target.origin.as_ref().ok_or(IdentityError::MissingOrigin)?;
-        let scheme = match origin.scheme {
-            OriginScheme::Http => WebScheme::Http,
-            OriginScheme::Https => WebScheme::Https,
-            OriginScheme::ChromeExtension | OriginScheme::MozExtension | OriginScheme::File => {
-                return Err(IdentityError::UnsupportedScheme);
+        Ok(Self::LinuxApp {
+            adapter,
+            app_id: app_id.to_owned(),
+        })
+    }
+
+    pub fn from_target(target: &TargetDescriptor) -> Result<Self, IdentityError> {
+        match target.kind {
+            TargetKind::Browser if target.app_id == "chromium" => {
+                let origin = target.origin.as_ref().ok_or(IdentityError::MissingOrigin)?;
+                let scheme = match origin.scheme {
+                    OriginScheme::Http => WebScheme::Http,
+                    OriginScheme::Https => WebScheme::Https,
+                    OriginScheme::ChromeExtension
+                    | OriginScheme::MozExtension
+                    | OriginScheme::File => return Err(IdentityError::UnsupportedScheme),
+                };
+                Self::browser_origin(BrowserAdapter::Chromium, scheme, &origin.host, origin.port)
             }
-        };
-        Self::browser_origin(BrowserAdapter::Chromium, scheme, &origin.host, origin.port)
+            TargetKind::DesktopApplication if target.origin.is_none() => {
+                Self::linux_app(LinuxAdapter::Fcitx, &target.app_id)
+            }
+            _ => Err(IdentityError::UnsupportedTarget),
+        }
     }
 
     pub fn validate(&self) -> Result<(), IdentityError> {
@@ -112,6 +140,14 @@ impl StableIdentity {
                     Ok(())
                 } else {
                     Err(IdentityError::NoncanonicalHost)
+                }
+            }
+            Self::LinuxApp { adapter, app_id } => {
+                let canonical = Self::linux_app(*adapter, app_id)?;
+                if &canonical == self {
+                    Ok(())
+                } else {
+                    Err(IdentityError::InvalidAppId)
                 }
             }
         }
@@ -206,16 +242,51 @@ pub struct SubjectRule {
     pub permissions: SubjectPermissions,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct SettingsV1 {
+pub struct SettingsV2 {
     pub schema: String,
     pub revision: u64,
     pub paused: bool,
     pub subjects: Vec<SubjectRule>,
 }
 
-impl SettingsV1 {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsDocument {
+    schema: String,
+    revision: u64,
+    paused: bool,
+    subjects: Vec<SubjectRule>,
+}
+
+impl<'de> Deserialize<'de> for SettingsV2 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let decoded = SettingsDocument::deserialize(deserializer)?;
+        if decoded.schema != SETTINGS_SCHEMA && decoded.schema != SETTINGS_SCHEMA_V1 {
+            return Err(serde::de::Error::custom("unsupported_settings_schema"));
+        }
+        if decoded.schema == SETTINGS_SCHEMA_V1
+            && decoded
+                .subjects
+                .iter()
+                .any(|rule| matches!(rule.identity, StableIdentity::LinuxApp { .. }))
+        {
+            return Err(serde::de::Error::custom("linux_app_requires_settings_v2"));
+        }
+        Ok(Self {
+            schema: SETTINGS_SCHEMA.to_owned(),
+            revision: decoded.revision,
+            paused: decoded.paused,
+            subjects: decoded.subjects,
+        })
+    }
+}
+
+impl SettingsV2 {
     #[must_use]
     pub fn deny_by_default() -> Self {
         Self {
@@ -241,6 +312,11 @@ impl SettingsV1 {
         for rule in &self.subjects {
             rule.identity.validate()?;
             rule.permissions.validate()?;
+            if matches!(rule.identity, StableIdentity::LinuxApp { .. })
+                && rule.permissions.learn.is_allowed()
+            {
+                return Err(SettingsValidationError::LinuxAppLearningUnsupported);
+            }
             if let Some(identity) = previous {
                 match identity.cmp(&rule.identity) {
                     Ordering::Equal => return Err(SettingsValidationError::DuplicateIdentity),
@@ -301,13 +377,55 @@ impl SettingsV1 {
             |identity| self.resolve_identity_validated(&identity),
         )
     }
+
+    pub fn wire_document(
+        &self,
+        protocol_version: u8,
+    ) -> Result<serde_json::Value, serde_json::Error> {
+        if protocol_version == crate::protocol::PROTOCOL_VERSION {
+            let subjects = self
+                .subjects
+                .iter()
+                .filter(|rule| matches!(rule.identity, StableIdentity::BrowserOrigin { .. }))
+                .collect::<Vec<_>>();
+            Ok(serde_json::json!({
+                "schema": SETTINGS_SCHEMA_V1,
+                "revision": self.revision,
+                "paused": self.paused,
+                "subjects": subjects,
+            }))
+        } else {
+            serde_json::to_value(self)
+        }
+    }
+
+    /// A legacy settings client can still manage its browser-origin slice, but
+    /// cannot erase native policy that its schema is unable to represent.
+    #[must_use]
+    pub fn preserving_linux_rules_from(mut self, current: &Self) -> Self {
+        self.subjects.extend(
+            current
+                .subjects
+                .iter()
+                .filter(|rule| matches!(rule.identity, StableIdentity::LinuxApp { .. }))
+                .cloned(),
+        );
+        self.subjects
+            .sort_by(|left, right| left.identity.cmp(&right.identity));
+        self
+    }
 }
 
-impl Default for SettingsV1 {
+impl Default for SettingsV2 {
     fn default() -> Self {
         Self::deny_by_default()
     }
 }
+
+/// Compatibility name for existing broker and Chromium control-plane code.
+/// Values deserialize legacy v1 documents but are always canonical settings v2
+/// in memory and on disk.
+pub type SettingsV1 = SettingsV2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PolicyResolution {
@@ -547,7 +665,14 @@ impl SettingsStore {
             .lock()
             .map_err(|_| SettingsStoreError::LockPoisoned)?;
         if let Some(bytes) = read_private_limited(&self.path, MAX_SETTINGS_BYTES)? {
-            decode_settings(&bytes)
+            let (settings, migrated) = decode_settings_with_source(&bytes)?;
+            if migrated {
+                // The existing lifetime and mutation locks make this a single
+                // writer migration. atomic_write_private keeps either the old
+                // complete v1 document or the new complete v2 document visible.
+                write_settings(&self.path, &settings)?;
+            }
+            Ok(settings)
         } else {
             let settings = SettingsV1::deny_by_default();
             write_settings(&self.path, &settings)?;
@@ -641,9 +766,19 @@ impl SettingsStore {
 }
 
 fn decode_settings(bytes: &[u8]) -> Result<SettingsV1, SettingsStoreError> {
+    decode_settings_with_source(bytes).map(|(settings, _)| settings)
+}
+
+fn decode_settings_with_source(bytes: &[u8]) -> Result<(SettingsV1, bool), SettingsStoreError> {
+    #[derive(Deserialize)]
+    struct SchemaProbe {
+        schema: String,
+    }
+
+    let source = serde_json::from_slice::<SchemaProbe>(bytes)?;
     let settings: SettingsV1 = serde_json::from_slice(bytes)?;
     settings.validate()?;
-    Ok(settings)
+    Ok((settings, source.schema == SETTINGS_SCHEMA_V1))
 }
 
 fn write_settings(path: &Path, settings: &SettingsV1) -> Result<(), SettingsStoreError> {
@@ -977,6 +1112,8 @@ fn sync_directory(path: &Path) -> Result<(), PrivateStorageError> {
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum IdentityError {
+    #[error("invalid_app_id")]
+    InvalidAppId,
     #[error("invalid_host")]
     InvalidHost,
     #[error("invalid_port")]
@@ -999,6 +1136,8 @@ pub enum SettingsValidationError {
     Identity(#[from] IdentityError),
     #[error("invalid_retention")]
     InvalidRetention,
+    #[error("linux_app_learning_unsupported")]
+    LinuxAppLearningUnsupported,
     #[error("permission_dependency")]
     PermissionDependency,
     #[error("revision_out_of_range")]
@@ -1063,10 +1202,11 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        BrowserAdapter, MAX_SETTINGS_BYTES, MAX_SUBJECTS, PermissionDecision, PrivateStorage,
-        PrivateStorageError, RetentionPermission, SETTINGS_SCHEMA, SettingsStoreError, SettingsV1,
-        StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
-        remove_private_file_with_sync, write_settings,
+        BrowserAdapter, LinuxAdapter, MAX_SETTINGS_BYTES, MAX_SUBJECTS, PRIVATE_FILE_MODE,
+        PermissionDecision, PrivateStorage, PrivateStorageError, RetentionPermission,
+        SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV1, StableIdentity,
+        StoragePaths, SubjectPermissions, SubjectRule, WebScheme, remove_private_file_with_sync,
+        write_settings,
     };
     use crate::protocol::{
         MAX_FRAME_BYTES, Origin, OriginScheme, TargetDescriptor, TargetKind, WireEnvelope,
@@ -1144,6 +1284,49 @@ mod tests {
         ] {
             assert!(StableIdentity::from_target(&rejected).is_err());
         }
+    }
+
+    #[test]
+    fn desktop_target_resolution_uses_exact_canonical_fcitx_program_identity() {
+        let target = TargetDescriptor {
+            kind: TargetKind::DesktopApplication,
+            app_id: "com.github.xournalpp.xournalpp".to_owned(),
+            target_id: "ic:42".to_owned(),
+            origin: None,
+        };
+        assert_eq!(
+            StableIdentity::from_target(&target).expect("known Linux app"),
+            StableIdentity::linux_app(LinuxAdapter::Fcitx, &target.app_id)
+                .expect("canonical identity")
+        );
+
+        for app_id in [
+            "",
+            "Omawrite",
+            "omawrite window",
+            ".omawrite",
+            "omawrite.",
+            "omawrite.1editor",
+            "omawrite._editor",
+            "omawrite.-editor",
+        ] {
+            assert!(StableIdentity::linux_app(LinuxAdapter::Fcitx, app_id).is_err());
+        }
+        for app_id in [
+            "omawrite",
+            "com.github.xournalpp.xournalpp",
+            "omawrite.editor_",
+        ] {
+            StableIdentity::linux_app(LinuxAdapter::Fcitx, app_id)
+                .expect("schema-compatible Linux app identity");
+        }
+        let mut with_origin = target;
+        with_origin.origin = Some(Origin {
+            scheme: OriginScheme::Https,
+            host: "example.com".to_owned(),
+            port: None,
+        });
+        assert!(StableIdentity::from_target(&with_origin).is_err());
     }
 
     #[test]
@@ -1284,6 +1467,60 @@ mod tests {
         }"#;
         let decoded: SettingsV1 = serde_json::from_slice(invalid).expect("structurally valid");
         assert!(decoded.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_v1_document_migrates_atomically_to_canonical_v2_on_load() {
+        let temporary = tempdir().expect("temporary directory");
+        let paths = StoragePaths::new(
+            temporary.path().join("config/badi"),
+            temporary.path().join("data/badi"),
+        )
+        .expect("paths");
+        let storage = PrivateStorage::open(paths.clone()).expect("private storage");
+        let legacy = format!(
+            r#"{{
+              "schema":"{SETTINGS_SCHEMA_V1}","revision":1,"paused":false,
+              "subjects":[{{"identity":{{"kind":"browser_origin","adapter":"chromium",
+              "scheme":"https","host":"example.com","port":443}},"permissions":{{
+              "suggest":"allow","display":"allow","context_read":"allow","learn":"block",
+              "retention":{{"mode":"none"}}}}}}]
+            }}"#
+        );
+        fs::write(paths.settings_path(), legacy).expect("seed legacy settings");
+        fs::set_permissions(
+            paths.settings_path(),
+            fs::Permissions::from_mode(PRIVATE_FILE_MODE),
+        )
+        .expect("private legacy settings");
+
+        let settings = storage
+            .settings_store()
+            .expect("settings store")
+            .load_or_initialize()
+            .expect("migrate settings");
+        assert_eq!(settings.schema, SETTINGS_SCHEMA);
+        assert_eq!(settings.revision, 1);
+        assert!(
+            settings
+                .resolve_identity(&identity("example.com"))
+                .allows_suggestion()
+        );
+
+        let persisted: serde_json::Value = serde_json::from_slice(
+            &fs::read(paths.settings_path()).expect("read migrated settings"),
+        )
+        .expect("migrated JSON");
+        assert_eq!(persisted["schema"], SETTINGS_SCHEMA);
+        assert!(
+            fs::read_dir(paths.config_dir())
+                .expect("config directory")
+                .all(|entry| !entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp"))
+        );
     }
 
     #[test]

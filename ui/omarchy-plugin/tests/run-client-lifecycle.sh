@@ -125,30 +125,85 @@ wait_for_pid_exit() {
 ipc activate >/dev/null
 wait_for_call_count 1
 wait_until_idle
+state=$(ipc state)
+jq -e '
+  .overviewSchema == "badi.overview.v2"
+  and .supportScope == "verified_test_cells_only"
+  and .supportGeneralization == "none"
+  and .supportAuthorization == "not_granted_by_evidence"
+  and .verifiedSupportCells == 3
+  and .browserSupportActivation == "always"
+  and .nativeSupportActivation == "explicit_manual"
+  and .settingsSchema == "badi.settings.v2"
+  and .settingsDocumentValid == true
+  and .subjectCount == 2
+  and .targetSubjectIndex == 0
+' <<<"$state" >/dev/null
+legacy_settings='{"schema":"badi.settings.v1","revision":0,"paused":true,"subjects":[]}'
+[[ $(ipc validateSettings "$legacy_settings") == false ]]
+invalid_linux_settings=$(jq -cn '{
+  schema: "badi.settings.v2",
+  revision: 1,
+  paused: false,
+  subjects: [{
+    identity: {kind: "linux_app", adapter: "fcitx", app_id: "Omawrite Window"},
+    permissions: {
+      suggest: "block", display: "block", context_read: "block", learn: "block",
+      retention: {mode: "none"}
+    }
+  }]
+}')
+[[ $(ipc validateSettings "$invalid_linux_settings") == false ]]
+linux_learning_settings=$(jq -cn '{
+  schema: "badi.settings.v2",
+  revision: 1,
+  paused: false,
+  subjects: [{
+    identity: {kind: "linux_app", adapter: "fcitx", app_id: "omawrite"},
+    permissions: {
+      suggest: "allow", display: "allow", context_read: "allow", learn: "allow",
+      retention: {mode: "none"}
+    }
+  }]
+}')
+[[ $(ipc validateSettings "$linux_learning_settings") == false ]]
+
+# A browser-policy mutation must preserve the native Fcitx rule that the same
+# settings v2 document carries through the control center.
+ipc blockTarget >/dev/null
+wait_for_call_count 3
+wait_until_idle
+replacement=$(sed -n '2p' "$call_log" | cut -d' ' -f6-)
+jq -e '
+  .schema == "badi.settings.v2"
+  and any(.subjects[];
+    .identity == {kind: "linux_app", adapter: "fcitx", app_id: "omawrite"})
+' <<<"$replacement" >/dev/null
+
 ipc clearMemory >/dev/null
-wait_for_call_count 2
+wait_for_call_count 4
 first_pid=$(head -n 1 "$pid_log")
 ipc deactivate >/dev/null
 sleep 0.7
 wait_for_pid_exit "$first_pid"
-wait_for_call_count 2
+wait_for_call_count 4
 [[ $(jq -r '.active' <<<"$(ipc state)") == false ]]
 
 # Reopen while the second TERM-ignoring mutation is still tearing down. The
 # stale mutation result is discarded and exactly one fresh overview is queued.
 ipc activate >/dev/null
-wait_for_call_count 3
+wait_for_call_count 5
 wait_until_idle
 ipc clearMemory >/dev/null
-wait_for_call_count 4
+wait_for_call_count 6
 second_pid=$(tail -n 1 "$pid_log")
 ipc deactivate >/dev/null
 ipc activate >/dev/null
 wait_for_pid_exit "$second_pid"
-wait_for_call_count 5
+wait_for_call_count 7
 wait_until_idle
 sleep 0.2
-wait_for_call_count 5
+wait_for_call_count 7
 state=$(ipc state)
 [[ $(jq -r '.active' <<<"$state") == true ]]
 [[ $(jq -r '.refreshQueued' <<<"$state") == false ]]

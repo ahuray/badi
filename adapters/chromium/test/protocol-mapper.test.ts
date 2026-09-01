@@ -19,6 +19,7 @@ import {
   sessionOpenEnvelope,
   suggestionRequestEnvelopes,
 } from "../src/background/protocol-mapper";
+import { contextFingerprint } from "../src/content/context";
 import type { SuggestionRequest } from "../src/shared/model";
 
 let validate: ReturnType<Ajv2020["compile"]>;
@@ -175,6 +176,27 @@ describe("protocol v1 mapper", () => {
       unit: "utf16_code_units",
     });
     expect(validate(context), JSON.stringify(validate.errors)).toBe(true);
+  });
+
+  it("emits the shared context fingerprint within the wire contract", () => {
+    const current = request();
+    const fingerprint = contextFingerprint(
+      `${current.sessionId}\u001finmemory://model/1\u001fthank you`,
+    );
+    const [context] = suggestionRequestEnvelopes({
+      ...current,
+      context: { ...current.context, fingerprint },
+    });
+
+    expect(fingerprint).toMatch(/^[a-f0-9]{32}$/u);
+    expect(context.payload["fingerprint"]).toBe(fingerprint);
+    expect(validate(context), JSON.stringify(validate.errors)).toBe(true);
+    expect(
+      validate({
+        ...context,
+        payload: { ...context.payload, fingerprint: fingerprint.slice(0, 8) },
+      }),
+    ).toBe(false);
   });
 
   it("rejects lone context surrogates while allowing controls and astral pairs", () => {

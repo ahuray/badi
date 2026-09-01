@@ -12,6 +12,7 @@
     "build": "npm run build --workspace @badi/chromium",
     "build:verify": "npm run build:verify --workspace @badi/chromium",
     "live:check": "npm run live:check --workspace @badi/chromium",
+    "fcitx5:check": "cmake -S adapters/fcitx5 -B adapters/fcitx5/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON && cmake --build adapters/fcitx5/build && ctest --test-dir adapters/fcitx5/build --output-on-failure",
     "name:check": "node scripts/check-name.mjs",
     "docs:check": "node scripts/check-docs.mjs",
     "omarchy:check": "bash ui/omarchy-plugin/tests/check-fast.sh",

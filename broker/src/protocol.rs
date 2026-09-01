@@ -8,7 +8,11 @@ use uuid::{Uuid, Variant};
 
 use crate::metrics::MetricsSnapshot;
 
+/// The legacy browser wire version. Constructors continue to default to this
+/// version so existing Chromium call sites cannot change behavior accidentally.
 pub const PROTOCOL_VERSION: u8 = 1;
+pub const MIN_PROTOCOL_VERSION: u8 = PROTOCOL_VERSION;
+pub const CURRENT_PROTOCOL_VERSION: u8 = 2;
 pub const MAX_SAFE_COUNTER: u64 = 9_007_199_254_740_991;
 pub const MAX_FRAME_BYTES: usize = 65_536;
 pub const MAX_BEFORE_CHARS: usize = 512;
@@ -110,6 +114,7 @@ pub enum Capability {
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
     Browser,
+    DesktopApplication,
     Obsidian,
     Terminal,
     Fixture,
@@ -357,7 +362,7 @@ impl WireEnvelope {
     }
 
     pub fn validate_shape(&self) -> Result<(), ProtocolError> {
-        if self.v != PROTOCOL_VERSION {
+        if !(MIN_PROTOCOL_VERSION..=CURRENT_PROTOCOL_VERSION).contains(&self.v) {
             return Err(ProtocolError::UnsupportedVersion(self.v));
         }
         if self.mono_ms > MAX_SAFE_COUNTER {
@@ -419,6 +424,12 @@ impl WireEnvelope {
         Ok(())
     }
 
+    pub fn at_version(mut self, version: u8) -> Result<Self, ProtocolError> {
+        self.v = version;
+        self.validate_shape()?;
+        Ok(self)
+    }
+
     pub fn coordinates(&self) -> Result<Coordinates, ProtocolError> {
         self.validate_shape()?;
         Ok(Coordinates {
@@ -452,7 +463,7 @@ pub struct HelloPayload {
 
 impl HelloPayload {
     pub fn validate(&self) -> Result<(), ProtocolError> {
-        if self.min_v != PROTOCOL_VERSION || self.max_v != PROTOCOL_VERSION {
+        if self.select_version().is_none() {
             return Err(ProtocolError::VersionNegotiationFailed);
         }
         if self.adapter.name.is_empty()
@@ -469,6 +480,23 @@ impl HelloPayload {
         unique.dedup();
         if unique.len() != self.capabilities.len() {
             return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn select_version(&self) -> Option<u8> {
+        if self.min_v > self.max_v {
+            return None;
+        }
+        let selected = self.max_v.min(CURRENT_PROTOCOL_VERSION);
+        (selected >= self.min_v.max(MIN_PROTOCOL_VERSION)).then_some(selected)
+    }
+
+    pub fn validate_for_frame(&self, frame_version: u8) -> Result<(), ProtocolError> {
+        self.validate()?;
+        if self.min_v != frame_version || self.max_v != frame_version {
+            return Err(ProtocolError::VersionNegotiationFailed);
         }
         Ok(())
     }
@@ -490,7 +518,7 @@ pub struct HelloAckPayload {
 
 impl HelloAckPayload {
     pub fn validate(&self) -> Result<(), ProtocolError> {
-        if self.selected_v != PROTOCOL_VERSION
+        if !(MIN_PROTOCOL_VERSION..=CURRENT_PROTOCOL_VERSION).contains(&self.selected_v)
             || !valid_opaque_id(&self.connection_id)
             || self.enabled_capabilities.is_empty()
             || self.enabled_capabilities.len() > CAPABILITY_COUNT
@@ -558,6 +586,31 @@ impl TargetDescriptor {
         {
             return Err(ProtocolError::InvalidPayload);
         }
+        match self.kind {
+            TargetKind::DesktopApplication => {
+                if self.origin.is_some() || !valid_linux_app_id(&self.app_id) {
+                    return Err(ProtocolError::InvalidPayload);
+                }
+            }
+            TargetKind::Browser
+            | TargetKind::Obsidian
+            | TargetKind::Terminal
+            | TargetKind::Fixture => {}
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_version(&self, version: u8) -> Result<(), ProtocolError> {
+        self.validate()?;
+        if version == PROTOCOL_VERSION && self.kind == TargetKind::DesktopApplication {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        if version == CURRENT_PROTOCOL_VERSION
+            && self.kind == TargetKind::Browser
+            && self.origin.is_none()
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
         Ok(())
     }
 }
@@ -582,6 +635,10 @@ pub struct PolicyQueryPayload {
 impl PolicyQueryPayload {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         self.target.validate()
+    }
+
+    pub fn validate_for_version(&self, version: u8) -> Result<(), ProtocolError> {
+        self.target.validate_for_version(version)
     }
 }
 
@@ -752,6 +809,8 @@ pub struct Selection {
 pub enum OffsetUnit {
     #[serde(rename = "utf16_code_units")]
     Utf16CodeUnits,
+    #[serde(rename = "unicode_scalar_values")]
+    UnicodeScalarValues,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -808,6 +867,15 @@ impl ContextChangedPayload {
             return Err(ProtocolError::InvalidPayload);
         }
         Ok(())
+    }
+
+    pub fn validate_for_version(&self, version: u8) -> Result<(), ProtocolError> {
+        self.validate()?;
+        match (version, self.selection.unit) {
+            (PROTOCOL_VERSION, OffsetUnit::Utf16CodeUnits)
+            | (CURRENT_PROTOCOL_VERSION, OffsetUnit::UnicodeScalarValues) => Ok(()),
+            _ => Err(ProtocolError::InvalidPayload),
+        }
     }
 }
 
@@ -1045,6 +1113,24 @@ pub fn valid_opaque_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
 }
 
+/// Canonical Fcitx program identity used for both the session target and its
+/// settings subject. Restricting this to a stable, comparison-safe ASCII form
+/// avoids accidentally granting policy to display names or window titles.
+#[must_use]
+pub fn valid_linux_app_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_ID_CHARS
+        && value.split('.').all(|segment| {
+            let mut bytes = segment.bytes();
+            bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+                && bytes.all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'_' | b'-')
+                })
+        })
+}
+
 pub(crate) fn valid_language_tag(value: &str) -> bool {
     (2..=35).contains(&value.chars().count())
         && value.split('-').all(|subtag| {
@@ -1079,8 +1165,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AdapterDescriptor, AdapterKind, Capability, HelloPayload, MAX_SAFE_COUNTER, MessageType,
-        PROTOCOL_VERSION, ProtocolError, SessionId, WireEnvelope, valid_language_tag,
+        AdapterDescriptor, AdapterKind, CURRENT_PROTOCOL_VERSION, Capability, HelloPayload,
+        MAX_SAFE_COUNTER, MessageType, PROTOCOL_VERSION, PolicyQueryPayload, ProtocolError,
+        SessionId, TargetDescriptor, TargetKind, WireEnvelope, valid_language_tag,
     };
 
     #[test]
@@ -1218,5 +1305,22 @@ mod tests {
         for invalid in ["en-", "-en", "en--x", "en_US", "e", "fr-ça"] {
             assert!(!valid_language_tag(invalid), "{invalid}");
         }
+    }
+
+    #[test]
+    fn desktop_policy_queries_require_protocol_v2() {
+        let query = PolicyQueryPayload {
+            target: TargetDescriptor {
+                kind: TargetKind::DesktopApplication,
+                app_id: "omawrite".to_owned(),
+                target_id: "ic:42".to_owned(),
+                origin: None,
+            },
+        };
+
+        assert!(query.validate_for_version(PROTOCOL_VERSION).is_err());
+        query
+            .validate_for_version(CURRENT_PROTOCOL_VERSION)
+            .expect("desktop policy query is a v2 contract");
     }
 }

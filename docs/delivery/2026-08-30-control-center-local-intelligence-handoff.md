@@ -33,12 +33,15 @@ The distinction matters:
 
 ### Settings and policy
 
-`badi.settings.v1` is the normative user-policy document. It is strict,
+`badi.settings.v2` is the current normative user-policy document. It is strict,
 revisioned, compare-and-swap protected, and deny-by-default. The current schema
 supports up to 64 canonical subjects and keeps the independent permissions
 `context_read`, `suggest`, `display`, and `learn`, plus bounded retention
 ([settings types](../../broker/src/settings.rs#L23),
-[formal schema](../../broker/schemas/badi.settings.v1.schema.json)).
+[formal schema](../../broker/schemas/badi.settings.v2.schema.json)). Legacy v1
+browser-only documents are migrated atomically on disk and projected only for
+v1 clients; native application learning remains blocked until its private
+personalization format is explicitly versioned.
 
 The broker, not QML, owns validation and persistence. Settings are written to
 private XDG storage with lifetime interprocess locks, atomic replacement,
@@ -101,7 +104,7 @@ are mutually serialized and have a five-second deadline followed by bounded
 termination
 ([historical QML process boundary](https://github.com/ahuray/badi/blob/e113d45e43338f30235e0830d6674c520dedb242/ui/quickshell/badi/BadiClient.qml#L305),
 [overview assembly](../../broker/src/bin/badictl.rs#L242),
-[overview schema](../../broker/schemas/badi.overview.v1.schema.json)).
+[overview schema](../../broker/schemas/badi.overview.v2.schema.json)).
 
 Missing, malformed, incoherent, or degraded state disables mutation rather
 than guessing. Emergency pause has a narrower fallback: if persisted settings
@@ -428,7 +431,7 @@ target/debug/badictl models writing --json
 
 Before changing policy code, read these in order:
 
-1. [`badi.settings.v1` schema](../../broker/schemas/badi.settings.v1.schema.json)
+1. [`badi.settings.v2` schema](../../broker/schemas/badi.settings.v2.schema.json)
 2. [`settings.rs`](../../broker/src/settings.rs)
 3. [`control_plane.rs`](../../broker/src/control_plane.rs)
 4. [`engine.rs`](../../broker/src/engine.rs)

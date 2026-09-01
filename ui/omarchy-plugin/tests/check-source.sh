@@ -89,6 +89,11 @@ grep -F 'enabled: client.canGrantSubjects' "$artifact_dir/Panel.qml" >/dev/null
 grep -F 'identity.scheme === "https"' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'identity.host === "dillinger.io"' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'identity.port === 443' "$artifact_dir/BadiClient.qml" >/dev/null
+grep -F 'value.schema !== "badi.settings.v2"' "$artifact_dir/BadiClient.qml" >/dev/null
+grep -F 'parsed.schema !== "badi.overview.v2"' "$artifact_dir/BadiClient.qml" >/dev/null
+grep -F 'value.kind === "linux_app"' "$artifact_dir/BadiClient.qml" >/dev/null
+grep -F 'value.adapter === "fcitx"' "$artifact_dir/BadiClient.qml" >/dev/null
+grep -F 'return isBrowserIdentity(identity)' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'text: "https://dillinger.io/"' "$artifact_dir/Panel.qml" >/dev/null
 grep -F 'term-ignoring-mutation)' "$artifact_dir/tests/fake-bin/badictl" >/dev/null
 

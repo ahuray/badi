@@ -148,6 +148,16 @@ function authorityChanged(
   };
 }
 
+function completeHandshake(
+  port: FakeNativePort,
+  paused = false,
+  authorityEpoch = 4,
+  settingsRevision = 2,
+): void {
+  port.onMessage.emit(helloAck(paused));
+  port.onMessage.emit(authorityChanged(authorityEpoch, paused, settingsRevision));
+}
+
 describe("NativeBrokerClient", () => {
   it("does not become ready from a partial hello acknowledgment", async () => {
     const port = new FakeNativePort();
@@ -166,9 +176,10 @@ describe("NativeBrokerClient", () => {
     await Promise.resolve();
     expect(port.posted).toHaveLength(1);
 
-    port.onMessage.emit(helloAck(true));
+    completeHandshake(port, true);
     await expect(pending).resolves.toBe(true);
-    expect(port.posted).toHaveLength(1);
+    expect(port.posted).toHaveLength(2);
+    expect(port.posted.at(-1)).toMatchObject({ type: "authority.ack" });
     client.dispose();
   });
 
@@ -179,22 +190,41 @@ describe("NativeBrokerClient", () => {
       { now: () => 1_000, handshakeTimeoutMs: 10_000 },
     );
     const pending = client.requestSuggestion(request());
-    port.onMessage.emit(helloAck(true));
+    completeHandshake(port, true);
 
     await expect(pending).rejects.toThrow("Broker is paused");
-    expect(port.posted).toEqual([expect.objectContaining({ type: "hello" })]);
+    expect(port.posted.map((message) => (message as { type: string }).type)).toEqual([
+      "hello",
+      "authority.ack",
+    ]);
     client.dispose();
   });
 
-  it("resolves trusted document policy before returning bootstrap state", async () => {
+  it("ACKs the baseline authority snapshot before querying bootstrap policy", async () => {
     const port = new FakeNativePort();
     const client = new NativeBrokerClient(
       { connectNative: () => port },
       { now: () => 1_000, handshakeTimeoutMs: 10_000 },
     );
+    const retireEstablishedAuthority = vi.fn();
+    client.setAuthorityChangedHandler(retireEstablishedAuthority);
     const pending = client.bootstrap(request().sessionId, request().origin);
     port.onMessage.emit(helloAck());
+    await Promise.resolve();
+    expect(port.posted).toEqual([expect.objectContaining({ type: "hello" })]);
+
+    port.onMessage.emit(authorityChanged(4));
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const messageTypes = port.posted.map((message) =>
+      typeof message === "object" && message !== null && "type" in message
+        ? message.type
+        : null,
+    );
+    expect(messageTypes.indexOf("authority.ack")).toBeGreaterThan(-1);
+    expect(messageTypes.indexOf("policy.query")).toBeGreaterThan(
+      messageTypes.indexOf("authority.ack"),
+    );
+    expect(retireEstablishedAuthority).not.toHaveBeenCalled();
     const query = port.posted.find(
       (message) =>
         typeof message === "object" &&
@@ -225,6 +255,15 @@ describe("NativeBrokerClient", () => {
       paused: false,
       policy: { authorityEpoch: 4, reason: "matched_rule" },
     });
+
+    port.onMessage.emit(authorityChanged(5, true, 3));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(retireEstablishedAuthority).toHaveBeenCalledOnce();
+    expect(retireEstablishedAuthority).toHaveBeenCalledWith({
+      authorityEpoch: 5,
+      settingsRevision: 3,
+      paused: true,
+    });
     client.dispose();
   });
 
@@ -235,7 +274,7 @@ describe("NativeBrokerClient", () => {
       { now: () => 1_000, handshakeTimeoutMs: 10_000 },
     );
     const ready = client.bootstrap();
-    port.onMessage.emit(helloAck());
+    completeHandshake(port);
     await ready;
 
     const earlyPolicy = client.resolvePolicy(request().sessionId, request().origin);
@@ -263,6 +302,13 @@ describe("NativeBrokerClient", () => {
       finishRefresh = resolve;
     });
     client.setAuthorityChangedHandler(() => refresh);
+    const acknowledgedBeforeRefresh = port.posted.filter(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        "type" in message &&
+        message.type === "authority.ack",
+    ).length;
     port.onMessage.emit({
       v: 1,
       type: "authority.changed",
@@ -271,14 +317,14 @@ describe("NativeBrokerClient", () => {
     });
     await Promise.resolve();
     expect(
-      port.posted.some(
+      port.posted.filter(
         (message) =>
           typeof message === "object" &&
           message !== null &&
           "type" in message &&
           message.type === "authority.ack",
       ),
-    ).toBe(false);
+    ).toHaveLength(acknowledgedBeforeRefresh);
 
     finishRefresh();
     await refresh;
@@ -297,7 +343,7 @@ describe("NativeBrokerClient", () => {
       { now: () => 1_000, handshakeTimeoutMs: 10_000 },
     );
     const ready = client.bootstrap();
-    port.onMessage.emit(helloAck());
+    completeHandshake(port);
     await ready;
 
     let finishAuthority!: () => void;
@@ -349,7 +395,7 @@ describe("NativeBrokerClient", () => {
       { now: () => 1_000, handshakeTimeoutMs: 10_000 },
     );
     const firstReady = client.bootstrap();
-    firstPort.onMessage.emit(helloAck());
+    completeHandshake(firstPort);
     await firstReady;
 
     let finishFirst!: () => void;
@@ -366,7 +412,7 @@ describe("NativeBrokerClient", () => {
     firstPort.onDisconnect.emit(firstPort);
 
     const secondReady = client.bootstrap();
-    secondPort.onMessage.emit(helloAck());
+    completeHandshake(secondPort, false, 0, 3);
     await secondReady;
     secondPort.onMessage.emit(authorityChanged(0, false, 3));
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -380,15 +426,12 @@ describe("NativeBrokerClient", () => {
     finishFirst();
     await firstGate;
     await Promise.resolve();
-    expect(
-      firstPort.posted.some(
-        (message) =>
-          typeof message === "object" &&
-          message !== null &&
-          "type" in message &&
-          message.type === "authority.ack",
-      ),
-    ).toBe(false);
+    expect(firstPort.posted).not.toContainEqual(
+      expect.objectContaining({
+        type: "authority.ack",
+        payload: expect.objectContaining({ authority_epoch: 5 }),
+      }),
+    );
     expect(
       secondPort.posted.filter(
         (message) =>
@@ -433,7 +476,7 @@ describe("NativeBrokerClient", () => {
         },
       );
       const ready = client.bootstrap();
-      port.onMessage.emit(helloAck());
+      completeHandshake(port);
       await ready;
 
       const pending = client.requestSuggestion(request());
@@ -465,7 +508,7 @@ describe("NativeBrokerClient", () => {
         },
       );
       const ready = client.bootstrap();
-      port.onMessage.emit(helloAck());
+      completeHandshake(port);
       await ready;
 
       const pending = client.requestSuggestion(request());
@@ -506,7 +549,7 @@ describe("NativeBrokerClient", () => {
         },
       );
       const ready = client.bootstrap();
-      port.onMessage.emit(helloAck());
+      completeHandshake(port);
       await ready;
 
       const pending = client.authorizeCommit(commitRequest());
@@ -538,7 +581,7 @@ describe("NativeBrokerClient", () => {
         },
       );
       const ready = client.bootstrap();
-      port.onMessage.emit(helloAck());
+      completeHandshake(port);
       await ready;
 
       const suggestion = client.requestSuggestion(request());
@@ -603,7 +646,7 @@ describe("NativeBrokerClient", () => {
         },
       );
       const ready = client.bootstrap();
-      port.onMessage.emit(helloAck());
+      completeHandshake(port);
       await ready;
 
       const closing = client.requestSuggestion(request());
@@ -655,7 +698,7 @@ describe("NativeBrokerClient", () => {
         },
       );
       const ready = client.bootstrap();
-      port.onMessage.emit(helloAck());
+      completeHandshake(port);
       await ready;
 
       const first = client.globalControl("pause");
@@ -744,7 +787,7 @@ describe("NativeBrokerClient", () => {
       { now: () => 1_000, handshakeTimeoutMs: 10_000 },
     );
     const pending = client.requestSuggestion(request());
-    port.onMessage.emit(helloAck());
+    completeHandshake(port);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     port.onMessage.emit({
       v: 1,
@@ -765,7 +808,7 @@ describe("NativeBrokerClient", () => {
       { now: () => 1_000, handshakeTimeoutMs: 10_000 },
     );
     const first = client.requestSuggestion(request());
-    port.onMessage.emit(helloAck());
+    completeHandshake(port);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const secondRequest = request("request-2", 10, "fedcba9876543210");
     let secondSettled = false;
@@ -825,9 +868,18 @@ describe("NativeBrokerClient", () => {
     expect(port.posted).toHaveLength(1);
     expect(port.posted[0]).toMatchObject({ type: "hello", v: 1 });
 
-    port.onMessage.emit(helloAck());
+    completeHandshake(port);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(port.posted.slice(1)).toMatchObject([
+    const dataPlaneMessages = port.posted.filter(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        "type" in message &&
+        ["session.open", "context.changed", "suggest.request"].includes(
+          String(message.type),
+        ),
+    );
+    expect(dataPlaneMessages).toMatchObject([
       { type: "session.open", session_id: request().sessionId },
       { type: "context.changed", payload: { before: "Hello" } },
       { type: "suggest.request", id: "request-1" },
@@ -938,7 +990,7 @@ describe("NativeBrokerClient", () => {
       { now: () => 1_000, handshakeTimeoutMs: 10_000 },
     );
     const first = client.requestSuggestion(request());
-    port.onMessage.emit(helloAck());
+    completeHandshake(port);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const firstRejected = expect(first).rejects.toThrow("session closed");
 
@@ -1003,7 +1055,7 @@ describe("NativeBrokerClient", () => {
     const pending = client.requestSuggestion(request()).then(() => {
       settled = true;
     });
-    port.onMessage.emit(helloAck());
+    completeHandshake(port);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(port.posted.some((message) =>
       typeof message === "object" &&
@@ -1052,7 +1104,7 @@ describe("NativeBrokerClient", () => {
       acceptance: "all" as const,
     };
     const authorization = client.authorizeCommit(commitRequest);
-    port.onMessage.emit(helloAck());
+    completeHandshake(port);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const correlationId = "request-revoked.9.accept_all";
     port.onMessage.emit({
@@ -1097,7 +1149,7 @@ describe("NativeBrokerClient", () => {
     const clears: unknown[] = [];
     client.setSuggestionClearHandler((event) => clears.push(event));
     const pending = client.requestSuggestion(request());
-    port.onMessage.emit(helloAck());
+    completeHandshake(port);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     port.onMessage.emit({
       v: 1,
@@ -1153,7 +1205,7 @@ describe("NativeBrokerClient", () => {
       { now: () => 1_000, handshakeTimeoutMs: 10_000 },
     );
     const result = client.globalControl("pause_toggle");
-    port.onMessage.emit(helloAck());
+    completeHandshake(port);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const control = [...port.posted].reverse().find(
       (message) =>
@@ -1197,7 +1249,7 @@ describe("NativeBrokerClient", () => {
       disconnects += 1;
     });
     const pending = client.requestSuggestion(request());
-    port.onMessage.emit(helloAck());
+    completeHandshake(port);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     port.onMessage.emit({
       v: 1,

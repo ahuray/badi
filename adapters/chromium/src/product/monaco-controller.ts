@@ -7,7 +7,7 @@ import type {
   SuggestionResponse,
   SuggestionTransport,
 } from "../shared/model";
-import { sanitizeSuggestion } from "../content/context";
+import { contextFingerprint, sanitizeSuggestion } from "../content/context";
 import type { MonacoBridge } from "./monaco-runtime-bridge";
 import type { MonacoSnapshot } from "./monaco-main-world";
 import { MonacoGhostView, type MonacoSuggestionView } from "./monaco-view";
@@ -56,15 +56,6 @@ function snapshotIdentity(snapshot: MonacoSnapshot): string {
     snapshot.before,
     snapshot.after,
   ].join("\u001f");
-}
-
-function fingerprint(value: string): string {
-  let hash = 0x811c9dc5;
-  for (const character of value) {
-    hash ^= character.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function addressesMatch(left: SuggestionAddress, right: SuggestionAddress): boolean {
@@ -165,19 +156,21 @@ export class MonacoController {
     this.#clearSuggestion();
   }
 
-  acceptAll(): void {
+  acceptAll(): boolean {
+    // Key repeat or duplicate command delivery must not invalidate the
+    // authorization already in flight.
+    if (this.#authorizing !== null) return true;
     const visible = this.#visible;
     if (
       visible === null ||
       this.#paused ||
       this.#disposed ||
       !this.#view.visible ||
-      this.#authorizing !== null ||
       !this.#documentIsUsable() ||
       this.#now() >= visible.expiresAt
     ) {
       this.#clearSuggestion();
-      return;
+      return false;
     }
     const request: CommitAuthorizationRequest = {
       ...this.#address(visible),
@@ -194,6 +187,7 @@ export class MonacoController {
         }
       },
     );
+    return true;
   }
 
   revokeCommit(address: SuggestionAddress): void {
@@ -313,7 +307,7 @@ export class MonacoController {
       revision: this.#revision,
       monotonicMs: Math.max(0, Math.floor(this.#now())),
       context: {
-        fingerprint: fingerprint(identity),
+        fingerprint: contextFingerprint(`${this.#sessionId}\u001f${identity}`),
         before: snapshot.before,
         after: snapshot.after,
         // The product slice is frozen to Dillinger's explicitly English cell;

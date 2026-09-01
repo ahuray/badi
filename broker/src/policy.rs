@@ -119,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_ambient_fails_to_manual() {
+    fn unknown_field_requires_explicit_manual_authority() {
         let mut unknown = field(FieldPurpose::Unknown);
         unknown.identity_known = false;
         assert_eq!(
@@ -132,6 +132,17 @@ mod tests {
                 selection_collapsed: true,
             }),
             PolicyDecision::ManualRequired(PolicyReason::ManualRequired)
+        );
+        assert_eq!(
+            evaluate(PolicyInput {
+                activation: Activation::Manual,
+                explicit: true,
+                field: unknown,
+                target_kind: TargetKind::DesktopApplication,
+                paused: false,
+                selection_collapsed: true,
+            }),
+            PolicyDecision::Allow(PolicyReason::AllowedExplicit)
         );
     }
 

@@ -1,0 +1,12 @@
+[Addon]
+Name=Badi
+Comment=Cooperative manual writing suggestions for supported Linux applications
+Type=SharedLibrary
+Library=libbadi-fcitx5
+Category=Module
+Version=@PROJECT_VERSION@
+OnDemand=False
+Configurable=False
+
+[Addon/Dependencies]
+0=core:5.1.0

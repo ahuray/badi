@@ -149,16 +149,31 @@ Scope {
     return isRetention(value) && value.mode === "bounded"
   }
 
-  function isIdentity(value) {
+  function isBrowserIdentity(value) {
     return hasExactKeys(value, ["kind", "adapter", "scheme", "host", "port"])
       && value.kind === "browser_origin"
       && value.adapter === "chromium"
       && (value.scheme === "http" || value.scheme === "https")
       && typeof value.host === "string"
       && value.host.length > 0
+      && value.host.length <= 253
+      && /^[a-z0-9.:-]+$/.test(value.host)
       && Number.isSafeInteger(value.port)
       && value.port >= 1
       && value.port <= 65535
+  }
+
+  function isLinuxIdentity(value) {
+    return hasExactKeys(value, ["kind", "adapter", "app_id"])
+      && value.kind === "linux_app"
+      && value.adapter === "fcitx"
+      && typeof value.app_id === "string"
+      && /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/.test(value.app_id)
+      && value.app_id.length <= 128
+  }
+
+  function isIdentity(value) {
+    return isBrowserIdentity(value) || isLinuxIdentity(value)
   }
 
   function isPermissions(value) {
@@ -182,21 +197,28 @@ Scope {
     return hasExactKeys(value, ["identity", "permissions"])
       && isIdentity(value.identity)
       && isPermissions(value.permissions)
+      && (value.identity.kind !== "linux_app" || value.permissions.learn === "block")
   }
 
   function compareIdentities(left, right) {
-    var fields = ["kind", "adapter", "scheme", "host"]
+    var kindOrder = {"browser_origin": 0, "linux_app": 1}
+    var leftKind = kindOrder[left.kind]
+    var rightKind = kindOrder[right.kind]
+    if (leftKind !== rightKind) return leftKind - rightKind
+    var fields = left.kind === "browser_origin"
+      ? ["adapter", "scheme", "host"]
+      : ["adapter", "app_id"]
     for (var index = 0; index < fields.length; index += 1) {
       var field = fields[index]
       if (left[field] < right[field]) return -1
       if (left[field] > right[field]) return 1
     }
-    return left.port - right.port
+    return left.kind === "browser_origin" ? left.port - right.port : 0
   }
 
   function isSettingsDocument(value) {
     if (!hasExactKeys(value, ["schema", "revision", "paused", "subjects"])
-        || value.schema !== "badi.settings.v1"
+        || value.schema !== "badi.settings.v2"
         || !Number.isSafeInteger(value.revision)
         || value.revision < 0
         || typeof value.paused !== "boolean"
@@ -212,7 +234,7 @@ Scope {
   }
 
   function isTargetIdentity(identity) {
-    return isIdentity(identity)
+    return isBrowserIdentity(identity)
       && identity.scheme === "https"
       && identity.host === "dillinger.io"
       && identity.port === 443
@@ -287,7 +309,7 @@ Scope {
     document.revision = settingsRevision + 1
     if (!isSettingsDocument(document)) {
       messageTone = "danger"
-      message = "The requested change did not produce valid badi.settings.v1 data."
+      message = "The requested change did not produce valid badi.settings.v2 data."
       return
     }
     pendingSuccessMessage = successMessage
@@ -506,14 +528,14 @@ Scope {
       }
       try {
         var parsed = JSON.parse(overviewStdout.text)
-        if (!root.isObject(parsed) || parsed.schema !== "badi.overview.v1")
+        if (!root.isObject(parsed) || parsed.schema !== "badi.overview.v2")
           throw new Error("unexpected overview schema")
         root.overview = parsed
         if (!root.preserveMessageOnRefresh) root.message = ""
       } catch (error) {
         root.overview = ({})
         root.messageTone = "danger"
-        root.message = "badictl returned invalid badi.overview.v1 data."
+        root.message = "badictl returned invalid badi.overview.v2 data."
       }
       root.preserveMessageOnRefresh = false
       root.refreshed()

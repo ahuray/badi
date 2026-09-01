@@ -87,7 +87,7 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
     --argjson degraded "$degraded" \
     --argjson capacity "$capacity" '
     {
-      schema: "badi.overview.v1",
+      schema: "badi.overview.v2",
       broker: {
         reachable: true,
         provider: "phrase_v1",
@@ -100,7 +100,7 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
         max_frame_bytes: 65536
       },
       settings: {
-        schema: "badi.settings.v1",
+        schema: "badi.settings.v2",
         revision: $settings_revision,
         paused: false,
         subjects: (if $capacity then [
@@ -137,6 +137,20 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
               learn: "block",
               retention: {mode: "none"}
             }
+          },
+          {
+            identity: {
+              kind: "linux_app",
+              adapter: "fcitx",
+              app_id: "omawrite"
+            },
+            permissions: {
+              suggest: "allow",
+              display: "allow",
+              context_read: "allow",
+              learn: "block",
+              retention: {mode: "none"}
+            }
           }
         ] end)
       },
@@ -146,6 +160,49 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
         memory_integrity: (if $store_available then "healthy" else "unavailable" end),
         memory_records: (if $store_available then 0 else null end),
         memory_bytes: (if $store_available then 0 else null end)
+      },
+      support: {
+        scope: "verified_test_cells_only",
+        generalization: "none",
+        authorization: "not_granted_by_evidence",
+        verified_cells: [
+          {
+            id: "chromium_fixture",
+            adapter: "chromium",
+            application: "badi_fixture",
+            application_version: null,
+            toolkit: "web_platform",
+            test_surface: "http://localhost:4173/chromium.html :: HTMLTextAreaElement#draft",
+            required_policy_subject: "http://localhost:4173",
+            required_activation: "always",
+            evidence_class: "historical_not_current_tree_proof",
+            verified_trials: null
+          },
+          {
+            id: "omawrite_0_5_0_qt6",
+            adapter: "fcitx",
+            application: "Omawrite",
+            application_version: "0.5.0",
+            toolkit: "qt6",
+            test_surface: "markdown_editor",
+            required_policy_subject: "omawrite",
+            required_activation: "explicit_manual",
+            evidence_class: "live_native_application_proof",
+            verified_trials: 20
+          },
+          {
+            id: "xournalpp_1_3_7_gtk3_text_tool",
+            adapter: "fcitx",
+            application: "Xournal++",
+            application_version: "1.3.7",
+            toolkit: "gtk3",
+            test_surface: "text_tool_canvas",
+            required_policy_subject: "com.github.xournalpp.xournalpp",
+            required_activation: "explicit_manual",
+            evidence_class: "live_native_application_proof",
+            verified_trials: 20
+          }
+        ]
       }
     }
   '
@@ -154,7 +211,11 @@ fi
 
 if [[ ${1:-} == settings && ${2:-} == replace ]]; then
   [[ ${3:-} == --if-revision && ${5:-} == --json && -n ${4:-} && -n ${6:-} ]]
-  jq -e . <<<"$6" >/dev/null
+  jq -e '
+    .schema == "badi.settings.v2"
+    and any(.subjects[];
+      .identity == {kind: "linux_app", adapter: "fcitx", app_id: "omawrite"})
+  ' <<<"$6" >/dev/null
   exit 0
 fi
 

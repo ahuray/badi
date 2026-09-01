@@ -21,13 +21,16 @@ if (isolatedGlobal[INSTALLATION_KEY] !== true && isExactDillingerDocument(docume
   let controller: MonacoController | null = null;
   let lifetimePort: chrome.runtime.Port | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let bootstrapRetryTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempts = 0;
+  let bootstrapAttempts = 0;
   let bootstrapping = false;
   let bootstrapGeneration = 0;
   let disabled = false;
   let currentPolicy: TargetPolicy | null = null;
   let navigation: EventTarget | null = null;
   const MAX_RECONNECT_ATTEMPTS = 5;
+  const MAX_BOOTSTRAP_ATTEMPTS = 5;
 
   const policyAllowsProduct = (state: BootstrapState | null = null): boolean => {
     const policy = state?.policy ?? currentPolicy;
@@ -46,6 +49,12 @@ if (isolatedGlobal[INSTALLATION_KEY] !== true && isExactDillingerDocument(docume
     if (controller === null) return;
     controller.dispose(invalidateTransport);
     controller = null;
+  };
+
+  const clearBootstrapRetry = (): void => {
+    if (bootstrapRetryTimer === null) return;
+    clearTimeout(bootstrapRetryTimer);
+    bootstrapRetryTimer = null;
   };
 
   const applyPolicy = (policy: TargetPolicy): void => {
@@ -71,6 +80,7 @@ if (isolatedGlobal[INSTALLATION_KEY] !== true && isExactDillingerDocument(docume
   const fence = (invalidateTransport: boolean): void => {
     bootstrapGeneration += 1;
     bootstrapping = false;
+    clearBootstrapRetry();
     currentPolicy = null;
     disposeController(invalidateTransport);
   };
@@ -104,23 +114,56 @@ if (isolatedGlobal[INSTALLATION_KEY] !== true && isExactDillingerDocument(docume
     document.visibilityState === "visible" &&
     document.hasFocus();
 
-  const bootstrap = (): void => {
-    if (bootstrapping || !documentCanBootstrap()) return;
+  const scheduleBootstrapRetry = (detail: string): void => {
+    if (disabled || bootstrapRetryTimer !== null || !documentCanBootstrap()) return;
+    if (bootstrapAttempts >= MAX_BOOTSTRAP_ATTEMPTS) {
+      console.error(
+        `Badi bootstrap failed after ${bootstrapAttempts} attempts: ${detail}`,
+      );
+      return;
+    }
+    const delayMs = Math.min(
+      2_000,
+      100 * 2 ** Math.max(0, bootstrapAttempts - 1),
+    );
+    console.warn(
+      `Badi bootstrap retry ${bootstrapAttempts + 1}/${MAX_BOOTSTRAP_ATTEMPTS} scheduled in ${delayMs} ms: ${detail}`,
+    );
+    bootstrapRetryTimer = setTimeout(() => {
+      bootstrapRetryTimer = null;
+      bootstrap();
+    }, delayMs);
+  };
+
+  function bootstrap(): void {
+    if (
+      bootstrapping ||
+      bootstrapAttempts >= MAX_BOOTSTRAP_ATTEMPTS ||
+      !documentCanBootstrap()
+    ) {
+      return;
+    }
+    clearBootstrapRetry();
     bootstrapping = true;
+    bootstrapAttempts += 1;
     const generation = ++bootstrapGeneration;
     void transport.bootstrap(sessionId).then(
       (state) => {
         if (disabled || generation !== bootstrapGeneration) return;
         bootstrapping = false;
+        bootstrapAttempts = 0;
         reconnectAttempts = 0;
         applyPolicy(state.policy);
         reconnectLifetime();
       },
-      () => {
-        if (generation === bootstrapGeneration) bootstrapping = false;
+      (error: unknown) => {
+        if (disabled || generation !== bootstrapGeneration) return;
+        bootstrapping = false;
+        const detail = error instanceof Error ? error.message : "unknown error";
+        scheduleBootstrapRetry(detail);
       },
     );
-  };
+  }
 
   const reconnectLifetime = (): void => {
     if (
@@ -161,11 +204,10 @@ if (isolatedGlobal[INSTALLATION_KEY] !== true && isExactDillingerDocument(docume
         respond({ applied: true });
       } else if (message.kind === "badi.product.worker-restarted.v1") {
         fence(true);
-        bootstrap();
+        scheduleBootstrapRetry("extension service worker restarted");
         respond({ applied: true });
       } else {
-        controller?.acceptAll();
-        respond({ applied: controller?.suggestionVisible === true });
+        respond({ armed: controller?.acceptAll() === true });
       }
       return false;
     }
@@ -177,7 +219,7 @@ if (isolatedGlobal[INSTALLATION_KEY] !== true && isExactDillingerDocument(docume
     }
     if (message.kind === "badi.transport.disconnected.v1") {
       fence(true);
-      bootstrap();
+      scheduleBootstrapRetry("native broker disconnected");
       return false;
     }
     if (message.kind === "badi.commit.revoke.v1") {

@@ -58,10 +58,11 @@ agents. Their current choices are fragmented:
 Badi's job is to preserve one co-writing habit across the Linux apps that
 can prove support, while yielding cleanly everywhere else.
 
-The first user is a Linux knowledge worker who moves among Chromium, Obsidian,
-and supported browser/editor AI-agent prompt surfaces, values local control,
-and will trade theoretical reach for observable safety and consistent
-behavior. Ghostty/Codex remains a separate manual feasibility experiment.
+The first user is a Linux knowledge worker who moves among Chromium and
+explicitly verified native writing cells, values local control, and will trade
+theoretical reach for observable safety and consistent behavior. Obsidian and
+Ghostty/Codex remain separate feasibility targets until their own exact cells
+pass.
 
 ## The signature loop
 
@@ -226,12 +227,36 @@ Linux is not one text API. Badi uses this integration order:
    target-specific tests; never generic edit authority.
 4. **Manual/status surface** — explains state where inline presentation is not
    possible, but does not manufacture a safe insertion path.
-5. **Unsupported** — the correct result when target identity, sensitive state,
-   revision, placement, or native insertion cannot be proved.
+5. **Unsupported** — the correct result when application target identity,
+   sensitive state, revision, placement, or native insertion cannot be proved.
+   A native input-method adapter may leave semantic widget identity/purpose
+   unknown only on an explicit-manual path; unknown fields never receive
+   ambient completion.
 
 There is no production rung for raw `evdev`, screenshots or clipboard scraping
 by default, `wtype`, virtual keyboards, `xdotool`, arbitrary Electron preload
 injection, or title-only security policy.
+
+### Current native compatibility cells
+
+On Arch Linux, Hyprland 0.56.2, native Wayland, and Fcitx5 5.1.21, the
+cooperative module passed 20 visible accept/clear/undo trials in each exact
+cell:
+
+| Application | Stack | Activation | Verified boundary |
+| --- | --- | --- | --- |
+| Omawrite 0.5.0 | Qt 6 | Manual | Fcitx surrounding text, native candidate, one `commitString`, save, and same-field undo |
+| Xournal++ 1.3.7 | GTK 3 text tool | Manual | Fcitx surrounding text, native candidate, one `commitString`, saved `.xopp` inspection, and native document undo |
+
+The module remained a cooperative addon while `keyboard-us` stayed selected.
+These rows are compatibility evidence, not widget-identity selectors: Fcitx
+exposes the exact application identity and native text context, but no stable
+widget identity. Runtime access therefore additionally requires the user's
+explicit chord in an eligible focused context; the adapter declares semantic
+field identity and purpose unknown rather than inventing them. Results do not
+generalize to other fields, versions, or applications. Product code used no raw input,
+clipboard, or synthetic insertion; an external test driver generated
+physical-class shortcuts only for the acceptance matrix.
 
 ## Architecture as a product promise
 
@@ -242,13 +267,17 @@ Small target-native adapters own the text surface:
 
 - a strict TypeScript Manifest V3 adapter for Chromium;
 - a strict TypeScript CodeMirror adapter for Obsidian;
-- a manual-only C++ Fcitx5 experiment for Ghostty/Codex; and
+- a manual-only cooperative C++ Fcitx5 module with compatibility proven in the
+  named Omawrite and Xournal++ cells;
+- a separate future terminal experiment for Ghostty/Codex; and
 - later adapters only when a target exposes a stable, testable contract.
 
 The broker cannot mutate another app. It can only authorize a revision-bound
 commit for the one adapter that owns the still-focused, unchanged target. The
-adapter awaits that authorization, re-reads target identity, field purpose,
-selection, revision, and fingerprint, then attempts one target-API mutation.
+adapter awaits that authorization, re-reads the available target identity,
+field capability/purpose, selection, revision, and fingerprint, then attempts
+one target-API mutation. Unknown semantic field identity is permitted only for
+an explicit-manual capability cell.
 It reports `applied` only when the target can verify state and undo semantics;
 otherwise it reports `dispatched-unverified`.
 

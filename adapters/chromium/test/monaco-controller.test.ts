@@ -112,13 +112,14 @@ function harness(): Harness {
 function controllerFor(
   state: Harness,
   isCurrentDocument: () => boolean = () => true,
+  sessionId = "session-a",
 ): MonacoController {
   return new MonacoController({
     transport: state.transport,
     bridge: state.bridge,
     view: state.view,
     document,
-    sessionId: "session-a",
+    sessionId,
     origin: "https://dillinger.io",
     isCurrentDocument,
     debounceMs: 0,
@@ -161,8 +162,9 @@ describe("Dillinger Monaco controller", () => {
     expect(suggestionRequest.origin).toBe("https://dillinger.io");
     expect(suggestionRequest.context.before).toBe("thank you");
     expect(suggestionRequest.context.language).toBe("en");
+    expect(suggestionRequest.context.fingerprint).toMatch(/^[a-f0-9]{32}$/u);
 
-    controller.acceptAll();
+    expect(controller.acceptAll()).toBe(true);
     await settle();
     expect(state.bridge.apply).toHaveBeenCalledWith(
       "session-a",
@@ -174,6 +176,54 @@ describe("Dillinger Monaco controller", () => {
     );
     expect(controller.suggestionVisible).toBe(false);
     controller.dispose();
+  });
+
+  it("keeps repeated acceptance idempotent while authorization is pending", async () => {
+    const state = harness();
+    let resolveAuthorization!: (authorization: CommitAuthorization) => void;
+    state.transport.authorizeCommit.mockImplementation(
+      (request: CommitAuthorizationRequest) =>
+        new Promise<CommitAuthorization>((resolve) => {
+          resolveAuthorization = () => resolve(authorizationFor(request));
+        }),
+    );
+    const controller = controllerFor(state);
+    await showSuggestion(controller);
+    expect(controller.acceptAll()).toBe(true);
+    expect(state.transport.authorizeCommit).toHaveBeenCalledTimes(1);
+    expect(controller.acceptAll()).toBe(true);
+    expect(state.transport.authorizeCommit).toHaveBeenCalledTimes(1);
+    expect(controller.suggestionVisible).toBe(true);
+
+    resolveAuthorization(authorizationFor(
+      state.transport.authorizeCommit.mock.calls[0]?.[0] as CommitAuthorizationRequest,
+    ));
+    await settle();
+
+    expect(state.bridge.apply).toHaveBeenCalledTimes(1);
+    expect(state.transport.reportCommit).toHaveBeenCalledTimes(1);
+    expect(state.transport.reportCommit).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "applied", suggestionId: "suggestion-a" }),
+    );
+    controller.dispose();
+  });
+
+  it("salts protocol-valid fingerprints per session", async () => {
+    const first = harness();
+    const second = harness();
+    const firstController = controllerFor(first, () => true, "session-a");
+    const secondController = controllerFor(second, () => true, "session-b");
+    await showSuggestion(firstController);
+    await showSuggestion(secondController);
+
+    const firstRequest = first.transport.requestSuggestion.mock.calls[0]?.[0] as SuggestionRequest;
+    const secondRequest = second.transport.requestSuggestion.mock.calls[0]?.[0] as SuggestionRequest;
+    expect(firstRequest.context.fingerprint).toMatch(/^[a-f0-9]{32}$/u);
+    expect(secondRequest.context.fingerprint).toMatch(/^[a-f0-9]{32}$/u);
+    expect(secondRequest.context.fingerprint).not.toBe(firstRequest.context.fingerprint);
+
+    firstController.dispose();
+    secondController.dispose();
   });
 
   it("does not mutate when the exact document becomes stale during authorization", async () => {
@@ -189,7 +239,7 @@ describe("Dillinger Monaco controller", () => {
     const controller = controllerFor(state, () => current);
     await showSuggestion(controller);
 
-    controller.acceptAll();
+    expect(controller.acceptAll()).toBe(true);
     current = false;
     resolveAuthorization(authorizationFor(
       state.transport.authorizeCommit.mock.calls[0]?.[0] as CommitAuthorizationRequest,
@@ -218,7 +268,7 @@ describe("Dillinger Monaco controller", () => {
       fingerprint: request.context.fingerprint,
       suggestionId: "suggestion-a",
     });
-    controller.acceptAll();
+    expect(controller.acceptAll()).toBe(false);
 
     expect(controller.suggestionVisible).toBe(false);
     expect(state.transport.authorizeCommit).not.toHaveBeenCalled();
@@ -237,7 +287,7 @@ describe("Dillinger Monaco controller", () => {
 
     expect(state.view.show).toHaveBeenCalledTimes(1);
     expect(controller.suggestionVisible).toBe(false);
-    controller.acceptAll();
+    expect(controller.acceptAll()).toBe(false);
     expect(state.transport.authorizeCommit).not.toHaveBeenCalled();
     expect(state.bridge.apply).not.toHaveBeenCalled();
     controller.dispose();

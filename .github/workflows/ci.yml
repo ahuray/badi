@@ -94,6 +94,38 @@ jobs:
           BADI_OMARCHY_ROOT: ${{ github.workspace }}/.ci/omarchy
         run: bash ui/omarchy-plugin/tests/check-host.sh
 
+  fcitx5:
+    name: Fcitx5 addon / pinned Arch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure the dated Arch package snapshot
+        run: |
+          # Pacman expands these repository placeholders.
+          # shellcheck disable=SC2016
+          printf '%s\n' \
+            'Server = https://archive.archlinux.org/repos/2026/08/31/$repo/os/$arch' \
+            > /etc/pacman.d/mirrorlist
+          pacman -Syyu --noconfirm
+          pacman -S --needed --noconfirm \
+            ca-certificates cmake fcitx5 gcc git ninja nlohmann-json
+          pacman -Q cmake fcitx5 gcc ninja nlohmann-json
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build and test the cooperative addon
+        run: |
+          cmake -S adapters/fcitx5 -B adapters/fcitx5/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build adapters/fcitx5/build
+          ctest --test-dir adapters/fcitx5/build --output-on-failure
+
   chromium:
     name: Chromium adapter / Node ${{ matrix.node }}
     runs-on: ubuntu-latest

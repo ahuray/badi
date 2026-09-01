@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:badi:schema:overview:v2",
+  "title": "Badi control-plane overview v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "broker", "settings", "privacy", "support", "models"],
+  "properties": {
+    "schema": { "const": "badi.overview.v2" },
+    "broker": { "$ref": "#/$defs/broker" },
+    "settings": { "$ref": "urn:badi:schema:settings:v2" },
+    "privacy": { "$ref": "#/$defs/privacy" },
+    "support": { "$ref": "#/$defs/support" },
+    "models": { "$ref": "#/$defs/models" }
+  },
+  "$defs": {
+    "counter": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "broker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reachable",
+        "provider",
+        "paused",
+        "authority_epoch",
+        "settings_revision",
+        "control_plane_degraded",
+        "sessions",
+        "socket_mode",
+        "max_frame_bytes"
+      ],
+      "properties": {
+        "reachable": { "const": true },
+        "provider": { "enum": ["phrase_v1", "local_model"] },
+        "paused": { "type": "boolean" },
+        "authority_epoch": { "$ref": "#/$defs/counter" },
+        "settings_revision": { "$ref": "#/$defs/counter" },
+        "control_plane_degraded": { "type": "boolean" },
+        "sessions": { "$ref": "#/$defs/counter" },
+        "socket_mode": { "const": "0600" },
+        "max_frame_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "max_before_chars",
+        "max_after_chars",
+        "clipboard",
+        "screen",
+        "network",
+        "adaptive_writing_memory",
+        "outcome_aggregates",
+        "aggregate_semantics",
+        "stored_metadata",
+        "max_retention_days",
+        "memory_records",
+        "memory_bytes",
+        "memory_store_available",
+        "memory_command_available",
+        "memory_integrity",
+        "memory_write_failures",
+        "memory_dropped_signals",
+        "learning_available"
+      ],
+      "properties": {
+        "context": { "const": "focused_supported_field_only" },
+        "max_before_chars": { "type": "integer", "minimum": 0 },
+        "max_after_chars": { "type": "integer", "minimum": 0 },
+        "clipboard": { "const": false },
+        "screen": { "const": false },
+        "network": { "const": false },
+        "adaptive_writing_memory": { "const": "not_implemented" },
+        "outcome_aggregates": {
+          "enum": ["disabled", "memory_only", "persisted"]
+        },
+        "aggregate_semantics": {
+          "const": "broker_emitted_and_commit_requested_not_delivery_confirmed"
+        },
+        "stored_metadata": { "const": "origin_provider_utc_day_counts" },
+        "max_retention_days": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 90
+        },
+        "memory_records": {
+          "anyOf": [{ "$ref": "#/$defs/counter" }, { "type": "null" }]
+        },
+        "memory_bytes": {
+          "anyOf": [{ "$ref": "#/$defs/counter" }, { "type": "null" }]
+        },
+        "memory_store_available": { "type": "boolean" },
+        "memory_command_available": { "type": "boolean" },
+        "memory_integrity": {
+          "enum": ["healthy", "degraded_since_start", "unavailable"]
+        },
+        "memory_write_failures": { "$ref": "#/$defs/counter" },
+        "memory_dropped_signals": { "$ref": "#/$defs/counter" },
+        "learning_available": { "const": false }
+      }
+    },
+    "support": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "generalization",
+        "authorization",
+        "verified_cells"
+      ],
+      "properties": {
+        "scope": { "const": "verified_test_cells_only" },
+        "generalization": { "const": "none" },
+        "authorization": { "const": "not_granted_by_evidence" },
+        "verified_cells": {
+          "type": "array",
+          "prefixItems": [
+            { "$ref": "#/$defs/chromiumFixtureCell" },
+            { "$ref": "#/$defs/omawriteCell" },
+            { "$ref": "#/$defs/xournalppCell" }
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3
+        }
+      }
+    },
+    "supportCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "adapter",
+        "application",
+        "application_version",
+        "toolkit",
+        "test_surface",
+        "required_policy_subject",
+        "required_activation",
+        "evidence_class",
+        "verified_trials"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "adapter": { "enum": ["chromium", "fcitx"] },
+        "application": { "type": "string" },
+        "application_version": { "type": ["string", "null"] },
+        "toolkit": { "type": "string" },
+        "test_surface": { "type": "string" },
+        "required_policy_subject": { "type": "string" },
+        "required_activation": { "enum": ["always", "explicit_manual"] },
+        "evidence_class": {
+          "enum": [
+            "historical_not_current_tree_proof",
+            "live_native_application_proof"
+          ]
+        },
+        "verified_trials": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        }
+      }
+    },
+    "chromiumFixtureCell": {
+      "allOf": [
+        { "$ref": "#/$defs/supportCell" },
+        {
+          "properties": {
+            "id": { "const": "chromium_fixture" },
+            "adapter": { "const": "chromium" },
+            "application": { "const": "badi_fixture" },
+            "application_version": { "type": "null" },
+            "toolkit": { "const": "web_platform" },
+            "test_surface": {
+              "const": "http://localhost:4173/chromium.html :: HTMLTextAreaElement#draft"
+            },
+            "required_policy_subject": { "const": "http://localhost:4173" },
+            "required_activation": { "const": "always" },
+            "evidence_class": { "const": "historical_not_current_tree_proof" },
+            "verified_trials": { "type": "null" }
+          }
+        }
+      ]
+    },
+    "omawriteCell": {
+      "allOf": [
+        { "$ref": "#/$defs/supportCell" },
+        {
+          "properties": {
+            "id": { "const": "omawrite_0_5_0_qt6" },
+            "adapter": { "const": "fcitx" },
+            "application": { "const": "Omawrite" },
+            "application_version": { "const": "0.5.0" },
+            "toolkit": { "const": "qt6" },
+            "test_surface": { "const": "markdown_editor" },
+            "required_policy_subject": { "const": "omawrite" },
+            "required_activation": { "const": "explicit_manual" },
+            "evidence_class": { "const": "live_native_application_proof" },
+            "verified_trials": { "const": 20 }
+          }
+        }
+      ]
+    },
+    "xournalppCell": {
+      "allOf": [
+        { "$ref": "#/$defs/supportCell" },
+        {
+          "properties": {
+            "id": { "const": "xournalpp_1_3_7_gtk3_text_tool" },
+            "adapter": { "const": "fcitx" },
+            "application": { "const": "Xournal++" },
+            "application_version": { "const": "1.3.7" },
+            "toolkit": { "const": "gtk3" },
+            "test_surface": { "const": "text_tool_canvas" },
+            "required_policy_subject": { "const": "com.github.xournalpp.xournalpp" },
+            "required_activation": { "const": "explicit_manual" },
+            "evidence_class": { "const": "live_native_application_proof" },
+            "verified_trials": { "const": 20 }
+          }
+        }
+      ]
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["writing"],
+      "properties": {
+        "writing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["advice", "configured", "installed"],
+          "properties": {
+            "advice": { "$ref": "urn:badi:schema:model-advice:v2" },
+            "configured": { "const": false },
+            "installed": { "const": false }
+          }
+        }
+      }
+    }
+  }
+}

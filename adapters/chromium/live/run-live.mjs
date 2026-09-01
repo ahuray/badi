@@ -609,7 +609,7 @@ async function pollBrokerPaused(socketPath, env, expected, timeoutMs = 2_000) {
 
 async function grantIsolatedFixturePolicy(socketPath, env) {
   const settings = {
-    schema: "badi.settings.v1",
+    schema: "badi.settings.v2",
     revision: 1,
     paused: false,
     subjects: [

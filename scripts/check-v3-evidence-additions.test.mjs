@@ -610,11 +610,21 @@ async function createFixture({
       implementationCommit,
       repository,
       async cleanup() {
-        await rm(repository, { recursive: true, force: true });
+        await rm(repository, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 50,
+        });
       },
     };
   } catch (error) {
-    await rm(repository, { recursive: true, force: true });
+    await rm(repository, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
     throw error;
   }
 }

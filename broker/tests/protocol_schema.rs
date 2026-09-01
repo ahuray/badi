@@ -21,6 +21,13 @@ fn protocol_root() -> PathBuf {
         .join("protocol/v1")
 }
 
+fn protocol_v2_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("broker has workspace parent")
+        .join("protocol/v2")
+}
+
 fn rust_scalar_schema(mut schema: Value) -> Value {
     // serde_json strings cannot contain lone UTF-16 surrogates. Keep the ECMA-only
     // exclusion normative, assert its presence, and compile the scalar-representable
@@ -81,13 +88,13 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         }
         MessageType::SessionOpen => decode::<SessionOpenPayload>(envelope)
             .target
-            .validate()
+            .validate_for_version(envelope.v)
             .expect("valid target"),
         MessageType::SessionClose => {
             let _: SessionClosePayload = decode(envelope);
         }
         MessageType::ContextChanged => decode::<ContextChangedPayload>(envelope)
-            .validate()
+            .validate_for_version(envelope.v)
             .expect("valid context"),
         MessageType::SuggestRequest => {
             let payload: SuggestRequestPayload = decode(envelope);
@@ -149,7 +156,7 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
             let _: HealthStatusPayload = decode(envelope);
         }
         MessageType::PolicyQuery => decode::<PolicyQueryPayload>(envelope)
-            .validate()
+            .validate_for_version(envelope.v)
             .expect("valid policy query"),
         MessageType::PolicyStatus => decode::<PolicyStatusPayload>(envelope)
             .validate()
@@ -227,6 +234,84 @@ fn every_negative_scalar_fixture_is_rejected_by_normative_schema() {
             path.display()
         );
     }
+}
+
+#[test]
+fn every_v2_fixture_matches_schema_and_versioned_rust_contracts() {
+    let root = protocol_v2_root();
+    let schema = rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(root.join("schema.json")).expect("v2 schema file"),
+        )
+        .expect("v2 schema JSON"),
+    );
+    let validator = jsonschema::validator_for(&schema).expect("v2 schema compiles");
+
+    for kind in ["valid", "invalid"] {
+        let mut fixtures = fs::read_dir(root.join("examples").join(kind))
+            .expect("v2 fixture directory")
+            .map(|entry| entry.expect("v2 fixture entry").path())
+            .collect::<Vec<_>>();
+        fixtures.sort();
+        assert!(!fixtures.is_empty(), "v2 {kind} fixtures required");
+        for path in fixtures {
+            let instance: Value = serde_json::from_str(
+                &fs::read_to_string(&path).unwrap_or_else(|_| panic!("read {}", path.display())),
+            )
+            .unwrap_or_else(|_| panic!("parse {}", path.display()));
+            if kind == "valid" {
+                validator
+                    .validate(&instance)
+                    .unwrap_or_else(|error| panic!("{} failed schema: {error}", path.display()));
+                let envelope: WireEnvelope = serde_json::from_value(instance)
+                    .unwrap_or_else(|_| panic!("decode {}", path.display()));
+                envelope
+                    .validate_shape()
+                    .unwrap_or_else(|_| panic!("shape {}", path.display()));
+                validate_rust_payload(&envelope);
+            } else {
+                assert!(
+                    !validator.is_valid(&instance),
+                    "{} unexpectedly passed v2 schema",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn protocol_versions_keep_offset_and_target_semantics_disjoint() {
+    let v1_schema = rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(protocol_root().join("schema.json")).expect("v1 schema file"),
+        )
+        .expect("v1 schema JSON"),
+    );
+    let v2_schema = rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("v2 schema file"),
+        )
+        .expect("v2 schema JSON"),
+    );
+    let v1 = jsonschema::validator_for(&v1_schema).expect("v1 schema compiles");
+    let v2 = jsonschema::validator_for(&v2_schema).expect("v2 schema compiles");
+
+    let desktop: Value = serde_json::from_str(
+        &fs::read_to_string(protocol_v2_root().join("examples/valid/session_open_desktop.json"))
+            .expect("desktop fixture"),
+    )
+    .expect("desktop JSON");
+    assert!(v2.is_valid(&desktop));
+    assert!(!v1.is_valid(&desktop));
+
+    let scalar: Value = serde_json::from_str(
+        &fs::read_to_string(protocol_v2_root().join("examples/valid/context_changed_scalar.json"))
+            .expect("scalar fixture"),
+    )
+    .expect("scalar JSON");
+    assert!(v2.is_valid(&scalar));
+    assert!(!v1.is_valid(&scalar));
 }
 
 #[test]

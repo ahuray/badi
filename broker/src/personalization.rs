@@ -82,6 +82,9 @@ impl DailyAggregate {
 
     fn validate(&self) -> Result<(), PersonalizationValidationError> {
         self.identity.validate()?;
+        if !matches!(self.identity, StableIdentity::BrowserOrigin { .. }) {
+            return Err(PersonalizationValidationError::UnsupportedIdentity);
+        }
         if self.day > MAX_SAFE_COUNTER {
             return Err(PersonalizationValidationError::DayOutOfRange);
         }
@@ -563,6 +566,8 @@ pub enum PersonalizationValidationError {
     RevisionOutOfRange,
     #[error("too_many_records")]
     TooManyRecords,
+    #[error("unsupported_identity")]
+    UnsupportedIdentity,
     #[error("unsupported_schema")]
     UnsupportedSchema,
 }
@@ -601,8 +606,8 @@ mod tests {
     };
     use crate::protocol::MAX_SAFE_COUNTER;
     use crate::settings::{
-        BrowserAdapter, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV1,
-        StableIdentity, SubjectPermissions, SubjectRule, WebScheme,
+        BrowserAdapter, LinuxAdapter, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA,
+        SettingsV1, StableIdentity, SubjectPermissions, SubjectRule, WebScheme,
     };
 
     fn identity(host: &str) -> StableIdentity {
@@ -663,6 +668,26 @@ mod tests {
         if let Err(error) = validator.validate(&value) {
             panic!("personalization document failed formal schema: {error}");
         }
+    }
+
+    #[test]
+    fn personalization_v1_rejects_linux_application_identities() {
+        let document = PersonalizationV1 {
+            schema: PERSONALIZATION_SCHEMA.to_owned(),
+            revision: 1,
+            records: vec![DailyAggregate {
+                identity: StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite")
+                    .expect("Linux identity"),
+                provider: PersonalizationProvider::PhraseV1,
+                day: 10,
+                shown: 1,
+                dismissed: 0,
+                accepted_word: 0,
+                accepted_all: 0,
+            }],
+        };
+
+        assert!(document.validate().is_err());
     }
 
     #[test]

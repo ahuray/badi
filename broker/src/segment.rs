@@ -298,6 +298,20 @@ mod tests {
     }
 
     #[test]
+    fn output_rejects_every_non_ascii_unicode_whitespace_scalar() {
+        for whitespace in [
+            '\u{0085}', '\u{00a0}', '\u{1680}', '\u{2000}', '\u{2001}', '\u{2002}', '\u{2003}',
+            '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}', '\u{2009}', '\u{200a}',
+            '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}',
+        ] {
+            assert!(matches!(
+                sanitize_suggestion(&format!(" bad{whitespace}space")),
+                Err(OutputError::ForbiddenControl | OutputError::InvalidShape)
+            ));
+        }
+    }
+
+    #[test]
     fn context_shape_rejects_spacing_and_exact_overlap_failures() {
         for (before, after, suggestion) in [
             ("hello", "", "world"),

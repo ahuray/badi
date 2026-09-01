@@ -22,7 +22,7 @@ function lastScalars(value: string, limit: number): string {
   return Array.from(value).slice(-limit).join("");
 }
 
-function hash(value: string): string {
+export function contextFingerprint(value: string): string {
   const lanes = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35];
   for (const character of value) {
     const scalar = character.codePointAt(0) ?? 0;
@@ -72,7 +72,7 @@ export function captureContext(input: ContextCaptureInput): SuggestionContext {
   const after = firstScalars(afterSlice, AFTER_LIMIT);
   const language = captureLanguage(field);
   const identity = stableIdentity(field);
-  const fingerprint = hash(
+  const fingerprint = contextFingerprint(
     [
       input.fingerprintSalt,
       identity,
