@@ -20,7 +20,7 @@
     "live:product:probe": "node live/run-product-monaco-proof.mjs"
   },
   "devDependencies": {
-    "@types/chrome": "^0.2.7",
+    "@types/chrome": "^0.2.8",
     "@types/node": "^22.20.1",
     "ajv": "^8.17.1",
     "esbuild": "^0.28.2",
