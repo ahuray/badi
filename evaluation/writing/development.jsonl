@@ -1,0 +1,24 @@
+{"id":"development-en-01","split":"development","language":"en","category":"email","prefix":"Thanks for sharing the draft. I will","reference":" review it this afternoon.","origin":"authored_synthetic"}
+{"id":"development-en-02","split":"development","language":"en","category":"planning","prefix":"If the train is delayed, we can","reference":" take the bus instead.","origin":"authored_synthetic"}
+{"id":"development-en-03","split":"development","language":"en","category":"technical","prefix":"The cache entry must expire when","reference":" the document changes.","origin":"authored_synthetic"}
+{"id":"development-en-04","split":"development","language":"en","category":"daily","prefix":"I put the clean cups on the","reference":" kitchen shelf.","origin":"authored_synthetic"}
+{"id":"development-en-05","split":"development","language":"en","category":"partial_word","prefix":"Please add a short expl","reference":"anation of the change.","origin":"authored_synthetic"}
+{"id":"development-en-06","split":"development","language":"en","category":"punctuation","prefix":"We have three priorities: reliability,","reference":" accessibility, and speed.","origin":"authored_synthetic"}
+{"id":"development-en-07","split":"development","language":"en","category":"uncertain","prefix":"I have not decided which design to","reference":" choose for the cover.","origin":"authored_synthetic"}
+{"id":"development-en-08","split":"development","language":"en","category":"spelling_context","prefix":"This is teh","reference":" first draft of the announcement.","origin":"authored_synthetic"}
+{"id":"development-de-01","split":"development","language":"de","category":"email","prefix":"Vielen Dank für Ihre Nachricht. Ich werde","reference":" mich morgen bei Ihnen melden.","origin":"authored_synthetic"}
+{"id":"development-de-02","split":"development","language":"de","category":"planning","prefix":"Falls es morgen regnet, können wir","reference":" das Treffen verschieben.","origin":"authored_synthetic"}
+{"id":"development-de-03","split":"development","language":"de","category":"technical","prefix":"Der Server sollte die Anfrage ablehnen, wenn","reference":" die Sitzung abgelaufen ist.","origin":"authored_synthetic"}
+{"id":"development-de-04","split":"development","language":"de","category":"daily","prefix":"Ich habe den Schlüssel auf den","reference":" Tisch gelegt.","origin":"authored_synthetic"}
+{"id":"development-de-05","split":"development","language":"de","category":"partial_word","prefix":"Bitte schreibe eine kurze Zusammenf","reference":"assung des Gesprächs.","origin":"authored_synthetic"}
+{"id":"development-de-06","split":"development","language":"de","category":"punctuation","prefix":"Wir brauchen Brot, Milch und","reference":" frisches Obst.","origin":"authored_synthetic"}
+{"id":"development-de-07","split":"development","language":"de","category":"uncertain","prefix":"Ich weiß noch nicht, welchen Termin ich","reference":" vorschlagen soll.","origin":"authored_synthetic"}
+{"id":"development-de-08","split":"development","language":"de","category":"spelling_context","prefix":"Das ist ein kleiner Fehelr","reference":" im ersten Entwurf.","origin":"authored_synthetic"}
+{"id":"development-fa-01","split":"development","language":"fa","category":"email","prefix":"از پیام شما ممنونم. من فردا","reference":" پاسخ کامل را ارسال خواهم کرد.","origin":"authored_synthetic"}
+{"id":"development-fa-02","split":"development","language":"fa","category":"planning","prefix":"اگر فردا باران ببارد، می‌توانیم","reference":" جلسه را در خانه برگزار کنیم.","origin":"authored_synthetic"}
+{"id":"development-fa-03","split":"development","language":"fa","category":"technical","prefix":"وقتی اتصال قطع شد، برنامه باید","reference":" پیام خطا را نمایش دهد.","origin":"authored_synthetic"}
+{"id":"development-fa-04","split":"development","language":"fa","category":"daily","prefix":"کتاب تازه را روی","reference":" میز گذاشتم.","origin":"authored_synthetic"}
+{"id":"development-fa-05","split":"development","language":"fa","category":"partial_word","prefix":"لطفاً یک توض","reference":"یح کوتاه بنویسید.","origin":"authored_synthetic"}
+{"id":"development-fa-06","split":"development","language":"fa","category":"punctuation","prefix":"برای سفر به آب، غذا و","reference":" لباس گرم نیاز داریم.","origin":"authored_synthetic"}
+{"id":"development-fa-07","split":"development","language":"fa","category":"uncertain","prefix":"هنوز نمی‌دانم کدام طرح را","reference":" انتخاب کنم.","origin":"authored_synthetic"}
+{"id":"development-fa-08","split":"development","language":"fa","category":"spelling_context","prefix":"این یک اشتبا","reference":"ه کوچک در متن است.","origin":"authored_synthetic"}

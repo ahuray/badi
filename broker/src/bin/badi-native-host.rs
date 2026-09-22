@@ -6,9 +6,17 @@ use badi_broker::native_host::{
     NativeHostError, connect_and_bridge, validate_development_caller_origin,
 };
 
-#[tokio::main]
-async fn main() {
-    if let Err(error) = run().await {
+fn main() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("native host runtime");
+    let result = runtime.block_on(run());
+    // Tokio stdin uses an uncancellable blocking read. Once the bridge has
+    // closed and flushed its streams, waiting for that read would keep Chrome's
+    // native port falsely connected until Chrome itself closed stdin.
+    runtime.shutdown_background();
+    if let Err(error) = result {
         eprintln!("error_code={error}");
         std::process::exit(1);
     }

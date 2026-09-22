@@ -12,8 +12,15 @@ name = "badi_broker"
 path = "src/lib.rs"
 
 [features]
-default = []
-local-model-eval = ["dep:reqwest", "dep:sha2", "dep:unicode-script"]
+default = ["local-model"]
+local-model = ["dep:reqwest", "dep:sha2", "dep:unicode-script"]
+local-model-eval = ["local-model"]
+writing-lab = ["local-model"]
+
+[[bin]]
+name = "badi-writing-lab"
+path = "src/bin/badi-writing-lab.rs"
+required-features = ["writing-lab"]
 
 [[bin]]
 name = "badi-broker"
@@ -52,6 +59,7 @@ unicode-script = { version = "0.5", optional = true }
 uuid = { version = "1.18", features = ["serde", "v4"] }
 
 [dev-dependencies]
+tokio = { version = "1.47", features = ["test-util"] }
 jsonschema = { version = "0.52", default-features = false }
 tempfile = "3.21"
 

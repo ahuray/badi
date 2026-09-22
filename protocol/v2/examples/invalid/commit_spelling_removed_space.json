@@ -1,0 +1,16 @@
+{
+  "v": 2,
+  "id": "commit-spelling-1",
+  "type": "commit.prepare",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 1,
+  "revision": 1,
+  "mono_ms": 50,
+  "payload": {
+    "fingerprint": "fingerprint_000000000001",
+    "suggestion_id": "s:1234",
+    "replace_before": "teh ",
+    "text": "the",
+    "acceptance": "word"
+  }
+}

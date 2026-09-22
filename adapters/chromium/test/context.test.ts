@@ -8,6 +8,24 @@ import {
 } from "../src/content/context";
 
 describe("bounded context", () => {
+  it("preserves only the shared orthographic joiner cases in context and output", async () => {
+    const corpus = JSON.parse(await readFile(resolve(import.meta.dirname, '../../../protocol/orthographic-joiner-fixtures.json'), 'utf8')) as {
+      fixtures: { name: string; text: string; valid: boolean }[];
+    };
+    const field = document.createElement("textarea");
+    field.id = "orthographic-joiner";
+    document.body.append(field);
+    for (const fixture of corpus.fixtures) {
+      expect(sanitizeSuggestion(fixture.text) !== null, fixture.name).toBe(fixture.valid);
+      field.value = fixture.text;
+      const capture = () => captureContext({ field, purpose: "normal", composing: false,
+        selection: { start: field.value.length, end: field.value.length, direction: "none" },
+        activation: "always", explicit: false, fingerprintSalt: "orthography" });
+      if (fixture.valid) expect(capture().before, fixture.name).toBe(fixture.text);
+      else expect(capture, fixture.name).toThrow();
+    }
+    field.remove();
+  });
   it("caps before/after by Unicode scalar without splitting surrogate pairs", () => {
     const field = document.createElement("textarea");
     field.id = "long-draft";
@@ -70,10 +88,33 @@ describe("bounded context", () => {
     expect(german.language).toBe("de");
     expect(german.fingerprint).not.toBe(english.fingerprint);
 
+    expect(captureContext({ ...input, fallbackLanguage: "en-US" }).language).toBe("de");
+    document.documentElement.removeAttribute("lang");
+    expect(captureContext(input).language).toBeUndefined();
+    expect(captureContext({ ...input, fallbackLanguage: "en-us" }).language).toBe("en-US");
+    expect(captureContext({ ...input, fallbackLanguage: "en-us" }).fingerprint).toBe(english.fingerprint);
+
     field.lang = "not_a_language";
     const invalid = captureContext(input);
     expect(invalid.language).toBeUndefined();
+    expect(captureContext({ ...input, fallbackLanguage: "en-US" }).language).toBeUndefined();
     expect(invalid.fingerprint).not.toBe(german.fingerprint);
+  });
+
+  it("routes mixed Persian web writing from already captured context while retaining Latin page language", () => {
+    const field = document.createElement("textarea");
+    field.id = "mixed-writing";
+    field.lang = "de-DE";
+    field.value = "Please reply: لطفا برای من";
+    document.body.append(field);
+    const input = { field, purpose: "normal" as const,
+      selection: { start: field.value.length, end: field.value.length, direction: "none" as const },
+      composing: false, activation: "always" as const, explicit: false,
+      fingerprintSalt: "language-test", fallbackLanguage: "en-US" };
+    expect(captureContext(input).language).toBe("fa");
+    field.value = "Bitte senden Sie";
+    expect(captureContext({ ...input, selection: { ...input.selection, start: field.value.length, end: field.value.length } }).language).toBe("de-DE");
+    field.remove();
   });
 
   it("accepts bounded plain text without rewriting it", () => {

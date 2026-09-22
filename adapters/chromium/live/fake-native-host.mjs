@@ -6,8 +6,8 @@ import { FIXTURE_FAULT_PROVIDER } from "./scenario-plan.mjs";
 const MAX_FRAME_BYTES = 65_536;
 const logPath = process.env["BADI_LIVE_HOST_LOG"];
 const normalDelayMs = Number(process.env["BADI_LIVE_NORMAL_DELAY_MS"] ?? "8");
-const staleDelayMs = Number(process.env["BADI_LIVE_STALE_DELAY_MS"] ?? "500");
-const latestDelayMs = Number(process.env["BADI_LIVE_LATEST_DELAY_MS"] ?? "800");
+const staleDelayMs = Number(process.env["BADI_LIVE_STALE_DELAY_MS"] ?? "250");
+const latestDelayMs = Number(process.env["BADI_LIVE_LATEST_DELAY_MS"] ?? "400");
 const disconnectDelayMs = Number(
   process.env["BADI_LIVE_DISCONNECT_DELAY_MS"] ?? "250",
 );
@@ -15,6 +15,8 @@ const disconnectDelayMs = Number(
 let input = Buffer.alloc(0);
 let sequence = 0;
 let paused = false;
+let authorityEpoch = 1;
+let acknowledgedEpoch = null;
 const contexts = new Map();
 const suggestions = new Map();
 const timers = new Set();
@@ -87,6 +89,7 @@ function handleHello(frame) {
         "commit.dispatched_unverified",
         "control",
         "health",
+        "policy",
       ],
       max_frame_bytes: MAX_FRAME_BYTES,
       max_before_chars: 512,
@@ -96,7 +99,44 @@ function handleHello(frame) {
       paused,
     },
   });
-  log("hello.ack");
+  log("hello.ack", { fault_provider: FIXTURE_FAULT_PROVIDER, emulated_wire_provider: "phrase_v1" });
+  sendAuthority();
+}
+
+function sendAuthority() {
+  acknowledgedEpoch = null;
+  send({
+    v: 1,
+    type: "authority.changed",
+    mono_ms: monoMs(),
+    payload: { authority_epoch: authorityEpoch, settings_revision: 1, paused },
+  });
+}
+
+function handlePolicy(frame) {
+  const target = frame.payload?.target;
+  const origin = target?.origin;
+  const exactFixture = target?.kind === "browser" &&
+    target.app_id === "chromium" && origin?.scheme === "http" &&
+    origin.host === "localhost" && origin.port === 4173;
+  const allowed = exactFixture && !paused && acknowledgedEpoch === authorityEpoch;
+  send({
+    v: 1,
+    id: frame.id,
+    type: "policy.status",
+    mono_ms: monoMs(),
+    payload: {
+      authority_epoch: authorityEpoch,
+      settings_revision: 1,
+      paused,
+      activation: allowed ? "always" : "never",
+      context_allowed: allowed,
+      display_allowed: allowed,
+      suggestions_allowed: allowed,
+      learning_allowed: false,
+      reason: paused ? "global_disabled" : allowed ? "matched_rule" : "unknown_identity",
+    },
+  });
 }
 
 function handleSuggestion(frame) {
@@ -138,7 +178,9 @@ function handleSuggestion(frame) {
         text,
         accept_word: text,
         ttl_ms: 600,
-        provider: FIXTURE_FAULT_PROVIDER,
+        // Emulate an allowed wire provider. The runner and event log label
+        // this process as fixture_fault_v1, never real-provider evidence.
+        provider: "phrase_v1",
       },
     });
     log("suggestion.show", {
@@ -218,6 +260,7 @@ function handleAddressedControl(frame) {
 }
 
 function handleGlobalControl(frame) {
+  const wasPaused = paused;
   const action = frame.payload?.action;
   if (action === "pause") paused = true;
   else if (action === "resume") paused = false;
@@ -234,6 +277,12 @@ function handleGlobalControl(frame) {
     payload: { action, accepted: true, reason: "accepted", paused },
   });
   log("control.global", { action, paused });
+  if (paused !== wasPaused) {
+    contexts.clear();
+    suggestions.clear();
+    authorityEpoch += 1;
+    sendAuthority();
+  }
 }
 
 function handle(frame) {
@@ -251,6 +300,18 @@ function handle(frame) {
       handleHello(frame);
       break;
     case "session.open":
+      break;
+    case "session.close":
+      for (const key of contexts.keys()) {
+        if (key.startsWith(`${frame.session_id}|`)) contexts.delete(key);
+      }
+      break;
+    case "authority.ack":
+      if (frame.payload?.authority_epoch === authorityEpoch) acknowledgedEpoch = authorityEpoch;
+      else sendError(frame.id, "stale");
+      break;
+    case "policy.query":
+      handlePolicy(frame);
       break;
     case "context.changed":
       contexts.set(coordinateKey(frame), {

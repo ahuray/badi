@@ -4,15 +4,23 @@ use std::error::Error;
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
+use badi_broker::engine::{Broker, BrokerConfig, BrokerError, BrokerEventSink, SessionAuthority};
 use badi_broker::local_model::{ProductionActivationStatus, production_activation_status};
-use badi_broker::protocol::ProviderKind;
+use badi_broker::protocol::{
+    Activation, AdapterKind, Capability, Coordinates, ProviderKind, SessionId, SessionOpenPayload,
+    TargetDescriptor, TargetKind,
+};
 use badi_broker::provider::{CompletionProvider, ProviderRequest};
 use badi_broker::semantic;
 use badi_broker::semantic::candidate::RUNTIME_DYNAMIC_BUNDLE_CONSTRAINT;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
+use tokio::io::AsyncReadExt as _;
+use tokio::net::UnixStream;
+use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
 #[path = "../../evaluation/src/fixture_backend.rs"]
@@ -337,28 +345,109 @@ async fn runtime_rejects_wrong_artifacts_bad_health_early_exit_and_orphans()
 }
 
 #[test]
-fn evaluator_is_feature_gated_and_absent_from_normal_broker_modules() -> Result<(), Box<dyn Error>>
+fn evaluator_stays_opt_in_while_local_writing_is_available_by_default() -> Result<(), Box<dyn Error>>
 {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let cargo = fs::read_to_string(manifest_dir.join("Cargo.toml"))?;
     assert!(cargo.contains("name = \"badi-evaluator\""));
     assert!(cargo.contains("required-features = [\"local-model-eval\"]"));
     let library = fs::read_to_string(manifest_dir.join("src/lib.rs"))?;
-    assert!(library.contains("#[cfg(feature = \"local-model-eval\")]\npub mod semantic;"));
+    assert!(library.contains("#[cfg(feature = \"local-model\")]\npub mod semantic;"));
+    assert!(cargo.contains("default = [\"local-model\"]"));
     let main = fs::read_to_string(manifest_dir.join("src/main.rs"))?;
     assert!(!main.contains("semantic"));
-    assert!(!main.contains("local_model"));
+    assert!(main.contains("badi_broker::writing::activate"));
     assert!(!main.contains("badi_evaluator"));
     assert_eq!(CHECK_NO_NORMAL_BINARY, "badi.semantic.no_normal_binary.v1");
     Ok(())
 }
 
 #[test]
-fn production_semantic_activation_remains_disabled_without_qualification() {
+fn historical_qualification_lane_remains_disabled_without_its_receipt() {
     assert_eq!(
         production_activation_status(),
         ProductionActivationStatus::AwaitingQualifiedReceipt
     );
+}
+
+#[tokio::test]
+async fn owned_runtime_death_stops_broker_and_retires_sessions() -> Result<(), Box<dyn Error>> {
+    let fixture = OwnedFixture::new()?;
+    let runtime = Arc::new(fixture.launch(FixtureBehavior::Ready)?.spawn().await?);
+    assert!(runtime.is_alive());
+    let process_id = runtime.process_id().expect("owned live child");
+    let pid = rustix::process::Pid::from_raw(i32::try_from(process_id)?)
+        .expect("positive owned child PID");
+    let broker = Broker::new(runtime.clone(), BrokerConfig::default());
+    let coordinates = Coordinates {
+        session_id: SessionId::new(),
+        focus_epoch: 1,
+        revision: 0,
+    };
+    let payload = SessionOpenPayload {
+        target: TargetDescriptor {
+            kind: TargetKind::Fixture,
+            app_id: "runtime-lifetime-test".to_owned(),
+            target_id: "disposable-field".to_owned(),
+            origin: None,
+        },
+        activation: Activation::Always,
+    };
+    let authority = SessionAuthority {
+        protocol_version: 1,
+        adapter_kind: AdapterKind::Test,
+        capabilities: vec![Capability::Context, Capability::Suggestion],
+    };
+    let (sender, _events) = tokio::sync::mpsc::channel(8);
+    let sink = BrokerEventSink::new(sender, CancellationToken::new());
+    broker
+        .open_session(
+            coordinates,
+            payload.clone(),
+            authority.clone(),
+            sink.clone(),
+        )
+        .await?;
+    assert_eq!(broker.session_count().await, 1);
+
+    let socket = fixture.directory.path().join("private/broker.sock");
+    let server_socket = socket.clone();
+    let server_broker = broker.clone();
+    let server =
+        tokio::spawn(async move { badi_broker::server::run(&server_socket, server_broker).await });
+    let mut connection = timeout(Duration::from_secs(2), async {
+        loop {
+            if let Ok(connection) = UnixStream::connect(&socket).await {
+                break connection;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    // This fixture cannot exit on its own. Its unreaped owned PID remains bound
+    // until the server's lifecycle poll observes this signal and reaps it.
+    rustix::process::kill_process(pid, rustix::process::Signal::KILL)?;
+    let outcome = timeout(Duration::from_secs(2), server).await??;
+    assert!(matches!(
+        outcome,
+        Err(badi_broker::server::ServerError::ProviderExited)
+    ));
+    assert!(!runtime.is_alive());
+    assert!(!socket.exists());
+    assert_eq!(broker.session_count().await, 0);
+    assert_eq!(connection.read(&mut [0_u8]).await?, 0);
+    assert!(matches!(
+        broker
+            .open_session(coordinates, payload, authority, sink)
+            .await,
+        Err(BrokerError::ShuttingDown)
+    ));
+    drop(broker);
+    let runtime = Arc::try_unwrap(runtime).expect("server dropped runtime ownership");
+    let observation = runtime.shutdown()?;
+    assert!(observation.reaped());
+    assert!(!Path::new(&format!("/proc/{process_id}")).exists());
+    Ok(())
 }
 
 #[test]

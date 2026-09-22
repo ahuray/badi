@@ -1,14 +1,4 @@
-//! Disabled-by-default production boundary for the one pinned semantic lane.
-//!
-//! Transport, prompt parsing, output policy, artifact verification, and child
-//! ownership live in [`crate::semantic`]. This module intentionally contains no
-//! second llama.cpp client or runtime implementation.
-//!
-//! The development evaluator emits evaluation-only receipts with
-//! `production_ready: false`. Those receipts cannot construct
-//! [`QualifiedSemanticActivation`], so the normal broker remains on the
-//! deterministic provider until a future immutable scored run earns a separate
-//! qualification constructor.
+//! Historical evaluator qualification; interactive inference lives in [`crate::writing`].
 
 use thiserror::Error;
 
@@ -31,13 +21,7 @@ pub const fn production_activation_status() -> ProductionActivationStatus {
     ProductionActivationStatus::AwaitingQualifiedReceipt
 }
 
-/// Opaque authorization for a scored, immutable production qualification.
-///
-/// There is deliberately no public constructor. In particular, an
-/// evaluation-only receipt is not an activation credential. A future
-/// qualification module must derive this value from its immutable raw run and
-/// match every identity below before broker wiring can call
-/// [`activate_pinned_semantic_provider`].
+/// No public constructor: evaluation receipts cannot authorize production activation.
 pub struct QualifiedSemanticActivation {
     model_sha256: String,
     runtime_sha256: String,
@@ -77,12 +61,7 @@ impl QualifiedSemanticActivation {
     }
 }
 
-/// Verifies the pinned bytes, starts the one owned llama.cpp child, and returns
-/// that owned runtime as the broker's `CompletionProvider`.
-///
-/// This function is unreachable from normal configuration today because
-/// [`QualifiedSemanticActivation`] has no constructor. It also performs no
-/// downloads and accepts no alternate model, backend, endpoint, or prompt.
+/// Starts the pinned runtime only with a matching qualification credential.
 pub async fn activate_pinned_semantic_provider(
     qualification: QualifiedSemanticActivation,
     paths: PinnedCandidatePaths,

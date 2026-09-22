@@ -1,6 +1,9 @@
-# Badi Chromium vertical slice
+# Badi Chromium adapters
 
-This is a deliberately narrow unpacked Manifest V3 adapter. It connects only to
+The ordinary website build is documented in [editor integrations](../shared/README.md).
+The remainder of this runbook covers the historical fixture and Dillinger proofs.
+
+These unpacked Manifest V3 adapters connect only to
 the native-messaging host name `io.github.ahuray.badi`. Ordinary build/unit commands
 do not register that host, modify a Chromium profile, or install the extension;
 the live commands use and remove a fully disposable profile and HOME/XDG tree.
@@ -15,13 +18,14 @@ npm run build:product --workspace @badi/chromium
 npm run build:verify --workspace @badi/chromium
 ```
 
-The two unpacked artifacts are intentionally separate:
+The unpacked artifacts have separate permission boundaries:
 
+- `adapters/chromium/dist-web/` is the opt-in ordinary website build.
 - `adapters/chromium/dist/` is the historical localhost fixture build.
 - `adapters/chromium/dist-product/` is the opt-in Dillinger product slice.
 
 Each `BUILD_MANIFEST.json` contains stable SHA-256 hashes and no timestamp.
-Both directories are generated and ignored by Git.
+All three directories are generated and ignored by Git.
 
 For a controlled page, run:
 

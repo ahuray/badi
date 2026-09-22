@@ -23,6 +23,7 @@ function authorizationsEqual(
     left.fingerprint === right.fingerprint &&
     left.suggestionId === right.suggestionId &&
     left.text === right.text &&
+    left.replaceBefore === right.replaceBefore &&
     left.acceptance === right.acceptance
   );
 }

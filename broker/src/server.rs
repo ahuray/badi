@@ -32,6 +32,7 @@ const EVENT_QUEUE_CAPACITY: usize = 32;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(3);
 const CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const WRITER_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
+const PROVIDER_LIFETIME_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 pub async fn run(socket_path: &Path, broker: Broker) -> Result<(), ServerError> {
     // Register both handlers before binding. Once the socket is visible, either
@@ -43,8 +44,15 @@ pub async fn run(socket_path: &Path, broker: Broker) -> Result<(), ServerError> 
     let admissions = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let shutdown = CancellationToken::new();
     let mut connections = JoinSet::new();
+    let mut provider_lifetime = time::interval(PROVIDER_LIFETIME_POLL_INTERVAL);
+    provider_lifetime.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     let outcome = loop {
         tokio::select! {
+            _ = provider_lifetime.tick() => {
+                if !broker.provider_is_alive() {
+                    break Err(ServerError::ProviderExited);
+                }
+            }
             accepted = listener.accept() => {
                 let (stream, _) = match accepted {
                     Ok(accepted) => accepted,
@@ -206,6 +214,7 @@ async fn serve_connection_with_timeouts(
         .select_version()
         .ok_or(crate::protocol::ProtocolError::VersionNegotiationFailed)?;
     let authority = SessionAuthority {
+        protocol_version: selected_version,
         adapter_kind: hello.adapter.kind,
         capabilities: hello.capabilities.clone(),
     };
@@ -310,6 +319,11 @@ async fn serve_connection_with_timeouts(
                 let Ok(event) = authority else {
                     break Ok(());
                 };
+                // Policy-capable adapters retire their bindings at every new
+                // epoch. Retire both broker state and connection bookkeeping
+                // before notifying them, including transient pause/resume.
+                broker.close_owned_sessions(&owned_sessions).await;
+                owned_sessions.clear();
                 let envelope = WireEnvelope::global(
                     MessageType::AuthorityChanged,
                     broker.mono_ms(),
@@ -829,6 +843,7 @@ fn reason_for_frame(error: &FrameError) -> ReasonCode {
 const fn reason_for_server(error: &ServerError) -> ReasonCode {
     match error {
         ServerError::InvalidCapability => ReasonCode::InvalidCapability,
+        ServerError::ProviderExited => ReasonCode::ProviderError,
         ServerError::Broker(error) => reason_for_broker(error),
         ServerError::Frame(FrameError::Protocol(
             crate::protocol::ProtocolError::UnsupportedVersion(_),
@@ -870,6 +885,8 @@ pub enum ServerError {
     Io(#[from] io::Error),
     #[error("protocol")]
     Protocol(#[from] crate::protocol::ProtocolError),
+    #[error("provider_exited")]
+    ProviderExited,
     #[error("resource_limit")]
     ResourceLimit,
     #[error("session_not_owned")]
@@ -969,6 +986,10 @@ mod tests {
             .await
             .expect("write authority acknowledgment");
 
+        reopen_test_session(client, session_id).await;
+    }
+
+    async fn reopen_test_session(client: &mut UnixStream, session_id: SessionId) {
         let session = WireEnvelope::session(
             MessageType::SessionOpen,
             Coordinates {
@@ -1004,6 +1025,65 @@ mod tests {
         })
         .await
         .expect("session count");
+    }
+
+    #[tokio::test]
+    async fn authority_changes_retire_sessions_and_release_connection_capacity() {
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let broker = broker();
+        let task_broker = broker.clone();
+        let shutdown = CancellationToken::new();
+        let task_shutdown = shutdown.clone();
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                task_broker,
+                task_shutdown,
+                Duration::from_secs(1),
+                Duration::from_secs(5),
+            )
+            .await
+        });
+        let session_id = SessionId::new();
+        open_test_session(&mut client, session_id).await;
+        wait_for_sessions(&broker, 1).await;
+
+        for _ in 0..=MAX_SESSIONS_PER_CONNECTION {
+            for paused in [true, false] {
+                assert_eq!(broker.set_paused(paused).await, paused);
+                let event = timeout(Duration::from_secs(1), read_envelope(&mut client))
+                    .await
+                    .expect("authority deadline")
+                    .expect("read authority")
+                    .expect("authority event");
+                assert_eq!(event.message_type, MessageType::AuthorityChanged);
+                assert_eq!(
+                    broker.session_count().await,
+                    0,
+                    "old sessions must be retired before publishing the new epoch"
+                );
+                let payload: AuthorityChangedPayload = event.decode_payload().expect("authority");
+                let ack = WireEnvelope::global(
+                    MessageType::AuthorityAck,
+                    0,
+                    &AuthorityAckPayload {
+                        authority_epoch: payload.authority_epoch,
+                    },
+                )
+                .expect("ack");
+                write_envelope(&mut client, &ack).await.expect("write ack");
+            }
+            // Adapters reuse a document session after revocation. More than
+            // 64 cycles also proves old bookkeeping cannot exhaust the quota.
+            reopen_test_session(&mut client, session_id).await;
+            wait_for_sessions(&broker, 1).await;
+        }
+        shutdown.cancel();
+        connection
+            .await
+            .expect("connection task")
+            .expect("clean shutdown");
+        assert_eq!(broker.session_count().await, 0);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 artifact_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-qml_files=("$artifact_dir/BadiClient.qml" "$artifact_dir/Panel.qml")
+qml_files=("$artifact_dir/BadiClient.qml" "$artifact_dir/Panel.qml" "$artifact_dir/BarWidget.qml" "$artifact_dir/BadiMark.qml" "$artifact_dir/DesktopPanel.qml")
 compatibility="$artifact_dir/compatibility.json"
 omarchy_root=${BADI_OMARCHY_ROOT:-/usr/share/omarchy}
 require_host_checks=${BADI_OMARCHY_REQUIRE_HOST_CHECKS:-0}
@@ -15,16 +15,16 @@ require_host_checks=${BADI_OMARCHY_REQUIRE_HOST_CHECKS:-0}
 jq -e '
   .schemaVersion == 1
   and .id == "io.github.ahuray.badi"
-  and .kinds == ["panel"]
-  and .entryPoints == {"panel": "Panel.qml"}
+  and .kinds == ["panel", "bar-widget"]
+  and .entryPoints == {"panel": "Panel.qml", "barWidget": "BarWidget.qml"}
 ' "$artifact_dir/manifest.json" >/dev/null
 
 jq -e '
   .status == "disabled_repo_local_feasibility"
-  and .omarchy.package == "4.0.2-1"
+  and .omarchy.package == "4.0.3-1"
   and .omarchy.source_repository == "https://github.com/omacom/omarchy.git"
-  and .omarchy.source_tag == "v4.0.2"
-  and .omarchy.source_commit == "346e69e1cec6c4e8924531874af6ba010a1bc99e"
+  and .omarchy.source_tag == "v4.0.3"
+  and .omarchy.source_commit == "0534987009061cbe2dacdde4ad564092ab698d12"
 ' "$compatibility" >/dev/null
 
 if grep -En 'ShellRoot|execDetached|Qt\.openUrlExternally|/bin/(ba)?sh|(^|[[:space:]])(ba)?sh[[:space:]]+-c|console\.(log|warn|error)' "${qml_files[@]}"; then
@@ -53,11 +53,11 @@ process_count=$(grep -Ec '^[[:space:]]*Process[[:space:]]*\{' "$artifact_dir/Bad
   exit 1
 }
 
-grep -F 'overviewProcess.exec(["badictl", "overview", "--json"])' \
+grep -F 'overviewProcess.exec(cliPrefix.concat(["overview", "--json"]))' \
   "$artifact_dir/BadiClient.qml" >/dev/null
-grep -F 'mutationProcess.exec(["badictl", "memory", "clear"])' \
+grep -F 'mutationProcess.exec(mutationPrefix.concat(["memory", "clear"]))' \
   "$artifact_dir/BadiClient.qml" >/dev/null
-grep -F '"badictl", "settings", "replace",' "$artifact_dir/BadiClient.qml" >/dev/null
+grep -F '"settings", "replace",' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'overviewProcess.signal(15)' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'mutationProcess.signal(15)' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'overviewKillTimeout.restart()' "$artifact_dir/BadiClient.qml" >/dev/null

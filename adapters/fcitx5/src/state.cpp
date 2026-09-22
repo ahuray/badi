@@ -29,8 +29,13 @@ std::uint64_t mix(std::string_view value, std::uint64_t seed) {
 } // namespace
 
 bool hasForeignImeUi(const PanelObservation &panel) {
-    return panel.preedit || panel.clientPreedit ||
+    return panel.preedit || panel.clientPreedit || panel.foreignAuxiliary ||
            (panel.candidates && !panel.candidatesOwnedByBadi);
+}
+
+bool hasOwnedCandidate(const PanelObservation &panel) {
+    return panel.candidates && panel.candidatesOwnedByBadi &&
+           !hasForeignImeUi(panel);
 }
 
 bool allowsNativeContext(::fcitx::CapabilityFlags capabilities) {
@@ -54,7 +59,17 @@ bool allowsNativeContext(::fcitx::CapabilityFlags capabilities) {
 }
 
 bool supportedAppId(std::string_view appId) {
-    return appId == "omawrite" || appId == "com.github.xournalpp.xournalpp";
+    return validLinuxAppId(appId);
+}
+
+bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target) {
+    // Browser/Electron commitString can retarget during beforeinput. Policy
+    // and an external field snapshot cannot supply an editor transaction.
+    constexpr std::array<std::string_view, 9> unavailable{
+        "chromium", "chromium-browser", "chrome", "google-chrome", "brave",
+        "brave-origin", "brave-browser", "firefox", "chatgpt"};
+    return target == NativeEditTarget::DesktopApplication && supportedAppId(appId) &&
+           std::find(unavailable.begin(), unavailable.end(), appId) == unavailable.end();
 }
 
 bool matchesCapturedContext(
@@ -68,12 +83,24 @@ LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
                               const PanelObservation &panel) {
     if (hasForeignImeUi(panel)) return LocalAction::PassThrough;
     if (invokeChord) return LocalAction::Invoke;
-    if (!hasLiveOwnedCandidate || !panel.candidatesOwnedByBadi) {
+    if (!hasLiveOwnedCandidate || !hasOwnedCandidate(panel)) {
         return LocalAction::PassThrough;
     }
     if (acceptChord) return LocalAction::Accept;
     if (escapeKey) return LocalAction::Dismiss;
     return LocalAction::PassThrough;
+}
+
+LocalAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
+                            const PanelObservation &panel) {
+    if (hasForeignImeUi(panel)) return LocalAction::PassThrough;
+    if (hasLiveOwnedCandidate && hasOwnedCandidate(panel)) return LocalAction::Accept;
+    return eligibleContext ? LocalAction::Invoke : LocalAction::PassThrough;
+}
+
+bool supportedWritingLanguage(std::string_view language) {
+    const auto primary = language.substr(0, language.find('-'));
+    return validLanguageTag(language) && (primary == "en" || primary == "de" || primary == "fa");
 }
 
 std::optional<ContextWindow> captureContextWindow(std::string_view text,
@@ -106,7 +133,7 @@ std::optional<ContextWindow> captureContextWindow(std::string_view text,
                                      scalars->size() - selectionEnd);
     auto before = scalarSlice(text, beforeStart, selectionStart - beforeStart);
     auto after = scalarSlice(text, selectionEnd, afterCount);
-    if (!before || !after) return std::nullopt;
+    if (!before || !after || !validContextText(*before) || !validContextText(*after)) return std::nullopt;
     result.before = std::move(*before);
     result.after = std::move(*after);
     result.anchor = anchor;
@@ -115,7 +142,8 @@ std::optional<ContextWindow> captureContextWindow(std::string_view text,
 }
 
 bool SessionState::focusIn(std::string sessionId, std::string targetId,
-                           std::string appId, std::string fingerprintSalt) {
+                           std::string appId, std::string fingerprintSalt,
+                           NativeEditTarget target) {
     if (!validOpaqueId(targetId) || !validLinuxAppId(appId) ||
         !supportedAppId(appId) || !validSessionId(sessionId) ||
         fingerprintSalt.size() < 16 || !validOpaqueId(fingerprintSalt)) {
@@ -126,6 +154,7 @@ bool SessionState::focusIn(std::string sessionId, std::string targetId,
     targetId_ = std::move(targetId);
     appId_ = std::move(appId);
     fingerprintSalt_ = std::move(fingerprintSalt);
+    editTarget_ = target;
     coordinates_.focusEpoch =
         coordinates_.focusEpoch >= kMaxSafeCounter ? 1 : coordinates_.focusEpoch + 1;
     coordinates_.revision = 0;
@@ -146,6 +175,12 @@ void SessionState::focusOut() {
     appId_.clear();
     targetId_.clear();
     fingerprintSalt_.clear();
+    editTarget_ = NativeEditTarget::Unsupported;
+}
+
+void SessionState::denyEditing() {
+    editTarget_ = NativeEditTarget::Unsupported;
+    invalidateContext();
 }
 
 void SessionState::invalidateContext() {
@@ -160,9 +195,9 @@ void SessionState::invalidateContext() {
 
 std::optional<ContextUpdate>
 SessionState::updateContext(ContextWindow context) {
-    if (!focused_) return std::nullopt;
+    if (!focused_ || !editingAvailable()) return std::nullopt;
     if (context.sensitive || context.composing || context.anchor != context.head ||
-        !validLanguageTag(context.language)) {
+        !validLanguageTag(context.language) || !validContextText(context.before) || !validContextText(context.after)) {
         invalidateContext();
         return std::nullopt;
     }
@@ -183,6 +218,12 @@ SessionState::updateContext(ContextWindow context) {
 }
 
 bool SessionState::showSuggestion(Suggestion suggestion, std::uint64_t nowMs) {
+    // Generic Fcitx deletion and insertion cannot form one exact-field edit:
+    // an application input handler can change focus between those operations.
+    if (!editingAvailable() || !suggestion.replaceBefore.empty()) {
+        clearSuggestion();
+        return false;
+    }
     const auto clean = sanitizeSuggestion(suggestion.text);
     if (!focused_ || sensitive_ || !clean || suggestion.expiresAtMs <= nowMs ||
         suggestion.expiresAtMs > kMaxSafeCounter ||
@@ -199,7 +240,11 @@ bool SessionState::showSuggestion(Suggestion suggestion, std::uint64_t nowMs) {
 
 std::optional<AcceptRequest>
 SessionState::requestAcceptance(std::uint64_t nowMs,
-                                const PanelObservation &panel) {
+                               const PanelObservation &panel) {
+    if (!editingAvailable() || !hasOwnedCandidate(panel)) {
+        clearSuggestion();
+        return std::nullopt;
+    }
     if (!focused_ || sensitive_ || hasForeignImeUi(panel) ||
         pendingAcceptance_ || !visible_ || visible_->expiresAtMs <= nowMs ||
         !sameAddress(visible_->coordinates, coordinates_)) {
@@ -213,6 +258,7 @@ SessionState::requestAcceptance(std::uint64_t nowMs,
                      std::to_string(visible_->coordinates.revision),
         .suggestionId = visible_->suggestionId,
         .expectedText = visible_->text,
+        .replaceBefore = visible_->replaceBefore,
     };
     pendingAcceptance_ = request;
     return request;
@@ -221,6 +267,10 @@ SessionState::requestAcceptance(std::uint64_t nowMs,
 std::optional<DismissRequest>
 SessionState::requestDismissal(std::uint64_t nowMs,
                                const PanelObservation &panel) {
+    if (!hasOwnedCandidate(panel)) {
+        clearSuggestion();
+        return std::nullopt;
+    }
     if (!focused_ || sensitive_ || hasForeignImeUi(panel) || !visible_ ||
         visible_->expiresAtMs <= nowMs ||
         !sameAddress(visible_->coordinates, coordinates_)) {
@@ -240,7 +290,12 @@ SessionState::requestDismissal(std::uint64_t nowMs,
 
 std::optional<CommitDispatch>
 SessionState::authorizeCommit(const CommitPrepare &prepare,
-                              std::uint64_t nowMs) {
+                              std::uint64_t nowMs,
+                              const PanelObservation &panel) {
+    if (!editingAvailable() || !prepare.replaceBefore.empty() || !hasOwnedCandidate(panel)) {
+        clearSuggestion();
+        return std::nullopt;
+    }
     if (!focused_ || !visible_ || !pendingAcceptance_ ||
         visible_->expiresAtMs <= nowMs ||
         !sameAddress(prepare.coordinates, coordinates_) ||
@@ -248,6 +303,7 @@ SessionState::authorizeCommit(const CommitPrepare &prepare,
         prepare.controlId != pendingAcceptance_->controlId ||
         prepare.suggestionId != pendingAcceptance_->suggestionId ||
         prepare.text != pendingAcceptance_->expectedText ||
+        prepare.replaceBefore != pendingAcceptance_->replaceBefore ||
         prepare.acceptance != "all") {
         return std::nullopt;
     }
@@ -256,6 +312,7 @@ SessionState::authorizeCommit(const CommitPrepare &prepare,
         .controlId = prepare.controlId,
         .suggestionId = prepare.suggestionId,
         .text = prepare.text,
+        .replaceBefore = prepare.replaceBefore,
     };
     clearSuggestion();
     return dispatch;

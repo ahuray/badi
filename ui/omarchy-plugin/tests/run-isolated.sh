@@ -32,6 +32,7 @@ test_home="$test_root/home"
 runtime_dir="$test_root/runtime"
 plugin_target="$test_home/.config/omarchy/plugins/io.github.ahuray.badi"
 call_log="$test_root/badictl.calls"
+desktop_call_log="$test_root/desktop.calls"
 pid_log="$test_root/badictl.pids"
 shell_log="$test_root/shell.log"
 shell_pid=""
@@ -63,13 +64,14 @@ trap cleanup EXIT
 
 mkdir -p "$plugin_target" "$runtime_dir" \
   "$test_root/config/omarchy" \
-  "$test_home/.config/omarchy" "$test_home/.local/share" \
+  "$test_home/.config/omarchy" "$test_home/.local/share" "$test_home/.local/bin" \
   "$test_home/.cache" "$test_home/.local/state"
 chmod 700 "$runtime_dir" "$test_home/.config" "$test_home/.config/omarchy"
 cp -a -- "$omarchy_root/shell" "$shell_copy"
 cp -- "$omarchy_root/config/omarchy/shell.json" \
   "$test_root/config/omarchy/shell.json"
 cp -a -- "$artifact_dir/." "$plugin_target/"
+ln -s -- "$tests_dir/fake-bin/badi-desktop" "$test_home/.local/bin/badi-desktop"
 
 # Keep Quickshell's IPC/log namespace isolated while connecting to the current
 # graphical session through explicit socket links owned by this temporary tree.
@@ -113,6 +115,7 @@ runtime_env=(
   "PATH=$artifact_dir/tests/fake-bin:$PATH"
   "BADI_FAKE_SCENARIO=$scenario"
   "BADI_FAKE_CALL_LOG=$call_log"
+  "BADI_FAKE_DESKTOP_CALL_LOG=$desktop_call_log"
   "BADI_FAKE_PID_LOG=$pid_log"
   "QT_QPA_PLATFORM=wayland"
   "NO_COLOR=1"
@@ -176,8 +179,28 @@ wait_for_plugin_state false
 wait_for_plugin_state true
 jq -e '
   .badiIsolatedSentinel == {preserve: true}
-  and any(.plugins[]; .id == "io.github.ahuray.badi")
+  and ([.plugins[]?, .bar.layout.left[]?, .bar.layout.center[]?, .bar.layout.right[]?]
+    | map(select(.id == "io.github.ahuray.badi")) | length == 1)
 ' "$test_home/.config/omarchy/shell.json" >/dev/null
+
+# The combined manifest also mounts a bar widget. Prove it loaded its own
+# desktop bridge without counting that background request as a panel refresh.
+desktop_ready=0
+for _ in $(seq 1 80); do
+  desktop_state=$("${runtime_env[@]}" qs --no-color -p "$shell_copy" \
+    ipc call badi-writing state 2>/dev/null || true)
+  if jq -e '.visible == false and .status == "Model ready"
+      and .service.active == "active"' <<<"$desktop_state" >/dev/null 2>&1; then
+    desktop_ready=1
+    break
+  fi
+  sleep 0.05
+done
+[[ $desktop_ready == 1 && -s $desktop_call_log ]] || {
+  cat "$shell_log" >&2
+  echo "isolated plugin check: combined bar widget did not become ready" >&2
+  exit 1
+}
 
 for cycle in $(seq 1 "$summon_cycles"); do
   summoned=$("${runtime_env[@]}" qs --no-color -p "$shell_copy" \
@@ -256,7 +279,8 @@ done
 wait_for_plugin_state false
 jq -e '
   .badiIsolatedSentinel == {preserve: true}
-  and all(.plugins[]; .id != "io.github.ahuray.badi")
+  and ([.plugins[]?, .bar.layout.left[]?, .bar.layout.center[]?, .bar.layout.right[]?]
+    | all(.id != "io.github.ahuray.badi"))
 ' "$test_home/.config/omarchy/shell.json" >/dev/null
 disabled_summon=$("${runtime_env[@]}" qs --no-color -p "$shell_copy" \
   ipc call shell summon io.github.ahuray.badi '{}')

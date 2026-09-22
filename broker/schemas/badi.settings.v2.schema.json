@@ -56,13 +56,13 @@
           "required": ["kind", "adapter", "app_id"],
           "properties": {
             "kind": { "const": "linux_app" },
-            "adapter": { "const": "fcitx" },
+            "adapter": { "enum": ["fcitx", "obsidian", "shell"] },
             "app_id": {
               "type": "string",
               "minLength": 1,
               "maxLength": 128,
               "pattern": "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)*$",
-              "description": "Exact canonical Fcitx program identity; never a window title, executable path, or display label."
+              "description": "Exact canonical adapter application identity; never a window title, executable path, or display label."
             }
           }
         }

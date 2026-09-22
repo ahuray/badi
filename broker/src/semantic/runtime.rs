@@ -3,6 +3,7 @@ use std::io;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -16,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::protocol::ProviderKind;
-use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
+use crate::provider::{CompletionProvider, ProviderError, ProviderRequest, WritingProposal};
 
 use super::client::{ClientError, HealthStatus, SemanticClient, SemanticClientConfig};
 use super::provenance::{ProvenanceError, VerifiedDirectoryManifest, VerifiedFile};
@@ -24,10 +25,13 @@ use super::provenance::{ProvenanceError, VerifiedDirectoryManifest, VerifiedFile
 pub const LLAMA_CPP_LAUNCH_CONTRACT_ID: &str = "badi.llama-cpp-owned-eval.v1";
 pub const CONTEXT_SIZE: u16 = 512;
 pub const GPU_LAYERS: u16 = 0;
+const WRITING_BATCH_SIZE: u16 = 16;
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(20);
-const GRACEFUL_SHUTDOWN_WAIT: Duration = Duration::from_millis(200);
+// A cancelled cold prefill may still be unwinding inside the runtime. Allow
+// that work and its HTTP readers to stop before the process-group kill fallback.
+const GRACEFUL_SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 const FORCE_SHUTDOWN_WAIT: Duration = Duration::from_secs(1);
 const FIXTURE_ARGUMENT: &str = "__fixture-backend";
 pub const FIXTURE_TOKEN_CANARY: &str =
@@ -62,6 +66,13 @@ pub struct LlamaCppLaunch {
     startup_timeout: Duration,
     threads: usize,
     fixture_behavior: Option<FixtureBehavior>,
+    writing: bool,
+    #[cfg(feature = "writing-lab")]
+    writing_lab: bool,
+    #[cfg(feature = "writing-lab")]
+    explicit_lab_artifact: bool,
+    #[cfg(feature = "writing-lab")]
+    lab_prefill_batch: crate::writing_lab::PrefillBatch,
 }
 
 impl LlamaCppLaunch {
@@ -80,6 +91,13 @@ impl LlamaCppLaunch {
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             threads,
             fixture_behavior: None,
+            writing: false,
+            #[cfg(feature = "writing-lab")]
+            writing_lab: false,
+            #[cfg(feature = "writing-lab")]
+            explicit_lab_artifact: false,
+            #[cfg(feature = "writing-lab")]
+            lab_prefill_batch: crate::writing_lab::PrefillBatch::Tokens16,
         };
         launch.validate()?;
         Ok(launch)
@@ -104,6 +122,13 @@ impl LlamaCppLaunch {
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             threads: 1,
             fixture_behavior: Some(behavior),
+            writing: false,
+            #[cfg(feature = "writing-lab")]
+            writing_lab: false,
+            #[cfg(feature = "writing-lab")]
+            explicit_lab_artifact: false,
+            #[cfg(feature = "writing-lab")]
+            lab_prefill_batch: crate::writing_lab::PrefillBatch::Tokens16,
         };
         launch.validate()?;
         Ok(launch)
@@ -111,6 +136,72 @@ impl LlamaCppLaunch {
 
     pub async fn spawn(self) -> Result<OwnedRuntime, RuntimeError> {
         self.spawn_with_post_spawn_hook(|_| {}).await
+    }
+
+    #[must_use]
+    pub const fn for_writing(mut self) -> Self {
+        self.writing = true;
+        self
+    }
+
+    #[cfg(feature = "writing-lab")]
+    #[must_use]
+    pub const fn for_writing_lab(mut self) -> Self {
+        self.writing = true;
+        self.writing_lab = true;
+        self
+    }
+
+    #[cfg(feature = "writing-lab")]
+    pub(crate) const fn for_writing_lab_artifact(mut self) -> Self {
+        self = self.for_writing_lab();
+        self.explicit_lab_artifact = true;
+        self
+    }
+
+    #[cfg(feature = "writing-lab")]
+    pub(crate) const fn with_lab_prefill_batch(
+        mut self,
+        batch: crate::writing_lab::PrefillBatch,
+    ) -> Self {
+        self.lab_prefill_batch = batch;
+        self
+    }
+
+    fn writing_batch_size(&self) -> u16 {
+        #[cfg(feature = "writing-lab")]
+        if self.writing_lab {
+            return self.lab_prefill_batch.tokens();
+        }
+        WRITING_BATCH_SIZE
+    }
+
+    fn model_origin(&self) -> Option<&'static str> {
+        #[cfg(feature = "writing-lab")]
+        if self.explicit_lab_artifact {
+            return Some("explicit_lab_artifact");
+        }
+        None
+    }
+
+    fn context_size(&self) -> u16 {
+        #[cfg(feature = "writing-lab")]
+        if self.writing_lab {
+            return crate::writing_lab::CONTEXT_TOKENS;
+        }
+        CONTEXT_SIZE
+    }
+
+    fn launch_contract(&self) -> &'static str {
+        #[cfg(feature = "writing-lab")]
+        if self.writing_lab {
+            return crate::writing_lab::LAUNCH_CONTRACT;
+        }
+        if self.writing {
+            crate::writing::WRITING_CONTRACT
+        } else {
+            LLAMA_CPP_LAUNCH_CONTRACT_ID
+        }
     }
 
     async fn spawn_with_post_spawn_hook(
@@ -127,25 +218,17 @@ impl LlamaCppLaunch {
         };
         let negative_token = SecretToken::new();
         let config = SemanticClientConfig::new(endpoint, &self.model_alias, token.expose())?;
+        let config = if self.writing {
+            config.for_writing()
+        } else {
+            config
+        };
         let client = SemanticClient::new(config)?;
         let negative_config =
             SemanticClientConfig::new(endpoint, &self.model_alias, negative_token.expose())?;
         let negative_client = SemanticClient::new(negative_config)?;
-        let identity = StableRuntimeIdentity {
-            launch_contract_id: LLAMA_CPP_LAUNCH_CONTRACT_ID,
-            binary_sha256: self.binary.sha256().to_owned(),
-            runtime_bundle_manifest_sha256: self
-                .runtime_bundle
-                .as_ref()
-                .map(|bundle| bundle.sha256().to_owned()),
-            model_sha256: self.model.sha256().to_owned(),
-            model_size: self.model.identity().size,
-            model_alias: self.model_alias.clone(),
-            threads: self.threads,
-            context_size: CONTEXT_SIZE,
-            gpu_layers: GPU_LAYERS,
-        };
-        let mut command = Command::new(self.binary.path());
+        let identity = self.runtime_identity();
+        let mut command = self.runtime_command()?;
         if self.fixture_behavior.is_some() {
             command.arg(FIXTURE_ARGUMENT);
         }
@@ -158,7 +241,7 @@ impl LlamaCppLaunch {
             .env("LLAMA_ARG_MODEL", self.model.path())
             .env("LLAMA_ARG_ALIAS", &self.model_alias)
             .env("LLAMA_API_KEY", token.expose())
-            .env("LLAMA_ARG_CTX_SIZE", CONTEXT_SIZE.to_string())
+            .env("LLAMA_ARG_CTX_SIZE", self.context_size().to_string())
             .env("LLAMA_ARG_N_PARALLEL", "1")
             .env("LLAMA_ARG_THREADS", self.threads.to_string())
             .env("LLAMA_ARG_THREADS_BATCH", self.threads.to_string())
@@ -177,13 +260,11 @@ impl LlamaCppLaunch {
                     .ok_or(RuntimeError::InvalidConfig("model_parent"))?,
             )
             .process_group(0);
-        if let Some(behavior) = self.fixture_behavior {
-            command.env("BADI_FIXTURE_BEHAVIOR", behavior.environment_value());
-        }
+        self.configure_mode(&mut command);
         self.reverify_artifacts()?;
         let child = command.spawn().map_err(RuntimeError::Spawn)?;
         let mut runtime = OwnedRuntime {
-            child: Some(child),
+            child: Mutex::new(Some(child)),
             client,
             endpoint,
             token_credential: token,
@@ -206,6 +287,62 @@ impl LlamaCppLaunch {
             return Err(error.into());
         }
         Ok(runtime)
+    }
+
+    fn runtime_command(&self) -> Result<Command, RuntimeError> {
+        #[cfg(feature = "writing-lab")]
+        if self.writing_lab {
+            #[cfg(target_os = "linux")]
+            return crate::writing_lab::process::launch_command(self.binary.path())
+                .map_err(RuntimeError::Spawn);
+            #[cfg(not(target_os = "linux"))]
+            return Err(RuntimeError::InvalidConfig("lab_parent_death_unavailable"));
+        }
+        Ok(Command::new(self.binary.path()))
+    }
+
+    fn runtime_identity(&self) -> StableRuntimeIdentity {
+        StableRuntimeIdentity {
+            launch_contract_id: self.launch_contract(),
+            binary_sha256: self.binary.sha256().to_owned(),
+            runtime_bundle_manifest_sha256: self
+                .runtime_bundle
+                .as_ref()
+                .map(|bundle| bundle.sha256().to_owned()),
+            model_sha256: self.model.sha256().to_owned(),
+            model_size: self.model.identity().size,
+            model_alias: self.model_alias.clone(),
+            model_origin: self.model_origin(),
+            threads: self.threads,
+            context_size: self.context_size(),
+            gpu_layers: GPU_LAYERS,
+            batch_size: self.writing.then_some(self.writing_batch_size()),
+            ubatch_size: self.writing.then_some(self.writing_batch_size()),
+        }
+    }
+
+    fn configure_mode(&self, command: &mut Command) {
+        #[cfg(feature = "writing-lab")]
+        if self.writing_lab {
+            // Bounded model comparisons own one active slot. Recurrent model
+            // checkpoint copies must not inherit the runtime's default of 32.
+            command.env("LLAMA_ARG_CTX_CHECKPOINTS", "0");
+        }
+        if let Some(behavior) = self.fixture_behavior {
+            command.env("BADI_FIXTURE_BEHAVIOR", behavior.environment_value());
+        }
+        if self.writing {
+            // Reuse only the active slot's bounded KV state. Disable the
+            // separate RAM archive; no slot-save path or disk cache is enabled.
+            command
+                .env("LLAMA_ARG_CACHE_PROMPT", "1")
+                .env("LLAMA_ARG_CACHE_RAM", "0")
+                // The runtime observes cancellation between prefill batches.
+                // Production stays at 16. Only an explicit Lab launch can test
+                // a larger chunk, whose cancellation cost is measured separately.
+                .env("LLAMA_ARG_BATCH", self.writing_batch_size().to_string())
+                .env("LLAMA_ARG_UBATCH", self.writing_batch_size().to_string());
+        }
     }
 
     fn validate(&self) -> Result<(), RuntimeError> {
@@ -246,13 +383,19 @@ pub struct StableRuntimeIdentity {
     pub model_sha256: String,
     pub model_size: u64,
     pub model_alias: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_origin: Option<&'static str>,
     pub threads: usize,
     pub context_size: u16,
     pub gpu_layers: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ubatch_size: Option<u16>,
 }
 
 pub struct OwnedRuntime {
-    child: Option<Child>,
+    child: Mutex<Option<Child>>,
     client: SemanticClient,
     endpoint: SocketAddr,
     #[allow(dead_code)]
@@ -278,7 +421,18 @@ impl OwnedRuntime {
 
     #[must_use]
     pub fn process_id(&self) -> Option<u32> {
-        self.child.as_ref().map(Child::id)
+        self.child.lock().ok()?.as_ref().map(Child::id)
+    }
+
+    fn try_wait(&self) -> io::Result<Option<ExitStatus>> {
+        // Poll only the owned handle. Once reaped, Child remembers its status;
+        // cleanup cannot mistake a subsequently reused PID for this runtime.
+        self.child
+            .lock()
+            .map_err(|_| io::Error::other("owned child lock poisoned"))?
+            .as_mut()
+            .ok_or_else(|| io::Error::other("owned child missing"))?
+            .try_wait()
     }
 
     pub fn shutdown(mut self) -> Result<RuntimeLifecycleObservation, RuntimeError> {
@@ -300,13 +454,7 @@ impl OwnedRuntime {
     ) -> Result<(), RuntimeError> {
         let deadline = Instant::now() + timeout;
         loop {
-            if let Some(status) = self
-                .child
-                .as_mut()
-                .ok_or(RuntimeError::MissingChild)?
-                .try_wait()
-                .map_err(RuntimeError::Wait)?
-            {
+            if let Some(status) = self.try_wait().map_err(RuntimeError::Wait)? {
                 return Err(RuntimeError::EarlyExit(status.code()));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -344,10 +492,14 @@ impl OwnedRuntime {
     }
 
     fn terminate(&mut self) -> Result<ExitStatus, RuntimeError> {
-        if self.child.is_none() {
+        let child = self
+            .child
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner());
+        if child.is_none() {
             return Err(RuntimeError::MissingChild);
         }
-        terminate_owned_child_with(&mut self.child, terminate_child).map_err(RuntimeError::Shutdown)
+        terminate_owned_child_with(child, terminate_child).map_err(RuntimeError::Shutdown)
     }
 }
 
@@ -357,12 +509,27 @@ impl CompletionProvider for OwnedRuntime {
         ProviderKind::LocalModel
     }
 
+    fn is_alive(&self) -> bool {
+        matches!(self.try_wait(), Ok(None))
+    }
+
     async fn complete(
         &self,
         request: ProviderRequest,
         cancellation: CancellationToken,
     ) -> Result<Option<String>, ProviderError> {
         self.client.complete(request, cancellation).await
+    }
+
+    async fn propose(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        allow_replacement: bool,
+    ) -> Result<Option<WritingProposal>, ProviderError> {
+        self.client
+            .propose(request, cancellation, allow_replacement)
+            .await
     }
 }
 
@@ -424,9 +591,7 @@ impl fmt::Debug for OwnedRuntime {
 
 impl Drop for OwnedRuntime {
     fn drop(&mut self) {
-        if self.child.is_some() {
-            let _ = self.terminate();
-        }
+        let _ = self.terminate();
     }
 }
 
@@ -551,6 +716,7 @@ mod tests {
     use std::error::Error;
     use std::fs;
     use std::io;
+    use std::io::Read as _;
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
     use std::path::Path;
@@ -561,12 +727,184 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        LlamaCppLaunch, ProvenanceError, RuntimeError, terminate_child, terminate_owned_child_with,
+        FixtureBehavior, LlamaCppLaunch, ProvenanceError, RuntimeError, terminate_child,
+        terminate_owned_child_with,
     };
     use crate::semantic::provenance::{
         DirectoryManifestExpectation, FileExpectation, VerifiedFile, directory_manifest_sha256,
         verify_directory_manifest, verify_file,
     };
+
+    #[test]
+    fn writing_bounds_batches_without_changing_evaluation_defaults() -> Result<(), Box<dyn Error>> {
+        let temporary = tempfile::tempdir()?;
+        let binary_path = temporary.path().join("fixture");
+        let model_path = temporary.path().join("model");
+        fs::write(&binary_path, b"fixture")?;
+        fs::write(&model_path, b"model")?;
+        let launch = LlamaCppLaunch::for_fixture(
+            verify_observed_file(&binary_path)?,
+            verify_observed_file(&model_path)?,
+            FixtureBehavior::Ready,
+        )?;
+        let baseline_identity = launch.runtime_identity();
+        for (launch, writing) in [(launch.clone(), false), (launch.for_writing(), true)] {
+            let mut command = Command::new(&binary_path);
+            command.env_clear().env("LLAMA_ARG_CACHE_PROMPT", "0");
+            launch.configure_mode(&mut command);
+            let identity = launch.runtime_identity();
+            let serialized_identity = serde_json::to_value(&identity)?;
+            for name in ["batch_size", "ubatch_size"] {
+                assert_eq!(
+                    serialized_identity.get(name),
+                    writing.then_some(&serde_json::json!(16))
+                );
+            }
+            assert_eq!(identity.sha256() == baseline_identity.sha256(), !writing);
+            if writing {
+                let mut previous_writing_identity = identity.clone();
+                previous_writing_identity.batch_size = None;
+                previous_writing_identity.ubatch_size = None;
+                assert_ne!(identity.sha256(), previous_writing_identity.sha256());
+            }
+            let environment: std::collections::BTreeMap<_, _> = command
+                .get_envs()
+                .map(|(key, value)| (key.to_str().unwrap(), value.unwrap().to_str().unwrap()))
+                .collect();
+            assert_eq!(
+                environment["LLAMA_ARG_CACHE_PROMPT"],
+                if writing { "1" } else { "0" }
+            );
+            for name in ["LLAMA_ARG_BATCH", "LLAMA_ARG_UBATCH"] {
+                assert_eq!(environment.get(name).copied(), writing.then_some("16"));
+            }
+            assert_eq!(
+                environment.get("LLAMA_ARG_CACHE_RAM").copied(),
+                writing.then_some("0")
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "writing-lab")]
+    #[test]
+    fn lab_prefill_batches_bind_launch_and_identity_without_changing_other_defaults()
+    -> Result<(), Box<dyn Error>> {
+        use crate::writing_lab::PrefillBatch;
+
+        let temporary = tempfile::tempdir()?;
+        let binary = temporary.path().join("fixture");
+        let model = temporary.path().join("weights");
+        fs::write(&binary, b"fixture")?;
+        fs::write(&model, b"disposable model")?;
+        let launch = LlamaCppLaunch::for_fixture(
+            verify_observed_file(&binary)?,
+            verify_observed_file(&model)?,
+            FixtureBehavior::Ready,
+        )?;
+        for unchanged in [launch.clone(), launch.clone().for_writing()] {
+            let selected = unchanged
+                .clone()
+                .with_lab_prefill_batch(PrefillBatch::Tokens64);
+            assert_eq!(
+                serde_json::to_vec(&selected.runtime_identity())?,
+                serde_json::to_vec(&unchanged.runtime_identity())?
+            );
+            assert_eq!(selected.writing_batch_size(), super::WRITING_BATCH_SIZE);
+        }
+        let baseline = launch.for_writing_lab();
+        let explicit_default = baseline
+            .clone()
+            .with_lab_prefill_batch(PrefillBatch::Tokens16);
+        assert_eq!(
+            serde_json::to_vec(&baseline.runtime_identity())?,
+            serde_json::to_vec(&explicit_default.runtime_identity())?
+        );
+        let candidate = baseline
+            .clone()
+            .with_lab_prefill_batch(PrefillBatch::Tokens64);
+        let mut candidate_identity = candidate.runtime_identity();
+        assert_eq!(candidate_identity.batch_size, Some(64));
+        assert_eq!(candidate_identity.ubatch_size, Some(64));
+        assert_ne!(
+            candidate_identity.sha256(),
+            baseline.runtime_identity().sha256()
+        );
+        candidate_identity.batch_size = Some(16);
+        candidate_identity.ubatch_size = Some(16);
+        assert_eq!(candidate_identity, baseline.runtime_identity());
+        for (selected, expected) in [(baseline, "16"), (candidate, "64")] {
+            let mut command = Command::new(&binary);
+            selected.configure_mode(&mut command);
+            let environment: std::collections::BTreeMap<_, _> = command
+                .get_envs()
+                .map(|(key, value)| (key.to_str().unwrap(), value.unwrap().to_str().unwrap()))
+                .collect();
+            assert_eq!(environment["LLAMA_ARG_BATCH"], expected);
+            assert_eq!(environment["LLAMA_ARG_UBATCH"], expected);
+            assert_eq!(environment["LLAMA_ARG_CACHE_PROMPT"], "1");
+            assert_eq!(environment["LLAMA_ARG_CACHE_RAM"], "0");
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "writing-lab")]
+    #[test]
+    fn explicit_lab_artifact_identity_is_bound_without_changing_default_serialization()
+    -> Result<(), Box<dyn Error>> {
+        let temporary = tempfile::tempdir()?;
+        let binary = temporary.path().join("fixture");
+        let model = temporary.path().join("weights");
+        fs::write(&binary, b"fixture")?;
+        fs::write(&model, b"disposable model")?;
+        let launch = LlamaCppLaunch::for_fixture(
+            verify_observed_file(&binary)?,
+            verify_observed_file(&model)?,
+            FixtureBehavior::Ready,
+        )?;
+        for default in [
+            launch.clone(),
+            launch.clone().for_writing(),
+            launch.clone().for_writing_lab(),
+        ] {
+            assert!(
+                serde_json::to_value(default.runtime_identity())?
+                    .get("model_origin")
+                    .is_none()
+            );
+        }
+        let ordinary = launch.clone().for_writing_lab().runtime_identity();
+        let explicit = launch.for_writing_lab_artifact().runtime_identity();
+        assert_eq!(explicit.model_origin, Some("explicit_lab_artifact"));
+        assert_ne!(explicit.sha256(), ordinary.sha256());
+        let mut without_marker = explicit;
+        without_marker.model_origin = None;
+        assert_eq!(ordinary, without_marker);
+        Ok(())
+    }
+
+    #[test]
+    fn shutdown_allows_a_busy_child_to_finish_its_term_cleanup() -> Result<(), Box<dyn Error>> {
+        let mut child = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "trap 'sleep 0.35; exit 0' TERM; printf r; while :; do sleep 10 & wait $!; done",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()?;
+        let mut ready = [0_u8; 1];
+        child
+            .stdout
+            .as_mut()
+            .expect("readiness pipe")
+            .read_exact(&mut ready)?;
+        assert_eq!(ready, *b"r");
+        let status = terminate_child(&mut child)?;
+        assert!(status.success(), "TERM cleanup was interrupted: {status}");
+        Ok(())
+    }
 
     #[tokio::test]
     async fn post_spawn_bundle_mutation_is_rejected_and_child_is_reaped()

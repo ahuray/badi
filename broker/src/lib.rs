@@ -5,7 +5,7 @@
 pub mod control_plane;
 pub mod engine;
 pub mod ipc;
-#[cfg(feature = "local-model-eval")]
+#[cfg(feature = "local-model")]
 pub mod local_model;
 pub mod metrics;
 pub mod model_selection;
@@ -15,10 +15,14 @@ pub mod policy;
 pub mod protocol;
 pub mod provider;
 pub mod segment;
-#[cfg(feature = "local-model-eval")]
+#[cfg(feature = "local-model")]
 pub mod semantic;
 pub mod server;
 pub mod settings;
+#[cfg(feature = "local-model")]
+pub mod writing;
+#[cfg(feature = "writing-lab")]
+pub mod writing_lab;
 
 pub use control_plane::{ControlPlane, ControlPlaneError, ControlPlaneSnapshot};
 pub use engine::{Broker, BrokerConfig, BrokerError, BrokerEvent, BrokerEventSink, ContextOutcome};

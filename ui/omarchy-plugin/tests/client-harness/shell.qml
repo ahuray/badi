@@ -20,6 +20,8 @@ ShellRoot {
       client.activate()
     }
 
+    function refresh(): void { client.refresh(true) }
+
     function clearMemory(): void {
       client.clearMemory()
     }
@@ -44,6 +46,9 @@ ShellRoot {
       return JSON.stringify({
         active: client.active,
         busy: client.busy,
+        loading: client.loading,
+        canMutateSettings: client.canMutateSettings,
+        message: client.message,
         lifecycleGeneration: client.lifecycleGeneration,
         refreshQueued: client.refreshQueued,
         overviewSchema: client.overview.schema || "",

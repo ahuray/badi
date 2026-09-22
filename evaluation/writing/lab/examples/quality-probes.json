@@ -1,0 +1,168 @@
+{
+  "schema": "badi.prediction-suite.v1",
+  "name": "Synthetic boundary, context and style development probes",
+  "cases": [
+    {
+      "id": "en-time-no-space",
+      "language": "en",
+      "prefix": "The meeting starts at nine in the",
+      "context": "",
+      "style": "",
+      "expected": [
+        " morning"
+      ]
+    },
+    {
+      "id": "en-time-space",
+      "language": "en",
+      "prefix": "The meeting starts at nine in the ",
+      "context": "",
+      "style": "",
+      "expected": [
+        "morning"
+      ]
+    },
+    {
+      "id": "en-file-no-space",
+      "language": "en",
+      "prefix": "I cannot open this encrypted file without the",
+      "context": "",
+      "style": "",
+      "expected": [
+        " password",
+        " key"
+      ]
+    },
+    {
+      "id": "en-file-space",
+      "language": "en",
+      "prefix": "I cannot open this encrypted file without the ",
+      "context": "",
+      "style": "",
+      "expected": [
+        "password",
+        "key"
+      ]
+    },
+    {
+      "id": "de-reading-no-space",
+      "language": "de",
+      "prefix": "Zum Lesen brauche ich meine",
+      "context": "",
+      "style": "",
+      "expected": [
+        " Brille"
+      ]
+    },
+    {
+      "id": "de-reading-space",
+      "language": "de",
+      "prefix": "Zum Lesen brauche ich meine ",
+      "context": "",
+      "style": "",
+      "expected": [
+        "Brille"
+      ]
+    },
+    {
+      "id": "fa-book-no-space",
+      "language": "fa",
+      "prefix": "کتاب را از",
+      "context": "",
+      "style": "",
+      "expected": [
+        " کتابخانه"
+      ]
+    },
+    {
+      "id": "fa-book-space",
+      "language": "fa",
+      "prefix": "کتاب را از ",
+      "context": "",
+      "style": "",
+      "expected": [
+        "کتابخانه"
+      ]
+    },
+    {
+      "id": "en-cue-museum",
+      "language": "en",
+      "prefix": "The next stop on our route is the ",
+      "context": "Our route has exactly two stops. Stop A is the library and stop B is the museum. We have finished visiting stop A.",
+      "style": "",
+      "expected": [
+        "museum"
+      ]
+    },
+    {
+      "id": "en-cue-library",
+      "language": "en",
+      "prefix": "The next stop on our route is the ",
+      "context": "Our route has exactly two stops. Stop A is the museum and stop B is the library. We have finished visiting stop A.",
+      "style": "",
+      "expected": [
+        "library"
+      ]
+    },
+    {
+      "id": "fa-cue-library",
+      "language": "fa",
+      "prefix": "ایستگاه بعدی ما ",
+      "context": "مسیر ما دو ایستگاه دارد: ایستگاه اول موزه و ایستگاه دوم کتابخانه است. بازدید از ایستگاه اول تمام شده است.",
+      "style": "",
+      "expected": [
+        "کتابخانه"
+      ]
+    },
+    {
+      "id": "fa-cue-museum",
+      "language": "fa",
+      "prefix": "ایستگاه بعدی ما ",
+      "context": "مسیر ما دو ایستگاه دارد: ایستگاه اول کتابخانه و ایستگاه دوم موزه است. بازدید از ایستگاه اول تمام شده است.",
+      "style": "",
+      "expected": [
+        "موزه"
+      ]
+    },
+    {
+      "id": "style-british",
+      "language": "en",
+      "prefix": "We need to review the user's typing ",
+      "context": "",
+      "style": "We organise the catalogue by colour. I label each draft carefully.",
+      "expected": [
+        "behaviour"
+      ]
+    },
+    {
+      "id": "style-american",
+      "language": "en",
+      "prefix": "We need to review the user's typing ",
+      "context": "",
+      "style": "We organize the catalog by color. I label each draft carefully.",
+      "expected": [
+        "behavior"
+      ]
+    },
+    {
+      "id": "style-british-context-american",
+      "language": "en",
+      "prefix": "We need to review the user's typing ",
+      "context": "This document must use American English spelling.",
+      "style": "We organise the catalogue by colour. I label each draft carefully.",
+      "expected": [
+        "behavior"
+      ]
+    },
+    {
+      "id": "style-american-context-british",
+      "language": "en",
+      "prefix": "We need to review the user's typing ",
+      "context": "This document must use British English spelling.",
+      "style": "We organize the catalog by color. I label each draft carefully.",
+      "expected": [
+        "behaviour"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,129 @@
+diff --git i/src/frontend/waylandim/waylandim.h w/src/frontend/waylandim/waylandim.h
+index 7c08ed9..56a2529 100644
+--- i/src/frontend/waylandim/waylandim.h
++++ w/src/frontend/waylandim/waylandim.h
+@@ -38,6 +38,10 @@ FCITX_CONFIGURATION(
+         this, "PreferKeyEvent",
+         _("Forward key event instead of committing text if it is not handled"),
+         true};
++    Option<bool> idleDoneAcknowledgement{
++        this, "IdleDoneAcknowledgement",
++        _("Acknowledge idle V2 state updates (compatibility workaround)"),
++        false};
+     OptionWithAnnotation<bool, ToolTipAnnotation> persistentVirtualKeyboard{
+         this,
+         "PersistentVirtualKeyboard",
+@@ -66,6 +70,10 @@ public:
+ 
+     bool hasKeyboardGrab(const std::string &display) const;
+ 
++    bool idleDoneAcknowledgementEnabled() const {
++        return *config_.idleDoneAcknowledgement;
++    }
++
+     const Configuration *getConfig() const override { return &config_; }
+     void setConfig(const RawConfig &config) override {
+         config_.load(config, true);
+diff --git i/src/frontend/waylandim/waylandimserverv2.cpp w/src/frontend/waylandim/waylandimserverv2.cpp
+index 2715834..cb025ad 100644
+--- i/src/frontend/waylandim/waylandimserverv2.cpp
++++ w/src/frontend/waylandim/waylandimserverv2.cpp
+@@ -203,6 +203,9 @@ WaylandIMInputContextV2::WaylandIMInputContextV2(
+         }
+         if (pendingActivate_) {
+             pendingActivate_ = false;
++            // activate resets protocol output state. Reset before focus
++            // callbacks, which may publish a new preedit for the new field.
++            preeditActive_ = false;
+             if (!server_->parent()->persistentVirtualKeyboard()) {
+                 vk_.reset();
+                 vkReady_ = false;
+@@ -243,6 +246,7 @@ WaylandIMInputContextV2::WaylandIMInputContextV2(
+                 updateSurroundingTextWrapper();
+             }
+         }
++        acknowledgeIdleState();
+     });
+     ic_->contentType().connect([this](uint32_t hint, uint32_t purpose) {
+         WAYLANDIM_DEBUG() << "contentTypeCallback:" << hint << purpose;
+@@ -273,6 +277,25 @@ WaylandIMInputContextV2::~WaylandIMInputContextV2() {
+     destroy();
+ }
+ 
++void WaylandIMInputContextV2::acknowledgeIdleState() {
++    if (!server_->parent()->idleDoneAcknowledgementEnabled()) {
++        return;
++    }
++    auto *input = delegatedInputContext();
++    // Some text-input clients serialize each publication behind done. An idle
++    // input method otherwise never acknowledges it. A bare protocol commit is
++    // sufficient, but can clear client preedit: never send it while composing.
++    // Delegate operations commit synchronously, so their pending mutation batch
++    // is already flushed; avoid another commit if they acknowledged this serial.
++    if (!realFocus() || committedSerial_ == serial_ || preeditActive_ ||
++        !input->inputPanel().clientPreedit().empty() ||
++        !input->inputPanel().preedit().empty() ||
++        server_->instance()->isComposing(input)) {
++        return;
++    }
++    commitProtocolState();
++}
++
+ void WaylandIMInputContextV2::repeat() {
+     if (!realFocus()) {
+         return;
+@@ -691,7 +714,8 @@ void WaylandIMInputContextV2::updatePreeditDelegate(InputContext *ic) const {
+         ic_->setPreeditString(preedit.toString().data(), cursorStart,
+                               cursorEnd);
+     }
+-    ic_->commit(serial_);
++    commitProtocolState(preedit.textLength() > 0 &&
++                        preedit.textLength() < WaylandIMServerBase::safeStringLimit);
+ }
+ 
+ void WaylandIMInputContextV2::deleteSurroundingTextDelegate(
+@@ -725,7 +749,7 @@ void WaylandIMInputContextV2::deleteSurroundingTextDelegate(
+     auto sizeBytes = utf8::ncharByteLength(text.begin() + startBytes, size);
+     ic_->deleteSurroundingText(cursorBytes - startBytes,
+                                startBytes + sizeBytes - cursorBytes);
+-    ic_->commit(serial_);
++    commitProtocolState();
+ }
+ 
+ int32_t WaylandIMInputContextV2::repeatRate() const {
+diff --git i/src/frontend/waylandim/waylandimserverv2.h w/src/frontend/waylandim/waylandimserverv2.h
+index 6378b8a..254bdce 100644
+--- i/src/frontend/waylandim/waylandimserverv2.h
++++ w/src/frontend/waylandim/waylandimserverv2.h
+@@ -106,7 +106,7 @@ protected:
+ 
+         WaylandIMServerBase::commitStringWrapper(text, [this](const char *str) {
+             ic_->commitString(str);
+-            ic_->commit(serial_);
++            commitProtocolState();
+         });
+     }
+     void deleteSurroundingTextDelegate(InputContext *ic, int offset,
+@@ -117,6 +117,12 @@ protected:
+     void updatePreeditDelegate(InputContext *ic) const override;
+ 
+ private:
++    void commitProtocolState(bool preeditActive = false) const {
++        ic_->commit(serial_);
++        committedSerial_ = serial_;
++        preeditActive_ = preeditActive;
++    }
++    void acknowledgeIdleState();
+     void repeat();
+     void surroundingTextCallback(const char *text, uint32_t cursor,
+                                  uint32_t anchor);
+@@ -148,6 +154,9 @@ private:
+     bool pendingDeactivate_ = false;
+     bool vkReady_ = false;
+ 
++    // Protocol commits can run through const delegate methods.
++    mutable std::optional<uint32_t> committedSerial_;
++    mutable bool preeditActive_ = false;
+     uint32_t serial_ = 0;
+     uint32_t time_ = 0;
+ 

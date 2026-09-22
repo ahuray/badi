@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Badi site access</title>
+<style>
+:root{color-scheme:light dark;font:14px/1.5 system-ui}body{margin:0;padding:20px;width:310px}header{display:flex;align-items:center;gap:10px}strong{font-size:19px}.mark{border:2px solid currentColor;border-radius:9px 9px 9px 2px;padding:0 9px;font-size:23px;font-weight:700}#site{overflow-wrap:anywhere;color:GrayText}button{font:inherit;padding:8px 12px;border:1px solid GrayText;border-radius:6px;background:Canvas;color:CanvasText;cursor:pointer}button:focus-visible{outline:2px solid Highlight;outline-offset:3px}code{display:block;white-space:pre-wrap;overflow-wrap:anywhere;background:color-mix(in srgb,CanvasText 8%,Canvas);padding:10px;border-radius:6px}[hidden]{display:none}
+</style>
+<header><span class="mark" aria-hidden="true">b</span><strong>Badi</strong></header>
+<p id="site">Checking site…</p><p id="status" role="status">Connecting to your local model…</p>
+<p><button id="enable" disabled>Enable on this site</button><button id="disable" hidden>Disable site access</button> <button id="retry" hidden>Retry connection</button></p>
+<code id="command"></code><p>Local suggestions for text inputs and textareas. Password and sensitive fields stay excluded.</p>
+<script src="web-access.js"></script></html>

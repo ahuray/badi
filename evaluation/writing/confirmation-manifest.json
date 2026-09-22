@@ -1,0 +1,58 @@
+{
+  "schema": "badi.writing-corpus.v1",
+  "frozen_at": "2026-09-07T20:21:31.639496+00:00",
+  "languages": [
+    "en",
+    "de",
+    "fa"
+  ],
+  "language_selection": "English, German and Persian receive 40 cases each; language tags identify the intended continuation language, including contexts containing another language.",
+  "origin": "New assistant-authored synthetic confirmation prompts with one plausible reference each; no private user writing or independently sampled natural text.",
+  "split_policy": "Development and heldout remain unchanged. Confirmation is frozen before inference and must be evaluated only after the candidate writing implementation is frozen. Do not tune from confirmation cases or their outputs; subsequent tuning requires a newly authored confirmation set.",
+  "quality_policy": "References are examples, not exhaustive correct answers. Suggestion count is coverage. Semantic usefulness requires separately attributed rubric review; real typing benefit requires observed user trials.",
+  "files": {
+    "development": {
+      "sha256": "b6b2d4c845630c46a955a1d804ed5b7e68489d708d6f0613a97d11a298456e4c",
+      "samples": 24
+    },
+    "heldout": {
+      "sha256": "79efdf0b86e5f9c4a620dc57e9d9537c64ef4e6273cb2a6d8d51ed4977b5c616",
+      "samples": 132
+    },
+    "confirmation": {
+      "sha256": "1a253a4884e3a0ad417223dba7a48646a950ae7bd529a71438d1deece07f5194",
+      "samples": 120
+    }
+  },
+  "author": "OpenAI Codex subagent extensionless_research",
+  "provenance": "Authored without inspecting previous corpus case text, generated continuation outputs, or model implementation source. Only the corpus validator/schema and original manifest were used. Existing corpus files were parsed mechanically for hash, count and duplicate checks without printing their text. No inference was run during authoring.",
+  "composition": {
+    "by_language": {
+      "en": 40,
+      "de": 40,
+      "fa": 40
+    },
+    "by_category": {
+      "email": 24,
+      "planning": 24,
+      "technical": 24,
+      "mixed_language": 24,
+      "context_dependence": 24
+    },
+    "partial_word_by_language": {
+      "en": 10,
+      "de": 10,
+      "fa": 10
+    },
+    "context_dependence_by_language": {
+      "en": 8,
+      "de": 8,
+      "fa": 8
+    },
+    "prior_complete_sentence_by_language": {
+      "en": 25,
+      "de": 25,
+      "fa": 25
+    }
+  }
+}

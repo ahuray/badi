@@ -387,8 +387,8 @@ fn build_overview(
         models: OverviewModels {
             writing: OverviewModel {
                 advice: writing,
-                configured: false,
-                installed: false,
+                configured: health.provider == ProviderKind::LocalModel,
+                installed: health.provider == ProviderKind::LocalModel,
             },
         },
     })
@@ -904,6 +904,33 @@ mod tests {
         values.iter().map(ToString::to_string).collect()
     }
 
+    fn overview_schema_validator() -> jsonschema::Validator {
+        let schema_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schemas");
+        let read_schema = |name: &str| {
+            serde_json::from_slice::<serde_json::Value>(
+                &std::fs::read(schema_root.join(name)).expect("read schema"),
+            )
+            .expect("parse schema")
+        };
+        let hardware = read_schema("badi.hardware.v1.schema.json");
+        let advice = read_schema("badi.model-advice.v2.schema.json");
+        let settings = read_schema("badi.settings.v2.schema.json");
+        let schema = read_schema("badi.overview.v2.schema.json");
+        let registry = Registry::new()
+            .add("urn:badi:schema:hardware:v1", hardware)
+            .expect("hardware resource")
+            .add("urn:badi:schema:model-advice:v2", advice)
+            .expect("advice resource")
+            .add("urn:badi:schema:settings:v2", settings)
+            .expect("settings resource")
+            .prepare()
+            .expect("overview schema registry");
+        jsonschema::options()
+            .with_registry(&registry)
+            .build(&schema)
+            .expect("overview schema")
+    }
+
     #[test]
     fn overview_matches_its_versioned_schema() {
         let health = HealthStatusPayload {
@@ -929,32 +956,29 @@ mod tests {
             personalization_write_failures: 0,
             personalization_dropped_signals: 0,
         };
+        let local_overview = serde_json::to_value(
+            build_overview(
+                HealthStatusPayload {
+                    provider: ProviderKind::LocalModel,
+                    ..health.clone()
+                },
+                status.clone(),
+            )
+            .expect("local overview"),
+        )
+        .expect("json");
+        assert_eq!(
+            local_overview.pointer("/models/writing/installed"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            local_overview.pointer("/models/writing/configured"),
+            Some(&json!(true))
+        );
         let overview = serde_json::to_value(build_overview(health, status).expect("overview"))
             .expect("overview json");
-        let schema_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schemas");
-        let read_schema = |name: &str| {
-            serde_json::from_slice::<serde_json::Value>(
-                &std::fs::read(schema_root.join(name)).expect("read schema"),
-            )
-            .expect("parse schema")
-        };
-        let hardware = read_schema("badi.hardware.v1.schema.json");
-        let advice = read_schema("badi.model-advice.v2.schema.json");
-        let settings = read_schema("badi.settings.v2.schema.json");
-        let schema = read_schema("badi.overview.v2.schema.json");
-        let registry = Registry::new()
-            .add("urn:badi:schema:hardware:v1", hardware)
-            .expect("hardware resource")
-            .add("urn:badi:schema:model-advice:v2", advice)
-            .expect("advice resource")
-            .add("urn:badi:schema:settings:v2", settings)
-            .expect("settings resource")
-            .prepare()
-            .expect("overview schema registry");
-        let validator = jsonschema::options()
-            .with_registry(&registry)
-            .build(&schema)
-            .expect("overview schema");
+        let validator = overview_schema_validator();
+        assert!(validator.is_valid(&local_overview));
         if let Err(error) = validator.validate(&overview) {
             panic!("overview failed schema: {error}");
         }

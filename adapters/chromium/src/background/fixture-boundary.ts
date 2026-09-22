@@ -17,6 +17,29 @@ export function isTrustedFixtureSender(
   );
 }
 
+export function isFocusedFixtureTab(
+  sender: chrome.runtime.MessageSender,
+  tab: chrome.tabs.Tab,
+  window: chrome.windows.Window,
+  extensionId: string,
+): boolean {
+  // MessageSender supplies the exact sending document URL and document ID.
+  // tabs.get omits URL under this fixture's nativeMessaging-only manifest.
+  // Recheck current tab/window activity without requiring a broader grant.
+  return (
+    isTrustedFixtureSender(sender, extensionId) &&
+    tab.id === sender.tab?.id &&
+    tab.windowId === sender.tab?.windowId &&
+    window.id === tab.windowId &&
+    tab.active === true &&
+    tab.incognito === false &&
+    tab.discarded === false &&
+    tab.frozen === false &&
+    (tab.url === undefined || tab.url === EXPECTED_FIXTURE_URL) &&
+    window.focused === true
+  );
+}
+
 /**
  * The content-free bootstrap may subscribe an inactive exact document so it
  * can receive pause/resume before it ever acquires text. Content-bearing and

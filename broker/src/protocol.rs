@@ -21,7 +21,7 @@ pub const MAX_SUGGESTION_CHARS: usize = 64;
 pub const MAX_SUGGESTION_WORDS: usize = 8;
 pub const MAX_ID_CHARS: usize = 128;
 pub const DEFAULT_SUGGESTION_TTL_MS: u64 = 600;
-pub const CAPABILITY_COUNT: usize = 8;
+pub const CAPABILITY_COUNT: usize = 9;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SessionId(Uuid);
@@ -88,10 +88,13 @@ pub enum AdapterKind {
     Fcitx,
     Cli,
     Test,
+    Terminal,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Capability {
+    #[serde(rename = "text_replacement")]
+    TextReplacement,
     #[serde(rename = "context")]
     Context,
     #[serde(rename = "suggestion")]
@@ -495,6 +498,9 @@ impl HelloPayload {
 
     pub fn validate_for_frame(&self, frame_version: u8) -> Result<(), ProtocolError> {
         self.validate()?;
+        if self.adapter.kind == AdapterKind::Terminal && frame_version != CURRENT_PROTOCOL_VERSION {
+            return Err(ProtocolError::InvalidPayload);
+        }
         if self.min_v != frame_version || self.max_v != frame_version {
             return Err(ProtocolError::VersionNegotiationFailed);
         }
@@ -899,9 +905,30 @@ pub struct SuggestionShowPayload {
     pub fingerprint: String,
     pub suggestion_id: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace_before: Option<String>,
     pub accept_word: String,
     pub ttl_ms: u64,
     pub provider: ProviderKind,
+}
+
+/// The replacement route owns exactly one ASCII word and, optionally, the one
+/// space just typed after it. Neither form can add, remove, or alter spacing.
+#[must_use]
+pub fn valid_spelling_replacement(original: &str, corrected: &str) -> bool {
+    fn parts(value: &str) -> Option<(&str, bool)> {
+        let (word, space) = value
+            .strip_suffix(' ')
+            .map_or((value, false), |word| (word, true));
+        ((3..=24).contains(&word.len()) && word.bytes().all(|byte| byte.is_ascii_lowercase()))
+            .then_some((word, space))
+    }
+    match (parts(original), parts(corrected)) {
+        (Some((original_word, original_space)), Some((corrected_word, corrected_space))) => {
+            original_word != corrected_word && original_space == corrected_space
+        }
+        _ => false,
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -971,6 +998,8 @@ pub struct CommitPreparePayload {
     pub fingerprint: String,
     pub suggestion_id: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace_before: Option<String>,
     pub acceptance: Acceptance,
 }
 
@@ -1195,6 +1224,28 @@ mod tests {
     }
 
     #[test]
+    fn shell_adapter_requires_v2_negotiation() {
+        let mut hello = HelloPayload {
+            min_v: 1,
+            max_v: 1,
+            adapter: AdapterDescriptor {
+                kind: AdapterKind::Terminal,
+                name: "badi-terminal".to_owned(),
+                version: "1".to_owned(),
+            },
+            capabilities: vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::CommitApplied,
+            ],
+        };
+        assert!(hello.validate_for_frame(1).is_err());
+        hello.min_v = 2;
+        hello.max_v = 2;
+        hello.validate_for_frame(2).expect("v2 shell adapter");
+    }
+
+    #[test]
     fn rejects_coordinates_on_global_message() {
         let envelope: WireEnvelope = serde_json::from_value(json!({
             "v": 1,
@@ -1305,6 +1356,41 @@ mod tests {
         for invalid in ["en-", "-en", "en--x", "en_US", "e", "fr-ça"] {
             assert!(!valid_language_tag(invalid), "{invalid}");
         }
+    }
+
+    #[test]
+    fn spelling_suffixes_preserve_one_optional_ascii_space() {
+        for (original, corrected) in [("teh", "the"), ("teh ", "the "), ("adress ", "address ")] {
+            assert!(super::valid_spelling_replacement(original, corrected));
+        }
+        for (original, corrected) in [
+            ("teh ", "the"),
+            ("teh", "the "),
+            ("teh  ", "the  "),
+            ("teh\t", "the\t"),
+            ("teh\n", "the\n"),
+            ("teh\u{00a0}", "the\u{00a0}"),
+            ("teh.", "the."),
+            ("teh x", "the x"),
+            ("Teh ", "The "),
+            ("teh ", "teh "),
+            ("te ", "the "),
+            ("teh ", "to "),
+            ("één ", "een "),
+        ] {
+            assert!(
+                !super::valid_spelling_replacement(original, corrected),
+                "{original:?} -> {corrected:?}"
+            );
+        }
+        assert!(super::valid_spelling_replacement(
+            &format!("{} ", "a".repeat(24)),
+            &format!("{} ", "b".repeat(24))
+        ));
+        assert!(!super::valid_spelling_replacement(
+            &format!("{} ", "a".repeat(25)),
+            &format!("{} ", "b".repeat(25))
+        ));
     }
 
     #[test]

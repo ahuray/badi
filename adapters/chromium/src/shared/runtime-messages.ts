@@ -148,6 +148,8 @@ export function isRuntimeCommand(value: unknown): value is RuntimeCommand {
         isRecord(notice) &&
         isAddress(notice) &&
         typeof notice["expectedText"] === "string" &&
+        (notice["expectedReplaceBefore"] === undefined || (typeof notice["expectedReplaceBefore"] === "string"
+          && /^[a-z]{3,24}$/u.test(notice["expectedReplaceBefore"]))) &&
         (notice["acceptance"] === "word" || notice["acceptance"] === "all")
       );
     }

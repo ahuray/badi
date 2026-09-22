@@ -26,6 +26,7 @@ std::optional<std::vector<std::uint8_t>> encodeFrame(std::string_view body);
 bool strictBoundedJsonObject(std::string_view body);
 bool strictSessionControlResult(std::string_view body);
 bool strictSuggestionClear(std::string_view body);
+bool strictPolicyStatus(std::string_view body);
 std::optional<std::string>
 serializeSessionOpenEnvelope(const Coordinates &coordinates,
                              std::string_view appId,
@@ -49,6 +50,7 @@ private:
 struct ClearNotice {
     Coordinates coordinates;
     std::optional<std::string> suggestionId;
+    std::string reason;
 };
 
 bool dispatchSuggestionClear(
@@ -68,6 +70,7 @@ struct WireCallbacks {
     std::function<void(const ClearNotice &)> onClear;
     std::function<void(const CommitPrepare &)> onCommitPrepare;
     std::function<void()> onDisconnected;
+    std::function<void(std::string_view, bool)> onPolicy;
 };
 
 class Transport {
@@ -85,6 +88,10 @@ public:
 
     bool openSession(const Coordinates &coordinates, std::string_view appId,
                      std::string_view targetId);
+    bool queryPolicy(const Coordinates &coordinates, std::string_view appId,
+                     std::string_view targetId);
+    bool queryTargetPolicy(const Coordinates &coordinates, const nlohmann::json &target);
+    bool openTargetSession(const Coordinates &coordinates, const nlohmann::json &target);
     bool closeSession(const Coordinates &coordinates);
     bool publishContext(const ContextUpdate &update);
     bool requestAcceptance(const AcceptRequest &request);

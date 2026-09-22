@@ -80,6 +80,7 @@ export interface BootstrapState {
 }
 
 export interface SuggestionResponse {
+  readonly replaceBefore?: string;
   readonly requestId: string;
   readonly sessionId: string;
   readonly focusEpoch: number;
@@ -113,11 +114,13 @@ export interface SuggestionClearEvent {
 }
 
 export interface CommitAuthorizationRequest extends SuggestionAddress {
+  readonly expectedReplaceBefore?: string;
   readonly expectedText: string;
   readonly acceptance: "word" | "all";
 }
 
 export interface CommitAuthorization extends SuggestionAddress {
+  readonly replaceBefore?: string;
   readonly text: string;
   readonly acceptance: "word" | "all";
 }

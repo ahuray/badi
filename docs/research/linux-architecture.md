@@ -2,7 +2,7 @@
 
 > **Historical architecture baseline:** this research remains source evidence,
 > but [Vision V2](../../VISION-V2.md) and the
-> [V2 implementation plan](../plan/vision-v2-implementation.md) supersede its
+> [V2 implementation plan](../../what-have-been.md) supersede its
 > 48-hour scope, product terminology, and delivery gates.
 
 Status: decision-ready research, 2026-08-30
@@ -514,3 +514,102 @@ The durable architecture is therefore a broker plus capability-negotiated adapte
 Ship the first proof as “Chromium + Obsidian + manual Ghostty/Codex on this Omarchy tuple,” backed by one Rust broker and explicit capability receipts. Treat application-owned APIs as the durable path, Fcitx/IBus as conditional breadth, Hyprland/portals as control planes, and AT-SPI as optional observation.
 
 The architecture succeeds when it fails closed and describes unsupported targets honestly. A suggestion that cannot be tied to one current, unchanged, non-sensitive field must disappear; an adapter that cannot insert natively must not synthesize its way around the failure.
+
+## 2026-09-07: German and Persian correction feasibility
+
+The current correction contract remains English-only. A read-only audit pinned
+LibreOffice dictionaries release `libreoffice-26.2.6.3` to commit
+`9925407d67e752a75cff6a1b2d7b713b7ef0380c`; no new dictionary was installed or
+evaluated. Persian Lilak 3.3 declares Apache-2.0 and uses UTF-8, continuation and
+compound rules, and meaningful ZWNJ affixes. Its Arabic-to-Persian yeh/kaf `REP`
+entries are suggestion rules, not permission to normalize the editable buffer.
+Sources: [Persian license](https://github.com/LibreOffice/dictionaries/blob/9925407d67e752a75cff6a1b2d7b713b7ef0380c/fa_IR/LICENSE),
+[affix rules](https://github.com/LibreOffice/dictionaries/blob/9925407d67e752a75cff6a1b2d7b713b7ef0380c/fa_IR/fa-IR.aff).
+
+The German spelling dictionary declares GPL v2 or v3 and uses ISO-8859-1,
+capitalization and compound semantics. Its additional frami entries are described
+as unreviewed, so membership alone cannot establish correction quality.
+Preserve explicit `de_DE`/`de_AT`/`de_CH` choices.
+Sources: [German README](https://github.com/LibreOffice/dictionaries/blob/9925407d67e752a75cff6a1b2d7b713b7ef0380c/de/README_de_DE_frami.txt),
+[affix contract](https://github.com/LibreOffice/dictionaries/blob/9925407d67e752a75cff6a1b2d7b713b7ef0380c/de/de_DE_frami.aff).
+
+Use complete [Hunspell semantics](https://github.com/hunspell/hunspell/blob/v1.7.3/man/hunspell.5)
+to veto corrections of valid originals and to generate eligible candidates;
+`NOSUGGEST` originals must remain valid without becoming candidates. The current
+English generator cannot expand either dictionary faithfully. Preserve exact
+original suffixes even when lookup uses a normalized form. Extending correction
+also requires synchronized Rust, JSON-schema, JS and C++ validators, Unicode
+character counts for Fcitx deletion, and UTF-16 offsets in browser editors.
+Correct words, names, ambiguous candidates, mixed-language tokens, umlauts, sharp
+S, combining marks and ZWNJ need dedicated replacement, stale-state and native
+undo checks before a coverage claim.
+
+## 2026-09-08: Extension-free editing transaction limits
+
+This finding concerns Chromium `151.0.7922.173` on the tested Linux
+Wayland/Fcitx5 `5.1.21`/Hyprland `0.56.2` route. Accessibility observation and a
+visible prediction do not establish an editor transaction or separate native
+undo step.
+
+- **Physical replacement failure:** in a sandbox-enabled disposable Chromium
+  page, an `input` handler moved focus during the native correction's deletion.
+  The first field lost `adress ` and the second received `address `. Receipt:
+  `output/extensionless/installed-browser-03/hostile-focus-result.json`.
+  Native `text_replacement` was removed; editor-owned correction remains a
+  separate capability. See the [native contract](../../adapters/fcitx5/README.md).
+- **Accessibility is not a replacement API here:** the pinned Linux ATK
+  implementation registers Text and Action interfaces, but no EditableText.
+  Setting the existing caret or selection returns success before invoking the
+  renderer, so that no-op cannot close a typing group. Sources:
+  [registered interfaces](https://github.com/chromium/chromium/blob/151.0.7922.173/ui/accessibility/platform/ax_platform_node_auralinux.cc#L2402),
+  [identical selection handling](https://github.com/chromium/chromium/blob/151.0.7922.173/ui/accessibility/platform/ax_platform_node_auralinux.cc#L4693).
+- **An original navigation key is ambiguous:** native selection movement closes
+  typing, but a page can `preventDefault()` on a real `End` key at line end.
+  Text, caret and focus then look identical while the editor's navigation and
+  typing-group closure never execute. Observing unchanged context or key release
+  cannot distinguish these cases. Sources:
+  [selection movement](https://github.com/chromium/chromium/blob/151.0.7922.173/third_party/blink/renderer/core/editing/frame_selection.cc#L642),
+  [default-handler gate](https://github.com/chromium/chromium/blob/151.0.7922.173/third_party/blink/renderer/core/dom/events/event_dispatcher.cc#L441).
+- **A real selected gesture still lacks target binding:** Shift+Left can create
+  an observable range and close prior typing. However, one no-composition IME
+  commit fires `beforeinput`, checks document availability, then invokes editing
+  using the subsequently resolved target. Its saved numeric offsets do not pin
+  the original field across that handler. A sandbox-enabled physical append test
+  confirmed this: `beforeinput` focused a second field and the full continuation
+  landed there. A same-field caret change inserted it before the original prefix.
+  Cancelling `beforeinput` prevented mutation; changing focus during the later
+  `input` event left the exact append in the first field. All five cases, including
+  a baseline with coalesced undo, are in
+  `output/extensionless/installed-browser-04/`. Selected-text-plus-completion
+  redirection remains source-predicted; Badi continues to deny selections. Source:
+  [commit and insertion path](https://github.com/chromium/chromium/blob/151.0.7922.173/third_party/blink/renderer/core/editing/ime/input_method_controller.cc#L928).
+
+macOS has different client contracts, including AppKit's
+[`NSTextInputClient.insertText(_:replacementRange:)`](https://developer.apple.com/documentation/appkit/nstextinputclient/inserttext%28_%3Areplacementrange%3A%29).
+That API is not the current Linux AT-SPI/Wayland interface, nor evidence of how
+Cotypist implements acceptance. Electron's
+[host-owned editing methods](https://www.electronjs.org/docs/latest/api/web-contents#contentsinserttexttext)
+also do not expose an external expected-field/revision transaction for Badi.
+
+The extension-free objective remains valid. Safe acceptance and correction need
+a cooperating app/site editor that checks exact field, revision and range inside
+one undoable transaction, or upstream protocol/editor support providing equivalent
+authority through execution. This is a missing capability of the investigated
+route, not a claim that extension-free Linux integration is universally
+impossible. Clipboard replacement, fabricated preedit and blind synthetic input
+do not supply that capability.
+
+An upstream Chromium fix could retain the original element and selection across
+`beforeinput` and reject changes before editing. That would close the observed
+callback gap, but not prove authority from an earlier external snapshot while the
+commit waits in the renderer queue. Chromium's internal
+[text input state](https://github.com/chromium/chromium/blob/151.0.7922.173/ui/base/ime/mojom/text_input_state.mojom#L20)
+has a document-local node identifier without an edit revision; existing
+[targeted IME behavior](https://github.com/chromium/chromium/blob/151.0.7922.173/third_party/blink/public/mojom/input/input_handler.mojom#L512)
+can temporarily move focus instead of rejecting a stale target. Ordinary
+[input-method-v2 serial mismatch](https://github.com/fcitx/fcitx5/blob/5.1.21/src/lib/fcitx-wayland/input-method-v2/input-method-unstable-v2.xml#L279)
+also does not reject edits. A stronger negotiated contract must carry opaque
+field/document generation and edit revision through both Wayland legs and
+renderer IPC, revalidate through callbacks, define the undo transaction, and
+return an operation-specific outcome. No browser fork or upstream publication
+has been made.

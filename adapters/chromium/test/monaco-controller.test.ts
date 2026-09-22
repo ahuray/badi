@@ -69,6 +69,7 @@ function authorizationFor(request: CommitAuthorizationRequest): CommitAuthorizat
     fingerprint: request.fingerprint,
     suggestionId: request.suggestionId,
     text: request.expectedText,
+    ...(request.expectedReplaceBefore === undefined ? {} : { replaceBefore: request.expectedReplaceBefore }),
     acceptance: request.acceptance,
   };
 }
@@ -175,6 +176,22 @@ describe("Dillinger Monaco controller", () => {
       expect.objectContaining({ status: "applied", suggestionId: "suggestion-a" }),
     );
     expect(controller.suggestionVisible).toBe(false);
+    controller.dispose();
+  });
+
+  it("preserves the typed delimiter through correction display and authorization", async () => {
+    const state = harness();
+    const snapshot = { ...SNAPSHOT, before: "This is teh ", valueLength: 12, offset: 12, column: 13 };
+    state.bridge.snapshot.mockResolvedValue(snapshot);
+    state.transport.requestSuggestion.mockImplementation(async (request: SuggestionRequest) => ({
+      ...responseFor(request), suggestion: "the ", replaceBefore: "teh ", acceptWord: "the ",
+    }));
+    const controller = controllerFor(state);
+    await showSuggestion(controller);
+    expect(controller.acceptAll()).toBe(true);
+    await settle();
+    expect(state.bridge.apply).toHaveBeenCalledWith("session-a", snapshot,
+      expect.objectContaining({ text: "the ", replaceBefore: "teh ", acceptance: "all" }));
     controller.dispose();
   });
 
@@ -353,5 +370,119 @@ describe("Dillinger Monaco controller", () => {
     expect(state.view.dispose).toHaveBeenCalledTimes(1);
     expect(state.view.show).not.toHaveBeenCalled();
     expect(controller.suggestionVisible).toBe(false);
+  });
+
+  it.each(["input", "selectionchange", "mousedown", "focusout"])(
+    "revokes visible and pending acceptance synchronously on %s",
+    async (eventType) => {
+      const state = harness();
+      let resolveAuthorization!: (authorization: CommitAuthorization) => void;
+      state.transport.authorizeCommit.mockImplementation(
+        () => new Promise<CommitAuthorization>((resolve) => { resolveAuthorization = resolve; }),
+      );
+      const controller = controllerFor(state);
+      await showSuggestion(controller);
+      controller.acceptAll();
+      const request = state.transport.authorizeCommit.mock.calls[0]?.[0] as CommitAuthorizationRequest;
+
+      document.dispatchEvent(new Event(eventType, { bubbles: true }));
+      expect(controller.suggestionVisible).toBe(false);
+      resolveAuthorization(authorizationFor(request));
+      await settle();
+      expect(state.bridge.apply).not.toHaveBeenCalled();
+      controller.dispose();
+    },
+  );
+
+  it("suspends acquisition and acceptance throughout an IME composition", async () => {
+    const state = harness();
+    const controller = controllerFor(state);
+    await showSuggestion(controller);
+    state.bridge.snapshot.mockClear();
+    state.transport.requestSuggestion.mockClear();
+
+    document.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    expect(controller.suggestionVisible).toBe(false);
+    expect(controller.acceptAll()).toBe(false);
+    document.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(state.bridge.snapshot).not.toHaveBeenCalled();
+    expect(state.transport.requestSuggestion).not.toHaveBeenCalled();
+
+    document.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    await settle();
+    expect(controller.suggestionVisible).toBe(true);
+    controller.dispose();
+  });
+
+  it.each([600, 700])("rejects a target recheck completing at deadline %i", async (deadline) => {
+    const state = harness();
+    let now = 100;
+    let resolveSnapshot!: (snapshot: MonacoSnapshot) => void;
+    state.bridge.snapshot.mockResolvedValueOnce(SNAPSHOT).mockImplementationOnce(
+      () => new Promise<MonacoSnapshot>((resolve) => { resolveSnapshot = resolve; }),
+    );
+    const controller = new MonacoController({
+      ...state, document, sessionId: "session-a", origin: "https://dillinger.io",
+      isCurrentDocument: () => true, debounceMs: 0, now: () => now,
+    });
+    controller.start();
+    controller.resume();
+    await vi.advanceTimersByTimeAsync(0);
+    await settle();
+    now = deadline;
+    resolveSnapshot(SNAPSHOT);
+    await settle();
+    expect(state.view.show).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("does not let a late old authorization erase a newer preview", async () => {
+    const state = harness();
+    let resolveAuthorization!: (authorization: CommitAuthorization) => void;
+    state.transport.authorizeCommit.mockImplementationOnce(
+      () => new Promise<CommitAuthorization>((resolve) => { resolveAuthorization = resolve; }),
+    );
+    const controller = controllerFor(state);
+    await showSuggestion(controller);
+    controller.acceptAll();
+    const oldRequest = state.transport.authorizeCommit.mock.calls[0]?.[0] as CommitAuthorizationRequest;
+    state.bridge.snapshot.mockResolvedValue({ ...SNAPSHOT, versionId: 8 });
+    document.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    await settle();
+    expect(controller.suggestionVisible).toBe(true);
+
+    resolveAuthorization(authorizationFor(oldRequest));
+    await settle();
+    expect(state.bridge.apply).not.toHaveBeenCalled();
+    expect(controller.suggestionVisible).toBe(true);
+    expect(controller.acceptAll()).toBe(true);
+    await settle();
+    expect(state.bridge.apply).toHaveBeenCalledTimes(1);
+    controller.dispose();
+  });
+
+  it("rechecks the monotonic lease before dispatch even if expiry timers have not run", async () => {
+    const state = harness();
+    let now = 100;
+    let resolveAuthorization!: (authorization: CommitAuthorization) => void;
+    state.transport.authorizeCommit.mockImplementation(
+      () => new Promise<CommitAuthorization>((resolve) => { resolveAuthorization = resolve; }),
+    );
+    const controller = new MonacoController({
+      ...state, document, sessionId: "session-a", origin: "https://dillinger.io",
+      isCurrentDocument: () => true, debounceMs: 0, now: () => now,
+    });
+    await showSuggestion(controller);
+    controller.acceptAll();
+    const request = state.transport.authorizeCommit.mock.calls[0]?.[0] as CommitAuthorizationRequest;
+    now = 601;
+    resolveAuthorization(authorizationFor(request));
+    await settle();
+    expect(state.bridge.apply).not.toHaveBeenCalled();
+    expect(state.transport.reportCommit).toHaveBeenCalledWith(expect.objectContaining({ status: "stale" }));
+    controller.dispose();
   });
 });

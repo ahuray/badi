@@ -16,9 +16,15 @@ target/
 node_modules/
 coverage/
 output/playwright/
+output/native-trials/
 *.tsbuildinfo
 *.log
 
 # OS files
 .DS_Store
 Thumbs.db
+
+adapters/chromium/dist-web/
+output/writing/
+output/extensionless/
+__pycache__/

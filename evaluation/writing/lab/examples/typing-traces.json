@@ -1,0 +1,84 @@
+{
+  "schema": "badi.prediction-suite.v1",
+  "name": "Synthetic ordered warm-cache traces; event times are illustrative metadata",
+  "cases": [
+    {
+      "id": "en-cue-trace-0",
+      "language": "en",
+      "prefix": "The tour visits the library first. Next we will walk to the",
+      "context": "The afternoon stop is the botanical garden. It is the only stop after the library.",
+      "style": "",
+      "expected": [
+        " botanical garden"
+      ],
+      "trace_id": "en-cue-trace",
+      "step": 0,
+      "at_ms": 0
+    },
+    {
+      "id": "en-cue-trace-1",
+      "language": "en",
+      "prefix": "The tour visits the library first. Next we will walk to the ",
+      "context": "The afternoon stop is the botanical garden. It is the only stop after the library.",
+      "style": "",
+      "expected": [
+        "botanical garden"
+      ],
+      "trace_id": "en-cue-trace",
+      "step": 1,
+      "at_ms": 250
+    },
+    {
+      "id": "en-cue-trace-2",
+      "language": "en",
+      "prefix": "The tour visits the library first. Next we will walk to the bot",
+      "context": "The afternoon stop is the botanical garden. It is the only stop after the library.",
+      "style": "",
+      "expected": [
+        "anical garden"
+      ],
+      "trace_id": "en-cue-trace",
+      "step": 2,
+      "at_ms": 650
+    },
+    {
+      "id": "fa-cue-trace-0",
+      "language": "fa",
+      "prefix": "ابتدا از موزه بازدید می‌کنیم. پس از آن",
+      "context": "بعد از موزه باید به کتابخانه برویم. مقصد دیگری در برنامه نیست.",
+      "style": "",
+      "expected": [
+        " به کتابخانه می‌رویم"
+      ],
+      "trace_id": "fa-cue-trace",
+      "step": 0,
+      "at_ms": 0
+    },
+    {
+      "id": "fa-cue-trace-1",
+      "language": "fa",
+      "prefix": "ابتدا از موزه بازدید می‌کنیم. پس از آن به",
+      "context": "بعد از موزه باید به کتابخانه برویم. مقصد دیگری در برنامه نیست.",
+      "style": "",
+      "expected": [
+        " کتابخانه می‌رویم"
+      ],
+      "trace_id": "fa-cue-trace",
+      "step": 1,
+      "at_ms": 250
+    },
+    {
+      "id": "fa-cue-trace-2",
+      "language": "fa",
+      "prefix": "ابتدا از موزه بازدید می‌کنیم. پس از آن به ",
+      "context": "بعد از موزه باید به کتابخانه برویم. مقصد دیگری در برنامه نیست.",
+      "style": "",
+      "expected": [
+        "کتابخانه می‌رویم"
+      ],
+      "trace_id": "fa-cue-trace",
+      "step": 2,
+      "at_ms": 650
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "schema": "badi.writing-corpus.v1",
+  "frozen_at": "2026-09-07",
+  "languages": [
+    "en",
+    "de",
+    "fa"
+  ],
+  "language_selection": "Provisional English, German and Persian coverage; these are evaluation probes, not a compatibility claim. User language preferences were pending when frozen.",
+  "origin": "Assistant-authored synthetic prompts and one plausible reference continuation per prompt; not private user writing or independently sampled natural text.",
+  "split_policy": "Development examples may guide tuning. Heldout examples were frozen before inference and must not guide tuning. Any later tuning after heldout inspection requires a new independently authored holdout for confirmation.",
+  "quality_policy": "References are examples, not exhaustive correct answers. Suggestion count is coverage. Semantic usefulness requires separately attributed rubric review; real typing benefit requires observed user trials.",
+  "files": {
+    "development": {
+      "sha256": "b6b2d4c845630c46a955a1d804ed5b7e68489d708d6f0613a97d11a298456e4c",
+      "samples": 24
+    },
+    "heldout": {
+      "sha256": "79efdf0b86e5f9c4a620dc57e9d9537c64ef4e6273cb2a6d8d51ed4977b5c616",
+      "samples": 132
+    }
+  }
+}

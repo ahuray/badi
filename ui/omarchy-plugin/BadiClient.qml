@@ -5,10 +5,14 @@ import Quickshell.Io
 Scope {
   id: root
 
+  property var cliPrefix: ["badictl"]
+  property var mutationPrefix: cliPrefix
+
   property var overview: ({})
   property string message: ""
   property string messageTone: "neutral"
   property bool overviewTimedOut: false
+  property bool overviewInvalidated: false
   property bool mutationTimedOut: false
   property string pendingSuccessMessage: ""
   property bool preserveMessageOnRefresh: false
@@ -50,7 +54,7 @@ Scope {
     && controlPlaneDegradedReported
     && !controlPlaneDegraded
     && settingsRevision >= 0
-    && !busy
+    && !mutating
 
   readonly property bool memoryStoreAvailable: boolValue(
     privacy, "memory_store_available", false)
@@ -166,7 +170,7 @@ Scope {
   function isLinuxIdentity(value) {
     return hasExactKeys(value, ["kind", "adapter", "app_id"])
       && value.kind === "linux_app"
-      && value.adapter === "fcitx"
+      && (value.adapter === "fcitx" || value.adapter === "obsidian" || value.adapter === "shell")
       && typeof value.app_id === "string"
       && /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/.test(value.app_id)
       && value.app_id.length <= 128
@@ -282,8 +286,9 @@ Scope {
     preserveMessageOnRefresh = preserveMessage === true
     if (!preserveMessageOnRefresh) message = ""
     overviewTimedOut = false
+    overviewInvalidated = false
     overviewGeneration = lifecycleGeneration
-    overviewProcess.exec(["badictl", "overview", "--json"])
+    overviewProcess.exec(cliPrefix.concat(["overview", "--json"]))
   }
 
   function activate() {
@@ -312,15 +317,16 @@ Scope {
       message = "The requested change did not produce valid badi.settings.v2 data."
       return
     }
+    invalidateOverview()
     pendingSuccessMessage = successMessage
     message = ""
     mutationTimedOut = false
     mutationGeneration = lifecycleGeneration
-    mutationProcess.exec([
-      "badictl", "settings", "replace",
+    mutationProcess.exec(mutationPrefix.concat([
+      "settings", "replace",
       "--if-revision", String(settingsRevision),
       "--json", JSON.stringify(document)
-    ])
+    ]))
   }
 
   function blockTarget() {
@@ -385,17 +391,18 @@ Scope {
   }
 
   function clearMemory() {
-    if (!active || disposed || busy || !brokerReachable || !memoryCommandAvailableReported
+    if (!active || disposed || mutating || !brokerReachable || !memoryCommandAvailableReported
         || !memoryCommandAvailable) {
       messageTone = "danger"
       message = "The broker's explicit Memory clear command is unavailable."
       return
     }
+    invalidateOverview()
     pendingSuccessMessage = "Text-free outcome aggregates were cleared."
     message = ""
     mutationTimedOut = false
     mutationGeneration = lifecycleGeneration
-    mutationProcess.exec(["badictl", "memory", "clear"])
+    mutationProcess.exec(mutationPrefix.concat(["memory", "clear"]))
   }
 
   function deactivate() {
@@ -421,6 +428,14 @@ Scope {
     } else {
       mutationKillTimeout.stop()
     }
+  }
+
+  function invalidateOverview() {
+    if (!overviewProcess.running) return
+    // A read begun before the CAS write must never replace its new snapshot.
+    overviewInvalidated = true
+    overviewProcess.signal(15)
+    overviewKillTimeout.restart()
   }
 
   function dispose() {
@@ -502,7 +517,7 @@ Scope {
       var exitedGeneration = root.overviewGeneration
       root.overviewGeneration = -1
       if (root.disposed || !root.active
-          || exitedGeneration !== root.lifecycleGeneration) {
+          || root.overviewInvalidated || exitedGeneration !== root.lifecycleGeneration) {
         root.scheduleQueuedRefresh()
         return
       }

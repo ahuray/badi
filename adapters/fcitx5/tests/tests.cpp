@@ -9,6 +9,7 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -18,6 +19,8 @@ namespace {
 using namespace badi::fcitx5;
 constexpr auto kSession = "550e8400-e29b-41d4-a716-446655440000";
 constexpr auto kSalt = "0123456789abcdef0123456789abcdef";
+constexpr PanelObservation kOwnedPanel{.candidates = true,
+                                       .candidatesOwnedByBadi = true};
 
 void check(bool condition, const char *message) {
     if (!condition) throw std::runtime_error(message);
@@ -58,10 +61,15 @@ Suggestion suggestionFor(const ContextUpdate &update, std::uint64_t expiresAt = 
 }
 
 void stateTransitionsAndIdentity() {
+    check(supportedWritingLanguage("en-US") && supportedWritingLanguage("de-DE") &&
+          supportedWritingLanguage("fa"), "tested writing language tags must reach manual invocation");
+    check(!supportedWritingLanguage("end") && !supportedWritingLanguage("fr") &&
+          !supportedWritingLanguage("de_"), "unknown language tags must not be treated as supported");
     check(supportedAppId("omawrite"), "Omawrite must be supported");
     check(supportedAppId("com.github.xournalpp.xournalpp"),
           "canonical Xournal++ id must be supported");
-    check(!supportedAppId("xournalpp"), "noncanonical Xournal++ id must fail");
+    check(supportedAppId("org.gnome.texteditor"), "native identity must not require a compiled allowlist");
+    check(!supportedAppId("A window title"), "native identity must be canonical");
 
     auto state = focusedState();
     check(state.focused() && state.coordinates().focusEpoch == 1 &&
@@ -199,6 +207,28 @@ void framingIsBoundedAndIncremental() {
           "non-object and trailing JSON must be rejected");
 }
 
+void coalescedFramesRespectIndividualLimits() {
+    const std::string body(kMaxFrameBytes, 'x');
+    const auto large = encodeFrame(body);
+    const auto small = encodeFrame("{}");
+    check(large.has_value() && small.has_value(), "valid frames encode");
+    auto joined = *large;
+    joined.insert(joined.end(), small->begin(), small->end());
+    for (const std::size_t chunkSize : {std::size_t{1}, std::size_t{8192}, joined.size()}) {
+        FrameDecoder decoder;
+        std::vector<std::string> decoded;
+        for (std::size_t offset = 0; offset < joined.size(); offset += chunkSize) {
+            check(decoder.feed(std::span(joined).subspan(
+                      offset, std::min(chunkSize, joined.size() - offset))),
+                  "coalescing must not turn valid frames into an oversized frame");
+            auto frames = decoder.takeFrames();
+            decoded.insert(decoded.end(), frames.begin(), frames.end());
+        }
+        check(decoded == std::vector<std::string>{body, "{}"},
+              "all chunk boundaries must decode the same exact frames");
+    }
+}
+
 void sessionControlResultIsExact() {
     constexpr auto valid = R"({"v":2,"id":"fcitx.accept.1.1","type":"control.result","mono_ms":7,"payload":{"action":"accept_all","accepted":true,"reason":"accepted","paused":false}})";
     check(strictSessionControlResult(valid),
@@ -222,7 +252,7 @@ void suggestionClearMatchesOptionalWireField() {
     check(dispatchSuggestionClear(
               nlohmann::json::parse(withoutSuggestion),
               [&dispatched](const ClearNotice &notice) { dispatched = notice; }) &&
-              dispatched && !dispatched->suggestionId &&
+              dispatched && !dispatched->suggestionId && dispatched->reason == "provider_error" &&
               dispatched->coordinates.sessionId == kSession &&
               dispatched->coordinates.focusEpoch == 1 &&
               dispatched->coordinates.revision == 1,
@@ -234,7 +264,7 @@ void suggestionClearMatchesOptionalWireField() {
     check(dispatchSuggestionClear(
               nlohmann::json::parse(withSuggestion),
               [&dispatched](const ClearNotice &notice) { dispatched = notice; }) &&
-              dispatched && dispatched->suggestionId == "suggestion-1",
+              dispatched && dispatched->suggestionId == "suggestion-1" && dispatched->reason == "expired",
           "clear with suggestion id must retain it through callback dispatch");
     constexpr auto nullSuggestion = R"({"v":2,"id":"fcitx.suggest.1.1","type":"suggestion.clear","session_id":"550e8400-e29b-41d4-a716-446655440000","focus_epoch":1,"revision":1,"mono_ms":7,"payload":{"fingerprint":"0123456789abcdef0123456789abcdef","suggestion_id":null,"reason":"expired"}})";
     check(!strictSuggestionClear(nullSuggestion),
@@ -356,7 +386,7 @@ void staleAndDuplicateCommitsCannotDispatch() {
     const auto update = explicitContext(state);
     check(state.showSuggestion(suggestionFor(update), 100),
           "current suggestion should display");
-    const auto accept = state.requestAcceptance(100, {});
+    const auto accept = state.requestAcceptance(100, kOwnedPanel);
     check(accept.has_value(), "current candidate should request acceptance");
     check(accept->controlId.size() < 64, "control id must stay bounded");
     const CommitPrepare prepare{
@@ -366,10 +396,11 @@ void staleAndDuplicateCommitsCannotDispatch() {
         .text = accept->expectedText,
         .acceptance = "all",
     };
-    const auto dispatch = state.authorizeCommit(prepare, 100);
+    const auto dispatch = state.authorizeCommit(prepare, 100, kOwnedPanel);
     check(dispatch && dispatch->text == " for your time",
           "exact broker authorization should dispatch once");
-    check(!state.authorizeCommit(prepare, 100), "duplicate prepare must not dispatch");
+    check(!state.authorizeCommit(prepare, 100, kOwnedPanel),
+          "duplicate prepare must not dispatch");
 
     auto stale = focusedState();
     const auto staleUpdate = explicitContext(stale);
@@ -383,6 +414,33 @@ void staleAndDuplicateCommitsCannotDispatch() {
     auto unsafeExpiry = suggestionFor(staleUpdate, (std::uint64_t{1} << 53U));
     check(!stale.showSuggestion(std::move(unsafeExpiry), 100),
           "non-JS-safe expiry must fail");
+}
+
+void missingCandidateCannotAuthorizeAcceptance() {
+    auto state = focusedState();
+    const auto update = explicitContext(state);
+    check(state.showSuggestion(suggestionFor(update), 100), "show candidate");
+    check(!state.requestAcceptance(100, {}),
+          "a removed candidate must never request acceptance");
+    check(!state.requestDismissal(100, {}),
+          "a removed candidate must never request dismissal");
+
+    for (const auto panel : {PanelObservation{},
+                            PanelObservation{.candidates = true},
+                            PanelObservation{.candidatesOwnedByBadi = true},
+                            PanelObservation{.preedit = true,
+                                             .candidates = true,
+                                             .candidatesOwnedByBadi = true}}) {
+        check(state.showSuggestion(suggestionFor(update), 100), "restore candidate");
+        const auto accept = state.requestAcceptance(100, kOwnedPanel);
+        check(accept.has_value(), "visible owned candidate may request acceptance");
+        const CommitPrepare prepare{accept->coordinates, accept->controlId,
+                                    accept->suggestionId, accept->expectedText, "all"};
+        check(!state.authorizeCommit(prepare, 100, panel),
+              "ownership loss during authorization must revoke the commit");
+        check(!state.authorizeCommit(prepare, 100, kOwnedPanel),
+              "restoring a panel must not revive a revoked commit");
+    }
 }
 
 void foreignImeAndManualKeysYieldCooperatively() {
@@ -413,6 +471,16 @@ void foreignImeAndManualKeysYieldCooperatively() {
     check(decideLocalAction(true, false, false, false, foreignPreedit) ==
               LocalAction::PassThrough,
           "foreign IME must win even over invoke chord");
+    check(decideTabAction(true, false, {}) == LocalAction::Invoke,
+          "Tab requests at an eligible end-of-text caret");
+    check(decideTabAction(true, true, ownedCandidates) == LocalAction::Accept,
+          "Tab accepts the owned live candidate before generic IME navigation");
+    check(decideTabAction(false, false, {}) == LocalAction::PassThrough,
+          "Tab preserves navigation and indentation without eligible context");
+    check(decideTabAction(true, true, foreignCandidates) == LocalAction::PassThrough,
+          "Tab leaves foreign candidate navigation intact");
+    check(decideTabAction(true, false, {.foreignAuxiliary = true}) == LocalAction::PassThrough,
+          "Tab yields to foreign auxiliary UI");
 
     auto state = focusedState();
     const auto update = explicitContext(state);
@@ -440,16 +508,136 @@ void shiftedLetterChordUsesFcitxNormalization() {
           "acceptance must retain the explicit Shift modifier");
 }
 
+void nativePolicyMustBeCoherent() {
+    const nlohmann::json allowed{
+        {"v", 2}, {"type", "policy.status"}, {"id", "policy-1"}, {"mono_ms", 0},
+        {"payload", {{"authority_epoch", 1}, {"settings_revision", 1}, {"paused", false},
+            {"activation", "always"}, {"context_allowed", true}, {"display_allowed", true},
+            {"suggestions_allowed", true}, {"learning_allowed", false}, {"reason", "matched_rule"}}}};
+    check(strictPolicyStatus(allowed.dump()), "a coherent app grant must pass");
+    for (const auto key : {"context_allowed", "display_allowed", "paused", "learning_allowed"}) {
+        auto invalid = allowed;
+        invalid["payload"][key] = !invalid["payload"][key].get<bool>();
+        check(!strictPolicyStatus(invalid.dump()), "contradictory native permission must fail");
+    }
+    auto invalid = allowed;
+    invalid["payload"]["reason"] = "arbitrary";
+    check(!strictPolicyStatus(invalid.dump()), "unknown policy reason must fail");
+    invalid = allowed;
+    invalid["payload"]["extra"] = true;
+    check(!strictPolicyStatus(invalid.dump()), "additional policy fields must fail");
+    auto denied = allowed;
+    denied["payload"]["activation"] = "never";
+    for (const auto key : {"context_allowed", "display_allowed", "suggestions_allowed"})
+        denied["payload"][key] = false;
+    check(strictPolicyStatus(denied.dump()), "a coherent denial is a valid response");
+}
+
+void observedFieldsRejectReplacementAuthority() {
+    auto state = focusedState();
+    auto context = explicitContext(state, "check adress ").context;
+    context.anchor = context.head = context.before.size();
+    context.identityKnown = true;
+    context.explicitRequest = false;
+    const auto update = state.updateContext(context);
+    check(update.has_value(), "observed context accepted");
+    const auto serialized = serializeContextEnvelope(*update, 0);
+    check(serialized.has_value(), "observed automatic context serializes");
+    const auto payload = nlohmann::json::parse(*serialized)["payload"];
+    check(payload["field"]["identity_known"] == true && payload["field"]["purpose"] == "normal" &&
+          payload["explicit"] == false && payload["activation"] == "always", "automatic authority must be explicit on the wire");
+    auto unknown = *update;
+    unknown.context.identityKnown = false;
+    check(!serializeContextEnvelope(unknown, 0), "unknown-widget automatic context must not serialize");
+    auto suggestion = suggestionFor(*update);
+    suggestion.text = "address ";
+    suggestion.replaceBefore = "adress ";
+    check(!state.showSuggestion(suggestion, 0), "even exact observed spelling replacements must be rejected");
+    check(!state.suggestionVisible() && !state.requestAcceptance(1, kOwnedPanel),
+          "a rejected replacement cannot create acceptance authority");
+    auto noSpaceContext = context;
+    noSpaceContext.before = "check adress";
+    noSpaceContext.anchor = noSpaceContext.head = noSpaceContext.before.size();
+    const auto noSpaceUpdate = state.updateContext(noSpaceContext);
+    check(noSpaceUpdate.has_value(), "a no-space observed context remains eligible");
+    suggestion.coordinates = noSpaceUpdate->coordinates;
+    suggestion.text = "address";
+    suggestion.replaceBefore = "adress";
+    check(!state.showSuggestion(suggestion, 0), "append-shaped replacement text must still be rejected");
+
+    const auto append = suggestionFor(*noSpaceUpdate);
+    check(state.showSuggestion(append, 0), "ordinary observed append suggestions remain eligible");
+    const auto accept = state.requestAcceptance(1, kOwnedPanel);
+    check(accept && accept->replaceBefore.empty(), "native acceptance never authorizes a removed suffix");
+    CommitPrepare prepare{accept->coordinates, accept->controlId, accept->suggestionId, accept->expectedText, "all", "adress"};
+    check(!state.authorizeCommit(prepare, 2, kOwnedPanel), "injected deletion cannot upgrade an append acceptance");
+    prepare.replaceBefore.clear();
+    check(!state.authorizeCommit(prepare, 3, kOwnedPanel), "rejected replacement retires acceptance against replay");
+    check(state.showSuggestion(append, 4), "fresh append can recover after rejection");
+    const auto fresh = state.requestAcceptance(5, kOwnedPanel);
+    check(fresh.has_value(), "fresh append acceptance remains available");
+    prepare = {fresh->coordinates, fresh->controlId, fresh->suggestionId, fresh->expectedText, "all"};
+    const auto dispatch = state.authorizeCommit(prepare, 6, kOwnedPanel);
+    check(dispatch && dispatch->text == append.text && dispatch->replaceBefore.empty(), "native dispatch remains append only");
+    check(!state.authorizeCommit(prepare, 7, kOwnedPanel), "append grants remain one shot");
+    auto manual = focusedState();
+    auto manualUpdate = explicitContext(manual, "check adress ");
+    suggestion.coordinates = manualUpdate.coordinates;
+    check(!manual.showSuggestion(suggestion, 0), "unknown native widgets cannot replace text");
+}
+
+void browserNativeEditingIsUnavailable() {
+    auto allowedState = focusedState();
+    const auto allowed = explicitContext(allowedState);
+    for (const auto app : {"chromium", "chromium-browser", "chrome", "google-chrome",
+                           "brave", "brave-origin", "brave-browser", "firefox", "chatgpt"}) {
+        auto state = focusedState(app);
+        check(!state.editingAvailable(), "known browser/desktop composer cannot gain native editing");
+        check(!state.updateContext(allowed.context), "blocked app must not publish manual context");
+        auto context = allowed.context;
+        context.identityKnown = true;
+        context.explicitRequest = false;
+        check(!state.updateContext(context), "an exact observed field cannot bypass app quarantine");
+        auto suggestion = suggestionFor(allowed);
+        suggestion.coordinates = state.coordinates();
+        check(!state.showSuggestion(suggestion, 0) && !state.requestAcceptance(1, kOwnedPanel),
+              "quarantined app cannot display or accept injected suggestions");
+    }
+    for (const auto kind : {NativeEditTarget::BrowserOrigin, NativeEditTarget::Unsupported}) {
+        SessionState state;
+        check(state.focusIn(kSession, "input-context-1", "unrecognized-browser-alias", kSalt, kind),
+              "unsupported target retains focus for explicit diagnostic notice");
+        check(!state.editingAvailable() && !state.updateContext(allowed.context),
+              "browser or unknown target kind cannot fall back to native app permission");
+    }
+    auto state = focusedState();
+    const auto update = explicitContext(state);
+    check(state.showSuggestion(suggestionFor(update), 0), "native manual candidate still displays");
+    const auto accept = state.requestAcceptance(1, kOwnedPanel);
+    check(accept.has_value(), "native manual acceptance remains available");
+    const CommitPrepare prepare{accept->coordinates, accept->controlId, accept->suggestionId,
+                                accept->expectedText, "all"};
+    state.denyEditing();
+    check(!state.lastContext() && !state.suggestionVisible() &&
+              !state.authorizeCommit(prepare, 2, kOwnedPanel),
+          "invalid target metadata retires prior candidate and dispatch authority");
+    check(!state.updateContext(allowed.context), "invalid target remains denied until fresh field binding");
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
     const std::vector<std::pair<const char *, void (*)()>> tests{
+        {"browser native editing quarantine", browserNativeEditingIsUnavailable},
+        {"observed fields reject replacement authority", observedFieldsRejectReplacementAuthority},
         {"state transitions and identity", stateTransitionsAndIdentity},
+        {"native app policy coherence", nativePolicyMustBeCoherent},
         {"unchanged toolkit republish",
          unchangedToolkitRepublishPreservesAuthority},
         {"fingerprint binding", fingerprintBindsExactCaptureAndSalt},
         {"sanitizer and identifiers", sanitizerAndIdentifiers},
         {"framing", framingIsBoundedAndIncremental},
+        {"coalesced maximum frame", coalescedFramesRespectIndividualLimits},
         {"exact session control result", sessionControlResultIsExact},
         {"optional suggestion clear field",
          suggestionClearMatchesOptionalWireField},
@@ -458,11 +646,22 @@ int main() {
         {"session policy and explicit request split",
          sessionWireSeparatesPolicyFromExplicitRequest},
         {"stale and duplicate commit", staleAndDuplicateCommitsCannotDispatch},
+        {"missing candidate ownership", missingCandidateCannotAuthorizeAcceptance},
         {"foreign IME and manual keys", foreignImeAndManualKeysYieldCooperatively},
         {"shifted letter chord normalization",
          shiftedLetterChordUsesFcitxNormalization},
     };
     try {
+        check(argc == 2, "orthographic joiner fixtures path is required");
+        std::ifstream input(argv[1]);
+        check(input.good(), "orthographic fixtures must exist");
+        const auto corpus = nlohmann::json::parse(input);
+        for (const auto &fixture : corpus.at("fixtures")) {
+            const auto text = fixture.at("text").get<std::string>();
+            const auto valid = fixture.at("valid").get<bool>();
+            check(sanitizeSuggestion(text).has_value() == valid && validContextText(text) == valid,
+                  fixture.at("name").get_ref<const std::string &>().c_str());
+        }
         for (const auto &[name, test] : tests) {
             test();
             std::cout << "ok - " << name << '\n';

@@ -2,7 +2,7 @@
 
 > **Historical V1 gate:** its risks remain relevant, but
 > [Vision V2](../../VISION-V2.md) and the
-> [V2 implementation plan](../plan/vision-v2-implementation.md) supersede its
+> [V2 implementation plan](../../what-have-been.md) supersede its
 > three-target/48-hour delivery contract.
 
 Status: research gate, 2026-08-30
@@ -10,7 +10,7 @@ Status: research gate, 2026-08-30
 This is the promised grill of the current proposal. It reviews the
 [vision](../../VISION.md), [competitive evidence](competitive-landscape.md),
 [Linux architecture](linux-architecture.md), and
-[two-day delivery contract](../plan/two-day-delivery.md) as if the goal were to
+[two-day delivery contract](../../what-have-been.md) as if the goal were to
 find a reason **not** to build them.
 
 ## Verdict

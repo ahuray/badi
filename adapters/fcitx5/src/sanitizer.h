@@ -22,6 +22,7 @@ std::optional<std::string> scalarSlice(std::string_view value,
                                        std::size_t count);
 bool validLinuxAppId(std::string_view value);
 bool validLanguageTag(std::string_view value);
+bool validContextText(std::string_view value);
 bool validOpaqueId(std::string_view value);
 bool validSessionId(std::string_view value);
 

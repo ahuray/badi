@@ -297,13 +297,14 @@
         "control",
         "health",
         "policy",
-        "settings"
+        "settings",
+        "text_replacement"
       ]
     },
     "capabilities": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 8,
+      "maxItems": 9,
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/capability" }
     },
@@ -312,7 +313,7 @@
       "additionalProperties": false,
       "required": ["kind", "name", "version"],
       "properties": {
-        "kind": { "enum": ["browser", "obsidian", "fcitx", "cli", "test"] },
+        "kind": { "enum": ["browser", "obsidian", "fcitx", "cli", "test", "terminal"] },
         "name": { "type": "string", "minLength": 1, "maxLength": 64 },
         "version": { "type": "string", "minLength": 1, "maxLength": 32 }
       }
@@ -746,10 +747,37 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 64,
-      "description": "V2 safe output text. Permits only isolated U+0020 spaces (including at most one leading space), rejects trailing/repeated/other Unicode whitespace, C0/C1 controls, U+2028/U+2029, UTF-16 surrogate code units U+D800-U+DFFF, and the exact Unicode 16/17 Cf set: U+00AD, U+0600-U+0605, U+061C, U+06DD, U+070F, U+0890-U+0891, U+08E2, U+180E, U+200B-U+200F, U+202A-U+202E, U+2060-U+2064, U+2066-U+206F, U+FEFF, U+FFF9-U+FFFB, U+110BD, U+110CD, U+13430-U+1343F, U+1BCA0-U+1BCA3, U+1D173-U+1D17A, U+E0001, and U+E0020-U+E007F.",
+      "description": "V2 safe output text. Permits only isolated U+0020 spaces (including at most one leading space), rejects trailing/repeated/other Unicode whitespace, C0/C1 controls, U+2028/U+2029, UTF-16 surrogate code units U+D800-U+DFFF, and the exact Unicode 16/17 Cf set: U+00AD, U+0600-U+0605, U+061C, U+06DD, U+070F, U+0890-U+0891, U+08E2, U+180E, U+200B, U+200D-U+200F, U+202A-U+202E, U+2060-U+2064, U+2066-U+206F, U+FEFF, U+FFF9-U+FFFB, U+110BD, U+110CD, U+13430-U+1343F, U+1BCA0-U+1BCA3, U+1D173-U+1D17A, U+E0001, and U+E0020-U+E007F. A single U+200C (Persian ZWNJ) is permitted only immediately between Arabic-block letters U+0620-U+063F, U+0641-U+064A, U+066E-U+066F, U+0671-U+06D3, U+06D5, U+06E5-U+06E6, U+06EE-U+06EF, U+06FA-U+06FC or U+06FF; leading, trailing, repeated and cross-script joiners remain forbidden.",
       "allOf": [
-        { "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u00ad\\u0600-\\u0605\\u061c\\u06dd\\u070f\\u0890-\\u0891\\u08e2\\u180e\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ud800-\\udfff\\ufeff\\ufff9-\\ufffb\\u{110bd}\\u{110cd}\\u{13430}-\\u{1343f}\\u{1bca0}-\\u{1bca3}\\u{1d173}-\\u{1d17a}\\u{e0001}\\u{e0020}-\\u{e007f}]+$" },
-        { "pattern": "^ ?[^\\s](?: ?[^\\s])*$" }
+        { "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u00ad\\u0600-\\u0605\\u061c\\u06dd\\u070f\\u0890-\\u0891\\u08e2\\u180e\\u200b\\u200d-\\u200f\\u2028-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ud800-\\udfff\\ufeff\\ufff9-\\ufffb\\u{110bd}\\u{110cd}\\u{13430}-\\u{1343f}\\u{1bca0}-\\u{1bca3}\\u{1d173}-\\u{1d17a}\\u{e0001}\\u{e0020}-\\u{e007f}]+$" },
+        { "pattern": "^ ?[^\\s](?: ?[^\\s])*$" },
+        { "pattern": "^(?:[^\\u200c]|[\\u0620-\\u063f\\u0641-\\u064a\\u066e-\\u066f\\u0671-\\u06d3\\u06d5\\u06e5-\\u06e6\\u06ee-\\u06ef\\u06fa-\\u06fc\\u06ff]\\u200c(?=[\\u0620-\\u063f\\u0641-\\u064a\\u066e-\\u066f\\u0671-\\u06d3\\u06d5\\u06e5-\\u06e6\\u06ee-\\u06ef\\u06fa-\\u06fc\\u06ff]))*$" }
+      ]
+    },
+    "spellingSuffixPair": {
+      "type": "object",
+      "description": "A negotiated spelling edit replaces one lowercase ASCII word and optionally preserves its one trailing ASCII space. Producers and consumers additionally require different words and, for suggestions, accept_word equal to text.",
+      "required": ["replace_before", "text"],
+      "properties": {
+        "replace_before": { "type": "string", "not": { "pattern": "[^a-z ]" } },
+        "text": { "type": "string", "not": { "pattern": "[^a-z ]" } },
+        "accept_word": { "type": "string", "not": { "pattern": "[^a-z ]" } }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "replace_before": { "type": "string", "pattern": "^[a-z]{3,24}$" },
+            "text": { "type": "string", "pattern": "^[a-z]{3,24}$" },
+            "accept_word": { "type": "string", "pattern": "^[a-z]{3,24}$" }
+          }
+        },
+        {
+          "properties": {
+            "replace_before": { "type": "string", "pattern": "^[a-z]{3,24} $" },
+            "text": { "type": "string", "pattern": "^[a-z]{3,24} $" },
+            "accept_word": { "type": "string", "pattern": "^[a-z]{3,24} $" }
+          }
+        }
       ]
     },
     "suggestionShowPayload": {
@@ -766,10 +794,19 @@
       "properties": {
         "fingerprint": { "$ref": "#/$defs/fingerprint" },
         "suggestion_id": { "$ref": "#/$defs/opaqueId" },
-        "text": { "$ref": "#/$defs/safeSuggestionText" },
-        "accept_word": { "$ref": "#/$defs/safeSuggestionText" },
-        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 600, "description": "Relative receiver-local lifetime starting when this frame is received." },
+        "replace_before": { "type": "string", "pattern": "^[a-z]{3,24} ?$", "description": "Exact suffix replaced only by adapters negotiating text_replacement; bound to the original context and commit grant." },
+        "text": { "type": "string" },
+        "accept_word": { "type": "string" },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 5000, "description": "Relative receiver-local lifetime starting when this frame is received. Native panels receive up to five seconds; browser leases remain 600 ms." },
         "provider": { "enum": ["phrase_v1", "local_model"] }
+      },
+      "if": { "required": ["replace_before"] },
+      "then": { "$ref": "#/$defs/spellingSuffixPair" },
+      "else": {
+        "properties": {
+          "text": { "$ref": "#/$defs/safeSuggestionText" },
+          "accept_word": { "$ref": "#/$defs/safeSuggestionText" }
+        }
       }
     },
     "suggestionClearPayload": {
@@ -841,8 +878,14 @@
       "properties": {
         "fingerprint": { "$ref": "#/$defs/fingerprint" },
         "suggestion_id": { "$ref": "#/$defs/opaqueId" },
-        "text": { "$ref": "#/$defs/safeSuggestionText" },
+        "replace_before": { "type": "string", "pattern": "^[a-z]{3,24} ?$", "description": "Exact suffix replaced only by adapters negotiating text_replacement; bound to the original context and commit grant." },
+        "text": { "type": "string" },
         "acceptance": { "enum": ["word", "all"] }
+      },
+      "if": { "required": ["replace_before"] },
+      "then": { "$ref": "#/$defs/spellingSuffixPair" },
+      "else": {
+        "properties": { "text": { "$ref": "#/$defs/safeSuggestionText" } }
       }
     },
     "commitResultPayload": {

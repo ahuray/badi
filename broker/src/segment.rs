@@ -20,7 +20,11 @@ pub fn sanitize_suggestion(raw: &str) -> Result<String, OutputError> {
     if raw.is_empty() || raw.chars().all(char::is_whitespace) {
         return Err(OutputError::Empty);
     }
-    if raw.chars().any(is_forbidden_output_scalar) {
+    if !valid_orthographic_joiners(raw)
+        || raw
+            .chars()
+            .any(|character| character != '\u{200c}' && is_forbidden_output_scalar(character))
+    {
         return Err(OutputError::ForbiddenControl);
     }
     if has_invalid_spacing(raw) {
@@ -37,10 +41,42 @@ pub fn sanitize_suggestion(raw: &str) -> Result<String, OutputError> {
     Ok(raw.to_owned())
 }
 
+/// Keep this exact Arabic-letter set aligned with the wire schemas and adapters.
+#[must_use]
+pub fn valid_orthographic_joiners(value: &str) -> bool {
+    value.char_indices().all(|(index, character)| {
+        character != '\u{200c}'
+            || (value[..index]
+                .chars()
+                .next_back()
+                .is_some_and(is_arabic_joiner_letter)
+                && value[index + character.len_utf8()..]
+                    .chars()
+                    .next()
+                    .is_some_and(is_arabic_joiner_letter))
+    })
+}
+
+const fn is_arabic_joiner_letter(character: char) -> bool {
+    matches!(character,
+        '\u{0620}'..='\u{063f}' | '\u{0641}'..='\u{064a}' | '\u{066e}'..='\u{066f}'
+        | '\u{0671}'..='\u{06d3}' | '\u{06d5}' | '\u{06e5}'..='\u{06e6}'
+        | '\u{06ee}'..='\u{06ef}' | '\u{06fa}'..='\u{06fc}' | '\u{06ff}')
+}
+
 pub fn validate_suggestion_shape(
     before: &str,
     after: &str,
     suggestion: &str,
+) -> Result<(), OutputError> {
+    validate_completion_shape(before, after, suggestion, false)
+}
+
+pub(crate) fn validate_completion_shape(
+    before: &str,
+    after: &str,
+    suggestion: &str,
+    allow_word_suffix: bool,
 ) -> Result<(), OutputError> {
     let first = suggestion.chars().next().ok_or(OutputError::Empty)?;
     let last = suggestion.chars().next_back().ok_or(OutputError::Empty)?;
@@ -50,7 +86,7 @@ pub fn validate_suggestion_shape(
     if (before.is_empty() && first.is_whitespace())
         || has_invalid_spacing(suggestion)
         || (before_last == Some(' ') && first == ' ')
-        || before_last.is_some_and(|left| needs_word_separator(left, first))
+        || (!allow_word_suffix && before_last.is_some_and(|left| needs_word_separator(left, first)))
         || after_first.is_some_and(|right| needs_word_separator(last, right))
     {
         return Err(OutputError::InvalidShape);

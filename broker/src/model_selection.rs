@@ -7,6 +7,9 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+#[cfg(feature = "local-model")]
+pub mod qualification;
+
 const MIB: u64 = 1_048_576;
 const HOST_RESERVE_MIB: u64 = 2_048;
 const RUNTIME_BASE_MIB: u64 = 768;
@@ -301,6 +304,38 @@ pub fn recommend_model(hardware: HardwareProfile, use_case: ModelUseCase) -> Mod
             runtime_ready: false,
         },
     }
+}
+
+/// Download advice expresses a preference, not the identity of an installation.
+/// Power changes may alter that preference without making an installed artifact
+/// incompatible. Actual available memory and the host reserve remain hard gates.
+pub(crate) fn select_installed_writing_model(
+    hardware: &HardwareProfile,
+    installed_filenames: &[&str],
+) -> Result<Option<ModelArtifact>, AdviceReason> {
+    let selection = select_model(hardware, ModelUseCase::Writing)?;
+    let installed: Vec<_> = catalog(ModelUseCase::Writing)
+        .iter()
+        .copied()
+        .filter(|model| installed_filenames.contains(&model.filename))
+        .collect();
+    if installed.is_empty() {
+        return Ok(None);
+    }
+    let usable = selection.fit.usable_host_memory_mib;
+    let fits =
+        |model: &&ModelArtifact| memory_fit(**model, usable).required_host_memory_mib <= usable;
+    // Prefer the advised tier, then smaller artifacts. If only a larger pinned
+    // artifact is installed, use the smallest one that still fits safely.
+    installed
+        .iter()
+        .rev()
+        .filter(|model| model.tier <= selection.recommended.tier)
+        .find(fits)
+        .or_else(|| installed.iter().find(fits))
+        .copied()
+        .map(Some)
+        .ok_or(AdviceReason::InsufficientUsableMemory)
 }
 
 #[must_use]
@@ -808,6 +843,83 @@ mod tests {
         assert_eq!(
             recommend_model(hardware, ModelUseCase::Code).tier,
             Some(ModelTier::Balanced)
+        );
+    }
+
+    #[test]
+    fn installed_writing_model_survives_power_advice_changes() {
+        let mut hardware = profile(16_384, 8_192, 20);
+        hardware.on_battery = Some(true);
+        let balanced = super::WRITING_MODELS[1];
+        assert_eq!(recommended_tier(&hardware), ModelTier::Compact);
+        assert_eq!(
+            super::select_installed_writing_model(&hardware, &[balanced.filename]),
+            Ok(Some(balanced))
+        );
+        hardware.on_battery = None;
+        assert_eq!(
+            super::select_installed_writing_model(&hardware, &[balanced.filename]),
+            Ok(Some(balanced))
+        );
+    }
+
+    #[test]
+    fn installed_selection_prefers_advice_then_smaller_artifacts() {
+        let mut hardware = profile(16_384, 8_192, 20);
+        let compact = super::WRITING_MODELS[0];
+        let balanced = super::WRITING_MODELS[1];
+        assert_eq!(
+            super::select_installed_writing_model(&hardware, &[compact.filename]),
+            Ok(Some(compact))
+        );
+        let installed = [compact.filename, balanced.filename];
+        assert_eq!(
+            super::select_installed_writing_model(&hardware, &installed),
+            Ok(Some(balanced))
+        );
+        hardware.on_battery = Some(true);
+        assert_eq!(
+            super::select_installed_writing_model(&hardware, &installed),
+            Ok(Some(compact))
+        );
+    }
+
+    #[test]
+    fn installed_selection_keeps_actual_memory_and_compatibility_gates() {
+        let balanced = super::WRITING_MODELS[1];
+        let mut hardware = profile(8_192, 4_300, 8);
+        assert_eq!(
+            super::select_installed_writing_model(&hardware, &[balanced.filename]),
+            Err(AdviceReason::InsufficientUsableMemory)
+        );
+        hardware.memory.available_mib = None;
+        assert_eq!(
+            super::select_installed_writing_model(&hardware, &[balanced.filename]),
+            Err(AdviceReason::MemoryCapacityUnknown)
+        );
+        hardware.memory.available_mib = Some(9_000);
+        assert_eq!(
+            super::select_installed_writing_model(&hardware, &[balanced.filename]),
+            Err(AdviceReason::MemoryCapacityInvalid)
+        );
+        hardware.memory.available_mib = Some(8_000);
+        hardware.logical_cpus = 2;
+        assert_eq!(
+            super::select_installed_writing_model(&hardware, &[balanced.filename]),
+            Err(AdviceReason::InsufficientCompute)
+        );
+    }
+
+    #[test]
+    fn installed_selection_never_invents_a_model_or_accepts_an_unknown_artifact() {
+        let hardware = profile(16_384, 8_192, 20);
+        assert_eq!(
+            super::select_installed_writing_model(&hardware, &[]),
+            Ok(None)
+        );
+        assert_eq!(
+            super::select_installed_writing_model(&hardware, &["unreviewed.gguf"]),
+            Ok(None)
         );
     }
 

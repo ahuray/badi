@@ -88,6 +88,12 @@ export interface FieldControllerOptions {
   readonly document?: Document;
   readonly view?: SuggestionView;
   readonly debounceMs?: number;
+  readonly readingLeaseMs?: number;
+  readonly generationMaxAgeMs?: number;
+  readonly requestOnTab?: boolean;
+  readonly tabAcceptsWord?: boolean;
+  readonly preserveUndo?: boolean;
+  readonly fallbackLanguage?: string | undefined;
   readonly now?: () => number;
   readonly idFactory?: () => string;
   readonly sessionId?: string;
@@ -111,6 +117,12 @@ export class FieldController {
   readonly #document: Document;
   readonly #view: SuggestionView;
   readonly #debounceMs: number;
+  readonly #readingLeaseMs: number;
+  readonly #generationMaxAgeMs: number;
+  readonly #requestOnTab: boolean;
+  readonly #tabAcceptsWord: boolean;
+  readonly #preserveUndo: boolean;
+  readonly #fallbackLanguage: string | undefined;
   readonly #now: () => number;
   readonly #idFactory: () => string;
   readonly #sessionId: string;
@@ -135,8 +147,14 @@ export class FieldController {
 
   constructor(options: FieldControllerOptions) {
     this.#transport = options.transport;
+    this.#requestOnTab = options.requestOnTab ?? false;
+    this.#tabAcceptsWord = options.tabAcceptsWord ?? false;
+    this.#preserveUndo = options.preserveUndo ?? false;
+    this.#fallbackLanguage = options.fallbackLanguage;
+    this.#readingLeaseMs = Math.min(5000, Math.max(1, options.readingLeaseMs ?? 600));
+    this.#generationMaxAgeMs = Math.min(5000, Math.max(1, options.generationMaxAgeMs ?? MAX_GENERATION_AGE_MS));
     this.#document = options.document ?? globalThis.document;
-    this.#view = options.view ?? new AnchoredGhostView(this.#document);
+    this.#view = options.view ?? new AnchoredGhostView(this.#document, this.#tabAcceptsWord);
     this.#debounceMs = options.debounceMs ?? 140;
     this.#now = options.now ?? (() => performance.now());
     this.#idFactory = options.idFactory ?? defaultId;
@@ -579,6 +597,22 @@ export class FieldController {
     }
     if (event.defaultPrevented) return;
     const visible = this.#visible;
+    if (visible === null && this.#requestOnTab && event.key === "Tab" &&
+        !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey &&
+        (event.isTrusted || this.#allowUntrustedKeyboardForTesting) && this.#activeField !== null &&
+        event.target === this.#activeField && !this.#paused && evaluateField(this.#activeField).allowed) {
+      const field = this.#activeField;
+      const selection = readSelection(field);
+      const state = this.#stateFor(field);
+      if (selection !== null && selection.start === selection.end && selection.end === field.value.length &&
+          field.value.trim() && !state.composing) {
+        event.preventDefault(); event.stopPropagation();
+        this.#cancelStateWork(state);
+        state.revision += 1;
+        this.#schedule(field, true);
+      }
+      return;
+    }
     if (
       event.target !== this.#activeField ||
       visible === null ||
@@ -605,7 +639,8 @@ export class FieldController {
     ) {
       if (!visible.brokerBound) return;
       if (this.#activeAuthorization?.visible === visible) return;
-      if (this.#acceptanceCandidate(visible, "all") === null) {
+      const acceptance = this.#tabAcceptsWord ? "word" : "all";
+      if (this.#acceptanceCandidate(visible, acceptance) === null) {
         this.#clearSuggestion();
         return;
       }
@@ -614,7 +649,7 @@ export class FieldController {
       // synthetic input. Fail closed and leave the field unchanged instead.
       event.preventDefault();
       event.stopPropagation();
-      this.#accept("all");
+      this.#accept(acceptance);
       return;
     }
     if (
@@ -625,13 +660,14 @@ export class FieldController {
     ) {
       if (!visible.brokerBound) return;
       if (this.#activeAuthorization?.visible === visible) return;
-      if (this.#acceptanceCandidate(visible, "word") === null) {
+      const acceptance = this.#tabAcceptsWord ? "all" : "word";
+      if (this.#acceptanceCandidate(visible, acceptance) === null) {
         this.#clearSuggestion();
         return;
       }
       event.preventDefault();
       event.stopPropagation();
-      this.#accept("word");
+      this.#accept(acceptance);
     }
   };
 
@@ -653,7 +689,7 @@ export class FieldController {
     return created;
   }
 
-  #schedule(field: EditableField): void {
+  #schedule(field: EditableField, explicit = false): void {
     if (!this.#currentDocumentIsTrusted()) {
       this.#invalidateActiveState();
       return;
@@ -677,11 +713,11 @@ export class FieldController {
     state.scheduledAt = this.#now();
     state.debounceTimer = setTimeout(() => {
       state.debounceTimer = null;
-      this.#request(field, state);
-    }, this.#debounceMs);
+      this.#request(field, state, explicit);
+    }, explicit ? 0 : this.#debounceMs);
   }
 
-  #request(field: EditableField, state: FieldState): void {
+  #request(field: EditableField, state: FieldState, explicit = false): void {
     if (!this.#currentDocumentIsTrusted()) {
       this.#invalidateActiveState();
       return;
@@ -719,15 +755,16 @@ export class FieldController {
       purpose: decision.purpose,
       selection,
       composing: state.composing,
-      activation: "always",
-      explicit: false,
+      activation: explicit ? "manual" : "always",
+      explicit,
       fingerprintSalt: this.#fingerprintSalt,
+      fallbackLanguage: this.#fallbackLanguage,
     });
     if (context === null) {
       this.#clearSuggestion();
       return;
     }
-    const deadlineAt = state.scheduledAt + MAX_GENERATION_AGE_MS;
+    const deadlineAt = state.scheduledAt + this.#generationMaxAgeMs;
     if (this.#now() >= deadlineAt) {
       this.#clearSuggestion();
       return;
@@ -831,6 +868,7 @@ export class FieldController {
       activation: request.context.activation,
       explicit: request.context.explicit,
       fingerprintSalt: this.#fingerprintSalt,
+      fallbackLanguage: this.#fallbackLanguage,
     });
     if (
       revalidatedContext === null ||
@@ -850,7 +888,7 @@ export class FieldController {
         preferredWord !== nextSuggestionWord(text)) ||
       response.suggestionId === null ||
       (response.ttlMs !== null &&
-        (!Number.isInteger(response.ttlMs) || response.ttlMs < 1 || response.ttlMs > 600))
+        (!Number.isInteger(response.ttlMs) || response.ttlMs < 1 || response.ttlMs > this.#readingLeaseMs))
     ) {
       this.#clearSuggestion();
       return;
@@ -875,7 +913,7 @@ export class FieldController {
       request,
       suggestionId: response.suggestionId,
       preferredWord,
-      expiresAt: this.#now() + (response.ttlMs ?? 600),
+      expiresAt: this.#now() + (response.ttlMs ?? this.#readingLeaseMs),
       brokerBound: true,
       sourceAddress,
     }, pending.deadlineAt);
@@ -1014,34 +1052,38 @@ export class FieldController {
       ).catch(() => undefined);
       return;
     }
+    const expectedValue = visible.value.slice(0, visible.selection.start) + authorization.text +
+      visible.value.slice(visible.selection.end);
+    let inserted = false;
     this.#internalMutations.add(field);
-    field.setRangeText(
-      authorization.text,
-      visible.selection.start,
-      visible.selection.end,
-      "end",
-    );
+    try {
+      if (this.#preserveUndo) {
+        // Reasserting the same selection closes Chromium's preceding typing
+        // group so Undo removes only Badi's insertion. No second edit on failure.
+        field.setSelectionRange(visible.selection.start, visible.selection.end, visible.selection.direction);
+        inserted = this.#validateVisible(visible) &&
+          this.#insertionSatisfiesConstraints(field, visible.selection, authorization.text) &&
+          this.#document.execCommand("insertText", false, authorization.text);
+      } else {
+        field.setRangeText(authorization.text, visible.selection.start, visible.selection.end, "end");
+        inserted = true;
+      }
+    } catch { inserted = false; }
     state.revision += 1;
     const updatedSelection = readSelection(field);
     state.lastSelection = updatedSelection;
-    const expectedValue = field.value;
-
-    let inputEvent: Event;
-    try {
-      inputEvent = new InputEvent("input", {
-        bubbles: true,
-        composed: true,
-        inputType: "insertText",
-        data: authorization.text,
-      });
-    } catch {
-      inputEvent = new Event("input", { bubbles: true, composed: true });
+    if (inserted && !this.#preserveUndo) {
+      let inputEvent: Event;
+      try { inputEvent = new InputEvent("input", { bubbles: true, composed: true,
+        inputType: "insertText", data: authorization.text }); }
+      catch { inputEvent = new Event("input", { bubbles: true, composed: true }); }
+      field.dispatchEvent(inputEvent);
     }
-    field.dispatchEvent(inputEvent);
     this.#internalMutations.delete(field);
 
     const postDispatchSelection = readSelection(field);
     if (
+      !inserted ||
       updatedSelection === null ||
       postDispatchSelection === null ||
       field.value !== expectedValue ||
@@ -1116,6 +1158,7 @@ export class FieldController {
       activation: visible.request.context.activation,
       explicit: visible.request.context.explicit,
       fingerprintSalt: this.#fingerprintSalt,
+      fallbackLanguage: this.#fallbackLanguage,
     });
     return (
       context !== null && context.fingerprint === visible.request.context.fingerprint
@@ -1210,6 +1253,7 @@ export class FieldController {
       activation: visible.request.context.activation,
       explicit: visible.request.context.explicit,
       fingerprintSalt: this.#fingerprintSalt,
+      fallbackLanguage: this.#fallbackLanguage,
     });
     if (continuedContext === null) {
       return false;

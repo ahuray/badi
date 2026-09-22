@@ -8,6 +8,7 @@ import type {
   SuggestionTransport,
 } from "../shared/model";
 import { contextFingerprint, sanitizeSuggestion } from "../content/context";
+import { validCorrection } from "../../../shared/text-safety.mjs";
 import type { MonacoBridge } from "./monaco-runtime-bridge";
 import type { MonacoSnapshot } from "./monaco-main-world";
 import { MonacoGhostView, type MonacoSuggestionView } from "./monaco-view";
@@ -27,6 +28,7 @@ interface VisibleSuggestion {
   readonly request: SuggestionRequest;
   readonly snapshot: MonacoSnapshot;
   readonly text: string;
+  readonly replaceBefore?: string;
   readonly suggestionId: string;
   readonly expiresAt: number;
 }
@@ -84,6 +86,7 @@ export class MonacoController {
   #started = false;
   #paused = true;
   #disposed = false;
+  #composing = false;
   #focusEpoch = 0;
   #revision = 0;
   #generation = 0;
@@ -115,10 +118,14 @@ export class MonacoController {
   start(): void {
     if (this.#started || this.#disposed) return;
     this.#started = true;
-    this.#document.addEventListener("input", this.#onActivity, true);
+    this.#document.addEventListener("input", this.#onContextChanged, true);
+    this.#document.addEventListener("compositionstart", this.#onCompositionStart, true);
+    this.#document.addEventListener("compositionend", this.#onCompositionEnd, true);
+    this.#document.addEventListener("mousedown", this.#onContextChanged, true);
+    this.#document.addEventListener("focusout", this.#onBlur, true);
     this.#document.addEventListener("keyup", this.#onActivity, true);
     this.#document.addEventListener("mouseup", this.#onActivity, true);
-    this.#document.addEventListener("selectionchange", this.#onActivity, true);
+    this.#document.addEventListener("selectionchange", this.#onContextChanged, true);
     this.#document.addEventListener("keydown", this.#onKeyDown, true);
     this.#document.addEventListener("visibilitychange", this.#onVisibilityChange, true);
     const window = this.#document.defaultView;
@@ -175,6 +182,7 @@ export class MonacoController {
     const request: CommitAuthorizationRequest = {
       ...this.#address(visible),
       expectedText: visible.text,
+      ...(visible.replaceBefore === undefined ? {} : { expectedReplaceBefore: visible.replaceBefore }),
       acceptance: "all",
     };
     this.#authorizing = visible;
@@ -220,10 +228,14 @@ export class MonacoController {
     this.#paused = true;
     this.#invalidateGeneration();
     this.#clearSuggestion();
-    this.#document.removeEventListener("input", this.#onActivity, true);
+    this.#document.removeEventListener("input", this.#onContextChanged, true);
+    this.#document.removeEventListener("compositionstart", this.#onCompositionStart, true);
+    this.#document.removeEventListener("compositionend", this.#onCompositionEnd, true);
+    this.#document.removeEventListener("mousedown", this.#onContextChanged, true);
+    this.#document.removeEventListener("focusout", this.#onBlur, true);
     this.#document.removeEventListener("keyup", this.#onActivity, true);
     this.#document.removeEventListener("mouseup", this.#onActivity, true);
-    this.#document.removeEventListener("selectionchange", this.#onActivity, true);
+    this.#document.removeEventListener("selectionchange", this.#onContextChanged, true);
     this.#document.removeEventListener("keydown", this.#onKeyDown, true);
     this.#document.removeEventListener("visibilitychange", this.#onVisibilityChange, true);
     const window = this.#document.defaultView;
@@ -238,6 +250,28 @@ export class MonacoController {
 
   readonly #onActivity = (): void => {
     this.#schedule();
+  };
+
+  readonly #onContextChanged = (event?: Event): void => {
+    if (event?.type === "input" && (event as InputEvent).isComposing) {
+      this.#composing = true;
+    }
+    // Revoke synchronously. Debouncing context acquisition must never leave
+    // the old preview or an in-flight acceptance eligible during an edit.
+    this.#invalidateGeneration();
+    this.#clearSuggestion();
+    this.#schedule();
+  };
+
+  readonly #onCompositionStart = (): void => {
+    this.#composing = true;
+    this.#onContextChanged();
+  };
+
+  readonly #onCompositionEnd = (): void => {
+    this.#composing = false;
+    this.#activeIdentity = null;
+    this.#onContextChanged();
   };
 
   readonly #onBlur = (): void => {
@@ -369,15 +403,20 @@ export class MonacoController {
     ) {
       return;
     }
-    const text = sanitizeSuggestion(response.suggestion ?? "");
+    const text = response.replaceBefore === undefined
+      ? sanitizeSuggestion(response.suggestion ?? "")
+      : (pending.snapshot.after === "" && validCorrection(pending.snapshot.before,
+        response.replaceBefore, response.suggestion) ? response.suggestion : null);
     if (
       text === null ||
       response.suggestionId === null ||
+      (response.replaceBefore !== undefined && response.acceptWord !== text) ||
       (response.ttlMs !== null &&
         (!Number.isInteger(response.ttlMs) || response.ttlMs < 1 || response.ttlMs > 600))
     ) {
       return;
     }
+    const expiresAt = this.#now() + (response.ttlMs ?? 600);
     let current: MonacoSnapshot | null;
     try {
       current = await this.#bridge.snapshot(this.#sessionId);
@@ -388,6 +427,8 @@ export class MonacoController {
       current === null ||
       snapshotIdentity(current) !== snapshotIdentity(pending.snapshot) ||
       pending.generation !== this.#generation ||
+      this.#now() >= pending.deadlineAt ||
+      this.#now() >= expiresAt ||
       !this.#documentIsUsable()
     ) {
       return;
@@ -397,9 +438,10 @@ export class MonacoController {
       snapshot: current,
       text,
       suggestionId: response.suggestionId,
-      expiresAt: this.#now() + (response.ttlMs ?? 600),
+      ...(response.replaceBefore === undefined ? {} : { replaceBefore: response.replaceBefore }),
+      expiresAt,
     };
-    this.#view.show(text, current.geometry);
+    this.#view.show(response.replaceBefore === undefined ? text : ` ${response.replaceBefore} → ${text}`, current.geometry);
     if (!this.#view.visible) return;
     this.#visible = visible;
     this.#expiryTimer = setTimeout(() => {
@@ -415,12 +457,15 @@ export class MonacoController {
     const matches =
       this.#authorizing === visible &&
       this.#visible === visible &&
+      this.#view.visible &&
+      this.#now() < visible.expiresAt &&
       authorization.text === request.expectedText &&
+      authorization.replaceBefore === request.expectedReplaceBefore &&
       authorization.acceptance === request.acceptance &&
       addressesMatch(authorization, request);
     if (!matches || !this.#documentIsUsable()) {
       if (this.#authorizing === visible) this.#authorizing = null;
-      this.#clearSuggestion();
+      if (this.#visible === visible) this.#clearSuggestion();
       await this.#report(visible, "stale");
       return;
     }
@@ -436,8 +481,8 @@ export class MonacoController {
     }
     const stillCurrent =
       this.#authorizing === visible && this.#visible === visible && this.#documentIsUsable();
-    this.#authorizing = null;
-    this.#clearSuggestion();
+    if (this.#authorizing === visible) this.#authorizing = null;
+    if (this.#visible === visible) this.#clearSuggestion();
     await this.#report(visible, applied ? "applied" : "stale");
     if (applied && stillCurrent) {
       this.#activeIdentity = null;
@@ -469,6 +514,7 @@ export class MonacoController {
   #documentIsUsable(): boolean {
     try {
       return (
+        !this.#composing &&
         this.#isCurrentDocument() &&
         this.#document.visibilityState === "visible" &&
         this.#document.hasFocus()
@@ -512,6 +558,7 @@ export class MonacoController {
       this.#expiryTimer = null;
     }
     this.#visible = null;
+    this.#authorizing = null;
     this.#view.hide();
   }
 }

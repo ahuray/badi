@@ -1,0 +1,25 @@
+[Unit]
+Description=Badi local writing model
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=%h/.local/lib/badi/badi-broker
+Restart=on-failure
+RestartSec=3
+UMask=0077
+RuntimeDirectory=badi
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+# The broker owns graceful runtime shutdown. Sending TERM to both processes
+# makes the runtime receive a second TERM from the broker during cleanup.
+# Keep the final forced-kill fallback scoped to the entire service cgroup.
+KillMode=mixed
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical-session.target

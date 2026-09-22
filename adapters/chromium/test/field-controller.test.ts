@@ -259,6 +259,29 @@ describe("FieldController", () => {
     document.querySelectorAll("[data-badi-owned]").forEach((node) => node.remove());
   });
 
+  it("manual Tab retries unchanged text with a fresh revision and keeps selection Tab native", async () => {
+    document.body.innerHTML = '<textarea id="note"></textarea>';
+    const field = document.querySelector<HTMLTextAreaElement>('#note')!;
+    const transport = new FakeTransport();
+    const controller = new FieldController({ transport, view: new RecordingView(),
+      requestOnTab: true, readingLeaseMs: 5000, debounceMs: 5,
+      allowUntrustedKeyboardForTesting: true, idFactory: nextIdFactory(), sessionId: SESSION_ID });
+    controller.start(); field.focus(); setValue(field, 'thank you'); await dispatchRequest();
+    const revision = transport.requests[0]!.revision;
+    const press = () => {
+      const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+      field.dispatchEvent(event); return event.defaultPrevented;
+    };
+    expect(press()).toBe(true); await dispatchRequest();
+    expect(transport.requests.at(-1)!.revision).toBeGreaterThan(revision);
+    expect(transport.requests.at(-1)!.context.explicit).toBe(true);
+    const retryRevision = transport.requests.at(-1)!.revision;
+    expect(press()).toBe(true); await dispatchRequest();
+    expect(transport.requests.at(-1)!.revision).toBeGreaterThan(retryRevision);
+    field.setSelectionRange(0, 3); expect(press()).toBe(false);
+    controller.dispose();
+  });
+
   it("makes zero outbound context/provider requests for locally denied fields", async () => {
     document.body.innerHTML = `
       <input id="password" type="password" value="never send me">
@@ -1404,6 +1427,75 @@ describe("FieldController", () => {
 
     expect(view.shown).toEqual([]);
     expect(transport.cancellations).toEqual([transport.requests[0]]);
+    controller.dispose();
+  });
+
+  it("uses Tab for one word and Control Right for all in ordinary web fields", async () => {
+    const field = document.createElement("textarea");
+    field.id = "web-word-acceptance";
+    field.value = "thank you";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    const transport = new FakeTransport();
+    const view = new RecordingView();
+    const controller = new FieldController({ transport, view, debounceMs: 5,
+      tabAcceptsWord: true, requestOnTab: true, readingLeaseMs: 5000,
+      allowUntrustedKeyboardForTesting: true, sessionId: SESSION_ID, idFactory: nextIdFactory() });
+    controller.start();
+    field.focus();
+    await dispatchRequest();
+    transport.resolve(0, " for your time", " for", 5000);
+    await Promise.resolve();
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    expect(transport.authorizationRequests[0]?.acceptance).toBe("word");
+    expect(field.value).toBe("thank you for");
+    await dispatchRequest();
+    transport.resolve(1, " your time", " your", 5000);
+    await Promise.resolve();
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", ctrlKey: true, bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    expect(transport.authorizationRequests[1]?.acceptance).toBe("all");
+    expect(field.value).toBe("thank you for your time");
+    const reverseFocus = new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
+    field.dispatchEvent(reverseFocus);
+    expect(reverseFocus.defaultPrevented).toBe(false);
+    controller.dispose();
+  });
+
+  it("allows a slower local model within the web budget while cancelling edited context", async () => {
+    vi.setSystemTime(1_000);
+    const field = document.createElement("textarea");
+    field.id = "local-model-budget";
+    field.value = "Please find attached the";
+    document.body.append(field);
+    field.setSelectionRange(field.value.length, field.value.length);
+    const transport = new FakeTransport();
+    const view = new RecordingView();
+    const controller = new FieldController({ transport, view, debounceMs: 140,
+      generationMaxAgeMs: 2000, readingLeaseMs: 5000, sessionId: SESSION_ID,
+      idFactory: nextIdFactory(), now: () => Date.now() });
+    controller.start();
+    field.focus();
+    await dispatchRequest(140);
+    await vi.advanceTimersByTimeAsync(800);
+    transport.resolve(0, " document", " document", 5000);
+    await Promise.resolve();
+    expect(view.current).toBe(" document");
+
+    setValue(field, "The next task is");
+    await dispatchRequest(140);
+    setValue(field, "The next task is different");
+    await dispatchRequest(140);
+    transport.resolve(1, " obsolete", " obsolete", 5000);
+    await Promise.resolve();
+    expect(view.visible).toBe(false);
+    expect(transport.cancellations).toContain(transport.requests[1]);
+    await vi.advanceTimersByTimeAsync(2000);
+    transport.resolve(2, " too late", " too", 5000);
+    await Promise.resolve();
+    expect(view.visible).toBe(false);
+    expect(transport.cancellations).toContain(transport.requests[2]);
     controller.dispose();
   });
 

@@ -5,6 +5,8 @@ import type {
   SuggestionContext,
 } from "../shared/model";
 import { hasStableFieldIdentity } from "./field-policy";
+import { writingLanguage } from "../../../shared/writing-language.mjs";
+import { hasUnsafeText } from "../../../shared/text-safety.mjs";
 
 const BEFORE_LIMIT = 512;
 const AFTER_LIMIT = 128;
@@ -55,6 +57,7 @@ export interface ContextCaptureInput {
   readonly activation: "always" | "manual";
   readonly explicit: boolean;
   readonly fingerprintSalt: string;
+  readonly fallbackLanguage?: string | undefined;
 }
 
 export function captureContext(input: ContextCaptureInput): SuggestionContext {
@@ -70,7 +73,9 @@ export function captureContext(input: ContextCaptureInput): SuggestionContext {
   }
   const before = lastScalars(beforeSlice, BEFORE_LIMIT);
   const after = firstScalars(afterSlice, AFTER_LIMIT);
-  const language = captureLanguage(field);
+  if (hasUnsafeText(before, true) || hasUnsafeText(after, true)) throw new Error("Unsupported context formatting");
+  const capturedLanguage = captureLanguage(field, input.fallbackLanguage);
+  const language = input.fallbackLanguage === undefined ? capturedLanguage : writingLanguage(before, capturedLanguage);
   const identity = stableIdentity(field);
   const fingerprint = contextFingerprint(
     [
@@ -105,14 +110,14 @@ export function captureContext(input: ContextCaptureInput): SuggestionContext {
   };
 }
 
-function captureLanguage(field: EditableField): string | undefined {
+function captureLanguage(field: EditableField, fallback?: string): string | undefined {
   // Page language is untrusted quality metadata, never an authority signal.
-  // Resolve only the nearest declared BCP 47 tag; do not inspect page prose.
+  // Only untagged fields use the optional browser locale; never inspect prose.
   const languageElement = field.closest("[lang]");
   const declared =
     languageElement?.getAttribute("lang") ??
     field.ownerDocument.documentElement.getAttribute("lang");
-  const candidate = declared?.trim();
+  const candidate = (declared ?? fallback)?.trim();
   if (
     candidate === undefined ||
     candidate.length < 2 ||
@@ -159,13 +164,13 @@ function hasUnpairedSurrogate(value: string): boolean {
 }
 
 export function sanitizeSuggestion(value: string): string | null {
-  if (value.length === 0 || hasUnpairedSurrogate(value)) {
+  if (value.length === 0 || hasUnpairedSurrogate(value) || hasUnsafeText(value)) {
     return null;
   }
 
   for (const character of value) {
     if (
-      isForbiddenOutputScalar(character) ||
+      (character !== "\u200c" && isForbiddenOutputScalar(character)) ||
       (/\p{White_Space}/u.test(character) && character !== " ")
     ) {
       return null;

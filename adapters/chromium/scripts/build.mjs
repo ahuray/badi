@@ -6,14 +6,17 @@ import { build } from "esbuild";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const product = process.argv.includes("--product");
-const outputRoot = join(packageRoot, product ? "dist-product" : "dist");
+const web = process.argv.includes("--web");
+if (web && product) throw new Error("Select one extension target");
+const outputRoot = join(packageRoot, web ? "dist-web" : product ? "dist-product" : "dist");
 
 await rm(outputRoot, { recursive: true, force: true });
 await mkdir(outputRoot, { recursive: true });
 
 await build({
   absWorkingDir: packageRoot,
-  entryPoints: product
+  entryPoints: web ? { "web-access": "src/web/access-popup.ts", "web-content-script": "src/web/content-script.ts",
+    "web-service-worker": "src/web/service-worker.ts" } : product
     ? {
         "product-access": "src/product/access-popup.ts",
         "product-content-script": "src/product/content-script.ts",
@@ -37,13 +40,20 @@ await build({
 });
 
 const sourceManifest = JSON.parse(
-  await readFile(join(packageRoot, product ? "manifest.product.json" : "manifest.json"), "utf8"),
+  await readFile(join(packageRoot, web ? "manifest.web.json" : product ? "manifest.product.json" : "manifest.json"), "utf8"),
 );
 await writeFile(
   join(outputRoot, "manifest.json"),
   `${JSON.stringify(sourceManifest, null, 2)}\n`,
   "utf8",
 );
+if (web) {
+  await writeFile(join(outputRoot, "web-access.html"), await readFile(join(packageRoot, "web-access.html")));
+  for (const size of [16, 32, 48, 128]) {
+    const name = `badi-${size}.png`;
+    await writeFile(join(outputRoot, name), await readFile(join(packageRoot, "icons", name)));
+  }
+}
 if (product) {
   await writeFile(
     join(outputRoot, "product-access.html"),
@@ -78,7 +88,7 @@ const buildManifest = {
   schema: 1,
   package: "@badi/chromium",
   version: sourceManifest.version,
-  target: product ? "chrome132-mv3-dillinger-product" : "chrome132-mv3",
+  target: web ? "chrome132-mv3-web" : product ? "chrome132-mv3-dillinger-product" : "chrome132-mv3",
   native_host: "io.github.ahuray.badi",
   artifacts,
 };
@@ -89,5 +99,5 @@ await writeFile(
 );
 
 process.stdout.write(
-  `Built ${artifacts.length} deterministic ${product ? "product" : "fixture"} files in ${outputRoot}\n`,
+  `Built ${artifacts.length} deterministic ${web ? "web" : product ? "product" : "fixture"} files in ${outputRoot}\n`,
 );

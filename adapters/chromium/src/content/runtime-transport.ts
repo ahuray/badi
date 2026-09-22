@@ -42,6 +42,7 @@ export class RuntimeSuggestionTransport implements SuggestionTransport {
       kind: "badi.suggest.v1",
       request,
     } satisfies RuntimeCommand);
+    if (typeof reply === "object" && reply !== null && "error" in reply) console.warn("Badi request failed", String(reply.error));
     return parseRuntimeSuggestionReply(reply);
   }
 
@@ -76,6 +77,7 @@ export class RuntimeSuggestionTransport implements SuggestionTransport {
       kind: "badi.commit.authorize.v1",
       request,
     } satisfies RuntimeCommand);
+    if (typeof reply === "object" && reply !== null && "error" in reply) console.warn("Badi acceptance failed", String(reply.error));
     return parseRuntimeCommitAuthorization(reply);
   }
 

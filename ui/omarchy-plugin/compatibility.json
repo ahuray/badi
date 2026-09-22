@@ -3,16 +3,18 @@
   "artifact": "io.github.ahuray.badi@0.1.0",
   "status": "disabled_repo_local_feasibility",
   "omarchy": {
-    "package": "4.0.2-1",
+    "package": "4.0.3-1",
     "source_repository": "https://github.com/omacom/omarchy.git",
-    "source_tag": "v4.0.2",
-    "source_commit": "346e69e1cec6c4e8924531874af6ba010a1bc99e",
+    "source_tag": "v4.0.3",
+    "source_commit": "0534987009061cbe2dacdde4ad564092ab698d12",
     "contract_files": {
-      "shell/shell.qml": "sha256:9f1db77dcc3c111ceccc860ac472d19b35d385958a63d270ea51e413ab86f1f0",
-      "shell/services/PluginRegistry.qml": "sha256:63371e4224f948e5444531282ad9f7c74ca2e578470b549f4c6b898c3a15c50f",
-      "shell/Ui/qmldir": "sha256:d6b4ac284aea719458cfdcf66afc18c63b69c20a400317ad307d029865a96886",
+      "shell/shell.qml": "sha256:4a4b7694e5b9e0bd952ce0efa2d6dc2cea44cdfa98cc2f442e40fe41cbc1beab",
+      "shell/services/PluginRegistry.qml": "sha256:8466127c53037b80b582544610b0bdf78a86764e4f037a3b9ce360d107359803",
+      "shell/Ui/qmldir": "sha256:1c8f878acd5eafa6e3932325f76a205b1c0fc800f210ca071eee2409fee5d22b",
       "shell/Commons/qmldir": "sha256:5593fa25d33b1e2d3ed8628ca2e0dce5074497608f2bad6652689e390727e5e8",
-      "bin/omarchy-plugin-validate": "sha256:f7507e5042eb970e3dc918bdf6bf251c7557443892a77e71a17d7019ddde72c8"
+      "bin/omarchy-plugin-validate": "sha256:f7507e5042eb970e3dc918bdf6bf251c7557443892a77e71a17d7019ddde72c8",
+      "shell/services/PluginShellApi.qml": "sha256:ff0cb5ec5fcdda0b21af447b11f07a24e065a3557796639364109aaa2ce5c763",
+      "shell/Ui/PluginBarApi.qml": "sha256:91964a42b92c58476a4f961df35148d4c94071344ef1a69eab1563d1496705a7"
     }
   },
   "quickshell": "0.3.1-1",

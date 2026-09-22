@@ -38,6 +38,17 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test --workspace --all-features
+      - name: Install Node for editor protocol and Readline checks
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.20.0
+      - name: Exercise editor clients against the real broker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash-builtins libreadline-dev
+          python3 adapters/shell/build-preview.py
+          cargo build --workspace --bins --locked
+          node --test adapters/shared/broker-client.test.mjs
 
   rust-msrv:
     name: Rust MSRV 1.85
@@ -80,7 +91,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: omacom/omarchy
-          ref: 346e69e1cec6c4e8924531874af6ba010a1bc99e
+          ref: 0534987009061cbe2dacdde4ad564092ab698d12
           path: .ci/omarchy
           persist-credentials: false
       - name: Install the reviewed QML runtime and test tools
@@ -113,8 +124,8 @@ jobs:
             > /etc/pacman.d/mirrorlist
           pacman -Syyu --noconfirm
           pacman -S --needed --noconfirm \
-            ca-certificates cmake fcitx5 gcc git ninja nlohmann-json
-          pacman -Q cmake fcitx5 gcc ninja nlohmann-json
+            at-spi2-core ca-certificates cmake dbus fcitx5 gcc git ninja nlohmann-json python python-gobject
+          pacman -Q at-spi2-core cmake dbus fcitx5 gcc ninja nlohmann-json python python-gobject
       - name: Check out source
         uses: actions/checkout@v7
         with:
@@ -125,6 +136,16 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
           cmake --build adapters/fcitx5/build
           ctest --test-dir adapters/fcitx5/build --output-on-failure
+      - name: Install Rust for the native transport integration
+        uses: dtolnay/rust-toolchain@1.98.0
+      - name: Exercise the C++ transport against the real Rust broker
+        run: |
+          cargo build --workspace --bins --locked
+          python adapters/fcitx5/tests/broker-smoke.py
+      - name: Exercise isolated accessibility buses and actual addon event flow
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python adapters/accessibility/tests/run-isolated.py
+          PYTHONDONTWRITEBYTECODE=1 python adapters/fcitx5/tests/observed-desktop.py
 
   chromium:
     name: Chromium adapter / Node ${{ matrix.node }}
@@ -149,6 +170,10 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Install Bash display builtin build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash-builtins libreadline-dev
       - name: Type, test, build reproducibly, and validate evidence
         env:
           CAPABILITY_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || inputs.capability_base_sha || 'missing-capability-base' }}

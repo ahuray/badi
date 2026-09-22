@@ -9,6 +9,21 @@ namespace {
 
 bool continuation(unsigned char byte) { return (byte & 0xc0U) == 0x80U; }
 
+bool arabicLetter(std::uint32_t value) {
+    return (value >= 0x0620U && value <= 0x063fU) ||
+           (value >= 0x0641U && value <= 0x064aU) ||
+           (value >= 0x066eU && value <= 0x066fU) ||
+           (value >= 0x0671U && value <= 0x06d3U) || value == 0x06d5U ||
+           (value >= 0x06e5U && value <= 0x06e6U) ||
+           (value >= 0x06eeU && value <= 0x06efU) ||
+           (value >= 0x06faU && value <= 0x06fcU) || value == 0x06ffU;
+}
+
+bool safeJoiner(const std::vector<std::uint32_t> &scalars, std::size_t index) {
+    return index > 0 && index + 1 < scalars.size() &&
+           arabicLetter(scalars[index - 1]) && arabicLetter(scalars[index + 1]);
+}
+
 bool forbiddenOutputScalar(std::uint32_t value) {
     return value <= 0x1fU || (value >= 0x7fU && value <= 0x9fU) ||
            value == 0x00adU || (value >= 0x0600U && value <= 0x0605U) ||
@@ -83,8 +98,9 @@ std::optional<std::string> sanitizeSuggestion(std::string_view value) {
     bool inWord = false;
     bool anyNonSpace = false;
     bool previousSpace = false;
-    for (const auto scalar : *scalars) {
-        if (forbiddenOutputScalar(scalar) ||
+    for (std::size_t index = 0; index < scalars->size(); ++index) {
+        const auto scalar = (*scalars)[index];
+        if ((forbiddenOutputScalar(scalar) && !(scalar == 0x200cU && safeJoiner(*scalars, index))) ||
             (unicodeWhitespace(scalar) && scalar != 0x20U)) {
             return std::nullopt;
         }
@@ -103,6 +119,17 @@ std::optional<std::string> sanitizeSuggestion(std::string_view value) {
         return std::nullopt;
     }
     return std::string(value);
+}
+
+bool validContextText(std::string_view value) {
+    const auto scalars = decodeUtf8(value);
+    if (!scalars) return false;
+    for (std::size_t index = 0; index < scalars->size(); ++index) {
+        const auto scalar = (*scalars)[index];
+        if (scalar == '\n' || scalar == '\t') continue;
+        if (forbiddenOutputScalar(scalar) && !(scalar == 0x200cU && safeJoiner(*scalars, index))) return false;
+    }
+    return true;
 }
 
 std::optional<std::string> scalarSlice(std::string_view value,

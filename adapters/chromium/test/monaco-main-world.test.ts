@@ -88,7 +88,7 @@ function installMonaco(
         value =
           behavior === "corrupt"
             ? `${value}!corrupt`
-            : value.slice(0, insertionOffset) + edit.text + value.slice(insertionOffset);
+            : value.slice(0, insertionOffset) + edit.text + value.slice(edit.range.endColumn - 1);
         offset = behavior === "corrupt" ? value.length : insertionOffset + edit.text.length;
         version += 1;
         return true;
@@ -151,6 +151,38 @@ describe("Dillinger MAIN-world Monaco adapter", () => {
       after: "",
       geometry: { left: 110, top: 60, height: 18 },
     });
+  });
+
+  it.each(["", " "])("replaces the exact misspelled suffix with delimiter %j and restores one native undo", (space) => {
+    const harness = installMonaco(`This is teh${space}`);
+    const snapshot = readDillingerMonacoSnapshotInMainWorld() as MonacoSnapshot;
+    expect(applyDillingerMonacoEditInMainWorld(snapshot, `the${space}`, `teh${space}`)).toBe(true);
+    expect(harness.getValue()).toBe(`This is the${space}`);
+    harness.editor.trigger("test", "undo");
+    expect(harness.getValue()).toBe(`This is teh${space}`);
+  });
+
+  it.each([
+    ["This is teh ", "teh ", "the"],
+    ["This is teh", "teh", "the "],
+    ["This is teh  ", "teh  ", "the  "],
+    ["This is teh\n", "teh\n", "the\n"],
+    ["Thisisteh ", "teh ", "the "],
+    ["This is teh ", "teh ", "teh "],
+  ])("rejects unbound correction %j / %j / %j before mutation", (before, original, corrected) => {
+    const harness = installMonaco(before);
+    const snapshot = readDillingerMonacoSnapshotInMainWorld() as MonacoSnapshot;
+    expect(applyDillingerMonacoEditInMainWorld(snapshot, corrected, original)).toBe(false);
+    expect(harness.editor.executeEdits).not.toHaveBeenCalled();
+  });
+
+  it("refuses replacement of a different suffix or stale model", () => {
+    const harness = installMonaco("This is teh");
+    const snapshot = readDillingerMonacoSnapshotInMainWorld() as MonacoSnapshot;
+    expect(applyDillingerMonacoEditInMainWorld(snapshot, "the", "ten")).toBe(false);
+    harness.setVersion(snapshot.versionId + 1);
+    expect(applyDillingerMonacoEditInMainWorld(snapshot, "the", "teh")).toBe(false);
+    expect(harness.editor.executeEdits).not.toHaveBeenCalled();
   });
 
   it("uses one Monaco transaction that target-native undo restores exactly", () => {

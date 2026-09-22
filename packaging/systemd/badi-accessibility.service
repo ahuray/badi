@@ -1,0 +1,21 @@
+[Unit]
+Description=Badi focused field observer and native prediction preview
+After=graphical-session.target badi-broker.service
+PartOf=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_RUNTIME_DIR
+ConditionEnvironment=HYPRLAND_INSTANCE_SIGNATURE
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -B %h/.local/lib/badi/accessibility/daemon.py
+Restart=on-failure
+RestartSec=3
+UMask=0077
+KillMode=control-group
+TimeoutStopSec=5
+
+[Install]
+WantedBy=graphical-session.target

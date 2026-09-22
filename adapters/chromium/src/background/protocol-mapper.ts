@@ -9,6 +9,7 @@ import type {
   SuggestionResponse,
   TargetPolicy,
 } from "../shared/model";
+import { validCorrection } from "../../../shared/text-safety.mjs";
 
 export const NATIVE_HOST_NAME = "io.github.ahuray.badi";
 
@@ -74,7 +75,7 @@ function parseOrigin(origin: string): Readonly<Record<string, unknown>> {
   };
 }
 
-export function helloEnvelope(monotonicMs: number): WireEnvelope {
+export function helloEnvelope(monotonicMs: number, textReplacement = false): WireEnvelope {
   return {
     v: 1,
     id: "chromium.hello",
@@ -84,7 +85,7 @@ export function helloEnvelope(monotonicMs: number): WireEnvelope {
       min_v: 1,
       max_v: 1,
       adapter: { kind: "browser", name: "badi-chromium", version: "0.1.0" },
-      capabilities: [...BROWSER_CAPABILITIES],
+      capabilities: [...BROWSER_CAPABILITIES, ...(textReplacement ? ["text_replacement"] : [])],
     },
   };
 }
@@ -151,10 +152,14 @@ export function sessionCloseEnvelope(request: SuggestionRequest): WireSessionEnv
 
 export function suggestionRequestEnvelopes(
   request: SuggestionRequest,
+  protocolVersion: 1 | 2 = 1,
 ): readonly [WireSessionEnvelope, WireSessionEnvelope] {
   const { selection } = request.context;
-  const anchor = selection.direction === "backward" ? selection.end : selection.start;
-  const head = selection.direction === "backward" ? selection.start : selection.end;
+  if (protocolVersion === 2 && selection.start !== selection.end) throw new Error("v2 browser requires a collapsed caret");
+  const anchor = protocolVersion === 2 ? [...request.context.before].length
+    : selection.direction === "backward" ? selection.end : selection.start;
+  const head = protocolVersion === 2 ? anchor
+    : selection.direction === "backward" ? selection.start : selection.end;
   const context = withCoordinates(
     request,
     "context.changed",
@@ -165,7 +170,7 @@ export function suggestionRequestEnvelopes(
       ...(request.context.language === undefined
         ? {}
         : { language: request.context.language }),
-      selection: { anchor, head, unit: "utf16_code_units" },
+      selection: { anchor, head, unit: protocolVersion === 2 ? "unicode_scalar_values" : "utf16_code_units" },
       field: {
         purpose: request.context.field.purpose,
         editable: request.context.field.editable,
@@ -616,6 +621,9 @@ export function parseCommitAuthorization(
     payload["fingerprint"] !== request.fingerprint ||
     payload["suggestion_id"] !== request.suggestionId ||
     payload["text"] !== request.expectedText ||
+    payload["replace_before"] !== request.expectedReplaceBefore ||
+    (request.expectedReplaceBefore !== undefined &&
+      !validCorrection(request.expectedReplaceBefore, request.expectedReplaceBefore, request.expectedText)) ||
     payload["acceptance"] !== request.acceptance
   ) {
     return null;
@@ -630,6 +638,7 @@ export function parseCommitAuthorization(
     fingerprint: request.fingerprint,
     suggestionId: request.suggestionId,
     text: request.expectedText,
+    ...(request.expectedReplaceBefore === undefined ? {} : { replaceBefore: request.expectedReplaceBefore }),
     acceptance: request.acceptance,
   };
 }
@@ -671,6 +680,9 @@ export function parseSuggestionReply(
     value["type"] !== "suggestion.show" ||
     typeof payload["text"] !== "string" ||
     !isOpaqueId(payload["suggestion_id"]) ||
+    (payload["replace_before"] !== undefined &&
+      (!validCorrection(request.context.before, payload["replace_before"], payload["text"])
+        || request.context.after !== "" || payload["accept_word"] !== payload["text"])) ||
     typeof payload["accept_word"] !== "string" ||
     typeof payload["ttl_ms"] !== "number" ||
     (payload["provider"] !== "phrase_v1" && payload["provider"] !== "local_model")
@@ -684,6 +696,7 @@ export function parseSuggestionReply(
     revision: request.revision,
     fingerprint: request.context.fingerprint,
     suggestion: payload["text"],
+    ...(typeof payload["replace_before"] === "string" ? { replaceBefore: payload["replace_before"] } : {}),
     suggestionId: payload["suggestion_id"],
     acceptWord: payload["accept_word"],
     ttlMs: payload["ttl_ms"],
@@ -703,7 +716,7 @@ export function replyMatchesRequest(value: unknown, request: SuggestionRequest):
   );
 }
 
-export function parseHelloAckPaused(value: unknown): boolean | null {
+export function parseHelloAckPaused(value: unknown, textReplacement = false): boolean | null {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, ["v", "id", "type", "mono_ms", "payload"]) ||
@@ -741,10 +754,11 @@ export function parseHelloAckPaused(value: unknown): boolean | null {
     return null;
   }
   const capabilities = payload["enabled_capabilities"];
+  const expected = [...BROWSER_CAPABILITIES, ...(textReplacement ? ["text_replacement"] : [])];
   const capabilitiesMatch =
-    capabilities.length === BROWSER_CAPABILITIES.length &&
-    new Set(capabilities).size === BROWSER_CAPABILITIES.length &&
-    BROWSER_CAPABILITIES.every((capability) => capabilities.includes(capability));
+    capabilities.length === expected.length &&
+    new Set(capabilities).size === expected.length &&
+    expected.every((capability) => capabilities.includes(capability));
   return capabilitiesMatch ? payload["paused"] : null;
 }
 

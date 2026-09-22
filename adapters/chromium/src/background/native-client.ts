@@ -94,6 +94,8 @@ interface OpenSession {
 
 export class NativeBrokerClient {
   readonly #factory: NativePortFactory;
+  readonly #protocolVersion: 1 | 2;
+  readonly #textReplacement: boolean;
   readonly #now: () => number;
   readonly #handshakeTimeoutMs: number;
   readonly #operationTimeoutMs: number;
@@ -126,12 +128,16 @@ export class NativeBrokerClient {
   constructor(
     factory: NativePortFactory,
     options: {
+      readonly textReplacement?: boolean;
+      readonly protocolVersion?: 1 | 2;
       readonly now?: () => number;
       readonly handshakeTimeoutMs?: number;
       readonly operationTimeoutMs?: number;
     } = {},
   ) {
     this.#factory = factory;
+    this.#protocolVersion = options.protocolVersion ?? 1;
+    this.#textReplacement = options.textReplacement ?? false;
     this.#now = options.now ?? (() => performance.now());
     this.#handshakeTimeoutMs = options.handshakeTimeoutMs ?? 3_000;
     this.#operationTimeoutMs = Math.max(1, options.operationTimeoutMs ?? 3_000);
@@ -186,7 +192,7 @@ export class NativeBrokerClient {
       });
     });
     try {
-      for (const envelope of suggestionRequestEnvelopes(request)) {
+      for (const envelope of suggestionRequestEnvelopes(request, this.#protocolVersion)) {
         this.#post(envelope);
       }
     } catch (error) {
@@ -431,7 +437,7 @@ export class NativeBrokerClient {
       this.#reset(error, port, generation);
     }, this.#handshakeTimeoutMs);
     void ready.finally(() => clearTimeout(timeout)).catch(() => undefined);
-    this.#post(helloEnvelope(Math.max(0, Math.floor(this.#now()))));
+    this.#post(helloEnvelope(Math.max(0, Math.floor(this.#now())), this.#textReplacement));
     return ready;
   }
 
@@ -454,7 +460,9 @@ export class NativeBrokerClient {
     if (this.#port === null) {
       throw new Error("Native broker port is unavailable");
     }
-    this.#port.postMessage(envelope);
+    this.#port.postMessage({ ...envelope, v: this.#protocolVersion,
+      ...(envelope.type === "hello" ? { payload: { ...envelope.payload,
+        min_v: this.#protocolVersion, max_v: this.#protocolVersion } } : {}) });
   }
 
   #handleMessage(
@@ -463,7 +471,9 @@ export class NativeBrokerClient {
     generation: number,
   ): void {
     if (!this.#connectionIsCurrent(sourcePort, generation)) return;
-    const helloPaused = parseHelloAckPaused(message);
+    message = normalizeWireVersion(message, this.#protocolVersion);
+    if (message === null) { this.#handleDisconnect(sourcePort, generation); return; }
+    const helloPaused = parseHelloAckPaused(message, this.#textReplacement);
     if (helloPaused !== null) {
       if (this.#helloAcknowledged) return;
       this.#helloAcknowledged = true;
@@ -490,7 +500,7 @@ export class NativeBrokerClient {
         if (!this.#connectionIsCurrent(sourcePort, generation)) return;
         if (!initialSnapshot) await this.#authorityChangedHandler?.(authority);
         if (!this.#connectionIsCurrent(sourcePort, generation)) return;
-        sourcePort.postMessage(
+        this.#post(
           authorityAckEnvelope(authority.authorityEpoch, Math.max(0, Math.floor(this.#now()))),
         );
         if (initialSnapshot) {
@@ -765,4 +775,14 @@ export class NativeBrokerClient {
     clearTimeout(pending.operationTimer);
     pending.operationTimer = null;
   }
+}
+
+// Reply payloads share their strict parsers across v1/v2; outgoing context
+// offsets are mapped separately. Bind every reply to the negotiated version.
+export function normalizeWireVersion(message: unknown, version: 1 | 2): unknown {
+  if (typeof message !== "object" || message === null || !("v" in message) || message.v !== version) return null;
+  if (!("type" in message) || message.type !== "hello.ack") return { ...message, v: 1 };
+  if (!("payload" in message) || typeof message.payload !== "object" || message.payload === null ||
+      !("selected_v" in message.payload) || message.payload.selected_v !== version) return null;
+  return { ...message, v: 1, payload: { ...message.payload, selected_v: 1 } };
 }

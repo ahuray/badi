@@ -9,6 +9,11 @@
 
 namespace badi::fcitx5 {
 
+enum class NativeEditTarget { DesktopApplication, BrowserOrigin, Unsupported };
+
+bool nativeEditingAvailable(std::string_view appId,
+                           NativeEditTarget target = NativeEditTarget::DesktopApplication);
+
 struct Coordinates {
     std::string sessionId;
     std::uint64_t focusEpoch = 0;
@@ -27,8 +32,15 @@ struct ContextWindow {
     bool sensitive = false;
     bool multiline = false;
     bool composing = false;
+    bool identityKnown = false;
+    bool explicitRequest = true;
 
-    bool operator==(const ContextWindow &) const = default;
+    bool operator==(const ContextWindow &other) const {
+        // Invocation mode is request metadata, not an edit to the field.
+        return before == other.before && after == other.after && anchor == other.anchor &&
+            head == other.head && language == other.language && sensitive == other.sensitive &&
+            multiline == other.multiline && composing == other.composing && identityKnown == other.identityKnown;
+    }
 };
 
 struct ContextUpdate {
@@ -44,6 +56,7 @@ struct Suggestion {
     std::string suggestionId;
     std::string text;
     std::uint64_t expiresAtMs = 0;
+    std::string replaceBefore{};
 };
 
 struct AcceptRequest {
@@ -51,6 +64,7 @@ struct AcceptRequest {
     std::string controlId;
     std::string suggestionId;
     std::string expectedText;
+    std::string replaceBefore{};
 };
 
 struct DismissRequest {
@@ -65,6 +79,7 @@ struct CommitPrepare {
     std::string suggestionId;
     std::string text;
     std::string acceptance;
+    std::string replaceBefore{};
 };
 
 struct CommitDispatch {
@@ -72,6 +87,7 @@ struct CommitDispatch {
     std::string controlId;
     std::string suggestionId;
     std::string text;
+    std::string replaceBefore{};
 };
 
 struct PanelObservation {
@@ -79,6 +95,7 @@ struct PanelObservation {
     bool clientPreedit = false;
     bool candidates = false;
     bool candidatesOwnedByBadi = false;
+    bool foreignAuxiliary = false;
 };
 
 enum class LocalAction { PassThrough, Invoke, Accept, Dismiss };
@@ -96,14 +113,18 @@ private:
 };
 
 bool hasForeignImeUi(const PanelObservation &panel);
+bool hasOwnedCandidate(const PanelObservation &panel);
 bool allowsNativeContext(::fcitx::CapabilityFlags capabilities);
 bool supportedAppId(std::string_view appId);
+bool supportedWritingLanguage(std::string_view language);
 bool matchesCapturedContext(
     const std::optional<ContextUpdate> &captured,
     const std::optional<ContextWindow> &current);
 LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
                               bool escapeKey, bool hasLiveOwnedCandidate,
                               const PanelObservation &panel);
+LocalAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
+                            const PanelObservation &panel);
 std::optional<ContextWindow> captureContextWindow(std::string_view text,
                                                   std::size_t cursor,
                                                   std::size_t anchor,
@@ -115,9 +136,11 @@ std::optional<ContextWindow> captureContextWindow(std::string_view text,
 class SessionState {
 public:
     bool focusIn(std::string sessionId, std::string targetId,
-                 std::string appId, std::string fingerprintSalt);
+                 std::string appId, std::string fingerprintSalt,
+                 NativeEditTarget target = NativeEditTarget::DesktopApplication);
     void focusOut();
     void invalidateContext();
+    void denyEditing();
     std::optional<ContextUpdate> updateContext(ContextWindow context);
 
     bool showSuggestion(Suggestion suggestion, std::uint64_t nowMs);
@@ -126,12 +149,16 @@ public:
     std::optional<DismissRequest>
     requestDismissal(std::uint64_t nowMs, const PanelObservation &panel);
     std::optional<CommitDispatch> authorizeCommit(const CommitPrepare &prepare,
-                                                  std::uint64_t nowMs);
+                                                  std::uint64_t nowMs,
+                                                  const PanelObservation &panel);
     bool clearSuggestionIf(const Coordinates &coordinates,
                            const std::optional<std::string> &suggestionId);
     void clearSuggestion();
 
     [[nodiscard]] bool focused() const { return focused_; }
+    [[nodiscard]] bool editingAvailable() const {
+        return nativeEditingAvailable(appId_, editTarget_);
+    }
     [[nodiscard]] bool sensitive() const { return sensitive_; }
     [[nodiscard]] bool suggestionVisible() const { return visible_.has_value(); }
     [[nodiscard]] const Coordinates &coordinates() const { return coordinates_; }
@@ -148,6 +175,7 @@ private:
     std::string appId_;
     std::string targetId_;
     std::string fingerprintSalt_;
+    NativeEditTarget editTarget_ = NativeEditTarget::Unsupported;
     bool focused_ = false;
     bool sensitive_ = false;
     std::optional<ContextUpdate> lastContext_;

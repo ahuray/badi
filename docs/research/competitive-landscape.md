@@ -1,6 +1,317 @@
 # Badi competitive landscape
 
-Research snapshot: **2026-08-29**. This report asks a narrow question: what makes Cotypist compelling, which open-source projects are genuinely relevant, and what is still missing for a Linux-native ghostwriter that works in browsers, Obsidian, note apps, and terminal AI prompts?
+Original research snapshot: **2026-08-29**, with the primary-source update below
+on **2026-09-07**. Historical project activity counts and model descriptions in
+the original sections retain their snapshot date.
+
+## 2026-09-09: a prediction lab before another model switch
+
+The next useful deliverable is a local test workspace that separates the user's
+draft, surrounding context, explicit writing examples and expected continuation.
+Expected outputs are evaluator labels and must never enter generation prompts,
+retrieval indexes or personalization statistics. The workspace should expose
+the actual prompt, generated text, display rejection reason and timing, so a
+poor model choice can be distinguished from lost context, a token boundary
+problem or a deadline. UI polish and application coverage follow that evidence.
+
+This recommendation follows the rejected experiments in the
+[writing evaluation record](../../evaluation/writing/README.md). Production
+already uses prefix caching, a 160-scalar/current-sentence window and English
+partial-word healing. Neither a longer cold prompt, an instruction template,
+first-word delivery nor the tested smaller/larger alternatives established a
+better default. Repeating those comparisons without a new mechanism would add
+little information.
+
+### Primary-source findings
+
+- [Smart Compose's paper, sections 3 and 5](https://arxiv.org/pdf/1906.00080)
+  treats useful completion as contextual prediction plus selective triggering.
+  It compares predictions at matched coverage and combines its general model
+  with a lightweight personal n-gram model. These are precedents for a Badi
+  experiment; Google's email corpus, serving hardware and reported gains do not
+  transfer to this laptop.
+- [LaMP](https://aclanthology.org/2024.acl-long.399/) evaluates retrieval of
+  relevant writing from an explicit user profile for personalized generation.
+  Its tasks are not next-word typing. It supports testing a few relevant
+  examples against no examples and irrelevant examples, rather than assuming
+  that a large pasted biography improves completion.
+- [The ICML 2025 token-to-character paper](https://arxiv.org/html/2412.03719v2)
+  shows that trailing spaces and partial tokens can distort continuation.
+  Its full algorithm and token-healing baseline are distinct: backing up one
+  token is only a heuristic and can still fail. This identifies a measurable
+  boundary hypothesis, not a ready-made Badi quality improvement.
+- The pinned [llama.cpp b10726 server contract](https://github.com/ggml-org/llama.cpp/blob/b10726/tools/server/README.md)
+  describes common-prefix KV reuse, prompt-only evaluation with `n_predict: 0`,
+  explicit slots, token probabilities and per-token timing. The
+  [implementation](https://github.com/ggml-org/llama.cpp/blob/b10726/tools/server/server-context.cpp#L1953-L2075)
+  distinguishes raw-logit probabilities from sampling-chain probabilities and
+  attaches probability data to partial responses. Verify actual response
+  fields against this version. A high token probability is not a calibrated
+  chance that a human will find the word useful; forced healing echoes must
+  not count as newly predicted words.
+- Qwen publishes both [pretrained Qwen3-1.7B-Base](https://huggingface.co/Qwen/Qwen3-1.7B-Base)
+  and [post-trained Qwen3-1.7B](https://huggingface.co/Qwen/Qwen3-1.7B).
+  Model-card chat benchmarks do not decide which completes personal prose
+  better. The post-trained model's thinking-mode warning about greedy decoding
+  is not evidence that random sampling improves short, non-thinking
+  autocomplete. A same-size base comparison is lower priority than fixing the
+  observable input and evaluation loop.
+
+### Context reuse: source audit before implementation
+
+The b10726 tag resolves to commit
+`85c55223caf0a2ad0d1d88e5a73ab3fe36107867`. Its
+[timing serializer](https://github.com/ggml-org/llama.cpp/blob/85c55223caf0a2ad0d1d88e5a73ab3fe36107867/tools/server/server-common.cpp#L67-L79)
+reports `timings.cache_n` as reused prompt tokens and `timings.prompt_n` as newly
+processed prompt tokens. `tokens_cached` is final slot occupancy and cannot
+substitute for either. Experimental Lab streams now collect both optional
+terminal counters without enabling prose/debug logging; production-code modes
+leave reuse unavailable. Parsing/source verification is separate from measuring
+whether a particular priming operation actually reuses context.
+
+The installed binary confirms a contract discrepancy. The
+[request schema](https://github.com/ggml-org/llama.cpp/blob/85c55223caf0a2ad0d1d88e5a73ab3fe36107867/tools/server/server-schema.cpp#L44-L48)
+advertises zero generated tokens for `n_predict: 0`, while the
+[completion path](https://github.com/ggml-org/llama.cpp/blob/85c55223caf0a2ad0d1d88e5a73ab3fe36107867/tools/server/server-context.cpp#L3791-L3869)
+appears to sample before its prediction-budget check. The six-request fixed-input
+probe (`output/writing/2026-09-09-prefill-probe/`) observed one returned/generated
+token in every streaming and non-streaming request, while resolved `n_predict`
+remained zero. Both fresh runtime groups shut down and reaped with exit code zero.
+This is one-token priming, not prefill-only evaluation; a future warming experiment
+should explicitly request one token and discard it.
+
+The tiny cold prompt evaluated 14 new tokens with zero reuse. Its identical
+repeat reused 13 and evaluated one; the appended prompt reused 14 and evaluated
+one. Request time was 168–176 ms cold and 33–35 ms afterward, with approximately
+3.35 seconds of model startup reported separately. This confirms the counter
+semantics and reuse mechanism for those disposable prompts. It does not establish
+larger-context speed, cancellation recovery or typing latency.
+
+Any warming experiment must use only context already available at each typing
+event. Pace explicit development traces, keep one active job and one replaceable
+latest snapshot, and start the useful-result deadline at the latest typing event.
+Charge cancellation recovery, queueing, token preflight and generation against
+that deadline; report priming and first cold-request cost separately. Changed
+fields/context and explicit clearing must cancel and reap the owned runtime.
+Successful warm timing would demonstrate a Lab mechanism, not safe application
+editing or free context acquisition.
+
+The completed paced test now demonstrates that distinction: preparing context
+produced three eligible final continuations out of twelve traces, but blinded
+full-continuation review found only one useful and two contradicting supplied
+facts. Cold inference produced none. Six primed preludes exceeded 1,500 ms,
+including all four Persian traces. The frozen usefulness and harm gates both
+failed; see the [measured results](../../evaluation/writing/README.md#current-development-findings-2026-09-09).
+
+### Same-family Base checkpoint: a candidate comparison
+
+The next candidate tested was [Qwen3-1.7B-Base](https://huggingface.co/Qwen/Qwen3-1.7B-Base).
+Qwen's [technical report](https://arxiv.org/html/2505.09388v1#S4.SS5) describes
+distillation used in the smaller post-trained models. This supports testing a
+pretrained continuation checkpoint against the installed post-trained artifact;
+it does not establish that Base is better at autocomplete. Earlier smaller,
+larger, Qwen3.5 and template comparisons do not answer this specific question.
+
+The public [Base Q4_K_M artifact](https://huggingface.co/mradermacher/Qwen3-1.7B-Base-GGUF/tree/7b0494b4ddf6e7aa1ca2da0b2f398be382dd0ea8)
+was downloaded into private experiment storage and verified: 1,107,409,024 bytes,
+SHA-256 `8b5d946a169e62dd49444be8858c8a7f06067573de990b2bc19380d3a260b5fa`.
+The source card, Apache-2.0 license and pinned upstream configurations are saved
+under `output/writing/model-research/qwen3-17b-base/`. A real two-trial Lab smoke
+loaded this exact artifact with the existing runtime and verified both shutdowns;
+its cold trace exhausted a deadline, while the primed trace produced an eligible
+final result. This is load/lifecycle evidence, not a quality score.
+
+A read-only header inspection following the [GGUF specification](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md)
+found a material artifact difference: Base has 310 tensors and a Q6_K embedding
+with no separate output tensor; the installed 311-tensor artifact has Q4_K
+embeddings and separate Q6_K output weights. Actual GGUF token and merge arrays
+match byte-for-byte. Both GGUF files advertise EOS 151645, although the pinned
+Base upstream config specifies 151643. Preserve and test the actual metadata;
+do not silently rewrite it to fit the hypothesis. A practical comparison can
+choose a better artifact, but cannot attribute any gain solely to training stage.
+
+The matched 32-request development comparison has now completed. Full eligible
+continuation review found 8/16 useful Base outputs versus 6/16 for the installed
+artifact, with one harmful output each. This misses the frozen +3 gain and
+loses the installed artifact's one useful Persian output. All 16 paired actual
+payloads and prompts matched, and all owned processes were reaped. The exposed
+synthetic set has only two German cases and related boundary pairs; it cannot
+establish multilingual quality. See the [evaluation findings](../../evaluation/writing/README.md#current-development-findings-2026-09-09).
+
+The earlier instruction experiment has a separate implementation confound:
+instruction wrapping and exact boundary healing were mutually exclusive.
+Three of its sixteen outputs were rejected for a duplicated leading space;
+recovering those alone cannot explain the ten-point difference in the old
+first-word review. The opt-in combined mode subsequently passed a matched
+66-request development quality diagnostic: 18/22 useful full continuations
+versus 13/22 for healing alone and 6/22 for instructions alone. No language lost
+useful output and the candidate had no harmful output in blind agent review.
+Its cold median was 2.81 seconds, with no eligible terminal result within
+550 ms. Longer ChatML prompts still require a separate latency experiment;
+this five-second result does not warrant changing the default.
+
+A paired prepared-instruction experiment subsequently yielded 11/22 useful
+terminal results within 550 ms versus none cold, with one neutral and no harmful
+candidate results in blind agent review. It still failed the frozen 18-useful
+threshold. Median preparation cost was 1.40 seconds, excluding runtime startup;
+this was a readiness experiment on exposed synthetic cases, not paced typing.
+The improvement supports further latency work without qualifying promotion.
+
+### Multilingual word completion and correction
+
+Source inspection found that the shared proposal guard rejects every German or
+Persian letter-to-letter word completion; English uses its compiled lexicon.
+The small Lab experiment kept the model's Healed prompt unchanged and
+recovered only the first completed suffix when its exact whole word appeared in
+the explicitly supplied context or style. Case, diacritics and Persian joiners
+must match, with visible source-word boundaries. An unfinished pasted fragment,
+expected answer or earlier generated text cannot provide that evidence. This
+can reuse names and repeated terms, including mistakes already in the source;
+it is not dictionary spelling validation or proof of contextual relevance.
+Its 24-request comparison recovered two useful German words, below its frozen
++3 gain requirement, and did not improve Persian. Exact source-boundary checks
+passed, including negative controls; two repeated non-Persian legacy suggestions
+remained in both arms. The mechanism remains experimental.
+
+Removing inference entirely makes exact word reuse fast but does not resolve
+intent. A separate frozen 30-case English/German/Persian lookup test returned all
+12 expected completions, with every HTTP response below 36 ms including worker
+verification and cleanup. It also wrongly extended three completed words with
+other words from context, failing the zero-unwanted-offer gate. The result
+supports a manual word-completion workbench, not automatic semantic prediction
+or Cotypist parity. Requests, limits and measurements are recorded in the
+[writing evaluation](../../evaluation/writing/README.md).
+
+Spelling needs a separate language-aware implementation. Hunspell's
+[format contract](https://raw.githubusercontent.com/hunspell/hunspell/master/man/hunspell.5)
+uses paired dictionary/affix files with language-specific flags and encodings;
+words accepted as correctly spelled may still carry `NOSUGGEST`. The current
+English ASCII generator must not be generalized by merely widening its character
+filter. LibreOffice's [Persian Lilak notice](https://raw.githubusercontent.com/LibreOffice/dictionaries/master/fa_IR/README_fa_IR.txt)
+identifies an Apache-2.0 morphology-based dictionary. Its exact dictionary and
+affix behavior should be tested through the real engine before choosing a
+production validator or correction policy.
+An actual 48-word probe of the pinned pairs found all six authored typo
+references in each language's suggestion lists, but Persian ranked only three
+first. Unknown names and unfinished prefixes also attracted corrections, while
+some accepted words had `NOSUGGEST`. This supports a guarded correction
+experiment, with neither rank-one replacement nor spelling acceptance treated
+as sufficient authority.
+A later real HTTP40 correction test confirmed that limit: six useful reference
+matches and two unwanted changes, including an intentional name and a wrong
+nearby Persian word after the restricted candidate list excluded another option.
+All requests completed, but the frozen quality gate failed. Dictionary checks
+are fast enough for this Lab; contextual correctness and coverage remain open.
+
+### Three prioritized, falsifiable experiments
+
+1. **Repair the generation boundary without changing the draft.** Freeze paired
+   inputs whose only difference is a trailing ASCII space, plus partial words,
+   punctuation and Persian joiner cases. Compare the existing prompt with a
+   lab-only mode that removes a bounded trailing space suffix from the model
+   prompt, requires generation to reproduce those exact bytes, then strips the
+   echo once. Keep the original input for seam validation. Never silently trim
+   arbitrary whitespace or repair generated output to match the answer key.
+   Compare complete first-word agreement, blinded usefulness, abstentions,
+   rejected seams and latency. This is a cheap initial boundary experiment;
+   general tokenization marginalization remains a separate research problem.
+
+2. **Preserve useful context across realistic typing traces.** Freeze several
+   short documents with explicit contextual cues and a sequence of caret
+   prefixes for each. Compare current sentence-only prompting with one bounded,
+   structured context/prefix template, first cold and then through append-only
+   typing with a stable contextual prefix. Use the same model and decoding.
+   Charge all priming time and report the first request separately; prefill is
+   not free. Also exercise backspace, a changed context source, field switches
+   and cancellation. Record prompt tokens evaluated and reused, first-token and
+   first-complete-word time, useful output and suggestion churn. A laboratory
+   quality budget may be longer than 550 ms if clearly labeled; report which
+   outputs would meet the production budget as a separate measure. Warming is
+   worthwhile only if the additional context improves meaning and retains a
+   usable latency under these transitions.
+
+3. **Add narrow, explicit personalization and measure its tradeoff.** Start with
+   the user's voluntarily supplied writing examples, scoped by language and
+   writing task. Compare no profile, a bounded relevant example and an equal-
+   size irrelevant example. In a separate candidate-ranking experiment, compare
+   the LLM distribution with a small backoff n-gram distribution from those
+   examples, tuning the blend on development cases only. Keep facts in current
+   context authoritative: frequent personal names must not override a different
+   name or negation in the draft. Include those conflicts as negative controls.
+   Report same-coverage precision, useful words per request and latency, rather
+   than crediting more frequent familiar vocabulary as success. Do not train
+   on test answers or automatically collect writing from other applications.
+
+The lab should allow expected alternatives and an explicit “prefer no
+suggestion” case. Exact matching is a reproducible diagnostic, not a complete
+semantic judgment. Split whole documents and writing examples before evaluation
+so adjacent prefixes cannot leak from development into confirmation. Freeze
+profiles, prompts and randomized/counterbalanced run order; retain first cold
+requests, failed attempts and per-language results. A candidate becomes a
+production proposal only after new confirmation cases and actual user writing
+show a benefit. None of these research directions establishes Cotypist parity,
+screen-context acquisition or editing support in any application.
+
+## 2026-09-07: useful results before broader coverage
+
+The current research supports a focused Linux implementation, but does not
+establish that Badi matches Cotypist. Cotypist's public documentation describes
+behavior; no reproducible comparative quality or end-to-end latency measurement
+was available in the reviewed sources. A parity claim requires the same writing
+tasks on a named Cotypist version and Apple Silicon machine, alongside Badi's
+named Linux hardware and application versions.
+
+| Primary-source finding | Consequence for Badi |
+| --- | --- |
+| [Cotypist's tips](https://cotypist.app/help/tips) emphasize automatic updates while typing and the usefulness of accepting only the next word. Its [shortcut guide](https://cotypist.app/help/shortcuts) documents separate full acceptance and temporary quieting after Escape. | Automatic activation on proven fields, next-word acceptance and predictable dismissal belong in the first usable slice. A manual request followed by a separate accept is a different experience. |
+| The current [model menu](https://cotypist.app/pricing) includes Qwen3 1.7B and 4B, alongside Gemma choices. | The older Gemma-only/default-size description below is historical. Badi's current Qwen family is a plausible starting point; model choice alone does not explain a missing input path. |
+| The [compatibility matrix](https://cotypist.app/compatibility) excludes Ghostty, Kitty, Warp, Thunderbird and several custom editor surfaces. | Evaluate exact fields and application versions. Neither product has demonstrated literal universal application coverage. |
+| The [privacy page](https://cotypist.app/help/privacy) distinguishes local inference, optional screen/clipboard context, default-off writing recording, default-on anonymous telemetry, and occasional clipboard-assisted insertion. | Local inference does not imply zero networking or zero context collection. Badi can offer clearer acquisition policy, default-off telemetry and editor-owned insertion. |
+
+Implementation order, subject to actual failure evidence:
+
+1. Prove the installed input-to-insertion path in the user's real writing
+   surfaces. Show whether an adapter is connected, has fresh eligible input,
+   receives a suggestion, and can apply it with native undo. A ready model is
+   not evidence of usable input integration.
+2. Make automatic requests, word acceptance, cancellation and type-through
+   behavior dependable. Preserve focus, revision, policy, composition and
+   sensitive-field boundaries rather than weakening them for coverage.
+3. Freeze development and heldout examples before model tuning. Measure
+   abstention, errors, reference agreement and independently reviewed semantic
+   usefulness separately. Use [the writing evaluator](../../evaluation/writing/README.md)
+   for explicit synthetic real-broker requests; it does not measure UI latency
+   or actual user acceptance.
+4. Optimize the measured bottleneck. The [llama.cpp server contract](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
+   provides KV-prefix reuse and token probabilities. Verify the installed
+   runtime's schema before use; post-sampling certainty is not calibrated model
+   confidence. Compare existing prompting and at most a small set of justified
+   candidates on identical examples, recording cancellation and latency as well
+   as usefulness. Qwen publishes separate [base](https://huggingface.co/Qwen/Qwen3-1.7B-Base)
+   and [post-trained](https://huggingface.co/Qwen/Qwen3-1.7B) models; suitability
+   for short continuation is an experiment, not a model-card conclusion.
+5. Investigate first-word abstention and low-confidence tail trimming using
+   development data only. [Pretype's architecture](https://github.com/nikiomori/Pretype/blob/main/docs/ARCHITECTURE.md)
+   reports that ungated suggestions were net-negative in its evaluation and
+   describes calibrated gating. That is publisher-reported evidence: its linked
+   `Eval/BASELINE.md` returned 404 during this review, so its numerical results
+   were not reproduced or adopted as Badi thresholds.
+6. Expand through cooperative toolkit and editor APIs only after a useful
+   vertical slice. [Fcitx's integration documentation](https://fcitx-im.org/wiki/How_does_an_application_talk_to_Fcitx)
+   explains why toolkit, compositor and transport change available capabilities.
+   Exact browser/editor context is preferable where those applications expose
+   it. Unknown terminal/TUI editing authority remains a separate integration
+   problem.
+
+The engineering targets remain zero wrong-field or stale edits, native undo,
+and warm end-to-end p50 at most 250 ms / p95 at most 500 ms in the selected
+application cells. These are Badi targets, not measured Cotypist numbers.
+[Google's historical Smart Compose account](https://research.google/blog/smart-compose-using-neural-networks-to-help-write-emails/)
+identifies approximately 100 ms as the ideal per-keystroke response budget;
+500 ms is therefore a ceiling for this first local implementation rather than
+a reason to stop improving responsiveness. A larger suggestion count alone
+cannot demonstrate useful writing assistance. Positive typing benefit needs
+observed accept, dismiss and correction behavior from real writing trials.
 
 ## Executive verdict
 

@@ -47,6 +47,9 @@ cp -- "$artifact_dir/BadiClient.qml" "$harness_dir/BadiClient.qml"
 
 runtime_env=(
   env
+  # A desktop GTK theme plugin may require a live display even with offscreen Qt.
+  -u QT_QPA_PLATFORMTHEME
+  -u QT_STYLE_OVERRIDE
   "HOME=$test_root"
   "XDG_CONFIG_HOME=$test_root/config"
   "XDG_DATA_HOME=$test_root/data"
@@ -57,6 +60,7 @@ runtime_env=(
   "BADI_FAKE_SCENARIO=term-ignoring-mutation"
   "BADI_FAKE_CALL_LOG=$call_log"
   "BADI_FAKE_PID_LOG=$pid_log"
+  "BADI_FAKE_HOLD_OVERVIEW=$test_root/hold-overview"
   "QT_QPA_PLATFORM=offscreen"
   "NO_COLOR=1"
 )
@@ -207,6 +211,18 @@ wait_for_call_count 7
 state=$(ipc state)
 [[ $(jq -r '.active' <<<"$state") == true ]]
 [[ $(jq -r '.refreshQueued' <<<"$state") == false ]]
+
+touch "$test_root/hold-overview"
+ipc refresh >/dev/null
+wait_for_call_count 8
+state=$(ipc state)
+jq -e '.loading and .canMutateSettings and .settingsDocumentValid' <<<"$state" >/dev/null
+rm -- "$test_root/hold-overview"
+ipc blockTarget >/dev/null
+wait_for_call_count 10
+wait_until_idle
+state=$(ipc state)
+jq -e '.canMutateSettings and (.message | contains("durably blocked"))' <<<"$state" >/dev/null
 
 ipc deactivate >/dev/null
 

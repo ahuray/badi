@@ -6,9 +6,17 @@
   "author": "Badi contributors",
   "description": "Privacy and runtime controls for the local Badi broker",
   "kinds": [
-    "panel"
+    "panel",
+    "bar-widget"
   ],
   "entryPoints": {
-    "panel": "Panel.qml"
+    "panel": "Panel.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Badi",
+    "description": "Local writing predictions and settings",
+    "category": "Utilities",
+    "allowMultiple": false
   }
 }

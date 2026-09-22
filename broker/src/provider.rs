@@ -33,11 +33,38 @@ pub enum ProviderError {
 pub trait CompletionProvider: Send + Sync + 'static {
     fn kind(&self) -> ProviderKind;
 
+    /// Whether this provider's owned resources can still serve requests.
+    /// A false result is terminal: the broker shuts down without replaying work.
+    fn is_alive(&self) -> bool {
+        true
+    }
+
     async fn complete(
         &self,
         request: ProviderRequest,
         cancellation: CancellationToken,
     ) -> Result<Option<String>, ProviderError>;
+
+    async fn propose(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        _allow_replacement: bool,
+    ) -> Result<Option<WritingProposal>, ProviderError> {
+        self.complete(request, cancellation).await.map(|output| {
+            output.map(|text| WritingProposal {
+                text,
+                replace_before: None,
+            })
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WritingProposal {
+    pub text: String,
+    /// Exact suffix of the guarded context to replace; absent for insertions.
+    pub replace_before: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -95,10 +122,8 @@ impl CompletionProvider for DeterministicPhraseProvider {
         if cancellation.is_cancelled() {
             return Err(ProviderError::Cancelled);
         }
-        // This lane is only a deterministic integration probe. It deliberately
-        // abstains unless the caret is at the end, the language is compatible
-        // with its English rules, and the complete trimmed context is an exact
-        // trigger. Semantic suffix completion belongs to a qualified model.
+        // Exact English triggers keep this deterministic integration provider
+        // separate from model-backed writing inference.
         let Some(language) = request.language.as_deref() else {
             return Ok(None);
         };

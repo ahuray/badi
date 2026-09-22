@@ -7,6 +7,8 @@ find_package(Fcitx5Core 5.1 REQUIRED)
 find_package(nlohmann_json 3.11 REQUIRED)
 
 add_library(badi-fcitx5-core STATIC
+    src/accessibility.cpp
+    src/debug.cpp
     src/sanitizer.cpp
     src/state.cpp
     src/transport.cpp
@@ -30,9 +32,30 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/badi.conf"
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(badi-fcitx5-replacement-tests tests/replacement.cpp)
+    target_compile_features(badi-fcitx5-replacement-tests PRIVATE cxx_std_20)
+    target_link_libraries(badi-fcitx5-replacement-tests PRIVATE badi-fcitx5-core)
+    target_compile_options(badi-fcitx5-replacement-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME badi-fcitx5-replacement-tests COMMAND badi-fcitx5-replacement-tests)
+    add_executable(badi-fcitx5-accessibility-tests tests/accessibility.cpp)
+    target_compile_features(badi-fcitx5-accessibility-tests PRIVATE cxx_std_20)
+    target_link_libraries(badi-fcitx5-accessibility-tests PRIVATE badi-fcitx5-core)
+    target_compile_options(badi-fcitx5-accessibility-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME badi-fcitx5-accessibility-tests COMMAND badi-fcitx5-accessibility-tests)
+    add_executable(badi-fcitx5-debug-tests tests/debug.cpp)
+    target_compile_features(badi-fcitx5-debug-tests PRIVATE cxx_std_20)
+    target_link_libraries(badi-fcitx5-debug-tests PRIVATE badi-fcitx5-core)
+    target_compile_options(badi-fcitx5-debug-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME badi-fcitx5-debug-tests COMMAND badi-fcitx5-debug-tests)
     add_executable(badi-fcitx5-tests tests/tests.cpp)
     target_compile_features(badi-fcitx5-tests PRIVATE cxx_std_20)
     target_link_libraries(badi-fcitx5-tests PRIVATE badi-fcitx5-core)
     target_compile_options(badi-fcitx5-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
-    add_test(NAME badi-fcitx5-tests COMMAND badi-fcitx5-tests)
+    add_test(NAME badi-fcitx5-tests COMMAND badi-fcitx5-tests
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../protocol/orthographic-joiner-fixtures.json")
+
+    add_executable(badi-fcitx5-broker-smoke tests/broker-smoke.cpp)
+    target_compile_features(badi-fcitx5-broker-smoke PRIVATE cxx_std_20)
+    target_link_libraries(badi-fcitx5-broker-smoke PRIVATE badi-fcitx5-core)
+    target_compile_options(badi-fcitx5-broker-smoke PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()

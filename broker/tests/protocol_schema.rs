@@ -73,6 +73,40 @@ fn decode<T: DeserializeOwned>(envelope: &WireEnvelope) -> T {
     envelope.decode_payload().expect("typed payload")
 }
 
+#[test]
+fn contextual_persian_joiners_match_both_wire_schemas_and_rust() {
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../protocol/orthographic-joiner-fixtures.json"
+    ))
+    .expect("orthographic fixtures");
+    for root in [protocol_root(), protocol_v2_root()] {
+        let schema = rust_scalar_schema(
+            serde_json::from_str(
+                &fs::read_to_string(root.join("schema.json")).expect("wire schema"),
+            )
+            .expect("wire schema JSON"),
+        );
+        let validator = jsonschema::validator_for(&schema["$defs"]["safeSuggestionText"])
+            .expect("safe output schema");
+        for fixture in fixtures["fixtures"].as_array().expect("fixtures") {
+            let text = fixture["text"].as_str().expect("fixture text");
+            let valid = fixture["valid"].as_bool().expect("fixture verdict");
+            assert_eq!(
+                sanitize_suggestion(text).is_ok(),
+                valid,
+                "Rust {}",
+                fixture["name"]
+            );
+            assert_eq!(
+                validator.is_valid(&fixture["text"]),
+                valid,
+                "schema {}",
+                fixture["name"]
+            );
+        }
+    }
+}
+
 // One exhaustive match keeps Rust decoding coverage visibly aligned with the
 // protocol schema's complete message enum.
 #[allow(clippy::too_many_lines)]
@@ -106,11 +140,19 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         }
         MessageType::SuggestionShow => {
             let payload: SuggestionShowPayload = decode(envelope);
-            assert_eq!(
-                sanitize_suggestion(&payload.text).expect("safe suggestion"),
-                payload.text
-            );
-            assert_eq!(accept_word(&payload.text).accepted, payload.accept_word);
+            if let Some(original) = payload.replace_before.as_deref() {
+                assert!(badi_broker::protocol::valid_spelling_replacement(
+                    original,
+                    &payload.text
+                ));
+                assert_eq!(payload.text, payload.accept_word);
+            } else {
+                assert_eq!(
+                    sanitize_suggestion(&payload.text).expect("safe suggestion"),
+                    payload.text
+                );
+                assert_eq!(accept_word(&payload.text).accepted, payload.accept_word);
+            }
             assert!(valid_opaque_id(&payload.suggestion_id));
         }
         MessageType::SuggestionClear => {
@@ -141,10 +183,17 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         }
         MessageType::CommitPrepare => {
             let payload: CommitPreparePayload = decode(envelope);
-            assert_eq!(
-                sanitize_suggestion(&payload.text).expect("safe commit text"),
-                payload.text
-            );
+            if let Some(original) = payload.replace_before.as_deref() {
+                assert!(badi_broker::protocol::valid_spelling_replacement(
+                    original,
+                    &payload.text
+                ));
+            } else {
+                assert_eq!(
+                    sanitize_suggestion(&payload.text).expect("safe commit text"),
+                    payload.text
+                );
+            }
         }
         MessageType::CommitResult => decode::<CommitResultPayload>(envelope)
             .validate()
@@ -277,6 +326,57 @@ fn every_v2_fixture_matches_schema_and_versioned_rust_contracts() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn only_negotiated_spelling_payloads_may_preserve_a_trailing_space() {
+    let root = protocol_v2_root();
+    let schema = rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(root.join("schema.json")).expect("v2 schema file"),
+        )
+        .expect("v2 schema JSON"),
+    );
+    let validator = jsonschema::validator_for(&schema).expect("v2 schema compiles");
+    for filename in [
+        "suggestion_show_spelling_space.json",
+        "commit_prepare_spelling_space.json",
+    ] {
+        let fixture: Value = serde_json::from_str(
+            &fs::read_to_string(root.join("examples/valid").join(filename)).expect("fixture"),
+        )
+        .expect("fixture JSON");
+        assert!(validator.is_valid(&fixture));
+        for (original, corrected) in [
+            ("teh ", "the"),
+            ("teh", "the "),
+            ("teh  ", "the  "),
+            ("teh\n", "the\n"),
+            ("teh\t", "the\t"),
+            ("teh\u{00a0}", "the\u{00a0}"),
+            ("teh.", "the."),
+        ] {
+            let mut invalid = fixture.clone();
+            invalid["payload"]["replace_before"] = original.into();
+            invalid["payload"]["text"] = corrected.into();
+            if invalid["payload"].get("accept_word").is_some() {
+                invalid["payload"]["accept_word"] = corrected.into();
+            }
+            assert!(
+                !validator.is_valid(&invalid),
+                "{filename}: {original:?} -> {corrected:?}"
+            );
+        }
+        let mut continuation = fixture;
+        continuation["payload"]
+            .as_object_mut()
+            .expect("payload")
+            .remove("replace_before");
+        assert!(
+            !validator.is_valid(&continuation),
+            "ordinary continuation still rejects trailing space"
+        );
     }
 }
 

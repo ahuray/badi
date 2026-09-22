@@ -29,6 +29,18 @@ const applyCommand = {
 } as const;
 
 describe("product bridge messages", () => {
+  it("keeps correction spacing bound to its exact snapshot suffix", () => {
+    const command = { ...applyCommand,
+      expected: { ...applyCommand.expected, before: "This is teh ", valueLength: 12, offset: 12, column: 13 },
+      authorization: { ...applyCommand.authorization, text: "the ", replaceBefore: "teh " },
+    };
+    expect(isProductBridgeCommand(command)).toBe(true);
+    for (const text of ["the", "the  ", "the\n", "teh "]) {
+      expect(isProductBridgeCommand({ ...command, authorization: { ...command.authorization, text } })).toBe(false);
+    }
+    expect(isProductBridgeCommand({ ...command, expected: { ...command.expected, before: "Thisisteh " } })).toBe(false);
+    expect(isProductBridgeCommand({ ...command, expected: { ...command.expected, after: "next" } })).toBe(false);
+  });
   it("requires the complete exact all-acceptance authorization at apply", () => {
     expect(isProductBridgeCommand(applyCommand)).toBe(true);
     expect(

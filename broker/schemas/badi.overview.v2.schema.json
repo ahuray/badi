@@ -148,7 +148,7 @@
       ],
       "properties": {
         "id": { "type": "string" },
-        "adapter": { "enum": ["chromium", "fcitx"] },
+        "adapter": { "enum": ["chromium", "fcitx", "obsidian", "shell"] },
         "application": { "type": "string" },
         "application_version": { "type": ["string", "null"] },
         "toolkit": { "type": "string" },
@@ -194,7 +194,7 @@
         {
           "properties": {
             "id": { "const": "omawrite_0_5_0_qt6" },
-            "adapter": { "const": "fcitx" },
+            "adapter": { "enum": ["fcitx", "obsidian", "shell"] },
             "application": { "const": "Omawrite" },
             "application_version": { "const": "0.5.0" },
             "toolkit": { "const": "qt6" },
@@ -213,7 +213,7 @@
         {
           "properties": {
             "id": { "const": "xournalpp_1_3_7_gtk3_text_tool" },
-            "adapter": { "const": "fcitx" },
+            "adapter": { "enum": ["fcitx", "obsidian", "shell"] },
             "application": { "const": "Xournal++" },
             "application_version": { "const": "1.3.7" },
             "toolkit": { "const": "gtk3" },
@@ -237,8 +237,8 @@
           "required": ["advice", "configured", "installed"],
           "properties": {
             "advice": { "$ref": "urn:badi:schema:model-advice:v2" },
-            "configured": { "const": false },
-            "installed": { "const": false }
+            "configured": { "type": "boolean" },
+            "installed": { "type": "boolean" }
           }
         }
       }

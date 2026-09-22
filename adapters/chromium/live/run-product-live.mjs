@@ -29,12 +29,14 @@ const extensionId = "ckkiehcjbclcjckkkajohopoikeejkoa";
 const extensionOrigin = `chrome-extension://${extensionId}/`;
 const extensionWorkerUrl = `${extensionOrigin}product-service-worker.js`;
 const dillingerUrl = "https://dillinger.io/";
-const trigger = "thank you";
-const completion = " for your time";
-const brokerBinary = join(repositoryRoot, "target/debug/badi-broker");
-const nativeHostBinary = join(repositoryRoot, "target/debug/badi-native-host");
-const nativeManifestBinary = join(repositoryRoot, "target/debug/badi-native-manifest");
-const cliBinary = join(repositoryRoot, "target/debug/badictl");
+let trigger = "thank you";
+let replaceBefore = "";
+let completion = " for your time";
+const buildProfile = process.argv.includes("--writing-case") ? "release" : "debug";
+const brokerBinary = join(repositoryRoot, `target/${buildProfile}/badi-broker`);
+const nativeHostBinary = join(repositoryRoot, `target/${buildProfile}/badi-native-host`);
+const nativeManifestBinary = join(repositoryRoot, `target/${buildProfile}/badi-native-manifest`);
+const cliBinary = join(repositoryRoot, `target/${buildProfile}/badictl`);
 let receivedSignal = null;
 
 class ProductLiveStageError extends Error {
@@ -93,6 +95,8 @@ function check(condition, message) {
 function parseArguments(values) {
   const parsed = {
     chromiumExecutable: null,
+    writingCase: null,
+    modelDirectory: null,
     headless: false,
     interactive: false,
     permissionTimeoutMs: 60_000,
@@ -100,6 +104,18 @@ function parseArguments(values) {
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
     const next = values[index + 1];
+    if (value === "--writing-case") {
+      if (!["completion", "correction"].includes(next)) throw new Error("Expected completion or correction");
+      parsed.writingCase = next;
+      index += 1;
+      continue;
+    }
+    if (value === "--model-directory") {
+      if (next === undefined || !isAbsolute(next)) throw new Error("Expected absolute model directory");
+      parsed.modelDirectory = next;
+      index += 1;
+      continue;
+    }
     if (value === "--headless") {
       parsed.headless = true;
       continue;
@@ -131,6 +147,9 @@ function parseArguments(values) {
   }
   if (parsed.headless && parsed.interactive) {
     throw new Error("--interactive requires headed Chromium");
+  }
+  if (parsed.writingCase !== null && (parsed.modelDirectory === null || parsed.interactive)) {
+    throw new Error("Writing smoke needs --model-directory and scripted mode");
   }
   return parsed;
 }
@@ -546,6 +565,14 @@ function assertEditorInvariant(state, value, offset, label) {
 
 async function main() {
   const settings = parseArguments(process.argv.slice(2));
+  if (settings.writingCase === "completion") {
+    trigger = "Please find attached the";
+    completion = " latest version of the";
+  } else if (settings.writingCase === "correction") {
+    trigger = "This is teh";
+    replaceBefore = "teh";
+    completion = "the";
+  }
   const chromiumExecutable = await resolveChromiumExecutable(settings.chromiumExecutable);
   const lifecycle = createBrowserLifecycle();
   const stage = { name: "build", action: "Resolve the first product build error before retrying." };
@@ -572,6 +599,7 @@ async function main() {
       "cargo",
       [
         "build",
+        ...(buildProfile === "release" ? ["--release"] : []),
         "--bin",
         "badi-broker",
         "--bin",
@@ -622,12 +650,13 @@ async function main() {
       XDG_CACHE_HOME: xdgCache,
       XDG_RUNTIME_DIR: runtime,
     };
-    broker = spawn(brokerBinary, ["--socket", socketPath], {
+    broker = spawn(brokerBinary, ["--provider", settings.writingCase === null ? "phrase" : "local", "--socket", socketPath,
+      ...(settings.writingCase === null ? [] : ["--model-directory", settings.modelDirectory])], {
       cwd: repositoryRoot,
       env: isolatedEnv,
       stdio: ["ignore", "ignore", "ignore"],
     });
-    await waitFor("private broker socket", () => exists(socketPath));
+    await waitFor("private broker socket", () => exists(socketPath), 60_000);
     await grantDillingerPolicy(socketPath, isolatedEnv);
 
     enterStage("browser-startup", "Verify Chromium can launch a disposable profile.");
@@ -788,7 +817,7 @@ async function main() {
       try {
         assertEditorInvariant(
           interactiveState,
-          trigger + completion,
+          trigger.slice(0, trigger.length - replaceBefore.length) + completion,
           trigger.length + completion.length,
           "interactive acceptance",
         );
@@ -879,7 +908,7 @@ async function main() {
         acceptanceControl?.armed === true,
         "The extension-owned acceptance control did not arm the visible Dillinger suggestion",
       );
-      const acceptedValue = trigger + completion;
+      const acceptedValue = trigger.slice(0, trigger.length - replaceBefore.length) + completion;
       await dillingerPage.waitForFunction(
         (expected) => globalThis.monaco.editor.getModels()[0]?.getValue() === expected,
         acceptedValue,
@@ -925,7 +954,7 @@ async function main() {
       );
       check(
         statusAfter.metrics.provider_calls > statusBefore.metrics.provider_calls,
-        "The real phrase_v1 provider was not reached",
+        "The real selected provider was not reached",
       );
       const productDiagnostics = browserDiagnostics.filter(({ scope }) => scope !== "dillinger");
       check(
@@ -958,7 +987,7 @@ async function main() {
             statusAfter.metrics.provider_calls - statusBefore.metrics.provider_calls,
         },
         transaction: {
-          phrase_case: "phrase_v1.thank-you",
+          writing_case: settings.writingCase ?? "phrase_v1.thank-you",
           acceptance_trigger: "extension-owned-content-control",
           browser_shortcut_registration_verified: true,
           accepted_exact_expected_output: acceptedExactExpectedOutput,

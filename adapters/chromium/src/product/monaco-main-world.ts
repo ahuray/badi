@@ -146,12 +146,23 @@ export function readDillingerMonacoSnapshotInMainWorld(): MonacoSnapshot | null 
 export function applyDillingerMonacoEditInMainWorld(
   expected: MonacoSnapshotGuard,
   text: string,
+  replaceBefore = "",
 ): boolean {
   if (
     globalThis.location.href !== "https://dillinger.io/" ||
     globalThis.document.visibilityState !== "visible" ||
     !globalThis.document.hasFocus() ||
-    text.length === 0
+    text.length === 0 ||
+    (replaceBefore !== "" && (!/^[a-z]{3,24} ?$/u.test(replaceBefore)
+      || !/^[a-z]{3,24} ?$/u.test(text)
+      || /[^a-z ]/u.test(replaceBefore + text)
+      || replaceBefore === text
+      || replaceBefore.endsWith(" ") !== text.endsWith(" ")
+      || !expected.before.endsWith(replaceBefore)
+      || (expected.before.length > replaceBefore.length &&
+        !/\s/u.test(expected.before[expected.before.length - replaceBefore.length - 1] ?? ""))
+      || expected.column <= replaceBefore.length
+      || expected.after !== ""))
   ) {
     return false;
   }
@@ -236,10 +247,10 @@ export function applyDillingerMonacoEditInMainWorld(
 
   const originalValue = value;
   const expectedValue =
-    originalValue.slice(0, expected.offset) + text + originalValue.slice(expected.offset);
+    originalValue.slice(0, expected.offset - replaceBefore.length) + text + originalValue.slice(expected.offset);
   const range = new Range(
     expected.lineNumber,
-    expected.column,
+    expected.column - replaceBefore.length,
     expected.lineNumber,
     expected.column,
   );

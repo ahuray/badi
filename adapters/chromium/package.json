@@ -17,7 +17,9 @@
     "live:smoke": "node live/run-live.mjs --smoke",
     "live": "node live/run-live.mjs",
     "live:product": "node live/run-product-live.mjs",
-    "live:product:probe": "node live/run-product-monaco-proof.mjs"
+    "live:product:probe": "node live/run-product-monaco-proof.mjs",
+    "build:web": "node scripts/build.mjs --web",
+    "live:web": "node live/run-web-live.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.2.7",

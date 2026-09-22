@@ -9,6 +9,10 @@ if [[ -n ${BADI_FAKE_CALL_LOG:-} ]]; then
 fi
 
 if [[ ${1:-} == overview && ${2:-} == --json ]]; then
+  if [[ -n ${BADI_FAKE_HOLD_OVERVIEW:-} && -f $BADI_FAKE_HOLD_OVERVIEW ]]; then
+    trap '' TERM
+    exec sleep 300
+  fi
   case "$scenario" in
   term-ignoring)
     trap '' TERM

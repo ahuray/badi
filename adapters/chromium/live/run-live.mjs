@@ -480,27 +480,35 @@ async function waitForExtensionWorker(context) {
 
 async function focusFixtureWindow(worker) {
   const deadline = Date.now() + 5_000;
+  let observation = null;
   while (Date.now() < deadline) {
-    const focused = await worker.evaluate(async (expectedUrl) => {
-      const tabs = await chrome.tabs.query({});
-      const tab = tabs.find((candidate) => candidate.url === expectedUrl);
-      if (tab?.id === undefined || tab.windowId === undefined) return false;
+    observation = await worker.evaluate(async () => {
+      // openFixture owns this isolated browser and has just brought its exact
+      // Playwright page forward. The least-privilege fixture manifest does not
+      // grant tabs/host permissions, so tabs.query deliberately omits URLs.
+      const tabs = await chrome.tabs.query({ active: true });
+      const tab = tabs[0];
+      if (tabs.length !== 1 || tab?.id === undefined || tab.windowId === undefined) {
+        return { activeTabs: tabs.length, focused: false };
+      }
       await chrome.tabs.update(tab.id, { active: true });
       await chrome.windows.update(tab.windowId, { focused: true });
-      return (await chrome.windows.get(tab.windowId)).focused === true;
-    }, fixtureUrl);
-    if (focused) return;
+      return { activeTabs: 1, focused: (await chrome.windows.get(tab.windowId)).focused === true };
+    });
+    if (observation.focused === true) return;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
   }
-  throw new Error("Chromium did not focus the isolated fixture window");
+  throw new Error(`Chromium did not focus the isolated fixture window: ${JSON.stringify(observation)}`);
 }
 
 async function openFixture(context, worker) {
   const page = await context.newPage();
   await page.goto(fixtureUrl, { waitUntil: "load" });
   await page.waitForFunction(() => typeof window.__badiLive === "object");
+  check(page.url() === fixtureUrl, "Fixture navigated away before window focus");
   await page.bringToFront();
   await focusFixtureWindow(worker);
+  check(page.url() === fixtureUrl, "Fixture navigated away during window focus");
   check(await page.evaluate(() => document.hasFocus()), "Fixture document is not focused");
   return page;
 }
@@ -1044,6 +1052,7 @@ async function runRealChain({
   );
 
   const navigationCases = scenarioDefinition("lifecycle.navigation").cases;
+  setStep("real.navigation");
   await setupDraft(page, navigationCases[0].trigger);
   await waitForGhost(page);
   await page.goto("http://localhost:4173/blank.html", { waitUntil: "load" });
@@ -1066,6 +1075,7 @@ async function runRealChain({
   const authoritativePauseCases = scenarioDefinition(
     "control.pause-authoritative",
   ).cases;
+  setStep("real.authoritative-pause-resume");
   await setupDraft(page, authoritativePauseCases[0].trigger);
   await waitForGhost(page);
   await command(cliBinary, ["--socket", socketPath, "pause", "on"], { env: brokerEnv });
@@ -1098,6 +1108,7 @@ async function runRealChain({
   );
 
   const pauseShortcutCases = scenarioDefinition("control.pause-shortcut").cases;
+  setStep("real.pause-shortcut");
   await setupDraft(page, pauseShortcutCases[0].trigger);
   await waitForGhost(page);
   await page.keyboard.press("Alt+Shift+P");
@@ -1274,7 +1285,11 @@ async function runRealChain({
   const disconnectStart = disconnectEvents.find(
     (event) => event.type === "fixture.mark" && event.label === "disconnect-start",
   );
-  const disconnectHidden = disconnectEvents.find((event) => event.type === "ghost.hidden");
+  // Disconnect disposes the controller and removes its host. Removal is an
+  // observed clearing endpoint too; retain the same sub-TTL deadline below.
+  const disconnectHidden = disconnectEvents.find(
+    (event) => event.type === "ghost.hidden" || event.type === "ghost.missing",
+  );
   check(disconnectStart && disconnectHidden, "Disconnect endpoints were not observed");
   check(
     disconnectHidden.at_ms - disconnectStart.at_ms <= 250,
@@ -1341,8 +1356,11 @@ async function runFaultHostRace({
     runtime,
     extraEnv: {
       BADI_LIVE_HOST_LOG: hostLog,
-      BADI_LIVE_STALE_DELAY_MS: "500",
-      BADI_LIVE_LATEST_DELAY_MS: "800",
+      // Both response ages stay below the controller's 600 ms generation
+      // deadline (including debounce). Stale replies must be rejected because
+      // they were superseded, not merely because every response expired.
+      BADI_LIVE_STALE_DELAY_MS: "250",
+      BADI_LIVE_LATEST_DELAY_MS: "400",
     },
   });
   let hostPids = [];
@@ -1351,6 +1369,9 @@ async function runFaultHostRace({
     const faultCases = scenarioDefinition("race.stale-100").cases;
     const worker = await waitForExtensionWorker(context);
     const page = await openFixture(context, worker);
+    // Establish policy/authority before counting requests in the race.
+    await setupDraft(page, "thank you");
+    await waitForGhost(page);
     await page.evaluate(async ({ trials, gap, staleTrigger, latestTrigger }) => {
       const api = window.__badiLive;
       const field = document.querySelector("#draft");
@@ -1371,7 +1392,7 @@ async function runFaultHostRace({
       staleTrigger: faultCases[0].trigger,
       latestTrigger: faultCases[1].trigger,
     });
-    await page.waitForTimeout(575);
+    await page.waitForTimeout(275);
     const staleWindowEvents = await fixtureEvents(page);
     const complete = staleWindowEvents.find(
       (event) => event.type === "fixture.mark" && event.label === "inputs-complete",
@@ -1379,7 +1400,7 @@ async function runFaultHostRace({
     check(complete, "Fault-host race completion marker missing");
     const earlyVisible = staleWindowEvents.filter(
       (event) =>
-        event.type === "ghost.visible" && event.at_ms < complete.at_ms + 575,
+        event.type === "ghost.visible" && event.at_ms < complete.at_ms + 275,
     );
     check(earlyVisible.length === 0, "A delayed stale response became visible");
     await waitForGhost(page, 2_000);
@@ -1430,6 +1451,14 @@ async function runFaultHostRace({
         "A separately labeled fault host returned every delayed response after supersession; none of the stale results displayed or inserted, and only the latest remained eligible.",
       ),
     );
+  } catch (error) {
+    if (await exists(hostLog)) {
+      // The fault host records event types/counters only, never context text.
+      await writeFile(join(diagnosticRoot, "fault-host-events.jsonl"), await readFile(hostLog), {
+        mode: 0o600,
+      });
+    }
+    throw error;
   } finally {
     await context.close();
   }
@@ -1590,7 +1619,7 @@ async function main() {
       XDG_CACHE_HOME: xdgCache,
       XDG_RUNTIME_DIR: runtime,
     };
-    broker = spawn(brokerBinary, ["--socket", socketPath], {
+    broker = spawn(brokerBinary, ["--provider", "phrase", "--socket", socketPath], {
       cwd: repositoryRoot,
       env: brokerEnv,
       stdio: ["ignore", "ignore", "ignore"],

@@ -27,6 +27,7 @@ fn assert_graceful_shutdown(signal: Signal) {
     let config_home = directory.path().join("xdg-config");
     let data_home = directory.path().join("xdg-data");
     let child = Command::new(env!("CARGO_BIN_EXE_badi-broker"))
+        .args(["--provider", "phrase"])
         .arg("--socket")
         .arg(&socket_path)
         .env("XDG_CONFIG_HOME", &config_home)

@@ -43,6 +43,8 @@ pub enum BrowserAdapter {
 #[serde(rename_all = "snake_case")]
 pub enum LinuxAdapter {
     Fcitx,
+    Obsidian,
+    Shell,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -122,6 +124,12 @@ impl StableIdentity {
             }
             TargetKind::DesktopApplication if target.origin.is_none() => {
                 Self::linux_app(LinuxAdapter::Fcitx, &target.app_id)
+            }
+            TargetKind::Obsidian if target.origin.is_none() && target.app_id == "obsidian" => {
+                Self::linux_app(LinuxAdapter::Obsidian, &target.app_id)
+            }
+            TargetKind::Terminal if target.origin.is_none() && target.app_id == "bash" => {
+                Self::linux_app(LinuxAdapter::Shell, &target.app_id)
             }
             _ => Err(IdentityError::UnsupportedTarget),
         }
@@ -1327,6 +1335,34 @@ mod tests {
             port: None,
         });
         assert!(StableIdentity::from_target(&with_origin).is_err());
+    }
+
+    #[test]
+    fn editor_targets_require_their_exact_adapter_identity() {
+        for (kind, adapter, app) in [
+            (TargetKind::Obsidian, LinuxAdapter::Obsidian, "obsidian"),
+            (TargetKind::Terminal, LinuxAdapter::Shell, "bash"),
+        ] {
+            let mut target = TargetDescriptor {
+                kind,
+                app_id: app.to_owned(),
+                target_id: "buffer".to_owned(),
+                origin: None,
+            };
+            assert_eq!(
+                StableIdentity::from_target(&target).unwrap(),
+                StableIdentity::linux_app(adapter, app).unwrap()
+            );
+            target.app_id = "other".to_owned();
+            assert!(StableIdentity::from_target(&target).is_err());
+            target.app_id = app.to_owned();
+            target.origin = Some(Origin {
+                scheme: OriginScheme::Https,
+                host: "example.com".to_owned(),
+                port: None,
+            });
+            assert!(StableIdentity::from_target(&target).is_err());
+        }
     }
 
     #[test]

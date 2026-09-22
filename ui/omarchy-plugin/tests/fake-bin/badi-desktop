@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# The bar widget polls independently of the legacy panel exercised by this
+# harness. Keep its bounded healthy fixture and call log separate so panel
+# cancellation assertions count only the panel's own requests.
+case "$*" in
+  'service status')
+    printf '%s\n' '{"autostart":false,"active":"active","state":"running"}'
+    ;;
+  'ctl overview --json')
+    fixture_dir=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)
+    BADI_FAKE_SCENARIO=healthy BADI_FAKE_CALL_LOG=${BADI_FAKE_DESKTOP_CALL_LOG:?} \
+      BADI_FAKE_PID_LOG='' BADI_FAKE_HOLD_OVERVIEW='' \
+      exec "$fixture_dir/badictl" overview --json
+    ;;
+  *)
+    echo 'isolated desktop fixture: unsupported command' >&2
+    exit 64
+    ;;
+esac

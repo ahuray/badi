@@ -1,0 +1,11 @@
+.badi-inline {
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+  border-bottom: 1px dotted var(--interactive-accent);
+  border-radius: 3px;
+  white-space: pre;
+  pointer-events: none;
+}
+@media (prefers-contrast: more) {
+  .badi-inline { color: var(--text-normal); border-bottom-style: solid; }
+}

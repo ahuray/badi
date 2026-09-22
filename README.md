@@ -1,244 +1,174 @@
 # Badi
 
-Badi (`بعدی`, Persian for “next”) is a capability-aware, local-first writing
-assistant for Linux. It offers one short, revision-bound continuation only when
-an adapter can read, display, and edit through a tested target API. Unsupported
-is a valid result; raw global input capture, clipboard insertion, and synthetic
-typing are outside the architecture.
+Badi (`بعدی`, “next”) is a local writing assistant for Linux, starting with
+Omarchy/Hyprland. It uses a verified local LLM to suggest up to four words,
+with guarded, explicit acceptance. This is pre-release software.
 
-> **Naming boundary:** an unrelated
-> [AI workflow CLI](https://github.com/fatihkan/badi) already uses the `badi`
-> command, so this project uses `badictl` and the owned
-> `io.github.ahuray.badi` native identity. Public package and trademark
-> clearance remains a release decision.
+## Current coverage
 
-## Current state
+| Surface | Implemented behavior | Remaining boundary |
+| --- | --- | --- |
+| Omawrite / Xournal++ Text tool | Fcitx candidate; Tab request/accept; Escape dismiss | Exact tested native cells; English continuation |
+| Dillinger in Chromium | Monaco ghost text, append and narrow spelling correction | Separate opt-in product extension |
+| Obsidian desktop | CodeMirror inline words, automatic/Tab request, Tab accepts a word, Ctrl/Command+Right accepts all | Caret at note end; reload the installed vault plugin after an update |
+| Bash in a terminal | Grey inline Readline preview; continuation and narrow English spelling correction; Ctrl-X then Tab accepts; native undo | Installed Ghostty 1.3.1 / Bash 5.3.15 physical preview, correction, acceptance and undo passed; explicit shortcut |
+| Chromium text inputs / textareas | Automatic/Tab request, Tab accepts a word, Ctrl/Command+Right accepts all, Escape and native undo | Optional site access; top-level fields with stable identity; inline LTR or caret callout |
+| Extension-free Chromium / Codex desktop | Experimental accessibility/Fcitx path is quarantined | Chromium preview rendered, but native acceptance failed field/caret binding and separate undo; a safe editor transaction is required |
+| Other editors / rich websites / shells | Cooperative integration backlog | Contenteditable, canvas editors, TUIs, Fish/Zsh and Firefox remain unverified |
 
-Badi is pre-release. This tree contains two narrow product paths and keeps its
-remaining claims deliberately smaller than its code:
+The desktop broker currently uses Qwen3-1.7B Q4_K_M on this workstation. Startup
+selects among installed pinned models that fit current resources and verifies
+their bytes; a changed hardware recommendation does not require an absent model.
+“Model ready” confirms inference startup; it does not prove input is arriving.
 
-- **Dillinger product slice:** an MV3 extension requests only the optional
-  `https://dillinger.io:443/*` host permission, registers its content script
-  only after consent, reads and edits the one exact Dillinger Monaco document,
-  renders caret-relative ghost text, and accepts with `Ctrl+Shift+Y` as one
-  target-native undoable transaction.
-- **Native Fcitx5 slice:** a cooperative module observes the active input
-  method without replacing it, stays manual-only, and uses Fcitx's candidate
-  and `commitString` APIs. The tested Omawrite 0.5.0/Qt6 editor and Xournal++
-  1.3.7/GTK3 text-tool cells passed 20 visible accept/clear/undo trials each on
-  Fcitx5 5.1.21 under Hyprland 0.56.2. Runtime authorization is the exact
-  process identity plus an explicit chord and an eligible native text context;
-  Fcitx does not expose a stable widget identity. No behavior outside those
-  verified cells is claimed.
-- **Local semantic evaluation:** a feature-gated evaluator can supervise one
-  pinned `llama.cpp` child and one pinned Qwen3 1.7B GGUF artifact through a
-  private, fresh-bearer-gated loopback boundary. It is development evidence only.
-  The normal broker still uses the explicit four-rule `phrase_v1` fixture;
-  no model is downloaded or activated automatically.
-- **Omarchy integration artifact:** `ui/omarchy-plugin` is a small
-  disabled-by-default panel for Omarchy's existing shell. It uses shared host
-  primitives and a bounded `badictl` process lifecycle. It is validated from
-  an isolated copy and is not installed or enabled on this machine.
-- **Evidence V3:** strict run and product-cell schemas bind observations,
-  artifacts, role attestations, cleanup, and an exact implementation commit.
-  No V3 receipt exists yet because the required headed, visual, accessibility,
-  and final semantic qualification have not all happened.
+English prediction includes guarded partial-word completion. German and Persian
+whole-word continuations are experimental; application language controls and
+Persian half-spaces are described in the adapter runbooks. Unknown word endings
+can abstain. These are defined language paths, not a general multilingual claim.
+The [writing evaluation](evaluation/writing/README.md) separates useful suggestions,
+abstentions, errors and latency. Cotypist parity has not been measured.
 
-The former standalone Quickshell control center was removed after the Omarchy
-plugin passed its isolated lifecycle gates. This leaves one control surface and
-avoids a second resident shell.
+The [Prediction Lab](evaluation/writing/README.md#discover-assess-and-compare-a-model)
+can inspect this device, search public Hugging Face models, explain conservative
+memory fit, verify pinned downloads, and select an isolated comparison model.
+Qualification requires reviewed full additions and measured runtime behavior;
+metadata or fast generation alone cannot recommend a replacement. Explicitly
+saved receipts retain counts and identities without drafts. The installed model
+changes only through a separate authorized installation.
+The [three-candidate development screen](evaluation/writing/README.md#measured-shortlist-development-2026-09-10)
+found lower memory use but no model meeting the English/German/Persian quality
+gates at 550 ms. The installed baseline remains unchanged.
 
-## Trust boundary
+To test prediction quality directly, run `npm run writing:lab` from this checkout.
+The local [Prediction Lab](evaluation/writing/README.md#prediction-lab) lets you
+enter drafts and expected continuations, compare context/style experiments,
+inspect actual model prompts, and explicitly export results. Its owned test
+editor needs no extension. The Word completion tab can reuse a uniquely matching
+word from supplied context without loading a model. A separate Spelling tab previews conservative German
+and Persian corrections when started with the local dictionary configuration
+documented in that runbook. It does not enable unsupported editing in other apps
+or change installed prediction defaults.
 
-```text
-exact target API <-> Chromium adapter <-> native host ---\
-                                                       +--> Rust broker
-Fcitx InputContext <-> cooperative Fcitx module -------/       |
-       |                       |                                |
-native candidate        exact app allowlist               policy/provider
-native commitString     explicit eligible-context gate    private settings
+## Desktop use
 
-evaluation only: verified model + verified runtime bundle -> owned llama.cpp
-control only:    Omarchy panel -> fixed badictl argv -> broker contract
+```sh
+badi status
+badi settings
+badi launch omawrite
+badi pause                 # persisted across restart
+badi resume
+badi app xournalpp on
+badi service restart
+badi autostart on
 ```
 
-The adapter alone may read or mutate target text. Every non-global action is
-bound to session, focus epoch, revision, fingerprint, and suggestion ID. The
-broker owns policy, cancellation, commit authorization, and content-free
-metrics. Same-UID IPC is process isolation, not authentication against a
-malicious process running as the same user.
+Type an English prefix such as `Please find attached the` at the end of a native
+text field. Press **Tab** to request, **Tab again** to accept, or **Escape** to
+dismiss. In Xournal++, select the Text tool first. Candidates last five seconds
+and disappear when focus or text changes. These previously tested native cells
+use manual invocation. `Ctrl+Shift+Space` / `Ctrl+Shift+Y` are alternate shortcuts.
+The experimental browser/Codex native path is disabled after failed editing
+tests; a site permission alone cannot enable it.
 
-The Fcitx module uses protocol v2 directly over the private broker socket. It
-never registers an input method and never uses raw input capture, clipboard
-insertion, or synthetic typing as a product fallback.
+The new Omarchy speech-bubble **b** mark opens settings; right-click pauses/resumes. The panel also
+controls app permissions, model service, login startup and activity diagnostics.
 
-## Try the current product slice
+## Obsidian, terminal and browser setup
 
-Requirements: Linux, system Chromium, Node.js 22.23+ or 24.20+, Rust 1.85+,
-and a graphical session. From the repository root:
+```sh
+python3 scripts/install-editors.py --vault /path/to/vault --bash --chromium
+badi app obsidian on
+badi app bash on
+badi site https://example.com on
+```
+
+Reload the Obsidian plugin and open a new Bash shell. In Bash, **Ctrl-X then Tab**
+requests/accepts and **Ctrl-X then Escape** dismisses; ordinary Tab stays shell
+completion. Predictions only edit the buffer; Enter remains your action.
+
+Load `~/.local/lib/badi/chromium` through **Load unpacked** in `chrome://extensions`,
+then enable each site in the Badi popup. The popup explains a missing local policy
+grant or offline broker. Browser permission covers the host; Badi policy separately
+checks the exact scheme, host and port. Private windows and sensitive fields are
+excluded. See [editor integrations](adapters/shared/README.md) for verification
+and installation boundaries.
+
+The extension-free path uses the [focused accessibility observer](adapters/accessibility/README.md)
+and the Fcitx addon. It needs application accessibility and native input-method
+support; a browser extension is not part of that path. The opt-in
+[pinned Fcitx compatibility frontend](packaging/fcitx5-wayland-compat/README.md)
+resolves the measured Chromium v3 publication stall. Physical Chromium trials
+showed a grey real-model preview and accepted insertion, but undo also removed
+the preceding typed prefix. Sandbox-enabled tests then proved wrong-field and
+wrong-caret edits, including with a single native insertion when a page changed
+focus or selection during `beforeinput`. The native browser/Codex path is
+quarantined, and native replacement is disabled. Editor-owned correction paths
+remain separate. Safe extension-free editing needs authority that reaches the
+editor transaction; the current external observation and input protocols do not
+provide it. See the [source-backed findings](docs/research/linux-architecture.md).
+Preview geometry is currently restricted to the measured Chromium 151 native
+Wayland LTR cell. Other coordinate conventions fall back to Fcitx's candidate
+display. Do not treat this source implementation as completed app coverage.
+
+## Debug missing suggestions
+
+```sh
+badi doctor
+badi service restart      # clears a failed service's restart limit
+badi debug on
+badi debug watch           # type in another app; Ctrl+C stops watching
+badi debug status
+badi debug off
+```
+
+Debug mode expires after 15 minutes. It records counts and reasons for focus,
+input, context, Tab decisions, model requests, display and commit dispatch.
+It stores no typed prose or individual key values. `app_disabled` means no app
+grant exists; `unidentified_app` means Fcitx supplied no canonical app identity.
+`no_input_events` means no instrumented adapter has reported during this debug run.
+Obsidian and Bash appear under `editors`; browser requests appear in broker metrics
+and transport failures in the page console. Other reasons distinguish
+field denial, missing fresh context, caret position and model abstention.
+Snapshots live in the private runtime directory and are removed by `debug off`.
+A Fcitx commit dispatch cannot itself prove that the application inserted text.
+Doctor reports startup failures, missing native integration and degraded settings
+without copying arbitrary logs or writing into its output. A paused broker stays
+paused across service restart; use `badi resume` to enable predictions.
+If the inference process exits, the broker clears sessions and exits too, letting
+the desktop service restart it with fresh model verification and editor authority.
+Additional cooperative native apps can be granted with `badi app APP_ID on`;
+policy is checked before reading. Use the exact debug identity. This cannot add
+context support to an application that does not expose it through Fcitx.
+
+## Development
+
+Read [AGENTS.md](AGENTS.md) for architecture and exact checks. Use the root npm
+workspace/lockfile and Rust 1.85+. On a provisioned Omarchy development device:
 
 ```sh
 npm ci
-npm run live:product --workspace @badi/chromium -- --interactive
-```
-
-The runner builds the product extension and Rust bridge, creates a disposable
-HOME/XDG/profile/socket tree, and opens Chromium. Approve the exact Dillinger
-permission, focus its editor, type the fixed `thank you` integration trigger,
-wait for the ghost suggestion, and accept with `Ctrl+Shift+Y`. Return to the
-terminal and press Enter; the runner revokes permission, stops its processes,
-removes the profile and socket, and fails if cleanup cannot be proven. Its
-diagnostics are content-free and are not release evidence.
-
-The automated product transaction can also be exercised without the
-interactive hold:
-
-```sh
-npm run live:product --workspace @badi/chromium
-```
-
-Chromium still requires a real permission decision. Window-manager focus
-transfer may require one manual click. The disposable run proves one exact
-browser/editor cell, not arbitrary websites or all Chromium versions.
-
-## Try the exact native-app slice
-
-Build and test the cooperative addon with:
-
-```sh
-npm run fcitx5:check
-```
-
-User-local evaluation changes the live Fcitx process, so follow the scoped
-[install, verification, and rollback runbook](adapters/fcitx5/README.md). The
-runbook keeps `keyboard-us` selected and limits policy to the two verified app
-IDs. It is not a claim that arbitrary Qt, GTK, terminal, or Electron cells work.
-
-## Evaluate the local-model boundary
-
-The evaluator is deliberately feature-gated and never changes normal broker
-composition:
-
-```sh
-cargo run -p badi-broker --features local-model-eval --bin badi-evaluator -- \
-  fixture-self-test
-
-cargo run -p badi-broker --features local-model-eval --bin badi-evaluator -- \
-  pinned-development /path/to/Qwen3-1.7B-Q4_K_M.gguf \
-  /path/to/llama-server \
-  /path/to/llama-b10726-bin-ubuntu-x64.tar.gz
-```
-
-The pinned-development path accepts only the declared artifact names, sizes,
-digests, and exact extracted runtime-bundle manifest. It re-verifies them
-around child launch, uses a fresh bearer secret on private loopback, owns the
-process group, and emits content-free development observations. Passing this
-small development run does **not** qualify production use; the owner-approved
-100-case blinded corpus and final visible-path gates remain open.
-
-Hardware advice is offline and content-free:
-
-```sh
-cargo run --quiet --bin badictl -- hardware --json
-cargo run --quiet --bin badictl -- models writing --json
-cargo run --quiet --bin badictl -- models code --json
-```
-
-Recommendations contain pinned metadata and a non-executing download plan.
-They never download, start, or claim readiness for a model.
-
-## Validate the Omarchy artifact
-
-No command below changes live Omarchy configuration:
-
-```sh
-npm run omarchy:check
-omarchy plugin validate ui/omarchy-plugin
-BADI_SUMMON_CYCLES=100 bash ui/omarchy-plugin/tests/run-isolated.sh healthy
-```
-
-The portable gate runs without Omarchy. On the pinned local Omarchy cell it
-also checks the official validator, QML, host hashes, lifecycle teardown, and a
-TERM-ignoring child. Visual theme, focus, scaling, screen-reader,
-multi-monitor, packaging, and installed-`badictl` checks remain manual gates.
-
-## Verify the repository
-
-CI runs Rust 1.98, the declared Rust 1.85 MSRV, and Node.js 22.23.2/24.20.0.
-The local equivalent is:
-
-```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-cargo +1.85.0 check --workspace --all-targets --all-features --locked
-npm ci
+python3 scripts/install-desktop.py
+python3 scripts/install-omarchy-ui.py
 npm run check
-npm run fcitx5:check
-git diff --check
+npm run fcitx5:integration
+cargo test --workspace --all-features --locked
 ```
 
-`npm run check` covers strict schemas, TypeScript, jsdom races, reproducible
-extension builds, product-manifest policy, scenario descriptions, Omarchy
-lifecycle gates, evidence immutability, and capability linkage. Historical V1
-and V2 receipts remain verified against their recorded commits. Use an explicit
-receipt when requiring current-source linkage:
+The desktop installer builds user-local binaries and restarts the Badi/Fcitx
+user services in an unlocked session, preserving the keyboard profile, existing
+autostart preference and settings, and backing up replaced files. Use
+`python3 scripts/install-desktop.py --broker-only` for a model/controller update
+that leaves the input method running, including while the desktop is locked.
+Model assets must already exist. The UI updater requires an unlocked desktop
+and an existing Badi plugin installation. See [native setup and rollback](adapters/fcitx5/README.md),
+[Omarchy controls](ui/omarchy-plugin/README.md), and [Chromium development](adapters/chromium/README.md).
 
-```sh
-npm run capabilities:check:current -- --receipt-id <id>
-```
+Adapters own text acquisition and edits. The broker enforces per-target policy,
+focus/revision binding, cancellation and one-shot acceptance. Password fields,
+foreign IME composition and stale requests must fail closed. Raw keylogging,
+clipboard replacement and blind synthetic typing are not product integrations.
 
-Adding V3 evidence requires a clean implementation commit and chronological
-approval; the CI diff gate rejects a receipt added with the implementation it
-claims to attest.
-
-## Start here
-
-- [GrillMe implementation handoff](docs/delivery/2026-09-01-grillme-implementation-handoff.md) —
-  exact source-review baseline, architecture, finding disposition, real-device
-  observations, reproduction commands, and remaining release gates.
-- [GrillMe product-proof plan](docs/plan/grillme-product-proof.md) — vertical
-  slices, stop conditions, ownership, and the final evidence contract.
-- [Omarchy review dossier](docs/delivery/2026-08-31-omarchy-review-dossier.md) —
-  the pre-implementation product critique and decision context.
-- [Vision V2](VISION-V2.md) — current product and trust contract.
-- [Hardware-aware model selection](docs/architecture/model-selection.md) —
-  candidate, runtime, evaluator, and activation boundaries.
-- [Chromium runbook](adapters/chromium/README.md) — historical fixture lane and
-  current exact-Dillinger product runner.
-- [Fcitx5 native-app handoff](docs/delivery/2026-09-01-fcitx5-native-app-handoff.md) —
-  architecture, exact compatibility cells, live proof, install boundary, and
-  rollback.
-- [Fcitx5 module runbook](adapters/fcitx5/README.md) — build, user-local
-  evaluation, shortcuts, and removal.
-- [Omarchy artifact](ui/omarchy-plugin/README.md) — host contract, isolation,
-  lifecycle proof, and current limits.
-- [Capability evidence guide](capabilities/README.md) — immutable V1/V2 history
-  and the V3 approval workflow.
-- [Independent adversarial audit](docs/delivery/2026-08-30-independent-adversarial-audit.md)
-  and [GrillMe review](docs/delivery/2026-08-30-grillme-omarchy-quality-round.md)
-  — historical findings retained as immutable review context.
-
-The original [V1 vision](VISION.md),
-[Linux architecture research](docs/research/linux-architecture.md), and
-[two-day plan](docs/plan/two-day-delivery.md) remain decision history. Their
-broader target and timing claims are superseded by Vision V2 and the GrillMe
-plan.
-
-## Explicit non-goals for this milestone
-
-- No arbitrary-site, Obsidian, terminal, generic Fcitx5, generic Qt/GTK, or
-  multilingual product claim.
-- No network model provider, automatic model download, personalization, or
-  prose retention.
-- No `evdev`, `wtype`, clipboard, `xdotool`, synthetic-key, or global-input
-  fallback.
-- No production semantic activation before final commit-linked qualification.
-
-## License
-
-Badi-owned source code and documentation are available under the
-[MIT License](LICENSE), the same license used by Omarchy. Model weights,
-tokenizers, datasets, dependencies, generated artifacts, names, and trademarks
-retain their independent terms; see
-[ADR 0002](docs/decisions/0002-mit-source-license.md).
+Only [future plans](<future plans.md>) is the active backlog. Read the short
+[what has been built](what-have-been.md) for history. Research documents and
+immutable capability receipts are on-demand references, not required startup
+context. Historical receipts do not qualify changed code or universal app support.

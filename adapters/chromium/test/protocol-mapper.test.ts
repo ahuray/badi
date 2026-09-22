@@ -14,6 +14,7 @@ import {
   parseAuthorityChanged,
   parseHelloAckPaused,
   parsePolicyStatus,
+  parseSuggestionReply,
   policyQueryEnvelope,
   sessionCloseEnvelope,
   sessionOpenEnvelope,
@@ -57,6 +58,56 @@ describe("protocol v1 mapper", () => {
     const schemaPath = resolve(process.cwd(), "../../protocol/v1/schema.json");
     const schema = JSON.parse(await readFile(schemaPath, "utf8"));
     validate = new Ajv2020({ allErrors: true, strict: false }).compile(schema);
+  });
+
+  it("parses only exactly bound spelling suffix pairs and their whole accepted edit", () => {
+    const current = request();
+    const spelling = { ...current, context: { ...current.context, before: "This is teh ", after: "" } };
+    const frame = {
+      v: 1, type: "suggestion.show", session_id: current.sessionId,
+      focus_epoch: current.focusEpoch, revision: current.revision,
+      payload: { fingerprint: current.context.fingerprint, suggestion_id: "s:spelling",
+        replace_before: "teh ", text: "the ", accept_word: "the ", ttl_ms: 500, provider: "local_model" },
+    };
+    expect(parseSuggestionReply(frame, spelling)).toMatchObject({ suggestion: "the ", replaceBefore: "teh ", acceptWord: "the " });
+    for (const payload of [
+      { ...frame.payload, text: "the", accept_word: "the" },
+      { ...frame.payload, accept_word: "the" },
+      { ...frame.payload, replace_before: "teh\n", text: "the\n", accept_word: "the\n" },
+      { ...frame.payload, replace_before: "teh  ", text: "the  ", accept_word: "the  " },
+      { ...frame.payload, text: "teh ", accept_word: "teh " },
+    ]) {
+      expect(parseSuggestionReply({ ...frame, payload }, spelling)).toBeNull();
+    }
+    expect(parseSuggestionReply(frame, { ...spelling, context: { ...spelling.context, before: "Thisisteh " } })).toBeNull();
+    expect(parseSuggestionReply(frame, { ...spelling, context: { ...spelling.context, after: "next" } })).toBeNull();
+  });
+
+  it("checks v2 correction fixtures with the browser's ECMA regular expressions", async () => {
+    const root = resolve(process.cwd(), "../../protocol/v2");
+    const schema = JSON.parse(await readFile(resolve(root, "schema.json"), "utf8"));
+    const validateCorrectionFrame = new Ajv2020({ allErrors: true, strict: false }).compile(schema);
+    for (const [path, valid] of [
+      ["valid/suggestion_show_spelling_space.json", true],
+      ["valid/commit_prepare_spelling_space.json", true],
+      ["invalid/commit_spelling_removed_space.json", false],
+      ["invalid/commit_spelling_final_newline.json", false],
+    ] as const) {
+      const frame = JSON.parse(await readFile(resolve(root, "examples", path), "utf8"));
+      expect(validateCorrectionFrame(frame), path).toBe(valid);
+    }
+  });
+
+  it("maps v2 collapsed context to Unicode scalar offsets without changing v1", () => {
+    const current = request();
+    const emoji = { ...current, context: { ...current.context, before: "Hi 🐧",
+      selection: { start: 1006, end: 1006, direction: "none" as const } } };
+    expect(suggestionRequestEnvelopes(emoji)[0].payload["selection"])
+      .toEqual({ anchor: 1006, head: 1006, unit: "utf16_code_units" });
+    expect(suggestionRequestEnvelopes(emoji, 2)[0].payload["selection"])
+      .toEqual({ anchor: 4, head: 4, unit: "unicode_scalar_values" });
+    expect(() => suggestionRequestEnvelopes({ ...emoji, context: { ...emoji.context,
+      selection: { start: 1005, end: 1006, direction: "forward" } } }, 2)).toThrow(/collapsed/);
   });
 
   it("emits only schema-valid strict envelopes for the complete browser flow", () => {

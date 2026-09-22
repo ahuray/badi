@@ -1,5 +1,6 @@
 import type { CommitAuthorization } from "../shared/model";
 import type { MonacoSnapshot, MonacoSnapshotGuard } from "./monaco-main-world";
+import { validCorrection } from "../../../shared/text-safety.mjs";
 
 export type ProductBridgeCommand =
   | {
@@ -60,6 +61,7 @@ function isCommitAuthorization(value: unknown): value is CommitAuthorization {
       "suggestionId",
       "text",
       "acceptance",
+      ...(value["replaceBefore"] === undefined ? [] : ["replaceBefore"]),
     ]) &&
     typeof value["requestId"] === "string" &&
     value["requestId"].length > 0 &&
@@ -74,6 +76,8 @@ function isCommitAuthorization(value: unknown): value is CommitAuthorization {
     value["suggestionId"].length > 0 &&
     typeof value["text"] === "string" &&
     value["text"].length > 0 &&
+    (value["replaceBefore"] === undefined || (typeof value["replaceBefore"] === "string"
+      && validCorrection(value["replaceBefore"], value["replaceBefore"], value["text"]))) &&
     value["acceptance"] === "all"
   );
 }
@@ -130,6 +134,9 @@ export function isProductBridgeCommand(value: unknown): value is ProductBridgeCo
       value["sessionId"].length > 0 &&
       isMonacoSnapshotGuard(value["expected"]) &&
       isCommitAuthorization(value["authorization"]) &&
+      (value["authorization"].replaceBefore === undefined ||
+        (value["expected"].after === "" && validCorrection(value["expected"].before,
+          value["authorization"].replaceBefore, value["authorization"].text))) &&
       value["authorization"].sessionId === value["sessionId"]
     );
   }

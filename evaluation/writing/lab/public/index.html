@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="badi-lab-token" content="__LAB_CAPABILITY__">
+  <title>Badi · Prediction Lab</title><link rel="stylesheet" href="./style.css"><link rel="stylesheet" href="./spelling.css"><link rel="stylesheet" href="./context-lookup.css">
+  <link rel="stylesheet" href="/discovery.css">
+</head>
+<body>
+  <header><div><span class="brand">badi<span class="dot">.</span></span><span class="pill">LOCAL EXPERIMENT</span></div><p>Prediction Lab</p></header>
+  <section id="launch-help" class="launch-help card" aria-labelledby="launch-heading">
+    <p class="eyebrow">START THE LOCAL WORKBENCH</p><h1 id="launch-heading">Open Badi through its server.</h1>
+    <p>This HTML file cannot connect to the local model or dictionaries on its own. From the Badi repository folder, run:</p>
+    <pre class="trace">npm run writing:lab -- --port 36889</pre>
+    <p>Open the HTTP address printed by that command. Keep the server running while you test. Your existing files are unchanged.</p>
+  </section>
+  <main id="lab-ui" hidden>
+    <noscript><p class="warning">Enable JavaScript to run the local writing tests.</p></noscript>
+    <section class="intro"><p class="eyebrow">MAKE THE NEXT WORD COUNT</p><h1>Test the words you actually need.</h1><p>Write a draft, give it a useful continuation, and compare what the local model predicts. Expected answers are used only for scoring.</p></section>
+    <div class="lab-tabs" role="tablist" aria-label="Writing tests"><button id="prediction-tab" role="tab" aria-selected="true" aria-controls="prediction-panel">Prediction</button><button id="spelling-tab" role="tab" aria-selected="false" aria-controls="spelling-panel" tabindex="-1">Spelling</button><button id="lookup-tab" role="tab" aria-selected="false" aria-controls="lookup-panel" tabindex="-1">Word completion</button></div>
+    <div id="prediction-panel" role="tabpanel" aria-labelledby="prediction-tab">
+    <details class="card model-workbench"><summary>Choose and qualify a local model</summary>
+      <p class="hint">Discover small public models, check this laptop, and download verified artifacts. Writing and evaluation stay local. A model that fits is still an experiment until its predictions pass the quality gates.</p>
+      <div class="actions"><button id="inspect-device" class="secondary">Inspect this laptop</button><button id="baseline-model" class="secondary">Use installed baseline</button></div>
+      <details><summary>Device measurements</summary><pre id="device-details" class="trace">Inspect the laptop to refresh available resources.</pre></details>
+      <section id="discovery"></section>
+      <section id="qualification"></section>
+    </details>
+    <div class="workspace">
+      <section class="card editor" aria-labelledby="draft-heading">
+        <div class="section-top"><h2 id="draft-heading">Your test case</h2><select id="example" aria-label="Load an example"><option value="">Load example…</option><option value="context-en">English · previous sentence</option><option value="context-de">German · previous sentence</option><option value="context-fa">Persian · previous sentence</option><option value="partial">English · partial word</option><option value="style">English · writing style</option></select></div>
+        <div class="two"><label>Case name<input id="case-name" value="weekend-plan" maxlength="64"></label><label>Writing language<select id="language"><option value="en">English</option><option value="de">Deutsch</option><option value="fa">فارسی</option></select></label></div>
+        <label for="prefix">Text before the caret</label><textarea id="prefix" dir="auto" rows="5" spellcheck="false">We chose the Black Forest for our weekend trip. We will spend Saturday hiking in the </textarea>
+        <label for="expected">Expected text to add</label><textarea id="expected" dir="auto" rows="2" spellcheck="false">Black Forest</textarea><p class="hint">Optional: one acceptable alternative per line, including any leading space. You can test without an answer key and judge the result yourself.</p>
+        <details><summary>Relevant context and writing style</summary><label for="context">Relevant text from the screen or document</label><textarea id="context" dir="auto" rows="3" placeholder="Paste only the context this prediction needs."></textarea><label for="style">Examples of how you write</label><textarea id="style" dir="auto" rows="4" placeholder="Separate examples with a blank line."></textarea><p class="hint">You supply this text explicitly. Badi does not capture the screen or collect your writing history here. Context and style are experiment inputs, never an answer key.</p></details>
+        <div class="actions"><button id="add-case" class="secondary">Add to test set</button><button id="clear-editor" class="quiet">Clear editor</button></div>
+        <div class="suite-head"><h3>Test set <span id="case-count">0</span></h3><button id="use-editor" class="quiet">Use editor only</button></div><div id="cases" class="case-list"><p class="hint">Run the editor directly, or add several cases to compare them together.</p></div>
+      </section>
+      <aside class="card controls" aria-labelledby="compare-heading">
+        <p class="eyebrow">CONTROLLED COMPARISON</p><h2 id="compare-heading">What should we change?</h2>
+        <label class="choice"><input type="checkbox" name="mode" value="production_baseline" checked><span><strong>Current Badi logic</strong><small>Current provider logic and its 550 ms budget. Context and style inputs are ignored. This lab uses a separate 2,048-token runtime; installed Badi uses 512.</small></span></label>
+        <label class="choice"><input type="checkbox" name="mode" value="production_boundary"><span><strong>Isolated boundary fix</strong><small>Keep current provider logic and its 550 ms budget; change only the handling of trailing spaces. An experiment, not an installed change. Context and style inputs are ignored.</small></span></label>
+        <label class="choice"><input type="checkbox" name="mode" value="context"><span><strong>Full context</strong><small>Keep the supplied context and complete draft in the prompt.</small></span></label>
+        <label class="choice"><input type="checkbox" name="mode" value="instructed"><span><strong>Context + style instructions</strong><small>Ask for a continuation using the supplied context and examples.</small></span></label>
+        <label class="choice"><input type="checkbox" name="mode" value="healed" checked><span><strong>Word-boundary experiment</strong><small>Test whether exact prefix healing improves the next word.</small></span></label>
+        <label class="choice"><input type="checkbox" name="mode" value="instructed_healed"><span><strong>Instructions + word boundary</strong><small>Combine context and style instructions with the word boundary experiment.</small></span></label>
+        <label class="choice"><input type="checkbox" name="mode" value="instructed_word"><span><strong>One complete word</strong><small>Use the same instructions, but constrain generation to one word and a confirmed end. This can change the chosen word; compare its usefulness and timing.</small></span></label>
+        <label class="choice"><input type="checkbox" name="mode" value="healed_attested"><span><strong>Complete words from context</strong><small>Reuse exact German or Persian words from your supplied context or examples. This does not verify spelling.</small></span></label>
+        <label class="choice"><input type="checkbox" name="mode" value="native_instructed"><span><strong>Selected model instructions</strong><small>Use the selected model’s own chat template with exact word boundaries. For instruction models; base models use full context or word-boundary continuation.</small></span></label>
+        <details><summary>Reserve an untouched confirmation run</summary><label><input id="confirmation-untouched" type="checkbox">This test set is unused and the final model configuration is frozen.</label><label for="confirmation-protocol">Frozen review protocol</label><textarea id="confirmation-protocol" rows="3" placeholder="Define substantive useful additions, harmful tails, language rules and all-request denominators before inference."></textarea><p class="hint">Requires at least 40 independent cases per language. This declaration cannot prove that a person has never inspected the set. Ordinary development runs cannot qualify a model.</p></details><hr><h3>Experimental settings</h3><div class="two"><label>Time budget<select id="budget"><option value="550" selected>550 ms · production target</option><option value="1500">1.5 s · diagnostic</option><option value="5000">5 s · quality diagnostic</option><option value="10000">10 s · quality diagnostic</option></select></label><label>Token limit<select id="tokens"><option>8</option><option>16</option><option>32</option><option>64</option></select></label></div>
+        <div class="two"><label>Temperature<input id="temperature" type="number" min="0" max="1" step="0.1" value="0"></label><label>Order seed<input id="seed" type="number" min="0" max="2147483647" step="1" value="42"></label></div>
+        <label class="inline"><input id="cache" type="checkbox" checked>Reuse context within imported typing traces</label><p class="hint">Each independent case starts a fresh model session. Trace steps run in order after the previous result; event times are not replayed. Startup is excluded from model timing. Longer budgets are diagnostics, not production latency results.</p>
+        <button id="run" class="primary">Run comparison <span>→</span></button><button id="cancel" class="secondary" hidden>Cancel comparison</button><p id="status" role="status" aria-live="polite">Ready. The model loads when you run a test.</p>
+      </aside>
+    </div>
+    <section class="card results" aria-labelledby="results-heading"><div class="section-top"><div><p class="eyebrow">OBSERVE, THEN TUNE</p><h2 id="results-heading">Prediction results</h2></div><div class="actions"><button id="export" class="secondary" disabled>Export session</button><button id="import-button" class="secondary">Import test set</button><input id="import" type="file" accept="application/json,.json" hidden><button id="clear-all" class="quiet">Clear session</button></div></div><p id="result-note" class="hint">No run yet. Exact reference agreement is a diagnostic; mark useful alternatives yourself. No result here establishes performance in another application.</p><div id="summary"></div><div id="results"><div class="empty">Your draft → the model’s actual continuation → your judgment</div></div></section>
+    <footer>Local inference. No account, browser extension, or writing collection. Session data stays in memory until you explicitly export it. Clearing or closing the server also stops its model session.</footer>
+    </div>
+    <section id="spelling-panel" role="tabpanel" aria-labelledby="spelling-tab" hidden>
+      <div class="workspace spelling-workspace">
+        <form id="spelling-form" class="card" aria-labelledby="spelling-heading">
+          <div class="section-top"><h2 id="spelling-heading">Check a finished word.</h2><select id="spelling-example" aria-label="Load a spelling example"><option value="">Load example…</option><option value="de">German · spelling</option><option value="fa">Persian · spelling</option><option value="protected">Persian · keep a name</option></select></div>
+          <p class="hint">Finish the word with a space, then compare the proposed correction with the word you wanted.</p>
+          <label for="spelling-language">Spelling language</label><select id="spelling-language"><option value="de">Deutsch</option><option value="fa">فارسی</option></select>
+          <label for="spelling-before">Text before the caret</label><textarea id="spelling-before" dir="auto" rows="4" spellcheck="false">Ich gehe heute in die Bibliotek </textarea>
+          <label for="spelling-expected">Expected corrected word <span class="optional">(optional)</span></label><input id="spelling-expected" dir="auto" value="Bibliothek" maxlength="96" spellcheck="false"><p class="hint spelling-expected-hint">Enter the word without its final space. This answer is used only to compare results.</p>
+          <details><summary>Words to keep unchanged</summary><label for="spelling-protected">Names or special vocabulary</label><textarea id="spelling-protected" dir="auto" rows="3" spellcheck="false" placeholder="One word per line"></textarea><p class="hint">Up to 32 exact words. These stay unchanged even if the dictionary does not recognize them.</p></details>
+          <button id="spelling-check" type="submit" class="primary">Check spelling <span>→</span></button><button id="spelling-cancel" type="button" class="secondary" hidden>Cancel check</button>
+          <p id="spelling-status" class="spelling-status" role="status" aria-live="polite">Checking dictionary availability…</p>
+        </form>
+        <aside class="card" aria-labelledby="spelling-preview-heading"><p class="eyebrow">READ BEFORE ACCEPTING</p><h2 id="spelling-preview-heading">Correction preview</h2><div id="spelling-preview"><p class="empty">Your word → a suggested correction → your judgment</p></div><p class="hint spelling-preview-note">The preview leaves your draft unchanged. An unfamiliar name can look like a spelling error; add names you want to keep above.</p></aside>
+      </div>
+      <section class="card results" aria-labelledby="spelling-history-heading"><div class="section-top"><h2 id="spelling-history-heading">Spelling results <span id="spelling-count">0</span></h2><div class="actions"><button id="spelling-export" class="secondary" disabled>Export spelling tests</button><button id="spelling-clear" class="quiet">Clear spelling session</button></div></div><div id="spelling-results"><p class="hint">No checks yet. German and Persian use local dictionaries; the language model is not loaded for spelling.</p></div></section>
+      <footer>Explicit tests only. Corrections do not edit another application. Drafts and results remain in memory until you export them. Clearing this session stops its dictionary process.</footer>
+    </section>
+    <section id="lookup-panel" role="tabpanel" aria-labelledby="lookup-tab" hidden>
+      <div class="workspace">
+        <form id="lookup-form" class="card" aria-labelledby="lookup-heading">
+          <div class="section-top"><h2 id="lookup-heading">Complete a word from context.</h2><select id="lookup-example" aria-label="Load a word completion example"><option value="">Load example…</option><option value="en">English · schedule</option><option value="de">German · meeting point</option><option value="fa">Persian · library</option></select></div>
+          <p class="hint">Start a word with at least three letters. Badi looks for one matching word in the text you supply below or earlier in your draft.</p>
+          <label for="lookup-language">Completion language</label><select id="lookup-language"><option value="en">English</option><option value="de">Deutsch</option><option value="fa">فارسی</option></select>
+          <label for="lookup-before">Text before the caret</label><textarea id="lookup-before" dir="auto" rows="3" spellcheck="false">Please send the updated sched</textarea>
+          <label for="lookup-context">Relevant context</label><textarea id="lookup-context" dir="auto" rows="3" spellcheck="false">The schedule is ready.</textarea>
+          <details><summary>Examples of how you write</summary><label for="lookup-style">Writing examples</label><textarea id="lookup-style" dir="auto" rows="3" spellcheck="false" placeholder="Separate examples with a blank line."></textarea></details>
+          <label for="lookup-expected">Expected text to add <span class="optional">(optional)</span></label><input id="lookup-expected" dir="auto" value="ule" spellcheck="false"><p class="hint lookup-reference-note">Only used to compare results. Your expected answer is never sent with the lookup.</p>
+          <button id="lookup-check" type="submit" class="primary">Complete word <span>→</span></button><button id="lookup-cancel" type="button" class="secondary" hidden>Cancel word completion</button>
+          <p id="lookup-status" role="status" aria-live="polite">Ready. This test uses your supplied words without loading the language model.</p>
+        </form>
+        <aside class="card" aria-labelledby="lookup-preview-heading"><p class="eyebrow">WORDS ALREADY IN YOUR CONTEXT</p><h2 id="lookup-preview-heading">Completion preview</h2><div id="lookup-preview"><p class="empty">Your partial word → a grey completion → your judgment</p></div><p class="hint lookup-reference-note">Your draft stays unchanged. An exact match may still be the wrong word for this sentence; this experiment does not predict an entirely new word.</p></aside>
+      </div>
+      <section class="card results" aria-labelledby="lookup-results-heading"><div class="section-top"><h2 id="lookup-results-heading">Word completion results <span id="lookup-count">0</span></h2><div class="actions"><button id="lookup-export" class="secondary">Export word tests</button><button id="lookup-clear" class="quiet">Clear word tests</button></div></div><div id="lookup-results"><p class="hint">No checks yet.</p></div></section>
+      <footer>Explicit English, German and Persian tests. Only the text in this form is searched. No background collection or automatic storage. Export a session if you want to keep it.</footer>
+    </section>
+  </main><script type="module" src="/app.mjs"></script><script type="module" src="/spelling.mjs"></script><script type="module" src="/context-lookup.mjs"></script>
+</body></html>

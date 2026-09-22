@@ -1,275 +1,218 @@
-# Hardware-aware model selection
+# Device fit and prediction qualification
 
-Status: implemented recommendation foundation; inference remains gated
+Badi separates pinned installation advice from model discovery and empirical
+prediction qualification. The normal writing broker already uses verified local
+weights. A candidate suggested by `badictl models` is an estimated hardware fit;
+its `runtime_ready: false` does not report the live broker's readiness or establish
+prediction quality. The existing hardware/advice JSON contracts remain unchanged.
 
-## Intent
+## Shared implementation
 
-Badi should recommend the smallest local model likely to feel immediate on the
-current machine. It should not equate a larger parameter count with a better
-typing experience, download gigabytes without consent, or hide an unmeasured
-runtime behind an “AI enabled” label.
+The Rust [model-selection module](../../broker/src/model_selection.rs) owns the
+pinned catalog and existing hardware detector. Its
+[qualification module](../../broker/src/model_selection/qualification.rs) extends
+that architecture for dynamic candidates. It is available with `local-model` and
+does not start inference, contact the network, install a model, or change editing
+policy. The [Lab bridge](../../evaluation/writing/lab/device-qualification.mjs)
+uses this engine instead of duplicating its gates in JavaScript.
 
-The design has four separate steps:
+| API | Contract |
+| --- | --- |
+| `inspect_device(cache_path)` | Refresh local CPU/topology, RAM, GPUs, disk, power and memory pressure; return `badi.device-inspection.v1`. |
+| `evidence_identity(candidate, device, settings)` | Compute identities for the complete candidate metadata, relevant hardware/power and inference/evaluation configuration. |
+| `assess(&AssessmentInput)` | Pure assessment for explicit inputs; useful for deterministic tests and estimated compatibility on another device. |
+| `assess_current(candidate, settings, evidence, cache_path)` | Refresh this device before evaluating fit and saved evidence. Use this before a local load. |
+| `rank(&[Assessment])` | Rank only candidates passing every gate, or return `no_qualified_model`. Refresh assessments before presenting a current recommendation. |
 
-1. inspect content-free hardware facts;
-2. choose a conservative model tier for a named use case;
-3. present a pinned, verifiable download plan; and
-4. enable inference only after Badi's quality and latency gates pass.
+The request/report structs use strict Serde deserialization: unknown fields are
+rejected. `CandidateMetadata` records the immutable repository revision, exact
+artifact bytes/SHA-256, quantization, architecture, tokenizer identity, context
+limit, language claims, access, license and architecture-specific state dimensions.
+`QualificationSettings` binds runtime identity/version/CPU architecture and required
+instruction features, backend, context, batch,
+threads, parallel sequences, cache precision, recurrent snapshots, context
+checkpoints, prompt format, a hash of complete generation/guard settings, requested
+languages and evaluation version. Language claims in a model card are metadata;
+the requested languages each need their own measurements.
 
-The first three exist in the default build. An off-by-default
-`local-model-eval` feature contains the pinned-candidate verifier, one bounded
-native-prefix client, an owned llama.cpp child lifecycle, and the dedicated
-development evaluator. It is excluded from the default binary dependency graph,
-and the normal broker has no model-activation flag or semantic provider wiring.
-The feature-gated production seam requires an opaque qualification value for
-which there is deliberately no public constructor. Model advice therefore
-reports `runtime_ready: false`.
-
-## Commands
-
-```sh
-badictl hardware --json
-badictl models writing --json
-badictl models code --json
-```
-
-These commands are local and do not require a running broker, an XDG runtime
-directory, or network access. Their formal JSON contracts
-([`badi.hardware.v1`](../../broker/schemas/badi.hardware.v1.schema.json) and
-[`badi.model-advice.v2`](../../broker/schemas/badi.model-advice.v2.schema.json))
-let a future Omarchy menu, Quickshell surface,
-installer, or package script consume the same result without duplicating
-selection policy. Model advice v2 supersedes the original candidate-only v1
-shape: `tier`, `recommended`, `fit`, and `download` are nullable when
-`status: "no_fit"`.
-
-Development-only semantic checks require the explicit feature and evaluator
-binary:
+The worker exposes the same read-only operations:
 
 ```sh
-cargo run -p badi-broker --features local-model-eval --bin badi-evaluator -- fixture-self-test
-cargo run -p badi-broker --features local-model-eval --bin badi-evaluator -- \
-  pinned-development /path/to/Qwen3-1.7B-Q4_K_M.gguf \
-  /path/to/llama-server \
-  /path/to/llama-b10726-bin-ubuntu-x64.tar.gz
+target/release/badi-writing-lab --inspect-device \
+  --cache-directory "$HOME/.cache/badi/prediction-lab"
+target/release/badi-writing-lab --assess-model \
+  --cache-directory "$HOME/.cache/badi/prediction-lab" < assessment-request.json
 ```
 
-Both commands emit evaluation evidence to stdout. They neither download a
-model nor expose one through the normal broker.
+The assessment input is an object containing `candidate`, `settings`, and nullable
+`evidence`, using the Rust types above. This CLI supplies a fresh device/time
+snapshot itself. An assessment is not permission to execute arbitrary binaries or
+repository code. For the actual application, start the Lab through its HTTP server;
+see the [Prediction Lab runbook](../../evaluation/writing/README.md#prediction-lab).
 
-## Observed hardware
+## Device observations
 
-The Rust probe reads only machine metadata:
+The extended inspection reuses `detect_hardware()`. It adds CPU model/features,
+physical core/package topology, individual DRM device/vendor/driver identities,
+reported total/free GPU memory, cache filesystem capacity, platform power profile,
+and `/proc/pressure/memory`. RAM uses Linux `MemTotal` and `MemAvailable`;
+filesystem capacity uses a bounded two-second, 4 KiB-output `df` invocation.
+The existing NVIDIA probe remains bounded to two seconds and 16 KiB output.
 
-- architecture and logical CPU count;
-- AVX2 and AVX-512F availability on x86-64;
-- total and currently available memory from `/proc/meminfo`;
-- GPU vendor IDs and detected total dedicated VRAM where Linux exposes it
-  through DRM sysfs;
-- NVIDIA total VRAM through `nvidia-smi` when available, with a two-second
-  deadline and a 16 KiB stdout cap; and
-- whether a detected battery is currently discharging.
+Unknown facts stay null or explicitly unknown. In particular, DRM VRAM labels and
+GPU vendor alone do not prove dedicated physical memory: a UMA reservation can
+come from the same host RAM. No detected GPU capacity is added to host memory.
+The inspection reports GPU execution as unverified; it does not infer successful
+inference from GPU detection. A separate owned-runtime Vulkan exercise can prove
+that specific runtime/device boundary, but the reusable qualification estimator
+currently accepts CPU execution only. It does not turn that probe into measured
+GPU prediction quality or apply its timings to the CPU configuration.
 
-The timeout kills and reaps the directly invoked `nvidia-smi` process. The
-standard-library runner does not own a process group: if a future probe starts a
-descendant that inherits stdout, that descendant could keep the capture pipe
-open after the direct child exits. `nvidia-smi` is not expected to do this; a
-different probe with child processes would require explicit process-group
-supervision.
+Stable device fingerprints include CPU/topology/features, total RAM, GPU identity,
+driver and memory type/capacity, battery state and power profile. Volatile free
+memory/disk, pressure and timestamps are excluded from that fingerprint and
+rechecked separately. A device snapshot older than 60 seconds fails the load-fit
+gate. The pure API recomputes hardware identity from the actual fields; it does
+not trust a caller-supplied fingerprint string.
 
-Detected GPU total is not usable capacity. `usable_memory_mib` and `backend`
-remain null until a validated inference backend can report both; selection
-therefore budgets CPU host memory only. Hybrid-vendor detection and missing
-power state cap the result below quality. Missing or inconsistent memory,
-unsupported architectures, and fewer than four logical CPUs return an explicit
-`no_fit` result instead of inventing a recommendation.
+## Conservative memory calculation
 
-This follows the useful part of
-[Voxtype's hardware-aware setup](https://github.com/peteonrails/voxtype/blob/dev/docs/USER_MANUAL.md#hardware-aware-recommendations): detection and recommendation are explicit,
-inspectable decisions. Badi does not copy Voxtype's engine switching or require
-privileged symlink changes.
+The estimator charges the complete artifact to RAM even with `mmap`, then adds
+model state, workspace and runtime overhead. It preserves room for normal laptop
+use. All dimension products are checked; missing, invalid or overflowing state
+metadata prevents an estimated fit.
 
-## Tiers
+| Component | Estimate |
+| --- | --- |
+| Weights | Exact artifact bytes. |
+| Standard attention state | `layers × padded_context × KV_heads × (key_length + value_length) × cache_element_bytes × sequences`. Context is rounded up to 256 tokens; cache element size is explicitly 2 or 4 bytes. |
+| LFM2 state | Attention state for attention layers plus float32 short-convolution state, described below. |
+| Workspace allowance | `max(512 MiB, weights / 4) + batch_tokens × 1 MiB`. This is a conservative policy allowance, not an exact model-derived allocation. |
+| Runtime overhead | 256 MiB. |
+| Host reserve | `max(2 GiB, 20% total RAM)`, subtracted from currently available RAM. |
+| Download disk | Artifact bytes plus 64 MiB transfer headroom. The estimate remains conservative even when cached bytes can be reused. |
 
-The selector reserves 2 GiB from both total host capacity and currently
-available memory for the OS and desktop, then uses the lower remainder. For
-each artifact it adds 768 MiB plus 25% of the exact pinned `download_bytes` as
-conservative runtime/KV-cache headroom. A candidate must fit that per-artifact
-budget; the tier is only a ceiling.
+`required_host_bytes = weights + state + workspace + runtime_overhead` must fit
+within `available_RAM - host_reserve`. The direct Lab descriptor supports at most
+8 GiB; the compact public discovery lane applies its smaller download limit too.
+Unknown/invalid RAM or insufficient/unknown cache disk fails closed.
 
-| Ceiling | Conservative policy cap | Product intent |
-| --- | --- | --- |
-| Compact | AArch64, x86-64 without AVX2, known battery discharge, or an otherwise supported four-CPU host below the balanced floor | Preserve responsiveness without claiming unbenchmarked CPU equivalence |
-| Balanced | At least 8 GiB RAM and six logical CPUs without the known, unambiguous AC and host headroom required for quality | Default for ordinary laptops, desktops with unknown power state, and hybrid graphics |
-| Quality | x86-64 with AVX2, at least 24 GiB RAM, 8 GiB currently available, 12 logical CPUs, known non-discharging power, and no hybrid-GPU ambiguity | Expose a larger candidate only when CPU host memory is plainly sufficient |
+The attention dimensions follow the official
+[GGUF metadata contract](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md).
+They cannot be substituted for recurrent state. Other unknown recurrent/hybrid
+architectures remain unestimated; parameter count alone does not supply their
+state layout.
 
-These are safe starting rules, not performance claims. Artifact fit can lower a
-use case independently—for example, writing and code artifacts at the same tier
-have different byte counts. Benchmarks may lower a recommendation; they may
-raise it only with measured evidence. A `no_fit` response has no tier, artifact,
-or download plan and always reports `runtime_ready: false`.
+For exact `lfm2` metadata and reviewed llama.cpp `b10726`, the convolution estimate
+is `conv_layers × hidden_size × (conv_cache_length - 1) × 4 × sequences ×
+(1 + recurrent_snapshots)`, plus 4 KiB alignment allowance per convolution layer.
+The KV and convolution total is multiplied by `1 + context_checkpoints` to allow
+retained state copies. The formula follows
+[LFM2 recurrent dimensions](https://github.com/ggml-org/llama.cpp/blob/b10726/src/llama-hparams.cpp),
+[float32 recurrent row allocation](https://github.com/ggml-org/llama.cpp/blob/b10726/src/llama-memory-recurrent.cpp),
+and [hybrid layer filtering](https://github.com/ggml-org/llama.cpp/blob/b10726/src/llama-memory-hybrid.cpp).
+A different runtime version needs review before that formula is accepted.
+The ordinary non-speculative runtime has zero recurrent snapshots; the source
+derives them from enabled speculative modes in
+[common parameters](https://github.com/ggml-org/llama.cpp/blob/b10726/common/common.h).
+The Lab launch explicitly disables server context checkpoints and RAM prompt
+cache copies while retaining its measured within-slot prompt reuse.
 
-## Candidate catalog
+These allowances are estimates, not allocation guarantees. Actual peak resident
+memory, startup, sustained pressure and cleanup still need measurement. Hardware
+inspection alone cannot account for every concurrent desktop allocation or future
+runtime change.
 
-The initial catalog deliberately contains only six Qwen-family GGUF artifacts
-distributed under Apache-2.0. Every entry pins the Hugging Face repository
-commit, exact filename, byte count, and SHA-256 digest.
+## States and hard gates
 
-| Use case | Tier | Candidate | Quantization | Download |
-| --- | --- | --- | --- | ---: |
-| Writing | Compact | `Qwen/Qwen3-0.6B-GGUF` | Q8_0 | 639 MB |
-| Writing | Balanced | `ggml-org/Qwen3-1.7B-GGUF` | Q4_K_M | 1.28 GB |
-| Writing | Quality | `Qwen/Qwen3-4B-GGUF` | Q4_K_M | 2.50 GB |
-| Code | Compact | `Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF` | Q4_K_M | 491 MB |
-| Code | Balanced | `Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF` | Q4_K_M | 1.12 GB |
-| Code | Quality | `Qwen/Qwen2.5-Coder-7B-Instruct-GGUF` | Q4_K_M | 4.68 GB |
+Every assessment exposes separate stage results and rejection reasons:
 
-Qwen's model cards describe the 0.6B and 4B GGUF/llama.cpp artifacts at
-[0.6B](https://huggingface.co/Qwen/Qwen3-0.6B-GGUF) and
-[4B](https://huggingface.co/Qwen/Qwen3-4B-GGUF). The balanced
-[1.7B artifact](https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF) is a
-`ggml-org` conversion whose card identifies the Qwen base model. The
-[Qwen2.5-Coder base model](https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B)
-explicitly supports fill-in-the-middle tasks; the instruct GGUF artifacts are
-initial code candidates, not a claim that they have passed Badi's completion
-benchmark. The quality candidate uses the official
-[7B GGUF](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF), avoiding
-the 3B release's non-commercial research license.
+1. `discovered`: an identified candidate exists.
+2. `estimated_fit`: public GGUF access, license/identity/tokenizer/quantization,
+   supported architecture/settings and fresh RAM/disk gates pass.
+3. `loaded_and_exercised`: matching local evidence says the verified artifact was
+   loaded and exercised on the requested backend, with verified owned cleanup.
+4. `meets_performance`: complete-word p95 is at most **550 ms** in every requested
+   language, over all assigned requests. Cold startup and preparation are reported
+   separately, peak RSS fits normal-use capacity, and 30 minutes of sustained
+   exercise plus actual prompt reuse, paced typing and cancellation/recovery pass.
+5. `meets_prediction_quality`: every requested language has at least **40**
+   independent confirmation cases, all outcomes reviewed, at least **60% useful
+   on-time full additions**, and **zero harmful suggestions**. The untouched
+   confirmation set and frozen review protocol have SHA-256 identities.
+6. `recommended`: current fit, exercise, performance and quality all pass.
 
-Keeping the catalog static makes changes reviewable. Discovery feeds and model
-popularity never alter a user's recommendation at runtime.
+The fixed development criteria are versioned as
+`badi.prediction-quality.v1`. They are model-experiment criteria, not historical
+adapter capability qualification or a claim of Cotypist parity. Smaller screening
+sets can reject candidates or inform further experiments; they do not pass the
+confirmation gate. Diagnostic requests with longer budgets cannot establish the
+550 ms target. The reviewer inspects the complete displayed addition: a generic
+function word, an incorrect tail or fact copied from a conflicting style example
+must not receive useful credit merely because a reference string overlaps.
 
-Every candidate records `llama.cpp` b5092 as Badi's minimum reviewed backend
-baseline. Badi's writing contract uses llama.cpp native prefix completion over
-bounded before-caret text; it does not pay for or rely on a chat template. The
-coder contract uses the Qwen2.5 Coder instruct chat template.
-Those prompt declarations are compatibility constraints, not evidence that an
-instruct GGUF performs fill-in-the-middle completion well. The JSON repeats the
-unvalidated prompt, context-size, latency, memory, and quality caveats on each
-artifact.
+For each language, useful/on-time, harmful, generic/incorrect and abstained/failed
+counts must sum exactly to the assigned total. Missing responses, errors, timeouts
+and abstentions stay in that denominator. Duplicate/unrequested languages or invalid
+counts invalidate the supplied evidence. Missing language measurements prevent
+performance/quality qualification but do not erase a valid load/exercise result.
+These checks validate evidence structure;
+they do not independently establish that manually supplied review labels are true.
+Retain inspectable raw results and the review protocol through the Lab workflow.
 
-## Download contract
+## Evidence identity and ranking
 
-The recommendation contains an argument vector for the official `hf` CLI:
+Evidence binds the full candidate metadata hash, recomputed hardware fingerprint
+and complete settings hash. Changing model bytes/revision, tokenizer,
+quantization, runtime/backend, CPU/GPU/power configuration, prompt/generation
+settings, language set or evaluation version invalidates it. Evidence from the
+future or older than 30 days is stale. The Node bridge additionally binds the
+worker executable and evaluator/HTTP/review source hashes, so compiled or
+JavaScript-only contract changes require new evidence. Artifact verification and fresh resource checks remain necessary
+before every load even when old measurements match.
 
-```text
-hf download REPOSITORY FILENAME --revision FULL_COMMIT
+Ranking is lexicographic after all hard gates: worst-language useful on-time
+yield, overall useful yield, language coverage, worst-language complete-word p95,
+then estimated memory. Harmful output fails qualification before ranking, and
+speed cannot compensate for lower useful yield. No passing candidate produces
+`no_qualified_model` with a reason; the workflow preserves the installed model
+and presents experiments without promoting a replacement.
+
+`assess()` can estimate compatibility for another explicit device snapshot, but
+only exact matching local evidence advances measured stages. A result measured
+here must not be relabeled as measured on another machine. Applications still own
+text acquisition, mutation, cancellation, policy, focus/caret binding and native
+undo; a model benchmark does not qualify those boundaries.
+
+## Existing pinned advice
+
+`badictl hardware --json`, `badictl models writing --json` and
+`badictl models code --json` remain local, non-executing controls. Their schemas
+remain [hardware v1](../../broker/schemas/badi.hardware.v1.schema.json) and
+[model advice v2](../../broker/schemas/badi.model-advice.v2.schema.json).
+The pinned six-artifact catalog still selects a tier using CPU/power and
+conservative RAM ceilings. It reserves 2 GiB and adds 768 MiB plus 25% of artifact
+bytes as runtime allowance. It can produce a smaller candidate or explicit
+`no_fit`; it never treats its tier as measured usefulness.
+
+Installed writing selection prefers a verified pinned artifact that is already
+present and still fits current resources, including when power changes advice.
+Dynamic discovery, downloads and qualification run through the explicit Lab
+workflow; catalog popularity or a new search result cannot silently replace the
+installed working model. Historical evaluator receipts remain separate and do
+not qualify the current writing path.
+
+## Verification
+
+```sh
+cargo test --lib --all-features --locked model_selection
+cargo clippy --lib --tests --all-features --locked -- -D warnings
+npm run docs:check
 ```
 
-Badi does not execute it automatically. The
-[Hugging Face download API](https://huggingface.co/docs/huggingface_hub/guides/download)
-uses a version-aware local cache and supports pinned revisions. A future
-installer must also verify the catalog SHA-256 after download and remove only
-its own incomplete file on failure.
-
-Only data-only GGUF artifacts are eligible in this catalog. Badi does not load
-remote Python code or pickle weights; Hugging Face itself warns that untrusted
-[pickle deserialization can execute code](https://huggingface.co/docs/hub/security-pickle).
-New repositories, formats, licenses, revisions, or runtimes require review and
-new benchmark evidence.
-
-## Runtime gate
-
-A candidate is not a production provider until all of the following pass on a
-named hardware profile:
-
-- cold start, warm p50, warm p95, cancellation, and peak-memory budgets;
-- a single warm end-to-end clock from eligible adapter scheduling after input
-  through adapter view visibility, including every debounce, transport hop,
-  provider call, validation step, and display operation; p95 must be at most
-  500 ms under the hard 600 ms generation ceiling;
-- frozen writing or code usefulness corpora;
-- output sanitation and eight-word/64-scalar limits;
-- stale-result, pause, policy, and shutdown tests;
-- no context or suggestion text in logs or receipts; and
-- at least `+0.10` useful accepted words per interruption over the deterministic
-  lane after interruption cost; this is an absolute difference, not a bounded
-  rate, and a tie cannot pass.
-
-The feature-gated evaluator implements only the smaller semantic foundation
-needed before those product gates can be scored. It emits a
-`badi.semantic-evaluation-bundle.v1` containing a content-free raw run and an
-aggregate receipt derived from that run. The receipt binds the raw-run hash,
-model and backend provenance, prompt/sampling contract, launch identity,
-evaluator/corpus identity, aggregate metrics, and stable semantic check IDs.
-Its authority is always `evaluation_only` and `production_ready` is always
-false. The older `badi.model-runtime-receipt.v1` schema remains readable as
-legacy evaluation metadata, but `runtime_ready`, even when true, is not a
-production activation credential.
-
-The current pinned development candidate is the balanced writing artifact,
-`Qwen3-1.7B-Q4_K_M.gguf`, at the exact quantizer repository revision recorded
-in the catalog. The quantizer model card names `Qwen/Qwen3-1.7B` as the source
-but does not disclose the source revision; the evaluator records that revision
-as unreported rather than inferring it. Tokenizer provenance is recorded as
-embedded in the exact GGUF artifact. The b10726 llama.cpp release archive and
-executed loader are both size- and SHA-256-verified. A pinned, deterministic
-exact-directory manifest additionally commits to every sibling regular file's
-name, size, and SHA-256 plus each safe same-directory symbolic-link target; it
-rejects extra, missing, nested, special, or escaping entries. The evaluator
-rechecks that manifest immediately before and after spawn and records its digest
-in the runtime and backend identities. System DSOs resolved outside the release
-directory remain explicit platform dependencies rather than reviewed bundle
-members.
-
-The reviewed archive SHA-256 is
-`d3c4e406b2911c8c75d2d0858459645960f8f592c1ab372d565cf145b870c901`;
-its canonical directory-manifest SHA-256 is
-`d1dad3f66d4064b1c2a6d9dc7c824d3d50d2639f3b1d3dd22c7f4355edb99cba`.
-The archive contains 60 bundle entries (50 regular files and 10 symbolic
-links), and its tar-stream name, size, file-hash, and link-target records match
-the installed directory records exactly.
-
-The evaluator owns the runtime it measures. It starts a private IPv4 loopback
-child in a new process group with a fresh bearer credential, requires a correct
-authenticated `/tokenize` challenge and rejection of a wrong credential, and
-terminates and reaps the child. The reviewed b10726 launch contract is CPU-only
-and fixes:
-
-- `LLAMA_ARG_CTX_SIZE=512`;
-- `LLAMA_ARG_N_PARALLEL=1`;
-- `LLAMA_ARG_THREADS=18` and `LLAMA_ARG_THREADS_BATCH=18`;
-- `LLAMA_ARG_N_GPU_LAYERS=0`;
-- `LLAMA_ARG_UI=0`; and
-- `LLAMA_ARG_OFFLINE=1` and `LLAMA_ARG_CACHE_PROMPT=0`.
-
-Writing requests use llama.cpp `/completion`, the raw bounded before-caret
-prefix, an eight-token greedy contract, and period/newline stops. The English
-scope gate runs before request serialization. The response stream is drained
-normally for latency measurement; length-truncated output is rejected, and
-script, word-count, and scalar-count checks fail closed before a suggestion is
-returned. Cancellation is a separate lifecycle observation rather than a
-shortcut in latency samples.
-
-The production Chromium adapter owns the 140 ms user-idle debounce before
-context dispatch. The broker's production default adds no second debounce;
-nonzero broker debounce remains a test/configuration seam and still counts
-against the same absolute generation deadline.
-
-`broker/src/local_model.rs` is now only the disabled production activation
-boundary; it contains no second llama.cpp integration. It accepts the same
-pinned semantic runtime only after an opaque `QualifiedSemanticActivation`,
-re-verifies the pinned bytes before and after launch, and returns the owned
-runtime as the existing `CompletionProvider`. No current evaluator receipt can
-construct that value. A frozen product corpus, end-to-end adapter measurements,
-and an immutable passing scored run still have to earn a future constructor;
-the development fixture and pinned-candidate commands cannot qualify a model.
-
-If no candidate passes, Badi keeps the deterministic provider. Silence is a
-better fallback than a late or mediocre model.
-
-## Linux and Omarchy fit
-
-The feature uses Linux facts and XDG-compatible tooling without modifying
-Omarchy's packaged files. `badictl` is the schema-versioned integration surface;
-future Omarchy UI work should branch on the model-advice schema and `status`,
-consume only candidate outputs, and live in user/package-owned paths, never
-patch `/usr/share/omarchy`.
-
-## Naming boundary
-
-Badi (`بعدی`, Persian for “next”) is the selected product name. An unrelated
-[active AI workflow CLI](https://github.com/fatihkan/badi) also uses `badi`, so
-this project keeps the distinct `badictl` command and the owned native-messaging
-identity `io.github.ahuray.badi`. Public package and trademark clearance remains a
-release task; the previous repository codename is retired.
+The focused tests cover no-evidence fallback, normal transformer and LFM2 state,
+overflow/unknown-state denial, shared GPU accounting, fresh-resource rejection,
+identity invalidation, per-language denominators, harmful output, timing and
+lifecycle gates, quality-first ranking, strict JSON and the legacy selector.
+Physical model comparisons and the rendered HTTP workflow are reported in the
+writing runbook; unit tests do not establish those results.

@@ -23,6 +23,18 @@ const ROUTE: TrustedSessionRoute = {
 };
 
 describe("product commit linearization", () => {
+  it("binds the original spelling to the one-shot replacement grant", async () => {
+    const linearizer = new ProductCommitLinearizer();
+    const authorization = { ...AUTHORIZATION, text: "the", replaceBefore: "teh" };
+    linearizer.issue(authorization, ROUTE);
+    const mutation = vi.fn(async () => true);
+    expect(linearizer.invoke({ ...authorization, replaceBefore: "ten" }, ROUTE,
+      linearizer.epoch, mutation)).toBeNull();
+    expect(mutation).not.toHaveBeenCalled();
+    await expect(linearizer.invoke(authorization, ROUTE, linearizer.epoch, mutation)).resolves.toBe(true);
+    expect(linearizer.invoke(authorization, ROUTE, linearizer.epoch, mutation)).toBeNull();
+  });
+
   it("does not invoke MAIN-world mutation after a revocation epoch", () => {
     const linearizer = new ProductCommitLinearizer();
     const epoch = linearizer.epoch;

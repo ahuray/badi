@@ -37,7 +37,7 @@ import {
 const PRODUCT_SCRIPT_ID = "badi-dillinger-product-v1";
 const broker = new NativeBrokerClient({
   connectNative: (hostName) => chrome.runtime.connectNative(hostName),
-});
+}, { textReplacement: true });
 const sessionRoutes = new SessionRouteRegistry();
 const productCommits = new ProductCommitLinearizer();
 const lifetimePorts = new Set<chrome.runtime.Port>();
@@ -205,7 +205,7 @@ async function executeApply(
         target: { tabId: route.tabId, documentIds: [route.documentId] },
         world: "MAIN",
         func: applyDillingerMonacoEditInMainWorld,
-        args: [command.expected, authorization.text],
+        args: [command.expected, authorization.text, authorization.replaceBefore ?? ""],
       }),
   );
   if (execution === null) return false;

@@ -6,6 +6,7 @@ import {
   EXPECTED_FIXTURE_URL,
   isTrustedFixtureBootstrapSender,
   isTrustedFixtureSender,
+  isFocusedFixtureTab,
 } from "../src/background/fixture-boundary";
 import { SessionRouteRegistry } from "../src/background/session-routes";
 import {
@@ -53,6 +54,26 @@ function trustedSender(): chrome.runtime.MessageSender {
 }
 
 describe("localhost fixture boundary", () => {
+  it("validates live activity with redacted tabs while retaining exact sender identity", () => {
+    const sender = trustedSender();
+    const tab = sender.tab!;
+    const window = { id: tab.windowId, focused: true } as chrome.windows.Window;
+    expect(tab.url).toBeUndefined();
+    expect(isFocusedFixtureTab(sender, tab, window, EXTENSION_ID)).toBe(true);
+    for (const invalid of [
+      { ...tab, active: false }, { ...tab, frozen: true },
+      { ...tab, discarded: true }, { ...tab, incognito: true },
+      { ...tab, id: 99 }, { ...tab, windowId: 99 },
+      { ...tab, url: `${EXPECTED_FIXTURE_URL}#other` },
+    ]) {
+      expect(isFocusedFixtureTab(sender, invalid, window, EXTENSION_ID)).toBe(false);
+    }
+    expect(isFocusedFixtureTab(sender, tab, { ...window, focused: false }, EXTENSION_ID)).toBe(false);
+    expect(isFocusedFixtureTab(sender, tab, { ...window, id: 99 }, EXTENSION_ID)).toBe(false);
+    expect(isFocusedFixtureTab({ ...sender, url: "https://example.com/" }, tab, window, EXTENSION_ID)).toBe(false);
+    expect(isFocusedFixtureTab({ ...sender, documentLifecycle: "cached" }, tab, window, EXTENSION_ID)).toBe(false);
+  });
+
   it("recognizes only the exact top-level fixture document", () => {
     const location = {
       origin: EXPECTED_FIXTURE_ORIGIN,

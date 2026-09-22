@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <limits>
 #include <unordered_set>
+#include <unordered_map>
 #include <utility>
 
 namespace badi::fcitx5 {
@@ -76,6 +77,34 @@ bool validReason(const Json &value) {
     return value.is_string() &&
            std::find(reasons.begin(), reasons.end(), value.get<std::string>()) !=
                reasons.end();
+}
+
+bool policyStatus(const Json &value, const Json &payload) {
+    if (!exactKeys(value, {"v", "id", "type", "mono_ms", "payload"}) ||
+        value["v"] != 2 || value["type"] != "policy.status" ||
+        !counter(value["mono_ms"]) || !value["id"].is_string() ||
+        !validOpaqueId(value["id"].get<std::string>()) ||
+        !exactKeys(payload, {"authority_epoch", "settings_revision", "paused",
+            "activation", "context_allowed", "display_allowed", "suggestions_allowed",
+            "learning_allowed", "reason"}) ||
+        !counter(payload["authority_epoch"]) || !counter(payload["settings_revision"])) return false;
+    for (const auto key : {"paused", "context_allowed", "display_allowed",
+                           "suggestions_allowed", "learning_allowed"}) {
+        if (!payload[key].is_boolean()) return false;
+    }
+    if (payload["activation"] != "always" && payload["activation"] != "manual" &&
+        payload["activation"] != "never") return false;
+    static constexpr std::array reasons{"default_policy", "global_disabled", "context_disabled",
+        "matched_rule", "suggestions_disabled", "unknown_identity"};
+    if (!payload["reason"].is_string() ||
+        std::find(reasons.begin(), reasons.end(), payload["reason"].get<std::string>()) == reasons.end()) return false;
+    if (payload["learning_allowed"] == true ||
+        (payload["suggestions_allowed"] == true &&
+         (payload["context_allowed"] == false || payload["display_allowed"] == false)) ||
+        (payload["context_allowed"] == false && payload["activation"] == "always")) return false;
+    return payload["paused"] == false || (payload["activation"] == "never" &&
+        payload["context_allowed"] == false && payload["display_allowed"] == false &&
+        payload["suggestions_allowed"] == false);
 }
 
 bool sessionControlResult(const Json &value, const Json &payload) {
@@ -147,6 +176,7 @@ std::optional<ClearNotice> parseClearNotice(const Json &value) {
     return ClearNotice{
         .coordinates = *coordinates,
         .suggestionId = std::move(suggestionId),
+        .reason = payload["reason"].get<std::string>(),
     };
 }
 
@@ -180,9 +210,11 @@ Json envelope(std::string_view type, std::optional<std::string> id,
 std::optional<Json> parseStrictObject(std::string_view body) {
     if (body.empty() || body.size() > kMaxFrameBytes) return std::nullopt;
     bool duplicateKey = false;
+    bool excessiveDepth = false;
     std::vector<std::unordered_set<std::string>> objectKeys;
-    const auto callback = [&duplicateKey, &objectKeys](
-                              int, Json::parse_event_t event, Json &parsed) {
+    const auto callback = [&duplicateKey, &excessiveDepth, &objectKeys](
+                              int depth, Json::parse_event_t event, Json &parsed) {
+        if (depth > 32) excessiveDepth = true;
         if (event == Json::parse_event_t::object_start) {
             objectKeys.emplace_back();
         } else if (event == Json::parse_event_t::key) {
@@ -200,7 +232,7 @@ std::optional<Json> parseStrictObject(std::string_view body) {
         return true;
     };
     auto value = Json::parse(body, callback, false, false);
-    if (duplicateKey || !objectKeys.empty() || value.is_discarded() ||
+    if (duplicateKey || excessiveDepth || !objectKeys.empty() || value.is_discarded() ||
         !value.is_object()) {
         return std::nullopt;
     }
@@ -217,8 +249,8 @@ std::optional<Json> contextEnvelope(const ContextUpdate &update,
         !validSessionId(coordinates.sessionId) ||
         coordinates.fingerprint.size() < 16 ||
         !validOpaqueId(coordinates.fingerprint) || context.sensitive ||
-        context.composing || context.anchor != context.head ||
-        !validLanguageTag(context.language) ||
+        context.composing || context.anchor != context.head || (!context.identityKnown && !context.explicitRequest) ||
+        !validLanguageTag(context.language) || !validContextText(context.before) || !validContextText(context.after) ||
         !before || before->size() > kMaxBeforeScalars || !after ||
         after->size() > kMaxAfterScalars) {
         return std::nullopt;
@@ -230,16 +262,16 @@ std::optional<Json> contextEnvelope(const ContextUpdate &update,
         {"selection", Json{{"anchor", context.anchor},
                             {"head", context.head},
                             {"unit", "unicode_scalar_values"}}},
-        {"field", Json{{"purpose", "unknown"},
+        {"field", Json{{"purpose", context.identityKnown ? "normal" : "unknown"},
                         {"editable", true},
                         {"multiline", context.multiline},
                         {"composing", false},
                         {"sensitive", false},
-                        {"identity_known", false},
+                        {"identity_known", context.identityKnown},
                         {"focused", true},
                         {"lock_screen", false}}},
-        {"activation", "manual"},
-        {"explicit", true},
+        {"activation", context.explicitRequest ? "manual" : "always"},
+        {"explicit", context.explicitRequest},
         {"language", context.language},
     };
     return envelope(
@@ -264,6 +296,11 @@ bool strictSessionControlResult(std::string_view body) {
 bool strictSuggestionClear(std::string_view body) {
     const auto value = parseStrictObject(body);
     return value && parseClearNotice(*value).has_value();
+}
+
+bool strictPolicyStatus(std::string_view body) {
+    const auto value = parseStrictObject(body);
+    return value && value->contains("payload") && policyStatus(*value, (*value)["payload"]);
 }
 
 bool dispatchSuggestionClear(
@@ -331,12 +368,16 @@ std::optional<std::vector<std::uint8_t>> encodeFrame(std::string_view body) {
 }
 
 bool FrameDecoder::feed(std::span<const std::uint8_t> bytes) {
-    if (failed_ || pending_.size() + bytes.size() > kMaxFrameBytes + 4U) {
-        failed_ = true;
-        return false;
-    }
-    pending_.insert(pending_.end(), bytes.begin(), bytes.end());
-    while (pending_.size() >= 4) {
+    if (failed_) return false;
+    // SOCK_STREAM may coalesce the end of a maximum-sized frame with the next
+    // header. Bound each frame independently of the socket's read boundaries.
+    while (!bytes.empty()) {
+        if (pending_.size() < 4) {
+            const auto count = std::min(4 - pending_.size(), bytes.size());
+            for (const auto byte : bytes.first(count)) pending_.push_back(byte);
+            bytes = bytes.subspan(count);
+            if (pending_.size() < 4) break;
+        }
         const auto length = static_cast<std::uint32_t>(pending_[0]) |
                             (static_cast<std::uint32_t>(pending_[1]) << 8U) |
                             (static_cast<std::uint32_t>(pending_[2]) << 16U) |
@@ -346,10 +387,13 @@ bool FrameDecoder::feed(std::span<const std::uint8_t> bytes) {
             failed_ = true;
             return false;
         }
+        const auto count = std::min(4U + length - pending_.size(), bytes.size());
+        pending_.insert(pending_.end(), bytes.begin(), bytes.begin() + count);
+        bytes = bytes.subspan(count);
         if (pending_.size() < 4U + length) break;
         frames_.emplace_back(reinterpret_cast<const char *>(pending_.data() + 4),
                              length);
-        pending_.erase(pending_.begin(), pending_.begin() + 4U + length);
+        pending_.clear();
     }
     return true;
 }
@@ -367,7 +411,38 @@ public:
         : eventLoop_(eventLoop), callbacks_(std::move(callbacks)),
           socketPath_(std::move(socketPath)), started_(Clock::now()) {}
 
-    ~Impl() { close(false); }
+    ~Impl() { disconnect(); }
+
+    bool connect() {
+        wantConnection_ = true;
+        if (fd_ >= 0 || reconnectScheduled_) return fd_ >= 0;
+        reconnectAttempts_ = 0;
+        const bool connected = connectSocket();
+        if (!connected) scheduleReconnect();
+        return connected;
+    }
+
+    void disconnect() {
+        wantConnection_ = false;
+        reconnectScheduled_ = false;
+        if (reconnectTimer_) reconnectTimer_->setEnabled(false);
+        close(false);
+    }
+
+    void scheduleReconnect() {
+        if (!wantConnection_ || reconnectScheduled_ || reconnectAttempts_ >= 10) return;
+        reconnectScheduled_ = true;
+        if (!reconnectTimer_) reconnectTimer_ = eventLoop_.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
+            [this](::fcitx::EventSourceTime *, std::uint64_t) {
+                reconnectScheduled_ = false;
+                ++reconnectAttempts_;
+                if (wantConnection_ && !connectSocket()) scheduleReconnect();
+                return true;
+            });
+        reconnectTimer_->setNextInterval(std::min<std::uint64_t>(
+            5'000'000, 250'000ULL << std::min(reconnectAttempts_, 5U)));
+        reconnectTimer_->setOneShot();
+    }
 
     bool connectSocket() {
         if (fd_ >= 0) return true;
@@ -411,12 +486,16 @@ public:
         ready_ = false;
         decoder_ = FrameDecoder{};
         writes_.clear();
+        pendingPolicies_.clear();
+        if (policyTimeout_) policyTimeout_->setEnabled(false);
+        if (handshakeTimeout_) handshakeTimeout_->setEnabled(false);
         writeOffset_ = 0;
         queuedBytes_ = 0;
         if (active && notify) {
             FCITX_WARN() << "Badi broker transport disconnected";
             if (callbacks_.onDisconnected) callbacks_.onDisconnected();
         }
+        if (notify) scheduleReconnect();
     }
 
     bool queue(const Json &message) {
@@ -450,12 +529,47 @@ public:
 
     [[nodiscard]] bool ready() const { return ready_ && fd_ >= 0; }
 
+    bool queryPolicy(const Coordinates &coordinates, std::string_view appId,
+                     std::string_view targetId) {
+        if (!ready() || !validSessionId(coordinates.sessionId) ||
+            !validLinuxAppId(appId) || !validOpaqueId(targetId)) return false;
+        return queryTargetPolicy(coordinates, Json{{"kind", "desktop_application"},
+            {"app_id", appId}, {"target_id", targetId}});
+    }
+
+    bool queryTargetPolicy(const Coordinates &coordinates, const Json &target) {
+        if (!ready() || !validSessionId(coordinates.sessionId) ||
+            !target.is_object() || target.dump().size() > 4096 || pendingPolicies_.size() >= 64) return false;
+        const auto id = "fcitx.policy." + coordinates.sessionId;
+        if (pendingPolicies_.contains(id)) return true;
+        if (!queue(envelope("policy.query", id, nowMs(),
+            Json{{"target", target}}))) return false;
+        pendingPolicies_.emplace(id, coordinates.sessionId);
+        if (pendingPolicies_.size() == 1) {
+            if (!policyTimeout_) policyTimeout_ = eventLoop_.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
+                [this](::fcitx::EventSourceTime *, std::uint64_t) { close(true); return true; });
+            policyTimeout_->setNextInterval(2'000'000);
+            policyTimeout_->setOneShot();
+        }
+        return true;
+    }
+
     bool openSession(const Coordinates &coordinates, std::string_view appId,
                      std::string_view targetId) {
         if (!ready() || !validLinuxAppId(appId) || !validOpaqueId(targetId)) return false;
         const auto body =
             serializeSessionOpenEnvelope(coordinates, appId, targetId, nowMs());
         return body && queueBody(*body);
+    }
+
+    bool openTargetSession(const Coordinates &coordinates, const Json &target) {
+        if (!ready() || !validSessionId(coordinates.sessionId) ||
+            !target.is_object() || target.dump().size() > 4096) return false;
+        auto opening = coordinates;
+        opening.revision = 0;
+        opening.fingerprint.clear();
+        return queue(envelope("session.open", "fcitx.open." + coordinates.sessionId,
+            nowMs(), Json{{"target", target}, {"activation", "always"}}, &opening));
     }
 
     bool closeSession(const Coordinates &coordinates) {
@@ -487,7 +601,7 @@ public:
         }
         return queue(envelope(
             "suggest.request", requestId, nowMs(),
-            Json{{"fingerprint", coordinates.fingerprint}, {"explicit", true}},
+            Json{{"fingerprint", coordinates.fingerprint}, {"explicit", context.explicitRequest}},
             &coordinates));
     }
 
@@ -574,6 +688,10 @@ private:
         if (!queue(envelope("hello", "fcitx.hello", nowMs(), helloPayload))) {
             return false;
         }
+        if (!handshakeTimeout_) handshakeTimeout_ = eventLoop_.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
+            [this](::fcitx::EventSourceTime *, std::uint64_t) { close(true); return true; });
+        handshakeTimeout_->setNextInterval(2'000'000);
+        handshakeTimeout_->setOneShot();
         updateEvents();
         return true;
     }
@@ -670,6 +788,7 @@ private:
             if (!helloAcknowledged_) return false;
             if (type == "authority.changed") return handleAuthority(value, payload);
             if (!ready_) return false;
+            if (type == "policy.status") return handlePolicy(value, payload);
             if (type == "suggestion.show") return handleSuggestion(value, payload);
             if (type == "suggestion.clear") return handleClear(value);
             if (type == "control.result") {
@@ -729,11 +848,15 @@ private:
         const bool initial = !authoritySeen_;
         authoritySeen_ = true;
         authorityEpoch_ = epoch;
+        pendingPolicies_.clear();
+        if (policyTimeout_) policyTimeout_->setEnabled(false);
         if (!queue(envelope("authority.ack", std::nullopt, nowMs(),
                             Json{{"authority_epoch", epoch}}))) {
             return false;
         }
         ready_ = true;
+        reconnectAttempts_ = 0;
+        if (handshakeTimeout_) handshakeTimeout_->setEnabled(false);
         FCITX_INFO() << "Badi broker transport ready";
         if (callbacks_.onAuthority) {
             callbacks_.onAuthority(AuthoritySnapshot{
@@ -743,6 +866,22 @@ private:
             });
         }
         if (initial && callbacks_.onReady) callbacks_.onReady();
+        return true;
+    }
+
+    bool handlePolicy(const Json &value, const Json &payload) {
+        if (!policyStatus(value, payload)) return false;
+        if (payload["authority_epoch"] < authorityEpoch_) return true;
+        if (payload["authority_epoch"] != authorityEpoch_) return false;
+        const auto pending = pendingPolicies_.find(value["id"].get<std::string>());
+        if (pending == pendingPolicies_.end()) return false;
+        const auto session = pending->second;
+        pendingPolicies_.erase(pending);
+        if (pendingPolicies_.empty() && policyTimeout_) policyTimeout_->setEnabled(false);
+        const bool allowed = payload["paused"] == false &&
+            payload["activation"] == "always" && payload["context_allowed"] == true &&
+            payload["display_allowed"] == true && payload["suggestions_allowed"] == true;
+        if (callbacks_.onPolicy) callbacks_.onPolicy(session, allowed);
         return true;
     }
 
@@ -758,7 +897,7 @@ private:
             !payload["text"].is_string() || !payload["accept_word"].is_string() ||
             !payload["ttl_ms"].is_number_unsigned() ||
             payload["ttl_ms"].get<std::uint64_t>() < 1 ||
-            payload["ttl_ms"].get<std::uint64_t>() > 600 ||
+            payload["ttl_ms"].get<std::uint64_t>() > 5000 ||
             !payload["provider"].is_string() ||
             (payload["provider"] != "phrase_v1" &&
              payload["provider"] != "local_model")) {
@@ -766,8 +905,7 @@ private:
         }
         const auto coordinates = parseCoordinates(value, payload);
         const auto text = sanitizeSuggestion(payload["text"].get_ref<const std::string &>());
-        const auto acceptWord =
-            sanitizeSuggestion(payload["accept_word"].get_ref<const std::string &>());
+        const auto acceptWord = sanitizeSuggestion(payload["accept_word"].get_ref<const std::string &>());
         if (!coordinates || !text || !acceptWord ||
             !text->starts_with(*acceptWord)) {
             return false;
@@ -793,8 +931,7 @@ private:
                                "focus_epoch", "revision", "mono_ms", "payload"}) ||
             !value["id"].is_string() ||
             !validOpaqueId(value["id"].get_ref<const std::string &>()) ||
-            !exactKeys(payload, {"fingerprint", "suggestion_id", "text",
-                                 "acceptance"}) ||
+            !exactKeys(payload, {"fingerprint", "suggestion_id", "text", "acceptance"}) ||
             !payload["suggestion_id"].is_string() ||
             !validOpaqueId(payload["suggestion_id"].get_ref<const std::string &>()) ||
             !payload["text"].is_string() || payload["acceptance"] != "all") {
@@ -825,6 +962,13 @@ private:
     bool authoritySeen_ = false;
     bool ready_ = false;
     std::uint64_t authorityEpoch_ = 0;
+    std::unordered_map<std::string, std::string> pendingPolicies_;
+    std::unique_ptr<::fcitx::EventSourceTime> policyTimeout_;
+    std::unique_ptr<::fcitx::EventSourceTime> handshakeTimeout_;
+    std::unique_ptr<::fcitx::EventSourceTime> reconnectTimer_;
+    bool wantConnection_ = false;
+    bool reconnectScheduled_ = false;
+    unsigned int reconnectAttempts_ = 0;
     std::unique_ptr<::fcitx::EventSourceIO> io_;
     FrameDecoder decoder_;
     std::deque<std::vector<std::uint8_t>> writes_;
@@ -839,13 +983,23 @@ Transport::Transport(::fcitx::EventLoop &eventLoop, WireCallbacks callbacks,
 
 Transport::~Transport() = default;
 
-bool Transport::connect() { return impl_->connectSocket(); }
-void Transport::disconnect() { impl_->close(false); }
+bool Transport::connect() { return impl_->connect(); }
+void Transport::disconnect() { impl_->disconnect(); }
 bool Transport::ready() const { return impl_->ready(); }
 std::uint64_t Transport::nowMs() const { return impl_->nowMs(); }
+bool Transport::queryPolicy(const Coordinates &coordinates, std::string_view appId,
+                            std::string_view targetId) {
+    return impl_->queryPolicy(coordinates, appId, targetId);
+}
 bool Transport::openSession(const Coordinates &coordinates, std::string_view appId,
                             std::string_view targetId) {
     return impl_->openSession(coordinates, appId, targetId);
+}
+bool Transport::queryTargetPolicy(const Coordinates &coordinates, const nlohmann::json &target) {
+    return impl_->queryTargetPolicy(coordinates, target);
+}
+bool Transport::openTargetSession(const Coordinates &coordinates, const nlohmann::json &target) {
+    return impl_->openTargetSession(coordinates, target);
 }
 bool Transport::closeSession(const Coordinates &coordinates) {
     return impl_->closeSession(coordinates);

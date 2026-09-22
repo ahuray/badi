@@ -286,4 +286,109 @@ describe("content-script bootstrap", () => {
     expect(harness.bootstrap).toHaveBeenCalledTimes(2);
     expect(harness.controllers).toHaveLength(2);
   });
+
+  it("recovers after repeated successful restarts without exhausting a lifetime retry budget", async () => {
+    harness.bootstrap.mockResolvedValue(bootstrapState(false));
+    installChromeRuntime();
+    await import("../src/content/content-script");
+    await flushPromises();
+    for (let restart = 0; restart < 7; restart += 1) {
+      const controller = harness.controllers.at(-1);
+      const disconnected = harness.disconnectListeners.at(-1);
+      if (!controller || !disconnected) throw new Error("Missing current controller");
+      disconnected();
+      await flushPromises();
+      expect(controller.dispose).toHaveBeenCalledTimes(1);
+      expect(harness.controllers).toHaveLength(restart + 2);
+    }
+    expect(harness.bootstrap).toHaveBeenCalledTimes(8);
+  });
+
+  it("retries ordinary-web startup without a focus event and stops after a bounded budget", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      harness.bootstrap.mockRejectedValue(new Error("broker restarting"));
+      installChromeRuntime();
+      const { startBrowserContent } = await import("../src/content/browser-content");
+      const retry = startBrowserContent(() => true, 5000);
+      await flushPromises();
+      await vi.advanceTimersByTimeAsync(50000);
+      expect(harness.bootstrap).toHaveBeenCalledTimes(10);
+      expect(harness.controllers).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(50000);
+      expect(harness.bootstrap).toHaveBeenCalledTimes(10);
+      harness.bootstrap.mockResolvedValue(bootstrapState(false));
+      retry?.();
+      await flushPromises();
+      expect(harness.controllers).toHaveLength(1);
+      expect(harness.bootstrap).toHaveBeenCalledTimes(11);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains restart backoff when every failed native connection broadcasts disconnect", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const listeners = installChromeRuntime();
+      harness.bootstrap.mockResolvedValue(bootstrapState(false));
+      const { startBrowserContent } = await import("../src/content/browser-content");
+      startBrowserContent(() => true, 5000);
+      await flushPromises();
+      const listener = listeners[0]!;
+      const first = harness.controllers[0]!;
+      harness.bootstrap.mockImplementation(async () => {
+        await Promise.resolve();
+        listener({ kind: "badi.transport.disconnected.v1" });
+        throw new Error("Native host has exited.");
+      });
+      listener({ kind: "badi.transport.disconnected.v1" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(first.invalidateTransport).toHaveBeenCalledTimes(1);
+      expect(first.dispose).toHaveBeenCalledTimes(1);
+      expect(harness.bootstrap).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(harness.bootstrap).toHaveBeenCalledTimes(5);
+      expect(harness.controllers).toHaveLength(1);
+      harness.bootstrap.mockResolvedValue(bootstrapState(false, { authorityEpoch: 0 }));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(harness.controllers).toHaveLength(2);
+      expect(harness.bootstrap).toHaveBeenCalledTimes(6);
+      await vi.advanceTimersByTimeAsync(50000);
+      expect(harness.bootstrap).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("fences a late successful bootstrap reply during reconnect backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = installChromeRuntime();
+      harness.bootstrap.mockResolvedValue(bootstrapState(false));
+      const { startBrowserContent } = await import("../src/content/browser-content");
+      startBrowserContent(() => true, 5000);
+      await flushPromises();
+      let resolveLate!: (state: BootstrapState) => void;
+      harness.bootstrap.mockImplementationOnce(() => new Promise(resolve => { resolveLate = resolve; }));
+      const listener = listeners[0]!;
+      listener({ kind: "badi.transport.disconnected.v1" });
+      listener({ kind: "badi.transport.disconnected.v1" });
+      resolveLate(bootstrapState(false));
+      await flushPromises();
+      expect(harness.controllers).toHaveLength(1);
+      expect(harness.bootstrap).toHaveBeenCalledTimes(2);
+      harness.bootstrap.mockResolvedValue(bootstrapState(true, { authorityEpoch: 0 }));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(harness.bootstrap).toHaveBeenCalledTimes(3);
+      expect(harness.controllers).toHaveLength(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });

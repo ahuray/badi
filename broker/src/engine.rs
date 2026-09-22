@@ -23,8 +23,8 @@ use crate::protocol::{
     SuggestRequestPayload, SuggestionClearPayload, SuggestionShowPayload, TargetDescriptor,
     WireEnvelope,
 };
-use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
-use crate::segment::{OutputError, accept_word, sanitize_suggestion, validate_suggestion_shape};
+use crate::provider::{CompletionProvider, ProviderError, ProviderRequest, WritingProposal};
+use crate::segment::{accept_word, sanitize_suggestion, validate_suggestion_shape};
 use crate::settings::{PrivateStorageError, SettingsStoreError, SettingsV1, StableIdentity};
 
 /// Default broker-local time allowed for an adapter to report a commit result.
@@ -44,6 +44,8 @@ pub const DEFAULT_PROVIDER_CONCURRENCY: usize = 4;
 pub const MAX_PROVIDER_CONCURRENCY: usize = 16;
 /// Maximum receiver-local age from an accepted request to provider completion.
 pub const MAX_GENERATION_TIMEOUT_MS: u64 = 600;
+/// Native panels need enough time to read and accept a continuation.
+pub const NATIVE_SUGGESTION_TTL_MS: u64 = 5_000;
 
 #[derive(Clone, Copy, Debug)]
 pub struct BrokerConfig {
@@ -78,6 +80,7 @@ impl Default for BrokerConfig {
 
 #[derive(Clone, Debug)]
 pub struct SessionAuthority {
+    pub protocol_version: u8,
     pub adapter_kind: AdapterKind,
     pub capabilities: Vec<Capability>,
 }
@@ -546,6 +549,11 @@ impl Broker {
     }
 
     #[must_use]
+    pub fn provider_is_alive(&self) -> bool {
+        self.inner.provider.is_alive()
+    }
+
+    #[must_use]
     pub fn metrics(&self) -> Arc<Metrics> {
         Arc::clone(&self.inner.metrics)
     }
@@ -675,7 +683,21 @@ impl Broker {
         let cancellation = CancellationToken::new();
         session.context_lease_cancellation = Some(cancellation.clone());
         let session_id = session.coordinates.session_id;
-        let lease = self.inner.config.context_authority_lease;
+        let lease = if session.authority.protocol_version == 2
+            && matches!(
+                session.authority.adapter_kind,
+                AdapterKind::Fcitx
+                    | AdapterKind::Obsidian
+                    | AdapterKind::Terminal
+                    | AdapterKind::Browser
+            ) {
+            self.inner.config.context_authority_lease.max(
+                Duration::from_millis(NATIVE_SUGGESTION_TTL_MS)
+                    + self.inner.config.generation_timeout,
+            )
+        } else {
+            self.inner.config.context_authority_lease
+        };
         let broker = self.clone();
         tokio::spawn(async move {
             tokio::select! {
@@ -776,6 +798,7 @@ impl Broker {
 
         let (
             provider_request,
+            allow_replacement,
             suggestion_context,
             generation_deadline,
             cancellation,
@@ -845,6 +868,11 @@ impl Broker {
                     after: context.payload.after,
                     language: context.payload.language,
                 },
+                session
+                    .authority
+                    .capabilities
+                    .contains(&Capability::TextReplacement)
+                    && context.payload.field.identity_known,
                 suggestion_context,
                 Instant::now() + self.inner.config.generation_timeout,
                 cancellation,
@@ -883,7 +911,7 @@ impl Broker {
                     broker
                         .inner
                         .provider
-                        .complete(provider_request, cancellation.clone()),
+                        .propose(provider_request, cancellation.clone(), allow_replacement),
                 ) => result,
             };
             broker
@@ -912,7 +940,7 @@ impl Broker {
         &self,
         context: GenerationResultContext,
         cancellation: CancellationToken,
-        result: Result<Result<Option<String>, ProviderError>, time::error::Elapsed>,
+        result: Result<Result<Option<WritingProposal>, ProviderError>, time::error::Elapsed>,
     ) {
         let GenerationResultContext {
             coordinates,
@@ -939,10 +967,28 @@ impl Broker {
         let timed_out = result.is_err();
         let output = match result {
             Ok(Ok(Some(raw))) => {
-                self.inner.metrics.record_provider_output(raw.len());
-                sanitize_suggestion(&raw)
+                self.inner.metrics.record_provider_output(raw.text.len());
+                if let Some(original) = raw.replace_before.as_deref() {
+                    // A correction may preserve the single space typed after
+                    // its word. General continuation sanitization stays strict.
+                    crate::protocol::valid_spelling_replacement(original, &raw.text)
+                        .then_some((raw.text, raw.replace_before))
+                        .ok_or(crate::segment::OutputError::InvalidShape)
+                } else {
+                    sanitize_suggestion(&raw.text).map(|text| (text, raw.replace_before))
+                }
             }
-            Ok(Ok(None)) => Err(OutputError::Empty),
+            Ok(Ok(None)) => {
+                self.clear_failed_generation(
+                    coordinates,
+                    &fingerprint,
+                    generation,
+                    request_id,
+                    ReasonCode::NoSuggestion,
+                )
+                .await;
+                return;
+            }
             Ok(Err(ProviderError::Cancelled)) => return,
             Ok(Err(ProviderError::Unavailable)) | Err(_) => {
                 if timed_out {
@@ -966,7 +1012,7 @@ impl Broker {
             }
         };
 
-        let Ok(text) = output else {
+        let Ok((text, replace_before)) = output else {
             self.inner.metrics.record_provider_error();
             self.clear_failed_generation(
                 coordinates,
@@ -978,7 +1024,28 @@ impl Broker {
             .await;
             return;
         };
-        if validate_suggestion_shape(&before, &after, &text).is_err() {
+        let shape_valid = match replace_before.as_deref() {
+            Some(original) => {
+                crate::protocol::valid_spelling_replacement(original, &text)
+                    && before.ends_with(original)
+                    && after.is_empty()
+                    && before[..before.len() - original.len()]
+                        .chars()
+                        .next_back()
+                        .is_none_or(char::is_whitespace)
+            }
+            None => {
+                #[cfg(feature = "local-model")]
+                if self.inner.provider_kind == ProviderKind::LocalModel {
+                    crate::writing::validate_suggestion_shape(&before, &after, &text).is_ok()
+                } else {
+                    validate_suggestion_shape(&before, &after, &text).is_ok()
+                }
+                #[cfg(not(feature = "local-model"))]
+                validate_suggestion_shape(&before, &after, &text).is_ok()
+            }
+        };
+        if !shape_valid {
             self.inner.metrics.record_provider_error();
             self.clear_failed_generation(
                 coordinates,
@@ -1035,15 +1102,57 @@ impl Broker {
             return;
         }
 
+        if replace_before.is_some()
+            && (!session
+                .authority
+                .capabilities
+                .contains(&Capability::TextReplacement)
+                || session
+                    .context
+                    .as_ref()
+                    .is_none_or(|context| !context.payload.field.identity_known))
+        {
+            self.inner.metrics.record_provider_error();
+            session.cancellation = None;
+            let _ = session.sink.send(BrokerEvent::SuggestionClear {
+                coordinates,
+                payload: SuggestionClearPayload {
+                    fingerprint,
+                    suggestion_id: None,
+                    reason: ReasonCode::InvalidCapability,
+                },
+                request_id,
+            });
+            return;
+        }
         session.cancellation = None;
         let suggestion_id = format!("s:{}", uuid::Uuid::new_v4());
-        let expires_at = Instant::now() + self.inner.config.suggestion_ttl;
+        // The native candidate panel has a human reading window. Browser v1
+        // retains its existing lease; revision/focus guards still revoke both.
+        let suggestion_ttl = if session.authority.protocol_version == 2
+            && matches!(
+                session.authority.adapter_kind,
+                AdapterKind::Fcitx
+                    | AdapterKind::Obsidian
+                    | AdapterKind::Terminal
+                    | AdapterKind::Browser
+            ) {
+            Duration::from_millis(NATIVE_SUGGESTION_TTL_MS)
+        } else {
+            self.inner.config.suggestion_ttl
+        };
+        let expires_at = Instant::now() + suggestion_ttl;
         let payload = SuggestionShowPayload {
             fingerprint,
             suggestion_id: suggestion_id.clone(),
-            accept_word: accept_word(&text).accepted,
+            accept_word: if replace_before.is_some() {
+                text.clone()
+            } else {
+                accept_word(&text).accepted
+            },
             text,
-            ttl_ms: duration_millis(self.inner.config.suggestion_ttl),
+            replace_before,
+            ttl_ms: duration_millis(suggestion_ttl),
             provider: self.inner.provider_kind,
         };
         if Instant::now() >= deadline {
@@ -1092,7 +1201,7 @@ impl Broker {
 
         let broker = self.clone();
         tokio::spawn(async move {
-            time::sleep(broker.inner.config.suggestion_ttl).await;
+            time::sleep(suggestion_ttl).await;
             broker
                 .expire_suggestion(coordinates, generation, suggestion_id)
                 .await;
@@ -1287,8 +1396,12 @@ impl Broker {
                 let aggregate_day = visible.aggregate_day;
                 let (acceptance, text) =
                     if payload.action == crate::protocol::ControlAction::AcceptWord {
-                        let parts = accept_word(&visible.payload.text);
-                        (Acceptance::Word, parts.accepted)
+                        let text = if visible.payload.replace_before.is_some() {
+                            visible.payload.text.clone()
+                        } else {
+                            accept_word(&visible.payload.text).accepted
+                        };
+                        (Acceptance::Word, text)
                     } else {
                         (Acceptance::All, visible.payload.text.clone())
                     };
@@ -1296,6 +1409,7 @@ impl Broker {
                     fingerprint: visible.payload.fingerprint.clone(),
                     suggestion_id: visible.payload.suggestion_id.clone(),
                     text,
+                    replace_before: visible.payload.replace_before.clone(),
                     acceptance,
                 };
                 let suggestion_id = visible.payload.suggestion_id.clone();
@@ -2110,7 +2224,7 @@ fn validate_commit_authority(
         CommitStatus::Applied => {
             matches!(
                 authority.adapter_kind,
-                AdapterKind::Browser | AdapterKind::Obsidian
+                AdapterKind::Browser | AdapterKind::Obsidian | AdapterKind::Terminal
             ) && authority.capabilities.contains(&Capability::CommitApplied)
         }
         CommitStatus::DispatchedUnverified => {
@@ -2274,6 +2388,7 @@ mod tests {
     #[test]
     fn commit_status_requires_matching_adapter_kind_and_declared_capability() {
         let browser_dispatch = SessionAuthority {
+            protocol_version: 1,
             adapter_kind: AdapterKind::Browser,
             capabilities: vec![Capability::CommitDispatchedUnverified],
         };
@@ -2287,12 +2402,14 @@ mod tests {
         ));
 
         let browser_applied = SessionAuthority {
+            protocol_version: 1,
             adapter_kind: AdapterKind::Browser,
             capabilities: vec![Capability::CommitApplied],
         };
         assert!(validate_commit_authority(&browser_applied, CommitStatus::Applied).is_ok());
 
         let browser_undeclared = SessionAuthority {
+            protocol_version: 1,
             adapter_kind: AdapterKind::Browser,
             capabilities: Vec::new(),
         };
@@ -2302,6 +2419,7 @@ mod tests {
         ));
 
         let obsidian_wrong_status = SessionAuthority {
+            protocol_version: 1,
             adapter_kind: AdapterKind::Obsidian,
             capabilities: vec![Capability::CommitDispatchedUnverified],
         };
@@ -2311,6 +2429,7 @@ mod tests {
         ));
 
         let fcitx_dispatch = SessionAuthority {
+            protocol_version: 2,
             adapter_kind: AdapterKind::Fcitx,
             capabilities: vec![Capability::CommitDispatchedUnverified],
         };
@@ -2448,6 +2567,23 @@ mod tests {
         provider: std::sync::Arc<dyn CompletionProvider>,
         config: BrokerConfig,
     ) -> (Broker, SessionId, mpsc::Receiver<BrokerEvent>) {
+        setup_with_capabilities(
+            provider,
+            config,
+            vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::CommitApplied,
+            ],
+        )
+        .await
+    }
+
+    async fn setup_with_capabilities(
+        provider: std::sync::Arc<dyn CompletionProvider>,
+        config: BrokerConfig,
+        capabilities: Vec<Capability>,
+    ) -> (Broker, SessionId, mpsc::Receiver<BrokerEvent>) {
         let broker = Broker::new(provider, config);
         let session_id = SessionId::new();
         let (sink, receiver) = mpsc::channel(32);
@@ -2464,18 +2600,390 @@ mod tests {
                     activation: Activation::Always,
                 },
                 SessionAuthority {
+                    protocol_version: 1,
                     adapter_kind: AdapterKind::Browser,
-                    capabilities: vec![
-                        Capability::Context,
-                        Capability::Suggestion,
-                        Capability::CommitApplied,
-                    ],
+                    capabilities,
                 },
                 event_sink(sink),
             )
             .await
             .expect("open session");
         (broker, session_id, receiver)
+    }
+
+    #[tokio::test]
+    async fn normal_provider_abstention_clears_without_recording_a_failure() {
+        let (broker, id, mut events) = setup(
+            std::sync::Arc::new(crate::provider::DeterministicPhraseProvider::default()),
+            BrokerConfig::default(),
+        )
+        .await;
+        let update = context(1, FieldPurpose::Normal);
+        broker
+            .update_context(coordinates(id, 1), update.clone())
+            .await
+            .expect("context");
+        broker
+            .request_suggestion(
+                coordinates(id, 1),
+                SuggestRequestPayload {
+                    fingerprint: update.fingerprint,
+                    explicit: false,
+                },
+                None,
+            )
+            .await
+            .expect("request");
+        let BrokerEvent::SuggestionClear { payload, .. } =
+            timeout(Duration::from_millis(100), events.recv())
+                .await
+                .expect("deadline")
+                .expect("event")
+        else {
+            panic!("expected clear")
+        };
+        assert_eq!(payload.reason, ReasonCode::NoSuggestion);
+        assert_eq!(broker.inner.metrics.snapshot().provider_errors, 0);
+    }
+
+    struct SpellingProvider(&'static str, &'static str);
+
+    #[async_trait]
+    impl CompletionProvider for SpellingProvider {
+        fn kind(&self) -> ProviderKind {
+            ProviderKind::LocalModel
+        }
+        async fn complete(
+            &self,
+            _request: ProviderRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<Option<String>, ProviderError> {
+            Ok(None)
+        }
+        async fn propose(
+            &self,
+            _request: ProviderRequest,
+            _cancellation: CancellationToken,
+            _allow_replacement: bool,
+        ) -> Result<Option<crate::provider::WritingProposal>, ProviderError> {
+            Ok(Some(crate::provider::WritingProposal {
+                text: self.1.to_owned(),
+                replace_before: Some(self.0.to_owned()),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn spelling_replacement_binds_original_suffix_through_commit() {
+        for (original, corrected) in [("teh", "the"), ("teh ", "the ")] {
+            for action in [ControlAction::AcceptWord, ControlAction::AcceptAll] {
+                assert_spelling_replacement_commits(original, corrected, action).await;
+            }
+        }
+    }
+
+    async fn assert_spelling_replacement_commits(
+        original: &'static str,
+        corrected: &'static str,
+        action: ControlAction,
+    ) {
+        let (broker, id, mut events) = setup_with_capabilities(
+            std::sync::Arc::new(SpellingProvider(original, corrected)),
+            BrokerConfig::default(),
+            vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::CommitApplied,
+                Capability::TextReplacement,
+            ],
+        )
+        .await;
+        let mut update = context(1, FieldPurpose::Normal);
+        update.before = format!("This is {original}");
+        update.selection.anchor = u64::try_from(update.before.len()).expect("small fixture");
+        update.selection.head = update.selection.anchor;
+        broker
+            .update_context(coordinates(id, 1), update.clone())
+            .await
+            .expect("context");
+        broker
+            .request_suggestion(
+                coordinates(id, 1),
+                SuggestRequestPayload {
+                    fingerprint: update.fingerprint.clone(),
+                    explicit: false,
+                },
+                None,
+            )
+            .await
+            .expect("request");
+        let BrokerEvent::SuggestionShow { payload, .. } =
+            timeout(Duration::from_millis(100), events.recv())
+                .await
+                .expect("deadline")
+                .expect("event")
+        else {
+            panic!("expected spelling preview")
+        };
+        assert_eq!(payload.replace_before.as_deref(), Some(original));
+        assert_eq!(payload.text, corrected);
+        assert_eq!(payload.accept_word, corrected);
+        broker
+            .session_control(
+                coordinates(id, 1),
+                SessionControlRequestPayload {
+                    action,
+                    fingerprint: update.fingerprint,
+                    suggestion_id: Some(payload.suggestion_id),
+                },
+                None,
+            )
+            .await
+            .expect("accept");
+        let BrokerEvent::CommitPrepare { payload, .. } = events.recv().await.expect("commit")
+        else {
+            panic!("expected commit")
+        };
+        assert_eq!(payload.replace_before.as_deref(), Some(original));
+        assert_eq!(payload.text, corrected);
+    }
+
+    #[tokio::test]
+    async fn provider_cannot_send_replacements_to_an_old_adapter() {
+        let (broker, id, mut events) = setup(
+            std::sync::Arc::new(SpellingProvider("teh", "the")),
+            BrokerConfig::default(),
+        )
+        .await;
+        let mut update = context(1, FieldPurpose::Normal);
+        update.before = "This is teh".to_owned();
+        update.selection.anchor = 11;
+        update.selection.head = 11;
+        broker
+            .update_context(coordinates(id, 1), update.clone())
+            .await
+            .expect("context");
+        broker
+            .request_suggestion(
+                coordinates(id, 1),
+                SuggestRequestPayload {
+                    fingerprint: update.fingerprint,
+                    explicit: false,
+                },
+                None,
+            )
+            .await
+            .expect("request");
+        let BrokerEvent::SuggestionClear { payload, .. } =
+            timeout(Duration::from_millis(100), events.recv())
+                .await
+                .expect("deadline")
+                .expect("event")
+        else {
+            panic!("expected capability rejection")
+        };
+        assert_eq!(payload.reason, ReasonCode::InvalidCapability);
+    }
+
+    #[tokio::test]
+    async fn correction_cannot_change_spacing_or_replace_an_unbound_suffix() {
+        for (before, after, original, corrected) in [
+            ("This is teh ", "", "teh ", "the"),
+            ("This is teh", "", "teh", "the "),
+            ("This is teh  ", "", "teh  ", "the  "),
+            ("This is teh\t", "", "teh\t", "the\t"),
+            ("This is teh ", "", "other ", "their "),
+            ("Thisisteh ", "", "teh ", "the "),
+            ("This is teh ", "later", "teh ", "the "),
+        ] {
+            let (broker, id, mut events) = setup_with_capabilities(
+                std::sync::Arc::new(SpellingProvider(original, corrected)),
+                BrokerConfig::default(),
+                vec![
+                    Capability::Context,
+                    Capability::Suggestion,
+                    Capability::CommitApplied,
+                    Capability::TextReplacement,
+                ],
+            )
+            .await;
+            let mut update = context(1, FieldPurpose::Normal);
+            update.before = before.to_owned();
+            update.after = after.to_owned();
+            update.selection.anchor = u64::try_from(before.len()).expect("small fixture");
+            update.selection.head = update.selection.anchor;
+            broker
+                .update_context(coordinates(id, 1), update.clone())
+                .await
+                .expect("context");
+            broker
+                .request_suggestion(
+                    coordinates(id, 1),
+                    SuggestRequestPayload {
+                        fingerprint: update.fingerprint,
+                        explicit: false,
+                    },
+                    None,
+                )
+                .await
+                .expect("request");
+            let BrokerEvent::SuggestionClear { payload, .. } =
+                timeout(Duration::from_millis(100), events.recv())
+                    .await
+                    .expect("deadline")
+                    .expect("event")
+            else {
+                panic!("unbound spelling preview for {before:?}")
+            };
+            assert_eq!(payload.reason, ReasonCode::InvalidOutput, "{before:?}");
+            assert_eq!(broker.metrics().snapshot().commits_prepared, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn spelling_after_space_is_revoked_when_typing_continues() {
+        let (broker, id, mut events) = setup_with_capabilities(
+            std::sync::Arc::new(SpellingProvider("teh ", "the ")),
+            BrokerConfig::default(),
+            vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::CommitApplied,
+                Capability::TextReplacement,
+            ],
+        )
+        .await;
+        let mut update = context(1, FieldPurpose::Normal);
+        update.before = "This is teh ".to_owned();
+        update.selection.anchor = 12;
+        update.selection.head = 12;
+        broker
+            .update_context(coordinates(id, 1), update.clone())
+            .await
+            .expect("context");
+        broker
+            .request_suggestion(
+                coordinates(id, 1),
+                SuggestRequestPayload {
+                    fingerprint: update.fingerprint.clone(),
+                    explicit: false,
+                },
+                None,
+            )
+            .await
+            .expect("request");
+        let BrokerEvent::SuggestionShow { payload, .. } =
+            timeout(Duration::from_millis(100), events.recv())
+                .await
+                .expect("deadline")
+                .expect("event")
+        else {
+            panic!("spelling preview")
+        };
+        let mut next = context(2, FieldPurpose::Normal);
+        next.before = "This is teh n".to_owned();
+        next.selection.anchor = 13;
+        next.selection.head = 13;
+        broker
+            .update_context(coordinates(id, 2), next)
+            .await
+            .expect("new context");
+        assert!(
+            broker
+                .session_control(
+                    coordinates(id, 1),
+                    SessionControlRequestPayload {
+                        action: ControlAction::AcceptWord,
+                        fingerprint: update.fingerprint,
+                        suggestion_id: Some(payload.suggestion_id),
+                    },
+                    None,
+                )
+                .await
+                .is_err()
+        );
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(event, BrokerEvent::CommitPrepare { .. }));
+        }
+        assert_eq!(broker.metrics().snapshot().commits_prepared, 0);
+    }
+
+    struct ReplacementAuthorityProbe(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    #[async_trait]
+    impl CompletionProvider for ReplacementAuthorityProbe {
+        fn kind(&self) -> ProviderKind {
+            ProviderKind::LocalModel
+        }
+        async fn complete(
+            &self,
+            _request: ProviderRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<Option<String>, ProviderError> {
+            Ok(None)
+        }
+        async fn propose(
+            &self,
+            _request: ProviderRequest,
+            _cancellation: CancellationToken,
+            allow_replacement: bool,
+        ) -> Result<Option<crate::provider::WritingProposal>, ProviderError> {
+            self.0
+                .store(allow_replacement, std::sync::atomic::Ordering::SeqCst);
+            // Deliberately ignore the false flag to exercise the broker's
+            // independent output gate as well as provider configuration.
+            Ok(Some(crate::provider::WritingProposal {
+                text: "the ".to_owned(),
+                replace_before: Some("teh ".to_owned()),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_unknown_identity_never_receives_spelling_authority() {
+        let allowed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (broker, id, mut events) = setup_with_capabilities(
+            std::sync::Arc::new(ReplacementAuthorityProbe(std::sync::Arc::clone(&allowed))),
+            BrokerConfig::default(),
+            vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::TextReplacement,
+            ],
+        )
+        .await;
+        let mut update = context(1, FieldPurpose::Normal);
+        update.before = "This is teh ".to_owned();
+        update.selection.anchor = 12;
+        update.selection.head = 12;
+        update.field.identity_known = false;
+        update.explicit = true;
+        broker
+            .update_context(coordinates(id, 1), update.clone())
+            .await
+            .expect("explicit context");
+        broker
+            .request_suggestion(
+                coordinates(id, 1),
+                SuggestRequestPayload {
+                    fingerprint: update.fingerprint,
+                    explicit: true,
+                },
+                None,
+            )
+            .await
+            .expect("explicit request");
+        let BrokerEvent::SuggestionClear { payload, .. } =
+            timeout(Duration::from_millis(100), events.recv())
+                .await
+                .expect("deadline")
+                .expect("event")
+        else {
+            panic!("replacement must be rejected")
+        };
+        assert_eq!(payload.reason, ReasonCode::InvalidCapability);
+        assert!(!allowed.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(broker.metrics().snapshot().commits_prepared, 0);
     }
 
     fn controlled_target() -> TargetDescriptor {
@@ -2554,6 +3062,7 @@ mod tests {
 
     fn controlled_authority() -> SessionAuthority {
         SessionAuthority {
+            protocol_version: 1,
             adapter_kind: AdapterKind::Browser,
             capabilities: vec![
                 Capability::Context,
@@ -2772,6 +3281,7 @@ mod tests {
                     activation: Activation::Never,
                 },
                 SessionAuthority {
+                    protocol_version: 1,
                     adapter_kind: AdapterKind::Browser,
                     capabilities: vec![Capability::Context, Capability::Suggestion],
                 },
@@ -2961,6 +3471,7 @@ mod tests {
                     activation: Activation::Always,
                 },
                 SessionAuthority {
+                    protocol_version: 1,
                     adapter_kind: AdapterKind::Browser,
                     capabilities: vec![Capability::Context, Capability::Suggestion],
                 },
@@ -3153,6 +3664,7 @@ mod tests {
                     activation: Activation::Always,
                 },
                 SessionAuthority {
+                    protocol_version: 1,
                     adapter_kind: AdapterKind::Browser,
                     capabilities: vec![Capability::Context, Capability::Suggestion],
                 },
@@ -3233,6 +3745,7 @@ mod tests {
                     activation: Activation::Manual,
                 },
                 SessionAuthority {
+                    protocol_version: 1,
                     adapter_kind: AdapterKind::Browser,
                     capabilities: vec![Capability::Context, Capability::Suggestion],
                 },
@@ -3316,6 +3829,7 @@ mod tests {
                     activation: Activation::Always,
                 },
                 SessionAuthority {
+                    protocol_version: 1,
                     adapter_kind: AdapterKind::Browser,
                     capabilities: vec![Capability::Context, Capability::Suggestion],
                 },
