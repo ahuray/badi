@@ -11,7 +11,7 @@ import { DeviceQualification } from './device-qualification.mjs';
 import { createQualificationHandler, isQualificationRoute } from './qualification-server.mjs';
 import { validateSuite, modelInputForCase, planComparison, scorePrediction, summarizeResults } from './cases.mjs';
 
-const MODES = ['production_baseline', 'production_boundary', 'context', 'instructed', 'healed', 'instructed_healed', 'instructed_word', 'healed_attested', 'native_instructed'];
+const MODES = ['production_baseline', 'production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'instructed_word', 'healed_attested', 'native_instructed'];
 
 export function labOptions(args) {
   const { values } = parseArgs({ args, strict: true, options: {
@@ -123,7 +123,7 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
   qualificationReview = createQualificationHandler({ origin: () => origin, capability, qualification, worker, makeRequest: workerRequest,
     isOtherBusy: () => Boolean(active || resetsInFlight || spelling.busy || contextLookup.busy || discovery.busy || deviceInspection),
     ...(evidenceStore ? { evidenceStore } : {}), ...(qualificationDiagnostics ? { diagnostics: qualificationDiagnostics } : {}) });
-  const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']],
+  const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']], ['/confidence.mjs', ['confidence.mjs', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']],
     ['/spelling.mjs', ['spelling.mjs', 'text/javascript; charset=utf-8']], ['/spelling.css', ['spelling.css', 'text/css; charset=utf-8']],
     ['/context-lookup.mjs', ['context-lookup.mjs', 'text/javascript; charset=utf-8']],
     ['/context-lookup.css', ['context-lookup.css', 'text/css; charset=utf-8']], ['/tabs.mjs', ['tabs.mjs', 'text/javascript; charset=utf-8']],

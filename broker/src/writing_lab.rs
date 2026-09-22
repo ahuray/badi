@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::provider::{CompletionProvider, ProviderRequest};
-use crate::semantic::client::{ClientError, LabObservation, LabStream};
+use crate::semantic::client::{ClientError, LabObservation, LabStream, TokenLogprob};
 use crate::semantic::runtime::{OwnedRuntime, StableRuntimeIdentity};
 use crate::writing::{self, WritingLanguage};
 
@@ -64,6 +64,7 @@ pub enum Mode {
     ProductionBaseline,
     ProductionBoundary,
     Context,
+    ContextConfidence,
     Instructed,
     Healed,
     InstructedHealed,
@@ -141,6 +142,8 @@ pub struct ResultRecord {
     pub ttft_ms: Option<f64>,
     pub first_word_ms: Option<f64>,
     pub first_four_words_ms: Option<f64>,
+    pub candidate_mean_token_logprob: Option<f64>,
+    pub candidate_logprob_token_count: Option<usize>,
     pub shape_valid: bool,
     pub within_production_budget: bool,
     pub word_complete: bool,
@@ -280,6 +283,8 @@ impl Request {
             ttft_ms: None,
             first_word_ms: None,
             first_four_words_ms: None,
+            candidate_mean_token_logprob: None,
+            candidate_logprob_token_count: None,
             shape_valid: false,
             within_production_budget: false,
             word_complete: false,
@@ -348,6 +353,10 @@ pub fn prepare_prompt(request: &Request) -> PreparedPrompt {
         "temperature":request.config.temperature,"seed":request.config.seed,
         "stop":["\n","<|im_end|>","<|endoftext|>"],"stream":true,
         "cache_prompt":request.config.cache_prompt});
+    if request.config.mode == Mode::ContextConfidence {
+        payload["n_probs"] = json!(1);
+        payload["post_sampling_probs"] = json!(false);
+    }
     if request.config.mode == Mode::InstructedWord {
         payload["grammar"] = json!(word_grammar(
             &echo,
@@ -629,29 +638,7 @@ fn apply_observation(
     observed: LabStream,
     echo: &str,
 ) {
-    result.inference_ms = Some(observed.latency_ms);
-    result.ttft_ms = observed.ttft_ms;
-    result.first_word_ms = observed.first_word_ms;
-    result.first_four_words_ms = observed.first_four_words_ms;
-    if request.config.mode == Mode::InstructedWord {
-        // The shared observer does not apply this mode's terminal and exact
-        // one-word checks. Preserve measured request latency, not that earlier
-        // observation as evidence this stricter candidate was ready to display.
-        result.first_word_ms = None;
-        result.first_four_words_ms = None;
-    }
-    result.tokens_predicted = observed.tokens_predicted;
-    result.tokens_evaluated = observed.tokens_evaluated;
-    result.slot_tokens_cached = observed.slot_tokens_cached;
-    result.reused_prompt_tokens = observed.reused_prompt_tokens;
-    result.newly_evaluated_prompt_tokens = observed.newly_evaluated_prompt_tokens;
-    result.terminal_received = Some(observed.terminal_received);
-    result
-        .warnings
-        .push("slot_tokens_cached_is_occupancy_not_proven_prompt_reuse");
-    result
-        .warnings
-        .push("word_timing_is_observed_candidate_readiness_not_display_latency");
+    record_observation_metrics(result, request, &observed);
     let continuation = observed.raw.strip_prefix(echo);
     let echo_matched = continuation.is_some();
     let candidate = if request.config.mode == Mode::InstructedWord {
@@ -718,6 +705,12 @@ fn apply_observation(
         result.reason = "style_fact_conflict";
         return;
     }
+    apply_confidence(
+        result,
+        request,
+        observed.token_logprobs.as_deref(),
+        &candidate,
+    );
     result.outcome = "suggestion";
     result.reason = if request.config.mode == Mode::InstructedWord {
         "constrained_complete_word"
@@ -729,6 +722,84 @@ fn apply_observation(
     result.word_complete = true;
     result.shape_valid = candidate.chars().count() <= 64;
     result.text = Some(candidate);
+}
+
+fn record_observation_metrics(result: &mut ResultRecord, request: &Request, observed: &LabStream) {
+    result.inference_ms = Some(observed.latency_ms);
+    result.ttft_ms = observed.ttft_ms;
+    result.first_word_ms = observed.first_word_ms;
+    result.first_four_words_ms = observed.first_four_words_ms;
+    if request.config.mode == Mode::InstructedWord {
+        // The shared observer does not apply this mode's terminal and exact
+        // one-word checks. Preserve measured request latency, not that earlier
+        // observation as evidence this stricter candidate was ready to display.
+        result.first_word_ms = None;
+        result.first_four_words_ms = None;
+    }
+    result.tokens_predicted = observed.tokens_predicted;
+    result.tokens_evaluated = observed.tokens_evaluated;
+    result.slot_tokens_cached = observed.slot_tokens_cached;
+    result.reused_prompt_tokens = observed.reused_prompt_tokens;
+    result.newly_evaluated_prompt_tokens = observed.newly_evaluated_prompt_tokens;
+    result.terminal_received = Some(observed.terminal_received);
+    result
+        .warnings
+        .push("slot_tokens_cached_is_occupancy_not_proven_prompt_reuse");
+    result
+        .warnings
+        .push("word_timing_is_observed_candidate_readiness_not_display_latency");
+}
+
+fn apply_confidence(
+    result: &mut ResultRecord,
+    request: &Request,
+    tokens: Option<&[TokenLogprob]>,
+    candidate: &str,
+) {
+    if request.config.mode != Mode::ContextConfidence {
+        return;
+    }
+    result
+        .warnings
+        .push("candidate_probability_is_not_calibrated_usefulness");
+    if let Some((mean, count)) =
+        candidate_token_logprob(result.raw.as_deref().unwrap_or_default(), candidate, tokens)
+    {
+        result.candidate_mean_token_logprob = Some(mean);
+        result.candidate_logprob_token_count = Some(count);
+    } else {
+        result.warnings.push("candidate_probability_unavailable");
+    }
+}
+
+fn candidate_token_logprob(
+    raw: &str,
+    candidate: &str,
+    tokens: Option<&[TokenLogprob]>,
+) -> Option<(f64, usize)> {
+    let tokens = tokens?;
+    if candidate.is_empty() || !raw.starts_with(candidate) {
+        return None;
+    }
+    let mut generated = Vec::new();
+    let mut total = 0.0;
+    let mut count = 0;
+    let mut byte_count = 0;
+    for token in tokens {
+        generated.extend_from_slice(&token.bytes);
+        if byte_count < candidate.len() {
+            byte_count += token.bytes.len();
+            if byte_count > candidate.len() {
+                return None;
+            }
+            total += token.logprob;
+            count += 1;
+        }
+    }
+    if count == 0 || byte_count != candidate.len() || generated != raw.as_bytes() {
+        return None;
+    }
+    Some((total / f64::from(u16::try_from(count).ok()?), count))
 }
 
 fn complete_constrained_word(
@@ -851,14 +922,18 @@ enum FactRun {
     Letters,
 }
 
-fn is_fact_digit(character: char) -> bool {
-    character.is_ascii_digit()
-        || ('\u{0660}'..='\u{0669}').contains(&character)
-        || ('\u{06F0}'..='\u{06F9}').contains(&character)
+fn fact_digit(character: char) -> Option<char> {
+    let value = match character {
+        '0'..='9' => character as u32 - '0' as u32,
+        '\u{0660}'..='\u{0669}' => character as u32 - '\u{0660}' as u32,
+        '\u{06F0}'..='\u{06F9}' => character as u32 - '\u{06F0}' as u32,
+        _ => return None,
+    };
+    char::from_u32('0' as u32 + value)
 }
 
 fn fact_run(character: char, current: Option<FactRun>) -> Option<FactRun> {
-    if is_fact_digit(character) {
+    if fact_digit(character).is_some() {
         Some(FactRun::Digits)
     } else if character.is_alphabetic()
         || (character == '\u{200c}' && current == Some(FactRun::Letters))
@@ -905,7 +980,14 @@ fn record_fact_run(
 ) {
     match kind {
         FactRun::Digits => {
-            found.insert(text[start..end].to_owned());
+            found.insert(
+                text[start..end]
+                    .chars()
+                    .map(|character| {
+                        fact_digit(character).expect("numeric fact run contains supported digits")
+                    })
+                    .collect(),
+            );
         }
         FactRun::Letters => {
             let token = text[start..end].replace('\u{200c}', "").to_lowercase();
@@ -1088,6 +1170,67 @@ mod tests {
         assert!(prepare_prompt(&value).echo.is_empty());
         value.before = "Please review the docum".to_owned();
         assert_eq!(prepare_prompt(&value).echo, "docum");
+    }
+
+    #[test]
+    fn context_confidence_changes_only_probability_capture() {
+        let ordinary = prepare_prompt(&request(Mode::Context));
+        let confidence = prepare_prompt(&request(Mode::ContextConfidence));
+        let mut expected = ordinary.payload;
+        expected["n_probs"] = json!(1);
+        expected["post_sampling_probs"] = json!(false);
+        assert_eq!(confidence.payload, expected);
+        assert_eq!(confidence.echo, ordinary.echo);
+    }
+
+    #[test]
+    fn confidence_requires_exact_complete_candidate_token_boundaries() {
+        let request = request(Mode::ContextConfidence);
+        let tokens = || {
+            [("report", -0.2), (" and", -0.4), (" par", -0.6)]
+                .into_iter()
+                .map(|(bytes, logprob)| TokenLogprob {
+                    bytes: bytes.as_bytes().to_vec(),
+                    logprob,
+                })
+                .collect()
+        };
+        let mut result = request.result(&fixture_identity());
+        apply_observation(
+            &mut result,
+            &request,
+            LabStream {
+                raw: "report and par".to_owned(),
+                token_logprobs: Some(tokens()),
+                ..LabStream::default()
+            },
+            "",
+        );
+        assert_eq!(result.text.as_deref(), Some("report and"));
+        assert_eq!(result.candidate_logprob_token_count, Some(2));
+        assert!((result.candidate_mean_token_logprob.unwrap() + 0.3).abs() < 1e-12);
+
+        let mut unaligned = request.result(&fixture_identity());
+        apply_observation(
+            &mut unaligned,
+            &request,
+            LabStream {
+                raw: "report and par".to_owned(),
+                token_logprobs: Some(vec![TokenLogprob {
+                    bytes: b"report and par".to_vec(),
+                    logprob: -0.1,
+                }]),
+                ..LabStream::default()
+            },
+            "",
+        );
+        assert_eq!(unaligned.outcome, "suggestion");
+        assert!(unaligned.candidate_mean_token_logprob.is_none());
+        assert!(
+            unaligned
+                .warnings
+                .contains(&"candidate_probability_unavailable")
+        );
     }
 
     #[test]
@@ -1998,16 +2141,10 @@ mod tests {
         );
         assert_eq!(longer_number.outcome, "suggestion");
         assert_eq!(longer_number.text.as_deref(), Some("at 14"));
+    }
 
-        let mut arabic_indic = request(Mode::Context);
-        arabic_indic.before = "باب ".to_owned();
-        arabic_indic.context.clear();
-        arabic_indic.language = "fa".to_owned();
-        arabic_indic.style_examples = vec!["رقم \u{0661}\u{0664}".to_owned()];
-        assert!(style_fact_conflict("باب \u{0661}\u{0664}", &arabic_indic));
-        arabic_indic.context = "رقم \u{0661}\u{0664}".to_owned();
-        assert!(!style_fact_conflict("باب \u{0661}\u{0664}", &arabic_indic));
-
+    #[test]
+    fn persian_weekday_with_zwnj_is_a_style_fact() {
         let wednesday = observe_continuation(
             Mode::Context,
             "جلسه ",
@@ -2018,6 +2155,39 @@ mod tests {
         );
         assert_eq!(wednesday.outcome, "abstention");
         assert_eq!(wednesday.reason, "style_fact_conflict");
+    }
+
+    #[test]
+    fn numeric_style_facts_match_across_digit_scripts() {
+        let mut arabic_indic = request(Mode::Context);
+        arabic_indic.before = "باب ".to_owned();
+        arabic_indic.context.clear();
+        arabic_indic.language = "fa".to_owned();
+        arabic_indic.style_examples = vec!["رقم \u{0661}\u{0664}".to_owned()];
+        assert!(style_fact_conflict("باب \u{0661}\u{0664}", &arabic_indic));
+        arabic_indic.context = "رقم \u{0661}\u{0664}".to_owned();
+        assert!(!style_fact_conflict("باب \u{0661}\u{0664}", &arabic_indic));
+
+        arabic_indic.context.clear();
+        arabic_indic.style_examples = vec!["رقم 14".to_owned()];
+        assert!(style_fact_conflict("باب \u{06f1}\u{06f4}", &arabic_indic));
+        assert!(style_fact_conflict("باب 1\u{0664}", &arabic_indic));
+        arabic_indic.context = "رقم \u{0661}\u{0664}".to_owned();
+        assert!(!style_fact_conflict("باب \u{06f1}\u{06f4}", &arabic_indic));
+        arabic_indic.context = "رقم 140".to_owned();
+        assert!(style_fact_conflict("باب \u{06f1}\u{06f4}", &arabic_indic));
+
+        let cross_script_conflict = observe_continuation(
+            Mode::Context,
+            "شماره ",
+            "fa",
+            "",
+            &["در نمونه شماره 14 را بنویس."],
+            "باب \u{06f1}\u{06f4}",
+        );
+        assert_eq!(cross_script_conflict.outcome, "abstention");
+        assert_eq!(cross_script_conflict.reason, "style_fact_conflict");
+        assert!(cross_script_conflict.text.is_none());
     }
 
     #[test]

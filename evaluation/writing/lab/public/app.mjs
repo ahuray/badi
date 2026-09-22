@@ -1,9 +1,10 @@
 import { mountDiscovery } from './discovery.mjs';
 import { mountQualification } from './qualification.mjs';
+import { confidenceCoverage } from './confidence.mjs';
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="badi-lab-token"]').content;
 const headers = { 'Content-Type': 'application/json', 'X-Badi-Lab-Token': token };
-const names = { production_baseline: 'Current Badi logic', production_boundary: 'Isolated boundary fix', context: 'Full context', instructed: 'Context + style', healed: 'Word-boundary experiment', instructed_healed: 'Instructions + word boundary', instructed_word: 'One complete word', healed_attested: 'Complete words from context', native_instructed: 'Selected model instructions' };
+const names = { production_baseline: 'Current Badi logic', production_boundary: 'Isolated boundary fix', context: 'Full context', context_confidence: 'Full context + token confidence', instructed: 'Context + style', healed: 'Word-boundary experiment', instructed_healed: 'Instructions + word boundary', instructed_word: 'One complete word', healed_attested: 'Complete words from context', native_instructed: 'Selected model instructions' };
 const fixedProductionMode = mode => mode === 'production_baseline' || mode === 'production_boundary';
 const reasonLabels = {
   constrained_complete_word: 'The model finished one word with a separator and a completion response. Its decoding was constrained to this shape.',
@@ -86,7 +87,7 @@ function renderRecord(record, index) {
   const review = node('div', undefined, 'review'); review.append(node('span', 'Your judgment:'));
   for (const value of ['Useful', 'Acceptable alternative', 'Unhelpful', 'Harmful']) {
     const button = node('button', value, 'secondary'); button.setAttribute('aria-pressed', 'false');
-    button.onclick = () => { session.records[index].review = { judgment: value, reviewer: 'user', at: new Date().toISOString() }; for (const other of review.querySelectorAll('button')) other.setAttribute('aria-pressed', String(other === button)); };
+    button.onclick = () => { session.records[index].review = { judgment: value, reviewer: 'user', at: new Date().toISOString() }; for (const other of review.querySelectorAll('button')) other.setAttribute('aria-pressed', String(other === button)); renderSummary(); };
     review.append(button);
   }
   const details = node('details'); details.append(node('summary', 'Inspect prompt, output and measurements'));
@@ -94,10 +95,12 @@ function renderRecord(record, index) {
   article.append(top, preview, diagnostic);
   if (result.reason && !result.text) article.append(node('p', reasonLabels[result.reason] ?? 'No usable prediction was delivered. Inspect the measurements for the exact reason.', 'diagnostic warning'));
   if (Number.isFinite(result.first_word_ms)) article.append(node('p', `First complete word observed at ${Math.round(result.first_word_ms)} ms. This diagnostic timestamp precedes the completed result shown above.`, 'diagnostic'));
+  if (Number.isFinite(result.candidate_mean_token_logprob)) article.append(node('p', `Mean candidate token log probability: ${result.candidate_mean_token_logprob.toFixed(3)} across ${result.candidate_logprob_token_count} tokens. This is an uncalibrated model feature, not a correctness score.`, 'diagnostic'));
   article.append(node('p', 'Useful confirms substantive value and correctness of the entire addition, including its tail. Acceptable alternative alone does not earn useful credit.', 'hint'), review);
   article.append(details); $('results').append(article);
 }
 function renderSummary() {
+  const confidenceOpen = $('summary').querySelector?.('details')?.open ?? false;
   $('summary').replaceChildren();
   const grid = node('div', undefined, 'summary-grid');
   for (const config of session.configs) {
@@ -114,6 +117,30 @@ function renderSummary() {
     grid.append(item);
   }
   $('summary').append(grid);
+  const groups = confidenceCoverage(session.records);
+  if (groups.length) {
+    const details = node('details'); details.open = confidenceOpen;
+    details.append(node('summary', 'Experimental confidence and coverage'));
+    details.append(node('p', 'Review the entire suggestion, including its tail. Scores rank only aligned, on-time suggestions. Missing scores, late results and abstentions stay in the request count. No threshold is selected.', 'hint'));
+    for (const group of groups) {
+      const section = node('section', undefined, 'summary-item confidence-group');
+      section.append(node('strong', `${group.label}: ${group.scored_suggestions}/${group.requests} requests have an aligned on-time score`));
+      section.append(node('p', `${group.missing_scores} on-time suggestions lack a score · ${group.reviewed_scores}/${group.scored_suggestions} scored suggestions reviewed`, 'diagnostic'));
+      const table = node('table', undefined, 'confidence-table');
+      const header = node('tr');
+      for (const label of ['Minimum log score', 'Coverage', 'Useful / harmful', 'Useful precision']) header.append(node('th', label));
+      table.append(header);
+      for (const point of group.points) {
+        const row = node('tr');
+        for (const value of [point.threshold.toFixed(3), `${point.retained}/${group.requests}`,
+          `${point.useful}/${point.harmful}${point.reviewed < point.retained ? ' · review incomplete' : ''}`,
+          point.precision === null ? 'Review pending' : `${Math.round(point.precision * 100)}%`]) row.append(node('td', value));
+        table.append(row);
+      }
+      section.append(table); details.append(section);
+    }
+    $('summary').append(details);
+  }
 }
 
 $('run').onclick = async () => {

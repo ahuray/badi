@@ -222,6 +222,30 @@ baseline, not an installed-service latency measurement. Experimental budgets up
 to ten seconds diagnose quality/latency tradeoffs and do not change production
 deadlines. Token preflight refuses overflow instead of silently discarding cues.
 
+The optional **full context + token confidence** (`context_confidence`) mode
+uses the same prompt, sampling and output guards as `context`. It requests one
+token log probability per generated token from the pinned local runtime. A mean
+score is reported only when the returned token bytes exactly cover the complete
+displayed addition at token boundaries; absent probabilities, clipped words and
+ambiguous byte alignment remain unscored. This is an uncalibrated model feature,
+not a probability that the writing is correct. The Lab shows score thresholds
+and reviewed full-addition usefulness at actual request coverage, separately by
+language. Unreviewed suggestions have no precision value; deadlines, abstentions,
+late suggestions and missing scores stay in the request denominator. No score
+threshold is selected or applied to production. The pinned runtime's
+[`n_probs` response contract](https://github.com/ggml-org/llama.cpp/blob/b10726/tools/server/README.md#post-completion-given-a-prompt-it-returns-the-predicted-completion)
+supplies this experimental measurement.
+
+A six-request local-model smoke and a paired 32-request run on the exposed
+16-case development set verified source/binary identity and worker cleanup.
+In the paired run, each mode showed six suggestions, two first-word reference
+matches and zero errors; the confidence mode scored all six suggestions, five
+of them within 550 ms. Matching and nonmatching first-word outputs had
+overlapping scores, and a high-scoring first-word match carried an unwanted
+tail. This small authored set cannot calibrate usefulness or justify filtering.
+The private receipts are under `output/writing/2026-09-22-confidence-*/` and
+predate the later review-view code; keep their recorded source identities.
+
 The Lab server and comparison CLI accept `--prefill-batch 16|64`. Omission keeps
 16; 64 is an explicit runtime experiment that changes both logical and physical
 prompt batches, with the same model, four CPU threads and 2,048-token context.
@@ -275,10 +299,22 @@ Completed Lab suggestions that share this observation path now abstain with
 `style_fact_conflict` when they introduce a weekday (English, German, or Persian,
 including a ZWNJ spelling) or a numeric token that appears in the style examples
 and is absent from the current draft and context. ASCII digits and both
-Arabic-Indic digit blocks count; a longer number does not match a shorter one.
+Arabic-Indic digit blocks count; digit scripts are normalized before comparison,
+while a longer number does not match a shorter one.
 Ordinary style words still pass. The one-word grammar itself still excludes
 numbers. This fence does not change installed prediction and is not a fresh
 model confirmation of the Friday/Tuesday failure.
+
+A nine-case synthetic English/German/Persian development probe ran both
+instruction modes on the local model with a 2,500 ms diagnostic budget. Nine of
+18 requests returned the expected first word, nine hit deadlines, and none
+returned a complete suggestion within the 550 ms typing deadline. The model did
+not copy a conflicting style fact, so this run did not exercise the fence's
+rejection path. All 18 executed workers had valid identity and verified cleanup.
+The run under `output/writing/2026-09-22-style-fact-probe-run/` predates the
+digit-normalization change; its source hash must not be reused as evidence for
+the updated binary. The cross-script behavior is covered by the Lab's local
+observation regression.
 
 The lexical body is restricted to common Latin letter blocks for English/German
 or the existing Arabic base-letter ranges for Persian, with internal apostrophes
@@ -473,6 +509,11 @@ node evaluation/writing/lab/run.mjs \
   --output output/writing/my-boundary-comparison \
   --modes context,healed --budget-ms 550 --max-tokens 8 --seed 42
 ```
+
+Use `--modes context,context_confidence` for paired score capture. Review each
+entire suggestion in the HTTP Lab and inspect **Experimental confidence and
+coverage** after the run; a CLI run without reviews records measurements but
+cannot report reviewed precision. Select a new output directory for each run.
 
 The [16-case development set](lab/examples/quality-probes.json) covers paired
 trailing-space boundaries, contrasting contextual facts and supplied spelling

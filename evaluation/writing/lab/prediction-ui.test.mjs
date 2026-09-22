@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
+import { confidenceCoverage } from './public/confidence.mjs';
 
 // Discovery has its own rendered module tests; this harness isolates draft/import
 // races without making a real metadata request through that independent module.
 const source = (await readFile(new URL('./public/app.mjs', import.meta.url), 'utf8'))
   .replace(/^import \{ mountDiscovery \} from '\.\/discovery\.mjs';\n/u, '')
-  .replace(/^import \{ mountQualification \} from '\.\/qualification\.mjs';\n/u, '');
+  .replace(/^import \{ mountQualification \} from '\.\/qualification\.mjs';\n/u, '')
+  .replace(/^import \{ confidenceCoverage \} from '\.\/confidence\.mjs';\n/u, '');
 const suite = (id, extra = {}) => ({ schema: 'badi.prediction-suite.v1', name: 'Import fixture',
   cases: [{ id, language: 'en', prefix: `Draft ${id}`, ...extra }] });
 
@@ -24,7 +26,7 @@ function harness() {
     return elements.get(id);
   };
   const requests = [];
-  runInNewContext(source, { structuredClone, mountDiscovery: () => {}, mountQualification: () => {}, document: {
+  runInNewContext(source, { structuredClone, mountDiscovery: () => {}, mountQualification: () => {}, confidenceCoverage, document: {
     getElementById: get, createElement: () => new Element(),
     querySelector: selector => selector === '.editor' ? get('editor') : { content: 'fixture-token' },
   }, fetch: async url => { requests.push(url); return { ok: true }; } });

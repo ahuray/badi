@@ -212,10 +212,10 @@ test('production-boundary mode requires the production budget, nominal tokens, c
   for (const changed of [{ budget_ms: 551 }, { max_tokens: 9 }, { cache_prompt: false }, { temperature: .1 }, { seed: 43 }]) {
     assert.throws(() => validateConfigs([{ ...boundary, ...changed }]), /fixed production settings/u);
   }
-  const modes = ['production_baseline', 'production_boundary', 'context', 'instructed', 'healed', 'instructed_healed', 'instructed_word', 'healed_attested', 'native_instructed'];
+  const modes = ['production_baseline', 'production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'instructed_word', 'healed_attested', 'native_instructed'];
   const all = modes.map(mode => config({ id: mode, mode }));
-  assert.equal(validateConfigs(all).length, 9);
-  assert.throws(() => validateConfigs([...all, config({ id: 'extra' })]), /9 configurations/u);
+  assert.equal(validateConfigs(all).length, 10);
+  assert.throws(() => validateConfigs([...all, config({ id: 'extra' })]), /10 configurations/u);
 });
 
 test('one-word mode is explicit, preserves input and cannot supply a custom grammar', async t => {

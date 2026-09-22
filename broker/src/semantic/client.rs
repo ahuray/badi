@@ -19,7 +19,7 @@ use unicode_segmentation::UnicodeSegmentation;
 #[cfg(feature = "writing-lab")]
 mod writing_lab;
 #[cfg(feature = "writing-lab")]
-pub(crate) use writing_lab::{LabObservation, LabStream};
+pub(crate) use writing_lab::{LabObservation, LabStream, TokenLogprob};
 #[cfg(feature = "writing-lab")]
 mod prefill_probe;
 #[cfg(feature = "writing-lab")]

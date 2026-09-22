@@ -18,6 +18,7 @@ const SOURCE_PATHS = ['evaluation/writing/lab/run.mjs', 'evaluation/writing/lab/
   'evaluation/writing/lab/discovery.mjs', 'evaluation/writing/lab/discovery-server.mjs',
   'evaluation/writing/lab/qualification-evidence.mjs', 'evaluation/writing/lab/qualification-diagnostics.mjs',
   'evaluation/writing/lab/qualification-server.mjs',
+  'evaluation/writing/lab/public/confidence.mjs',
   'broker/src/model_selection/qualification.rs', 'broker/src/model_selection/qualification/device.rs',
   'broker/src/bin/badi-writing-lab.rs', 'broker/src/writing_lab.rs', 'broker/src/writing_lab/process.rs',
   'broker/src/writing_lab/prefill_probe.rs', 'broker/src/writing_lab/paced_probe.rs', 'broker/src/writing_lab/artifact.rs',

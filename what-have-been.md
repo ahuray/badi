@@ -2,6 +2,14 @@
 
 Badi is a pre-release local writing assistant for Linux/Omarchy.
 
+The opt-in Prediction Lab now records an exact-token-aligned mean log
+probability for completed suggestions in a separate full-context experiment.
+Its review view retains all request denominators and withholds precision until
+the retained suggestions have full-addition judgments. A 16-case synthetic
+development comparison returned six suggestions and two first-word reference
+matches per arm, with overlapping scores for matching and nonmatching outputs.
+No confidence threshold or production default was selected.
+
 The 2026-09-10 [model discovery development screen](evaluation/writing/README.md#measured-shortlist-development-2026-09-10)
 retained 360 requests across the production Qwen baseline, its terminal-observed
 boundary mode, and three approximately 350M candidates. Granite, LFM2.5 and

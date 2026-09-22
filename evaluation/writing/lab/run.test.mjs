@@ -114,6 +114,7 @@ test('instructed healing is an explicit CLI experiment with unchanged defaults a
     budget_ms: 1500, max_tokens: 16, cache_prompt: false, temperature: 0, seed: 42 }]);
   assert.equal(selected.seed, 73);
   assert.equal(parseOptions([...base, '--modes', 'instructed_word']).configs[0].mode, 'instructed_word');
+  assert.equal(parseOptions([...base, '--modes', 'context_confidence']).configs[0].mode, 'context_confidence');
   for (const extra of [['--modes', 'instructed_healed_typo'], ['--budget-ms', '549'], ['--max-tokens', '65']]) {
     assert.throws(() => parseOptions([...base, '--modes', 'instructed_healed', ...extra]));
   }

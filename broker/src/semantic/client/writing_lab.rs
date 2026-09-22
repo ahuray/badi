@@ -16,6 +16,12 @@ use unicode_segmentation::UnicodeSegmentation;
 const MAX_LAB_RESPONSE_BYTES: usize = 128 * 1024;
 const MAX_LAB_RAW_BYTES: usize = 4096;
 
+#[derive(Debug)]
+pub(crate) struct TokenLogprob {
+    pub bytes: Vec<u8>,
+    pub logprob: f64,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct LabStream {
     pub raw: String,
@@ -31,6 +37,56 @@ pub(crate) struct LabStream {
     pub slot_tokens_cached: Option<u64>,
     pub reused_prompt_tokens: Option<u64>,
     pub newly_evaluated_prompt_tokens: Option<u64>,
+    pub token_logprobs: Option<Vec<TokenLogprob>>,
+}
+
+impl LabStream {
+    fn for_payload(payload: &Value) -> Self {
+        let mut result = Self::default();
+        if payload["n_probs"] == 1 {
+            result.token_logprobs = Some(Vec::new());
+        }
+        result
+    }
+
+    fn capture_token_logprob(&mut self, data: &str, content: &str) {
+        if self.token_logprobs.is_none() {
+            return;
+        }
+        if let Some(token) = streamed_token_logprob(data) {
+            if let Some(tokens) = self.token_logprobs.as_mut() {
+                if tokens.len() < 64 {
+                    tokens.push(token);
+                    return;
+                }
+            }
+        } else if content.is_empty() {
+            return;
+        }
+        self.token_logprobs = None;
+    }
+}
+
+fn streamed_token_logprob(data: &str) -> Option<TokenLogprob> {
+    let value: Value = serde_json::from_str(data).ok()?;
+    let tokens = value["completion_probabilities"].as_array()?;
+    let [token] = tokens.as_slice() else {
+        return None;
+    };
+    u32::try_from(token["id"].as_u64()?).ok()?;
+    let bytes = token["bytes"].as_array()?;
+    if bytes.is_empty() || bytes.len() > 128 {
+        return None;
+    }
+    let bytes: Vec<u8> = bytes
+        .iter()
+        .map(|value| u8::try_from(value.as_u64()?).ok())
+        .collect::<Option<_>>()?;
+    let logprob = token["logprob"].as_f64()?;
+    if !logprob.is_finite() || logprob > 0.0 {
+        return None;
+    }
+    Some(TokenLogprob { bytes, logprob })
 }
 
 #[derive(Clone, Copy)]
@@ -170,7 +226,7 @@ impl SemanticClient {
     ) -> Result<LabStream, ClientError> {
         let started = Instant::now();
         let deadline = tokio::time::Instant::now() + Duration::from_millis(budget_ms);
-        let mut result = LabStream::default();
+        let mut result = LabStream::for_payload(&payload);
         let send = self
             .client
             .post(self.completion_url.clone())
@@ -227,6 +283,9 @@ impl SemanticClient {
                 }
                 if !chunk.content.is_empty() && result.ttft_ms.is_none() {
                     result.ttft_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+                }
+                if !chunk.stop {
+                    result.capture_token_logprob(&data, &chunk.content);
                 }
                 result.raw.push_str(&chunk.content);
                 if result.raw.len() > MAX_LAB_RAW_BYTES {
@@ -407,6 +466,44 @@ mod tests {
             assert_eq!(observed.stopped, natural);
             assert_eq!(observed.deadline, !received);
             server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn token_logprob_capture_is_explicit_and_missing_data_stays_unknown() {
+        for include_probability in [true, false] {
+            let mut partial = json!({"index":0,"content":"report","stop":false});
+            if include_probability {
+                partial["completion_probabilities"] = json!([{
+                    "id": 41,
+                    "bytes": [114, 101, 112, 111, 114, 116],
+                    "logprob": -0.4,
+                    "top_logprobs": []
+                }]);
+            }
+            let body = format!(
+                "data: {partial}\n\ndata: {}\n\n",
+                json!({"index":0,"content":"","stop":true,"stop_type":"eos"})
+            );
+            let (client, server) = fixture(body, Duration::ZERO, "text/event-stream").await;
+            let observed = client
+                .lab_stream(
+                    json!({"prompt":"fixture","n_probs":1}),
+                    550,
+                    CancellationToken::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+            let payload = server.await.unwrap();
+            assert_eq!(payload["n_probs"], 1);
+            assert_eq!(observed.raw, "report");
+            assert_eq!(observed.token_logprobs.is_some(), include_probability);
+            if let Some(tokens) = observed.token_logprobs {
+                assert_eq!(tokens.len(), 1);
+                assert_eq!(tokens[0].bytes, b"report");
+                assert!((tokens[0].logprob + 0.4).abs() < 1e-12);
+            }
         }
     }
 
@@ -862,6 +959,7 @@ mod tests {
             slot_tokens_cached: None,
             reused_prompt_tokens: None,
             newly_evaluated_prompt_tokens: None,
+            token_logprobs: None,
         }
     }
 

@@ -79,7 +79,10 @@ awaiting clarification. GPT/Codex and Obsidian remain later application targets.
       The Lab now abstains with `style_fact_conflict` when a completed suggestion
       introduces a weekday or numeric token that is present in the style examples
       and absent from the current draft and context. This unit fence is not a
-      fresh multilingual model confirmation.
+      fresh multilingual model confirmation. A later nine-case synthetic model
+      probe returned no on-time suggestions or fact-fence rejections across 18
+      requests; it verifies cleanup but cannot close this quality item. Numeric
+      facts now match across ASCII and Arabic-Indic digit scripts in the Lab.
 - [x] Verify the combined separator/native-stop mechanism on fixed literals.
       All three pairs saved one native generation step with exact output and
       cleanup; this does not qualify natural prediction quality or timing.
@@ -102,6 +105,13 @@ awaiting clarification. GPT/Codex and Obsidian remain later application targets.
       independent cases before application integration; keep the failed gate.
 - [ ] Promote only an evidenced quality improvement into the writing provider,
       validate target application behavior, then improve its UI/UX.
+- [x] Add an opt-in local token-confidence measurement to the Prediction Lab,
+      with exact candidate-byte alignment and an unreviewed/late-aware coverage
+      view. The small development run measured the feature but did not select a
+      threshold or change installed prediction.
+- [ ] Calibrate confidence against independently reviewed full additions at
+      matched coverage, per language and word-boundary category. Freeze fresh
+      development and untouched confirmation inputs before any promotion.
 
 The Lab's real-model browser flow now exercises visible predictions, export,
 keyboard import, cancellation, clear during an active model session and recovery.
