@@ -60,7 +60,7 @@ uuid = { version = "1.18", features = ["serde", "v4"] }
 
 [dev-dependencies]
 tokio = { version = "1.47", features = ["test-util"] }
-jsonschema = { version = "0.52", default-features = false }
+jsonschema = { version = "0.56", default-features = false }
 tempfile = "3.21"
 
 [lints]
