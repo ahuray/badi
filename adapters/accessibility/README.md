@@ -56,10 +56,13 @@ Hyprland's active window and monitors are read over its IPC socket
 (`$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket.sock`) within the
 operation budget; only the lock check starts a process. It makes the Quickshell
 IPC call behind `omarchy-shell lock status` directly (`qs ipc -n -p
-$OMARCHY_PATH/shell call -- lock status`), about 20 ms instead of 23 ms without
-the wrapper's Bash and `timeout` processes, and denies unless all five lock flags
-are explicitly false; a missing `OMARCHY_PATH`, an IPC error reply, a timeout
-or any unparsable answer fails closed. Chromium browser nodes must supply a valid
+$OMARCHY_PATH/shell call -- lock status`) as a child process that runs while the
+field is read, and `inspect` answers only after joining it: at most 150 ms after
+the field read, within the operation budget. A late child is killed, and every
+child is reaped. The query denies unless all five lock flags are explicitly
+false, and that denial replaces any field result or error; a missing
+`OMARCHY_PATH`, an IPC error reply, a timeout or any unparsable answer fails
+closed. No lock state is kept between operations. Chromium browser nodes must supply a valid
 HTTP(S) Document `URI`, Gecko ones a `DocURL` (below); cross-origin frames
 retain their own address. Desktop apps need
 exactly one focused editable node. The helper reads no field prose during

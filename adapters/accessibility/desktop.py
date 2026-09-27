@@ -57,17 +57,21 @@ class Desktop:
         self.remaining = remaining
         self.request_socket = request_socket
 
-    def window(self, app_id, check_lock=False):
-        """The active window and its app rule, when this user's exact app shows it."""
+    def app(self, app_id):
         app = self.apps.get(app_id)
         if app is None:
             raise Denied("unsupported_app")
-        if check_lock:
-            self.require_unlocked()
+        return app
+
+    def window(self, app):
+        """The active window, when this user's exact `app` shows it."""
         window = self.active_window()
         if not verify_process(window["pid"], app, os.getuid(), config_home()) or not _shows(window, app):
             raise Denied("app_mismatch")
-        return window, app
+        return window
+
+    def lock_query(self):
+        return LockQuery(self.remaining)
 
     def active_window(self):
         window = self.request("j/activewindow")
@@ -78,27 +82,6 @@ class Desktop:
     def monitors(self):
         monitors = self.request("j/monitors")
         return monitors if isinstance(monitors, list) else []
-
-    def require_unlocked(self):
-        """Deny unless the Omarchy shell reports every lock flag explicitly false.
-
-        This is the Quickshell IPC call `omarchy-shell lock status` makes, made
-        directly: that wrapper adds a Bash and a `timeout` process per inspect,
-        and a timeout here would kill only the wrapper. Any failure, and any
-        reply that is not the status document, fails closed.
-        """
-        shell = os.environ.get("OMARCHY_PATH", "")
-        if not os.path.isabs(shell):
-            raise Denied("desktop_unavailable")
-        try:
-            raw = subprocess.check_output(("qs", "ipc", "-n", "-p", os.path.join(shell, "shell"), "call", "--", "lock", "status"),
-                                          timeout=self.remaining(IPC_SECONDS), stdin=subprocess.DEVNULL,
-                                          stderr=subprocess.DEVNULL)
-            state = json.loads(raw) if len(raw) <= MAX_IPC_REPLY else None
-        except (OSError, ValueError, subprocess.SubprocessError):
-            raise Denied("desktop_unavailable") from None
-        if not isinstance(state, dict) or any(state.get(flag) is not False for flag in LOCK_FLAGS):
-            raise Denied("desktop_locked")
 
     def request(self, request):
         """Hyprland's JSON reply to one IPC request, within the operation budget."""
@@ -120,6 +103,67 @@ class Desktop:
             if len(raw) > MAX_IPC_REPLY:
                 raise Denied("desktop_unavailable")
             connection.settimeout(self.remaining(IPC_SECONDS))
+        return raw
+
+
+class LockQuery:
+    """The Omarchy lock status, asked by a child process while the block runs.
+
+    Leaving the block waits at most IPC_SECONDS more, within the operation
+    budget, and denies unless every lock flag is explicitly false. That denial
+    replaces the block's result or error, so a locked session never yields a
+    binding. A missing shell, a failed or late query and any reply that is not
+    the status document fail closed. The child is always reaped, and every
+    block asks again.
+    """
+
+    def __init__(self, remaining):
+        self.remaining = remaining
+        self.process = None
+
+    def __enter__(self):
+        shell = os.environ.get("OMARCHY_PATH", "")
+        if not os.path.isabs(shell):
+            raise Denied("desktop_unavailable")
+        # The Quickshell IPC call behind `omarchy-shell lock status`, made
+        # directly: killing that wrapper on timeout would leave this running.
+        try:
+            self.process = subprocess.Popen(
+                ("qs", "ipc", "-n", "-p", os.path.join(shell, "shell"), "call", "--", "lock", "status"),
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            raise Denied("desktop_unavailable") from None
+        return self
+
+    def __exit__(self, *_exception):
+        try:
+            self.require_unlocked()
+        finally:
+            self.reap()
+
+    def reap(self):
+        """Kill the query if it still runs, and collect its exit status."""
+        self.process.kill()
+        self.process.wait()
+        self.process.stdout.close()
+
+    def require_unlocked(self):
+        raw = self.reply()
+        try:
+            state = json.loads(raw) if len(raw) <= MAX_IPC_REPLY else None
+        except ValueError:
+            raise Denied("desktop_unavailable") from None
+        if not isinstance(state, dict) or any(state.get(flag) is not False for flag in LOCK_FLAGS):
+            raise Denied("desktop_locked")
+
+    def reply(self):
+        """The query's output, once it exits successfully."""
+        try:
+            raw, _ = self.process.communicate(timeout=self.remaining(IPC_SECONDS))
+        except (OSError, subprocess.SubprocessError):
+            raise Denied("desktop_unavailable") from None
+        if self.process.returncode != 0:
+            raise Denied("desktop_unavailable")
         return raw
 
 

@@ -1,6 +1,8 @@
+import contextlib
 import json
 import os
 import pathlib
+import signal
 import socket
 import sys
 import tempfile
@@ -538,108 +540,233 @@ class IdentityTests(unittest.TestCase):
 
 
 class WindowTests(unittest.TestCase):
-    UNLOCKED = {key: False for key in observer_desktop.LOCK_FLAGS}
-
     def backend(self, window):
         backend = FieldBackend(None, APPS).desktop
         backend.request = lambda request: self.assertEqual(request, "j/activewindow") or window
         return backend
 
-    LOCK_QUERY = ("qs", "ipc", "-n", "-p", "/usr/share/omarchy/shell", "call", "--", "lock", "status")
-
-    def check_lock(self, backend, state, reply=None):
-        desktop = backend.desktop
-        with unittest.mock.patch.dict(os.environ, {"OMARCHY_PATH": "/usr/share/omarchy"}), \
-             unittest.mock.patch.object(observer_desktop.subprocess, "check_output",
-                                        return_value=json.dumps(state).encode() if reply is None else reply) as command:
-            backend.deadline = time.monotonic() + 1
-            try:
-                desktop.require_unlocked()
-            finally:
-                self.assertEqual(command.call_args.args[0], self.LOCK_QUERY)
-                self.assertLessEqual(command.call_args.kwargs["timeout"], .15)
-
-    def test_every_lock_flag_denies_and_only_an_explicit_unlock_passes(self):
-        backend = FieldBackend(None, APPS)
-        self.check_lock(backend, self.UNLOCKED)
-        for state in ({**self.UNLOCKED, "requested": True}, {**self.UNLOCKED, "pending": True},
-                      {**self.UNLOCKED, "sessionLocked": True}, {**self.UNLOCKED, "secure": None},
-                      {key: False for key in observer_desktop.LOCK_FLAGS[1:]}, [], "unlocked"):
-            with self.subTest(state=state), self.assertRaisesRegex(Denied, "desktop_locked"):
-                self.check_lock(backend, state)
-
-    def test_an_unanswered_or_unexpected_lock_query_fails_closed(self):
-        backend = FieldBackend(None, APPS)
-        # The replies omarchy-shell turns into failures arrive on stdout with exit 0.
-        for reply in (b"Target not found.\n", b"Function not found.\n", b"Not ready to accept queries yet\n", b""):
-            with self.subTest(reply=reply), self.assertRaisesRegex(Denied, "desktop_unavailable"):
-                self.check_lock(backend, None, reply)
-        with self.assertRaisesRegex(Denied, "desktop_locked"):
-            self.check_lock(backend, None, b"{" + b" " * observer_desktop.MAX_IPC_REPLY + b"}")
-        for failure in (observer_desktop.subprocess.TimeoutExpired(self.LOCK_QUERY, .15),
-                        observer_desktop.subprocess.CalledProcessError(1, self.LOCK_QUERY), FileNotFoundError("qs")):
-            with self.subTest(failure=type(failure).__name__), \
-                 unittest.mock.patch.dict(os.environ, {"OMARCHY_PATH": "/usr/share/omarchy"}), \
-                 unittest.mock.patch.object(observer_desktop.subprocess, "check_output", side_effect=failure), \
-                 self.assertRaisesRegex(Denied, "desktop_unavailable"):
-                backend.deadline = time.monotonic() + 1
-                backend.desktop.require_unlocked()
-        for path in ("", "relative/omarchy"):
-            with self.subTest(path=path), unittest.mock.patch.dict(os.environ, {"OMARCHY_PATH": path}), \
-                 unittest.mock.patch.object(observer_desktop.subprocess, "check_output") as command, \
-                 self.assertRaisesRegex(Denied, "desktop_unavailable"):
-                backend.desktop.require_unlocked()
-            command.assert_not_called()
-
-    def test_only_inspect_checks_the_session_lock(self):
-        window = {"pid": 42, "class": "org.telegram.desktop", "mapped": True, "hidden": False}
-        backend = self.backend(window)
-        checks = []
-        backend.require_unlocked = lambda: checks.append(True)
-        with unittest.mock.patch.object(observer_desktop, "verify_process", return_value=True):
-            backend.window("telegram")
-            self.assertEqual(checks, [])
-            backend.window("telegram", check_lock=True)
-            self.assertEqual(checks, [True])
-
-        def locked():
-            raise Denied("desktop_locked")
-        backend.require_unlocked = locked
-        backend.request = lambda _request: self.fail("A locked session is not queried further")
-        with self.assertRaisesRegex(Denied, "desktop_locked"):
-            backend.window("telegram", check_lock=True)
-
     def test_class_uid_and_executable_rules_all_apply(self):
         window = {"pid": 42, "class": "org.telegram.desktop", "mapped": True, "hidden": False}
         checked = []
         with unittest.mock.patch.object(observer_desktop, "verify_process", side_effect=lambda pid, app, uid, config: checked.append((pid, app, uid)) or True):
-            self.assertEqual(self.backend(window).window("telegram"), (window, APPS["telegram"]))
+            self.assertIs(self.backend(window).app("telegram"), APPS["telegram"])
+            self.assertEqual(self.backend(window).window(APPS["telegram"]), window)
             self.assertEqual(checked, [(42, APPS["telegram"], os.getuid())])
             for change in ({"class": "telegram"}, {"class": "code"}, {"mapped": False}, {"hidden": True}):
                 with self.assertRaisesRegex(Denied, "app_mismatch"):
-                    self.backend({**window, **change}).window("telegram")
+                    self.backend({**window, **change}).window(APPS["telegram"])
             with self.assertRaisesRegex(Denied, "unsupported_app"):
-                self.backend(window).window("org.telegram.desktop")
+                self.backend(window).app("org.telegram.desktop")
             chromium = {"pid": 42, "class": "chromium-browser", "mapped": True, "hidden": False}
-            self.assertEqual(self.backend(chromium).window("chromium-browser"), (chromium, APPS["chromium-browser"]))
+            self.assertEqual(self.backend(chromium).window(APPS["chromium-browser"]), chromium)
             for app_id, window_class in (("chromium", "chromium-browser"), ("chromium-browser", "chromium")):
                 with self.assertRaisesRegex(Denied, "app_mismatch"):
-                    self.backend({**chromium, "class": window_class}).window(app_id)
+                    self.backend({**chromium, "class": window_class}).window(APPS[app_id])
             zen = {"pid": 42, "class": "zen", "mapped": True, "hidden": False}
-            self.assertEqual(self.backend(zen).window("zen"), (zen, APPS["zen"]))
+            self.assertEqual(self.backend(zen).window(APPS["zen"]), zen)
             for window_class in ("zen-browser", "app.zen_browser.zen", "firefox", "Zen"):
                 with self.assertRaisesRegex(Denied, "app_mismatch"):
-                    self.backend({**zen, "class": window_class}).window("zen")
+                    self.backend({**zen, "class": window_class}).window(APPS["zen"])
             for app_id in ("zen-browser", "firefox"):
                 with self.assertRaisesRegex(Denied, "unsupported_app"):
-                    self.backend(zen).window(app_id)
+                    self.backend(zen).app(app_id)
             with self.assertRaisesRegex(Denied, "focus_unavailable"):
-                self.backend({**window, "pid": 0}).window("telegram")
+                self.backend({**window, "pid": 0}).window(APPS["telegram"])
             with self.assertRaisesRegex(Denied, "focus_unavailable"):
-                self.backend([window]).window("telegram")
+                self.backend([window]).window(APPS["telegram"])
         with unittest.mock.patch.object(observer_desktop, "verify_process", return_value=False):
             with self.assertRaisesRegex(Denied, "app_mismatch"):
-                self.backend(window).window("telegram")
+                self.backend(window).window(APPS["telegram"])
+
+
+UNLOCKED = {key: False for key in observer_desktop.LOCK_FLAGS}
+
+
+class LockReplyTests(unittest.TestCase):
+    LOCK_QUERY = ("qs", "ipc", "-n", "-p", "/usr/share/omarchy/shell", "call", "--", "lock", "status")
+
+    def setUp(self):
+        environment = unittest.mock.patch.dict(os.environ, {"OMARCHY_PATH": "/usr/share/omarchy"})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.backend = FieldBackend(None, APPS)
+        self.backend.deadline = time.monotonic() + 1
+
+    def check_lock(self, reply=b"", returncode=0, failure=None):
+        process = unittest.mock.Mock(returncode=returncode)
+        process.communicate.side_effect = failure
+        process.communicate.return_value = (reply, None)
+        with unittest.mock.patch.object(observer_desktop.subprocess, "Popen", return_value=process) as command:
+            try:
+                with self.backend.desktop.lock_query():
+                    pass
+            finally:
+                self.assertEqual(command.call_args.args[0], self.LOCK_QUERY)
+                self.assertLessEqual(process.communicate.call_args.kwargs["timeout"], .15)
+                process.kill.assert_called_once_with()
+                process.wait.assert_called_once_with()
+
+    def test_every_lock_flag_denies_and_only_an_explicit_unlock_passes(self):
+        self.check_lock(json.dumps(UNLOCKED).encode())
+        for state in ({**UNLOCKED, "requested": True}, {**UNLOCKED, "pending": True},
+                      {**UNLOCKED, "sessionLocked": True}, {**UNLOCKED, "secure": None},
+                      {key: False for key in observer_desktop.LOCK_FLAGS[1:]}, [], "unlocked"):
+            with self.subTest(state=state), self.assertRaisesRegex(Denied, "desktop_locked"):
+                self.check_lock(json.dumps(state).encode())
+
+    def test_an_unanswered_or_unexpected_lock_query_fails_closed(self):
+        # The replies omarchy-shell turns into failures arrive on stdout with exit 0.
+        for reply in (b"Target not found.\n", b"Function not found.\n", b"Not ready to accept queries yet\n", b""):
+            with self.subTest(reply=reply), self.assertRaisesRegex(Denied, "desktop_unavailable"):
+                self.check_lock(reply)
+        with self.assertRaisesRegex(Denied, "desktop_locked"):
+            self.check_lock(b"{" + b" " * observer_desktop.MAX_IPC_REPLY + b"}")
+        with self.assertRaisesRegex(Denied, "desktop_unavailable"):
+            self.check_lock(json.dumps(UNLOCKED).encode(), returncode=1)
+        for failure in (observer_desktop.subprocess.TimeoutExpired(self.LOCK_QUERY, .15), OSError("pipe")):
+            with self.subTest(failure=type(failure).__name__), self.assertRaisesRegex(Denied, "desktop_unavailable"):
+                self.check_lock(failure=failure)
+        with unittest.mock.patch.object(observer_desktop.subprocess, "Popen", side_effect=FileNotFoundError("qs")), \
+             self.assertRaisesRegex(Denied, "desktop_unavailable"):
+            with self.backend.desktop.lock_query():
+                self.fail("no field is read without a lock query")
+        for path in ("", "relative/omarchy"):
+            with self.subTest(path=path), unittest.mock.patch.dict(os.environ, {"OMARCHY_PATH": path}), \
+                 unittest.mock.patch.object(observer_desktop.subprocess, "Popen") as command, \
+                 self.assertRaisesRegex(Denied, "desktop_unavailable"):
+                with self.backend.desktop.lock_query():
+                    self.fail("no field is read without a lock query")
+            command.assert_not_called()
+
+    def test_only_inspect_checks_the_session_lock(self):
+        backend = FieldBackend(None, APPS)
+        backend.deadline = time.monotonic() + 1
+        backend.field_metadata = lambda app_id, app, calibrate: {"app_id": app_id}
+        queries = []
+        backend.desktop.lock_query = lambda: queries.append(True) or contextlib.nullcontext()
+        backend.metadata("telegram")
+        backend.metadata("telegram", True)
+        self.assertEqual(queries, [])
+        backend.metadata("telegram", check_lock=True)
+        self.assertEqual(queries, [True])
+        with self.assertRaisesRegex(Denied, "unsupported_app"):
+            backend.metadata("org.telegram.desktop", check_lock=True)
+        self.assertEqual(queries, [True], "an unsupported app starts no query")
+
+
+class LockQueryProcessTests(unittest.TestCase):
+    """The lock query as a real child process: a task-owned `qs` first on PATH."""
+
+    FIELD = {**FakeBackend().meta, "app_id": "telegram", "uri": "", "browser": False, "web": False}
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.bin = pathlib.Path(temp.name)
+        for patch in (unittest.mock.patch.dict(os.environ, {"OMARCHY_PATH": "/usr/share/omarchy",
+                                                            "PATH": os.pathsep.join((temp.name, "/usr/bin", "/bin"))}),
+                      # Generous, so only a query that never answers can be late.
+                      unittest.mock.patch.object(observer_desktop, "IPC_SECONDS", 10)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.backend = FieldBackend(None, APPS)
+        self.backend.deadline = time.monotonic() + 30
+        self.queries = []
+        start = self.backend.desktop.lock_query
+        self.backend.desktop.lock_query = lambda: self.queries.append(start()) or self.queries[-1]
+
+    def answer(self, script):
+        qs = self.bin / "qs"
+        qs.write_text(f"#!/bin/sh\n{script}\n")
+        qs.chmod(0o700)
+
+    def reply(self, state):
+        self.answer(f"printf '%s' '{json.dumps(state)}'")
+
+    def never_answer(self):
+        self.answer("exec sleep 30")
+        return unittest.mock.patch.object(observer_desktop, "IPC_SECONDS", .05)
+
+    def assert_reaped(self, returncode):
+        process = self.queries[-1].process
+        self.assertEqual(process.returncode, returncode)
+        with self.assertRaises(ChildProcessError):
+            os.waitpid(process.pid, os.WNOHANG)
+
+    def test_the_query_runs_while_the_field_is_read_and_answers_after_it(self):
+        go = self.bin / "go"
+        self.answer(f"until [ -e '{go}' ]; do sleep .01; done\nprintf '%s' '{json.dumps(UNLOCKED)}'")
+
+        def read_field(app_id, _app, _calibrate):
+            self.assertIsNone(self.queries[-1].process.poll(), "the query is still running")
+            go.touch()
+            return {"app_id": app_id}
+
+        self.backend.field_metadata = read_field
+        for attempt in range(2):
+            go.unlink(missing_ok=True)
+            self.assertEqual(self.backend.metadata("telegram", check_lock=True), {"app_id": "telegram"})
+            self.assert_reaped(0)
+        self.assertEqual(len(self.queries), 2, "every inspect asks again")
+
+    def test_a_locked_session_never_yields_a_binding_however_fine_the_field(self):
+        observer = Observer(self.backend)
+        events = []
+        observer.notify = events.append
+        fields = []
+        self.backend.field_metadata = lambda app_id, _app, _calibrate: fields.append(app_id) or dict(self.FIELD)
+        inspect = {"schema": SCHEMA, "id": "locked", "op": "inspect", "app_id": "telegram"}
+        self.reply({**UNLOCKED, "locked": True})
+        reply = observer.request(inspect)
+        self.assertEqual((reply["ok"], reply["error"]), (False, "desktop_locked"))
+        self.assertNotIn("focus", reply)
+        self.assertEqual(fields, ["telegram"])
+        self.assertIsNone(observer.tracked)
+        self.assertEqual(events, [])
+        self.assert_reaped(0)
+
+        def unavailable(*_args):
+            raise Denied("focus_unavailable")
+        self.backend.field_metadata = unavailable
+        self.assertEqual(observer.request(inspect)["error"], "desktop_locked", "the lock verdict comes first")
+        self.assert_reaped(0)
+
+        self.backend.field_metadata = lambda app_id, _app, _calibrate: dict(self.FIELD)
+        self.reply(UNLOCKED)
+        self.assertEqual(observer.request(inspect)["focus"]["binding"]["app_id"], "telegram")
+
+    def test_a_late_query_is_killed_and_reaped(self):
+        self.backend.field_metadata = lambda app_id, _app, _calibrate: dict(self.FIELD)
+        with self.never_answer(), self.assertRaisesRegex(Denied, "desktop_unavailable"):
+            self.backend.metadata("telegram", check_lock=True)
+        self.assert_reaped(-signal.SIGKILL)
+
+    def test_a_failed_field_read_still_reaps_the_query(self):
+        def broken(*_args):
+            raise RuntimeError("field")
+
+        def unavailable(*_args):
+            raise Denied("focus_unavailable")
+
+        def out_of_time(*_args):
+            self.backend.deadline = time.monotonic()
+            raise Denied("operation_timeout")
+
+        self.reply(UNLOCKED)
+        for failure, error, reason in ((broken, RuntimeError, "field"), (unavailable, Denied, "focus_unavailable")):
+            self.backend.field_metadata = failure
+            with self.subTest(reason=reason), self.assertRaisesRegex(error, reason):
+                self.backend.metadata("telegram", check_lock=True)
+            self.assert_reaped(0)
+        with self.never_answer():
+            self.backend.field_metadata = broken
+            with self.assertRaisesRegex(Denied, "desktop_unavailable"):
+                self.backend.metadata("telegram", check_lock=True)
+            self.assert_reaped(-signal.SIGKILL)
+            self.backend.field_metadata = out_of_time
+            with self.assertRaisesRegex(Denied, "operation_timeout"):
+                self.backend.metadata("telegram", check_lock=True)
+            self.assert_reaped(-signal.SIGKILL)
 
 
 class FakeStates:
@@ -1165,7 +1292,7 @@ class MetadataTests(unittest.TestCase):
         backend = FieldBackend(atspi, APPS)
         backend.budget = lambda: None
         window = {"pid": 42, "xwayland": False}
-        backend.desktop.window = lambda app_id, _check_lock: (window, APPS[app_id])
+        backend.desktop.window = lambda _app: window
         backend.focused = lambda pid, browser, gecko: node
         calibrations = []
         backend.geometry = lambda *args: calibrations.append(args) or {"coordinate_convention": CALIBRATED}
@@ -1195,7 +1322,8 @@ class GeckoMetadataTests(unittest.TestCase):
             "Text": SimpleNamespace(get_attribute_run=lambda *_args: ({"direction": "lr"}, 0, 24))}), APPS)
         self.backend.budget = lambda: None
         self.window = {"pid": 42, "xwayland": False}
-        self.backend.desktop.window = lambda app_id, _check_lock: (self.window, APPS[app_id])
+        self.backend.desktop.window = lambda _app: self.window
+        self.backend.desktop.lock_query = contextlib.nullcontext
         self.selections = []
         self.backend.focused = lambda pid, browser, gecko: self.selections.append((browser, gecko)) or self.node
         self.calibrations = []
@@ -1345,7 +1473,8 @@ class RichEditorTests(unittest.TestCase):
         self.backend = FieldBackend(RICH_ATSPI, APPS)
         self.backend.budget = lambda: None
         self.window = {"pid": 42, "xwayland": False}
-        self.backend.desktop.window = lambda app_id, _check_lock: (self.window, APPS[app_id])
+        self.backend.desktop.window = lambda _app: self.window
+        self.backend.desktop.lock_query = contextlib.nullcontext
         self.root = None
         self.backend.focused = lambda pid, browser, gecko: self.root
         self.calibrations = []

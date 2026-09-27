@@ -2,6 +2,7 @@
 position and bounded text, including Chromium rich-editor flattening."""
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 import time
 from typing import NamedTuple
@@ -66,9 +67,18 @@ class FieldBackend:
         return min(limit, max(.001, self.deadline - time.monotonic()))
 
     def metadata(self, app_id, calibrate=False, check_lock=False):
-        """The focused field's identity, purpose, state and caret; never its text."""
+        """The focused field's identity, purpose, state and caret; never its text.
+
+        With `check_lock`, the session lock query runs while the field is
+        read, and its denial replaces the field's result.
+        """
         self.budget()
-        window, app = self.desktop.window(app_id, check_lock)
+        app = self.desktop.app(app_id)
+        with self.desktop.lock_query() if check_lock else contextlib.nullcontext():
+            return self.field_metadata(app_id, app, calibrate)
+
+    def field_metadata(self, app_id, app, calibrate):
+        window = self.desktop.window(app)
         node = self.focused(window["pid"], app.browser, app.gecko)
         node.clear_cache()
         flags = node.get_state_set()
