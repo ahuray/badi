@@ -321,9 +321,19 @@ class DesktopBackend:
             raise Denied("desktop_unavailable") from None
 
     def require_unlocked(self):
+        """Deny unless the Omarchy shell reports every lock flag explicitly false.
+
+        This is the Quickshell IPC call `omarchy-shell lock status` makes, made
+        directly: that wrapper adds a Bash and a `timeout` process per inspect,
+        and a timeout here would kill only the wrapper. Any failure, and any
+        reply that is not the status document, fails closed.
+        """
+        shell = os.environ.get("OMARCHY_PATH", "")
+        if not os.path.isabs(shell):
+            raise Denied("desktop_unavailable")
         try:
-            raw = subprocess.check_output(("omarchy-shell", "lock", "status"), timeout=self.remaining(.15),
-                                          stderr=subprocess.DEVNULL)
+            raw = subprocess.check_output(("qs", "ipc", "-n", "-p", os.path.join(shell, "shell"), "call", "--", "lock", "status"),
+                                          timeout=self.remaining(.15), stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             state = json.loads(raw) if len(raw) <= MAX_HYPRLAND_REPLY else None
         except (OSError, ValueError, subprocess.SubprocessError):
             raise Denied("desktop_unavailable") from None

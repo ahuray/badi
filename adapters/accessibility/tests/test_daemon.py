@@ -541,12 +541,18 @@ class WindowTests(unittest.TestCase):
         backend.hypr = lambda request: self.assertEqual(request, "j/activewindow") or window
         return backend
 
-    def check_lock(self, backend, state):
-        with unittest.mock.patch.object(observer_daemon.subprocess, "check_output",
-                                        return_value=json.dumps(state).encode()) as command:
+    LOCK_QUERY = ("qs", "ipc", "-n", "-p", "/usr/share/omarchy/shell", "call", "--", "lock", "status")
+
+    def check_lock(self, backend, state, reply=None):
+        with unittest.mock.patch.dict(os.environ, {"OMARCHY_PATH": "/usr/share/omarchy"}), \
+             unittest.mock.patch.object(observer_daemon.subprocess, "check_output",
+                                        return_value=json.dumps(state).encode() if reply is None else reply) as command:
             backend.deadline = observer_daemon.time.monotonic() + 1
-            backend.require_unlocked()
-        self.assertEqual(command.call_args.args[0], ("omarchy-shell", "lock", "status"))
+            try:
+                backend.require_unlocked()
+            finally:
+                self.assertEqual(command.call_args.args[0], self.LOCK_QUERY)
+                self.assertLessEqual(command.call_args.kwargs["timeout"], .15)
 
     def test_every_lock_flag_denies_and_only_an_explicit_unlock_passes(self):
         backend = DesktopBackend(None)
@@ -556,6 +562,29 @@ class WindowTests(unittest.TestCase):
                       {key: False for key in observer_daemon.LOCK_FLAGS[1:]}, [], "unlocked"):
             with self.subTest(state=state), self.assertRaisesRegex(Denied, "desktop_locked"):
                 self.check_lock(backend, state)
+
+    def test_an_unanswered_or_unexpected_lock_query_fails_closed(self):
+        backend = DesktopBackend(None)
+        # The replies omarchy-shell turns into failures arrive on stdout with exit 0.
+        for reply in (b"Target not found.\n", b"Function not found.\n", b"Not ready to accept queries yet\n", b""):
+            with self.subTest(reply=reply), self.assertRaisesRegex(Denied, "desktop_unavailable"):
+                self.check_lock(backend, None, reply)
+        with self.assertRaisesRegex(Denied, "desktop_locked"):
+            self.check_lock(backend, None, b"{" + b" " * observer_daemon.MAX_HYPRLAND_REPLY + b"}")
+        for failure in (observer_daemon.subprocess.TimeoutExpired(self.LOCK_QUERY, .15),
+                        observer_daemon.subprocess.CalledProcessError(1, self.LOCK_QUERY), FileNotFoundError("qs")):
+            with self.subTest(failure=type(failure).__name__), \
+                 unittest.mock.patch.dict(os.environ, {"OMARCHY_PATH": "/usr/share/omarchy"}), \
+                 unittest.mock.patch.object(observer_daemon.subprocess, "check_output", side_effect=failure), \
+                 self.assertRaisesRegex(Denied, "desktop_unavailable"):
+                backend.deadline = observer_daemon.time.monotonic() + 1
+                backend.require_unlocked()
+        for path in ("", "relative/omarchy"):
+            with self.subTest(path=path), unittest.mock.patch.dict(os.environ, {"OMARCHY_PATH": path}), \
+                 unittest.mock.patch.object(observer_daemon.subprocess, "check_output") as command, \
+                 self.assertRaisesRegex(Denied, "desktop_unavailable"):
+                backend.require_unlocked()
+            command.assert_not_called()
 
     def test_only_inspect_checks_the_session_lock(self):
         window = {"pid": 42, "class": "org.telegram.desktop", "mapped": True, "hidden": False}
