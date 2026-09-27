@@ -8,7 +8,7 @@ use badi_broker::provider::{
     CompletionProvider, ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger,
 };
 use badi_broker::semantic::client::{
-    ClientError, CompletionDisposition, SemanticClient, SemanticClientConfig,
+    ClientError, CompletionDisposition, RequestObserver, SemanticClient, SemanticClientConfig,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
@@ -1094,6 +1094,122 @@ async fn a_spelling_attempt_that_spends_the_budget_sends_no_continuation()
     assert!(result.is_none());
     let correction = server.await?;
     assert_ne!(correction["grammar"], "root ::= \" \" [^<>\\n\\r`]*");
+    Ok(())
+}
+
+/// Records each body shown to a request observer.
+#[derive(Debug, Default)]
+struct BodyRecorder(std::sync::Mutex<Vec<Vec<u8>>>);
+
+impl RequestObserver for BodyRecorder {
+    fn observe(&self, body: &[u8]) {
+        self.0.lock().expect("recorder").push(body.to_vec());
+    }
+}
+
+#[tokio::test]
+async fn a_request_observer_sees_each_runtime_body_exactly_as_sent() -> Result<(), Box<dyn Error>> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let endpoint = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("continuation request");
+        let payload = read_payload(&mut socket).await;
+        let stop = serde_json::json!({"index":0,"content":" report","stop":true,"stop_type":"eos"});
+        socket
+            .write_all(
+                format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {stop}\n\n")
+                    .as_bytes(),
+            )
+            .await
+            .expect("stream");
+        payload
+    });
+    let recorder = std::sync::Arc::new(BodyRecorder::default());
+    let observed = SemanticClient::new(
+        SemanticClientConfig::new(endpoint, "observer-fixture", "public-fixture-token")?
+            .for_writing(),
+    )?
+    .with_request_observer(std::sync::Arc::clone(&recorder) as _);
+    // A dictionary correction sends nothing, so there is nothing to observe.
+    let correction = observed
+        .propose(
+            request("The shipping adress ", Some("en")),
+            CancellationToken::new(),
+            true,
+        )
+        .await?;
+    assert_eq!(correction.expect("correction").text, "address ");
+    assert!(recorder.0.lock().expect("recorder").is_empty());
+    let continuation = observed
+        .propose(
+            request("Please review the", Some("en")),
+            CancellationToken::new(),
+            true,
+        )
+        .await?;
+    assert_eq!(continuation.expect("continuation").text, " report");
+    let sent = server.await?;
+    let bodies = recorder.0.lock().expect("recorder").clone();
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bodies[0])?,
+        sent
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_posts_reach_only_a_single_lowercase_path_on_the_loopback_runtime()
+-> Result<(), Box<dyn Error>> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let client = SemanticClient::new(SemanticClientConfig::new(
+        listener.local_addr()?,
+        "path-fixture",
+        "public-fixture-token",
+    )?)?;
+    for path in [
+        "",
+        "/",
+        "tokenize",
+        "//attacker.example/x",
+        "/a/b",
+        "/Tokenize",
+        "/tokenize?x=1",
+        "/../health",
+        "/tok%65nize",
+        "/../../etc",
+    ] {
+        assert!(
+            matches!(
+                client.post_runtime(path, b"{}".to_vec(), None).await,
+                Err(ClientError::InvalidConfig("runtime_path"))
+            ),
+            "{path:?}"
+        );
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), listener.accept())
+            .await
+            .is_err()
+    );
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("runtime request");
+        let mut bytes = vec![0; 256];
+        let read = socket.read(&mut bytes).await.expect("request line");
+        String::from_utf8_lossy(&bytes[..read])
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    });
+    let _ = client
+        .post_runtime(
+            "/apply-template",
+            b"{}".to_vec(),
+            Some(Duration::from_millis(100)),
+        )
+        .await;
+    assert_eq!(server.await?, "POST /apply-template HTTP/1.1");
     Ok(())
 }
 

@@ -10,10 +10,8 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use super::artifact::ModelArtifactOverride;
+use super::transport::stop_token::{self, Arm, Observation, REQUEST_MS, Step, TokenCheck, Word};
 use crate::semantic::client::ClientError;
-use crate::semantic::client::stop_token_probe::{
-    Arm, Observation, REQUEST_MS, Step, TokenCheck, Word,
-};
 use crate::semantic::runtime::{RuntimeLifecycleObservation, StableRuntimeIdentity};
 
 const MODEL_SHA: &str = "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5";
@@ -217,7 +215,7 @@ pub async fn run(
             // cancellation immediately after startup. No credential is emitted.
             event(&json!({"type":"stop_probe_runtime","group":group})).map_err(|()| "output_closed")?;
             may_dispatch(&cancellation, started)?;
-            group.token_check = Some(runtime.client().stop_token_round_trip(cancellation.clone()).await.map_err(|err| client_error(&err))?);
+            group.token_check = Some(stop_token::round_trip(runtime.client(), cancellation.clone()).await.map_err(|err| client_error(&err))?);
             event(&json!({"type":"stop_probe_verified","group":group})).map_err(|()| "output_closed")?;
             for (name, step, record) in [("primer", Step::Primer, &mut group.primer),
                 ("target", Step::Target(group.word, group.arm), &mut group.target)] {
@@ -225,7 +223,7 @@ pub async fn run(
                 event(&json!({"type":"stop_probe_dispatch","ordinal":group.ordinal,"step":name,"payload":record.payload}))
                     .map_err(|()| "output_closed")?;
                 record.attempted = true;
-                match runtime.client().stop_token_completion(step, cancellation.clone()).await {
+                match stop_token::completion(runtime.client(), step, cancellation.clone()).await {
                     Ok(observation) => {
                         record.error = step.validate(&observation).err();
                         record.observation = Some(observation);

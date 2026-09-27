@@ -51,7 +51,9 @@ pub fn exec_runtime_helper(args: &[OsString]) -> Result<Infallible, &'static str
     Err(HELPER_ERROR)
 }
 
-pub(crate) fn arm_parent_death(expected_parent: Pid) -> Result<(), &'static str> {
+/// Arms `SIGKILL` for when the parent dies and confirms that the parent is
+/// still `expected_parent`. Call it in the child before exec.
+pub fn arm_parent_death(expected_parent: Pid) -> Result<(), &'static str> {
     set_parent_process_death_signal(Some(Signal::KILL)).map_err(|_| HELPER_ERROR)?;
     // Arming alone misses a parent that died earlier. Checking afterward also
     // covers reparenting before arming; a later death is handled by the kernel.
@@ -61,7 +63,9 @@ pub(crate) fn arm_parent_death(expected_parent: Pid) -> Result<(), &'static str>
     Ok(())
 }
 
-pub(crate) fn validate_unprivileged_executable(binary: &Path) -> Result<(), &'static str> {
+/// Accepts only a regular executable file that cannot gain privileges on
+/// exec, which would clear the parent-death signal.
+pub fn validate_unprivileged_executable(binary: &Path) -> Result<(), &'static str> {
     let leaf = std::fs::symlink_metadata(binary).map_err(|_| HELPER_ERROR)?;
     if !leaf.is_file() {
         return Err(HELPER_ERROR);

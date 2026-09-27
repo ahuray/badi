@@ -1,5 +1,6 @@
 use std::fmt;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::metrics::NoSuggestionReason;
@@ -11,8 +12,8 @@ use crate::provider::{
     WritingProposal,
 };
 use async_trait::async_trait;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
-use reqwest::{Client, Response, StatusCode, Url};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue};
+use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -20,16 +21,10 @@ use tokio_util::sync::CancellationToken;
 use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
 
-#[cfg(feature = "writing-lab")]
-mod writing_lab;
-#[cfg(feature = "writing-lab")]
-pub(crate) use writing_lab::{LabObservation, LabStream, TokenLogprob};
-#[cfg(feature = "writing-lab")]
-mod prefill_probe;
-#[cfg(feature = "writing-lab")]
-pub(crate) use prefill_probe::PrefillMetrics;
-#[cfg(feature = "writing-lab")]
-pub(crate) mod stop_token_probe;
+use super::wire::{
+    NativeStreamChunk, Response, StatusCode, TokenizeResponse, ensure_content_type, event_data,
+    next_event_boundary, read_bounded_body, transport_error,
+};
 
 pub const PROMPT_CONTRACT_ID: &str = "badi.semantic.inline-en.native-prefix.dev1";
 pub const MAX_OUTPUT_TOKENS: u16 = 8;
@@ -40,6 +35,7 @@ pub const MAX_REQUEST_TIMEOUT: Duration = Duration::from_millis(1_200);
 pub const MAX_RESPONSE_BYTES: usize = 16 * 1_024;
 
 const MAX_MODEL_ALIAS_BYTES: usize = 256;
+const MAX_RUNTIME_PATH_BYTES: usize = 32;
 const MAX_TOKEN_BYTES: usize = 4_096;
 const MAX_RAW_OUTPUT_BYTES: usize = 1_024;
 // After the writing budget, the outer deadline still lets the reader return
@@ -308,30 +304,26 @@ impl ClientError {
     }
 }
 
+/// Sees the exact body of each request a [`SemanticClient`] posts to its
+/// runtime, just before it is sent. Completion bodies carry the user's text:
+/// the broker never installs an observer. It exists for explicit local
+/// experiments that must record the requests production makes.
+pub trait RequestObserver: fmt::Debug + Send + Sync {
+    fn observe(&self, body: &[u8]);
+}
+
 #[derive(Clone, Debug)]
 pub struct SemanticClient {
     config: SemanticClientConfig,
     client: Client,
-    health_url: Url,
-    challenge_url: Url,
-    completion_url: Url,
-    #[cfg(feature = "writing-lab")]
-    lab_trace: Option<std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>>,
+    base_url: Url,
+    request_observer: Option<Arc<dyn RequestObserver>>,
 }
 
 impl SemanticClient {
     pub fn new(config: SemanticClientConfig) -> Result<Self, ClientError> {
         config.validate()?;
-        let base = Url::parse(&format!("http://{}/", config.endpoint))
-            .map_err(|_| ClientError::InvalidEndpoint)?;
-        let health_url = base
-            .join("health")
-            .map_err(|_| ClientError::InvalidEndpoint)?;
-        let challenge_url = base
-            .join("tokenize")
-            .map_err(|_| ClientError::InvalidEndpoint)?;
-        let completion_url = base
-            .join("completion")
+        let base_url = Url::parse(&format!("http://{}/", config.endpoint))
             .map_err(|_| ClientError::InvalidEndpoint)?;
         let client = Client::builder()
             .no_proxy()
@@ -344,17 +336,63 @@ impl SemanticClient {
         Ok(Self {
             config,
             client,
-            health_url,
-            challenge_url,
-            completion_url,
-            #[cfg(feature = "writing-lab")]
-            lab_trace: None,
+            base_url,
+            request_observer: None,
         })
     }
 
     #[must_use]
     pub const fn config(&self) -> &SemanticClientConfig {
         &self.config
+    }
+
+    /// This client with `observer` shown every request body it posts.
+    #[must_use]
+    pub fn with_request_observer(mut self, observer: Arc<dyn RequestObserver>) -> Self {
+        self.request_observer = Some(observer);
+        self
+    }
+
+    /// Posts one authenticated JSON `body` to `path` on the owned runtime and
+    /// returns its response unread. `timeout` replaces the client's request
+    /// timeout. `path` must be one lowercase segment such as `/completion`,
+    /// so the credential can reach only this runtime's own endpoints.
+    pub async fn post_runtime(
+        &self,
+        path: &'static str,
+        body: Vec<u8>,
+        timeout: Option<Duration>,
+    ) -> Result<Response, ClientError> {
+        let url = self.runtime_url(path)?;
+        if let Some(observer) = &self.request_observer {
+            observer.observe(&body);
+        }
+        let mut request = self
+            .client
+            .post(url)
+            .header(AUTHORIZATION, self.config.authorization.clone())
+            .header(CONTENT_TYPE, "application/json")
+            .body(body);
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+        request.send().await.map_err(transport_error)
+    }
+
+    fn runtime_url(&self, path: &str) -> Result<Url, ClientError> {
+        let segment = path
+            .strip_prefix('/')
+            .filter(|segment| {
+                !segment.is_empty()
+                    && segment.len() <= MAX_RUNTIME_PATH_BYTES
+                    && segment
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+            })
+            .ok_or(ClientError::InvalidConfig("runtime_path"))?;
+        self.base_url
+            .join(segment)
+            .map_err(|_| ClientError::InvalidEndpoint)
     }
 
     pub async fn probe_health(
@@ -523,22 +561,18 @@ impl SemanticClient {
     }
 
     async fn warm_up_inner(&self, timeout: Duration) -> Result<(), ClientError> {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "prompt": WARM_UP_PROMPT,
+            "n_predict": WARM_UP_TOKENS,
+            "temperature": 0.0,
+            "seed": 42,
+            "stream": false,
+            "cache_prompt": false,
+        }))
+        .map_err(|_| ClientError::InvalidRequest)?;
         let response = self
-            .client
-            .post(self.completion_url.clone())
-            .timeout(timeout)
-            .header(AUTHORIZATION, self.config.authorization.clone())
-            .json(&serde_json::json!({
-                "prompt": WARM_UP_PROMPT,
-                "n_predict": WARM_UP_TOKENS,
-                "temperature": 0.0,
-                "seed": 42,
-                "stream": false,
-                "cache_prompt": false,
-            }))
-            .send()
-            .await
-            .map_err(transport_error)?;
+            .post_runtime("/completion", body, Some(timeout))
+            .await?;
         if response.status() != StatusCode::OK {
             return Err(ClientError::UnexpectedStatus(response.status()));
         }
@@ -550,7 +584,7 @@ impl SemanticClient {
     async fn probe_health_inner(&self) -> Result<HealthStatus, ClientError> {
         let response = self
             .client
-            .get(self.health_url.clone())
+            .get(self.runtime_url("/health")?)
             .header(AUTHORIZATION, self.config.authorization.clone())
             .send()
             .await
@@ -590,25 +624,10 @@ impl SemanticClient {
             return Ok(ObservedCompletion::writing_budget_abstention(started, 0));
         }
         let request_body_bytes = payload.len();
-        #[cfg(feature = "writing-lab")]
-        if let Some(trace) = &self.lab_trace {
-            trace
-                .lock()
-                .map_err(|_| ClientError::InvalidRequest)?
-                .push(serde_json::from_slice(&payload).map_err(|_| ClientError::InvalidRequest)?);
-        }
-        let mut send = self
-            .client
-            .post(self.completion_url.clone())
-            .header(AUTHORIZATION, self.config.authorization.clone())
-            .header(CONTENT_TYPE, "application/json")
-            .body(payload);
-        if self.config.writing {
-            // The client-wide timeout suits the automatic budget; an explicit
-            // budget can be longer. The writing deadline still ends first.
-            send = send.timeout(budget + WRITING_HTTP_GRACE);
-        }
-        let send = send.send();
+        // The client-wide timeout suits the automatic budget; an explicit
+        // budget can be longer. The writing deadline still ends first.
+        let timeout = self.config.writing.then(|| budget + WRITING_HTTP_GRACE);
+        let send = self.post_runtime("/completion", payload, timeout);
         let response = tokio::select! {
             biased;
             () = cancellation.cancelled() => return Err(ClientError::Cancelled),
@@ -619,7 +638,7 @@ impl SemanticClient {
                     started, request_body_bytes,
                 ));
             },
-            result = send => result.map_err(transport_error)?,
+            result = send => result?,
         };
         if response.status() != StatusCode::OK {
             return Err(ClientError::UnexpectedStatus(response.status()));
@@ -638,17 +657,12 @@ impl SemanticClient {
     }
 
     async fn probe_authorization_challenge_inner(&self) -> Result<(), ClientError> {
-        let response = self
-            .client
-            .post(self.challenge_url.clone())
-            .header(AUTHORIZATION, self.config.authorization.clone())
-            .json(&TokenizeRequest {
-                content: AUTHORIZATION_CHALLENGE_TEXT,
-                add_special: false,
-            })
-            .send()
-            .await
-            .map_err(transport_error)?;
+        let body = serde_json::to_vec(&TokenizeRequest {
+            content: AUTHORIZATION_CHALLENGE_TEXT,
+            add_special: false,
+        })
+        .map_err(|_| ClientError::InvalidRequest)?;
+        let response = self.post_runtime("/tokenize", body, None).await?;
         if response.status() != StatusCode::OK {
             return Err(ClientError::UnexpectedStatus(response.status()));
         }
@@ -868,31 +882,6 @@ struct HealthResponse {
 struct TokenizeRequest {
     content: &'static str,
     add_special: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct TokenizeResponse {
-    tokens: Vec<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct NativeStreamChunk {
-    index: u32,
-    #[serde(default)]
-    content: String,
-    stop: bool,
-    #[serde(default)]
-    truncated: Option<bool>,
-    #[serde(default)]
-    stop_type: Option<String>,
-    #[serde(default)]
-    stopped_limit: Option<bool>,
-    #[serde(default)]
-    stopped_word: Option<bool>,
-    #[serde(default)]
-    stopped_eos: Option<bool>,
-    #[serde(default)]
-    stopping_word: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1146,40 +1135,6 @@ fn finish_observed_stream(
     }
 }
 
-fn next_event_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
-    let lf = buffer
-        .windows(2)
-        .position(|window| window == b"\n\n")
-        .map(|index| (index, index + 2));
-    let crlf = buffer
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|index| (index, index + 4));
-    match (lf, crlf) {
-        (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
-        (Some(boundary), None) | (None, Some(boundary)) => Some(boundary),
-        (None, None) => None,
-    }
-}
-
-fn event_data(event: &[u8]) -> Result<Option<String>, ClientError> {
-    let event = std::str::from_utf8(event).map_err(|_| ClientError::MalformedStream)?;
-    let mut lines = Vec::new();
-    for line in event.lines() {
-        if line.is_empty() || line.starts_with(':') {
-            continue;
-        }
-        if let Some(data) = line.strip_prefix("data:") {
-            lines.push(data.strip_prefix(' ').unwrap_or(data));
-        }
-    }
-    if lines.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(lines.join("\n")))
-    }
-}
-
 pub(crate) fn valid_english_output(value: &str) -> bool {
     if value.is_empty() || value.ends_with(char::is_whitespace) {
         return false;
@@ -1227,45 +1182,6 @@ pub(crate) const fn allowed_common_scalar(character: char) -> bool {
                 | '%'
                 | '\u{2026}'
     )
-}
-
-fn ensure_content_type(headers: &HeaderMap, expected: &str) -> Result<(), ClientError> {
-    let matches = headers
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case(expected));
-    if matches {
-        Ok(())
-    } else {
-        Err(ClientError::UnexpectedContentType)
-    }
-}
-
-async fn read_bounded_body(mut response: Response, limit: usize) -> Result<Vec<u8>, ClientError> {
-    let limit_u64 = u64::try_from(limit).unwrap_or(u64::MAX);
-    if response
-        .content_length()
-        .is_some_and(|length| length > limit_u64)
-    {
-        return Err(ClientError::ResponseTooLarge);
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
-        if body.len().saturating_add(chunk.len()) > limit {
-            return Err(ClientError::ResponseTooLarge);
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
-}
-
-fn transport_error(error: reqwest::Error) -> ClientError {
-    if error.is_timeout() {
-        ClientError::Timeout
-    } else {
-        ClientError::Transport(error)
-    }
 }
 
 fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {

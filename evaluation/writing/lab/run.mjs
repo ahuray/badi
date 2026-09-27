@@ -24,7 +24,8 @@ const SOURCE_PATHS = ['evaluation/writing/lab/run.mjs', 'evaluation/writing/lab/
   'broker/src/writing_lab/prefill_probe.rs', 'broker/src/writing_lab/paced_probe.rs', 'broker/src/writing_lab/artifact.rs',
   'broker/src/writing_lab/attestation.rs',
   'broker/src/writing_lab/paced_probe/scheduler.rs', 'broker/src/writing.rs', 'broker/src/semantic/client.rs',
-  'broker/src/semantic/client/writing_lab.rs', 'broker/src/semantic/client/prefill_probe.rs', 'broker/src/semantic/runtime.rs',
+  'broker/src/writing_lab/transport.rs', 'broker/src/writing_lab/transport/prefill.rs',
+  'broker/src/writing_lab/transport/stop_token.rs', 'broker/src/semantic/wire.rs', 'broker/src/semantic/runtime.rs',
   'Cargo.toml', 'Cargo.lock', 'broker/Cargo.toml', 'broker/src/lib.rs', 'broker/src/provider.rs',
   'broker/src/segment.rs', 'broker/src/protocol.rs', 'broker/src/model_selection.rs',
   'broker/src/semantic/pinned_runtime.rs', 'broker/src/semantic/provenance.rs', 'broker/data/writing-lexicon/en.txt'];

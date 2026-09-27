@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::semantic::client::{ClientError, PrefillMetrics};
+use super::transport::prefill::{self, PrefillMetrics};
+use crate::semantic::client::ClientError;
 use crate::semantic::runtime::{RuntimeLifecycleObservation, StableRuntimeIdentity};
 
 const TOTAL_BUDGET: Duration = Duration::from_secs(60);
@@ -113,10 +114,14 @@ pub async fn run(directory: PathBuf, cancellation: CancellationToken) -> ProbeRe
             let result = if budget.is_zero() {
                 Err(ClientError::Timeout)
             } else {
-                runtime
-                    .client()
-                    .prefill_probe(prompt, stream, budget, cancellation.clone())
-                    .await
+                prefill::prefill(
+                    runtime.client(),
+                    prompt,
+                    stream,
+                    budget,
+                    cancellation.clone(),
+                )
+                .await
             };
             let (metrics, error) = match result {
                 Ok(metrics) => (Some(metrics), None),

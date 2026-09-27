@@ -1,13 +1,16 @@
 //! Fixed-input diagnostic transport. It discards response text and token IDs as
 //! each bounded response is read; only counts and terminal metadata survive.
 
+use std::time::{Duration, Instant};
+
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use super::{
-    AUTHORIZATION, ClientError, Duration, Instant, SemanticClient, StatusCode, ensure_content_type,
-    event_data, next_event_boundary, read_bounded_body, transport_error,
+use crate::semantic::client::{ClientError, SemanticClient};
+use crate::semantic::wire::{
+    StatusCode, ensure_content_type, event_data, next_event_boundary, read_bounded_body,
+    transport_error,
 };
 
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
@@ -78,95 +81,89 @@ impl PrefillMetrics {
     }
 }
 
-impl SemanticClient {
-    pub(crate) async fn prefill_probe(
-        &self,
-        prompt: &'static str,
-        stream: bool,
-        budget: Duration,
-        cancellation: CancellationToken,
-    ) -> Result<PrefillMetrics, ClientError> {
-        self.diagnostic_completion(prompt, 0, stream, budget, cancellation)
-            .await
-    }
+/// Measures prefill of the fixed `prompt` with no generated token.
+pub(crate) async fn prefill(
+    client: &SemanticClient,
+    prompt: &'static str,
+    stream: bool,
+    budget: Duration,
+    cancellation: CancellationToken,
+) -> Result<PrefillMetrics, ClientError> {
+    diagnostic_completion(client, prompt, 0, stream, budget, cancellation).await
+}
 
-    pub(crate) async fn prime_context(
-        &self,
-        prompt: &str,
-        budget: Duration,
-        cancellation: CancellationToken,
-    ) -> Result<PrefillMetrics, ClientError> {
-        self.diagnostic_completion(prompt, 1, true, budget, cancellation)
-            .await
-    }
+/// Loads `prompt` into the runtime's slot with a single generated token.
+pub(crate) async fn prime_context(
+    client: &SemanticClient,
+    prompt: &str,
+    budget: Duration,
+    cancellation: CancellationToken,
+) -> Result<PrefillMetrics, ClientError> {
+    diagnostic_completion(client, prompt, 1, true, budget, cancellation).await
+}
 
-    async fn diagnostic_completion(
-        &self,
-        prompt: &str,
-        n_predict: u8,
-        stream: bool,
-        budget: Duration,
-        cancellation: CancellationToken,
-    ) -> Result<PrefillMetrics, ClientError> {
-        let started = Instant::now();
-        let operation = async {
-            let mut response = self
-                .client
-                .post(self.completion_url.clone())
-                .header(AUTHORIZATION, self.config.authorization.clone())
-                .timeout(budget)
-                .json(&json!({"prompt":prompt,"stream":stream,"id_slot":0,
-                    "n_predict":n_predict,"return_tokens":true,"cache_prompt":true,
-                    "temperature":0,"seed":42}))
-                .send()
-                .await
-                .map_err(transport_error)?;
-            if response.status() != StatusCode::OK {
-                return Err(ClientError::UnexpectedStatus(response.status()));
+async fn diagnostic_completion(
+    client: &SemanticClient,
+    prompt: &str,
+    n_predict: u8,
+    stream: bool,
+    budget: Duration,
+    cancellation: CancellationToken,
+) -> Result<PrefillMetrics, ClientError> {
+    let started = Instant::now();
+    let operation = async {
+        let body = serde_json::to_vec(&json!({"prompt":prompt,"stream":stream,"id_slot":0,
+            "n_predict":n_predict,"return_tokens":true,"cache_prompt":true,
+            "temperature":0,"seed":42}))
+        .map_err(|_| ClientError::InvalidRequest)?;
+        let mut response = client
+            .post_runtime("/completion", body, Some(budget))
+            .await?;
+        if response.status() != StatusCode::OK {
+            return Err(ClientError::UnexpectedStatus(response.status()));
+        }
+        let mut metrics = PrefillMetrics::default();
+        if !stream {
+            ensure_content_type(response.headers(), "application/json")?;
+            let bytes = read_bounded_body(response, MAX_RESPONSE_BYTES).await?;
+            let result =
+                serde_json::from_slice(&bytes).map_err(|_| ClientError::MalformedStream)?;
+            if !metrics.observe(&result)? {
+                return Err(ClientError::MalformedStream);
             }
-            let mut metrics = PrefillMetrics::default();
-            if !stream {
-                ensure_content_type(response.headers(), "application/json")?;
-                let bytes = read_bounded_body(response, MAX_RESPONSE_BYTES).await?;
-                let result =
-                    serde_json::from_slice(&bytes).map_err(|_| ClientError::MalformedStream)?;
-                if !metrics.observe(&result)? {
-                    return Err(ClientError::MalformedStream);
-                }
-                return Ok(metrics);
+            return Ok(metrics);
+        }
+        ensure_content_type(response.headers(), "text/event-stream")?;
+        let mut pending = Vec::new();
+        let mut received = 0_usize;
+        while let Some(bytes) = response.chunk().await.map_err(transport_error)? {
+            received = received.saturating_add(bytes.len());
+            if received > MAX_RESPONSE_BYTES {
+                return Err(ClientError::ResponseTooLarge);
             }
-            ensure_content_type(response.headers(), "text/event-stream")?;
-            let mut pending = Vec::new();
-            let mut received = 0_usize;
-            while let Some(bytes) = response.chunk().await.map_err(transport_error)? {
-                received = received.saturating_add(bytes.len());
-                if received > MAX_RESPONSE_BYTES {
-                    return Err(ClientError::ResponseTooLarge);
-                }
-                pending.extend_from_slice(&bytes);
-                while let Some((end, consumed)) = next_event_boundary(&pending) {
-                    let data = event_data(&pending[..end])?;
-                    pending.drain(..consumed);
-                    if let Some(data) = data {
-                        let chunk = serde_json::from_str(&data)
-                            .map_err(|_| ClientError::MalformedStream)?;
-                        if metrics.observe(&chunk)? {
-                            return Ok(metrics);
-                        }
+            pending.extend_from_slice(&bytes);
+            while let Some((end, consumed)) = next_event_boundary(&pending) {
+                let data = event_data(&pending[..end])?;
+                pending.drain(..consumed);
+                if let Some(data) = data {
+                    let chunk =
+                        serde_json::from_str(&data).map_err(|_| ClientError::MalformedStream)?;
+                    if metrics.observe(&chunk)? {
+                        return Ok(metrics);
                     }
                 }
             }
-            Err(ClientError::MalformedStream)
-        };
-        let mut result = tokio::select! {
-            biased;
-            () = cancellation.cancelled() => return Err(ClientError::Cancelled),
-            result = tokio::time::timeout(budget, operation) =>
-                result.map_err(|_| ClientError::Timeout)??,
-        };
-        result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
-        Ok(result)
-    }
+        }
+        Err(ClientError::MalformedStream)
+    };
+    let mut result = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => return Err(ClientError::Cancelled),
+        result = tokio::time::timeout(budget, operation) =>
+            result.map_err(|_| ClientError::Timeout)??,
+    };
+    result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -267,15 +264,15 @@ mod tests {
                 final_chunk.to_string()
             };
             let (client, task) = fixture(body, stream, Duration::ZERO, Duration::ZERO).await;
-            let observed = client
-                .prefill_probe(
-                    PROMPT,
-                    stream,
-                    Duration::from_secs(1),
-                    CancellationToken::new(),
-                )
-                .await
-                .unwrap();
+            let observed = prefill(
+                &client,
+                PROMPT,
+                stream,
+                Duration::from_secs(1),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
             assert_eq!(observed.content_bytes, 2);
             assert_eq!(observed.returned_token_count, Some(1));
             assert_eq!(observed.tokens_predicted, Some(1));
@@ -323,14 +320,14 @@ mod tests {
             Duration::ZERO,
         )
         .await;
-        let metrics = client
-            .prime_context(
-                "Stable context.\n\nStyle.\n\n",
-                Duration::from_secs(1),
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
+        let metrics = prime_context(
+            &client,
+            "Stable context.\n\nStyle.\n\n",
+            Duration::from_secs(1),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             task.await.unwrap(),
             json!({"prompt":"Stable context.\n\nStyle.\n\n",
@@ -364,14 +361,14 @@ mod tests {
                     if headers { Duration::ZERO } else { delay },
                 )
                 .await;
-                let result = client
-                    .prefill_probe(
-                        PROMPT,
-                        stream,
-                        Duration::from_millis(20),
-                        CancellationToken::new(),
-                    )
-                    .await;
+                let result = prefill(
+                    &client,
+                    PROMPT,
+                    stream,
+                    Duration::from_millis(20),
+                    CancellationToken::new(),
+                )
+                .await;
                 assert!(matches!(result, Err(ClientError::Timeout)));
                 task.abort();
                 let _ = task.await;
@@ -390,9 +387,14 @@ mod tests {
                 cancel.cancel();
             });
             assert!(matches!(
-                client
-                    .prefill_probe(PROMPT, stream, Duration::from_secs(1), cancellation)
-                    .await,
+                prefill(
+                    &client,
+                    PROMPT,
+                    stream,
+                    Duration::from_secs(1),
+                    cancellation
+                )
+                .await,
                 Err(ClientError::Cancelled)
             ));
             task.abort();
@@ -412,14 +414,14 @@ mod tests {
             (false, "x".repeat(MAX_RESPONSE_BYTES + 1), true),
         ] {
             let (client, task) = fixture(body, stream, Duration::ZERO, Duration::ZERO).await;
-            let result = client
-                .prefill_probe(
-                    PROMPT,
-                    stream,
-                    Duration::from_secs(2),
-                    CancellationToken::new(),
-                )
-                .await;
+            let result = prefill(
+                &client,
+                PROMPT,
+                stream,
+                Duration::from_secs(2),
+                CancellationToken::new(),
+            )
+            .await;
             assert!(
                 matches!(result, Err(ClientError::ResponseTooLarge)) && oversized
                     || matches!(result, Err(ClientError::MalformedStream)) && !oversized

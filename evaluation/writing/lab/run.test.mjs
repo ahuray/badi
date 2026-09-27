@@ -160,12 +160,13 @@ test('file/source provenance hashes exact bytes and cached hashing notices conte
   assert.notEqual(changed.sha256, first.sha256);
   assert.deepEqual(await sourceHashes(['suite.json'], f.directory), { 'suite.json': changed.sha256 });
   const sources = await sourceHashes();
-  for (const path of ['broker/src/semantic/client/writing_lab.rs', 'Cargo.lock', 'broker/src/provider.rs',
+  for (const path of ['broker/src/writing_lab/transport.rs', 'Cargo.lock', 'broker/src/provider.rs',
     'broker/src/semantic/process.rs', 'broker/src/writing_lab/prefill_probe.rs',
     'evaluation/writing/lab/paced.mjs', 'broker/src/writing_lab/paced_probe.rs',
     'broker/src/writing_lab/paced_probe/scheduler.rs', 'broker/src/writing_lab/artifact.rs', 'broker/src/writing_lab/attestation.rs',
     'evaluation/writing/lab/model-artifact.mjs',
-    'broker/src/semantic/client/prefill_probe.rs', 'broker/src/segment.rs',
+    'broker/src/writing_lab/transport/prefill.rs', 'broker/src/writing_lab/transport/stop_token.rs',
+    'broker/src/semantic/wire.rs', 'broker/src/segment.rs',
     'broker/data/writing-lexicon/en.txt']) assert.match(sources[path], /^[a-f0-9]{64}$/u);
   assert.equal(sources['broker/src/writing_lab/attestation.rs'],
     hash(await readFile(new URL('../../../broker/src/writing_lab/attestation.rs', import.meta.url))));

@@ -1,13 +1,16 @@
 //! Fixed synthetic stop-token diagnostic. The authenticated client stays
 //! private; callers select only a compiled word/arm, never an HTTP payload.
 
+use std::time::{Duration, Instant};
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use super::{
-    AUTHORIZATION, ClientError, Duration, Instant, NativeStreamChunk, SemanticClient, StatusCode,
-    ensure_content_type, event_data, next_event_boundary, read_bounded_body, transport_error,
+use crate::semantic::client::{ClientError, SemanticClient};
+use crate::semantic::wire::{
+    NativeStreamChunk, StatusCode, TokenizeResponse, ensure_content_type, event_data,
+    next_event_boundary, read_bounded_body, transport_error,
 };
 
 const MAX_BYTES: usize = 64 * 1024;
@@ -203,7 +206,7 @@ fn validate_round_trip(decoded: &Value, encoded: Value) -> Result<TokenCheck, Cl
     let decoded = decoded["content"]
         .as_str()
         .ok_or(ClientError::MalformedStream)?;
-    let encoded: super::TokenizeResponse =
+    let encoded: TokenizeResponse =
         serde_json::from_value(encoded).map_err(|_| ClientError::MalformedStream)?;
     if decoded.as_bytes() != b" \n" || encoded.tokens != [TOKEN_ID] {
         return Err(ClientError::MalformedStream);
@@ -214,91 +217,80 @@ fn validate_round_trip(decoded: &Value, encoded: Value) -> Result<TokenCheck, Cl
     })
 }
 
-impl SemanticClient {
-    async fn stop_probe_json(&self, route: &str, payload: Value) -> Result<Value, ClientError> {
-        let url = self
-            .completion_url
-            .join(route)
-            .map_err(|_| ClientError::InvalidEndpoint)?;
-        let response = self
-            .client
-            .post(url)
-            .header(AUTHORIZATION, self.config.authorization.clone())
-            .timeout(Duration::from_millis(REQUEST_MS))
-            .json(&payload)
-            .send()
-            .await
-            .map_err(transport_error)?;
+async fn fixed_json(
+    client: &SemanticClient,
+    route: &'static str,
+    payload: &Value,
+) -> Result<Value, ClientError> {
+    let body = serde_json::to_vec(payload).map_err(|_| ClientError::InvalidRequest)?;
+    let response = client
+        .post_runtime(route, body, Some(Duration::from_millis(REQUEST_MS)))
+        .await?;
+    if response.status() != StatusCode::OK {
+        return Err(ClientError::UnexpectedStatus(response.status()));
+    }
+    ensure_content_type(response.headers(), "application/json")?;
+    serde_json::from_slice(&read_bounded_body(response, MAX_BYTES).await?)
+        .map_err(|_| ClientError::MalformedStream)
+}
+
+/// Confirms that the stop token decodes to exactly `" \n"` and back.
+pub(crate) async fn round_trip(
+    client: &SemanticClient,
+    cancellation: CancellationToken,
+) -> Result<TokenCheck, ClientError> {
+    tokio::select! { biased;
+        () = cancellation.cancelled() => Err(ClientError::Cancelled),
+        result = tokio::time::timeout(Duration::from_millis(REQUEST_MS), async {
+            let decoded = fixed_json(client, "/detokenize", &json!({"tokens":[TOKEN_ID]})).await?;
+            // Both requests are fixed; no decoded server text is reflected into another request.
+            let encoded = fixed_json(client, "/tokenize", &json!({"content":" \n","add_special":false,"parse_special":false})).await?;
+            validate_round_trip(&decoded, encoded)
+        }) => result.map_err(|_| ClientError::Timeout)?,
+    }
+}
+
+pub(crate) async fn completion(
+    client: &SemanticClient,
+    step: Step,
+    cancellation: CancellationToken,
+) -> Result<Observation, ClientError> {
+    let started = Instant::now();
+    let operation = async {
+        let body = serde_json::to_vec(&step.payload()).map_err(|_| ClientError::InvalidRequest)?;
+        let mut response = client
+            .post_runtime("/completion", body, Some(Duration::from_millis(REQUEST_MS)))
+            .await?;
         if response.status() != StatusCode::OK {
             return Err(ClientError::UnexpectedStatus(response.status()));
         }
-        ensure_content_type(response.headers(), "application/json")?;
-        serde_json::from_slice(&read_bounded_body(response, MAX_BYTES).await?)
-            .map_err(|_| ClientError::MalformedStream)
-    }
-
-    pub(crate) async fn stop_token_round_trip(
-        &self,
-        cancellation: CancellationToken,
-    ) -> Result<TokenCheck, ClientError> {
-        tokio::select! { biased;
-            () = cancellation.cancelled() => Err(ClientError::Cancelled),
-            result = tokio::time::timeout(Duration::from_millis(REQUEST_MS), async {
-                let decoded = self.stop_probe_json("detokenize", json!({"tokens":[TOKEN_ID]})).await?;
-                // Both requests are fixed; no decoded server text is reflected into another request.
-                let encoded = self.stop_probe_json("tokenize", json!({"content":" \n","add_special":false,"parse_special":false})).await?;
-                validate_round_trip(&decoded, encoded)
-            }) => result.map_err(|_| ClientError::Timeout)?,
-        }
-    }
-
-    pub(crate) async fn stop_token_completion(
-        &self,
-        step: Step,
-        cancellation: CancellationToken,
-    ) -> Result<Observation, ClientError> {
-        let started = Instant::now();
-        let operation = async {
-            let mut response = self
-                .client
-                .post(self.completion_url.clone())
-                .header(AUTHORIZATION, self.config.authorization.clone())
-                .timeout(Duration::from_millis(REQUEST_MS))
-                .json(&step.payload())
-                .send()
-                .await
-                .map_err(transport_error)?;
-            if response.status() != StatusCode::OK {
-                return Err(ClientError::UnexpectedStatus(response.status()));
+        ensure_content_type(response.headers(), "text/event-stream")?;
+        let mut result = Observation::default();
+        let mut pending = Vec::new();
+        let mut received = 0;
+        while let Some(bytes) = response.chunk().await.map_err(transport_error)? {
+            received += bytes.len();
+            if received > MAX_BYTES {
+                return Err(ClientError::ResponseTooLarge);
             }
-            ensure_content_type(response.headers(), "text/event-stream")?;
-            let mut result = Observation::default();
-            let mut pending = Vec::new();
-            let mut received = 0;
-            while let Some(bytes) = response.chunk().await.map_err(transport_error)? {
-                received += bytes.len();
-                if received > MAX_BYTES {
-                    return Err(ClientError::ResponseTooLarge);
-                }
-                pending.extend_from_slice(&bytes);
-                while let Some((end, consumed)) = next_event_boundary(&pending) {
-                    let data = event_data(&pending[..end])?;
-                    pending.drain(..consumed);
-                    if let Some(data) = data {
-                        let value = serde_json::from_str(&data)
-                            .map_err(|_| ClientError::MalformedStream)?;
-                        if result.observe(&value, started.elapsed().as_secs_f64() * 1000.0)? {
-                            return Ok(result);
-                        }
+            pending.extend_from_slice(&bytes);
+            while let Some((end, consumed)) = next_event_boundary(&pending) {
+                let data = event_data(&pending[..end])?;
+                pending.drain(..consumed);
+                if let Some(data) = data {
+                    let value =
+                        serde_json::from_str(&data).map_err(|_| ClientError::MalformedStream)?;
+                    if result.observe(&value, started.elapsed().as_secs_f64() * 1000.0)? {
+                        return Ok(result);
                     }
                 }
             }
-            Err(ClientError::MalformedStream)
-        };
-        tokio::select! { biased;
-            () = cancellation.cancelled() => Err(ClientError::Cancelled),
-            result = tokio::time::timeout(Duration::from_millis(REQUEST_MS), operation) => result.map_err(|_| ClientError::Timeout)?,
         }
+        Err(ClientError::MalformedStream)
+    };
+    tokio::select! { biased;
+        () = cancellation.cancelled() => Err(ClientError::Cancelled),
+        result = tokio::time::timeout(Duration::from_millis(REQUEST_MS), operation) => result.map_err(|_| ClientError::Timeout)?,
     }
 }
 
@@ -347,7 +339,7 @@ mod tests {
 
     fn fixture_client(endpoint: std::net::SocketAddr) -> SemanticClient {
         SemanticClient::new(
-            super::super::SemanticClientConfig::new(
+            crate::semantic::client::SemanticClientConfig::new(
                 endpoint,
                 "fixed-probe-fixture",
                 "public-fixture-token",
@@ -401,19 +393,16 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let checked = client
-            .stop_token_round_trip(CancellationToken::new())
-            .await
-            .unwrap();
+        let checked = round_trip(&client, CancellationToken::new()).await.unwrap();
         assert_eq!(checked.decoded_bytes, [32, 10]);
         assert_eq!(checked.reencoded_tokens, [715]);
-        let result = client
-            .stop_token_completion(
-                Step::Target(Word::Copper, Arm::StopToken),
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
+        let result = completion(
+            &client,
+            Step::Target(Word::Copper, Arm::StopToken),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         Step::Target(Word::Copper, Arm::StopToken)
             .validate(&result)
             .unwrap();
@@ -446,9 +435,12 @@ mod tests {
             );
         });
         assert!(matches!(
-            client
-                .stop_token_completion(Step::Target(Word::Copper, Arm::StopToken), cancellation)
-                .await,
+            completion(
+                &client,
+                Step::Target(Word::Copper, Arm::StopToken),
+                cancellation
+            )
+            .await,
             Err(ClientError::Cancelled)
         ));
         server.await.unwrap();

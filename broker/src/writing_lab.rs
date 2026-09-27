@@ -11,9 +11,11 @@ pub mod prefill_probe;
 pub use crate::semantic::process;
 pub mod spelling;
 pub mod stop_token_probe;
+mod transport;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -23,12 +25,13 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::model_selection::current_memory;
 use crate::provider::{CompletionProvider, ProviderRequest};
-use crate::semantic::client::{ClientError, LabObservation, LabStream, TokenLogprob};
+use crate::semantic::client::ClientError;
 use crate::semantic::provenance::verify_file;
 use crate::semantic::runtime::{
     LlamaCppLaunch, OwnedRuntime, RuntimeError, StableRuntimeIdentity, WritingProfile,
 };
 use crate::writing::{self, WritingError, WritingLanguage};
+use transport::{LabObservation, LabStream, RequestTrace, TokenLogprob};
 
 pub const REQUEST_SCHEMA: &str = "badi.prediction-lab.request.v1";
 pub const LAUNCH_CONTRACT: &str = "badi.prediction-lab.owned-2048.v2";
@@ -513,10 +516,13 @@ pub async fn run(
     result.used_style = !request.style_examples.is_empty();
     if request.config.mode == Mode::NativeInstructed {
         let messages = native_instruction_messages(&request);
-        let template = match runtime
-            .client()
-            .lab_apply_template(messages, request.config.budget_ms, cancellation.clone())
-            .await
+        let template = match transport::apply_template(
+            runtime.client(),
+            messages,
+            request.config.budget_ms,
+            cancellation.clone(),
+        )
+        .await
         {
             Ok(template) => template,
             Err(ClientError::Timeout) => {
@@ -541,17 +547,16 @@ pub async fn run(
         .as_str()
         .ok_or(LabError::InvalidRequest)?;
     result.effective_prompt = Some(prompt.to_owned());
-    let count = match runtime
-        .client()
-        .lab_token_count(
-            prompt,
-            request
-                .config
-                .budget_ms
-                .saturating_sub(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)),
-            cancellation.clone(),
-        )
-        .await
+    let count = match transport::token_count(
+        runtime.client(),
+        prompt,
+        request
+            .config
+            .budget_ms
+            .saturating_sub(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)),
+        cancellation.clone(),
+    )
+    .await
     {
         Ok(count) => count,
         Err(ClientError::Timeout) => {
@@ -574,20 +579,19 @@ pub async fn run(
         .config
         .budget_ms
         .saturating_sub(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
-    let observed = runtime
-        .client()
-        .lab_stream(
-            prepared.payload,
-            remaining,
-            cancellation,
-            Some(LabObservation {
-                before: &request.before,
-                language: &request.language,
-                echo: &prepared.echo,
-                started,
-            }),
-        )
-        .await?;
+    let observed = transport::stream(
+        runtime.client(),
+        prepared.payload,
+        remaining,
+        cancellation,
+        Some(LabObservation {
+            before: &request.before,
+            language: &request.language,
+            echo: &prepared.echo,
+            started,
+        }),
+    )
+    .await?;
     apply_observation(&mut result, &request, observed, &prepared.echo);
     result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
     result.within_production_budget = result.latency_ms <= 550.0;
@@ -618,7 +622,11 @@ async fn baseline(
             .push("context_and_style_ignored_by_production");
     }
     result.warnings.push("production_raw_and_ttft_not_retained");
-    let (client, trace) = runtime.client().with_lab_trace();
+    let trace = Arc::new(RequestTrace::default());
+    let client = runtime
+        .client()
+        .clone()
+        .with_request_observer(Arc::clone(&trace) as _);
     let proposal = client
         .propose(request.provider_request(), cancellation, true)
         .await
@@ -626,9 +634,7 @@ async fn baseline(
             crate::provider::ProviderError::Cancelled => LabError::Cancelled,
             crate::provider::ProviderError::Unavailable => LabError::RuntimeUnavailable,
         })?;
-    result
-        .model_requests
-        .clone_from(&*trace.lock().map_err(|_| LabError::RuntimeUnavailable)?);
+    result.model_requests = trace.requests().ok_or(LabError::RuntimeUnavailable)?;
     result.effective_prompt = result
         .model_requests
         .last()

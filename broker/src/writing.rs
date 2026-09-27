@@ -32,15 +32,18 @@ pub const WRITING_CONTRACT: &str = "badi.writing.completion-and-spelling.en-de-f
 const MEMORY_RETRY_INITIAL: Duration = Duration::from_secs(2);
 const MEMORY_RETRY_MAX: Duration = Duration::from_secs(30);
 
+/// A language the writing provider completes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WritingLanguage {
+pub enum WritingLanguage {
     English,
     German,
     Persian,
 }
 
 impl WritingLanguage {
-    pub(crate) fn from_tag(tag: &str) -> Option<Self> {
+    /// The writing language of a BCP 47 `tag`, by its primary subtag.
+    #[must_use]
+    pub fn from_tag(tag: &str) -> Option<Self> {
         match tag.split('-').next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::English),
             "de" => Some(Self::German),
@@ -49,7 +52,9 @@ impl WritingLanguage {
         }
     }
 
-    pub(crate) fn accepts_output(self, value: &str) -> bool {
+    /// Whether `value` uses only this language's scripts and punctuation.
+    #[must_use]
+    pub fn accepts_output(self, value: &str) -> bool {
         if self != Self::Persian {
             return crate::semantic::client::valid_english_output(value);
         }
@@ -80,7 +85,9 @@ impl WritingLanguage {
     }
 }
 
-pub(crate) fn validate_suggestion_shape(
+/// Checks a completion's spacing, overlap and boundaries against the text
+/// around the caret.
+pub fn validate_suggestion_shape(
     before: &str,
     after: &str,
     suggestion: &str,
@@ -102,7 +109,9 @@ pub(crate) fn validate_suggestion_shape(
     crate::segment::validate_completion_shape(before, after, suggestion, suffix)
 }
 
-pub(crate) fn validate_proposal(
+/// [`validate_suggestion_shape`], plus: a completion that continues a word
+/// must be English and form a known English word.
+pub fn validate_proposal(
     before: &str,
     after: &str,
     suggestion: &str,
@@ -125,7 +134,8 @@ pub(crate) fn validate_proposal(
 }
 
 /// Normalize ASCII, Arabic-Indic and Persian digits to ASCII.
-pub(crate) fn ascii_digit(character: char) -> Option<char> {
+#[must_use]
+pub fn ascii_digit(character: char) -> Option<char> {
     let value = match character {
         '0'..='9' => character as u32 - '0' as u32,
         '\u{0660}'..='\u{0669}' => character as u32 - '\u{0660}' as u32,
@@ -530,7 +540,10 @@ pub(crate) fn inference_context(before: &str) -> &str {
     window
 }
 
-pub(crate) fn healing_prefix(before: &str) -> Option<&str> {
+/// The trailing word of `before` that token healing regenerates: two to 24
+/// letters that are not a known English word.
+#[must_use]
+pub fn healing_prefix(before: &str) -> Option<&str> {
     let word = before.split_whitespace().next_back()?;
     (before.ends_with(word)
         && (2..=24).contains(&word.chars().count())
@@ -701,7 +714,8 @@ fn spaced_words(raw: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
 
 /// A streaming token is not necessarily a complete word. Wait for a following
 /// separator (or a terminal model stop) before returning a bounded continuation.
-pub(crate) fn complete_word_prefix(raw: &str, limit: usize, finished: bool) -> Option<String> {
+#[must_use]
+pub fn complete_word_prefix(raw: &str, limit: usize, finished: bool) -> Option<String> {
     if raw.is_empty()
         || raw.contains(['\n', '\r', '<', '>', '`'])
         || raw.chars().any(char::is_control)

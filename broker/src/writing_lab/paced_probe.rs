@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::semantic::client::PrefillMetrics;
+use super::transport::prefill::PrefillMetrics;
 use crate::semantic::runtime::{RuntimeLifecycleObservation, StableRuntimeIdentity};
 
 use super::{Config, Mode, Request, ResultRecord};
@@ -305,13 +305,13 @@ async fn prime(
 ) -> Result<(), &'static str> {
     let started = Instant::now();
     let budget = deadline.saturating_duration_since(started);
-    let count = client
-        .lab_token_count(
-            prefix,
-            u64::try_from(budget.as_millis()).unwrap_or(0),
-            cancellation.token.clone(),
-        )
-        .await;
+    let count = super::transport::token_count(
+        client,
+        prefix,
+        u64::try_from(budget.as_millis()).unwrap_or(0),
+        cancellation.token.clone(),
+    )
+    .await;
     record.preflight_ms = Some(milliseconds(started));
     let count = count.map_err(|error| match error {
         crate::semantic::client::ClientError::Timeout => "prelude_deadline",
@@ -321,13 +321,13 @@ async fn prime(
         return Err("primer_context_overflow");
     }
     let started = Instant::now();
-    let metrics = client
-        .prime_context(
-            prefix,
-            deadline.saturating_duration_since(started),
-            cancellation.token.clone(),
-        )
-        .await;
+    let metrics = super::transport::prefill::prime_context(
+        client,
+        prefix,
+        deadline.saturating_duration_since(started),
+        cancellation.token.clone(),
+    )
+    .await;
     record.priming_ms = Some(milliseconds(started));
     let metrics = metrics.map_err(|error| match error {
         crate::semantic::client::ClientError::Timeout => "prelude_deadline",

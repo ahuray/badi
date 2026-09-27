@@ -1,17 +1,22 @@
-//! Explicit experiment transport. It shares authentication and endpoint ownership,
-//! but never changes the production streaming deadline or output contract.
+//! Explicit experiment transport over the production client's authenticated
+//! runtime endpoint. It never changes the production streaming deadline or
+//! output contract.
 
-use std::sync::{Arc, Mutex};
+pub(crate) mod prefill;
+pub(crate) mod stop_token;
+
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-
-use super::{
-    AUTHORIZATION, CONTENT_TYPE, ClientError, Duration, Instant, NativeStreamChunk, SemanticClient,
-    StatusCode, TokenizeResponse, ensure_content_type, event_data, next_event_boundary,
-    read_bounded_body, transport_error,
-};
 use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
+
+use crate::semantic::client::{ClientError, RequestObserver, SemanticClient};
+use crate::semantic::wire::{
+    NativeStreamChunk, StatusCode, TokenizeResponse, ensure_content_type, event_data,
+    next_event_boundary, read_bounded_body, transport_error,
+};
 
 const MAX_LAB_RESPONSE_BYTES: usize = 128 * 1024;
 const MAX_LAB_RAW_BYTES: usize = 4096;
@@ -129,202 +134,210 @@ impl LabObservation<'_> {
     }
 }
 
-impl SemanticClient {
-    /// Apply only the template embedded in the verified, owned model. This
-    /// endpoint formats text locally; it neither infers nor loads repository code.
-    pub(crate) async fn lab_apply_template(
-        &self,
-        messages: Value,
-        budget_ms: u64,
-        cancellation: CancellationToken,
-    ) -> Result<String, ClientError> {
-        let mut url = self.completion_url.clone();
-        url.set_path("/apply-template");
-        let operation = async {
-            let response = self
-                .client
-                .post(url)
-                .header(AUTHORIZATION, self.config.authorization.clone())
-                .timeout(Duration::from_millis(budget_ms.min(2000)))
-                .json(&json!({"messages":messages}))
-                .send()
-                .await
-                .map_err(transport_error)?;
-            if response.status() != StatusCode::OK {
-                return Err(ClientError::UnexpectedStatus(response.status()));
-            }
-            ensure_content_type(response.headers(), "application/json")?;
-            let body = read_bounded_body(response, MAX_LAB_RESPONSE_BYTES).await?;
-            let value: Value =
-                serde_json::from_slice(&body).map_err(|_| ClientError::MalformedStream)?;
-            let prompt = value["prompt"]
-                .as_str()
-                .filter(|text| !text.is_empty() && text.len() <= 48 * 1024)
-                .ok_or(ClientError::MalformedStream)?;
-            Ok(prompt.to_owned())
-        };
-        tokio::select! {
-            biased;
-            () = cancellation.cancelled() => Err(ClientError::Cancelled),
-            result = operation => result,
+/// Records the body of each request the production client sends, so a
+/// record can show exactly what production asked the runtime.
+#[derive(Debug, Default)]
+pub(crate) struct RequestTrace(Mutex<Vec<Option<Value>>>);
+
+impl RequestObserver for RequestTrace {
+    fn observe(&self, body: &[u8]) {
+        if let Ok(mut requests) = self.0.lock() {
+            requests.push(serde_json::from_slice(body).ok());
         }
     }
+}
 
-    pub(crate) fn with_lab_trace(&self) -> (Self, Arc<Mutex<Vec<Value>>>) {
-        let trace = Arc::new(Mutex::new(Vec::new()));
-        let mut client = self.clone();
-        client.lab_trace = Some(Arc::clone(&trace));
-        (client, trace)
+impl RequestTrace {
+    /// The recorded JSON bodies, or `None` if any body was not JSON.
+    pub(crate) fn requests(&self) -> Option<Vec<Value>> {
+        self.0.lock().ok()?.iter().cloned().collect()
     }
+}
 
-    pub(crate) async fn lab_token_count(
-        &self,
-        prompt: &str,
-        budget_ms: u64,
-        cancellation: CancellationToken,
-    ) -> Result<usize, ClientError> {
-        let operation = async {
-            let response = self
-                .client
-                .post(self.challenge_url.clone())
-                .header(AUTHORIZATION, self.config.authorization.clone())
-                .timeout(Duration::from_millis(budget_ms.min(2000)))
-                .json(&json!({"content":prompt,"add_special":true,"parse_special":true}))
-                .send()
-                .await
-                .map_err(transport_error)?;
-            if response.status() != StatusCode::OK {
-                return Err(ClientError::UnexpectedStatus(response.status()));
-            }
-            ensure_content_type(response.headers(), "application/json")?;
-            let body = read_bounded_body(response, MAX_LAB_RESPONSE_BYTES).await?;
-            let result: TokenizeResponse =
-                serde_json::from_slice(&body).map_err(|_| ClientError::MalformedStream)?;
-            if result.tokens.is_empty() {
-                return Err(ClientError::MalformedStream);
-            }
-            Ok(result.tokens.len())
-        };
-        tokio::select! {
-            biased;
-            () = cancellation.cancelled() => Err(ClientError::Cancelled),
-            result = operation => result,
+/// Apply only the template embedded in the verified, owned model. This
+/// endpoint formats text locally; it neither infers nor loads repository code.
+pub(crate) async fn apply_template(
+    client: &SemanticClient,
+    messages: Value,
+    budget_ms: u64,
+    cancellation: CancellationToken,
+) -> Result<String, ClientError> {
+    let operation = async {
+        let body = serde_json::to_vec(&json!({"messages":messages}))
+            .map_err(|_| ClientError::InvalidRequest)?;
+        let response = client
+            .post_runtime(
+                "/apply-template",
+                body,
+                Some(Duration::from_millis(budget_ms.min(2000))),
+            )
+            .await?;
+        if response.status() != StatusCode::OK {
+            return Err(ClientError::UnexpectedStatus(response.status()));
         }
+        ensure_content_type(response.headers(), "application/json")?;
+        let body = read_bounded_body(response, MAX_LAB_RESPONSE_BYTES).await?;
+        let value: Value =
+            serde_json::from_slice(&body).map_err(|_| ClientError::MalformedStream)?;
+        let prompt = value["prompt"]
+            .as_str()
+            .filter(|text| !text.is_empty() && text.len() <= 48 * 1024)
+            .ok_or(ClientError::MalformedStream)?;
+        Ok(prompt.to_owned())
+    };
+    tokio::select! {
+        biased;
+        () = cancellation.cancelled() => Err(ClientError::Cancelled),
+        result = operation => result,
     }
+}
 
-    pub(crate) async fn lab_stream(
-        &self,
-        payload: Value,
-        budget_ms: u64,
-        cancellation: CancellationToken,
-        observation: Option<LabObservation<'_>>,
-    ) -> Result<LabStream, ClientError> {
-        let started = Instant::now();
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(budget_ms);
-        let mut result = LabStream::for_payload(&payload);
-        let send = self
-            .client
-            .post(self.completion_url.clone())
-            .header(AUTHORIZATION, self.config.authorization.clone())
-            .header(CONTENT_TYPE, "application/json")
-            .timeout(Duration::from_millis(budget_ms + 100))
-            .json(&payload)
-            .send();
-        let mut response = tokio::select! {
+pub(crate) async fn token_count(
+    client: &SemanticClient,
+    prompt: &str,
+    budget_ms: u64,
+    cancellation: CancellationToken,
+) -> Result<usize, ClientError> {
+    let operation = async {
+        let body =
+            serde_json::to_vec(&json!({"content":prompt,"add_special":true,"parse_special":true}))
+                .map_err(|_| ClientError::InvalidRequest)?;
+        let response = client
+            .post_runtime(
+                "/tokenize",
+                body,
+                Some(Duration::from_millis(budget_ms.min(2000))),
+            )
+            .await?;
+        if response.status() != StatusCode::OK {
+            return Err(ClientError::UnexpectedStatus(response.status()));
+        }
+        ensure_content_type(response.headers(), "application/json")?;
+        let body = read_bounded_body(response, MAX_LAB_RESPONSE_BYTES).await?;
+        let result: TokenizeResponse =
+            serde_json::from_slice(&body).map_err(|_| ClientError::MalformedStream)?;
+        if result.tokens.is_empty() {
+            return Err(ClientError::MalformedStream);
+        }
+        Ok(result.tokens.len())
+    };
+    tokio::select! {
+        biased;
+        () = cancellation.cancelled() => Err(ClientError::Cancelled),
+        result = operation => result,
+    }
+}
+
+pub(crate) async fn stream(
+    client: &SemanticClient,
+    payload: Value,
+    budget_ms: u64,
+    cancellation: CancellationToken,
+    observation: Option<LabObservation<'_>>,
+) -> Result<LabStream, ClientError> {
+    let started = Instant::now();
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(budget_ms);
+    let mut result = LabStream::for_payload(&payload);
+    let body = serde_json::to_vec(&payload).map_err(|_| ClientError::InvalidRequest)?;
+    let send = client.post_runtime(
+        "/completion",
+        body,
+        Some(Duration::from_millis(budget_ms + 100)),
+    );
+    let mut response = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => return Err(ClientError::Cancelled),
+        () = tokio::time::sleep_until(deadline) => {
+            result.deadline = true;
+            result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+            return Ok(result);
+        },
+        response = send => response?,
+    };
+    if response.status() != StatusCode::OK {
+        return Err(ClientError::UnexpectedStatus(response.status()));
+    }
+    ensure_content_type(response.headers(), "text/event-stream")?;
+    let mut pending = Vec::new();
+    let mut received = 0_usize;
+    loop {
+        let bytes = tokio::select! {
             biased;
             () = cancellation.cancelled() => return Err(ClientError::Cancelled),
             () = tokio::time::sleep_until(deadline) => {
                 result.deadline = true;
-                result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
-                return Ok(result);
+                break;
             },
-            response = send => response.map_err(transport_error)?,
+            bytes = response.chunk() => bytes.map_err(transport_error)?,
         };
-        if response.status() != StatusCode::OK {
-            return Err(ClientError::UnexpectedStatus(response.status()));
+        let Some(bytes) = bytes else {
+            return Err(ClientError::MalformedStream);
+        };
+        received = received.saturating_add(bytes.len());
+        if received > MAX_LAB_RESPONSE_BYTES {
+            return Err(ClientError::ResponseTooLarge);
         }
-        ensure_content_type(response.headers(), "text/event-stream")?;
-        let mut pending = Vec::new();
-        let mut received = 0_usize;
-        loop {
-            let bytes = tokio::select! {
-                biased;
-                () = cancellation.cancelled() => return Err(ClientError::Cancelled),
-                () = tokio::time::sleep_until(deadline) => {
-                    result.deadline = true;
-                    break;
-                },
-                bytes = response.chunk() => bytes.map_err(transport_error)?,
+        pending.extend_from_slice(&bytes);
+        while let Some((end, consumed)) = next_event_boundary(&pending) {
+            let data = event_data(&pending[..end])?;
+            pending.drain(..consumed);
+            let Some(data) = data else {
+                continue;
             };
-            let Some(bytes) = bytes else {
+            // The native endpoint uses a terminal stop:true JSON event.
+            let chunk: NativeStreamChunk =
+                serde_json::from_str(&data).map_err(|_| ClientError::MalformedStream)?;
+            if chunk.index != 0 || chunk.truncated == Some(true) {
                 return Err(ClientError::MalformedStream);
-            };
-            received = received.saturating_add(bytes.len());
-            if received > MAX_LAB_RESPONSE_BYTES {
+            }
+            if !chunk.content.is_empty() && result.ttft_ms.is_none() {
+                result.ttft_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+            }
+            if !chunk.stop {
+                result.capture_token_logprob(&data, &chunk.content);
+            }
+            result.raw.push_str(&chunk.content);
+            if result.raw.len() > MAX_LAB_RAW_BYTES {
                 return Err(ClientError::ResponseTooLarge);
             }
-            pending.extend_from_slice(&bytes);
-            while let Some((end, consumed)) = next_event_boundary(&pending) {
-                let data = event_data(&pending[..end])?;
-                pending.drain(..consumed);
-                let Some(data) = data else {
-                    continue;
-                };
-                // The native endpoint uses a terminal stop:true JSON event.
-                let chunk: NativeStreamChunk =
+            if let Some(observation) = observation {
+                observation.record(&mut result, false);
+            }
+            if chunk.stop {
+                let metadata: Value =
                     serde_json::from_str(&data).map_err(|_| ClientError::MalformedStream)?;
-                if chunk.index != 0 || chunk.truncated == Some(true) {
+                let length_stop = chunk.stopped_limit == Some(true)
+                    || chunk.stop_type.as_deref() == Some("limit");
+                let natural_stop = chunk.stopped_eos == Some(true)
+                    || chunk.stopped_word == Some(true)
+                    || matches!(chunk.stop_type.as_deref(), Some("eos" | "word"));
+                if !length_stop && !natural_stop {
                     return Err(ClientError::MalformedStream);
                 }
-                if !chunk.content.is_empty() && result.ttft_ms.is_none() {
-                    result.ttft_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
-                }
-                if !chunk.stop {
-                    result.capture_token_logprob(&data, &chunk.content);
-                }
-                result.raw.push_str(&chunk.content);
-                if result.raw.len() > MAX_LAB_RAW_BYTES {
-                    return Err(ClientError::ResponseTooLarge);
-                }
+                result.stopped = natural_stop && !length_stop;
+                result.terminal_received = true;
+                result.tokens_predicted = metadata["tokens_predicted"].as_u64();
+                result.tokens_evaluated = metadata["tokens_evaluated"].as_u64();
+                // llama.cpp reports the occupied final slot, including
+                // generated tokens. It does not prove prompt-token reuse.
+                result.slot_tokens_cached = metadata["tokens_cached"].as_u64();
+                // Only final timings describe this completed request. Keep
+                // absent or invalid optional counters unknown, including
+                // when an older runtime omits them; never infer from slot
+                // occupancy or the total prompt-token count.
+                result.reused_prompt_tokens = metadata["timings"]["cache_n"].as_u64();
+                result.newly_evaluated_prompt_tokens = metadata["timings"]["prompt_n"].as_u64();
                 if let Some(observation) = observation {
-                    observation.record(&mut result, false);
+                    let stopped = result.stopped;
+                    observation.record(&mut result, stopped);
                 }
-                if chunk.stop {
-                    let metadata: Value =
-                        serde_json::from_str(&data).map_err(|_| ClientError::MalformedStream)?;
-                    let length_stop = chunk.stopped_limit == Some(true)
-                        || chunk.stop_type.as_deref() == Some("limit");
-                    let natural_stop = chunk.stopped_eos == Some(true)
-                        || chunk.stopped_word == Some(true)
-                        || matches!(chunk.stop_type.as_deref(), Some("eos" | "word"));
-                    if !length_stop && !natural_stop {
-                        return Err(ClientError::MalformedStream);
-                    }
-                    result.stopped = natural_stop && !length_stop;
-                    result.terminal_received = true;
-                    result.tokens_predicted = metadata["tokens_predicted"].as_u64();
-                    result.tokens_evaluated = metadata["tokens_evaluated"].as_u64();
-                    // llama.cpp reports the occupied final slot, including
-                    // generated tokens. It does not prove prompt-token reuse.
-                    result.slot_tokens_cached = metadata["tokens_cached"].as_u64();
-                    // Only final timings describe this completed request. Keep
-                    // absent or invalid optional counters unknown, including
-                    // when an older runtime omits them; never infer from slot
-                    // occupancy or the total prompt-token count.
-                    result.reused_prompt_tokens = metadata["timings"]["cache_n"].as_u64();
-                    result.newly_evaluated_prompt_tokens = metadata["timings"]["prompt_n"].as_u64();
-                    if let Some(observation) = observation {
-                        let stopped = result.stopped;
-                        observation.record(&mut result, stopped);
-                    }
-                    result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
-                    return Ok(result);
-                }
+                result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+                return Ok(result);
             }
         }
-        result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
-        Ok(result)
     }
+    result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -439,15 +452,15 @@ mod tests {
                 terminal.is_none().then_some(Duration::from_millis(100)),
             )
             .await;
-            let observed = client
-                .lab_stream(
-                    json!({"prompt":"fixture"}),
-                    30,
-                    CancellationToken::new(),
-                    None,
-                )
-                .await
-                .unwrap();
+            let observed = stream(
+                &client,
+                json!({"prompt":"fixture"}),
+                30,
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
             assert_eq!(observed.terminal_received, received);
             assert_eq!(observed.stopped, natural);
             assert_eq!(observed.deadline, !received);
@@ -472,15 +485,15 @@ mod tests {
                 json!({"index":0,"content":"","stop":true,"stop_type":"eos"})
             );
             let (client, server) = fixture(body, Duration::ZERO, "text/event-stream").await;
-            let observed = client
-                .lab_stream(
-                    json!({"prompt":"fixture","n_probs":1}),
-                    550,
-                    CancellationToken::new(),
-                    None,
-                )
-                .await
-                .unwrap();
+            let observed = stream(
+                &client,
+                json!({"prompt":"fixture","n_probs":1}),
+                550,
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
             let payload = server.await.unwrap();
             assert_eq!(payload["n_probs"], 1);
             assert_eq!(observed.raw, "report");
@@ -503,8 +516,7 @@ mod tests {
         )
         .await;
         assert_eq!(
-            client
-                .lab_apply_template(messages.clone(), 550, CancellationToken::new())
+            apply_template(&client, messages.clone(), 550, CancellationToken::new())
                 .await
                 .unwrap(),
             "<native-assistant>"
@@ -514,9 +526,7 @@ mod tests {
             let (client, task) =
                 fixture(body.to_string(), Duration::ZERO, "application/json").await;
             assert!(matches!(
-                client
-                    .lab_apply_template(messages.clone(), 550, CancellationToken::new())
-                    .await,
+                apply_template(&client, messages.clone(), 550, CancellationToken::new()).await,
                 Err(ClientError::MalformedStream)
             ));
             task.await.unwrap();
@@ -540,7 +550,7 @@ mod tests {
         let cancelled = CancellationToken::new();
         cancelled.cancel();
         assert!(matches!(
-            client.lab_apply_template(json!([]), 550, cancelled).await,
+            apply_template(&client, json!([]), 550, cancelled).await,
             Err(ClientError::Cancelled)
         ));
         assert!(
@@ -559,14 +569,14 @@ mod tests {
         )
         .await;
         assert_eq!(
-            client
-                .lab_token_count(
-                    "<|im_start|>assistant\nhello",
-                    550,
-                    CancellationToken::new()
-                )
-                .await
-                .expect("count"),
+            token_count(
+                &client,
+                "<|im_start|>assistant\nhello",
+                550,
+                CancellationToken::new()
+            )
+            .await
+            .expect("count"),
             3
         );
         let payload = task.await.expect("server");
@@ -580,22 +590,22 @@ mod tests {
     async fn lab_stream_retains_raw_and_distinguishes_a_token_limit() {
         let body = "data: {\"index\":0,\"content\":\" next wor\",\"stop\":false}\n\ndata: {\"index\":0,\"content\":\"\",\"stop\":true,\"stop_type\":\"limit\",\"tokens_predicted\":3,\"tokens_evaluated\":12,\"tokens_cached\":8}\n\n";
         let (client, task) = fixture(body.to_owned(), Duration::ZERO, "text/event-stream").await;
-        let observed = client
-            .lab_stream(
-                json!({"prompt":"The"}),
-                550,
-                CancellationToken::new(),
-                Some(LabObservation {
-                    before: "The",
-                    language: "en",
-                    echo: "",
-                    started: Instant::now()
-                        .checked_sub(Duration::from_millis(50))
-                        .expect("preflight clock"),
-                }),
-            )
-            .await
-            .expect("stream");
+        let observed = stream(
+            &client,
+            json!({"prompt":"The"}),
+            550,
+            CancellationToken::new(),
+            Some(LabObservation {
+                before: "The",
+                language: "en",
+                echo: "",
+                started: Instant::now()
+                    .checked_sub(Duration::from_millis(50))
+                    .expect("preflight clock"),
+            }),
+        )
+        .await
+        .expect("stream");
         assert_eq!(observed.raw, " next wor");
         assert!(!observed.stopped && !observed.deadline);
         assert_eq!(observed.tokens_predicted, Some(3));
@@ -622,10 +632,15 @@ mod tests {
         )
         .await;
         let payload = json!({"prompt":"The","n_predict":8,"cache_prompt":true,"stream":true});
-        let observed = client
-            .lab_stream(payload.clone(), 550, CancellationToken::new(), None)
-            .await
-            .expect("stream");
+        let observed = stream(
+            &client,
+            payload.clone(),
+            550,
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .expect("stream");
         assert_eq!(observed.raw, " next ");
         assert!(observed.stopped && !observed.deadline);
         assert_eq!(observed.tokens_predicted, Some(6));
@@ -659,10 +674,15 @@ mod tests {
                 "text/event-stream",
             )
             .await;
-            let observed = client
-                .lab_stream(json!({"prompt":"The"}), 550, CancellationToken::new(), None)
-                .await
-                .expect("optional statistics do not invalidate completion");
+            let observed = stream(
+                &client,
+                json!({"prompt":"The"}),
+                550,
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .expect("optional statistics do not invalidate completion");
             assert_eq!(observed.raw, " next");
             assert!(observed.stopped && !observed.deadline);
             assert_eq!(observed.reused_prompt_tokens, reused);
@@ -682,10 +702,15 @@ mod tests {
             Some(Duration::from_millis(150)),
         )
         .await;
-        let observed = client
-            .lab_stream(json!({"prompt":"The"}), 30, CancellationToken::new(), None)
-            .await
-            .expect("deadline");
+        let observed = stream(
+            &client,
+            json!({"prompt":"The"}),
+            30,
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .expect("deadline");
         assert_eq!(observed.raw, " next ");
         assert!(observed.deadline && !observed.stopped);
         assert_eq!(observed.reused_prompt_tokens, None);
@@ -701,10 +726,15 @@ mod tests {
             "text/event-stream",
         )
         .await;
-        let observed = client
-            .lab_stream(json!({"prompt":"The"}), 20, CancellationToken::new(), None)
-            .await
-            .expect("deadline");
+        let observed = stream(
+            &client,
+            json!({"prompt":"The"}),
+            20,
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .expect("deadline");
         assert!(observed.deadline && observed.raw.is_empty());
         assert!(observed.latency_ms < 75.0);
         task.await.expect("server");
@@ -717,9 +747,7 @@ mod tests {
         let cancellation = CancellationToken::new();
         cancellation.cancel();
         assert!(matches!(
-            client
-                .lab_stream(json!({"prompt":"The"}), 0, cancellation, None)
-                .await,
+            stream(&client, json!({"prompt":"The"}), 0, cancellation, None).await,
             Err(ClientError::Cancelled)
         ));
         task.abort();
@@ -734,9 +762,14 @@ mod tests {
             let (client, task) =
                 fixture(body.to_owned(), Duration::ZERO, "text/event-stream").await;
             assert!(matches!(
-                client
-                    .lab_stream(json!({"prompt":"The"}), 550, CancellationToken::new(), None)
-                    .await,
+                stream(
+                    &client,
+                    json!({"prompt":"The"}),
+                    550,
+                    CancellationToken::new(),
+                    None
+                )
+                .await,
                 Err(ClientError::MalformedStream)
             ));
             task.await.expect("server");
