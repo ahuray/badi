@@ -11,11 +11,12 @@ use badi_broker::protocol::{
     ControlAction, ControlResultPayload, Coordinates, ErrorPayload, GlobalControlRequestPayload,
     HealthStatusPayload, HelloAckPayload, HelloPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS,
     MAX_SAFE_COUNTER, MemoryStatusPayload, MessageType, ProbeRequestPayload, ProbeResultPayload,
-    ProviderKind, ReasonCode, SessionControlRequestPayload, SettingsReplacePayload,
+    ProtocolError, ProviderKind, ReasonCode, SessionControlRequestPayload, SettingsReplacePayload,
     SettingsStatusPayload, WireEnvelope,
 };
 use badi_broker::settings::{PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV1};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::net::UnixStream;
 
@@ -38,45 +39,47 @@ async fn main() {
 }
 
 async fn run() -> Result<(), CliError> {
-    let (socket_path, command) = match parse_arguments(std::env::args().skip(1))? {
-        ParsedCommand::Help => {
-            print!("{CLI_USAGE}");
-            return Ok(());
-        }
+    match parse_arguments(std::env::args().skip(1))? {
+        ParsedCommand::Help => print!("{CLI_USAGE}"),
         ParsedCommand::Version => {
             println!("{}", badi_broker::build_info::version_line("badictl"));
-            return Ok(());
         }
-        ParsedCommand::Local(LocalCommand::Hardware) => {
-            println!("{}", serde_json::to_string_pretty(&detect_hardware())?);
-            return Ok(());
-        }
-        ParsedCommand::Local(LocalCommand::Models(use_case)) => {
-            let advice = recommend_model(detect_hardware(), use_case);
-            println!("{}", serde_json::to_string_pretty(&advice)?);
-            return Ok(());
-        }
+        ParsedCommand::Local(command) => println!("{}", local_report(command)?),
         ParsedCommand::Remote {
             socket_path,
             command,
-        } => (socket_path, command),
-    };
-    // Read standard input before connecting, so typing it cannot outlast the
-    // handshake timeout.
-    let command = with_probe_stdin(command).await?;
-    let mut stream = connect(&socket_path).await?;
-    match command {
+        } => {
+            // Read standard input before connecting, so typing it cannot
+            // outlast the handshake timeout.
+            let command = with_probe_stdin(command).await?;
+            let mut stream = connect(&socket_path).await?;
+            println!("{}", broker_report(&mut stream, command).await?);
+        }
+    }
+    Ok(())
+}
+
+fn local_report(command: LocalCommand) -> Result<String, CliError> {
+    let hardware = detect_hardware();
+    Ok(match command {
+        LocalCommand::Hardware => serde_json::to_string_pretty(&hardware)?,
+        LocalCommand::Models(use_case) => {
+            serde_json::to_string_pretty(&recommend_model(hardware, use_case))?
+        }
+    })
+}
+
+async fn broker_report(stream: &mut UnixStream, command: Command) -> Result<String, CliError> {
+    Ok(match command {
         Command::Status => {
-            let status = request_health(&mut stream).await?;
-            println!("{}", serde_json::to_string(&redact_health_status(&status))?);
+            let status = request_health(stream).await?;
+            serde_json::to_string(&redact_health_status(&status))?
         }
         Command::Overview => {
-            let overview = request_coherent_overview(&mut stream).await?;
-            println!("{}", serde_json::to_string_pretty(&overview)?);
+            serde_json::to_string_pretty(&request_coherent_overview(stream).await?)?
         }
         Command::SettingsShow => {
-            let status = request_settings(&mut stream).await?;
-            println!("{}", serde_json::to_string_pretty(&status.document)?);
+            serde_json::to_string_pretty(&request_settings(stream).await?.document)?
         }
         Command::SettingsReplace {
             expected_revision,
@@ -86,56 +89,29 @@ async fn run() -> Result<(), CliError> {
                 expected_revision,
                 document,
             };
-            let mut request = cli_global(MessageType::SettingsReplace, &payload)?;
-            let request_id = new_request_id();
-            request.id = Some(request_id.clone());
-            write_envelope(&mut stream, &request).await?;
-            let response =
-                read_correlated_response(&mut stream, &request_id, MessageType::SettingsStatus)
-                    .await?;
-            let status = validate_settings_response(&response, &request_id)?;
-            println!("{}", serde_json::to_string_pretty(&status.document)?);
+            let request = cli_global(MessageType::SettingsReplace, &payload)?;
+            let status = exchange(stream, request, validate_settings_response).await?;
+            serde_json::to_string_pretty(&status.document)?
         }
         Command::MemoryClear => {
-            let mut request = cli_global(MessageType::MemoryClear, &serde_json::json!({}))?;
-            let request_id = new_request_id();
-            request.id = Some(request_id.clone());
-            write_envelope(&mut stream, &request).await?;
-            let response =
-                read_correlated_response(&mut stream, &request_id, MessageType::MemoryStatus)
-                    .await?;
-            let payload: MemoryStatusPayload = response
-                .decode_payload()
-                .map_err(|_| CliError::UnexpectedResponse)?;
-            payload
-                .validate()
-                .map_err(|_| CliError::UnexpectedResponse)?;
-            println!("{}", serde_json::to_string(&payload)?);
+            let request = cli_global(MessageType::MemoryClear, &serde_json::json!({}))?;
+            let memory = exchange(stream, request, validate_memory_response).await?;
+            serde_json::to_string(&memory)?
         }
         Command::Global(action) => {
-            let mut request = cli_global(
-                MessageType::ControlRequest,
-                &GlobalControlRequestPayload { action },
-            )?;
-            let request_id = new_request_id();
-            request.id = Some(request_id.clone());
-            write_envelope(&mut stream, &request).await?;
-            print_control_response(&mut stream, &request_id, action).await?;
+            let payload = GlobalControlRequestPayload { action };
+            let request = cli_global(MessageType::ControlRequest, &payload)?;
+            request_control(stream, request, action).await?
         }
         Command::Session(action) => {
-            let status = request_health(&mut stream).await?;
+            let status = request_health(stream).await?;
             let active = status.active.ok_or(CliError::NoActiveSession)?;
-            let request = addressed_control(action, active)?;
-            let request_id = request.id.clone().ok_or(CliError::UnexpectedResponse)?;
-            write_envelope(&mut stream, &request).await?;
-            print_control_response(&mut stream, &request_id, action).await?;
+            request_control(stream, addressed_control(action, active)?, action).await?
         }
         Command::Probe { payload, .. } => {
-            let report = request_probe(&mut stream, &payload).await?;
-            println!("{}", serde_json::to_string(&report)?);
+            serde_json::to_string(&request_probe(stream, &payload).await?)?
         }
-    }
-    Ok(())
+    })
 }
 
 async fn with_probe_stdin(command: Command) -> Result<Command, CliError> {
@@ -182,14 +158,11 @@ async fn request_probe(
     stream: &mut UnixStream,
     payload: &ProbeRequestPayload,
 ) -> Result<ProbeReport, CliError> {
-    let mut request = cli_global(MessageType::ProbeRequest, payload)?;
-    let request_id = new_request_id();
-    request.id = Some(request_id.clone());
+    let request = cli_global(MessageType::ProbeRequest, payload)?;
     let started = Instant::now();
-    write_envelope(stream, &request).await?;
-    let response = read_correlated_response(stream, &request_id, MessageType::ProbeResult).await?;
+    let result = exchange(stream, request, validate_probe_response).await?;
     Ok(ProbeReport {
-        result: validate_probe_response(&response, &request_id)?,
+        result,
         round_trip_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     })
 }
@@ -206,14 +179,12 @@ fn validate_probe_response(
     response: &WireEnvelope,
     request_id: &str,
 ) -> Result<ProbeResultPayload, CliError> {
-    validate_correlated_response(response, request_id, MessageType::ProbeResult)?;
-    let payload: ProbeResultPayload = response
-        .decode_payload()
-        .map_err(|_| CliError::UnexpectedResponse)?;
-    payload
-        .validate()
-        .map_err(|_| CliError::UnexpectedResponse)?;
-    Ok(payload)
+    decode_reply(
+        response,
+        request_id,
+        MessageType::ProbeResult,
+        ProbeResultPayload::validate,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -461,35 +432,55 @@ fn validate_handshake(
 }
 
 async fn request_health(stream: &mut UnixStream) -> Result<HealthStatusPayload, CliError> {
-    let mut request = cli_global(MessageType::HealthRequest, &serde_json::json!({}))?;
-    let request_id = new_request_id();
-    request.id = Some(request_id.clone());
-    write_envelope(stream, &request).await?;
-    let response = read_correlated_response(stream, &request_id, MessageType::HealthStatus).await?;
-    validate_health_response(&response, &request_id)
+    let request = cli_global(MessageType::HealthRequest, &serde_json::json!({}))?;
+    exchange(stream, request, validate_health_response).await
 }
 
 async fn request_settings(stream: &mut UnixStream) -> Result<SettingsStatusPayload, CliError> {
-    let mut request = cli_global(MessageType::SettingsGet, &serde_json::json!({}))?;
+    let request = cli_global(MessageType::SettingsGet, &serde_json::json!({}))?;
+    exchange(stream, request, validate_settings_response).await
+}
+
+/// The whole accepted control reply as JSON.
+async fn request_control(
+    stream: &mut UnixStream,
+    request: WireEnvelope,
+    action: ControlAction,
+) -> Result<String, CliError> {
+    exchange(stream, request, |response, request_id| {
+        validate_control_response(response, request_id, action)?;
+        Ok(serde_json::to_string(response)?)
+    })
+    .await
+}
+
+/// Sends `request` under a fresh correlation id and returns its one reply as
+/// `validate` accepts it.
+async fn exchange<T>(
+    stream: &mut UnixStream,
+    mut request: WireEnvelope,
+    validate: impl FnOnce(&WireEnvelope, &str) -> Result<T, CliError>,
+) -> Result<T, CliError> {
     let request_id = new_request_id();
     request.id = Some(request_id.clone());
     write_envelope(stream, &request).await?;
-    let response =
-        read_correlated_response(stream, &request_id, MessageType::SettingsStatus).await?;
-    validate_settings_response(&response, &request_id)
+    let response = tokio::time::timeout(RESPONSE_TIMEOUT, read_envelope(stream))
+        .await
+        .map_err(|_| CliError::ResponseTimeout)??
+        .ok_or(CliError::ConnectionClosed)?;
+    validate(&response, &request_id)
 }
 
 fn validate_settings_response(
     response: &WireEnvelope,
     request_id: &str,
 ) -> Result<SettingsStatusPayload, CliError> {
-    validate_correlated_response(response, request_id, MessageType::SettingsStatus)?;
-    let payload: SettingsStatusPayload = response
-        .decode_payload()
-        .map_err(|_| CliError::UnexpectedResponse)?;
-    payload
-        .validate()
-        .map_err(|_| CliError::UnexpectedResponse)?;
+    let payload = decode_reply(
+        response,
+        request_id,
+        MessageType::SettingsStatus,
+        SettingsStatusPayload::validate,
+    )?;
     if !has_current_settings_schema(&payload.document) {
         return Err(CliError::UnexpectedResponse);
     }
@@ -516,7 +507,7 @@ fn addressed_control(
     if needs_suggestion && active.suggestion_id.is_none() {
         return Err(CliError::NoSuggestion);
     }
-    let mut envelope = cli_session(
+    Ok(cli_session(
         MessageType::ControlRequest,
         Coordinates {
             session_id: active.session_id,
@@ -528,22 +519,7 @@ fn addressed_control(
             fingerprint: active.fingerprint,
             suggestion_id: active.suggestion_id,
         },
-    )?;
-    envelope.id = Some(new_request_id());
-    Ok(envelope)
-}
-
-async fn read_correlated_response(
-    stream: &mut UnixStream,
-    request_id: &str,
-    expected_type: MessageType,
-) -> Result<WireEnvelope, CliError> {
-    let response = tokio::time::timeout(RESPONSE_TIMEOUT, read_envelope(stream))
-        .await
-        .map_err(|_| CliError::ResponseTimeout)??
-        .ok_or(CliError::ConnectionClosed)?;
-    validate_correlated_response(&response, request_id, expected_type)?;
-    Ok(response)
+    )?)
 }
 
 fn validate_correlated_response(
@@ -618,28 +594,39 @@ fn validate_health_response(
     response: &WireEnvelope,
     request_id: &str,
 ) -> Result<HealthStatusPayload, CliError> {
-    validate_correlated_response(response, request_id, MessageType::HealthStatus)?;
-    let payload: HealthStatusPayload = response
-        .decode_payload()
-        .map_err(|_| CliError::UnexpectedResponse)?;
-    payload
-        .validate()
-        .map_err(|_| CliError::UnexpectedResponse)?;
-    Ok(payload)
+    decode_reply(
+        response,
+        request_id,
+        MessageType::HealthStatus,
+        HealthStatusPayload::validate,
+    )
 }
 
-async fn print_control_response(
-    stream: &mut UnixStream,
+fn validate_memory_response(
+    response: &WireEnvelope,
     request_id: &str,
-    expected_action: ControlAction,
-) -> Result<(), CliError> {
-    let response = tokio::time::timeout(RESPONSE_TIMEOUT, read_envelope(stream))
-        .await
-        .map_err(|_| CliError::ResponseTimeout)??
-        .ok_or(CliError::ConnectionClosed)?;
-    let _ = validate_control_response(&response, request_id, expected_action)?;
-    println!("{}", serde_json::to_string(&response)?);
-    Ok(())
+) -> Result<MemoryStatusPayload, CliError> {
+    decode_reply(
+        response,
+        request_id,
+        MessageType::MemoryStatus,
+        MemoryStatusPayload::validate,
+    )
+}
+
+/// Decodes a correlated `reply_type` reply whose payload passes `validate`.
+fn decode_reply<T: DeserializeOwned>(
+    response: &WireEnvelope,
+    request_id: &str,
+    reply_type: MessageType,
+    validate: fn(&T) -> Result<(), ProtocolError>,
+) -> Result<T, CliError> {
+    validate_correlated_response(response, request_id, reply_type)?;
+    let payload: T = response
+        .decode_payload()
+        .map_err(|_| CliError::UnexpectedResponse)?;
+    validate(&payload).map_err(|_| CliError::UnexpectedResponse)?;
+    Ok(payload)
 }
 
 fn new_request_id() -> String {
@@ -649,7 +636,7 @@ fn new_request_id() -> String {
 fn cli_global<P: Serialize>(
     message_type: MessageType,
     payload: &P,
-) -> Result<WireEnvelope, badi_broker::protocol::ProtocolError> {
+) -> Result<WireEnvelope, ProtocolError> {
     WireEnvelope::global(message_type, 0, payload)?.at_version(CURRENT_PROTOCOL_VERSION)
 }
 
@@ -657,7 +644,7 @@ fn cli_session<P: Serialize>(
     message_type: MessageType,
     coordinates: Coordinates,
     payload: &P,
-) -> Result<WireEnvelope, badi_broker::protocol::ProtocolError> {
+) -> Result<WireEnvelope, ProtocolError> {
     WireEnvelope::session(message_type, coordinates, 0, payload)?
         .at_version(CURRENT_PROTOCOL_VERSION)
 }
@@ -910,7 +897,7 @@ enum CliError {
     #[error("no_suggestion")]
     NoSuggestion,
     #[error("protocol")]
-    Protocol(#[from] badi_broker::protocol::ProtocolError),
+    Protocol(#[from] ProtocolError),
     #[error("rejected:{0}")]
     Rejected(String),
     #[error("response_timeout")]
