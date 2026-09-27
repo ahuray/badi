@@ -170,17 +170,6 @@ impl SemanticClient {
         }
     }
 
-    pub(crate) fn with_lab_production_boundary(mut self) -> Self {
-        self.lab_boundary_healing = true;
-        self
-    }
-
-    /// The historical baseline before production healed a trailing space.
-    pub(crate) fn with_lab_legacy_space_boundary(mut self) -> Self {
-        self.lab_boundary_healing = false;
-        self
-    }
-
     pub(crate) fn with_lab_trace(&self) -> (Self, Arc<Mutex<Vec<Value>>>) {
         let trace = Arc::new(Mutex::new(Vec::new()));
         let mut client = self.clone();
@@ -341,7 +330,6 @@ impl SemanticClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
     use crate::semantic::client::SemanticClientConfig;
     use std::fmt::Write as _;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -414,14 +402,6 @@ mod tests {
         )
         .expect("client");
         (client, task)
-    }
-
-    fn production_request(before: &str, language: &str) -> ProviderRequest {
-        ProviderRequest {
-            before: before.to_owned(),
-            after: String::new(),
-            language: Some(language.to_owned()),
-        }
     }
 
     fn events(pieces: &[&str], terminal: Option<&str>) -> String {
@@ -511,225 +491,6 @@ mod tests {
                 assert!((tokens[0].logprob + 0.4).abs() < 1e-12);
             }
         }
-    }
-
-    #[tokio::test]
-    async fn production_boundary_handles_chunked_exact_echo_for_promoted_languages() {
-        for (before, language, pieces, expected) in [
-            (
-                "Please review the ",
-                "en",
-                vec![" ", "report and make changes "],
-                "report and make changes",
-            ),
-            (
-                "Please review the  ",
-                "en-US",
-                vec![" ", " ", "report"],
-                "report",
-            ),
-            (
-                "Bitte lies das ",
-                "de-DE",
-                vec![" ", "Dokument sorgfältig"],
-                "Dokument sorgfältig",
-            ),
-            ("لطفا این گزارش را ", "fa", vec![" ", "بخوانید"], "بخوانید"),
-        ] {
-            // production_boundary equals production, which heals only promoted languages.
-            if !crate::writing::heals_trailing_space(language) {
-                continue;
-            }
-            let (client, server) = fixture(
-                events(&pieces, Some("eos")),
-                Duration::ZERO,
-                "text/event-stream",
-            )
-            .await;
-            let result = client
-                .with_lab_production_boundary()
-                .propose(
-                    production_request(before, language),
-                    CancellationToken::new(),
-                    true,
-                )
-                .await
-                .expect("proposal")
-                .expect("suggestion");
-            assert_eq!(result.text, expected);
-            assert_eq!(result.replace_before, None);
-            let payload = server.await.expect("server");
-            assert_eq!(payload["prompt"], before.trim_end_matches(' '));
-            assert_eq!(payload["n_predict"], 8);
-            let echo = &before[before.trim_end_matches(' ').len()..];
-            assert_eq!(
-                payload["grammar"],
-                format!(
-                    "root ::= {} [^<>\\n\\r`]*",
-                    serde_json::to_string(echo).expect("literal")
-                )
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn legacy_baseline_keeps_the_trailing_space_in_the_prompt() {
-        for (before, language) in [("Please review the ", "en"), ("Bitte lies das ", "de")] {
-            let (client, server) = fixture(
-                events(&["report"], Some("eos")),
-                Duration::ZERO,
-                "text/event-stream",
-            )
-            .await;
-            let result = client
-                .with_lab_legacy_space_boundary()
-                .propose(
-                    production_request(before, language),
-                    CancellationToken::new(),
-                    true,
-                )
-                .await
-                .expect("proposal");
-            assert_eq!(
-                result.map(|proposal| proposal.text).as_deref(),
-                Some("report")
-            );
-            let payload = server.await.expect("server");
-            assert_eq!(payload["prompt"], before);
-            assert!(payload.get("grammar").is_none());
-        }
-    }
-
-    #[tokio::test]
-    async fn production_boundary_never_exposes_missing_mismatched_or_incomplete_echoes() {
-        for (pieces, terminal, expected) in [
-            (vec!["report and make changes "], "eos", None),
-            (vec!["  report and make changes "], "eos", None),
-            (vec![" "], "eos", None),
-            (vec![" ", "docu"], "limit", None),
-            (vec![" ", "report and par"], "limit", Some("report and")),
-        ] {
-            let (client, server) = fixture(
-                events(&pieces, Some(terminal)),
-                Duration::ZERO,
-                "text/event-stream",
-            )
-            .await;
-            let result = client
-                .with_lab_production_boundary()
-                .propose(
-                    production_request("Please review the ", "en"),
-                    CancellationToken::new(),
-                    true,
-                )
-                .await
-                .expect("single attempt");
-            assert_eq!(
-                result.as_ref().map(|proposal| proposal.text.as_str()),
-                expected
-            );
-            server.await.expect("only one request");
-        }
-    }
-
-    #[tokio::test]
-    async fn production_boundary_deadline_salvages_complete_words_and_cancellation_stays_terminal()
-    {
-        let (client, server) = fixture_with_stall(
-            events(&[" ", "report and par"], None),
-            Duration::ZERO,
-            "text/event-stream",
-            Some(Duration::from_millis(700)),
-        )
-        .await;
-        let result = client
-            .with_lab_production_boundary()
-            .propose(
-                production_request("Please review the ", "en"),
-                CancellationToken::new(),
-                true,
-            )
-            .await
-            .expect("deadline")
-            .expect("complete prefix");
-        assert_eq!(result.text, "report and");
-        server.await.expect("single stalled request");
-        for header_delay in [Duration::ZERO, Duration::from_millis(150)] {
-            let (client, server) = fixture_with_stall(
-                events(&[" "], None),
-                header_delay,
-                "text/event-stream",
-                Some(Duration::from_millis(300)),
-            )
-            .await;
-            let cancellation = CancellationToken::new();
-            let cancel = cancellation.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                cancel.cancel();
-            });
-            assert!(matches!(
-                client
-                    .with_lab_production_boundary()
-                    .propose(
-                        production_request("Please review the ", "en"),
-                        cancellation,
-                        true
-                    )
-                    .await,
-                Err(ProviderError::Cancelled)
-            ));
-            server.await.expect("cancelled request");
-        }
-    }
-
-    #[tokio::test]
-    async fn production_boundary_does_not_replace_the_dictionary_correction_path() {
-        let (client, server) = fixture(String::new(), Duration::ZERO, "text/event-stream").await;
-        let (client, trace) = client.with_lab_production_boundary().with_lab_trace();
-        let result = client
-            .propose(
-                production_request("This is my adress ", "en"),
-                CancellationToken::new(),
-                true,
-            )
-            .await
-            .expect("dictionary")
-            .expect("correction");
-        assert_eq!(result.text, "address ");
-        assert_eq!(result.replace_before.as_deref(), Some("adress "));
-        assert!(trace.lock().expect("trace").is_empty());
-        server.abort();
-    }
-
-    #[tokio::test]
-    async fn production_boundary_cannot_submit_after_spelling_spends_the_shared_budget() {
-        let (client, server) = fixture(
-            String::new(),
-            Duration::from_millis(700),
-            "text/event-stream",
-        )
-        .await;
-        let (client, trace) = client.with_lab_production_boundary().with_lab_trace();
-        let result = client
-            .propose(
-                production_request("This is teh ", "en"),
-                CancellationToken::new(),
-                true,
-            )
-            .await
-            .expect("spent budget");
-        assert!(result.is_none());
-        assert_eq!(
-            trace.lock().expect("trace").len(),
-            1,
-            "no continuation request after the spelling deadline"
-        );
-        let correction_payload = server.await.expect("spelling request");
-        assert_ne!(
-            correction_payload["grammar"],
-            "root ::= \" \" [^<>\\n\\r`]*"
-        );
     }
 
     #[tokio::test]

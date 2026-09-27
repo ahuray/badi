@@ -38,8 +38,7 @@
       </section>
       <aside class="card controls" aria-labelledby="compare-heading">
         <p class="eyebrow">CONTROLLED COMPARISON</p><h2 id="compare-heading">What should we change?</h2>
-        <label class="choice"><input type="checkbox" name="mode" value="production_baseline" checked><span><strong>Current Badi logic</strong><small>Current provider logic and its 550 ms budget. Context and style inputs are ignored. This lab uses a separate 2,048-token runtime; installed Badi uses 512.</small></span></label>
-        <label class="choice"><input type="checkbox" name="mode" value="production_boundary"><span><strong>Isolated boundary fix</strong><small>Keep current provider logic and its 550 ms budget; change only the handling of trailing spaces. An experiment, not an installed change. Context and style inputs are ignored.</small></span></label>
+        <label class="choice"><input type="checkbox" name="mode" value="production_boundary" checked><span><strong>Current Badi logic</strong><small>The installed provider logic and its 550 ms budget, including its trailing-space handling for English and Persian. Context and style inputs are ignored. This lab uses a separate 2,048-token runtime; installed Badi uses 512.</small></span></label>
         <label class="choice"><input type="checkbox" name="mode" value="context"><span><strong>Full context</strong><small>Keep the supplied context and complete draft in the prompt.</small></span></label>
         <label class="choice"><input type="checkbox" name="mode" value="instructed"><span><strong>Context + style instructions</strong><small>Ask for a continuation using the supplied context and examples.</small></span></label>
         <label class="choice"><input type="checkbox" name="mode" value="healed" checked><span><strong>Word-boundary experiment</strong><small>Test whether exact prefix healing improves the next word.</small></span></label>

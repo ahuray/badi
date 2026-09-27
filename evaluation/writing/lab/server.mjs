@@ -11,7 +11,7 @@ import { DeviceQualification } from './device-qualification.mjs';
 import { createQualificationHandler, isQualificationRoute } from './qualification-server.mjs';
 import { validateSuite, modelInputForCase, planComparison, scorePrediction, summarizeResults } from './cases.mjs';
 
-const MODES = ['production_baseline', 'production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'instructed_word', 'healed_attested', 'native_instructed'];
+const MODES = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'instructed_word', 'healed_attested', 'native_instructed'];
 
 export function labOptions(args) {
   const { values } = parseArgs({ args, strict: true, options: {
@@ -47,8 +47,8 @@ export function validateConfigs(configs) {
       || !Number.isInteger(config.max_tokens) || config.max_tokens < 8 || config.max_tokens > 64
       || typeof config.cache_prompt !== 'boolean' || !Number.isFinite(config.temperature) || config.temperature < 0 || config.temperature > 1
       || !Number.isInteger(config.seed) || config.seed < 0 || config.seed > 2147483647) throw new Error('Configuration is outside the supported limits.');
-    if (['production_baseline', 'production_boundary'].includes(config.mode)
-      && (config.budget_ms !== 550 || config.max_tokens !== 8 || !config.cache_prompt || config.temperature !== 0 || config.seed !== 42)) throw new Error('Production comparison modes use fixed production settings.');
+    if (config.mode === 'production_boundary'
+      && (config.budget_ms !== 550 || config.max_tokens !== 8 || !config.cache_prompt || config.temperature !== 0 || config.seed !== 42)) throw new Error('The production mode uses fixed production settings.');
     return { ...config };
   });
 }

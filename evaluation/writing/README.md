@@ -183,8 +183,7 @@ containment is specific to the verified model process, not a general sandbox.
 
 | Mode | What it tests |
 | --- | --- |
-| `production_boundary` | The production provider, correction path, guards and fixed 550 ms / eight-token budget, including production trailing-space handling. Context and style are ignored. |
-| `production_baseline` | The same provider with the earlier unhealed trailing-space prompt; records carry `legacy_space_boundary_not_current_production`. |
+| `production_boundary` | "Current Badi logic": the installed provider exactly as production runs it, with its correction path, guards, trailing-space healing for English and Persian, and fixed 550 ms / eight-token budget. Context and style are ignored. |
 | `context` | Full supplied context and complete draft in the prompt. |
 | `context_confidence` | `context` plus an uncalibrated per-token log-probability score (below). |
 | `instructed` | Non-thinking ChatML instructions with context and style. |
@@ -320,7 +319,7 @@ node evaluation/writing/lab/run.mjs \
   --modes context,healed --budget-ms 550 --max-tokens 8 --seed 42
 ```
 
-Options: `--modes` (default `production_baseline,context`), `--budget-ms`
+Options: `--modes` (default `production_boundary,context`), `--budget-ms`
 550–10000, `--max-tokens` 8–64, `--seed`, `--cache-prompt true|false`,
 `--prefill-batch 16|64` and `--model-artifact`. Production modes always use 550
 ms and eight tokens. Use `--modes context,context_confidence` for paired score

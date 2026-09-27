@@ -34,7 +34,7 @@ const jsonBytes = value => JSON.stringify(value, null, 2) + '\n';
 export function parseOptions(args, cwd = process.cwd()) {
   const { values } = parseArgs({ args, strict: true, options: {
     suite: { type: 'string' }, output: { type: 'string' },
-    modes: { type: 'string', default: 'production_baseline,context' },
+    modes: { type: 'string', default: 'production_boundary,context' },
     'budget-ms': { type: 'string', default: '550' }, 'max-tokens': { type: 'string', default: '8' },
     seed: { type: 'string', default: '42' }, 'cache-prompt': { type: 'string', default: 'true' },
     'model-artifact': { type: 'string' }, 'prefill-batch': { type: 'string' },
@@ -51,7 +51,7 @@ export function parseOptions(args, cwd = process.cwd()) {
   if (!['true', 'false'].includes(values['cache-prompt'])) throw new Error('--cache-prompt must be true or false.');
   if (values['prefill-batch'] !== undefined && !['16', '64'].includes(values['prefill-batch'])) throw new Error('Use --prefill-batch 16 or 64.');
   const configs = validateConfigs(values.modes.split(',').map(mode => {
-    const fixed = ['production_baseline', 'production_boundary'].includes(mode);
+    const fixed = mode === 'production_boundary';
     return { id: mode, mode, budget_ms: fixed ? 550 : budget, max_tokens: fixed ? 8 : tokens,
       cache_prompt: fixed || values['cache-prompt'] === 'true', temperature: 0, seed: 42 };
   }));

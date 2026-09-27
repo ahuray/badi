@@ -234,8 +234,8 @@ script and fact checks are unchanged; tabs, newlines and no-break spaces are not
 healed. When healing would leave no prompt (only spaces before the caret, or one
 unfinished English word), the request abstains as `request_abstained` before any
 runtime request: the runtime answers an empty prompt with a malformed chunk.
-The Lab's `production_baseline` mode keeps the earlier unhealed behavior for
-comparison; `production_boundary` equals production. `TRAILING_SPACE_HEALING`
+The Lab's `production_boundary` mode ("Current Badi logic") runs this exact
+path; the earlier unhealed prompt is no longer a Lab mode. `TRAILING_SPACE_HEALING`
 is the per-language promotion and rollback switch: a language is listed only
 while healing does not increase its harmful suggestions, and an unlisted
 language keeps the unhealed prompt. A blinded review cleared English and

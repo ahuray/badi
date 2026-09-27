@@ -61,7 +61,7 @@ impl PrefillBatch {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
-    ProductionBaseline,
+    /// The installed provider, exactly as production runs it.
     ProductionBoundary,
     Context,
     ContextConfidence,
@@ -238,11 +238,7 @@ impl Request {
         if WritingLanguage::from_tag(&self.language).is_none() {
             return Err(LabError::UnsupportedLanguage);
         }
-        if matches!(
-            config.mode,
-            Mode::ProductionBaseline | Mode::ProductionBoundary
-        ) && self.before.chars().count() > 512
-        {
+        if config.mode == Mode::ProductionBoundary && self.before.chars().count() > 512 {
             return Err(LabError::InvalidRequest);
         }
         Ok(())
@@ -466,10 +462,7 @@ pub async fn run(
         return Err(LabError::RuntimeUnavailable);
     }
     let started = Instant::now();
-    if matches!(
-        request.config.mode,
-        Mode::ProductionBaseline | Mode::ProductionBoundary
-    ) {
+    if request.config.mode == Mode::ProductionBoundary {
         return baseline(runtime, &request, cancellation, started).await;
     }
     let mut prepared = prepare_prompt(&request);
@@ -578,18 +571,12 @@ async fn baseline(
         seed: 42,
     };
     if !request.context.is_empty() || !request.style_examples.is_empty() {
-        result.warnings.push("ignored_by_production_baseline");
+        result
+            .warnings
+            .push("context_and_style_ignored_by_production");
     }
     result.warnings.push("production_raw_and_ttft_not_retained");
     let (client, trace) = runtime.client().with_lab_trace();
-    let client = if request.config.mode == Mode::ProductionBoundary {
-        client.with_lab_production_boundary()
-    } else {
-        result
-            .warnings
-            .push("legacy_space_boundary_not_current_production");
-        client.with_lab_legacy_space_boundary()
-    };
     let proposal = client
         .propose(request.provider_request(), cancellation, true)
         .await
@@ -1111,12 +1098,12 @@ mod tests {
             assert_eq!(record["reused_prompt_tokens"], json!(reused));
             assert_eq!(record["newly_evaluated_prompt_tokens"], json!(evaluated));
         }
-        for mode in [Mode::ProductionBaseline, Mode::ProductionBoundary] {
-            let record = serde_json::to_value(self::request(mode).result(&fixture_identity()))
-                .expect("production record defaults");
-            assert!(record["reused_prompt_tokens"].is_null());
-            assert!(record["newly_evaluated_prompt_tokens"].is_null());
-        }
+        let record = serde_json::to_value(
+            self::request(Mode::ProductionBoundary).result(&fixture_identity()),
+        )
+        .expect("production record defaults");
+        assert!(record["reused_prompt_tokens"].is_null());
+        assert!(record["newly_evaluated_prompt_tokens"].is_null());
     }
 
     #[test]
@@ -2183,11 +2170,9 @@ mod tests {
 
     #[test]
     fn baseline_accepts_identical_cases_but_keeps_the_production_bound() {
-        for mode in [Mode::ProductionBaseline, Mode::ProductionBoundary] {
-            let mut value = request(mode);
-            value.validate().expect("same context/style case");
-            value.before = "a".repeat(513);
-            assert!(value.validate().is_err());
-        }
+        let mut value = request(Mode::ProductionBoundary);
+        value.validate().expect("same context/style case");
+        value.before = "a".repeat(513);
+        assert!(value.validate().is_err());
     }
 }

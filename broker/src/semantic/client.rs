@@ -317,11 +317,6 @@ pub struct SemanticClient {
     completion_url: Url,
     #[cfg(feature = "writing-lab")]
     lab_trace: Option<std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>>,
-    /// Production heals a trailing ASCII space for the languages in
-    /// `writing::TRAILING_SPACE_HEALING`; only the Lab's historical baseline
-    /// turns it off for all of them.
-    #[cfg(feature = "writing-lab")]
-    lab_boundary_healing: bool,
 }
 
 impl SemanticClient {
@@ -354,8 +349,6 @@ impl SemanticClient {
             completion_url,
             #[cfg(feature = "writing-lab")]
             lab_trace: None,
-            #[cfg(feature = "writing-lab")]
-            lab_boundary_healing: true,
         })
     }
 
@@ -416,24 +409,9 @@ impl SemanticClient {
         // The language boundary deliberately precedes construction and JSON
         // serialization. A rejected request therefore cannot allocate an HTTP
         // payload or send a runtime request/body byte.
-        let healed_languages: &[crate::writing::WritingLanguage] = {
-            #[cfg(feature = "writing-lab")]
-            {
-                if self.lab_boundary_healing {
-                    crate::writing::TRAILING_SPACE_HEALING
-                } else {
-                    &[]
-                }
-            }
-            #[cfg(not(feature = "writing-lab"))]
-            {
-                crate::writing::TRAILING_SPACE_HEALING
-            }
-        };
-        let plan = self
-            .config
-            .writing
-            .then(|| crate::writing::completion_plan(&request, healed_languages));
+        let plan = self.config.writing.then(|| {
+            crate::writing::completion_plan(&request, crate::writing::TRAILING_SPACE_HEALING)
+        });
         // Healing can consume the whole window (one unfinished English word),
         // and an unhealed language can send only whitespace. Neither carries
         // context, and the runtime answers an empty prompt with a malformed

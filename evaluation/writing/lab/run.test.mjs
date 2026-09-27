@@ -48,7 +48,7 @@ class FakeWorker {
 }
 
 test('CLI parsing keeps generation seed fixed and baseline settings independent of experiment settings', () => {
-  const parsed = parseOptions(['--suite', 'input.json', '--output', 'output/writing/new', '--modes', 'production_baseline,healed',
+  const parsed = parseOptions(['--suite', 'input.json', '--output', 'output/writing/new', '--modes', 'production_boundary,healed',
     '--budget-ms', '2500', '--max-tokens', '32', '--seed', '19', '--cache-prompt', 'false'], '/work/badi');
   assert.equal(parsed.suitePath, '/work/badi/input.json');
   assert.equal(parsed.outputPath, '/work/badi/output/writing/new');
@@ -67,20 +67,18 @@ test('CLI parsing keeps generation seed fixed and baseline settings independent 
   assert.throws(() => parseOptions([]));
 });
 
-test('CLI production-boundary mode is explicit and keeps production settings despite experiment overrides', () => {
+test('CLI production mode keeps production settings despite experiment overrides', () => {
   const base = ['--suite', 'suite.json', '--output', 'output/writing/new'];
-  const defaults = parseOptions(base);
-  assert.equal(defaults.configs.some(value => value.mode === 'production_boundary'), false);
-  const parsed = parseOptions([...base, '--modes', 'production_baseline,production_boundary,context,instructed,healed',
+  const parsed = parseOptions([...base, '--modes', 'production_boundary,context,instructed,healed',
     '--budget-ms', '5000', '--max-tokens', '64', '--cache-prompt', 'false', '--seed', '123']);
-  assert.equal(parsed.configs.length, 5);
-  for (const mode of ['production_baseline', 'production_boundary']) {
-    assert.deepEqual(parsed.configs.find(value => value.mode === mode), { id: mode, mode,
-      budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 });
-  }
+  assert.equal(parsed.configs.length, 4);
+  assert.deepEqual(parsed.configs.find(value => value.mode === 'production_boundary'), { id: 'production_boundary',
+    mode: 'production_boundary', budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 });
   assert.equal(parsed.seed, 123);
   assert.equal(parsed.configs.find(value => value.mode === 'context').budget_ms, 5000);
   assert.throws(() => parseOptions([...base, '--modes', 'production_boundary_unknown']));
+  // The historical unhealed baseline is retired; production is the only baseline.
+  assert.throws(() => parseOptions([...base, '--modes', 'production_baseline']));
 });
 
 test('artifact CLI option is explicit and cannot pass arbitrary runtime flags', () => {
@@ -107,7 +105,7 @@ test('prefill batch is an explicit bounded launch choice, separate from generati
 
 test('instructed healing is an explicit CLI experiment with unchanged defaults and bounds', () => {
   const base = ['--suite', 'suite.json', '--output', 'output/writing/new'];
-  assert.deepEqual(parseOptions(base).configs.map(config => config.mode), ['production_baseline', 'context']);
+  assert.deepEqual(parseOptions(base).configs.map(config => config.mode), ['production_boundary', 'context']);
   const selected = parseOptions([...base, '--modes', 'instructed_healed', '--budget-ms', '1500',
     '--max-tokens', '16', '--cache-prompt', 'false', '--seed', '73']);
   assert.deepEqual(selected.configs, [{ id: 'instructed_healed', mode: 'instructed_healed',
@@ -122,7 +120,7 @@ test('instructed healing is an explicit CLI experiment with unchanged defaults a
 
 test('context-attested recovery is opt-in with ordinary experimental settings and strict bounds', () => {
   const base = ['--suite', 'suite.json', '--output', 'output/writing/new'];
-  assert.deepEqual(parseOptions(base).configs.map(config => config.mode), ['production_baseline', 'context']);
+  assert.deepEqual(parseOptions(base).configs.map(config => config.mode), ['production_boundary', 'context']);
   const selected = parseOptions([...base, '--modes', 'healed,healed_attested', '--budget-ms', '5000',
     '--max-tokens', '32', '--cache-prompt', 'false', '--seed', '71']);
   assert.deepEqual(selected.configs, ['healed', 'healed_attested'].map(mode => ({ id: mode, mode,

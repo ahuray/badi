@@ -434,8 +434,8 @@ pub fn heals_trailing_space(language: &str) -> bool {
         .is_some_and(|language| TRAILING_SPACE_HEALING.contains(&language))
 }
 
-/// Production passes [`TRAILING_SPACE_HEALING`]; only the Lab's historical
-/// baseline passes no languages.
+/// Production passes [`TRAILING_SPACE_HEALING`]; tests pass other sets to
+/// check each language's promotion and rollback on its own.
 pub(crate) fn completion_plan<'a>(
     request: &'a ProviderRequest,
     healed_languages: &[WritingLanguage],

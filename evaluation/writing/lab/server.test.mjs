@@ -4,7 +4,7 @@ import { request as httpRequest } from 'node:http';
 import { createLabServer, validateConfigs, workerRequest, labOptions, renderLabPage } from './server.mjs';
 import { readFile } from 'node:fs/promises';
 
-const config = (overrides = {}) => ({ id: 'baseline', mode: 'production_baseline', budget_ms: 550, max_tokens: 8,
+const config = (overrides = {}) => ({ id: 'baseline', mode: 'production_boundary', budget_ms: 550, max_tokens: 8,
   cache_prompt: true, temperature: 0, seed: 42, ...overrides });
 const testCase = (overrides = {}) => ({ id: 'sample', language: 'en', prefix: 'Please review the docum', expected: ['ent'], context: '', style: '', ...overrides });
 const payload = (overrides = {}) => ({ suite: { schema: 'badi.prediction-suite.v1', name: 'HTTP fixture', cases: [testCase()] }, configs: [config()], seed: 42, ...overrides });
@@ -212,10 +212,26 @@ test('production-boundary mode requires the production budget, nominal tokens, c
   for (const changed of [{ budget_ms: 551 }, { max_tokens: 9 }, { cache_prompt: false }, { temperature: .1 }, { seed: 43 }]) {
     assert.throws(() => validateConfigs([{ ...boundary, ...changed }]), /fixed production settings/u);
   }
-  const modes = ['production_baseline', 'production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'instructed_word', 'healed_attested', 'native_instructed'];
+  const modes = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'instructed_word', 'healed_attested', 'native_instructed'];
   const all = modes.map(mode => config({ id: mode, mode }));
-  assert.equal(validateConfigs(all).length, 10);
-  assert.throws(() => validateConfigs([...all, config({ id: 'extra' })]), /10 configurations/u);
+  assert.equal(validateConfigs(all).length, 9);
+  assert.throws(() => validateConfigs([...all, config({ id: 'extra' })]), /9 configurations/u);
+  // The historical unhealed baseline is retired; production is the only baseline.
+  assert.throws(() => validateConfigs([config({ mode: 'production_baseline' })]), /supported limits/u);
+});
+
+test('the served UI offers production as "Current Badi logic" and no retired baseline', async t => {
+  const lab = await setup(t);
+  const html = await (await fetch(lab.origin)).text();
+  const current = [...html.matchAll(/<label class="choice">.*?<\/label>/gu)].map(match => match[0])
+    .filter(choice => choice.includes('Current Badi logic'));
+  assert.equal(current.length, 1);
+  assert.match(current[0], /value="production_boundary" checked/u);
+  assert.match(current[0], /trailing-space handling for English and Persian/u);
+  assert.doesNotMatch(html, /production_baseline|Isolated boundary fix/u);
+  const app = await readFile(new URL('./public/app.mjs', import.meta.url), 'utf8');
+  assert.match(app, /production_boundary: 'Current Badi logic'/u);
+  assert.doesNotMatch(app, /production_baseline/u);
 });
 
 test('one-word mode is explicit, preserves input and cannot supply a custom grammar', async t => {
@@ -247,7 +263,7 @@ test('instructed healing is unchecked in the served UI and forwards only explici
   assert.equal(combinedChoice.length, 1);
   assert.doesNotMatch(combinedChoice[0], /\bchecked\b/u);
   assert.deepEqual(choices.filter(choice => /\bchecked\b/u.test(choice))
-    .map(choice => choice.match(/value="([^"]+)"/u)[1]), ['production_baseline', 'healed']);
+    .map(choice => choice.match(/value="([^"]+)"/u)[1]), ['production_boundary', 'healed']);
   const combined = config({ id: 'instructed_healed', mode: 'instructed_healed', budget_ms: 1500,
     max_tokens: 16, cache_prompt: false, temperature: .2 });
   const sample = testCase({ prefix: 'Please review the  ', context: 'The meeting is Friday.',
@@ -273,7 +289,7 @@ test('contextual word completion is unchecked and forwards only bounded explicit
   assert.doesNotMatch(attested[0], /\bchecked\b/u);
   assert.match(html, /Complete words from context/u);
   assert.deepEqual(choices.filter(choice => /\bchecked\b/u.test(choice))
-    .map(choice => choice.match(/value="([^"]+)"/u)[1]), ['production_baseline', 'healed']);
+    .map(choice => choice.match(/value="([^"]+)"/u)[1]), ['production_boundary', 'healed']);
   const selected = config({ id: 'healed_attested', mode: 'healed_attested', budget_ms: 5000, max_tokens: 32 });
   const sample = testCase({ prefix: 'Die Tagesord', language: 'de', context: 'Die Tagesordnung liegt bereit.',
     style: 'Ich ergänze die Tagesordnung.', expected: ['ATTESTED_REFERENCE_NEVER_FORWARD'] });

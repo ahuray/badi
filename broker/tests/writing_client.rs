@@ -4,7 +4,9 @@ use std::error::Error;
 use std::time::Duration;
 
 use badi_broker::NoSuggestionReason;
-use badi_broker::provider::{CompletionProvider, ProviderOutcome, ProviderRequest, RequestTrigger};
+use badi_broker::provider::{
+    CompletionProvider, ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger,
+};
 use badi_broker::semantic::client::{
     ClientError, CompletionDisposition, SemanticClient, SemanticClientConfig,
 };
@@ -804,57 +806,98 @@ async fn warm_up_failures_are_bounded_and_classified_without_content() -> Result
     Ok(())
 }
 
+/// Reads one HTTP request from `socket` and returns its JSON body.
+async fn read_payload(socket: &mut tokio::net::TcpStream) -> serde_json::Value {
+    let mut bytes = Vec::new();
+    let mut buffer = [0; 4096];
+    loop {
+        let read = socket.read(&mut buffer).await.expect("HTTP request");
+        assert_ne!(read, 0);
+        bytes.extend_from_slice(&buffer[..read]);
+        let Some(end) = bytes.windows(4).position(|value| value == b"\r\n\r\n") else {
+            continue;
+        };
+        let length: usize = std::str::from_utf8(&bytes[..end])
+            .expect("headers")
+            .lines()
+            .find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                key.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse().expect("body size"))
+            })
+            .expect("content length");
+        if bytes.len() >= end + 4 + length {
+            return serde_json::from_slice(&bytes[end + 4..end + 4 + length])
+                .expect("request JSON");
+        }
+    }
+}
+
+/// How the fixture runtime ends its stream.
+#[derive(Clone, Copy, Debug)]
+enum Ending {
+    /// A terminal chunk with this `stop_type`.
+    Stop(&'static str),
+    /// No terminal chunk until the writing budget has passed.
+    Stall,
+}
+
 /// Serves one streamed completion and returns the payload the client sent.
 async fn healed_exchange(
     before: &str,
     language: &str,
     pieces: &[&str],
 ) -> Result<(serde_json::Value, ProviderOutcome), Box<dyn Error>> {
+    let (payload, outcome) = runtime_exchange(
+        before,
+        language,
+        pieces,
+        Ending::Stop("eos"),
+        Duration::ZERO,
+        CancellationToken::new(),
+    )
+    .await?;
+    Ok((payload, outcome?))
+}
+
+/// Serves one streamed completion whose headers wait `header_delay`, and
+/// returns the payload the client sent with the provider's result. Writes
+/// after a cancelled client has closed the connection are ignored.
+async fn runtime_exchange(
+    before: &str,
+    language: &str,
+    pieces: &[&str],
+    ending: Ending,
+    header_delay: Duration,
+    cancellation: CancellationToken,
+) -> Result<(serde_json::Value, Result<ProviderOutcome, ProviderError>), Box<dyn Error>> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let endpoint = listener.local_addr()?;
     let pieces: Vec<_> = pieces.iter().map(|value| (*value).to_owned()).collect();
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("HTTP connection");
-        let mut bytes = Vec::new();
-        let mut buffer = [0; 4096];
-        let payload: serde_json::Value = loop {
-            let read = socket.read(&mut buffer).await.expect("HTTP request");
-            assert_ne!(read, 0);
-            bytes.extend_from_slice(&buffer[..read]);
-            let Some(end) = bytes.windows(4).position(|value| value == b"\r\n\r\n") else {
-                continue;
-            };
-            let length: usize = std::str::from_utf8(&bytes[..end])
-                .expect("headers")
-                .lines()
-                .find_map(|line| {
-                    let (key, value) = line.split_once(':')?;
-                    key.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse().expect("body size"))
-                })
-                .expect("content length");
-            if bytes.len() >= end + 4 + length {
-                break serde_json::from_slice(&bytes[end + 4..end + 4 + length])
-                    .expect("request JSON");
-            }
-        };
-        socket
+        let payload = read_payload(&mut socket).await;
+        tokio::time::sleep(header_delay).await;
+        let _ = socket
             .write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
             )
-            .await
-            .expect("HTTP headers");
+            .await;
         for piece in pieces {
             let value = serde_json::json!({"index":0,"content":piece,"stop":false});
-            socket
+            let _ = socket
                 .write_all(format!("data: {value}\n\n").as_bytes())
-                .await
-                .expect("stream content");
+                .await;
         }
-        let stop = serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"eos"});
-        let _ = socket
-            .write_all(format!("data: {stop}\n\n").as_bytes())
-            .await;
+        match ending {
+            Ending::Stop(kind) => {
+                let stop = serde_json::json!({"index":0,"content":"","stop":true,"stop_type":kind});
+                let _ = socket
+                    .write_all(format!("data: {stop}\n\n").as_bytes())
+                    .await;
+            }
+            Ending::Stall => tokio::time::sleep(Duration::from_millis(700)).await,
+        }
         payload
     });
     let client = SemanticClient::new(
@@ -863,11 +906,11 @@ async fn healed_exchange(
     let outcome = client
         .propose_outcome(
             request(before, Some(language)),
-            CancellationToken::new(),
+            cancellation,
             false,
             RequestTrigger::Automatic,
         )
-        .await?;
+        .await;
     Ok((server.await?, outcome))
 }
 
@@ -908,6 +951,15 @@ async fn production_heals_a_trailing_space_and_never_shows_the_echo() -> Result<
             "  ",
             "  document",
         ),
+        (
+            // The echo may arrive in several chunks; a language subtag heals.
+            "Please review the  ",
+            "en-US",
+            &[" ", " ", "report"][..],
+            "Please review the",
+            "  ",
+            "  report",
+        ),
     ] {
         let (payload, outcome) = healed_exchange(before, language, pieces).await?;
         if !badi_broker::writing::heals_trailing_space(language) {
@@ -929,17 +981,30 @@ async fn production_heals_a_trailing_space_and_never_shows_the_echo() -> Result<
         let text = outcome.into_proposal().map(|proposal| proposal.text);
         assert_eq!(text.as_deref(), shown.strip_prefix(echo), "{before:?}");
     }
-    // An output that does not reproduce the removed bytes is never shown.
-    for pieces in [&["Nachricht"][..], &["\u{a0}Nachricht"][..], &[" "][..]] {
-        let (_, outcome) = healed_exchange("Vielen Dank für Ihre ", "de", pieces).await?;
-        if !badi_broker::writing::heals_trailing_space("de") {
+    // An output that does not reproduce the removed bytes exactly, or that
+    // completes no word after them, is never shown.
+    for (pieces, stop_type, shown) in [
+        (&["report and make changes "][..], "eos", None),
+        (&["  report and make changes "][..], "eos", None),
+        (&["\u{a0}report"][..], "eos", None),
+        (&[" "][..], "eos", None),
+        (&[" ", "docu"][..], "limit", None),
+        (&[" ", "report and par"][..], "limit", Some("report and")),
+    ] {
+        if !badi_broker::writing::heals_trailing_space("en") {
             break;
         }
-        assert_eq!(
-            outcome,
-            ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained),
-            "{pieces:?}"
-        );
+        let (_, outcome) = runtime_exchange(
+            "Please review the ",
+            "en",
+            pieces,
+            Ending::Stop(stop_type),
+            Duration::ZERO,
+            CancellationToken::new(),
+        )
+        .await?;
+        let text = outcome?.into_proposal().map(|proposal| proposal.text);
+        assert_eq!(text.as_deref(), shown, "{pieces:?} {stop_type}");
     }
     // Controls without a trailing ASCII space keep the unhealed payload.
     for (before, language) in [
@@ -952,6 +1017,83 @@ async fn production_heals_a_trailing_space_and_never_shows_the_echo() -> Result<
         assert!(payload.get("grammar").is_none(), "{before:?}");
         assert_eq!(payload["n_predict"], 8);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_healed_stream_salvages_complete_words_at_the_deadline_and_cancellation_stays_terminal()
+-> Result<(), Box<dyn Error>> {
+    if !badi_broker::writing::heals_trailing_space("en") {
+        return Ok(());
+    }
+    let before = "Please review the ";
+    let (_, outcome) = runtime_exchange(
+        before,
+        "en",
+        &[" ", "report and par"],
+        Ending::Stall,
+        Duration::ZERO,
+        CancellationToken::new(),
+    )
+    .await?;
+    let text = outcome?.into_proposal().map(|proposal| proposal.text);
+    assert_eq!(text.as_deref(), Some("report and"));
+    for header_delay in [Duration::ZERO, Duration::from_millis(150)] {
+        let cancellation = CancellationToken::new();
+        let cancel = cancellation.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancel.cancel();
+        });
+        let (_, outcome) = runtime_exchange(
+            before,
+            "en",
+            &[" "],
+            Ending::Stall,
+            header_delay,
+            cancellation,
+        )
+        .await?;
+        assert!(
+            matches!(outcome, Err(ProviderError::Cancelled)),
+            "{header_delay:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_spelling_attempt_that_spends_the_budget_sends_no_continuation()
+-> Result<(), Box<dyn Error>> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let endpoint = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("spelling request");
+        let payload = read_payload(&mut socket).await;
+        // Answer only after the automatic budget has passed.
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "no continuation request after the spelling deadline"
+        );
+        payload
+    });
+    let client = SemanticClient::new(
+        SemanticClientConfig::new(endpoint, "deadline-fixture", "public-fixture-token")?
+            .for_writing(),
+    )?;
+    let result = client
+        .propose(
+            request("This is teh ", Some("en")),
+            CancellationToken::new(),
+            true,
+        )
+        .await?;
+    assert!(result.is_none());
+    let correction = server.await?;
+    assert_ne!(correction["grammar"], "root ::= \" \" [^<>\\n\\r`]*");
     Ok(())
 }
 
