@@ -23,7 +23,7 @@ use crate::protocol::{
 use crate::protocol::{ProbeOutcome, ProbeRequestPayload};
 use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
 use crate::settings::{
-    BrowserAdapter, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV1,
+    BrowserAdapter, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV2,
     StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
 };
 
@@ -732,13 +732,13 @@ fn controlled_target() -> TargetDescriptor {
     }
 }
 
-fn controlled_settings(revision: u64, allowed: bool, learn: bool) -> SettingsV1 {
+fn controlled_settings(revision: u64, allowed: bool, learn: bool) -> SettingsV2 {
     let decision = if allowed {
         PermissionDecision::Allow
     } else {
         PermissionDecision::Block
     };
-    SettingsV1 {
+    SettingsV2 {
         schema: SETTINGS_SCHEMA.to_owned(),
         revision,
         paused: false,
@@ -770,8 +770,8 @@ fn controlled_settings(revision: u64, allowed: bool, learn: bool) -> SettingsV1 
     }
 }
 
-fn controlled_learning_settings(revision: u64, retention: RetentionPermission) -> SettingsV1 {
-    SettingsV1 {
+fn controlled_learning_settings(revision: u64, retention: RetentionPermission) -> SettingsV2 {
+    SettingsV2 {
         schema: SETTINGS_SCHEMA.to_owned(),
         revision,
         paused: false,
@@ -2451,7 +2451,7 @@ async fn durable_corrupt_store_deny_ack_advances_epoch_and_revokes_all_live_auth
         .await
         .expect("durable deny acknowledgement");
     assert_eq!(acknowledged.settings, denied);
-    let persisted: SettingsV1 =
+    let persisted: SettingsV2 =
         serde_json::from_slice(&std::fs::read(paths.settings_path()).expect("persisted deny"))
             .expect("valid persisted deny");
     assert_eq!(persisted, denied);
@@ -3361,7 +3361,7 @@ async fn probe_withholds_its_result_when_a_pause_arrives_during_inference() {
     broker
         .replace_settings(
             1,
-            SettingsV1 {
+            SettingsV2 {
                 paused: true,
                 ..controlled_settings(2, true, false)
             },

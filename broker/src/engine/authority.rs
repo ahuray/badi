@@ -8,7 +8,7 @@ use crate::protocol::{
     Activation, AuthorityChangedPayload, PolicyResolutionReason, PolicyStatusPayload, ReasonCode,
     TargetDescriptor,
 };
-use crate::settings::{PolicyResolution, SettingsV1};
+use crate::settings::{PolicyResolution, SettingsV2};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthoritySnapshot {
@@ -149,7 +149,7 @@ impl BrokerState {
 
 pub(super) fn settings_allow_data(
     runtime_paused: bool,
-    settings: &SettingsV1,
+    settings: &SettingsV2,
     target: &TargetDescriptor,
 ) -> bool {
     let resolution = settings.resolve_target_validated(target);
@@ -163,7 +163,7 @@ pub(super) fn settings_allow_data(
 pub(super) fn policy_status(
     runtime_paused: bool,
     authority_epoch: u64,
-    settings: &SettingsV1,
+    settings: &SettingsV2,
     target: &TargetDescriptor,
 ) -> PolicyStatusPayload {
     let resolution = settings.resolve_target_validated(target);

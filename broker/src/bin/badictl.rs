@@ -14,7 +14,7 @@ use badi_broker::protocol::{
     ProtocolError, ProviderKind, ReasonCode, SessionControlRequestPayload, SettingsReplacePayload,
     SettingsStatusPayload, WireEnvelope,
 };
-use badi_broker::settings::{PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV1};
+use badi_broker::settings::{PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV2};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -211,7 +211,7 @@ struct RedactedHealthStatus<'a> {
 struct Overview {
     schema: &'static str,
     broker: OverviewBroker,
-    settings: SettingsV1,
+    settings: SettingsV2,
     privacy: OverviewPrivacy,
     models: OverviewModels,
 }
@@ -289,7 +289,7 @@ fn build_overview(
     if !has_current_settings_schema(&status.document) {
         return Err(CliError::UnexpectedResponse);
     }
-    let settings: SettingsV1 =
+    let settings: SettingsV2 =
         serde_json::from_value(status.document).map_err(|_| CliError::UnexpectedResponse)?;
     settings
         .validate()
@@ -484,7 +484,7 @@ fn validate_settings_response(
     if !has_current_settings_schema(&payload.document) {
         return Err(CliError::UnexpectedResponse);
     }
-    let settings: SettingsV1 = serde_json::from_value(payload.document.clone())
+    let settings: SettingsV2 = serde_json::from_value(payload.document.clone())
         .map_err(|_| CliError::UnexpectedResponse)?;
     settings
         .validate()
@@ -823,7 +823,7 @@ fn parse_settings_command(arguments: &[String]) -> Result<Command, CliError> {
             if !has_current_settings_schema(&document) {
                 return Err(CliError::Arguments);
             }
-            let settings: SettingsV1 =
+            let settings: SettingsV2 =
                 serde_json::from_value(document.clone()).map_err(|_| CliError::Arguments)?;
             settings.validate().map_err(|_| CliError::Arguments)?;
             let next_revision = expected_revision
@@ -936,7 +936,7 @@ mod tests {
         ProbeResultPayload, ProviderKind, ReasonCode, SessionId, SettingsStatusPayload,
         WireEnvelope,
     };
-    use badi_broker::settings::SettingsV1;
+    use badi_broker::settings::SettingsV2;
     use jsonschema::Registry;
     use serde_json::json;
 
@@ -985,7 +985,7 @@ mod tests {
             metrics: MetricsSnapshot::default(),
             active: None,
         };
-        let settings = SettingsV1::deny_by_default();
+        let settings = SettingsV2::deny_by_default();
         let status = SettingsStatusPayload {
             document: serde_json::to_value(settings).expect("settings json"),
             personalization_revision: 0,
@@ -1032,9 +1032,9 @@ mod tests {
 
     #[test]
     fn overview_requires_one_settings_revision_but_allows_runtime_pause() {
-        let settings = SettingsV1 {
+        let settings = SettingsV2 {
             paused: false,
-            ..SettingsV1::deny_by_default()
+            ..SettingsV2::deny_by_default()
         };
         let status = SettingsStatusPayload {
             document: serde_json::to_value(&settings).expect("settings json"),
@@ -1302,7 +1302,7 @@ mod tests {
 
     #[test]
     fn settings_replace_accepts_only_the_current_v2_schema() {
-        let mut current = SettingsV1::deny_by_default();
+        let mut current = SettingsV2::deny_by_default();
         current.revision = 1;
         let current = serde_json::to_string(&current).expect("current settings JSON");
         assert!(

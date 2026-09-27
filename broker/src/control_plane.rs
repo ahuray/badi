@@ -9,7 +9,7 @@ use crate::personalization::{
 };
 use crate::settings::{
     PermissionDecision, PrivateStorage, PrivateStorageError, RetentionPermission, SettingsStore,
-    SettingsStoreError, SettingsV1, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule,
+    SettingsStoreError, SettingsV2, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule,
     read_private_limited, remove_private_file, remove_private_temporary_files,
 };
 
@@ -17,7 +17,7 @@ const SECONDS_PER_DAY: u64 = 86_400;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ControlPlaneSnapshot {
-    pub settings: SettingsV1,
+    pub settings: SettingsV2,
     pub personalization: PersonalizationV1,
     pub persisted_personalization_bytes: usize,
     pub personalization_store_available: bool,
@@ -34,7 +34,7 @@ pub struct ControlPlane {
 #[derive(Debug)]
 struct ControlPlaneState {
     settings_store: SettingsStore,
-    settings: SettingsV1,
+    settings: SettingsV2,
     personalization: Option<PersonalizationStore>,
 }
 
@@ -128,8 +128,8 @@ impl ControlPlane {
     pub fn replace_settings(
         &self,
         expected_revision: u64,
-        next: SettingsV1,
-    ) -> Result<SettingsV1, ControlPlaneError> {
+        next: SettingsV2,
+    ) -> Result<SettingsV2, ControlPlaneError> {
         let today = unix_day_now()?;
         let mut state = self.lock_state()?;
 
@@ -356,7 +356,7 @@ impl ControlPlane {
     }
 }
 
-fn strictly_reduces_authority(current: &SettingsV1, next: &SettingsV1) -> bool {
+fn strictly_reduces_authority(current: &SettingsV2, next: &SettingsV2) -> bool {
     // `paused` participates in the durable order separately from subject
     // permissions. This rejects latent grants hidden underneath a pause and
     // rejects unpausing even when every currently listed subject is blocked.
@@ -430,7 +430,7 @@ fn permissions_do_not_increase(
     Some(reduced || retention_reduced)
 }
 
-fn personalization_privacy_floor(current: &SettingsV1, next: &SettingsV1) -> SettingsV1 {
+fn personalization_privacy_floor(current: &SettingsV2, next: &SettingsV2) -> SettingsV2 {
     let mut subjects = Vec::new();
     for current_rule in &current.subjects {
         let Ok(index) = next
@@ -474,7 +474,7 @@ fn personalization_privacy_floor(current: &SettingsV1, next: &SettingsV1) -> Set
             },
         });
     }
-    SettingsV1 {
+    SettingsV2 {
         schema: crate::settings::SETTINGS_SCHEMA.to_owned(),
         revision: current.revision,
         paused: current.paused || next.paused,
@@ -562,7 +562,7 @@ mod tests {
     use crate::personalization::{PersonalizationProvider, PersonalizationSignal};
     use crate::settings::{
         ALL_WEB_ORIGINS_PERMISSIONS, BrowserAdapter, PermissionDecision, PrivateStorage,
-        PrivateStorageError, RetentionPermission, SETTINGS_SCHEMA, SettingsStoreError, SettingsV1,
+        PrivateStorageError, RetentionPermission, SETTINGS_SCHEMA, SettingsStoreError, SettingsV2,
         SettingsValidationError, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule,
         WebScheme,
     };
@@ -591,8 +591,8 @@ mod tests {
         .expect("other identity")
     }
 
-    fn learning_settings(revision: u64, retention: RetentionPermission) -> SettingsV1 {
-        SettingsV1 {
+    fn learning_settings(revision: u64, retention: RetentionPermission) -> SettingsV2 {
+        SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision,
             paused: false,
@@ -610,7 +610,7 @@ mod tests {
         }
     }
 
-    fn granted_settings(revision: u64) -> SettingsV1 {
+    fn granted_settings(revision: u64) -> SettingsV2 {
         learning_settings(revision, RetentionPermission::Bounded { days: 30 })
     }
 
@@ -732,7 +732,7 @@ mod tests {
         let storage_paths = paths(temporary.path());
         let control = ControlPlane::open(storage_paths.clone()).expect("control plane");
         let snapshot = control.snapshot().expect("snapshot");
-        assert_eq!(snapshot.settings, SettingsV1::deny_by_default());
+        assert_eq!(snapshot.settings, SettingsV2::deny_by_default());
         assert!(snapshot.personalization.records.is_empty());
         assert_eq!(snapshot.persisted_personalization_bytes, 0);
         assert!(matches!(
@@ -764,7 +764,7 @@ mod tests {
                 > 0
         );
 
-        let denied = SettingsV1 {
+        let denied = SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 2,
             paused: false,
@@ -849,7 +849,7 @@ mod tests {
         let before = control.snapshot().expect("snapshot before stale CAS");
         let persisted_before =
             fs::read(storage_paths.personalization_path()).expect("persisted personalization");
-        let stale_replacement = SettingsV1 {
+        let stale_replacement = SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 100,
             paused: true,
@@ -917,7 +917,7 @@ mod tests {
                 }
             })
             .collect();
-        let over_capacity = SettingsV1 {
+        let over_capacity = SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 2,
             paused: true,
@@ -1205,7 +1205,7 @@ mod tests {
             Err(ControlPlaneError::PersonalizationUnavailable)
         ));
 
-        let denied = SettingsV1 {
+        let denied = SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 2,
             paused: false,
@@ -1223,7 +1223,7 @@ mod tests {
         // Returning from replace_settings is the acknowledgement boundary:
         // the complete deny document and its directory entry are durable by
         // this point, while corrupt aggregate evidence remains untouched.
-        let persisted_settings: SettingsV1 = serde_json::from_slice(
+        let persisted_settings: SettingsV2 = serde_json::from_slice(
             &fs::read(storage_paths.settings_path()).expect("persisted deny settings"),
         )
         .expect("valid persisted settings");

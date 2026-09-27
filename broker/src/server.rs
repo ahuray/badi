@@ -28,7 +28,7 @@ use crate::protocol::{
     SessionControlRequestPayload, SessionId, SessionOpenPayload, SettingsReplacePayload,
     SettingsStatusPayload, SuggestCancelPayload, SuggestRequestPayload, WireEnvelope,
 };
-use crate::settings::{SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV1};
+use crate::settings::{SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2};
 
 const MAX_CONNECTIONS: usize = 32;
 const MAX_SESSIONS_PER_CONNECTION: usize = 64;
@@ -720,7 +720,7 @@ impl MessageHandler<'_> {
         if source_schema != expected_schema {
             return Err(ServerError::InvalidMessage);
         }
-        let mut next: SettingsV1 =
+        let mut next: SettingsV2 =
             serde_json::from_value(payload.document).map_err(|_| ServerError::InvalidMessage)?;
         if speaks_v1 {
             let current = self.broker.control_plane_snapshot().await?;
@@ -1046,7 +1046,7 @@ mod tests {
     };
     use crate::provider::DeterministicPhraseProvider;
     use crate::settings::{
-        BrowserAdapter, LinuxAdapter, SETTINGS_SCHEMA, SettingsV1, StableIdentity, StoragePaths,
+        BrowserAdapter, LinuxAdapter, SETTINGS_SCHEMA, SettingsV2, StableIdentity, StoragePaths,
         SubjectPermissions, SubjectRule, WebScheme,
     };
 
@@ -1379,7 +1379,7 @@ mod tests {
         control_plane
             .replace_settings(
                 0,
-                SettingsV1 {
+                SettingsV2 {
                     schema: SETTINGS_SCHEMA.to_owned(),
                     revision: 1,
                     paused: false,

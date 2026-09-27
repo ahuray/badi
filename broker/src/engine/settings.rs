@@ -9,14 +9,14 @@ use super::{Broker, BrokerError, BrokerState, ControlPlaneCondition};
 use crate::control_plane::{ControlPlane, ControlPlaneError, ControlPlaneSnapshot};
 use crate::personalization::PersonalizationStoreError;
 use crate::protocol::ReasonCode;
-use crate::settings::{PrivateStorageError, SettingsStoreError, SettingsV1};
+use crate::settings::{PrivateStorageError, SettingsStoreError, SettingsV2};
 
 const PERSONALIZATION_CLEAR_TIMEOUT: Duration = Duration::from_secs(5);
 
 enum SettingsReplaceOutcome {
     Updated(ControlPlaneSnapshot),
     CommittedDegraded {
-        settings: SettingsV1,
+        settings: SettingsV2,
         error: ControlPlaneError,
     },
     CommitUnknown(ControlPlaneError),
@@ -37,7 +37,7 @@ impl Broker {
     pub async fn replace_settings(
         &self,
         expected_revision: u64,
-        next: SettingsV1,
+        next: SettingsV2,
     ) -> Result<ControlPlaneSnapshot, BrokerError> {
         let control_plane = self
             .inner
@@ -120,7 +120,7 @@ impl Broker {
 
     /// A successful clear ends a recoverable degradation, never a
     /// restart-required one.
-    async fn recover_after_clear(&self, settings: &SettingsV1) {
+    async fn recover_after_clear(&self, settings: &SettingsV2) {
         let mut state = self.inner.state.lock().await;
         if state.control_plane_condition != ControlPlaneCondition::Recoverable {
             return;
@@ -131,7 +131,7 @@ impl Broker {
         self.publish_authority_change(state);
     }
 
-    async fn install_settings_authority(&self, settings: SettingsV1, degraded: bool) {
+    async fn install_settings_authority(&self, settings: SettingsV2, degraded: bool) {
         let mut state = self.inner.state.lock().await;
         state.close_all_sessions(&self.inner.metrics, ReasonCode::PolicyNever);
         state.control_plane_mutation_in_progress = false;
@@ -182,7 +182,7 @@ impl Broker {
 }
 
 impl BrokerState {
-    fn install_settings(&mut self, settings: SettingsV1) {
+    fn install_settings(&mut self, settings: SettingsV2) {
         self.settings_revision = settings.revision;
         self.settings = Some(settings);
     }
@@ -192,7 +192,7 @@ impl BrokerState {
 fn commit_settings(
     control_plane: &ControlPlane,
     expected_revision: u64,
-    next: SettingsV1,
+    next: SettingsV2,
 ) -> SettingsReplaceOutcome {
     let committed = next.clone();
     match control_plane.replace_settings(expected_revision, next) {

@@ -31,7 +31,7 @@ use crate::protocol::{
     SessionOpenPayload, SuggestionShowPayload,
 };
 use crate::provider::{CompletionProvider, RequestTrigger};
-use crate::settings::SettingsV1;
+use crate::settings::SettingsV2;
 
 pub use authority::AuthoritySnapshot;
 pub use error::BrokerError;
@@ -212,7 +212,7 @@ struct BrokerState {
     control_plane_mutation_in_progress: bool,
     authority_epoch: u64,
     settings_revision: u64,
-    settings: Option<SettingsV1>,
+    settings: Option<SettingsV2>,
     /// The latest authority epoch each policy connection acknowledged.
     policy_clients: HashMap<String, Option<u64>>,
     sessions: HashMap<SessionId, SessionState>,
@@ -289,7 +289,7 @@ impl Broker {
         provider: Arc<dyn CompletionProvider>,
         config: BrokerConfig,
         control_plane: Option<Arc<ControlPlane>>,
-        settings: Option<SettingsV1>,
+        settings: Option<SettingsV2>,
         outcome_recorder: Option<OutcomeRecorder>,
     ) -> Self {
         let config = config.clamped();

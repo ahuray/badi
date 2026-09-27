@@ -258,6 +258,8 @@ pub struct SubjectRule {
     pub permissions: SubjectPermissions,
 }
 
+/// Settings v1 documents deserialize into this type, but it is always
+/// canonical settings v2 in memory and on disk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsV2 {
@@ -465,11 +467,6 @@ impl Default for SettingsV2 {
         Self::deny_by_default()
     }
 }
-
-/// Compatibility name for existing broker and Chromium control-plane code.
-/// Values deserialize legacy v1 documents but are always canonical settings v2
-/// in memory and on disk.
-pub type SettingsV1 = SettingsV2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PolicyResolution {
@@ -703,7 +700,7 @@ impl SettingsStore {
         &self.path
     }
 
-    pub(crate) fn load_or_initialize(&self) -> Result<SettingsV1, SettingsStoreError> {
+    pub(crate) fn load_or_initialize(&self) -> Result<SettingsV2, SettingsStoreError> {
         let _guard = self
             .mutation
             .lock()
@@ -718,14 +715,14 @@ impl SettingsStore {
             }
             Ok(settings)
         } else {
-            let settings = SettingsV1::deny_by_default();
+            let settings = SettingsV2::deny_by_default();
             write_settings(&self.path, &settings)?;
             Ok(settings)
         }
     }
 
     #[cfg(test)]
-    fn load(&self) -> Result<Option<SettingsV1>, SettingsStoreError> {
+    fn load(&self) -> Result<Option<SettingsV2>, SettingsStoreError> {
         read_private_limited(&self.path, MAX_SETTINGS_BYTES)?
             .map(|bytes| decode_settings(&bytes))
             .transpose()
@@ -734,8 +731,8 @@ impl SettingsStore {
     pub(crate) fn compare_and_replace(
         &self,
         expected_revision: u64,
-        next: SettingsV1,
-    ) -> Result<SettingsV1, SettingsStoreError> {
+        next: SettingsV2,
+    ) -> Result<SettingsV2, SettingsStoreError> {
         self.compare_and_replace_with_writer(expected_revision, &next, write_settings)?;
         Ok(next)
     }
@@ -743,11 +740,11 @@ impl SettingsStore {
     fn compare_and_replace_with_writer<F>(
         &self,
         expected_revision: u64,
-        next: &SettingsV1,
+        next: &SettingsV2,
         writer: F,
-    ) -> Result<SettingsV1, SettingsStoreError>
+    ) -> Result<SettingsV2, SettingsStoreError>
     where
-        F: FnOnce(&Path, &SettingsV1) -> Result<(), SettingsStoreError>,
+        F: FnOnce(&Path, &SettingsV2) -> Result<(), SettingsStoreError>,
     {
         next.validate()?;
         let required_revision = expected_revision
@@ -767,7 +764,7 @@ impl SettingsStore {
             .map_err(|_| SettingsStoreError::LockPoisoned)?;
         let current = match read_private_limited(&self.path, MAX_SETTINGS_BYTES)? {
             Some(bytes) => decode_settings(&bytes)?,
-            None => SettingsV1::deny_by_default(),
+            None => SettingsV2::deny_by_default(),
         };
         if current.revision != expected_revision {
             return Err(SettingsStoreError::RevisionConflict {
@@ -796,42 +793,42 @@ impl SettingsStore {
                 match observed {
                     Ok(Some(document)) if document == *next => Ok(next.clone()),
                     Ok(Some(document)) if document == current => Err(write_error),
-                    Ok(None) if current == SettingsV1::deny_by_default() => Err(write_error),
+                    Ok(None) if current == SettingsV2::deny_by_default() => Err(write_error),
                     _ => Err(SettingsStoreError::CommitStateUnknown),
                 }
             }
         }
     }
 
-    pub(crate) fn preflight_replace(next: &SettingsV1) -> Result<(), SettingsStoreError> {
+    pub(crate) fn preflight_replace(next: &SettingsV2) -> Result<(), SettingsStoreError> {
         let _ = encode_settings(next)?;
         Ok(())
     }
 }
 
-fn decode_settings(bytes: &[u8]) -> Result<SettingsV1, SettingsStoreError> {
+fn decode_settings(bytes: &[u8]) -> Result<SettingsV2, SettingsStoreError> {
     decode_settings_with_source(bytes).map(|(settings, _)| settings)
 }
 
-fn decode_settings_with_source(bytes: &[u8]) -> Result<(SettingsV1, bool), SettingsStoreError> {
+fn decode_settings_with_source(bytes: &[u8]) -> Result<(SettingsV2, bool), SettingsStoreError> {
     #[derive(Deserialize)]
     struct SchemaProbe {
         schema: String,
     }
 
     let source = serde_json::from_slice::<SchemaProbe>(bytes)?;
-    let settings: SettingsV1 = serde_json::from_slice(bytes)?;
+    let settings: SettingsV2 = serde_json::from_slice(bytes)?;
     settings.validate()?;
     Ok((settings, source.schema == SETTINGS_SCHEMA_V1))
 }
 
-fn write_settings(path: &Path, settings: &SettingsV1) -> Result<(), SettingsStoreError> {
+fn write_settings(path: &Path, settings: &SettingsV2) -> Result<(), SettingsStoreError> {
     let bytes = encode_settings(settings)?;
     atomic_write_private(path, &bytes)?;
     Ok(())
 }
 
-fn encode_settings(settings: &SettingsV1) -> Result<Vec<u8>, SettingsStoreError> {
+fn encode_settings(settings: &SettingsV2) -> Result<Vec<u8>, SettingsStoreError> {
     settings.validate()?;
     let mut bytes = serde_json::to_vec_pretty(settings)?;
     bytes.push(b'\n');
@@ -1248,7 +1245,7 @@ mod tests {
     use super::{
         BrowserAdapter, LinuxAdapter, MAX_SETTINGS_BYTES, MAX_SUBJECTS, PRIVATE_FILE_MODE,
         PermissionDecision, PrivateStorage, PrivateStorageError, RetentionPermission,
-        SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV1, StableIdentity,
+        SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2, StableIdentity,
         StoragePaths, SubjectPermissions, SubjectRule, WebScheme, remove_private_file_with_sync,
         write_settings,
     };
@@ -1273,8 +1270,8 @@ mod tests {
             .expect("identity")
     }
 
-    fn settings_with(rule: SubjectRule) -> SettingsV1 {
-        SettingsV1 {
+    fn settings_with(rule: SubjectRule) -> SettingsV2 {
+        SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 1,
             paused: false,
@@ -1285,7 +1282,7 @@ mod tests {
 
     #[test]
     fn missing_settings_are_paused_and_deny_everything() {
-        let settings = SettingsV1::deny_by_default();
+        let settings = SettingsV2::deny_by_default();
         settings.validate().expect("safe settings");
         let resolution = settings.resolve_identity(&identity("example.com"));
         assert!(resolution.identity_known);
@@ -1359,7 +1356,7 @@ mod tests {
         let legacy = current.wire_document(1).expect("v1 wire document");
         assert!(legacy.get("all_web_origins").is_none());
         assert_eq!(legacy["subjects"], serde_json::json!([]));
-        let next: SettingsV1 = serde_json::from_value(legacy).expect("legacy replacement");
+        let next: SettingsV2 = serde_json::from_value(legacy).expect("legacy replacement");
         assert!(!next.all_web_origins);
         let merged = next.preserving_v2_policy_from(&current);
         assert!(merged.all_web_origins);
@@ -1538,7 +1535,7 @@ mod tests {
             identity: identity("b.example"),
             permissions: allowed(None),
         };
-        let valid = SettingsV1 {
+        let valid = SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 1,
             paused: false,
@@ -1572,7 +1569,7 @@ mod tests {
                 }
             })
             .collect();
-        let settings = SettingsV1 {
+        let settings = SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: crate::protocol::MAX_SAFE_COUNTER,
             paused: true,
@@ -1605,7 +1602,7 @@ mod tests {
           "schema":"badi.settings.v1","revision":0,"paused":true,"subjects":[],
           "cloud":"allow"
         }"#;
-        assert!(serde_json::from_slice::<SettingsV1>(unknown).is_err());
+        assert!(serde_json::from_slice::<SettingsV2>(unknown).is_err());
 
         let invalid = br#"{
           "schema":"badi.settings.v1","revision":1,"paused":false,
@@ -1614,7 +1611,7 @@ mod tests {
           "suggest":"allow","display":"block","context_read":"allow","learn":"block",
           "retention":{"mode":"none"}}}]
         }"#;
-        let decoded: SettingsV1 = serde_json::from_slice(invalid).expect("structurally valid");
+        let decoded: SettingsV2 = serde_json::from_slice(invalid).expect("structurally valid");
         assert!(decoded.validate().is_err());
     }
 
@@ -1790,7 +1787,7 @@ mod tests {
             PrivateStorage::open(StoragePaths::new(config, data).expect("paths")).expect("storage");
         let store = storage.settings_store().expect("settings store");
         let initial = store.load_or_initialize().expect("initial settings");
-        assert_eq!(initial, SettingsV1::deny_by_default());
+        assert_eq!(initial, SettingsV2::deny_by_default());
         let metadata = fs::metadata(store.path()).expect("settings metadata");
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
 
