@@ -21,10 +21,14 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::model_selection::current_memory;
 use crate::provider::{CompletionProvider, ProviderRequest};
 use crate::semantic::client::{ClientError, LabObservation, LabStream, TokenLogprob};
-use crate::semantic::runtime::{OwnedRuntime, StableRuntimeIdentity};
-use crate::writing::{self, WritingLanguage};
+use crate::semantic::provenance::verify_file;
+use crate::semantic::runtime::{
+    LlamaCppLaunch, OwnedRuntime, RuntimeError, StableRuntimeIdentity, WritingProfile,
+};
+use crate::writing::{self, WritingError, WritingLanguage};
 
 pub const REQUEST_SCHEMA: &str = "badi.prediction-lab.request.v1";
 pub const LAUNCH_CONTRACT: &str = "badi.prediction-lab.owned-2048.v2";
@@ -179,23 +183,61 @@ pub async fn activate_with_options(
     artifact: Option<artifact::ModelArtifactOverride>,
     prefill_batch: PrefillBatch,
 ) -> Result<OwnedRuntime, LabError> {
-    let launch = if let Some(artifact) = artifact {
-        writing::prepare_lab_artifact(directory, artifact)
-            .await
-            .map_err(|_| LabError::RuntimeUnavailable)?
-            .for_writing_lab_artifact()
-    } else {
-        writing::prepare_launch(directory)
-            .await
-            .map_err(|_| LabError::RuntimeUnavailable)?
-            .0
-    };
-    launch
-        .for_writing_lab()
-        .with_lab_prefill_batch(prefill_batch)
+    let explicit_artifact = artifact.is_some();
+    let launch = match artifact {
+        Some(artifact) => artifact_launch(directory, artifact).await,
+        None => installed_launch(directory).await,
+    }
+    .map_err(|_| LabError::RuntimeUnavailable)?;
+    configure_launch(launch, prefill_batch, explicit_artifact)
+        .map_err(|_| LabError::RuntimeUnavailable)?
         .spawn()
         .await
         .map_err(|_| LabError::RuntimeUnavailable)
+}
+
+/// The installed model's launch. Unlike the broker, the Lab reports a host
+/// that is short of memory right now instead of waiting for it.
+async fn installed_launch(directory: PathBuf) -> Result<LlamaCppLaunch, WritingError> {
+    let (model, threads) = writing::installed_model(&directory)?;
+    if !writing::memory_fits(model, current_memory().available_mib) {
+        return Err(WritingError::NoFit);
+    }
+    writing::verify_launch(directory, model, threads).await
+}
+
+/// An explicitly selected model artifact on the pinned runtime.
+async fn artifact_launch(
+    directory: PathBuf,
+    artifact: artifact::ModelArtifactOverride,
+) -> Result<LlamaCppLaunch, WritingError> {
+    let threads = writing::writing_threads()?;
+    tokio::task::spawn_blocking(move || {
+        let weights = verify_file(&artifact.weights)?;
+        writing::pinned_runtime_launch(&directory, weights, &artifact.alias, threads)
+    })
+    .await
+    .map_err(|_| WritingError::VerificationTask)?
+}
+
+/// Applies the Lab's runtime settings to a verified launch: its own launch
+/// contract, context window and prompt batch, and containment, so the runtime
+/// cannot outlive this worker.
+fn configure_launch(
+    launch: LlamaCppLaunch,
+    prefill_batch: PrefillBatch,
+    explicit_artifact: bool,
+) -> Result<LlamaCppLaunch, RuntimeError> {
+    let profile = WritingProfile {
+        launch_contract_id: LAUNCH_CONTRACT,
+        context_size: CONTEXT_TOKENS,
+        batch_size: prefill_batch.tokens(),
+        // Bounded model comparisons own one active slot. Recurrent model
+        // checkpoint copies must not inherit the runtime's default of 32.
+        context_checkpoints: Some(0),
+        model_origin: explicit_artifact.then_some("explicit_lab_artifact"),
+    };
+    Ok(launch.with_writing_profile(profile)?.contained())
 }
 
 fn valid_text(text: &str, limit: usize) -> bool {
@@ -2175,4 +2217,74 @@ mod tests {
         value.before = "a".repeat(513);
         assert!(value.validate().is_err());
     }
+
+    /// The Lab's launch settings bind its runtime identity, which every
+    /// record carries and run provenance compares across builds. This pins
+    /// the exact serialized identity of each Lab launch variant.
+    #[test]
+    fn lab_launch_identity_serialization_is_pinned() {
+        use crate::semantic::provenance::{FileExpectation, VerifiedFile, verify_file};
+        use crate::semantic::runtime::FixtureBehavior;
+        use sha2::{Digest, Sha256};
+        use std::fmt::Write as _;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let verified = |name: &str, bytes: &[u8]| -> VerifiedFile {
+            let path = temporary.path().join(name);
+            std::fs::write(&path, bytes).expect("fixture file");
+            let mut sha256 = String::new();
+            for byte in Sha256::digest(bytes) {
+                write!(sha256, "{byte:02x}").expect("string write");
+            }
+            let size = u64::try_from(bytes.len()).expect("fixture size");
+            verify_file(&FileExpectation::new(&path, sha256, size).expect("expectation"))
+                .expect("verified fixture")
+        };
+        let launch = LlamaCppLaunch::for_fixture(
+            verified("runtime", b"fixture runtime"),
+            verified("model", b"fixture model"),
+            FixtureBehavior::Ready,
+        )
+        .expect("fixture launch");
+        for (prefill_batch, explicit_artifact, expected) in [
+            (PrefillBatch::Tokens16, false, GOLDEN_DEFAULT),
+            (PrefillBatch::Tokens64, false, GOLDEN_TOKENS64),
+            (PrefillBatch::Tokens16, true, GOLDEN_EXPLICIT_ARTIFACT),
+        ] {
+            let identity = configure_launch(launch.clone(), prefill_batch, explicit_artifact)
+                .expect("Lab launch")
+                .identity();
+            let serialized = serde_json::to_string(&identity).expect("identity JSON");
+            assert_eq!(
+                serialized, expected,
+                "{prefill_batch:?} {explicit_artifact}"
+            );
+        }
+    }
+
+    const GOLDEN_DEFAULT: &str = concat!(
+        "{\"launch_contract_id\":\"badi.prediction-lab.owned-2048.v2\"",
+        ",\"binary_sha256\":\"7c63829baa2f5451c23789c5085b4de0627e5208b6c4bb2483217998f8cc38f0\"",
+        ",\"runtime_bundle_manifest_sha256\":null",
+        ",\"model_sha256\":\"c7a3a8c7435ef8e4cf1ca2d261f7e09ca85de6cdb70f7c689a836680523a180c\"",
+        ",\"model_size\":13,\"model_alias\":\"fixture-en-v1\",\"threads\":1",
+        ",\"context_size\":2048,\"gpu_layers\":0,\"batch_size\":16,\"ubatch_size\":16}",
+    );
+    const GOLDEN_TOKENS64: &str = concat!(
+        "{\"launch_contract_id\":\"badi.prediction-lab.owned-2048.v2\"",
+        ",\"binary_sha256\":\"7c63829baa2f5451c23789c5085b4de0627e5208b6c4bb2483217998f8cc38f0\"",
+        ",\"runtime_bundle_manifest_sha256\":null",
+        ",\"model_sha256\":\"c7a3a8c7435ef8e4cf1ca2d261f7e09ca85de6cdb70f7c689a836680523a180c\"",
+        ",\"model_size\":13,\"model_alias\":\"fixture-en-v1\",\"threads\":1",
+        ",\"context_size\":2048,\"gpu_layers\":0,\"batch_size\":64,\"ubatch_size\":64}",
+    );
+    const GOLDEN_EXPLICIT_ARTIFACT: &str = concat!(
+        "{\"launch_contract_id\":\"badi.prediction-lab.owned-2048.v2\"",
+        ",\"binary_sha256\":\"7c63829baa2f5451c23789c5085b4de0627e5208b6c4bb2483217998f8cc38f0\"",
+        ",\"runtime_bundle_manifest_sha256\":null",
+        ",\"model_sha256\":\"c7a3a8c7435ef8e4cf1ca2d261f7e09ca85de6cdb70f7c689a836680523a180c\"",
+        ",\"model_size\":13,\"model_alias\":\"fixture-en-v1\"",
+        ",\"model_origin\":\"explicit_lab_artifact\",\"threads\":1",
+        ",\"context_size\":2048,\"gpu_layers\":0,\"batch_size\":16,\"ubatch_size\":16}",
+    );
 }

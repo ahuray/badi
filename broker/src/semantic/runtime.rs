@@ -31,7 +31,10 @@ use super::provenance::{ProvenanceError, VerifiedDirectoryManifest, VerifiedFile
 pub const LLAMA_CPP_LAUNCH_CONTRACT_ID: &str = "badi.llama-cpp-owned-eval.v1";
 pub const CONTEXT_SIZE: u16 = 512;
 pub const GPU_LAYERS: u16 = 0;
-const WRITING_BATCH_SIZE: u16 = 16;
+const MAX_WRITING_CONTEXT_SIZE: u16 = 8_192;
+const MAX_CONTEXT_CHECKPOINTS: u16 = 64;
+const MAX_LAUNCH_CONTRACT_BYTES: usize = 128;
+const MAX_MODEL_ORIGIN_BYTES: usize = 64;
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -72,6 +75,67 @@ enum Launcher {
     ParentDeathHelper,
 }
 
+/// The settings of a writing launch. The runtime identity records every field
+/// except the checkpoint limit, so a profile that differs from production in
+/// any way must name its own launch contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WritingProfile {
+    /// Names the whole launch contract in the runtime identity.
+    pub launch_contract_id: &'static str,
+    /// Context window in tokens.
+    pub context_size: u16,
+    /// Prompt-processing batch and micro-batch in tokens. The runtime
+    /// observes cancellation only between batches.
+    pub batch_size: u16,
+    /// Limit on the runtime's context checkpoints; `None` keeps its default.
+    pub context_checkpoints: Option<u16>,
+    /// Where the model came from when it is not the installed catalog model.
+    pub model_origin: Option<&'static str>,
+}
+
+impl WritingProfile {
+    /// The installed writing provider's launch.
+    pub const PRODUCTION: Self = Self {
+        launch_contract_id: crate::writing::WRITING_CONTRACT,
+        context_size: CONTEXT_SIZE,
+        batch_size: 16,
+        context_checkpoints: None,
+        model_origin: None,
+    };
+
+    fn validate(&self) -> Result<(), RuntimeError> {
+        let contract = self.launch_contract_id;
+        if contract.is_empty()
+            || contract.len() > MAX_LAUNCH_CONTRACT_BYTES
+            || !contract.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(RuntimeError::InvalidConfig("launch_contract_id"));
+        }
+        if self.context_size == 0 || self.context_size > MAX_WRITING_CONTEXT_SIZE {
+            return Err(RuntimeError::InvalidConfig("context_size"));
+        }
+        if self.batch_size == 0 || self.batch_size > self.context_size {
+            return Err(RuntimeError::InvalidConfig("batch_size"));
+        }
+        if self
+            .context_checkpoints
+            .is_some_and(|checkpoints| checkpoints > MAX_CONTEXT_CHECKPOINTS)
+        {
+            return Err(RuntimeError::InvalidConfig("context_checkpoints"));
+        }
+        if self.model_origin.is_some_and(|origin| {
+            origin.is_empty()
+                || origin.len() > MAX_MODEL_ORIGIN_BYTES
+                || !origin
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        }) {
+            return Err(RuntimeError::InvalidConfig("model_origin"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LlamaCppLaunch {
     binary: VerifiedFile,
@@ -81,14 +145,8 @@ pub struct LlamaCppLaunch {
     startup_timeout: Duration,
     threads: usize,
     fixture_behavior: Option<FixtureBehavior>,
-    writing: bool,
+    writing: Option<WritingProfile>,
     launcher: Launcher,
-    #[cfg(feature = "writing-lab")]
-    writing_lab: bool,
-    #[cfg(feature = "writing-lab")]
-    explicit_lab_artifact: bool,
-    #[cfg(feature = "writing-lab")]
-    lab_prefill_batch: crate::writing_lab::PrefillBatch,
 }
 
 impl LlamaCppLaunch {
@@ -107,14 +165,8 @@ impl LlamaCppLaunch {
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             threads,
             fixture_behavior: None,
-            writing: false,
+            writing: None,
             launcher: Launcher::Direct,
-            #[cfg(feature = "writing-lab")]
-            writing_lab: false,
-            #[cfg(feature = "writing-lab")]
-            explicit_lab_artifact: false,
-            #[cfg(feature = "writing-lab")]
-            lab_prefill_batch: crate::writing_lab::PrefillBatch::Tokens16,
         };
         launch.validate()?;
         Ok(launch)
@@ -139,14 +191,8 @@ impl LlamaCppLaunch {
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             threads: 1,
             fixture_behavior: Some(behavior),
-            writing: false,
+            writing: None,
             launcher: Launcher::Direct,
-            #[cfg(feature = "writing-lab")]
-            writing_lab: false,
-            #[cfg(feature = "writing-lab")]
-            explicit_lab_artifact: false,
-            #[cfg(feature = "writing-lab")]
-            lab_prefill_batch: crate::writing_lab::PrefillBatch::Tokens16,
         };
         launch.validate()?;
         Ok(launch)
@@ -156,10 +202,18 @@ impl LlamaCppLaunch {
         self.spawn_with_post_spawn_hook(|_| {}).await
     }
 
+    /// Launches the installed writing provider: [`WritingProfile::PRODUCTION`].
     #[must_use]
     pub const fn for_writing(mut self) -> Self {
-        self.writing = true;
+        self.writing = Some(WritingProfile::PRODUCTION);
         self
+    }
+
+    /// Launches for writing with `profile` instead of production's settings.
+    pub fn with_writing_profile(mut self, profile: WritingProfile) -> Result<Self, RuntimeError> {
+        self.writing = Some(profile);
+        self.validate()?;
+        Ok(self)
     }
 
     /// Launches through this executable's parent-death helper, so the runtime
@@ -169,70 +223,6 @@ impl LlamaCppLaunch {
     pub const fn contained(mut self) -> Self {
         self.launcher = Launcher::ParentDeathHelper;
         self
-    }
-
-    #[cfg(feature = "writing-lab")]
-    #[must_use]
-    pub const fn for_writing_lab(mut self) -> Self {
-        self.writing = true;
-        self.writing_lab = true;
-        self.launcher = Launcher::ParentDeathHelper;
-        self
-    }
-
-    #[cfg(feature = "writing-lab")]
-    pub(crate) const fn for_writing_lab_artifact(mut self) -> Self {
-        self = self.for_writing_lab();
-        self.explicit_lab_artifact = true;
-        self
-    }
-
-    #[cfg(feature = "writing-lab")]
-    pub(crate) const fn with_lab_prefill_batch(
-        mut self,
-        batch: crate::writing_lab::PrefillBatch,
-    ) -> Self {
-        self.lab_prefill_batch = batch;
-        self
-    }
-
-    #[cfg_attr(not(feature = "writing-lab"), allow(clippy::unused_self))]
-    fn writing_batch_size(&self) -> u16 {
-        #[cfg(feature = "writing-lab")]
-        if self.writing_lab {
-            return self.lab_prefill_batch.tokens();
-        }
-        WRITING_BATCH_SIZE
-    }
-
-    #[cfg_attr(not(feature = "writing-lab"), allow(clippy::unused_self))]
-    fn model_origin(&self) -> Option<&'static str> {
-        #[cfg(feature = "writing-lab")]
-        if self.explicit_lab_artifact {
-            return Some("explicit_lab_artifact");
-        }
-        None
-    }
-
-    #[cfg_attr(not(feature = "writing-lab"), allow(clippy::unused_self))]
-    fn context_size(&self) -> u16 {
-        #[cfg(feature = "writing-lab")]
-        if self.writing_lab {
-            return crate::writing_lab::CONTEXT_TOKENS;
-        }
-        CONTEXT_SIZE
-    }
-
-    fn launch_contract(&self) -> &'static str {
-        #[cfg(feature = "writing-lab")]
-        if self.writing_lab {
-            return crate::writing_lab::LAUNCH_CONTRACT;
-        }
-        if self.writing {
-            crate::writing::WRITING_CONTRACT
-        } else {
-            LLAMA_CPP_LAUNCH_CONTRACT_ID
-        }
     }
 
     async fn spawn_with_post_spawn_hook(
@@ -249,7 +239,7 @@ impl LlamaCppLaunch {
         };
         let negative_token = SecretToken::new();
         let config = SemanticClientConfig::new(endpoint, &self.model_alias, token.expose())?;
-        let config = if self.writing {
+        let config = if self.writing.is_some() {
             config.for_writing()
         } else {
             config
@@ -258,7 +248,7 @@ impl LlamaCppLaunch {
         let negative_config =
             SemanticClientConfig::new(endpoint, &self.model_alias, negative_token.expose())?;
         let negative_client = SemanticClient::new(negative_config)?;
-        let identity = self.runtime_identity();
+        let identity = self.identity();
         let mut command = self.runtime_command()?;
         if self.fixture_behavior.is_some() {
             command.arg(FIXTURE_ARGUMENT);
@@ -340,9 +330,14 @@ impl LlamaCppLaunch {
         Ok(Command::new(self.binary.path()))
     }
 
-    fn runtime_identity(&self) -> StableRuntimeIdentity {
+    /// The identity this launch's runtime will report.
+    #[must_use]
+    pub fn identity(&self) -> StableRuntimeIdentity {
+        let writing = self.writing;
         StableRuntimeIdentity {
-            launch_contract_id: self.launch_contract(),
+            launch_contract_id: writing.map_or(LLAMA_CPP_LAUNCH_CONTRACT_ID, |profile| {
+                profile.launch_contract_id
+            }),
             binary_sha256: self.binary.sha256().to_owned(),
             runtime_bundle_manifest_sha256: self
                 .runtime_bundle
@@ -351,36 +346,37 @@ impl LlamaCppLaunch {
             model_sha256: self.model.sha256().to_owned(),
             model_size: self.model.identity().size,
             model_alias: self.model_alias.clone(),
-            model_origin: self.model_origin(),
+            model_origin: writing.and_then(|profile| profile.model_origin),
             threads: self.threads,
             context_size: self.context_size(),
             gpu_layers: GPU_LAYERS,
-            batch_size: self.writing.then_some(self.writing_batch_size()),
-            ubatch_size: self.writing.then_some(self.writing_batch_size()),
+            batch_size: writing.map(|profile| profile.batch_size),
+            ubatch_size: writing.map(|profile| profile.batch_size),
         }
     }
 
+    fn context_size(&self) -> u16 {
+        self.writing
+            .map_or(CONTEXT_SIZE, |profile| profile.context_size)
+    }
+
     fn configure_mode(&self, command: &mut Command) {
-        #[cfg(feature = "writing-lab")]
-        if self.writing_lab {
-            // Bounded model comparisons own one active slot. Recurrent model
-            // checkpoint copies must not inherit the runtime's default of 32.
-            command.env("LLAMA_ARG_CTX_CHECKPOINTS", "0");
-        }
         if let Some(behavior) = self.fixture_behavior {
             command.env("BADI_FIXTURE_BEHAVIOR", behavior.environment_value());
         }
-        if self.writing {
+        if let Some(profile) = self.writing {
             // Reuse only the active slot's bounded KV state. Disable the
             // separate RAM archive; no slot-save path or disk cache is enabled.
             command
                 .env("LLAMA_ARG_CACHE_PROMPT", "1")
                 .env("LLAMA_ARG_CACHE_RAM", "0")
-                // The runtime observes cancellation between prefill batches.
-                // Production stays at 16. Only an explicit Lab launch can test
-                // a larger chunk, whose cancellation cost is measured separately.
-                .env("LLAMA_ARG_BATCH", self.writing_batch_size().to_string())
-                .env("LLAMA_ARG_UBATCH", self.writing_batch_size().to_string());
+                // The runtime observes cancellation between prefill batches,
+                // so the batch bounds the cost of a cancelled request.
+                .env("LLAMA_ARG_BATCH", profile.batch_size.to_string())
+                .env("LLAMA_ARG_UBATCH", profile.batch_size.to_string());
+            if let Some(checkpoints) = profile.context_checkpoints {
+                command.env("LLAMA_ARG_CTX_CHECKPOINTS", checkpoints.to_string());
+            }
         }
     }
 
@@ -396,6 +392,9 @@ impl LlamaCppLaunch {
         }
         if self.startup_timeout.is_zero() || self.startup_timeout > MAX_STARTUP_TIMEOUT {
             return Err(RuntimeError::InvalidConfig("startup_timeout"));
+        }
+        if let Some(profile) = &self.writing {
+            profile.validate()?;
         }
         match (&self.runtime_bundle, self.fixture_behavior) {
             (Some(bundle), None) if self.binary.path().parent() == Some(bundle.path()) => {}
@@ -837,6 +836,7 @@ fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::error::Error;
     use std::fs;
     use std::io;
@@ -855,7 +855,7 @@ mod tests {
     use super::{
         CompletionProvider as _, FixtureBehavior, LlamaCppLaunch, OwnedRuntime, ProvenanceError,
         RuntimeError, SecretToken, SemanticClient, SemanticClientConfig, StableRuntimeIdentity,
-        terminate_child, terminate_owned_child_with,
+        WritingProfile, terminate_child, terminate_owned_child_with,
     };
     use crate::semantic::provenance::{
         DirectoryManifestExpectation, FileExpectation, VerifiedFile, directory_manifest_sha256,
@@ -874,12 +874,12 @@ mod tests {
             verify_observed_file(&model_path)?,
             FixtureBehavior::Ready,
         )?;
-        let baseline_identity = launch.runtime_identity();
+        let baseline_identity = launch.identity();
         for (launch, writing) in [(launch.clone(), false), (launch.for_writing(), true)] {
             let mut command = Command::new(&binary_path);
             command.env_clear().env("LLAMA_ARG_CACHE_PROMPT", "0");
             launch.configure_mode(&mut command);
-            let identity = launch.runtime_identity();
+            let identity = launch.identity();
             let serialized_identity = serde_json::to_value(&identity)?;
             for name in ["batch_size", "ubatch_size"] {
                 assert_eq!(
@@ -913,100 +913,182 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "writing-lab")]
-    #[test]
-    fn lab_prefill_batches_bind_launch_and_identity_without_changing_other_defaults()
-    -> Result<(), Box<dyn Error>> {
-        use crate::writing_lab::PrefillBatch;
+    const TEST_PROFILE: WritingProfile = WritingProfile {
+        launch_contract_id: "badi.test.writing-profile.v1",
+        context_size: 1_024,
+        batch_size: 64,
+        context_checkpoints: Some(0),
+        model_origin: Some("test_artifact"),
+    };
 
-        let temporary = tempfile::tempdir()?;
-        let binary = temporary.path().join("fixture");
-        let model = temporary.path().join("weights");
-        fs::write(&binary, b"fixture")?;
-        fs::write(&model, b"disposable model")?;
-        let launch = LlamaCppLaunch::for_fixture(
+    fn fixture_launch(directory: &Path) -> Result<LlamaCppLaunch, Box<dyn Error>> {
+        let binary = directory.join("runtime");
+        let model = directory.join("model");
+        fs::write(&binary, b"fixture runtime")?;
+        fs::write(&model, b"fixture model")?;
+        Ok(LlamaCppLaunch::for_fixture(
             verify_observed_file(&binary)?,
             verify_observed_file(&model)?,
             FixtureBehavior::Ready,
-        )?;
-        for unchanged in [launch.clone(), launch.clone().for_writing()] {
-            let selected = unchanged
-                .clone()
-                .with_lab_prefill_batch(PrefillBatch::Tokens64);
-            assert_eq!(
-                serde_json::to_vec(&selected.runtime_identity())?,
-                serde_json::to_vec(&unchanged.runtime_identity())?
-            );
-            assert_eq!(selected.writing_batch_size(), super::WRITING_BATCH_SIZE);
-        }
-        let baseline = launch.for_writing_lab();
-        let explicit_default = baseline
-            .clone()
-            .with_lab_prefill_batch(PrefillBatch::Tokens16);
+        )?)
+    }
+
+    fn launch_environment(launch: &LlamaCppLaunch) -> BTreeMap<String, String> {
+        let mut command = Command::new("/bin/true");
+        launch.configure_mode(&mut command);
+        command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                Some((key.to_str()?.to_owned(), value?.to_str()?.to_owned()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_writing_profile_binds_its_launch_and_identity() -> Result<(), Box<dyn Error>> {
+        let temporary = tempfile::tempdir()?;
+        let launch = fixture_launch(temporary.path())?;
+        let production = launch.clone().for_writing();
         assert_eq!(
-            serde_json::to_vec(&baseline.runtime_identity())?,
-            serde_json::to_vec(&explicit_default.runtime_identity())?
+            launch
+                .clone()
+                .with_writing_profile(WritingProfile::PRODUCTION)?
+                .identity(),
+            production.identity()
         );
-        let candidate = baseline
-            .clone()
-            .with_lab_prefill_batch(PrefillBatch::Tokens64);
-        let mut candidate_identity = candidate.runtime_identity();
-        assert_eq!(candidate_identity.batch_size, Some(64));
-        assert_eq!(candidate_identity.ubatch_size, Some(64));
-        assert_ne!(
-            candidate_identity.sha256(),
-            baseline.runtime_identity().sha256()
+        let profiled = launch.clone().with_writing_profile(TEST_PROFILE)?;
+        let identity = profiled.identity();
+        assert_eq!(identity.launch_contract_id, "badi.test.writing-profile.v1");
+        assert_eq!(identity.context_size, 1_024);
+        assert_eq!(
+            (identity.batch_size, identity.ubatch_size),
+            (Some(64), Some(64))
         );
-        candidate_identity.batch_size = Some(16);
-        candidate_identity.ubatch_size = Some(16);
-        assert_eq!(candidate_identity, baseline.runtime_identity());
-        for (selected, expected) in [(baseline, "16"), (candidate, "64")] {
-            let mut command = Command::new(&binary);
-            selected.configure_mode(&mut command);
-            let environment: std::collections::BTreeMap<_, _> = command
-                .get_envs()
-                .map(|(key, value)| (key.to_str().unwrap(), value.unwrap().to_str().unwrap()))
-                .collect();
-            assert_eq!(environment["LLAMA_ARG_BATCH"], expected);
-            assert_eq!(environment["LLAMA_ARG_UBATCH"], expected);
+        assert_eq!(identity.model_origin, Some("test_artifact"));
+        // Only the profile's own fields differ from the production identity.
+        let mut as_production = identity.clone();
+        as_production.launch_contract_id = WritingProfile::PRODUCTION.launch_contract_id;
+        as_production.context_size = super::CONTEXT_SIZE;
+        as_production.batch_size = Some(16);
+        as_production.ubatch_size = Some(16);
+        as_production.model_origin = None;
+        assert_eq!(as_production, production.identity());
+        // An absent origin is omitted from the digest input, not serialized.
+        let without_origin = launch
+            .with_writing_profile(WritingProfile {
+                model_origin: None,
+                ..TEST_PROFILE
+            })?
+            .identity();
+        assert!(
+            serde_json::to_value(&without_origin)?
+                .get("model_origin")
+                .is_none()
+        );
+        assert_ne!(without_origin.sha256(), identity.sha256());
+
+        for (selected, batch, checkpoints) in
+            [(production, "16", None), (profiled, "64", Some("0"))]
+        {
+            let environment = launch_environment(&selected);
+            assert_eq!(environment["LLAMA_ARG_BATCH"], batch);
+            assert_eq!(environment["LLAMA_ARG_UBATCH"], batch);
             assert_eq!(environment["LLAMA_ARG_CACHE_PROMPT"], "1");
             assert_eq!(environment["LLAMA_ARG_CACHE_RAM"], "0");
+            assert_eq!(
+                environment
+                    .get("LLAMA_ARG_CTX_CHECKPOINTS")
+                    .map(String::as_str),
+                checkpoints
+            );
         }
         Ok(())
     }
 
-    #[cfg(feature = "writing-lab")]
     #[test]
-    fn explicit_lab_artifact_identity_is_bound_without_changing_default_serialization()
-    -> Result<(), Box<dyn Error>> {
+    fn writing_profiles_outside_their_bounds_are_rejected() -> Result<(), Box<dyn Error>> {
         let temporary = tempfile::tempdir()?;
-        let binary = temporary.path().join("fixture");
-        let model = temporary.path().join("weights");
-        fs::write(&binary, b"fixture")?;
-        fs::write(&model, b"disposable model")?;
-        let launch = LlamaCppLaunch::for_fixture(
-            verify_observed_file(&binary)?,
-            verify_observed_file(&model)?,
-            FixtureBehavior::Ready,
-        )?;
-        for default in [
-            launch.clone(),
-            launch.clone().for_writing(),
-            launch.clone().for_writing_lab(),
+        let launch = fixture_launch(temporary.path())?;
+        let long_contract: &'static str = "c".repeat(129).leak();
+        let long_origin: &'static str = "o".repeat(65).leak();
+        let contract = |launch_contract_id| WritingProfile {
+            launch_contract_id,
+            ..TEST_PROFILE
+        };
+        let context = |context_size| WritingProfile {
+            context_size,
+            ..TEST_PROFILE
+        };
+        let batch = |batch_size| WritingProfile {
+            batch_size,
+            ..TEST_PROFILE
+        };
+        let checkpoints = |context_checkpoints| WritingProfile {
+            context_checkpoints,
+            ..TEST_PROFILE
+        };
+        let origin = |model_origin| WritingProfile {
+            model_origin,
+            ..TEST_PROFILE
+        };
+        for (profile, field) in [
+            (contract(""), "launch_contract_id"),
+            (contract("two words"), "launch_contract_id"),
+            (contract("badi.v1\n"), "launch_contract_id"),
+            (contract(long_contract), "launch_contract_id"),
+            (context(0), "context_size"),
+            (context(8_193), "context_size"),
+            (batch(0), "batch_size"),
+            (batch(1_025), "batch_size"),
+            (checkpoints(Some(65)), "context_checkpoints"),
+            (origin(Some("")), "model_origin"),
+            (origin(Some("Lab")), "model_origin"),
+            (origin(Some("lab-artifact")), "model_origin"),
+            (origin(Some(long_origin)), "model_origin"),
         ] {
             assert!(
-                serde_json::to_value(default.runtime_identity())?
-                    .get("model_origin")
-                    .is_none()
+                matches!(
+                    launch.clone().with_writing_profile(profile),
+                    Err(RuntimeError::InvalidConfig(name)) if name == field
+                ),
+                "{profile:?}"
             );
         }
-        let ordinary = launch.clone().for_writing_lab().runtime_identity();
-        let explicit = launch.for_writing_lab_artifact().runtime_identity();
-        assert_eq!(explicit.model_origin, Some("explicit_lab_artifact"));
-        assert_ne!(explicit.sha256(), ordinary.sha256());
-        let mut without_marker = explicit;
-        without_marker.model_origin = None;
-        assert_eq!(ordinary, without_marker);
+        let boundary = WritingProfile {
+            launch_contract_id: &long_contract[1..],
+            context_size: 8_192,
+            batch_size: 8_192,
+            context_checkpoints: Some(64),
+            model_origin: Some(&long_origin[1..]),
+        };
+        assert!(launch.with_writing_profile(boundary).is_ok());
+        Ok(())
+    }
+
+    /// Installed runtimes, lifecycle receipts and Lab provenance compare the
+    /// identity digest, so the evaluation and production launches keep their
+    /// exact serialized identity.
+    #[test]
+    fn evaluation_and_production_identity_serialization_is_pinned() -> Result<(), Box<dyn Error>> {
+        let temporary = tempfile::tempdir()?;
+        let launch = fixture_launch(temporary.path())?;
+        let common = concat!(
+            ",\"binary_sha256\":\"7c63829baa2f5451c23789c5085b4de0627e5208b6c4bb2483217998f8cc38f0\"",
+            ",\"runtime_bundle_manifest_sha256\":null",
+            ",\"model_sha256\":\"c7a3a8c7435ef8e4cf1ca2d261f7e09ca85de6cdb70f7c689a836680523a180c\"",
+            ",\"model_size\":13,\"model_alias\":\"fixture-en-v1\",\"threads\":1",
+            ",\"context_size\":512,\"gpu_layers\":0",
+        );
+        assert_eq!(
+            serde_json::to_string(&launch.identity())?,
+            format!("{{\"launch_contract_id\":\"badi.llama-cpp-owned-eval.v1\"{common}}}")
+        );
+        assert_eq!(
+            serde_json::to_string(&launch.for_writing().identity())?,
+            format!(
+                "{{\"launch_contract_id\":\"badi.writing.completion-and-spelling.en-de-fa.v2\"{common},\"batch_size\":16,\"ubatch_size\":16}}"
+            )
+        );
         Ok(())
     }
 

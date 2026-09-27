@@ -273,15 +273,22 @@ async fn wait_for_memory(model: ModelArtifact) {
     }
 }
 
+/// Whether `model` can start with `available_mib` of available memory.
+/// Unknown availability does not block: total memory already passed the hard
+/// floor during selection.
+#[must_use]
+pub fn memory_fits(model: ModelArtifact, available_mib: Option<u64>) -> bool {
+    available_mib.is_none_or(|available| fits_available_memory(model, available))
+}
+
 /// The pause before checking available memory again, or `None` once `model`
-/// can start. Unknown availability does not block: total memory already
-/// passed the hard floor during selection.
+/// can start.
 fn memory_retry_delay(
     model: ModelArtifact,
     available_mib: Option<u64>,
     previous: Option<Duration>,
 ) -> Option<Duration> {
-    if available_mib.is_none_or(|available| fits_available_memory(model, available)) {
+    if memory_fits(model, available_mib) {
         return None;
     }
     Some(previous.map_or(MEMORY_RETRY_INITIAL, |delay| {
@@ -300,22 +307,11 @@ pub fn activation_report(model: &ModelArtifact, warm_up: WarmUpReport) -> String
     )
 }
 
-/// The Lab's launch: it reports a host that is short of memory right now
-/// instead of waiting for it.
-#[cfg(feature = "writing-lab")]
-pub(crate) async fn prepare_launch(
-    directory: PathBuf,
-) -> Result<(LlamaCppLaunch, ModelArtifact), WritingError> {
-    let (model, threads) = installed_model(&directory)?;
-    if memory_retry_delay(model, current_memory().available_mib, None).is_some() {
-        return Err(WritingError::NoFit);
-    }
-    Ok((verify_launch(directory, model, threads).await?, model))
-}
-
-fn installed_model(directory: &Path) -> Result<(ModelArtifact, usize), WritingError> {
+/// The installed catalog model that fits this host, with the inference
+/// thread count, from the models under `directory`.
+pub fn installed_model(directory: &Path) -> Result<(ModelArtifact, usize), WritingError> {
     let hardware = detect_cpu_inference_hardware();
-    let threads = writing_threads(&hardware)?;
+    let threads = threads_for(&hardware)?;
     let installed: Vec<_> = catalog(ModelUseCase::Writing)
         .iter()
         .filter(|model| directory.join("models").join(model.filename).is_file())
@@ -333,7 +329,9 @@ fn installed_model(directory: &Path) -> Result<(ModelArtifact, usize), WritingEr
     Ok((model, threads))
 }
 
-async fn verify_launch(
+/// Verifies the installed `model` and the pinned runtime under `directory`
+/// off the async executor, and returns their launch.
+pub async fn verify_launch(
     directory: PathBuf,
     model: ModelArtifact,
     threads: usize,
@@ -343,27 +341,18 @@ async fn verify_launch(
         .map_err(|_| WritingError::VerificationTask)?
 }
 
-fn writing_threads(hardware: &HardwareProfile) -> Result<usize, WritingError> {
+/// The inference thread count for this host's CPU.
+pub fn writing_threads() -> Result<usize, WritingError> {
+    threads_for(&detect_cpu_inference_hardware())
+}
+
+fn threads_for(hardware: &HardwareProfile) -> Result<usize, WritingError> {
     if std::env::consts::OS != "linux" || hardware.architecture != "x86_64" || !hardware.cpu.avx2 {
         return Err(WritingError::UnsupportedRuntime);
     }
     // Small quantized models are bandwidth-bound on the tested hybrid CPU.
     // Leave capacity for the editor; twelve threads had worse tail latency.
     Ok((hardware.logical_cpus / 2).clamp(1, 4))
-}
-
-#[cfg(feature = "writing-lab")]
-pub(crate) async fn prepare_lab_artifact(
-    directory: PathBuf,
-    artifact: crate::writing_lab::artifact::ModelArtifactOverride,
-) -> Result<LlamaCppLaunch, WritingError> {
-    let threads = writing_threads(&detect_cpu_inference_hardware())?;
-    tokio::task::spawn_blocking(move || {
-        let weights = verify_file(&artifact.weights)?;
-        verified_runtime_launch(&directory, weights, &artifact.alias, threads)
-    })
-    .await
-    .map_err(|_| WritingError::VerificationTask)?
 }
 
 fn verified_launch(
@@ -381,10 +370,12 @@ fn verified_launch(
         model.sha256,
         model.download_bytes,
     )?)?;
-    verified_runtime_launch(directory, weights, model.filename, threads)
+    pinned_runtime_launch(directory, weights, model.filename, threads)
 }
 
-fn verified_runtime_launch(
+/// Verifies the pinned runtime release under `directory` and returns its
+/// launch of the already verified `weights`. Blocking: it hashes the runtime.
+pub fn pinned_runtime_launch(
     directory: &Path,
     weights: VerifiedFile,
     alias: &str,
