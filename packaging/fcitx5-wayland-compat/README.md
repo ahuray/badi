@@ -162,12 +162,18 @@ unchanged, and `--broker-only` never touches it. The installer:
    effective `ExecStart` must be the stock `/usr/bin/fcitx5 --disable
    notificationitem` or a Badi drop-in command; anything else stops the
    installation before any file changes.
-2. Runs `build.py --check` in a new
+2. Reuses the frontend already installed under
+   `~/.local/lib/badi/compat/fcitx5-5.1.22/` when its `build-receipt.json` passes
+   the checks below against its installed `addons/libwaylandim.so`: no download
+   and no compile. Otherwise it runs `build.py --check` in a new
    `output/extensionless/fcitx-wayland-compat-5.1.22-<ns>` directory, which
-   downloads the pinned archive. `--wayland-compat-build DIR` instead reuses an
-   existing checked build. Either way, the receipt must name this manifest,
+   downloads the pinned archive and compiles the baseline and patched frontend,
+   and deletes that directory once its result is installed.
+   `--wayland-compat-build DIR` instead installs an existing checked build and
+   leaves `DIR` in place. In every case the receipt must name this manifest,
    passed protocol checks, the installed Core/Config/Utils version, today's
-   runtime hashes and the artifact hash.
+   runtime hashes and the artifact hash, so a Fcitx upgrade or a changed pin
+   builds again.
 3. Installs `launch.py`, `build-receipt.json` and `addons/libwaylandim.so` under
    `~/.local/lib/badi/compat/fcitx5-5.1.22/`, plus this drop-in:
 

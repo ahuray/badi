@@ -11,6 +11,7 @@ import mmap
 import os
 from pathlib import Path
 import re
+import shutil
 import shlex
 import socket
 import stat
@@ -43,7 +44,8 @@ ACCESSIBILITY_SWITCH = "--force-renderer-accessibility"
 COMPLETE_ACCESSIBILITY = (ACCESSIBILITY_SWITCH, OBSERVED_FLAG)
 COMPAT_LIBRARY = Path(".local/lib/badi/compat")
 COMPAT_DROPIN = Path(".config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf")
-COMPAT_FILES = ("launch.py", "build-receipt.json", "addons/libwaylandim.so")
+COMPAT_MODULE = "addons/libwaylandim.so"
+COMPAT_FILES = ("launch.py", "build-receipt.json", COMPAT_MODULE)
 # Retired frontends are removed only while no service command references them.
 OBSOLETE_COMPAT = ("5.1.21",)
 STOCK_FCITX_COMMAND = "/usr/bin/fcitx5 --disable notificationitem"
@@ -390,10 +392,14 @@ def retirable_compat(home, directory):
     return sorted(files)
 
 
-def verify_compat_build(directory, launcher):
-    """Accept only a checked build of the pinned source for today's exact runtime."""
+def verify_compat_build(directory, launcher, module="libwaylandim.so"):
+    """Accept only a checked build of the pinned source for today's exact runtime.
+
+    `module` is where the directory keeps the artifact: at the top of a build's
+    work directory, or under addons/ in an installed frontend.
+    """
     directory = Path(directory).expanduser().resolve()
-    module = directory / "libwaylandim.so"
+    module = directory / module
     try:
         receipt = json.loads((directory / "build-receipt.json").read_text())
         manifest = json.loads((ROOT / "packaging/fcitx5-wayland-compat/manifest.json").read_text())
@@ -486,20 +492,36 @@ def plan_wayland_compat(home, build=None):
             kept.append(directory)
         elif files:
             obsolete.append((directory, files))
+    # "build" holds the verified build receipt and "module" its artifact;
+    # "work" is a directory this run builds in and removes once installed.
     plan = {"install": True, "version": version, "pinned": launcher.VERSION, "root": root, "launcher": launcher,
-            "homes": tuple(homes), "build": None, "obsolete": obsolete, "kept": kept}
+            "homes": tuple(homes), "build": None, "module": None, "work": None, "reused": False,
+            "obsolete": obsolete, "kept": kept}
     if build is not None:
-        plan["build"] = verify_compat_build(build, launcher)
+        directory = verify_compat_build(build, launcher)
+        plan.update(build=directory, module=directory / "libwaylandim.so")
+        return plan
+    try:
+        # The frontend already installed for this exact runtime and pinned
+        # source needs no download or compile; its receipt is checked the same way.
+        directory = verify_compat_build(root, launcher, COMPAT_MODULE)
+    except RuntimeError:
+        return plan
+    plan.update(build=directory, module=directory / COMPAT_MODULE, reused=True)
     return plan
 
 
 def build_wayland_compat(plan):
+    """Build and verify the frontend unless the plan already holds a verified build."""
+    if plan["reused"]:
+        print(f"Reusing the verified Fcitx {plan['version']} compatibility frontend already installed; "
+              "nothing to download or compile.", flush=True)
     if plan["build"] is None:
         work = ROOT / "output/extensionless" / f"fcitx-wayland-compat-{plan['version']}-{time.time_ns()}"
         run([sys.executable, "-B", str(ROOT / "packaging/fcitx5-wayland-compat/build.py"),
              "--work-dir", str(work), "--jobs", "2", "--check"], cwd=ROOT)
-        plan["build"] = verify_compat_build(work, plan["launcher"])
-    return plan["build"]
+        directory = verify_compat_build(work, plan["launcher"])
+        plan.update(build=directory, module=directory / "libwaylandim.so", work=directory)
 
 
 def wait_compat_frontend(module):
@@ -677,12 +699,15 @@ def install_files(plan):
             installation.write(target, text.encode(), stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600)
         if plan.installs_compat:
             root = plan.compat["root"]
-            install(plan.compat["build"] / "libwaylandim.so", root / "addons/libwaylandim.so")
+            install(plan.compat["module"], root / COMPAT_MODULE)
             install(plan.compat["build"] / "build-receipt.json", root / "build-receipt.json")
             install(ROOT / "packaging/fcitx5-wayland-compat/launch.py", root / "launch.py")
             installation.write(home / COMPAT_DROPIN, compat_dropin(plan.compat["version"]).encode(), 0o644)
             for directory, files in plan.compat["obsolete"]:
                 retire(files, (directory / "addons", directory))
+            if plan.compat["work"]:
+                # The installed copy and its receipt replace the ~40 MB build tree.
+                shutil.rmtree(plan.compat["work"])
     install(ROOT / "packaging/systemd/badi-broker.service", home / ".config/systemd/user/badi-broker.service")
     if native:
         install(ROOT / "packaging/systemd/fcitx-badi.conf",

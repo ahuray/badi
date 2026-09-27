@@ -700,7 +700,8 @@ class DesktopInstallTests(unittest.TestCase):
 
 
 class FullInstall:
-    def full_install(self, root, argv, *, version='5.1.22', overridden=False, loaded=True, prebuilt=False):
+    def full_install(self, root, argv, *, version='5.1.22', overridden=False, loaded=True, prebuilt=False,
+                     installed=None):
         home, project, runtime = root / 'home', root / 'project', root / 'runtime'
         native_project(project)
         profile = home / '.config/fcitx5/profile'
@@ -709,6 +710,14 @@ class FullInstall:
         launcher, build, _receipt = compat_fixture(root)
         if prebuilt:
             argv = [*argv, '--wayland-compat-build', str(build)]
+        if installed is not None:
+            # An earlier installation of this build, then the given change to it.
+            compat = home / '.local/lib/badi/compat/fcitx5-5.1.22'
+            (compat / 'addons').mkdir(parents=True)
+            shutil.copy2(build / 'libwaylandim.so', compat / 'addons/libwaylandim.so')
+            shutil.copy2(build / 'build-receipt.json', compat / 'build-receipt.json')
+            shutil.copy2(project / 'packaging/fcitx5-wayland-compat/launch.py', compat / 'launch.py')
+            installed(launcher, compat)
         calls = []
 
         def execute(command, **kwargs):
@@ -788,6 +797,56 @@ class WaylandCompatTests(FullInstall, unittest.TestCase):
             self.assertTrue(any(reload < index < restart for index in checks))
             frontend.assert_called_once_with(compat / 'addons/libwaylandim.so')
             self.assertIn('Wayland compatibility frontend verified in the running service', self.output)
+            self.assertFalse(Path(build[0][-4]).exists(), 'The build tree is removed once installed')
+
+    def test_installed_build_for_this_runtime_is_reused_without_download_or_compile(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home, _project, calls, frontend = self.full_install(Path(temporary), [], installed=lambda *_: None)
+            self.assertFalse(any(any(str(part).endswith('build.py') for part in call) for call in calls))
+            self.assertIn('Reusing the verified Fcitx 5.1.22 compatibility frontend', self.output)
+            _backup, _document, changed = only_backup(home)
+            self.assertFalse(any('/compat/' in path for path in changed), 'Identical frontend files are not rewritten')
+            recorded = json.loads((home / '.local/state/badi/receipts/desktop.json').read_text())['files']
+            self.assertIn('.local/lib/badi/compat/fcitx5-5.1.22/addons/libwaylandim.so', recorded)
+            frontend.assert_called_once()
+            self.assertFalse((home.parent / 'project/output').exists(), 'No work directory is created')
+
+    def test_installed_build_is_reused_only_while_runtime_source_and_module_match(self):
+        def upgraded_runtime(launcher, _compat):
+            Path(launcher.RUNTIME_FILES[0]).write_bytes(b'upgraded system file')
+
+        def other_source(_launcher, compat):
+            receipt = json.loads((compat / 'build-receipt.json').read_text())
+            receipt['source']['patch_sha256'] = '0' * 64
+            (compat / 'build-receipt.json').write_text(json.dumps(receipt))
+
+        def changed_module(_launcher, compat):
+            (compat / 'addons/libwaylandim.so').write_bytes(b'edited frontend')
+
+        for change in (None, upgraded_runtime, other_source, changed_module):
+            with self.subTest(change=change and change.__name__), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                home = root / 'home'
+                launcher, build, _receipt = compat_fixture(root)
+                compat = home / '.local/lib/badi/compat/fcitx5-5.1.22'
+                (compat / 'addons').mkdir(parents=True)
+                shutil.copy2(build / 'libwaylandim.so', compat / 'addons/libwaylandim.so')
+                shutil.copy2(build / 'build-receipt.json', compat / 'build-receipt.json')
+                (compat / 'launch.py').write_text('installed launcher')
+                if change:
+                    change(launcher, compat)
+                replies = {'/usr/bin/fcitx5': subprocess.CompletedProcess([], 0, '5.1.22\n', ''),
+                           'systemctl': subprocess.CompletedProcess([], 0, STOCK % installer.STOCK_FCITX_COMMAND, '')}
+                with patch.object(installer, 'compat_launcher', return_value=launcher), \
+                     patch.object(installer.Path, 'home', return_value=home), \
+                     patch.object(installer.subprocess, 'run', side_effect=lambda argv, **_: replies[argv[0]]):
+                    plan = installer.plan_wayland_compat(home)
+                if change is None:
+                    self.assertEqual((plan['reused'], plan['module'], plan['work']),
+                                     (True, compat.resolve() / 'addons/libwaylandim.so', None))
+                else:
+                    self.assertEqual((plan['reused'], plan['build'], plan['module']), (False, None, None),
+                                     'A changed runtime, source pin or module is built again')
 
     def test_overriding_drop_in_stops_before_fcitx_restart(self):
         with tempfile.TemporaryDirectory() as temporary:
