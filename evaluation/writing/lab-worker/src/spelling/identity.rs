@@ -23,7 +23,7 @@ fn verify_open_file(mut file: File, expected: &VerifiedFile) -> Result<(), &'sta
         .read_to_end(&mut bytes)
         .map_err(|_| ERROR)?;
     if bytes.len() as u64 != expected.identity().size
-        || super::artifact::digest(&bytes) != expected.sha256()
+        || crate::sha256_hex(&bytes) != expected.sha256()
         || !matches_file(&file.metadata().map_err(|_| ERROR)?, expected.identity())
     {
         return Err(ERROR);
@@ -248,10 +248,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("file");
         std::fs::write(&path, b"fixture").unwrap();
-        let expected = verify_file(
-            &FileExpectation::new(&path, super::super::artifact::digest(b"fixture"), 7).unwrap(),
-        )
-        .unwrap();
+        let expected =
+            verify_file(&FileExpectation::new(&path, crate::sha256_hex(b"fixture"), 7).unwrap())
+                .unwrap();
         verify_open_file(File::open(&path).unwrap(), &expected).unwrap();
         let copy = directory.path().join("copy");
         std::fs::write(&copy, b"fixture").unwrap();

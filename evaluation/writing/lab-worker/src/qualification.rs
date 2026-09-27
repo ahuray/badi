@@ -11,7 +11,8 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+
+use crate::sha256_hex;
 
 const MIB: u64 = 1_048_576;
 const SCHEMA: &str = "badi.device-qualification.v1";
@@ -227,15 +228,8 @@ fn now_unix_s() -> u64 {
 }
 
 fn digest(value: &impl Serialize) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
     // These structs only contain JSON-representable primitives and vectors.
-    let bytes = serde_json::to_vec(value).expect("qualification types serialize");
-    let mut result = String::with_capacity(64);
-    for byte in Sha256::digest(&bytes) {
-        result.push(char::from(HEX[usize::from(byte >> 4)]));
-        result.push(char::from(HEX[usize::from(byte & 15)]));
-    }
-    result
+    sha256_hex(&serde_json::to_vec(value).expect("qualification types serialize"))
 }
 
 fn valid_hash(value: &str) -> bool {

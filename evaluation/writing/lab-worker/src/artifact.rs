@@ -87,16 +87,10 @@ mod tests {
     use super::*;
     use badi_broker::semantic::provenance::verify_file;
     use serde_json::{Value, json};
-    use sha2::{Digest, Sha256};
-    use std::fmt::Write as _;
 
     fn descriptor(path: &Path, bytes: &[u8]) -> Value {
-        let mut digest = String::with_capacity(64);
-        for byte in Sha256::digest(bytes) {
-            write!(digest, "{byte:02x}").unwrap();
-        }
         json!({"schema":"badi.lab-model-artifact.v1","weights_path":path,
-            "sha256":digest,"bytes":bytes.len(),
+            "sha256":crate::sha256_hex(bytes),"bytes":bytes.len(),
             "alias":"disposable-weights.fixture"})
     }
 

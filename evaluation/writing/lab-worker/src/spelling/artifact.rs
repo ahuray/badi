@@ -1,6 +1,6 @@
+use crate::sha256_hex;
 use badi_broker::semantic::provenance::{FileExpectation, VerifiedFile, verify_file};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -8,15 +8,6 @@ use std::path::{Path, PathBuf};
 pub const ENGINE_SHA256: &str = "32b16f4c3ffbf8fab764e02c1d3e99d2453db5fb6e5c57a1f05b6552523a1faf";
 const LIBRARY_SHA256: &str = "c45ccf092f13c6007813940acc025cd2d5f5c9182a30c746168065ab69322e67";
 const ERROR: &str = "invalid_spelling_artifact";
-
-pub(super) fn digest(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut value = String::with_capacity(64);
-    for byte in Sha256::digest(bytes) {
-        write!(value, "{byte:02x}").expect("string write");
-    }
-    value
-}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -65,7 +56,7 @@ pub struct Identity {
 impl Identity {
     #[must_use]
     pub fn sha256(&self) -> String {
-        digest(&serde_json::to_vec(self).expect("identity serialization"))
+        sha256_hex(&serde_json::to_vec(self).expect("identity serialization"))
     }
 }
 
@@ -124,7 +115,7 @@ impl Artifact {
     pub(super) fn fixture(path: &Path) -> Self {
         fs::write(path, b"fixture").unwrap();
         let file =
-            verify_file(&FileExpectation::new(path, digest(b"fixture"), 7).unwrap()).unwrap();
+            verify_file(&FileExpectation::new(path, sha256_hex(b"fixture"), 7).unwrap()).unwrap();
         Self {
             manifest_path: path.to_owned(),
             manifest: file.clone(),
@@ -134,16 +125,16 @@ impl Artifact {
             dic: file,
             identity: Identity {
                 contract_id: "fixture",
-                manifest_sha256: digest(b"fixture"),
-                engine_sha256: digest(b"fixture"),
+                manifest_sha256: sha256_hex(b"fixture"),
+                engine_sha256: sha256_hex(b"fixture"),
                 engine_size: 7,
-                library_sha256: digest(b"fixture"),
+                library_sha256: sha256_hex(b"fixture"),
                 library_size: 7,
                 language: "de".to_owned(),
                 dictionary_id: "fixture".to_owned(),
-                aff_sha256: digest(b"fixture"),
+                aff_sha256: sha256_hex(b"fixture"),
                 aff_size: 7,
-                dic_sha256: digest(b"fixture"),
+                dic_sha256: sha256_hex(b"fixture"),
                 dic_size: 7,
             },
         }
@@ -176,7 +167,7 @@ impl Artifact {
         };
         let manifest_file = verified(&FileSpec {
             path: path.to_owned(),
-            sha256: digest(&bytes),
+            sha256: sha256_hex(&bytes),
             bytes: bytes.len() as u64,
         })?;
         let binary = verified(&manifest.binary)?;
@@ -240,7 +231,7 @@ mod tests {
         fs::write(&path, b"original").unwrap();
         let spec = || FileSpec {
             path: path.clone(),
-            sha256: digest(b"original"),
+            sha256: sha256_hex(b"original"),
             bytes: 8,
         };
         let file = verified(&spec()).unwrap();
@@ -275,7 +266,7 @@ mod tests {
                 fs::write(&path, b"fixture").unwrap();
                 FileSpec {
                     path,
-                    sha256: digest(b"fixture"),
+                    sha256: sha256_hex(b"fixture"),
                     bytes: 7,
                 }
             };

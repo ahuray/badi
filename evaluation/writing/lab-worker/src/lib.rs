@@ -41,6 +41,17 @@ pub const LAUNCH_CONTRACT: &str = "badi.prediction-lab.owned-2048.v2";
 pub const CONTEXT_TOKENS: u16 = 2048;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+
+    let mut hex = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    hex
+}
+
 /// Explicit worker-launch experiment. Browser requests cannot select runtime
 /// settings; omission preserves the installed writing batch configuration.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -2234,19 +2245,13 @@ mod tests {
     fn lab_launch_identity_serialization_is_pinned() {
         use badi_broker::semantic::provenance::{FileExpectation, VerifiedFile, verify_file};
         use badi_broker::semantic::runtime::FixtureBehavior;
-        use sha2::{Digest, Sha256};
-        use std::fmt::Write as _;
 
         let temporary = tempfile::tempdir().expect("temporary directory");
         let verified = |name: &str, bytes: &[u8]| -> VerifiedFile {
             let path = temporary.path().join(name);
             std::fs::write(&path, bytes).expect("fixture file");
-            let mut sha256 = String::new();
-            for byte in Sha256::digest(bytes) {
-                write!(sha256, "{byte:02x}").expect("string write");
-            }
             let size = u64::try_from(bytes.len()).expect("fixture size");
-            verify_file(&FileExpectation::new(&path, sha256, size).expect("expectation"))
+            verify_file(&FileExpectation::new(&path, sha256_hex(bytes), size).expect("expectation"))
                 .expect("verified fixture")
         };
         let launch = LlamaCppLaunch::for_fixture(
