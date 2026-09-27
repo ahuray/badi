@@ -61,8 +61,8 @@ void run(const std::string &socket, const std::string &appId,
             require(state.showSuggestion(std::move(suggestion), wire->nowMs()));
             ++suggestions;
             if (suggestions == 1) {
-                // A person must be able to read the native panel before accepting,
-                // including beyond the former 600 ms UI and 3 s context leases.
+                // A person reads the panel before accepting; the candidate must
+                // still be acceptable seconds later.
                 readingTimer = loop.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
                     [&](::fcitx::EventSourceTime *, std::uint64_t) {
                         const auto acceptance = state.requestAcceptance(wire->nowMs(), kPanel);

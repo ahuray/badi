@@ -988,8 +988,8 @@ void canonicalAppIdsFoldAsciiCase() {
               classifyNativeApp(*canonicalAppId("App.Zen_browser.Zen")) == NativeAppClass::Unavailable &&
               classifyNativeApp(*canonicalAppId("Telegram")) == NativeAppClass::NativeExact,
           "classification uses the folded identity");
-    // Folding newly admits these mixed-case window classes; none may become
-    // a native exact app with the unknown-identity manual path.
+    // Folding admits these mixed-case window classes; none may become a
+    // native exact app with the unknown-identity manual path.
     for (const auto program : {"chrome-app.hey.com__-Default", "chrome-nngceckbapebfimnlniiiahkandclblb-Default",
                                "com.google.Chrome", "org.chromium.Chromium", "com.brave.Browser",
                                "Microsoft-edge", "Vivaldi-stable", "Code-OSS", "VSCodium", "Electron",

@@ -531,7 +531,7 @@ private:
             !allowsNativeContext(binding.inputContext->capabilityFlags()) ||
             !binding.surroundingFreshness.fresh()) return;
         if (accessibility_->pending()) {
-            // Never an absent service or a denied field in an unbounded timer loop.
+            // Bounded, so an absent service or a denied field never loops the timer.
             if (binding.inspection.retryWhileBusy()) observeLater(binding, binding.observationExplicit, true);
             else observerUnavailable(binding);
             return;

@@ -16,8 +16,8 @@ enum class NativeEditPath { Manual, Observed };
 
 // Every native decision starts from the class of the canonical app id.
 enum class NativeAppClass {
-    // Existing contract for user-granted native apps: manual unknown identity
-    // or an observed desktop field.
+    // User-granted native apps: the manual unknown-identity contract or an
+    // observed desktop field.
     NativeExact,
     // Chromium-based apps and Zen (Gecko) without an editor-owned channel. Only
     // an observed field of the matching target kind may accept, append-only,

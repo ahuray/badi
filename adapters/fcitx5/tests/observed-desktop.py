@@ -436,7 +436,7 @@ def session(root, report):
         wait(lambda: auxiliary() == UNAVAILABLE_NOTICE, 'notice before foreign composition')
         assert context.key(ord('U'), 5)
         assert context.key(ord('4'))
-        wait(lambda: preedit() == 'U+4', 'quarantined field real Unicode preedit')
+        wait(lambda: preedit() == 'U+4', 'unavailable app real Unicode preedit')
         assert auxiliary() != UNAVAILABLE_NOTICE, 'Foreign composition must own the panel'
         assert context.key(desktop.ESCAPE)
         wait(lambda: preedit() == '' and auxiliary() == '', 'foreign composition clears without restoring notice')
@@ -637,7 +637,7 @@ def session(root, report):
         change(PREFIX)
         wait(lambda: context.candidate() == SUFFIX, 'resume with fresh context')
 
-        # Fcitx 5.1.21's shipped Unicode module owns real foreign preedit. Its
+        # Fcitx's shipped Unicode module owns real foreign preedit. Its
         # default direct-mode shortcut is Control+Shift+U; only this private
         # D-Bus input context receives the key, with no graphical input device.
         assert context.key(ord('U'), 5)
