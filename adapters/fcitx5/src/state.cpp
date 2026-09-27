@@ -148,6 +148,24 @@ bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target,
     return false;
 }
 
+std::string_view focusReason(std::string_view appId) {
+    if (appId.empty()) return "unidentified_app";
+    if (!nativeObservationAvailable(appId)) return "editor_transaction_unavailable";
+    return imeParityApp(appId) ? "awaiting_observed_field" : "checking_app_policy";
+}
+
+std::string_view editingUnavailableReason(std::string_view appId, bool fieldObserved) {
+    if (!imeParityApp(appId)) return "editor_transaction_unavailable";
+    return fieldObserved ? "ime_parity_target_mismatch" : "ime_parity_unobserved";
+}
+
+std::optional<std::string_view> clearNoticeText(std::string_view reason) {
+    if (reason == "no_suggestion") return "Badi has no continuation — try a longer phrase";
+    if (reason == "provider_timeout" || reason == "provider_error")
+        return "Badi could not finish — press Tab to retry";
+    return std::nullopt;
+}
+
 bool matchesCapturedContext(
     const std::optional<ContextUpdate> &captured,
     const std::optional<ContextWindow> &current) {

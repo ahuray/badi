@@ -35,6 +35,12 @@ bool imeParityApp(std::string_view appId);
 bool nativeObservationAvailable(std::string_view appId);
 bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target,
                             NativeEditPath path);
+// Content-free debug reasons. IME-parity apps never fall back to the
+// unknown-identity manual path, so their reasons name the missing field.
+std::string_view focusReason(std::string_view appId);
+std::string_view editingUnavailableReason(std::string_view appId, bool fieldObserved);
+// The notice for a broker clear without a suggestion, if the user should see one.
+std::optional<std::string_view> clearNoticeText(std::string_view reason);
 
 struct Coordinates {
     std::string sessionId;

@@ -770,6 +770,24 @@ void chromeAndBraveAliasesWithoutObserverRuleAreUnavailable() {
     }
 }
 
+void reasonsAndNoticesNameTheBlockedPath() {
+    check(focusReason("") == "unidentified_app" && focusReason("firefox") == "editor_transaction_unavailable" &&
+              focusReason("chrome") == "editor_transaction_unavailable" &&
+              focusReason("brave-origin") == "awaiting_observed_field" &&
+              focusReason("code") == "awaiting_observed_field" && focusReason("omawrite") == "checking_app_policy",
+          "focus reasons follow the app class");
+    check(editingUnavailableReason("zen", false) == "ime_parity_unobserved" &&
+              editingUnavailableReason("zen", true) == "ime_parity_target_mismatch" &&
+              editingUnavailableReason("omawrite", false) == "editor_transaction_unavailable" &&
+              editingUnavailableReason("obsidian", true) == "editor_transaction_unavailable",
+          "IME-parity reasons name the missing or mismatched observed field");
+    check(clearNoticeText("no_suggestion") == "Badi has no continuation — try a longer phrase" &&
+              clearNoticeText("provider_timeout") == "Badi could not finish — press Tab to retry" &&
+              clearNoticeText("provider_error") == clearNoticeText("provider_timeout") &&
+              !clearNoticeText("expired") && !clearNoticeText("dismissed") && !clearNoticeText("stale"),
+          "only abstentions and provider failures explain themselves to the user");
+}
+
 void canonicalAppIdsFoldAsciiCase() {
     check(canonicalAppId("Telegram") == "telegram", "Qt window-class identity folds to lowercase");
     check(canonicalAppId("org.Telegram.Desktop") == "org.telegram.desktop", "reverse DNS folds per segment");
@@ -1093,6 +1111,7 @@ int main(int argc, char **argv) {
         {"Chrome and Brave aliases without an observer rule",
          chromeAndBraveAliasesWithoutObserverRuleAreUnavailable},
         {"canonical app ids", canonicalAppIdsFoldAsciiCase},
+        {"debug reasons and clear notices", reasonsAndNoticesNameTheBlockedPath},
         {"IME parity requires an observed append-only field", imeParityRequiresObservedAppendOnlyField},
         {"unobserved IME parity and unavailable apps", unobservedParityAndUnavailableAppsCannotEdit},
         {"observer replies fail closed", observerRepliesFailClosed},

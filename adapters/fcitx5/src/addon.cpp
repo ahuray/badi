@@ -274,9 +274,7 @@ private:
     void focusIn(::fcitx::InputContext &inputContext) {
         const auto appId = canonicalProgram(inputContext);
         debug_.refresh();
-        debug_.record("focus", appId, appId.empty() ? "unidentified_app" :
-            !nativeObservationAvailable(appId) ? "editor_transaction_unavailable" :
-            imeParityApp(appId) ? "awaiting_observed_field" : "checking_app_policy");
+        debug_.record("focus", appId, focusReason(appId));
         const auto contextId = uuidString(inputContext.uuid());
         const auto sessionId = randomUuid();
         const auto salt = randomSalt();
@@ -448,13 +446,6 @@ private:
             imeParityApp(binding.state.appId()) ? "ime_parity_target_invalid" : "editor_transaction_unavailable");
     }
 
-    // Content-free reason for a focused binding that cannot edit.
-    std::string_view editingUnavailableReason(const Binding &binding) const {
-        if (!imeParityApp(binding.state.appId())) return "editor_transaction_unavailable";
-        // IME-parity apps never fall back to the unknown-identity manual path.
-        return binding.observedFocus.is_null() ? "ime_parity_unobserved" : "ime_parity_target_mismatch";
-    }
-
     // IME-parity has no manual fallback, so an explicit request says why the
     // observer produced no field: the field's own purpose, or no observer.
     void observerUnavailable(Binding &binding, const nlohmann::json &error = nullptr) {
@@ -566,7 +557,7 @@ private:
                                             *editTarget, NativeEditPath::Observed)) return;
                 current->observedFocus = focus;
                 if (!current->state.editingAvailable()) {
-                    debug_.record("request_blocked", appId, editingUnavailableReason(*current));
+                    debug_.record("request_blocked", appId, editingUnavailableReason(appId, !current->observedFocus.is_null()));
                     return;
                 }
                 queryPolicy(*current);
@@ -691,7 +682,8 @@ private:
             // Preserve original Tab/navigation. Only the explicit invocation
             // chord may display a notice or request an observed field below.
             if (!event.key().isModifier()) cancelForInput(*binding);
-            debug_.record("request_blocked", app, editingUnavailableReason(*binding));
+            debug_.record("request_blocked", app,
+                editingUnavailableReason(binding->state.appId(), !binding->observedFocus.is_null()));
             return;
         }
         const auto panel = observePanel(*binding);
@@ -835,7 +827,8 @@ private:
 
     std::string_view unavailableContextReason(const Binding &binding) const {
         auto &input = *binding.inputContext;
-        if (!binding.state.editingAvailable()) return editingUnavailableReason(binding);
+        if (!binding.state.editingAvailable())
+            return editingUnavailableReason(binding.state.appId(), !binding.observedFocus.is_null());
         if (!input.hasFocus() || !binding.state.focused() || !binding.policyAllowed)
             return "native_authority_changed";
         if (!binding.surroundingFreshness.fresh()) return "native_context_stale";
@@ -1148,12 +1141,8 @@ private:
         }
         if (binding && !notice.suggestionId && binding->state.coordinates() == notice.coordinates &&
             (binding->observedFocus.is_null() || binding->observationExplicit)) {
-            if (notice.reason == "no_suggestion") {
-                showNotice(*binding, "Badi has no continuation — try a longer phrase");
-                return;
-            }
-            if (notice.reason == "provider_timeout" || notice.reason == "provider_error") {
-                showNotice(*binding, "Badi could not finish — press Tab to retry");
+            if (const auto text = clearNoticeText(notice.reason)) {
+                showNotice(*binding, std::string(*text));
                 return;
             }
         }
