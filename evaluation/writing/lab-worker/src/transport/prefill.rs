@@ -10,7 +10,6 @@ use tokio_util::sync::CancellationToken;
 use badi_broker::semantic::client::{ClientError, SemanticClient};
 use badi_broker::semantic::wire::{
     StatusCode, ensure_content_type, event_data, next_event_boundary, read_bounded_body,
-    transport_error,
 };
 
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
@@ -124,7 +123,7 @@ async fn diagnostic_completion(
         }
         let mut metrics = PrefillMetrics::default();
         if !stream {
-            ensure_content_type(response.headers(), "application/json")?;
+            ensure_content_type(&response, "application/json")?;
             let bytes = read_bounded_body(response, MAX_RESPONSE_BYTES).await?;
             let result =
                 serde_json::from_slice(&bytes).map_err(|_| ClientError::MalformedStream)?;
@@ -133,10 +132,10 @@ async fn diagnostic_completion(
             }
             return Ok(metrics);
         }
-        ensure_content_type(response.headers(), "text/event-stream")?;
+        ensure_content_type(&response, "text/event-stream")?;
         let mut pending = Vec::new();
         let mut received = 0_usize;
-        while let Some(bytes) = response.chunk().await.map_err(transport_error)? {
+        while let Some(bytes) = response.chunk().await? {
             received = received.saturating_add(bytes.len());
             if received > MAX_RESPONSE_BYTES {
                 return Err(ClientError::ResponseTooLarge);

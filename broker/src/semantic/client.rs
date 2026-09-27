@@ -12,8 +12,6 @@ use crate::provider::{
     WritingProposal,
 };
 use async_trait::async_trait;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue};
-use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -22,8 +20,8 @@ use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::wire::{
-    NativeStreamChunk, Response, StatusCode, TokenizeResponse, ensure_content_type, event_data,
-    next_event_boundary, read_bounded_body, transport_error,
+    self, Method, NativeStreamChunk, Response, StatusCode, TokenizeResponse, ensure_content_type,
+    event_data, next_event_boundary, read_bounded_body,
 };
 
 pub const PROMPT_CONTRACT_ID: &str = "badi.semantic.inline-en.native-prefix.dev1";
@@ -68,7 +66,8 @@ pub fn prompt_contract_sha256() -> String {
 pub struct SemanticClientConfig {
     endpoint: SocketAddr,
     model_alias: String,
-    authorization: HeaderValue,
+    /// The `Authorization` header value: `Bearer` and the runtime's token.
+    authorization: String,
     connect_timeout: Duration,
     request_timeout: Duration,
     writing: bool,
@@ -81,16 +80,20 @@ impl SemanticClientConfig {
         token: impl AsRef<str>,
     ) -> Result<Self, ClientError> {
         let raw_token = token.as_ref();
-        if raw_token.is_empty() || raw_token.len() > MAX_TOKEN_BYTES {
+        // A header value may hold any byte but controls other than tab, so
+        // the token cannot end the header early.
+        if raw_token.is_empty()
+            || raw_token.len() > MAX_TOKEN_BYTES
+            || raw_token
+                .bytes()
+                .any(|byte| byte != b'\t' && (byte < b' ' || byte == 0x7f))
+        {
             return Err(ClientError::InvalidConfig("token"));
         }
-        let mut authorization = HeaderValue::from_str(&format!("Bearer {raw_token}"))
-            .map_err(|_| ClientError::InvalidConfig("token"))?;
-        authorization.set_sensitive(true);
         let config = Self {
             endpoint,
             model_alias: model_alias.into(),
-            authorization,
+            authorization: format!("Bearer {raw_token}"),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             writing: false,
@@ -263,12 +266,9 @@ pub enum ClientError {
     InvalidConfig(&'static str),
     #[error("semantic request exceeded the context contract")]
     InvalidRequest,
-    #[error("failed to construct the loopback endpoint")]
-    InvalidEndpoint,
-    #[error("failed to construct the bounded HTTP client")]
-    Client(#[source] reqwest::Error),
+    /// The connection failed, closed early or broke HTTP/1.1 framing.
     #[error("semantic HTTP transport failed")]
-    Transport(#[source] reqwest::Error),
+    Transport(#[source] std::io::Error),
     #[error("semantic endpoint returned HTTP status {0}")]
     UnexpectedStatus(StatusCode),
     #[error("semantic endpoint returned an unexpected content type")]
@@ -291,10 +291,7 @@ impl ClientError {
         match self {
             Self::Cancelled => "cancelled",
             Self::Timeout => "timeout",
-            Self::InvalidConfig(_)
-            | Self::InvalidRequest
-            | Self::InvalidEndpoint
-            | Self::Client(_) => "configuration",
+            Self::InvalidConfig(_) | Self::InvalidRequest => "configuration",
             Self::Transport(_) => "transport",
             Self::UnexpectedStatus(_) => "http_status",
             Self::UnexpectedContentType | Self::ResponseTooLarge | Self::MalformedStream => {
@@ -312,31 +309,19 @@ pub trait RequestObserver: fmt::Debug + Send + Sync {
     fn observe(&self, body: &[u8]);
 }
 
+/// The loopback runtime's client. Each request uses its own connection:
+/// no proxy, redirect, retry or pooling.
 #[derive(Clone, Debug)]
 pub struct SemanticClient {
     config: SemanticClientConfig,
-    client: Client,
-    base_url: Url,
     request_observer: Option<Arc<dyn RequestObserver>>,
 }
 
 impl SemanticClient {
     pub fn new(config: SemanticClientConfig) -> Result<Self, ClientError> {
         config.validate()?;
-        let base_url = Url::parse(&format!("http://{}/", config.endpoint))
-            .map_err(|_| ClientError::InvalidEndpoint)?;
-        let client = Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(config.connect_timeout)
-            .timeout(config.request_timeout)
-            .pool_max_idle_per_host(1)
-            .build()
-            .map_err(ClientError::Client)?;
         Ok(Self {
             config,
-            client,
-            base_url,
             request_observer: None,
         })
     }
@@ -363,36 +348,37 @@ impl SemanticClient {
         body: Vec<u8>,
         timeout: Option<Duration>,
     ) -> Result<Response, ClientError> {
-        let url = self.runtime_url(path)?;
+        let path = runtime_path(path)?;
         if let Some(observer) = &self.request_observer {
             observer.observe(&body);
         }
-        let mut request = self
-            .client
-            .post(url)
-            .header(AUTHORIZATION, self.config.authorization.clone())
-            .header(CONTENT_TYPE, "application/json")
-            .body(body);
-        if let Some(timeout) = timeout {
-            request = request.timeout(timeout);
-        }
-        request.send().await.map_err(transport_error)
+        self.exchange(Method::Post, path, Some(&body), timeout)
+            .await
     }
 
-    fn runtime_url(&self, path: &str) -> Result<Url, ClientError> {
-        let segment = path
-            .strip_prefix('/')
-            .filter(|segment| {
-                !segment.is_empty()
-                    && segment.len() <= MAX_RUNTIME_PATH_BYTES
-                    && segment
-                        .bytes()
-                        .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
-            })
-            .ok_or(ClientError::InvalidConfig("runtime_path"))?;
-        self.base_url
-            .join(segment)
-            .map_err(|_| ClientError::InvalidEndpoint)
+    /// One request to the runtime, bounded as a whole by `timeout` or else
+    /// by the client's request timeout.
+    async fn exchange(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&[u8]>,
+        timeout: Option<Duration>,
+    ) -> Result<Response, ClientError> {
+        let deadline = tokio::time::Instant::now() + timeout.unwrap_or(self.config.request_timeout);
+        let request = wire::Request {
+            method,
+            path,
+            authorization: &self.config.authorization,
+            body,
+        };
+        wire::exchange(
+            self.config.endpoint,
+            request,
+            self.config.connect_timeout,
+            deadline,
+        )
+        .await
     }
 
     pub async fn probe_health(
@@ -576,23 +562,17 @@ impl SemanticClient {
         if response.status() != StatusCode::OK {
             return Err(ClientError::UnexpectedStatus(response.status()));
         }
-        ensure_content_type(response.headers(), "application/json")?;
+        ensure_content_type(&response, "application/json")?;
         read_bounded_body(response, MAX_WARM_UP_RESPONSE_BYTES).await?;
         Ok(())
     }
 
     async fn probe_health_inner(&self) -> Result<HealthStatus, ClientError> {
-        let response = self
-            .client
-            .get(self.runtime_url("/health")?)
-            .header(AUTHORIZATION, self.config.authorization.clone())
-            .send()
-            .await
-            .map_err(transport_error)?;
+        let response = self.exchange(Method::Get, "/health", None, None).await?;
         match response.status() {
             StatusCode::SERVICE_UNAVAILABLE => Ok(HealthStatus::Loading),
             StatusCode::OK => {
-                ensure_content_type(response.headers(), "application/json")?;
+                ensure_content_type(&response, "application/json")?;
                 let body = read_bounded_body(response, MAX_RESPONSE_BYTES).await?;
                 let health: HealthResponse =
                     serde_json::from_slice(&body).map_err(|_| ClientError::MalformedStream)?;
@@ -643,7 +623,7 @@ impl SemanticClient {
         if response.status() != StatusCode::OK {
             return Err(ClientError::UnexpectedStatus(response.status()));
         }
-        ensure_content_type(response.headers(), "text/event-stream")?;
+        ensure_content_type(&response, "text/event-stream")?;
         read_stream(
             response,
             request_body_bytes,
@@ -666,7 +646,7 @@ impl SemanticClient {
         if response.status() != StatusCode::OK {
             return Err(ClientError::UnexpectedStatus(response.status()));
         }
-        ensure_content_type(response.headers(), "application/json")?;
+        ensure_content_type(&response, "application/json")?;
         let body = read_bounded_body(response, MAX_RESPONSE_BYTES).await?;
         let challenge: TokenizeResponse =
             serde_json::from_slice(&body).map_err(|_| ClientError::MalformedStream)?;
@@ -796,6 +776,22 @@ impl CompletionProvider for SemanticClient {
         )
         .await
         .map(Result::ok)
+    }
+}
+
+/// `path` if it is one lowercase segment such as `/completion`, so the
+/// credential can reach only this runtime's own endpoints.
+fn runtime_path(path: &str) -> Result<&str, ClientError> {
+    let segment = path.strip_prefix('/').unwrap_or_default();
+    if !segment.is_empty()
+        && segment.len() <= MAX_RUNTIME_PATH_BYTES
+        && segment
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+    {
+        Ok(path)
+    } else {
+        Err(ClientError::InvalidConfig("runtime_path"))
     }
 }
 
@@ -1011,7 +1007,7 @@ async fn read_stream(
                     request_body_bytes, response_body_bytes,
                 });
             },
-            result = response.chunk() => result.map_err(transport_error)?,
+            result = response.chunk() => result?,
         };
         let Some(chunk) = chunk else {
             break;

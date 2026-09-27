@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use badi_broker::semantic::client::{ClientError, SemanticClient};
 use badi_broker::semantic::wire::{
     NativeStreamChunk, StatusCode, TokenizeResponse, ensure_content_type, event_data,
-    next_event_boundary, read_bounded_body, transport_error,
+    next_event_boundary, read_bounded_body,
 };
 
 const MAX_BYTES: usize = 64 * 1024;
@@ -229,7 +229,7 @@ async fn fixed_json(
     if response.status() != StatusCode::OK {
         return Err(ClientError::UnexpectedStatus(response.status()));
     }
-    ensure_content_type(response.headers(), "application/json")?;
+    ensure_content_type(&response, "application/json")?;
     serde_json::from_slice(&read_bounded_body(response, MAX_BYTES).await?)
         .map_err(|_| ClientError::MalformedStream)
 }
@@ -264,11 +264,11 @@ pub(crate) async fn completion(
         if response.status() != StatusCode::OK {
             return Err(ClientError::UnexpectedStatus(response.status()));
         }
-        ensure_content_type(response.headers(), "text/event-stream")?;
+        ensure_content_type(&response, "text/event-stream")?;
         let mut result = Observation::default();
         let mut pending = Vec::new();
         let mut received = 0;
-        while let Some(bytes) = response.chunk().await.map_err(transport_error)? {
+        while let Some(bytes) = response.chunk().await? {
             received += bytes.len();
             if received > MAX_BYTES {
                 return Err(ClientError::ResponseTooLarge);
@@ -426,12 +426,14 @@ mod tests {
             socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"index\":0,\"content\":\"copper \",\"stop\":false}\n\n").await.unwrap();
             cancel.cancel();
             let mut byte = [0; 1];
-            assert_eq!(
-                tokio::time::timeout(Duration::from_secs(1), socket.read(&mut byte))
-                    .await
-                    .unwrap()
-                    .unwrap(),
-                0
+            // The client closes at once: end of stream, or a reset when it
+            // abandons bytes it has not read.
+            let read = tokio::time::timeout(Duration::from_secs(1), socket.read(&mut byte))
+                .await
+                .unwrap();
+            assert!(
+                matches!(read, Ok(0))
+                    || read.is_err_and(|error| error.kind() == std::io::ErrorKind::ConnectionReset)
             );
         });
         assert!(matches!(

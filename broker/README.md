@@ -137,6 +137,19 @@ Adapter deadlines already exceed the explicit limit: the shared editor client
 waits 2 s per RPC and the Bash builtin 3 s; the Fcitx addon has no suggestion
 deadline of its own.
 
+The broker reaches its owned runtime through a minimal HTTP/1.1 client
+(`semantic::wire`) over loopback TCP only: one connection per request, sent
+with the runtime's bearer token and `Connection: close`, never proxied,
+redirected, retried or pooled. A loopback connect measured about 12 µs, so
+keep-alive would not shorten a request. Reply heads are limited to 8 KiB and
+bodies to each endpoint's byte limit; `Content-Length`, chunked and
+close-delimited bodies are decoded, and broken framing or an early close is a
+`transport` failure. The request timeout bounds the connection, the head and
+every body read. Abandoning a request, whether cancelled, out of budget or
+already holding enough words, closes its connection at once (as a TCP reset
+when reply bytes are still unread); that close is how the runtime learns the
+request was abandoned.
+
 The desktop service keeps the idle runtime resident: `MemorySwapMax=0` stops
 its weights, most of which the pinned runtime repacks into about 760 MiB of
 anonymous memory, from being swapped out, and `CPUWeight=1000` lets a short

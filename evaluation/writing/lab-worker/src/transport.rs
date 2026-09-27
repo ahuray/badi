@@ -15,7 +15,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use badi_broker::semantic::client::{ClientError, RequestObserver, SemanticClient};
 use badi_broker::semantic::wire::{
     NativeStreamChunk, StatusCode, TokenizeResponse, ensure_content_type, event_data,
-    next_event_boundary, read_bounded_body, transport_error,
+    next_event_boundary, read_bounded_body,
 };
 
 const MAX_LAB_RESPONSE_BYTES: usize = 128 * 1024;
@@ -175,7 +175,7 @@ pub(crate) async fn apply_template(
         if response.status() != StatusCode::OK {
             return Err(ClientError::UnexpectedStatus(response.status()));
         }
-        ensure_content_type(response.headers(), "application/json")?;
+        ensure_content_type(&response, "application/json")?;
         let body = read_bounded_body(response, MAX_LAB_RESPONSE_BYTES).await?;
         let value: Value =
             serde_json::from_slice(&body).map_err(|_| ClientError::MalformedStream)?;
@@ -212,7 +212,7 @@ pub(crate) async fn token_count(
         if response.status() != StatusCode::OK {
             return Err(ClientError::UnexpectedStatus(response.status()));
         }
-        ensure_content_type(response.headers(), "application/json")?;
+        ensure_content_type(&response, "application/json")?;
         let body = read_bounded_body(response, MAX_LAB_RESPONSE_BYTES).await?;
         let result: TokenizeResponse =
             serde_json::from_slice(&body).map_err(|_| ClientError::MalformedStream)?;
@@ -257,7 +257,7 @@ pub(crate) async fn stream(
     if response.status() != StatusCode::OK {
         return Err(ClientError::UnexpectedStatus(response.status()));
     }
-    ensure_content_type(response.headers(), "text/event-stream")?;
+    ensure_content_type(&response, "text/event-stream")?;
     let mut pending = Vec::new();
     let mut received = 0_usize;
     loop {
@@ -268,7 +268,7 @@ pub(crate) async fn stream(
                 result.deadline = true;
                 break;
             },
-            bytes = response.chunk() => bytes.map_err(transport_error)?,
+            bytes = response.chunk() => bytes?,
         };
         let Some(bytes) = bytes else {
             return Err(ClientError::MalformedStream);

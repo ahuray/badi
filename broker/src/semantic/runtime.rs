@@ -9,7 +9,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use reqwest::StatusCode;
 use rustix::process::{Pid, Signal, kill_process_group};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -27,6 +26,7 @@ use crate::provider::{
 
 use super::client::{ClientError, HealthStatus, SemanticClient, SemanticClientConfig};
 use super::provenance::{ProvenanceError, VerifiedDirectoryManifest, VerifiedFile};
+use super::wire::StatusCode;
 
 pub const LLAMA_CPP_LAUNCH_CONTRACT_ID: &str = "badi.llama-cpp-owned-eval.v1";
 pub const CONTEXT_SIZE: u16 = 512;
