@@ -5,6 +5,9 @@ from dataclasses import dataclass
 import math
 import unicodedata
 
+from contract import RIGHT_TO_LEFT
+from geometry import CALIBRATED
+
 
 def _number(value, minimum=-100000, maximum=100000):
     return type(value) in (int, float) and math.isfinite(value) and minimum <= value <= maximum
@@ -41,7 +44,7 @@ class CaretGeometry:
 
 
 def ltr_text(text):
-    return not any(unicodedata.bidirectional(char) in ("R", "AL", "AN") for char in text)
+    return not any(unicodedata.bidirectional(char) in RIGHT_TO_LEFT for char in text)
 
 
 def mapped_caret(focus):
@@ -52,7 +55,7 @@ def mapped_caret(focus):
         scale = geometry["scale"]
         if (type(binding["process_id"]) is not int or binding["process_id"] <= 0
                 or window["pid"] != binding["process_id"] or window["xwayland"] is not False
-                or geometry["coordinate_convention"] != "atspi_frame_calibrated"
+                or geometry["coordinate_convention"] != CALIBRATED
                 or geometry["caret_edge"] != "right"
                 or not _number(scale, .5, 4) or monitor["scale"] != scale or monitor["transform"] != 0
                 or not isinstance(monitor["name"], str) or not monitor["name"] or len(monitor["name"]) > 64
