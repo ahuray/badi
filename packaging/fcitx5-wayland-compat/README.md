@@ -179,8 +179,8 @@ unchanged, and `--broker-only` never touches it. The installer:
    ```
 
    The existing `50-badi.conf` environment drop-in is kept. Replaced files go to
-   the installer's backup directory and `changed-files.json`; the install
-   receipt records the new digests.
+   the installer's backup directory and its `changes.json`; the install receipt
+   records the new digests.
 4. Removes the retired `fcitx5-5.1.21` directory, after backing it up, only when
    no service command references it and it holds exactly its three files.
    Otherwise the installer keeps it and names it in its output.
@@ -201,8 +201,8 @@ it separately from the synthetic protocol proof.
 
 ## Rollback
 
-Use the directory that the installer printed as `Rollback files and
-changed-file list`. The desktop must be unlocked; this helper rechecks all five
+Use the directory that the installer printed as `Replaced files and their
+rollback map`. The desktop must be unlocked; this helper rechecks all five
 lock flags before each service operation:
 
 ```sh
@@ -234,22 +234,13 @@ compat_fcitx_service start
 
 To restore the exact pre-install frontend files instead, including a retired
 5.1.21 directory, replace the `rm` line with this. Other Badi files keep their
-update:
+update, and a path changed since that installation is listed rather than
+overwritten:
 
 ```sh
-python3 - ~/.local/state/badi/install-backups/NNN <<'PY'
-import json, pathlib, shutil, sys
-home, backup = pathlib.Path.home(), pathlib.Path(sys.argv[1])
-for relative in json.loads((backup / 'changed-files.json').read_text()):
-    if not (relative.startswith('.local/lib/badi/compat/') or relative.endswith('/60-badi-wayland-compat.conf')):
-        continue
-    target, saved = home / relative, backup / relative
-    if saved.exists():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(saved, target)
-    else:
-        target.unlink(missing_ok=True)
-PY
+python3 scripts/badi_install.py restore ~/.local/state/badi/install-backups/<UTC time> \
+  --only .local/lib/badi/compat \
+  --only .config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf
 ```
 
 Verify the result in the running process instead of inferring it from a

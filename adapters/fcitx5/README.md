@@ -334,16 +334,26 @@ the exact application identity absent from its default Wayland frontend on this
 machine. Relaunch existing Xournal++ windows through the desktop launcher or Badi
 panel. Omawrite uses the existing `QT_IM_MODULE=fcitx` configuration.
 
-Replaced files are backed up under `~/.local/state/badi/install-backups/<timestamp>`
-with `changed-files.json`. Roll back from the actual unlocked graphical session:
+Each installer run that changes a file backs up what it replaced under
+`~/.local/state/badi/install-backups/<UTC time>/` and prints that directory.
+`changes.json` lists every change in order: its home-relative `path`, `action`
+(`create`, `replace` or `remove`), the original's location in the backup
+(`saved`, under `home/`) and the `sha256` (or `symlink`) the installation left.
+Files whose bytes and mode already match are neither rewritten nor backed up, so
+an unchanged reinstall creates no backup. The installer keeps the newest three
+backups and deletes older ones in that directory, including earlier-format
+backups named by nanosecond or local `YYYYmmdd-HHMMSS` time. Roll back from the
+actual unlocked graphical session:
 
-1. Select the applicable backup and inspect its changed-file list. An observed-app
+1. Select the applicable backup and inspect its `changes.json`. An observed-app
    installation also records `accessibility-setting.json`, containing the prior
    `bus_enabled` and `toolkit_accessibility` booleans. For a full rollback of the
    2026-09-07 task, use the earlier `accessibility-before-task.json` receipt copied
    into that backup: the temporary probe preceded installation, so the installer's
    receipt alone can describe an already enabled state. Choose the receipt for
    the intended restore point; do not assume missing receipts mean `false`.
+   Pruning an older backup first moves its `accessibility-*.json` receipts to
+   `~/.local/state/badi/install-backups/notes/<backup name>/`.
 2. **Stop `badi-accessibility.service` before replacing its Python files**, and
    stop `badi-broker.service` before restoring the broker. A broker-only rollback
    leaves the helper and Fcitx running. Disable a service before removing its unit
@@ -352,15 +362,22 @@ with `changed-files.json`. Roll back from the actual unlocked graphical session:
    do not blanket-disable them. The backup does not record prior service activity
    or enablement, and absence of a backed-up user unit does not rule out an existing
    system-provided unit.
-3. Restore the entries in `changed-files.json` from their matching backup paths;
-   remove only listed new files confirmed to have had no predecessor. Include the
-   observed-app startup files under the configured `XDG_CONFIG_HOME`
-   (`chromium-flags.conf`, `brave-origin-flags.conf`, `codex-flags.conf`,
-   `code-flags.conf` or `cursor-flags.conf`), plus the Fcitx drop-in and launcher
-   overrides when listed. To undo only the renderer accessibility flag, delete the
+3. Restore the files, newest backup first when undoing several installations:
+
+   ```sh
+   python3 scripts/badi_install.py restore ~/.local/state/badi/install-backups/<UTC time>
+   ```
+
+   It restores each replaced or removed original, deletes files that had no
+   predecessor, and leaves (and lists, exiting 1) every path changed since that
+   installation, preserving later unrelated edits. That covers the observed-app
+   startup files under the configured `XDG_CONFIG_HOME` (`chromium-flags.conf`,
+   `brave-origin-flags.conf`, `codex-flags.conf`, `code-flags.conf` or
+   `cursor-flags.conf`), the Fcitx drop-ins, launcher overrides and command
+   links. `--only PATH` limits it to one home-relative path or folder. To undo
+   only the renderer accessibility flag, delete the
    `# Badi: renderer accessibility for the focused-field observer` line and the
-   flag line after it. Preserve subsequent unrelated edits rather than
-   overwriting them with an older whole file. Run
+   flag line after it instead. Run
    `systemctl --user daemon-reload`, restore the prior broker/helper running states,
    and restart `omarchy-fcitx5.service` for a complete native rollback. Do not start
    a newly introduced helper whose unit has just been removed. Save work and

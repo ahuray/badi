@@ -1,23 +1,46 @@
+#!/usr/bin/env python3
 """Shared contracts of Badi's user-local installers and its desktop CLI.
 
 Installed next to the `badi` CLI, which imports it; the installers import it
-from the checkout. It holds content-free install receipts, atomic file writes,
-the systemd and lock-state queries both sides make, and the grant shape of a
+from the checkout. It holds content-free install receipts, the backed-up file
+changes of one installer run and their rollback, atomic file writes, the
+systemd and lock-state queries both sides make, and the grant shape of a
 settings subject.
+
+Run as a script, it restores one installation backup:
+    python3 scripts/badi_install.py restore BACKUP_DIRECTORY [--only PATH]...
 """
 
+import argparse
+import calendar
 import datetime
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
+import stat
 import subprocess
+import sys
 import tempfile
 import time
 
+STATE_DIRECTORY = Path(".local/state/badi")
 SCHEMA = "badi.install-receipt.v1"
-RECEIPT_DIRECTORY = Path(".local/state/badi/receipts")
+RECEIPT_DIRECTORY = STATE_DIRECTORY / "receipts"
+BACKUP_SCHEMA = "badi.install-backup.v1"
+# Each installer keeps its backups in its own directory, newest KEEP_BACKUPS only.
+BACKUP_DIRECTORIES = {"desktop": "install-backups", "editors": "editor-backups", "omarchy-ui": "ui-backups"}
+KEEP_BACKUPS = 3
+BACKUP_MAP = "changes.json"
+# Records of desktop-wide settings as they were before an installation changed
+# them. Pruning moves them to <backup directory>/notes/<backup name>/ first,
+# since no later backup can say what the setting was before Badi.
+KEPT_NOTES = "accessibility-*.json"
+# Backup directory names: the current UTC time, and the two earlier formats
+# (time_ns digits; local YYYYmmdd-HHMMSS) that pruning also recognizes.
+BACKUP_NAME = re.compile(r"(\d{8}T\d{6})\.(\d{9})Z")
 VERSIONED = frozenset(("badi-broker", "badictl"))
 VERSION_LINE = re.compile(r"[a-z][a-z-]* \S+ commit=([0-9a-f]{40}|unknown) dirty=(true|false|unknown)")
 UNKNOWN = {"commit": "unknown", "dirty": None}
@@ -170,7 +193,8 @@ def write_receipt(home, installer, source, files, now=None):
     Badi binaries record the identity embedded in their own `--version` line,
     since an installer may copy one built from an earlier checkout. Entries for
     files this run did not install are kept with their own earlier identity, so
-    a partial update never claims untouched files are current.
+    a partial update never claims untouched files are current; so are entries
+    whose recorded digest still matches, since those bytes were not rewritten.
     """
     home = Path(home)
     path = receipt_path(home, installer)
@@ -184,12 +208,15 @@ def write_receipt(home, installer, source, files, now=None):
     except (OSError, ValueError):
         pass
     for target in dict.fromkeys(Path(item) for item in files):
-        entry = {"sha256": file_sha256(target), "installed_at": installed_at,
+        key, digest = home_relative(home, target), file_sha256(target)
+        if isinstance(entries.get(key), dict) and entries[key].get("sha256") == digest:
+            continue  # Bytes this run found already installed keep their recorded identity.
+        entry = {"sha256": digest, "installed_at": installed_at,
                  "commit": source["commit"], "dirty": source["dirty"]}
         if target.name in VERSIONED:
             entry["version"] = binary_version(target)
             entry.update(version_identity(entry["version"]))
-        entries[home_relative(home, target)] = entry
+        entries[key] = entry
     receipt = {"schema": SCHEMA, "installer": installer, "installed_at": installed_at,
                "source": {"commit": source["commit"], "dirty": source["dirty"]},
                "files": dict(sorted(entries.items()))}
@@ -220,3 +247,270 @@ def store(path, receipt):
     """Atomically write a private receipt."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     atomic_write(path, (json.dumps(receipt, indent=2) + "\n").encode())
+
+
+def backup_time(name):
+    """The creation time in ns encoded by a backup directory name, or None."""
+    try:
+        if match := BACKUP_NAME.fullmatch(name):
+            return calendar.timegm(time.strptime(match[1], "%Y%m%dT%H%M%S")) * 10**9 + int(match[2])
+        if re.fullmatch(r"\d{19}", name):
+            return int(name)
+        if re.fullmatch(r"\d{8}-\d{6}", name):
+            return int(time.mktime(time.strptime(name, "%Y%m%d-%H%M%S"))) * 10**9
+    except (ValueError, OverflowError):
+        pass
+    return None
+
+
+def prune_backups(home, installer, keep=KEEP_BACKUPS):
+    """Delete all but the newest `keep` backups of one installer; returns what was deleted.
+
+    Only this installer's backup directory is searched, and only real,
+    user-owned directories whose names are a backup time are candidates, so
+    unrelated or unexpected entries are never removed. Prior-setting notes
+    are moved to notes/ first.
+    """
+    root = Path(home) / STATE_DIRECTORY / BACKUP_DIRECTORIES[installer]
+    if root.is_symlink() or not root.is_dir():
+        return []
+    backups = []
+    for entry in root.iterdir():
+        created = backup_time(entry.name)
+        if created is None:
+            continue
+        info = entry.lstat()
+        if stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid():
+            backups.append((created, entry.name, entry))
+    backups.sort()
+    doomed = [entry for _created, _name, entry in backups[:max(0, len(backups) - keep)]]
+    for entry in doomed:
+        notes = [path for path in entry.glob(KEPT_NOTES) if path.is_file() and not path.is_symlink()]
+        if notes:
+            kept = root / "notes" / entry.name
+            kept.mkdir(parents=True, exist_ok=True, mode=0o700)
+            for path in notes:
+                shutil.copy2(path, kept / path.name)
+        shutil.rmtree(entry)
+    return doomed
+
+
+class Installation:
+    """The file changes of one installer run, each backed up before it happens.
+
+    A file whose bytes and mode (or link) already match is neither backed up
+    nor rewritten. The backup directory appears with the first real change, as
+    ~/.local/state/badi/{install,editor,ui}-backups/<UTC time>/ holding changes.json
+    and each replaced or removed original under home/ (root/ for a path
+    outside home). changes.json lists every change in order; `restore` undoes
+    them. `current` lists every file that now holds this run's content.
+    """
+
+    def __init__(self, home, installer):
+        self.home = Path(home)
+        self.installer = installer
+        self.directory = None
+        self.changes = []
+        self.current = []
+        self._created_at = None
+
+    def copy(self, source, target, mode=None):
+        """Install a file's bytes, with its own permissions unless `mode` is given."""
+        source = Path(source)
+        return self.write(target, source.read_bytes(), stat.S_IMODE(source.stat().st_mode) if mode is None else mode)
+
+    def write(self, target, data, mode=0o644, *, replace_link=False):
+        """Install `data` at `target`; True when the file changed."""
+        target = Path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        info = self._existing(target, replace_link)
+        self.current.append(target)
+        if info is not None and stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == mode \
+                and info.st_size == len(data) and target.read_bytes() == data:
+            return False
+        self._record(target, "replace" if info else "create", info, {"sha256": hashlib.sha256(data).hexdigest()})
+        atomic_write(target, data, mode)
+        return True
+
+    def link(self, target, destination, *, replace_link=False):
+        """Make `target` a symlink to `destination`; True when it changed."""
+        target = Path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_symlink() and os.readlink(target) == destination:
+            return False
+        info = self._existing(target, replace_link)
+        self._record(target, "replace" if info else "create", info, {"symlink": destination})
+        _replace_with_link(target, destination)
+        return True
+
+    def remove(self, path):
+        """Back up and delete one file or symlink (never what a symlink names)."""
+        path = Path(path)
+        info = path.lstat()
+        if not (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)) or info.st_uid != os.getuid():
+            raise RuntimeError(f"Unexpected file ownership/type: {path}")
+        self._record(path, "remove", info, {})
+        path.unlink()
+
+    def note(self, name, document):
+        """Keep a private JSON record beside the changes, such as a prior setting."""
+        path = self._backup_directory() / name
+        with path.open("x") as stream:
+            os.chmod(path, 0o600)
+            json.dump(document, stream)
+        return path
+
+    def finish(self, keep=KEEP_BACKUPS):
+        """Name the backup and prune older ones of this installer once its files are in place."""
+        if self.directory:
+            print(f"Replaced files and their rollback map: {self.directory}", flush=True)
+        else:
+            print("Every installed file was already current; no backup was needed.", flush=True)
+        pruned = prune_backups(self.home, self.installer, keep)
+        if pruned:
+            print(f"Removed {len(pruned)} older {self.installer} backup(s); the newest {keep} are kept.", flush=True)
+        return pruned
+
+    def _existing(self, target, replace_link):
+        try:
+            info = target.lstat()
+        except FileNotFoundError:
+            return None
+        if stat.S_ISLNK(info.st_mode):
+            if not replace_link:
+                raise RuntimeError(f"Inspect existing symlink before replacing {target}")
+        elif not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise RuntimeError(f"Unexpected file ownership/type: {target}")
+        return info
+
+    def _record(self, target, action, info, installed):
+        # The original is saved and the map written before the target changes,
+        # so recovery stays discoverable even if this or a later step fails.
+        directory = self._backup_directory()
+        entry = {"path": home_relative(self.home, target), "action": action}
+        if info is not None:
+            key = entry["path"]
+            saved = directory / ("root" + key if key.startswith("/") else "home/" + key)
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(target, saved, follow_symlinks=False)
+            entry["saved"] = str(saved.relative_to(directory))
+        self.changes.append({**entry, **installed})
+        self._store_map()
+
+    def _backup_directory(self):
+        if self.directory is None:
+            root = self.home / STATE_DIRECTORY / BACKUP_DIRECTORIES[self.installer]
+            root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if root.is_symlink():
+                raise RuntimeError(f"Inspect the symlinked backup directory {root}")
+            while self.directory is None:
+                moment = time.time_ns()
+                candidate = root / (time.strftime("%Y%m%dT%H%M%S", time.gmtime(moment // 10**9))
+                                    + f".{moment % 10**9:09d}Z")
+                try:
+                    candidate.mkdir(mode=0o700)
+                except FileExistsError:
+                    continue
+                self.directory = candidate
+                self._created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(moment // 10**9))
+            self._store_map()
+        return self.directory
+
+    def _store_map(self):
+        atomic_write(self.directory / BACKUP_MAP, (json.dumps(
+            {"schema": BACKUP_SCHEMA, "installer": self.installer, "home": str(self.home),
+             "created_at": self._created_at, "changes": self.changes}, indent=2) + "\n").encode())
+
+
+def _replace_with_link(target, destination):
+    staged = target.with_name(f".{target.name}.{os.getpid()}.link")
+    staged.unlink(missing_ok=True)
+    staged.symlink_to(destination)
+    try:
+        staged.replace(target)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def _left_by_installation(target, entry):
+    """Whether `target` is still exactly what this installation left there."""
+    if entry["action"] == "remove":
+        return not os.path.lexists(target)
+    if "symlink" in entry:
+        return target.is_symlink() and os.readlink(target) == entry["symlink"]
+    return not target.is_symlink() and target.is_file() and file_sha256(target) == entry.get("sha256")
+
+
+def _holds_original(target, saved):
+    """Whether `target` already is the original a backup saved (or, with none, absent)."""
+    if saved is None:
+        return not os.path.lexists(target)
+    if saved.is_symlink():
+        return target.is_symlink() and os.readlink(target) == os.readlink(saved)
+    return not target.is_symlink() and target.is_file() and file_sha256(target) == file_sha256(saved)
+
+
+def restore(backup, only=()):
+    """Undo one backup's changes, newest first; returns the paths left unrestored.
+
+    A path changed again since that installation (by a later installation or
+    by hand) is reported instead of overwritten; one already holding its
+    original is skipped, so a restore can be repeated. `only` limits the
+    restore to these paths and everything below them.
+    """
+    backup = Path(backup)
+    document = json.loads((backup / BACKUP_MAP).read_text())
+    if not isinstance(document, dict) or document.get("schema") != BACKUP_SCHEMA:
+        raise RuntimeError(f"{backup / BACKUP_MAP} is not a Badi installation backup map")
+    home = Path(document["home"])
+    prefixes = [item.rstrip("/") for item in only]
+    changed = []
+    for entry in reversed(document["changes"]):
+        path = entry["path"]
+        if prefixes and not any(path == prefix or path.startswith(prefix + "/") for prefix in prefixes):
+            continue
+        target = home / path
+        saved = backup / entry["saved"] if entry.get("saved") else None
+        if _holds_original(target, saved):
+            continue
+        if not _left_by_installation(target, entry):
+            changed.append(path)
+            print(f"Changed since that installation, left as it is: {target}", flush=True)
+            continue
+        if saved is None:
+            target.unlink()
+            print(f"Removed {target}", flush=True)
+        elif saved.is_symlink():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _replace_with_link(target, os.readlink(saved))
+            print(f"Restored {target}", flush=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=target.parent, prefix=f".{target.name}.", delete=False) as stream:
+                staged = Path(stream.name)
+            try:
+                shutil.copy2(saved, staged)
+                staged.replace(target)
+            finally:
+                staged.unlink(missing_ok=True)
+            print(f"Restored {target}", flush=True)
+    return changed
+
+
+def main(arguments=None):
+    parser = argparse.ArgumentParser(description="Restore the files one Badi installation replaced.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    command = commands.add_parser("restore", help="Undo one backup's file changes; restore the newest backup first")
+    command.add_argument("backup", type=Path, help="The backup directory an installer printed")
+    command.add_argument("--only", action="append", default=[], metavar="PATH",
+                         help="Restore only this home-relative path and what lies below it (repeatable)")
+    args = parser.parse_args(arguments)
+    changed = restore(args.backup, args.only)
+    if changed:
+        print(f"{len(changed)} path(s) changed after that installation; inspect them against {args.backup}.",
+              file=sys.stderr)
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

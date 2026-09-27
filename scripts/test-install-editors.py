@@ -1,6 +1,8 @@
 """Keep editor installation local, idempotent and recoverable."""
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -21,11 +23,15 @@ class InstallEditorsTests(unittest.TestCase):
             rc = home / '.bashrc'
             original = '# My shell\n[[ $- == *i* ]] || return\nalias mine="echo local"\n'
             rc.write_text(original)
+            backups = home / '.local/state/badi/editor-backups'
             with patch.object(installer.Path, 'home', return_value=home), \
                  patch.object(installer, 'build_shell_preview', return_value=b'test display builtin') as build, \
-                 patch('sys.argv', ['install-editors.py', '--bash']):
+                 patch('sys.argv', ['install-editors.py', '--bash']), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
                 installer.main()
                 first = rc.read_text()
+                [backup] = backups.iterdir()
+                installed = {path: path.stat().st_mtime_ns for path in (home / '.local/lib/badi/editors').rglob('*')}
                 installer.main()
             self.assertEqual(build.call_count, 2)
             module = home / '.local/lib/badi/editors/shell/badi-preview.so'
@@ -34,13 +40,14 @@ class InstallEditorsTests(unittest.TestCase):
             self.assertTrue(first.startswith(original))
             self.assertEqual(first, rc.read_text())
             self.assertEqual(first.count('source "$HOME/.local/lib/badi/editors/shell/badi.bash"'), 1)
-            backups = list((home / '.local/state/badi/editor-backups').iterdir())
-            originals = []
-            for backup in backups:
-                for entry in json.loads((backup / 'changes.json').read_text()):
-                    if entry['path'] == str(rc):
-                        originals.append((backup / entry['backup']).read_text())
-            self.assertEqual(originals, [original])
+            self.assertEqual(list(backups.iterdir()), [backup], 'An unchanged reinstall makes no backup')
+            self.assertEqual({path: path.stat().st_mtime_ns for path in installed}, installed,
+                             'Identical files are not rewritten')
+            self.assertIn('already current; no backup was needed', output.getvalue())
+            changes = json.loads((backup / 'changes.json').read_text())['changes']
+            rc_change, = (entry for entry in changes if entry['path'] == '.bashrc')
+            self.assertEqual((backup / rc_change['saved']).read_text(), original)
+            self.assertTrue(all(entry['action'] == 'create' for entry in changes if entry['path'] != '.bashrc'))
             receipt = json.loads((home / '.local/state/badi/receipts/editors.json').read_text())
             self.assertEqual(receipt['installer'], 'editors')
             preview = receipt['files']['.local/lib/badi/editors/shell/badi-preview.so']

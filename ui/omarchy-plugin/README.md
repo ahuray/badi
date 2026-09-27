@@ -38,7 +38,9 @@ interface remains available.
 commands without restarting Fcitx or touching its addon/profile. It can run while
 the desktop is locked. The complete installer requires confirmed unlocked state
 before replacing native files and again before restarting the input service.
-Both modes retain backups and update the changed-file map as files are installed.
+Both modes skip files that are already identical, back up each file they
+replace or remove, and write its `changes.json` map before the change; see the
+Fcitx runbook for the layout and `scripts/badi_install.py restore`.
 
 To update the already installed Omarchy plugin:
 
@@ -50,7 +52,8 @@ python scripts/install-omarchy-ui.py --wait-for-unlock 3600
 
 The updater verifies the existing plugin identity and runs the strict source
 checks, snapshots the source, waits for explicit unlocked state, and backs up
-replaced plugin files under `~/.local/state/badi/ui-backups/`. It also backs up
+replaced plugin files under `~/.local/state/badi/ui-backups/<UTC time>/` (newest
+three kept; identical files are neither backed up nor rewritten). It also backs up
 and removes files earlier versions installed but the current manifest no longer
 loads (the former `Panel.qml`). It then uses the supported Omarchy shell restart
 and verifies that the new window answers IPC. It never unlocks the desktop. The

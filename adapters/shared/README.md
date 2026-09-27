@@ -28,10 +28,14 @@ badi app obsidian on
 badi app bash on
 ```
 
-The installer preserves existing plugin enablement and Bash configuration, keeps
-backups and a path map under `~/.local/state/badi/editor-backups/`, and replaces
-files atomically. Restore a mapped backup to its original path to roll back; a
-null backup denotes a newly installed file. It does not change Obsidian restricted
+The installer preserves existing plugin enablement and Bash configuration and
+replaces files atomically. It skips files that are already identical; a run that
+changes something backs up the replaced files and a `changes.json` map under
+`~/.local/state/badi/editor-backups/<UTC time>/` and keeps the newest three such
+backups. Roll back with
+`python3 scripts/badi_install.py restore ~/.local/state/badi/editor-backups/<UTC time>`:
+it restores replaced files, deletes newly created ones and leaves any path edited
+since. It does not change Obsidian restricted
 mode or edit any note. Reload Obsidian normally. The command palette includes
 **Badi: Request or accept words** and **Badi: Reconnect local model**.
 Open notes reconnect automatically after a broker restart with bounded backoff;

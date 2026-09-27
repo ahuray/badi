@@ -417,8 +417,9 @@ wrapper reads it:
 A file that already has the bare or `=complete` switch is left untouched. Any
 other value, or `--disable-renderer-accessibility`, stops the installer before
 it builds or changes anything, because a reduced mode is the user's choice.
-Changed files keep their mode (new files are `0600`), are backed up with
-`changed-files.json`, and are recorded in the desktop install receipt. Existing
+Changed files keep their mode (new files are `0600`), are backed up and listed
+in the desktop backup's `changes.json`, and are recorded in the desktop install
+receipt. Existing
 app windows keep the flags they started with; relaunch the app.
 
 Discord has no supported mechanism. `/usr/bin/discord` reads no flags file and

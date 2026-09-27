@@ -5,10 +5,8 @@ import argparse
 import json
 import os
 from pathlib import Path
-import shutil
 import stat
 import subprocess
-import time
 
 import badi_install
 
@@ -59,20 +57,15 @@ def main():
             print("Validated UI staged. Waiting for normal desktop unlock; the lock client remains intact.", flush=True)
         if not badi_install.poll(unlocked, args.wait_for_unlock, 2):
             raise RuntimeError("Desktop locked: no UI files changed. Unlock and rerun this command.")
-    backup = Path.home() / ".local/state/badi/ui-backups" / time.strftime("%Y%m%d-%H%M%S")
-    backup.mkdir(parents=True, mode=0o700)
+    installation = badi_install.Installation(Path.home(), "omarchy-ui")
     for name, (data, mode) in staged.items():
-        destination = target / name
-        if destination.exists() or destination.is_symlink():
-            shutil.copy2(destination, backup / name, follow_symlinks=False)
-        # Atomic replacement avoids the shell reading a partially written QML file.
-        badi_install.atomic_write(destination, data, mode)
+        # Atomic replacement avoids the shell reading a partially written QML
+        # file; a development link to a checkout file is replaced (and saved).
+        installation.write(target / name, data, mode, replace_link=True)
     for name in OBSOLETE:
-        stale = target / name
-        if stale.exists() or stale.is_symlink():
-            shutil.copy2(stale, backup / name, follow_symlinks=False)
-            stale.unlink()
-    print(f"Plugin backup: {backup}", flush=True)
+        if os.path.lexists(target / name):
+            installation.remove(target / name)
+    installation.finish()
     # The supported restart performs its own lock check. It also clears Qt's
     # cached nested components, which a plugin rescan alone may retain.
     subprocess.run(["omarchy", "restart", "shell"], check=True, timeout=30)

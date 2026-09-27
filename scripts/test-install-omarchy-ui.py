@@ -55,8 +55,11 @@ class UpdateTests(unittest.TestCase):
                 self.assertEqual((target / name).read_bytes(),
                                  (installer.ROOT / 'ui/omarchy-plugin' / name).read_bytes())
             [backup] = (home / '.local/state/badi/ui-backups').iterdir()
-            self.assertEqual((backup / 'Panel.qml').read_text(), 'legacy panel')
-            self.assertIn('"panel"', (backup / 'manifest.json').read_text())
+            changes = {entry['path']: entry for entry in json.loads((backup / 'changes.json').read_text())['changes']}
+            plugin = '.config/omarchy/plugins/io.github.ahuray.badi/'
+            self.assertEqual(changes[plugin + 'Panel.qml']['action'], 'remove')
+            self.assertEqual((backup / changes[plugin + 'Panel.qml']['saved']).read_text(), 'legacy panel')
+            self.assertIn('"panel"', (backup / changes[plugin + 'manifest.json']['saved']).read_text())
 
 
 if __name__ == '__main__':

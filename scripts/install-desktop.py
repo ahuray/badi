@@ -11,7 +11,6 @@ import mmap
 import os
 from pathlib import Path
 import re
-import shutil
 import shlex
 import socket
 import stat
@@ -136,7 +135,7 @@ def observed_config_target(home, config_home, filename):
     return target
 
 
-def enable_accessibility(backup):
+def enable_accessibility(installation):
     def status():
         value = run(["busctl", "--user", "--timeout=2s", "get-property", "org.a11y.Bus",
                      "/org/a11y/bus", "org.a11y.Status", "IsEnabled"],
@@ -151,10 +150,8 @@ def enable_accessibility(backup):
                   capture_output=True, text=True, timeout=3).stdout.strip()
     if toolkit not in ("true", "false"):
         raise RuntimeError("Cannot determine the prior toolkit accessibility state; it was not changed.")
-    receipt = backup / "accessibility-setting.json"
-    with receipt.open("x") as stream:
-        os.chmod(receipt, 0o600)
-        json.dump({"bus_enabled": previous, "toolkit_accessibility": toolkit == "true"}, stream)
+    installation.note("accessibility-setting.json",
+                      {"bus_enabled": previous, "toolkit_accessibility": toolkit == "true"})
     if not previous:
         require_unlocked()
         run(["busctl", "--user", "--timeout=2s", "set-property", "org.a11y.Bus", "/org/a11y/bus",
@@ -621,52 +618,16 @@ def xournal_launcher(home):
 
 
 def install_files(plan):
-    """Replace the installed files, backing up each one; returns the backup directory."""
+    """Install every file this run owns; returns the installation and its backup."""
     home, native = plan.home, plan.native
-    backup = home / ".local/state/badi/install-backups" / str(time.time_ns())
-    backup.mkdir(parents=True, mode=0o700)
-    changes = []
-    installed = []
-
-    def save(target):
-        # Keep recovery discoverable even if a later target or startup fails.
-        if target.exists() or target.is_symlink():
-            saved = backup / target.relative_to(home)
-            saved.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(target, saved, follow_symlinks=False)
-        changes.append(str(target.relative_to(home)))
-        (backup / "changed-files.json").write_text(json.dumps(changes, indent=2))
-
-    def write(target, data, mode):
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_symlink():
-            raise RuntimeError(f"Inspect existing symlink before replacing {target}")
-        save(target)
-        installed.append(target)
-        badi_install.atomic_write(target, data, mode)
-
-    def install(source, target):
-        write(target, source.read_bytes(), stat.S_IMODE(source.stat().st_mode))
-
-    def link(target, destination):
-        # A command link replaces an earlier copy, or the development link to
-        # this checkout's script; any other symlink is the user's.
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_symlink() and os.readlink(target) != destination \
-                and target.resolve() != ROOT / "scripts/badi-desktop.py":
-            raise RuntimeError(f"Inspect existing symlink before replacing {target}")
-        save(target)
-        staged = target.with_name(f".{target.name}.{os.getpid()}.link")
-        staged.unlink(missing_ok=True)
-        staged.symlink_to(destination)
-        staged.replace(target)
+    installation = badi_install.Installation(home, "desktop")
+    install = installation.copy
 
     def retire(files, folders):
-        # Recorded like replaced files: restoring changed-files.json from the
-        # backup recreates them, and they leave the install receipt's new set.
+        # Backed up like replaced files, so a restore recreates them, and they
+        # leave the install receipt's new set.
         for path in files:
-            save(path)
-            path.unlink()
+            installation.remove(path)
         for folder in folders:
             try:
                 folder.rmdir()
@@ -688,7 +649,11 @@ def install_files(plan):
     commands = {"badi": "../lib/badi/badi-desktop.py", "badi-desktop": "../lib/badi/badi-desktop.py",
                 "badictl": "../lib/badi/badictl"}
     for name, destination in commands.items():
-        link(home / ".local/bin" / name, destination)
+        target = home / ".local/bin" / name
+        # A command link replaces an earlier copy, or the development link to
+        # this checkout's script; any other symlink is the user's.
+        installation.link(target, destination,
+                          replace_link=target.is_symlink() and target.resolve() == ROOT / "scripts/badi-desktop.py")
     badi_install.forget(home, "desktop", [home / ".local/bin" / name for name in commands])
     install(ROOT / "packaging/io.github.ahuray.badi.desktop",
             home / ".local/share/applications/io.github.ahuray.badi.desktop")
@@ -709,13 +674,13 @@ def install_files(plan):
         for target, (original, text) in plan.flag_updates.items():
             if target.parent.resolve() != target.parent or target.is_symlink() or (target.read_text() if target.exists() else None) != original:
                 raise RuntimeError("App startup configuration changed during the build; newer user settings were preserved.")
-            write(target, text.encode(), stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600)
+            installation.write(target, text.encode(), stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600)
         if plan.installs_compat:
             root = plan.compat["root"]
             install(plan.compat["build"] / "libwaylandim.so", root / "addons/libwaylandim.so")
             install(plan.compat["build"] / "build-receipt.json", root / "build-receipt.json")
             install(ROOT / "packaging/fcitx5-wayland-compat/launch.py", root / "launch.py")
-            write(home / COMPAT_DROPIN, compat_dropin(plan.compat["version"]).encode(), 0o644)
+            installation.write(home / COMPAT_DROPIN, compat_dropin(plan.compat["version"]).encode(), 0o644)
             for directory, files in plan.compat["obsolete"]:
                 retire(files, (directory / "addons", directory))
     install(ROOT / "packaging/systemd/badi-broker.service", home / ".config/systemd/user/badi-broker.service")
@@ -730,19 +695,19 @@ def install_files(plan):
             json.dump(default_settings(), stream)
     launcher = xournal_launcher(home) if native else None
     if launcher:
-        write(launcher[0], launcher[1].encode(), 0o644)
+        installation.write(launcher[0], launcher[1].encode(), 0o644)
     if retired_files:
         print("Removed the retired Badi browser extension and native host; if the unpacked Badi extension "
               "is still loaded, remove it in brave://extensions.", flush=True)
     for path in retired_kept:
         print(f"Kept {path}: it holds unexpected entries from the retired browser extension. Inspect and remove it.", flush=True)
-    print(f"Rollback files and changed-file list: {backup}", flush=True)
-    receipt = badi_install.write_receipt(home, "desktop", plan.checkout, installed)
+    installation.finish()
+    receipt = badi_install.write_receipt(home, "desktop", plan.checkout, installation.current)
     print(f"Install receipt: {receipt}", flush=True)
-    return backup
+    return installation
 
 
-def restart(plan, backup):
+def restart(plan, installation):
     """Apply the installed files to the running services; returns the model's health."""
     home, runtime = plan.home, plan.runtime
     units = home / ".config/systemd/user"
@@ -766,9 +731,10 @@ def restart(plan, backup):
     run(["systemctl", "--user", "restart", "badi-accessibility.service"])
     wait_accessibility(home / ".local/lib/badi/accessibility/daemon.py", runtime / "badi/accessibility.sock")
     if plan.args.observed_app:
-        enable_accessibility(backup)
+        enable_accessibility(installation)
     if plan.installs_compat and fcitx_command() not in {compat_command(item, plan.compat["version"]) for item in plan.compat["homes"]}:
-        raise RuntimeError(f"Another omarchy-fcitx5.service override replaces the compatibility command, so Fcitx was not restarted. Inspect its drop-ins, restore from {backup}, or rerun with --no-wayland-compat.")
+        raise RuntimeError("Another omarchy-fcitx5.service override replaces the compatibility command, so Fcitx was not restarted. "
+                           "Inspect its drop-ins, restore the newest backup in ~/.local/state/badi/install-backups, or rerun with --no-wayland-compat.")
     require_unlocked()
     profile = home / ".config/fcitx5/profile"
     previous = hashlib.sha256(profile.read_bytes()).digest()
@@ -809,8 +775,8 @@ def report(plan, probe):
 def main():
     plan = preflight(parse_arguments())
     build(plan)
-    backup = install_files(plan)
-    report(plan, restart(plan, backup))
+    installation = install_files(plan)
+    report(plan, restart(plan, installation))
 
 
 if __name__ == "__main__":

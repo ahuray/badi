@@ -31,6 +31,19 @@ NATIVE_SOURCES = ('target/release/badi-broker', 'target/release/badictl', 'scrip
 STOCK = '{ path=/usr/bin/fcitx5 ; argv[]=%s ; ignore_errors=no ; start_time=[n/a] ; pid=0 }\n'
 
 
+def only_backup(home):
+    """The one desktop backup directory, its change map and the changed paths."""
+    backup, = (home / '.local/state/badi/install-backups').iterdir()
+    document = json.loads((backup / 'changes.json').read_text())
+    return backup, document, [entry['path'] for entry in document['changes']]
+
+
+def saved(backup, document, relative):
+    """Where the backup keeps the original of one changed path."""
+    entry, = (entry for entry in document['changes'] if entry['path'] == relative)
+    return backup / entry['saved']
+
+
 def native_project(project):
     for name in NATIVE_SOURCES:
         source = project / name
@@ -153,11 +166,10 @@ class DesktopInstallTests(unittest.TestCase):
             self.assertFalse(any(path.exists() for path in browser.retired))
             self.assertFalse(browser.extension.exists())
             self.assertTrue(all(path.is_symlink() or path.exists() for path in browser.kept))
-            backup, = (home / '.local/state/badi/install-backups').iterdir()
-            changed = json.loads((backup / 'changed-files.json').read_text())
+            backup, document, changed = only_backup(home)
             for relative, text in original.items():
                 self.assertIn(relative, changed)
-                self.assertEqual((backup / relative).read_text(), text)
+                self.assertEqual(saved(backup, document, relative).read_text(), text)
             receipt = json.loads(receipts.receipt_path(home, 'editors').read_text())
             self.assertEqual(receipt['files'], {'.local/lib/badi/editors/shell/badi.bash': {'sha256': 'b' * 64}})
             self.assertEqual((receipt['installed_at'], receipt['source']['commit']), ('2026-09-01T00:00:00Z', 'c' * 40))
@@ -165,6 +177,8 @@ class DesktopInstallTests(unittest.TestCase):
             second = broker_only_install(root)
             self.assertNotIn('brave://extensions', second)
             self.assertTrue(all(path.is_symlink() or path.exists() for path in browser.kept))
+            self.assertIn('already current; no backup was needed', second)
+            self.assertEqual(only_backup(home)[0], backup, 'An unchanged reinstall makes no backup')
 
     def test_observed_flags_add_only_accessibility_and_are_idempotent(self):
         original = '# user comment\n--ozone-platform=wayland\n--some-user-option'
@@ -277,8 +291,9 @@ class DesktopInstallTests(unittest.TestCase):
                  subprocess.CompletedProcess([], 0, '', ''),
                  subprocess.CompletedProcess([], 0, 'b true\n', ''),
              ]) as command:
-            installer.enable_accessibility(Path(temporary))
-            receipt = Path(temporary) / 'accessibility-setting.json'
+            installation = receipts.Installation(Path(temporary), 'desktop')
+            installer.enable_accessibility(installation)
+            receipt = installation.directory / 'accessibility-setting.json'
             self.assertEqual(json.loads(receipt.read_text()), {'bus_enabled': False, 'toolkit_accessibility': False})
             self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
         self.assertIn('set-property', command.call_args_list[2].args[0])
@@ -383,16 +398,16 @@ class DesktopInstallTests(unittest.TestCase):
             self.assertFalse((home / installer.COMPAT_DROPIN).exists())
             self.assertFalse(any('badi-accessibility.service' in call or call[0] == '/usr/bin/python3' for call in calls))
             self.assertNotIn(['systemctl', '--user', 'enable', 'badi-broker.service'], calls)
-            backup, = (home / '.local/state/badi/install-backups').iterdir()
-            self.assertEqual((backup / '.local/lib/badi/badi-broker').read_text(), 'previous broker')
-            changed = json.loads((backup / 'changed-files.json').read_text())
+            backup, document, changed = only_backup(home)
+            self.assertEqual(saved(backup, document, '.local/lib/badi/badi-broker').read_text(), 'previous broker')
             self.assertIn('.local/lib/badi/badi-broker', changed)
             self.assertFalse(any('fcitx' in path or 'accessibility' in path for path in changed))
             for name in ('LICENSE', 'README.md'):
                 relative = '.local/share/badi/licenses/writing-lexicon/' + name
                 self.assertEqual((home / relative).read_bytes(), (project / 'broker/data/writing-lexicon' / name).read_bytes())
                 self.assertIn(relative, changed)
-            self.assertEqual((backup / '.local/share/badi/licenses/writing-lexicon/LICENSE').read_text(), 'previous complete notice')
+            self.assertEqual(saved(backup, document, '.local/share/badi/licenses/writing-lexicon/LICENSE').read_text(),
+                             'previous complete notice')
             receipt_file = home / '.local/state/badi/receipts/desktop.json'
             self.assertEqual(receipt_file.stat().st_mode & 0o777, 0o600)
             receipt = json.loads(receipt_file.read_text())
@@ -674,9 +689,8 @@ class DesktopInstallTests(unittest.TestCase):
                 else:
                     self.assertNotIn(restart, calls)
                     addon.assert_not_called()
-                backup, = (home / '.local/state/badi/install-backups').iterdir()
-                self.assertEqual((backup / '.local/lib/badi/accessibility/daemon.py').read_text(), 'previous helper')
-                changed = json.loads((backup / 'changed-files.json').read_text())
+                backup, document, changed = only_backup(home)
+                self.assertEqual(saved(backup, document, '.local/lib/badi/accessibility/daemon.py').read_text(), 'previous helper')
                 self.assertIn('.local/lib/badi/accessibility/health.py', changed)
                 self.assertIn('.config/systemd/user/badi-accessibility.service', changed)
                 self.assertEqual(profile.read_text(), 'preserve keyboard profile')
@@ -755,11 +769,10 @@ class WaylandCompatTests(FullInstall, unittest.TestCase):
             self.assertEqual(dropin.splitlines()[-2:], ['ExecStart=',
                 'ExecStart=/usr/bin/python3 -B %h/.local/lib/badi/compat/fcitx5-5.1.22/launch.py --disable notificationitem'])
             self.assertFalse(old.exists())
-            backup, = (home / '.local/state/badi/install-backups').iterdir()
-            changed = json.loads((backup / 'changed-files.json').read_text())
+            backup, document, changed = only_backup(home)
             for name in installer.COMPAT_FILES:
                 relative = '.local/lib/badi/compat/fcitx5-5.1.21/' + name
-                self.assertEqual((backup / relative).read_text(), 'retired ' + name)
+                self.assertEqual(saved(backup, document, relative).read_text(), 'retired ' + name)
                 self.assertIn(relative, changed)
                 self.assertIn('.local/lib/badi/compat/fcitx5-5.1.22/' + name, changed)
             self.assertIn(str(installer.COMPAT_DROPIN), changed)
@@ -916,17 +929,17 @@ class ObservedAppInstallTests(FullInstall, unittest.TestCase):
             code = config / 'code-flags.conf'
             self.assertEqual(code.read_text(), flag_lines)
             self.assertEqual(code.stat().st_mode & 0o777, 0o600)
-            backup, = (home / '.local/state/badi/install-backups').iterdir()
-            self.assertEqual((backup / '.config/chromium-flags.conf').read_text(), original)
-            self.assertFalse((backup / '.config/code-flags.conf').exists(), 'a new file has no predecessor')
-            changed = json.loads((backup / 'changed-files.json').read_text())
+            backup, document, changed = only_backup(home)
+            self.assertEqual(saved(backup, document, '.config/chromium-flags.conf').read_text(), original)
+            created, = (entry for entry in document['changes'] if entry['path'] == '.config/code-flags.conf')
+            self.assertEqual((created['action'], created.get('saved')), ('create', None), 'a new file has no predecessor')
             self.assertEqual(changed.count('.config/chromium-flags.conf'), 1)
-            self.assertIn('.config/code-flags.conf', changed)
             receipt = json.loads((home / '.local/state/badi/receipts/desktop.json').read_text())
             for path in (chromium, code):
                 entry = receipt['files'][str(path.relative_to(home))]
                 self.assertEqual(entry['sha256'], hashlib.sha256(path.read_bytes()).hexdigest())
-            enabled.assert_called_once_with(backup)
+            self.assertEqual(enabled.call_args.args[0].directory, backup)
+            enabled.assert_called_once()
             self.assertIn(installer.OBSERVED_FLAG + ' added for chromium, code.', self.output)
             self.assertIn('CPU and memory', self.output)
 
@@ -942,11 +955,11 @@ class ObservedAppInstallTests(FullInstall, unittest.TestCase):
             home, _calls, enabled = self.install_observed(root, ['cursor'])
             self.assertEqual(cursor.read_text(), '--force-renderer-accessibility\n')
             self.assertEqual((cursor.stat().st_ino, cursor.stat().st_mode), (before.st_ino, before.st_mode))
-            backup, = (home / '.local/state/badi/install-backups').iterdir()
-            self.assertNotIn('.config/cursor-flags.conf', json.loads((backup / 'changed-files.json').read_text()))
+            _backup, _document, changed = only_backup(home)
+            self.assertNotIn('.config/cursor-flags.conf', changed)
             receipt = json.loads((home / '.local/state/badi/receipts/desktop.json').read_text())
             self.assertNotIn('.config/cursor-flags.conf', receipt['files'])
-            enabled.assert_called_once_with(backup)
+            enabled.assert_called_once()
             self.assertIn('already enabled for cursor', self.output)
             self.assertNotIn(' added for ', self.output)
 

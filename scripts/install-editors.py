@@ -3,11 +3,8 @@
 
 import argparse
 import json
-import os
 from pathlib import Path
-import shutil
 import subprocess
-import time
 
 import badi_install
 
@@ -30,26 +27,7 @@ def main():
     # Finish the native build before touching a user's shell or installation.
     shell_preview = build_shell_preview() if args.bash else None
     home = Path.home()
-    backup = home / ".local/state/badi/editor-backups" / str(time.time_ns())
-    backup.mkdir(parents=True, mode=0o700)
-    changed = []
-    installed = []
-
-    def install_bytes(data, destination, mode=0o644):
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if destination.is_symlink():
-            raise RuntimeError(f"Inspect existing symlink before replacing {destination}")
-        index = str(len(changed))
-        if destination.exists():
-            if destination.stat().st_uid != os.getuid() or not destination.is_file():
-                raise RuntimeError(f"Unexpected file ownership/type: {destination}")
-            shutil.copy2(destination, backup / index)
-        else:
-            index = None
-        changed.append({"path": str(destination), "backup": index})
-        installed.append(destination)
-        (backup / "changes.json").write_text(json.dumps(changed, indent=2) + "\n")
-        badi_install.atomic_write(destination, data, mode)
+    installation = badi_install.Installation(home, "editors")
 
     if args.vault:
         vault = args.vault.resolve(strict=True)
@@ -67,25 +45,24 @@ def main():
             raise RuntimeError("Invalid Obsidian community plugin registry")
         subprocess.run(["node", "adapters/obsidian/build.mjs"], cwd=ROOT, check=True)
         for name in ("main.js", "manifest.json", "styles.css"):
-            install_bytes((ROOT / "adapters/obsidian/dist" / name).read_bytes(), plugin / name)
+            installation.copy(ROOT / "adapters/obsidian/dist" / name, plugin / name, 0o644)
         if "badi" not in enabled:
-            install_bytes((json.dumps([*enabled, "badi"], indent=2) + "\n").encode(), community)
+            installation.write(community, (json.dumps([*enabled, "badi"], indent=2) + "\n").encode(), 0o644)
         print("Obsidian installed. Reload Obsidian; enable community plugins normally if restricted mode is on.")
     if args.bash:
-        install_bytes(shell_preview,
-                      home / ".local/lib/badi/editors/shell/badi-preview.so", 0o755)
+        installation.write(home / ".local/lib/badi/editors/shell/badi-preview.so", shell_preview, 0o755)
         for path in ("shared/broker-client.mjs", "shared/activity.mjs", "shared/writing-language.mjs", "shared/text-safety.mjs",
                      "shell/bridge.mjs", "shell/badi.bash"):
-            install_bytes((ROOT / "adapters" / path).read_bytes(), home / ".local/lib/badi/editors" / path)
+            installation.copy(ROOT / "adapters" / path, home / ".local/lib/badi/editors" / path, 0o644)
         bashrc = home / ".bashrc"
         text = bashrc.read_text() if bashrc.exists() else ""
         source = '[[ -r "$HOME/.local/lib/badi/editors/shell/badi.bash" ]] && source "$HOME/.local/lib/badi/editors/shell/badi.bash"'
         if source not in text:
-            install_bytes((text.rstrip() + "\n\n" + source + "\n").encode(), bashrc)
+            installation.write(bashrc, (text.rstrip() + "\n\n" + source + "\n").encode(), 0o644)
         subprocess.run(["bash", "-n", str(bashrc)], check=True)
         print("Bash installed with grey inline previews. New interactive shells: Ctrl-X then Tab requests/accepts; ordinary Tab is unchanged.")
-    print(f"Rollback map and original files: {backup}")
-    print(f"Install receipt: {badi_install.write_receipt(home, 'editors', checkout, installed)}")
+    installation.finish()
+    print(f"Install receipt: {badi_install.write_receipt(home, 'editors', checkout, installation.current)}")
 
 
 if __name__ == "__main__":
