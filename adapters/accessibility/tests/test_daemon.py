@@ -4,6 +4,7 @@ import pathlib
 import socket
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import types
 import unittest
@@ -12,9 +13,11 @@ import unittest.mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from contract import Denied, MAX_FRAME, SCHEMA, Observer
 import daemon as observer_daemon
-from daemon import (APPS, CALIBRATED, MAX_RICH_BLOCKS, Daemon, DesktopBackend, application_entry,
-                    browser_interface, calibrated_geometry, gecko_calibrated_geometry, per_user_executable,
-                    rich_text, unique_object, verify_process, visual_direction)
+import desktop as observer_desktop
+from daemon import APPS, Daemon, unique_object
+from desktop import WindowEvents, application_entry, per_user_executable, verify_process
+from field import MAX_RICH_BLOCKS, FieldBackend, browser_interface, rich_text
+from geometry import CALIBRATED, calibrated_geometry, gecko_calibrated_geometry, visual_direction
 from test_contract import FakeBackend
 
 
@@ -284,9 +287,9 @@ class EventTests(unittest.TestCase):
                 os.environ, {"XDG_RUNTIME_DIR": runtime, "HYPRLAND_INSTANCE_SIGNATURE": "private"}), \
                 self.assertRaises(OSError):
             self.daemon.watch()  # Stops at the missing private Hyprland event socket.
-        self.daemon.hypr.close()
+        self.assertIsNone(self.daemon.window_events)
         self.assertEqual(registered, ["object:state-changed:focused"])
-        self.assertEqual(self.daemon.backend.hyprland, pathlib.Path(runtime) / "hypr/private/.socket.sock")
+        self.assertEqual(self.daemon.backend.desktop.request_socket, pathlib.Path(runtime) / "hypr/private/.socket.sock")
 
     def test_hyprland_session_must_be_exact(self):
         for environment in ({"XDG_RUNTIME_DIR": "/run/user/1", "HYPRLAND_INSTANCE_SIGNATURE": ""},
@@ -295,7 +298,7 @@ class EventTests(unittest.TestCase):
                             {"XDG_RUNTIME_DIR": "relative", "HYPRLAND_INSTANCE_SIGNATURE": "private"}):
             with self.subTest(environment=environment), unittest.mock.patch.dict(os.environ, environment), \
                     self.assertRaisesRegex(RuntimeError, "hyprland_session_required"):
-                observer_daemon.hyprland_directory()
+                observer_desktop.hyprland_directory()
 
 
 class FieldSubscriptionTests(unittest.TestCase):
@@ -348,9 +351,10 @@ class FieldSubscriptionTests(unittest.TestCase):
         self.assertEqual(self.bus.calls[2 * count:], [("sync", "RegisterEvent", (event, [], ":1.8"))
                                                       for event in observer_daemon.FIELD_EVENTS])
         self.assertEqual(self.bus.subscriptions, [None, (":1.8", "org.a11y.atspi.Event.Object", None, "/field", None)])
-        self.daemon.hypr, self.daemon.loop = SimpleNamespace(recv=lambda _size: b"activewindowv2>>55\n"), None
+        self.daemon.window_events = WindowEvents(SimpleNamespace(recv=lambda _size: b"activewindowv2>>55\n"))
+        self.daemon.loop = None
         self.daemon.observer.tracked = {"app_id": "chromium"}
-        self.assertTrue(self.daemon.hypr_event(None, 0))
+        self.assertTrue(self.daemon.window_event(None, 0))
         self.assertIsNone(self.daemon.observer.tracked)
         self.assertEqual(self.bus.calls[3 * count:], [("async", "DeregisterEvent", (event, ":1.8"))
                                                       for event in observer_daemon.FIELD_EVENTS])
@@ -534,56 +538,57 @@ class IdentityTests(unittest.TestCase):
 
 
 class WindowTests(unittest.TestCase):
-    UNLOCKED = {key: False for key in observer_daemon.LOCK_FLAGS}
+    UNLOCKED = {key: False for key in observer_desktop.LOCK_FLAGS}
 
     def backend(self, window):
-        backend = DesktopBackend(None)
-        backend.hypr = lambda request: self.assertEqual(request, "j/activewindow") or window
+        backend = FieldBackend(None, APPS).desktop
+        backend.request = lambda request: self.assertEqual(request, "j/activewindow") or window
         return backend
 
     LOCK_QUERY = ("qs", "ipc", "-n", "-p", "/usr/share/omarchy/shell", "call", "--", "lock", "status")
 
     def check_lock(self, backend, state, reply=None):
+        desktop = backend.desktop
         with unittest.mock.patch.dict(os.environ, {"OMARCHY_PATH": "/usr/share/omarchy"}), \
-             unittest.mock.patch.object(observer_daemon.subprocess, "check_output",
+             unittest.mock.patch.object(observer_desktop.subprocess, "check_output",
                                         return_value=json.dumps(state).encode() if reply is None else reply) as command:
-            backend.deadline = observer_daemon.time.monotonic() + 1
+            backend.deadline = time.monotonic() + 1
             try:
-                backend.require_unlocked()
+                desktop.require_unlocked()
             finally:
                 self.assertEqual(command.call_args.args[0], self.LOCK_QUERY)
                 self.assertLessEqual(command.call_args.kwargs["timeout"], .15)
 
     def test_every_lock_flag_denies_and_only_an_explicit_unlock_passes(self):
-        backend = DesktopBackend(None)
+        backend = FieldBackend(None, APPS)
         self.check_lock(backend, self.UNLOCKED)
         for state in ({**self.UNLOCKED, "requested": True}, {**self.UNLOCKED, "pending": True},
                       {**self.UNLOCKED, "sessionLocked": True}, {**self.UNLOCKED, "secure": None},
-                      {key: False for key in observer_daemon.LOCK_FLAGS[1:]}, [], "unlocked"):
+                      {key: False for key in observer_desktop.LOCK_FLAGS[1:]}, [], "unlocked"):
             with self.subTest(state=state), self.assertRaisesRegex(Denied, "desktop_locked"):
                 self.check_lock(backend, state)
 
     def test_an_unanswered_or_unexpected_lock_query_fails_closed(self):
-        backend = DesktopBackend(None)
+        backend = FieldBackend(None, APPS)
         # The replies omarchy-shell turns into failures arrive on stdout with exit 0.
         for reply in (b"Target not found.\n", b"Function not found.\n", b"Not ready to accept queries yet\n", b""):
             with self.subTest(reply=reply), self.assertRaisesRegex(Denied, "desktop_unavailable"):
                 self.check_lock(backend, None, reply)
         with self.assertRaisesRegex(Denied, "desktop_locked"):
-            self.check_lock(backend, None, b"{" + b" " * observer_daemon.MAX_HYPRLAND_REPLY + b"}")
-        for failure in (observer_daemon.subprocess.TimeoutExpired(self.LOCK_QUERY, .15),
-                        observer_daemon.subprocess.CalledProcessError(1, self.LOCK_QUERY), FileNotFoundError("qs")):
+            self.check_lock(backend, None, b"{" + b" " * observer_desktop.MAX_IPC_REPLY + b"}")
+        for failure in (observer_desktop.subprocess.TimeoutExpired(self.LOCK_QUERY, .15),
+                        observer_desktop.subprocess.CalledProcessError(1, self.LOCK_QUERY), FileNotFoundError("qs")):
             with self.subTest(failure=type(failure).__name__), \
                  unittest.mock.patch.dict(os.environ, {"OMARCHY_PATH": "/usr/share/omarchy"}), \
-                 unittest.mock.patch.object(observer_daemon.subprocess, "check_output", side_effect=failure), \
+                 unittest.mock.patch.object(observer_desktop.subprocess, "check_output", side_effect=failure), \
                  self.assertRaisesRegex(Denied, "desktop_unavailable"):
-                backend.deadline = observer_daemon.time.monotonic() + 1
-                backend.require_unlocked()
+                backend.deadline = time.monotonic() + 1
+                backend.desktop.require_unlocked()
         for path in ("", "relative/omarchy"):
             with self.subTest(path=path), unittest.mock.patch.dict(os.environ, {"OMARCHY_PATH": path}), \
-                 unittest.mock.patch.object(observer_daemon.subprocess, "check_output") as command, \
+                 unittest.mock.patch.object(observer_desktop.subprocess, "check_output") as command, \
                  self.assertRaisesRegex(Denied, "desktop_unavailable"):
-                backend.require_unlocked()
+                backend.desktop.require_unlocked()
             command.assert_not_called()
 
     def test_only_inspect_checks_the_session_lock(self):
@@ -591,7 +596,7 @@ class WindowTests(unittest.TestCase):
         backend = self.backend(window)
         checks = []
         backend.require_unlocked = lambda: checks.append(True)
-        with unittest.mock.patch.object(observer_daemon, "verify_process", return_value=True):
+        with unittest.mock.patch.object(observer_desktop, "verify_process", return_value=True):
             backend.window("telegram")
             self.assertEqual(checks, [])
             backend.window("telegram", check_lock=True)
@@ -600,14 +605,14 @@ class WindowTests(unittest.TestCase):
         def locked():
             raise Denied("desktop_locked")
         backend.require_unlocked = locked
-        backend.hypr = lambda _request: self.fail("A locked session is not queried further")
+        backend.request = lambda _request: self.fail("A locked session is not queried further")
         with self.assertRaisesRegex(Denied, "desktop_locked"):
             backend.window("telegram", check_lock=True)
 
     def test_class_uid_and_executable_rules_all_apply(self):
         window = {"pid": 42, "class": "org.telegram.desktop", "mapped": True, "hidden": False}
         checked = []
-        with unittest.mock.patch.object(observer_daemon, "verify_process", side_effect=lambda pid, app, uid, config: checked.append((pid, app, uid)) or True):
+        with unittest.mock.patch.object(observer_desktop, "verify_process", side_effect=lambda pid, app, uid, config: checked.append((pid, app, uid)) or True):
             self.assertEqual(self.backend(window).window("telegram"), (window, APPS["telegram"]))
             self.assertEqual(checked, [(42, APPS["telegram"], os.getuid())])
             for change in ({"class": "telegram"}, {"class": "code"}, {"mapped": False}, {"hidden": True}):
@@ -632,7 +637,7 @@ class WindowTests(unittest.TestCase):
                 self.backend({**window, "pid": 0}).window("telegram")
             with self.assertRaisesRegex(Denied, "focus_unavailable"):
                 self.backend([window]).window("telegram")
-        with unittest.mock.patch.object(observer_daemon, "verify_process", return_value=False):
+        with unittest.mock.patch.object(observer_desktop, "verify_process", return_value=False):
             with self.assertRaisesRegex(Denied, "app_mismatch"):
                 self.backend(window).window("telegram")
 
@@ -683,7 +688,7 @@ class FocusSelectionTests(unittest.TestCase):
     def select(self, nodes, browser=True):
         atspi = SimpleNamespace(**vars(FAKE_ATSPI))
         atspi.get_desktop = lambda _index: FakeNode(children=[FakeNode(children=nodes)])
-        backend = DesktopBackend(atspi)
+        backend = FieldBackend(atspi, APPS)
         backend.budget = lambda: None
 
         def uri(node):
@@ -749,7 +754,7 @@ class FocusSelectionTests(unittest.TestCase):
     def test_origin_timeout_is_not_mistaken_for_browser_ui(self):
         atspi = SimpleNamespace(**vars(FAKE_ATSPI))
         atspi.get_desktop = lambda _index: FakeNode(children=[FakeNode(children=[FakeNode({"focused", "editable", "showing"})])])
-        backend = DesktopBackend(atspi)
+        backend = FieldBackend(atspi, APPS)
         backend.budget = lambda: None
         def timeout(_node):
             raise Denied("operation_timeout")
@@ -759,7 +764,7 @@ class FocusSelectionTests(unittest.TestCase):
 
     def test_nearest_document_uri_distinguishes_no_document_from_unreadable(self):
         atspi = SimpleNamespace(Document=SimpleNamespace(get_document_attribute_value=lambda document, _name: document))
-        backend = DesktopBackend(atspi)
+        backend = FieldBackend(atspi, APPS)
         backend.budget = lambda: None
 
         class Document(FakeNode):
@@ -784,7 +789,7 @@ class FocusSelectionTests(unittest.TestCase):
         self.assertTrue(backend.page_content(FakeNode()), "an unreadable document is never browser UI")
 
     def test_frame_and_nearest_document_ancestors(self):
-        backend = DesktopBackend(None)
+        backend = FieldBackend(None, APPS)
         backend.budget = lambda: None
         application = FakeNode(role="application")
         frame = FakeNode(role="frame", parent=application)
@@ -843,7 +848,7 @@ class GeckoFocusTests(unittest.TestCase):
     def setUp(self):
         self.application, self.frame = gecko_window()
         self.document = gecko_page(self.frame, self.PAGE)
-        self.backend = DesktopBackend(GECKO_ATSPI)
+        self.backend = FieldBackend(GECKO_ATSPI, APPS)
         self.backend.budget = lambda: None
 
     def select(self, nodes):
@@ -1073,10 +1078,10 @@ class GeometryWiringTests(unittest.TestCase):
         self.offsets = []
         self.text = SimpleNamespace(get_character_extents=lambda offset, kind: self.offsets.append((offset, kind)) or
                                     SimpleNamespace(x=10400, y=6220, width=20, height=40))
-        self.backend = DesktopBackend(SimpleNamespace(CoordType=SimpleNamespace(SCREEN="screen")))
+        self.backend = FieldBackend(SimpleNamespace(CoordType=SimpleNamespace(SCREEN="screen")), APPS)
         self.backend.budget = lambda: None
         self.monitors = [CalibrationTests.MONITOR]
-        self.backend.hypr = lambda request: self.assertEqual(request, "j/monitors") or self.monitors
+        self.backend.desktop.request = lambda request: self.assertEqual(request, "j/monitors") or self.monitors
         self.window = dict(CalibrationTests.WINDOW)
 
     def test_every_request_reads_live_extents_and_calibrates(self):
@@ -1097,7 +1102,7 @@ class GeometryWiringTests(unittest.TestCase):
         self.setUp()
         def unavailable(*_args):
             raise Denied("desktop_unavailable")
-        self.backend.hypr = unavailable
+        self.backend.desktop.request = unavailable
         self.assertIsNone(self.backend.geometry(self.field, self.text, 12, self.window))
         self.setUp()
         self.monitors = {"not": "a list"}
@@ -1157,10 +1162,10 @@ class MetadataTests(unittest.TestCase):
         atspi = SimpleNamespace(StateType=SimpleNamespace(FOCUSED="focused", EDITABLE="editable", SHOWING="showing",
                                                           VISIBLE="visible", ENABLED="enabled"),
                                 Text=SimpleNamespace(get_attribute_run=lambda *_args: ({"direction": "lr"}, 0, 5)))
-        backend = DesktopBackend(atspi)
+        backend = FieldBackend(atspi, APPS)
         backend.budget = lambda: None
         window = {"pid": 42, "xwayland": False}
-        backend.window = lambda app_id, _check_lock: (window, APPS[app_id])
+        backend.desktop.window = lambda app_id, _check_lock: (window, APPS[app_id])
         backend.focused = lambda pid, browser, gecko: node
         calibrations = []
         backend.geometry = lambda *args: calibrations.append(args) or {"coordinate_convention": CALIBRATED}
@@ -1185,12 +1190,12 @@ class GeckoMetadataTests(unittest.TestCase):
                                     get_n_selections=lambda: 0)
         self.node = self.field(role="entry", attributes={"tag": "textarea", "display": "block"})
         self.node.get_text_iface = lambda: self.text
-        self.backend = DesktopBackend(SimpleNamespace(**{**vars(GECKO_ATSPI), "StateType": SimpleNamespace(
+        self.backend = FieldBackend(SimpleNamespace(**{**vars(GECKO_ATSPI), "StateType": SimpleNamespace(
             FOCUSED="focused", EDITABLE="editable", SHOWING="showing", VISIBLE="visible", ENABLED="enabled"),
-            "Text": SimpleNamespace(get_attribute_run=lambda *_args: ({"direction": "lr"}, 0, 24))}))
+            "Text": SimpleNamespace(get_attribute_run=lambda *_args: ({"direction": "lr"}, 0, 24))}), APPS)
         self.backend.budget = lambda: None
         self.window = {"pid": 42, "xwayland": False}
-        self.backend.window = lambda app_id, _check_lock: (self.window, APPS[app_id])
+        self.backend.desktop.window = lambda app_id, _check_lock: (self.window, APPS[app_id])
         self.selections = []
         self.backend.focused = lambda pid, browser, gecko: self.selections.append((browser, gecko)) or self.node
         self.calibrations = []
@@ -1337,10 +1342,10 @@ class RichEditorTests(unittest.TestCase):
 
     def setUp(self):
         self.reads = []
-        self.backend = DesktopBackend(RICH_ATSPI)
+        self.backend = FieldBackend(RICH_ATSPI, APPS)
         self.backend.budget = lambda: None
         self.window = {"pid": 42, "xwayland": False}
-        self.backend.window = lambda app_id, _check_lock: (self.window, APPS[app_id])
+        self.backend.desktop.window = lambda app_id, _check_lock: (self.window, APPS[app_id])
         self.root = None
         self.backend.focused = lambda pid, browser, gecko: self.root
         self.calibrations = []
@@ -1493,7 +1498,7 @@ class RichEditorTests(unittest.TestCase):
         rich.children[1].text.get_character_extents = lambda offset, kind: SimpleNamespace(
             x=10400, y=6220, width=20, height=40)
         self.backend.frame_and_document = lambda node: (frame, document)
-        self.backend.hypr = lambda _request: [CalibrationTests.MONITOR]
+        self.backend.desktop.request = lambda _request: [CalibrationTests.MONITOR]
         self.window.update(CalibrationTests.WINDOW)
         geometry = self.backend.metadata("chatgpt", True)["geometry"]
         self.assertEqual((geometry["character_offset"], geometry["caret"]), (9, {"x": 210, "y": 110, "height": 20}))

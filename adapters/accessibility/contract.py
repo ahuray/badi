@@ -17,6 +17,10 @@ ID = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 class Denied(Exception):
     """A fixed, prose-free failure reason safe to return over IPC."""
 
+    @property
+    def timed_out(self):
+        return str(self) == "operation_timeout"
+
 
 def canonical_origin(uri):
     try:
