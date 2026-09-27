@@ -682,7 +682,7 @@ fn run_bounded_command(
 ) -> Option<BoundedOutput> {
     // This supervises and reaps the direct child. A descendant that inherits stdout could keep
     // the reader open after that child exits; nvidia-smi is invoked directly and is not expected
-    // to create such descendants. A future general-purpose runner would need process-group control.
+    // to create such descendants.
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

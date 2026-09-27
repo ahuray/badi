@@ -167,7 +167,7 @@ async fn request_probe(
     })
 }
 
-/// Prints the broker's probe result with the client-observed round trip.
+/// The broker's probe result with the client-observed round trip.
 #[derive(Debug, Serialize)]
 struct ProbeReport {
     #[serde(flatten)]

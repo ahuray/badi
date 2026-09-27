@@ -692,8 +692,8 @@ pub(crate) fn unambiguous_correction(word: &str) -> Option<String> {
             candidates.insert(candidate);
         }
     };
-    // The first character stays unchanged, matching the existing spelling
-    // contract. At most 1,298 short candidates are checked for a 24-byte word.
+    // The first character stays unchanged, as `valid_correction` requires.
+    // At most 1,298 short candidates are checked for a 24-byte word.
     for index in 1..word.len() {
         consider(format!("{}{}", &word[..index], &word[index + 1..]));
         for replacement in b'a'..=b'z' {
@@ -857,7 +857,6 @@ mod tests {
 
     #[test]
     fn in_place_lexicon_lookups_match_a_sorted_word_list() {
-        // The reference is the former heap index: every line in a sorted slice.
         let words: Vec<&str> = ENGLISH_LEXICON.lines().collect();
         assert_eq!(words.len(), 77_928);
         assert!(words.windows(2).all(|pair| pair[0] < pair[1]));
@@ -1495,10 +1494,9 @@ mod tests {
         );
     }
 
-    /// Observed with the pinned model on 2026-09-26: after the healed echo,
-    /// `the client should ` streamed ` be able to re-try the request`. UAX #29
-    /// splits `re-try` into two words, so the four-word limit ended inside it
-    /// and displayed `be able to re`. The limit counts space-separated words.
+    /// UAX #29 splits `re-try` into two words, so a limit counting its words
+    /// would cut ` be able to re-try the request` to `be able to re`. The
+    /// limit counts space-separated words.
     #[test]
     fn the_word_limit_never_cuts_inside_a_joined_word() {
         for (raw, finished, expected) in [

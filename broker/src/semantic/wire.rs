@@ -28,7 +28,6 @@ const MAX_CHUNK_LINE_BYTES: usize = 128;
 /// Spare buffer capacity offered to each socket read.
 const READ_BYTES: usize = 8 * 1_024;
 
-/// The status code of a runtime reply.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct StatusCode(u16);
 
@@ -487,7 +486,6 @@ pub struct NativeStreamChunk {
     pub stopping_word: Option<String>,
 }
 
-/// The tokenize endpoint's reply.
 #[derive(Debug, Deserialize)]
 pub struct TokenizeResponse {
     pub tokens: Vec<u32>,

@@ -8,8 +8,8 @@ use uuid::{Uuid, Variant};
 
 use crate::metrics::{MetricsSnapshot, NoSuggestionReason};
 
-/// The legacy browser wire version. Constructors continue to default to this
-/// version so existing Chromium call sites cannot change behavior accidentally.
+/// Protocol v1, the oldest version the broker negotiates. Envelope
+/// constructors start at it; [`WireEnvelope::at_version`] selects another.
 pub const PROTOCOL_VERSION: u8 = 1;
 pub const MIN_PROTOCOL_VERSION: u8 = PROTOCOL_VERSION;
 pub const CURRENT_PROTOCOL_VERSION: u8 = 2;

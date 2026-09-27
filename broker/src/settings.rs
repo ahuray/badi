@@ -265,8 +265,8 @@ pub struct SettingsV2 {
     pub revision: u64,
     pub paused: bool,
     /// Opt-in browser default: an http(s) origin without an exact rule gets
-    /// [`ALL_WEB_ORIGINS_PERMISSIONS`]. Exact rules win; field denial and the
-    /// extension's own host permission still apply. Omitted when off.
+    /// [`ALL_WEB_ORIGINS_PERMISSIONS`]. Exact rules win and field denial still
+    /// applies. Omitted when off.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub all_web_origins: bool,
     pub subjects: Vec<SubjectRule>,
@@ -441,9 +441,9 @@ impl SettingsV2 {
         }
     }
 
-    /// A legacy settings client can still manage its browser-origin slice, but
-    /// cannot erase native rules or the all-web default that its schema is
-    /// unable to represent.
+    /// A protocol v1 settings client can still manage its browser-origin
+    /// slice, but cannot erase native rules or the all-web default that its
+    /// schema is unable to represent.
     #[must_use]
     pub fn preserving_v2_policy_from(mut self, current: &Self) -> Self {
         self.all_web_origins = current.all_web_origins;

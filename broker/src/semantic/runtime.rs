@@ -984,9 +984,8 @@ mod tests {
         Ok(())
     }
 
-    /// Installed runtimes, lifecycle receipts and run provenance compare the
-    /// identity digest, so the production launch keeps its exact serialized
-    /// identity.
+    /// Installed runtimes and run provenance compare the identity digest, so
+    /// the production launch keeps its exact serialized identity.
     #[test]
     fn production_identity_serialization_is_pinned() -> Result<(), Box<dyn Error>> {
         let temporary = tempfile::tempdir()?;
