@@ -175,6 +175,12 @@ impl SemanticClient {
         self
     }
 
+    /// The historical baseline before production healed a trailing space.
+    pub(crate) fn with_lab_legacy_space_boundary(mut self) -> Self {
+        self.lab_boundary_healing = false;
+        self
+    }
+
     pub(crate) fn with_lab_trace(&self) -> (Self, Arc<Mutex<Vec<Value>>>) {
         let trace = Arc::new(Mutex::new(Vec::new()));
         let mut client = self.clone();
@@ -508,7 +514,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn production_boundary_handles_chunked_exact_echo_for_all_writing_languages() {
+    async fn production_boundary_handles_chunked_exact_echo_for_promoted_languages() {
         for (before, language, pieces, expected) in [
             (
                 "Please review the ",
@@ -530,6 +536,10 @@ mod tests {
             ),
             ("لطفا این گزارش را ", "fa", vec![" ", "بخوانید"], "بخوانید"),
         ] {
+            // production_boundary equals production, which heals only promoted languages.
+            if !crate::writing::heals_trailing_space(language) {
+                continue;
+            }
             let (client, server) = fixture(
                 events(&pieces, Some("eos")),
                 Duration::ZERO,
@@ -559,6 +569,34 @@ mod tests {
                     serde_json::to_string(echo).expect("literal")
                 )
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_baseline_keeps_the_trailing_space_in_the_prompt() {
+        for (before, language) in [("Please review the ", "en"), ("Bitte lies das ", "de")] {
+            let (client, server) = fixture(
+                events(&["report"], Some("eos")),
+                Duration::ZERO,
+                "text/event-stream",
+            )
+            .await;
+            let result = client
+                .with_lab_legacy_space_boundary()
+                .propose(
+                    production_request(before, language),
+                    CancellationToken::new(),
+                    true,
+                )
+                .await
+                .expect("proposal");
+            assert_eq!(
+                result.map(|proposal| proposal.text).as_deref(),
+                Some("report")
+            );
+            let payload = server.await.expect("server");
+            assert_eq!(payload["prompt"], before);
+            assert!(payload.get("grammar").is_none());
         }
     }
 

@@ -17,7 +17,10 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::protocol::ProviderKind;
-use crate::provider::{CompletionProvider, ProviderError, ProviderRequest, WritingProposal};
+use crate::provider::{
+    CompletionProvider, ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger,
+    WritingProposal,
+};
 
 use super::client::{ClientError, HealthStatus, SemanticClient, SemanticClientConfig};
 use super::provenance::{ProvenanceError, VerifiedDirectoryManifest, VerifiedFile};
@@ -29,6 +32,8 @@ const WRITING_BATCH_SIZE: u16 = 16;
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// Bound for the single warm-up completion after readiness.
+pub const WARM_UP_TIMEOUT: Duration = Duration::from_secs(2);
 // A cancelled cold prefill may still be unwinding inside the runtime. Allow
 // that work and its HTTP readers to stop before the process-group kill fallback.
 const GRACEFUL_SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
@@ -435,6 +440,23 @@ impl OwnedRuntime {
             .try_wait()
     }
 
+    /// Send one bounded warm-up completion. A failure is reported, never
+    /// raised: the runtime stays usable and only its first request is cold.
+    pub async fn warm_up(&self) -> WarmUpReport {
+        self.warm_up_within(WARM_UP_TIMEOUT).await
+    }
+
+    async fn warm_up_within(&self, timeout: Duration) -> WarmUpReport {
+        let started = Instant::now();
+        let failure = self
+            .client
+            .warm_up(timeout, CancellationToken::new())
+            .await
+            .err()
+            .map(|error| error.class());
+        WarmUpReport::new(started.elapsed(), failure)
+    }
+
     pub fn shutdown(mut self) -> Result<RuntimeLifecycleObservation, RuntimeError> {
         let process_id = self.process_id().ok_or(RuntimeError::MissingChild)?;
         let status = self.terminate()?;
@@ -531,6 +553,18 @@ impl CompletionProvider for OwnedRuntime {
             .propose(request, cancellation, allow_replacement)
             .await
     }
+
+    async fn propose_outcome(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        allow_replacement: bool,
+        trigger: RequestTrigger,
+    ) -> Result<ProviderOutcome, ProviderError> {
+        self.client
+            .propose_outcome(request, cancellation, allow_replacement, trigger)
+            .await
+    }
 }
 
 impl StableRuntimeIdentity {
@@ -538,6 +572,40 @@ impl StableRuntimeIdentity {
     pub fn sha256(&self) -> String {
         let canonical = serde_json::to_vec(self).expect("runtime identity is serializable");
         encode_lower_hex(Sha256::digest(canonical))
+    }
+}
+
+/// Content-free result of [`OwnedRuntime::warm_up`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WarmUpReport {
+    elapsed: Duration,
+    failure: Option<&'static str>,
+}
+
+impl WarmUpReport {
+    pub(crate) const fn new(elapsed: Duration, failure: Option<&'static str>) -> Self {
+        Self { elapsed, failure }
+    }
+
+    #[must_use]
+    pub const fn elapsed(&self) -> Duration {
+        self.elapsed
+    }
+
+    /// The failure class, or `None` when the completion finished.
+    #[must_use]
+    pub const fn failure(&self) -> Option<&'static str> {
+        self.failure
+    }
+}
+
+impl fmt::Display for WarmUpReport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.failure {
+            None => formatter.write_str("completed")?,
+            Some(class) => write!(formatter, "failed class={class}")?,
+        }
+        write!(formatter, " elapsed_ms={}", self.elapsed.as_millis())
     }
 }
 
@@ -721,13 +789,15 @@ mod tests {
     use std::os::unix::process::CommandExt;
     use std::path::Path;
     use std::process::{Command, Stdio};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use sha2::{Digest, Sha256};
 
     use super::{
-        FixtureBehavior, LlamaCppLaunch, ProvenanceError, RuntimeError, terminate_child,
+        FixtureBehavior, LlamaCppLaunch, OwnedRuntime, ProvenanceError, RuntimeError, SecretToken,
+        SemanticClient, SemanticClientConfig, StableRuntimeIdentity, terminate_child,
         terminate_owned_child_with,
     };
     use crate::semantic::provenance::{
@@ -977,6 +1047,96 @@ mod tests {
 
         terminate_owned_child_with(&mut child, terminate_child)?;
         assert!(child.is_none());
+        assert!(!Path::new(&format!("/proc/{process_id}")).exists());
+        Ok(())
+    }
+
+    fn owned_runtime_at(endpoint: std::net::SocketAddr) -> Result<OwnedRuntime, Box<dyn Error>> {
+        let child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()?;
+        Ok(OwnedRuntime {
+            child: Mutex::new(Some(child)),
+            client: SemanticClient::new(
+                SemanticClientConfig::new(endpoint, "fixture", "public-fixture-token")?
+                    .for_writing(),
+            )?,
+            endpoint,
+            token_credential: SecretToken::fixture(),
+            identity: StableRuntimeIdentity {
+                launch_contract_id: crate::writing::WRITING_CONTRACT,
+                binary_sha256: "0".repeat(64),
+                runtime_bundle_manifest_sha256: None,
+                model_sha256: "0".repeat(64),
+                model_size: 1,
+                model_alias: "fixture".to_owned(),
+                model_origin: None,
+                threads: 1,
+                context_size: super::CONTEXT_SIZE,
+                gpu_layers: super::GPU_LAYERS,
+                batch_size: Some(16),
+                ubatch_size: Some(16),
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn warm_up_reports_completion_and_failure_without_failing_the_runtime()
+    -> Result<(), Box<dyn Error>> {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let runtime = owned_runtime_at(listener.local_addr()?)?;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("warm-up connection");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let read = socket.read(&mut buffer).await.expect("warm-up request");
+                assert_ne!(read, 0);
+                request.extend_from_slice(&buffer[..read]);
+                let text = String::from_utf8_lossy(&request);
+                let Some((headers, body)) = text.split_once("\r\n\r\n") else {
+                    continue;
+                };
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .expect("content length")
+                    .parse()
+                    .expect("length");
+                if body.len() >= length {
+                    break;
+                }
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await
+                .expect("warm-up reply");
+            let (_stalled, _) = listener.accept().await.expect("stalled connection");
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+        let completed = runtime.warm_up().await;
+        assert_eq!(completed.failure(), None);
+        let rendered = completed.to_string();
+        assert!(rendered.starts_with("completed elapsed_ms="), "{rendered}");
+
+        let failed = runtime.warm_up_within(Duration::from_millis(100)).await;
+        assert_eq!(failed.failure(), Some("timeout"));
+        assert!(failed.elapsed() < Duration::from_millis(500));
+        let rendered = failed.to_string();
+        assert!(
+            rendered.starts_with("failed class=timeout elapsed_ms="),
+            "{rendered}"
+        );
+        assert!(crate::provider::CompletionProvider::is_alive(&runtime));
+        server.abort();
+        let process_id = runtime.process_id().expect("owned child");
+        drop(runtime);
         assert!(!Path::new(&format!("/proc/{process_id}")).exists());
         Ok(())
     }

@@ -22,10 +22,9 @@ use crate::semantic::provenance::{
     DirectoryManifestExpectation, FileExpectation, ProvenanceError, VerifiedFile,
     verify_directory_manifest, verify_file,
 };
-use crate::semantic::runtime::{LlamaCppLaunch, OwnedRuntime, RuntimeError};
+use crate::semantic::runtime::{LlamaCppLaunch, OwnedRuntime, RuntimeError, WarmUpReport};
 
 pub const WRITING_CONTRACT: &str = "badi.writing.completion-and-spelling.en-de-fa.v2";
-pub(crate) const STREAM_BUDGET_MS: u64 = 550;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WritingLanguage {
@@ -119,6 +118,49 @@ pub(crate) fn validate_proposal(
     Ok(())
 }
 
+/// Normalize ASCII, Arabic-Indic and Persian digits to ASCII.
+pub(crate) fn ascii_digit(character: char) -> Option<char> {
+    let value = match character {
+        '0'..='9' => character as u32 - '0' as u32,
+        '\u{0660}'..='\u{0669}' => character as u32 - '\u{0660}' as u32,
+        '\u{06f0}'..='\u{06f9}' => character as u32 - '\u{06f0}' as u32,
+        _ => return None,
+    };
+    char::from_u32('0' as u32 + value)
+}
+
+fn digit_runs(text: &str) -> std::collections::BTreeSet<String> {
+    let mut runs = std::collections::BTreeSet::new();
+    let mut run = String::new();
+    for character in text.chars() {
+        if let Some(digit) = ascii_digit(character) {
+            run.push(digit);
+        } else if !run.is_empty() {
+            runs.insert(std::mem::take(&mut run));
+        }
+    }
+    if !run.is_empty() {
+        runs.insert(run);
+    }
+    runs
+}
+
+/// A small model readily invents dates, times, amounts and ordinals. Reject a
+/// proposal unless each of its digit runs already occurs in the typed context,
+/// and reject a number ending at the `.` stop word, which may be an ordinal or
+/// a cut decimal.
+pub(crate) fn introduces_unsupported_fact(context: &str, proposal: &str) -> bool {
+    if proposal
+        .strip_suffix('.')
+        .and_then(|value| value.chars().next_back())
+        .is_some_and(|character| ascii_digit(character).is_some())
+    {
+        return true;
+    }
+    let proposed = digit_runs(proposal);
+    !proposed.is_empty() && !proposed.is_subset(&digit_runs(context))
+}
+
 fn english_words() -> &'static [&'static str] {
     static WORDS: OnceLock<Vec<&'static str>> = OnceLock::new();
     WORDS.get_or_init(|| {
@@ -159,9 +201,26 @@ pub fn data_directory() -> Result<PathBuf, WritingError> {
     Ok(home.join(".local/share/badi"))
 }
 
-pub async fn activate(directory: PathBuf) -> Result<(OwnedRuntime, ModelArtifact), WritingError> {
+pub async fn activate(
+    directory: PathBuf,
+) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
     let (launch, model) = prepare_launch(directory).await?;
-    Ok((launch.for_writing().spawn().await?, model))
+    let runtime = launch.for_writing().spawn().await?;
+    // Pay the first-inference cost before the broker binds its socket. No real
+    // request can queue behind this bounded job, and a failure only leaves the
+    // first request cold.
+    let warm_up = runtime.warm_up().await;
+    Ok((runtime, model, warm_up))
+}
+
+/// Content-free startup lines, provider line first: log readers such as the
+/// Fcitx broker smoke lane require the log to begin with it.
+#[must_use]
+pub fn activation_report(model: &ModelArtifact, warm_up: WarmUpReport) -> String {
+    format!(
+        "provider=local_model model={} quantization={}\nbadi-broker: writing runtime warm-up {warm_up}",
+        model.filename, model.quantization
+    )
 }
 
 pub(crate) async fn prepare_launch(
@@ -264,22 +323,43 @@ pub(crate) struct CompletionPlan<'a> {
     pub(crate) max_tokens: u16,
 }
 
-pub(crate) fn completion_plan(
-    request: &ProviderRequest,
-    heal_trailing_ascii_space: bool,
-) -> CompletionPlan<'_> {
+/// Languages whose trailing ASCII space is healed in production. A language is
+/// listed only while blinded per-language review finds no increase in harmful
+/// suggestions over the unhealed prompt; an unlisted language keeps that
+/// prompt, trailing space included. Removing a language is its rollback.
+/// German is unlisted: the sealed 2026-09-10 set rose from 1 to 9 harmful.
+/// English was kept by user decision at +1 harmful for +19 useful in 40.
+pub(crate) const TRAILING_SPACE_HEALING: &[WritingLanguage] =
+    &[WritingLanguage::English, WritingLanguage::Persian];
+
+/// Whether production heals a trailing ASCII space for this language tag.
+#[must_use]
+pub fn heals_trailing_space(language: &str) -> bool {
+    WritingLanguage::from_tag(language)
+        .is_some_and(|language| TRAILING_SPACE_HEALING.contains(&language))
+}
+
+/// Production passes [`TRAILING_SPACE_HEALING`]; only the Lab's historical
+/// baseline passes no languages.
+pub(crate) fn completion_plan<'a>(
+    request: &'a ProviderRequest,
+    healed_languages: &[WritingLanguage],
+) -> CompletionPlan<'a> {
     let context = inference_context(&request.before);
     let language = request
         .language
         .as_deref()
         .and_then(WritingLanguage::from_tag);
-    if heal_trailing_ascii_space && language.is_some() && context.ends_with(' ') {
+    if language.is_some_and(|language| healed_languages.contains(&language))
+        && context.ends_with(' ')
+    {
+        // A prompt ending in a space tokenizes unlike the model's own
+        // " word" tokens. Generate at the earlier boundary and require the
+        // exact spaces back; the echo keeps the ordinary eight-token budget.
         let prompt = context.trim_end_matches(' ');
         return CompletionPlan {
             prompt,
             echo: Some(&context[prompt.len()..]),
-            // Boundary echo is the only experiment. Do not silently expand
-            // the ordinary eight-token allowance because an echo now exists.
             max_tokens: 8,
         };
     }
@@ -309,7 +389,20 @@ impl CompletionPlan<'_> {
 
 #[cfg(test)]
 pub(crate) fn completion_payload(request: &ProviderRequest) -> Value {
-    completion_plan(request, false).payload()
+    completion_plan(request, TRAILING_SPACE_HEALING).payload()
+}
+
+/// A sentence start with fewer words than this also keeps the sentence(s)
+/// before it, within the same 160-scalar window.
+const MIN_SENTENCE_CONTEXT_WORDS: usize = 4;
+
+/// Words for the sentence-context rule: whitespace-separated runs containing a
+/// letter or digit. ZWNJ is not whitespace, so `می‌شود` is one word, and a
+/// lone dash is not a word.
+fn context_words(text: &str) -> usize {
+    text.split_whitespace()
+        .filter(|run| run.chars().any(char::is_alphanumeric))
+        .count()
 }
 
 /// Limit cold prefill cost without changing the context used for edit authority.
@@ -329,18 +422,25 @@ pub(crate) fn inference_context(before: &str) -> &str {
         }
     }
     // Cold prefill of the full window can exhaust the writing deadline before
-    // the first token. Keep the current sentence; edit authority still binds
-    // the unchanged full request.
+    // the first token, so keep the current sentence. At a sentence start that
+    // leaves the model almost nothing (`Please`), so extend back one sentence
+    // at a time until the prompt has four words; when the text is typed in
+    // order, the previous request's prompt is then a cached prefix. A sentence
+    // end is `.`, `!`, `?` or `؟` before whitespace, or a newline, so
+    // abbreviations such as `z. B.` and `e.g.` also end one. Edit authority
+    // still binds the unchanged full request.
     for (index, character) in window.char_indices().rev() {
         if matches!(character, '.' | '!' | '?' | '\u{061f}' | '\n') {
             let after = &window[index + character.len_utf8()..];
             if (character == '\n' || after.starts_with(char::is_whitespace))
-                && !after.trim_start().is_empty()
+                && context_words(after) >= MIN_SENTENCE_CONTEXT_WORDS
             {
                 return after.trim_start();
             }
         }
     }
+    // Too few words after every sentence start in the window: keep the whole
+    // window, which still begins at a whitespace boundary.
     window
 }
 
@@ -365,9 +465,8 @@ pub(crate) fn strip_healed_prefix<'a>(raw: &'a str, echo: Option<&str>) -> Optio
 
 pub(crate) fn available_complete_words(raw: &str) -> Option<String> {
     let separator = raw.rfind(' ').unwrap_or(0);
-    let count = raw
-        .unicode_word_indices()
-        .filter(|(start, word)| start + word.len() <= separator)
+    let count = spaced_words(raw)
+        .filter(|(run_end, _)| *run_end <= separator)
         .count()
         .min(4);
     (count > 0)
@@ -498,6 +597,22 @@ pub(crate) fn valid_correction(original: &str, corrected: &str) -> bool {
     }
 }
 
+/// Visible words for the suggestion limit: runs between ASCII spaces, the only
+/// word separator a suggestion may contain. UAX #29 splits `re-try`, `E-Mail`
+/// and `state-of-the-art`, so its segments cannot decide where a displayed word
+/// ends. Each item is (end of the run, end of the run's last UAX #29 word); the
+/// latter drops trailing punctuation such as a comma. A run without a word,
+/// such as a dash, is not counted.
+fn spaced_words(raw: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let mut next = 0;
+    raw.split(' ').filter_map(move |run| {
+        let start = next;
+        next += run.len() + 1;
+        let (offset, word) = run.unicode_word_indices().next_back()?;
+        Some((start + run.len(), start + offset + word.len()))
+    })
+}
+
 /// A streaming token is not necessarily a complete word. Wait for a following
 /// separator (or a terminal model stop) before returning a bounded continuation.
 pub(crate) fn complete_word_prefix(raw: &str, limit: usize, finished: bool) -> Option<String> {
@@ -507,18 +622,16 @@ pub(crate) fn complete_word_prefix(raw: &str, limit: usize, finished: bool) -> O
     {
         return None;
     }
-    let words: Vec<_> = raw.unicode_word_indices().collect();
     let separator = raw.rfind(' ').unwrap_or(0);
-    let complete: Vec<_> = words
-        .into_iter()
-        .filter(|(start, word)| finished || start + word.len() <= separator)
+    let complete: Vec<_> = spaced_words(raw)
+        .filter(|(run_end, _)| finished || *run_end <= separator)
+        .map(|(_, word_end)| word_end)
         .collect();
     if complete.is_empty() || (!finished && complete.len() < limit) {
         return None;
     }
     let count = complete.len().min(limit);
-    let (start, word) = complete[count - 1];
-    let mut end = start + word.len();
+    let mut end = complete[count - 1];
     if finished && count == complete.len() {
         end = raw.trim_end().len();
     }
@@ -608,12 +721,20 @@ mod tests {
             "We use version 2.5 in production"
         );
         for (context, expected) in [
-            ("Thanks for sharing the draft. I will", "I will"),
-            ("Vielen Dank für Ihre Nachricht. Ich werde", "Ich werde"),
-            ("از پیام شما ممنونم. من فردا", "من فردا"),
-            ("آماده هستید؟ من فردا", "من فردا"),
-            ("The user chose blue.\nMake the heading", "Make the heading"),
-            ("Previous line\nNext line", "Next line"),
+            (
+                "Thanks for sharing the draft. I will read it",
+                "I will read it",
+            ),
+            (
+                "Vielen Dank für Ihre Nachricht. Ich werde sie morgen",
+                "Ich werde sie morgen",
+            ),
+            ("از پیام شما ممنونم. من فردا گزارش را", "من فردا گزارش را"),
+            ("آماده هستید؟ من فردا گزارش را", "من فردا گزارش را"),
+            (
+                "The user chose blue.\nMake the heading bold",
+                "Make the heading bold",
+            ),
             ("A complete sentence. ", "A complete sentence. "),
             (
                 "domain.example remains intact",
@@ -628,11 +749,129 @@ mod tests {
             language: Some("de".to_owned()),
         };
         assert_eq!(super::completion_payload(&german)["prompt"], german.before);
-        assert!(super::completion_plan(&german, false).echo.is_none());
+        assert!(super::completion_plan(&german, &[]).echo.is_none());
     }
 
     #[test]
-    fn opt_in_space_boundary_preserves_exact_bytes_and_the_eight_token_budget() {
+    fn a_short_sentence_start_keeps_the_previous_sentences_in_the_window() {
+        for context in [
+            // Fewer than four words after the last sentence end.
+            "Thanks for sharing the draft. I will",
+            "Thanks for sharing the draft. I will send",
+            "Vielen Dank für Ihre Nachricht. Ich werde",
+            "Aus dem Protokoll ist der Grund nicht ersichtlich. Deshalb ",
+            "از پیام شما ممنونم. من فردا",
+            "آماده هستید؟ من فردا",
+            "Great news! We",
+            "The user chose blue.\nMake the heading",
+            "Previous line\nNext line",
+            "Hi Anna,\n\nThanks",
+            "Hi. Thanks. See you",
+            "First sentence. Second one. ",
+            // ZWNJ joins one word: three words, not four.
+            "پیام شما رسید. من می\u{200c}خواهم فردا",
+            // A lone dash is not a word: three words, not four.
+            "Thanks for the draft. Yes – I will",
+            // Abbreviations end a sentence; each piece is still short.
+            "Wir brauchen Obst, z. B. Äpfel",
+        ] {
+            assert_eq!(super::inference_context(context), context, "{context:?}");
+        }
+        for (context, expected) in [
+            // Extension stops once the kept sentences have four words.
+            (
+                "I read your notes. The draft looks good to me. Thanks. Please",
+                "The draft looks good to me. Thanks. Please",
+            ),
+            (
+                "Thanks for sharing the draft. I will send it",
+                "I will send it",
+            ),
+            (
+                "پیام شما رسید. من می\u{200c}خواهم فردا صبح",
+                "من می\u{200c}خواهم فردا صبح",
+            ),
+            // `z. B.` is treated as a sentence end (documented limitation).
+            (
+                "Ich brauche Zutaten, z. B. Mehl, Zucker, Eier und Butter",
+                "Mehl, Zucker, Eier und Butter",
+            ),
+        ] {
+            assert_eq!(super::inference_context(context), expected, "{context:?}");
+        }
+        // The 160-scalar window and its whitespace cut still bound the prompt,
+        // even when the previous sentence begins before the window.
+        for (sentence, start) in [
+            ("word ".repeat(40), "Please"),
+            ("Wort ".repeat(40), "Bitte"),
+            ("کلمه ".repeat(40), "لطفا"),
+        ] {
+            let before = format!("{}. {start} ", sentence.trim_end());
+            let context = super::inference_context(&before);
+            assert!(context.chars().count() <= 160, "{context:?}");
+            assert!(context.ends_with(&format!(". {start} ")), "{context:?}");
+            assert!(before[..before.len() - context.len()].ends_with(' '));
+            assert!(context.starts_with(sentence.split(' ').next().expect("word")));
+        }
+        // Typed in order, the previous request's prompt is a prefix of the
+        // prompt at the next sentence start, so the runtime reuses its cache.
+        let previous = super::inference_context("Thanks for sharing the draft");
+        let next = super::inference_context("Thanks for sharing the draft. I");
+        assert_eq!(next, "Thanks for sharing the draft. I");
+        assert!(next.starts_with(previous));
+        let request = crate::provider::ProviderRequest {
+            before: "Previous notes are here. Thanks for sharing the draft. Please ".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+        };
+        let plan = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
+        assert_eq!(plan.prompt, "Thanks for sharing the draft. Please");
+        assert_eq!(plan.echo, Some(" "));
+    }
+
+    #[test]
+    fn trailing_space_healing_is_promoted_per_language() {
+        use super::WritingLanguage::{English, German, Persian};
+        // A reviewed promotion decision: change it only with the per-language
+        // harm review recorded in evaluation/writing/README.md.
+        assert_eq!(super::TRAILING_SPACE_HEALING, [English, Persian]);
+        for (tag, language, before) in [
+            ("en-US", English, "Please review the "),
+            ("de", German, "Bitte lies das "),
+            ("fa-IR", Persian, "لطفا این گزارش را "),
+        ] {
+            let request = crate::provider::ProviderRequest {
+                before: before.to_owned(),
+                after: String::new(),
+                language: Some(tag.to_owned()),
+            };
+            let legacy = super::completion_plan(&request, &[]).payload();
+            assert_eq!(legacy["prompt"], before);
+            assert!(legacy.get("grammar").is_none());
+            let promoted = super::completion_plan(&request, &[language]);
+            assert_eq!(promoted.prompt, before.trim_end_matches(' '));
+            assert_eq!(promoted.echo, Some(" "));
+            // Promoting the other languages leaves this one unhealed.
+            let others: Vec<_> = [English, German, Persian]
+                .into_iter()
+                .filter(|other| *other != language)
+                .collect();
+            assert_eq!(super::completion_plan(&request, &others).payload(), legacy);
+            let production = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
+            assert_eq!(
+                production.echo.is_some(),
+                super::TRAILING_SPACE_HEALING.contains(&language)
+            );
+            assert_eq!(
+                super::heals_trailing_space(tag),
+                super::TRAILING_SPACE_HEALING.contains(&language)
+            );
+        }
+        assert!(!super::heals_trailing_space("ar"));
+    }
+
+    #[test]
+    fn trailing_space_boundary_preserves_exact_bytes_and_the_eight_token_budget() {
         for (language, before) in [
             ("en-US", "Please review the "),
             ("de-DE", "Bitte lies das "),
@@ -644,7 +883,13 @@ mod tests {
                 after: String::new(),
                 language: Some(language.to_owned()),
             };
-            let plan = super::completion_plan(&request, true);
+            // The mechanism, independent of which languages production promotes.
+            let all = [
+                super::WritingLanguage::English,
+                super::WritingLanguage::German,
+                super::WritingLanguage::Persian,
+            ];
+            let plan = super::completion_plan(&request, &all);
             let original = super::inference_context(before);
             assert_eq!(
                 format!("{}{}", plan.prompt, plan.echo.expect("ASCII echo")),
@@ -660,7 +905,7 @@ mod tests {
             assert_eq!(payload["seed"], 42);
             assert_eq!(payload["cache_prompt"], true);
             assert_eq!(request.before, before, "editing context must not change");
-            let legacy = super::completion_plan(&request, false);
+            let legacy = super::completion_plan(&request, &[]);
             assert_eq!(legacy.prompt, original);
             assert_eq!(legacy.echo, None);
             assert_eq!(legacy.max_tokens, 8);
@@ -684,8 +929,8 @@ mod tests {
                 after: String::new(),
                 language: Some(language.to_owned()),
             };
-            let legacy = super::completion_plan(&request, false);
-            let candidate = super::completion_plan(&request, true);
+            let legacy = super::completion_plan(&request, &[]);
+            let candidate = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
             assert_eq!(legacy.payload(), candidate.payload());
             assert_eq!(candidate.max_tokens, tokens);
             assert_eq!(
@@ -703,8 +948,9 @@ mod tests {
             after: String::new(),
             language: Some("en".to_owned()),
         };
-        let plan = super::completion_plan(&request, true);
-        assert_eq!(plan.prompt, "Please review the");
+        let plan = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
+        // Three words keep the previous sentence, but not the whole window.
+        assert_eq!(plan.prompt, "Earlier sentence. Please review the");
         assert_eq!(plan.echo, Some("  "));
         assert_eq!(request.before, before);
     }
@@ -757,6 +1003,72 @@ mod tests {
         ] {
             assert!(super::validate_proposal(before, "", suggestion, Some(language)).is_ok());
         }
+    }
+
+    #[test]
+    fn fact_fence_rejects_invented_numbers_and_stop_word_ordinals() {
+        use super::introduces_unsupported_fact as rejects;
+        for (context, proposal) in [
+            ("Ich freue mich auf", " die Teilnahme am 1."),
+            ("Ich freue mich auf", " die Teilnahme am 1"),
+            ("The survey ran in ", "2024, but"),
+            ("This essay is ", "100% original and"),
+            ("Our office is open from ", "10:00 AM to"),
+            ("Meet me at room 42, then room", " 4"),
+            ("Meet me at room 42, then room", " 420"),
+            ("Meet me at room 42, then room", " 42 or 43"),
+            ("We use version 2.5 in production and", " 2.6 later"),
+            // The number is known, but a stop-word period may be an ordinal
+            // or a decimal cut at the stop word.
+            ("Die Frist ist der 1. Mai. Wir treffen uns am", " 1."),
+            ("Meet me at room 42, then room", " 42."),
+            ("جلسه در اتاق ۴۲ است. بعد به اتاق", " ۴۳ برویم"),
+            ("جلسه در اتاق ۴۲ است. بعد به اتاق", " ۴۲."),
+            ("پیام شما رسید. من فردا", " ساعت ۱۰ می‌آیم"),
+            ("پیام شما رسید. من فردا", " ساعت \u{0661}\u{0660} می‌آیم"),
+        ] {
+            assert!(rejects(context, proposal), "{context:?} + {proposal:?}");
+        }
+        for (context, proposal) in [
+            ("Meet me at room 42, then room", " 42"),
+            ("Meet me at room 42, then room", " 42 again"),
+            ("We use version 2.5 in production and", " 2.5 remains"),
+            ("جلسه در اتاق ۴۲ است. بعد به اتاق", " ۴۲ برویم"),
+            // Digit scripts normalize before comparison.
+            ("جلسه در اتاق ۴۲ است. بعد به اتاق", " 42 برویم"),
+            ("Meet me at room 42, then room", " \u{0664}\u{0662}"),
+            ("Ich freue mich auf", " die Teilnahme."),
+            ("Thank you", " for your time."),
+            ("Please find attached the", " latest version of the"),
+        ] {
+            assert!(!rejects(context, proposal), "{context:?} + {proposal:?}");
+        }
+    }
+
+    #[test]
+    fn activation_report_begins_with_the_provider_line() {
+        use crate::model_selection::{ModelUseCase, catalog};
+        use crate::semantic::runtime::WarmUpReport;
+        use std::time::Duration;
+
+        let model = catalog(ModelUseCase::Writing)[0];
+        let provider = format!(
+            "provider=local_model model={} quantization={}",
+            model.filename, model.quantization
+        );
+        assert_eq!(
+            super::activation_report(&model, WarmUpReport::new(Duration::from_millis(412), None)),
+            format!("{provider}\nbadi-broker: writing runtime warm-up completed elapsed_ms=412")
+        );
+        assert_eq!(
+            super::activation_report(
+                &model,
+                WarmUpReport::new(Duration::from_millis(2000), Some("timeout"))
+            ),
+            format!(
+                "{provider}\nbadi-broker: writing runtime warm-up failed class=timeout elapsed_ms=2000"
+            )
+        );
     }
 
     #[test]
@@ -940,5 +1252,78 @@ mod tests {
             complete_word_prefix("<think>private reasoning", 4, true),
             None
         );
+    }
+
+    /// Observed with the pinned model on 2026-09-26: after the healed echo,
+    /// `the client should ` streamed ` be able to re-try the request`. UAX #29
+    /// splits `re-try` into two words, so the four-word limit ended inside it
+    /// and displayed `be able to re`. The limit counts space-separated words.
+    #[test]
+    fn the_word_limit_never_cuts_inside_a_joined_word() {
+        for (raw, finished, expected) in [
+            ("be able to re-try the", false, Some("be able to re-try")),
+            (" be able to re-try the", false, Some(" be able to re-try")),
+            (
+                "be able to re-try the request",
+                true,
+                Some("be able to re-try"),
+            ),
+            ("be able to re-try", false, None),
+            (" a state-of-the-art tool is", false, None),
+            (
+                " a state-of-the-art tool is here",
+                false,
+                Some(" a state-of-the-art tool is"),
+            ),
+            (" die E-Mail an Herrn", false, None),
+            (
+                " die E-Mail an Herrn Meyer",
+                false,
+                Some(" die E-Mail an Herrn"),
+            ),
+            (" را به‌روز کنیم و", false, None),
+            (" را به‌روز کنیم و بعد", false, Some(" را به‌روز کنیم و")),
+            // Trailing punctuation of an intermediate word is still dropped.
+            (
+                " we agreed, then left it",
+                false,
+                Some(" we agreed, then left"),
+            ),
+            (
+                " one two three four, five",
+                false,
+                Some(" one two three four"),
+            ),
+            (
+                " one - two three four five",
+                false,
+                Some(" one - two three four"),
+            ),
+            (" don't re-send it now", false, None),
+            (
+                " don't re-send it now ",
+                false,
+                Some(" don't re-send it now"),
+            ),
+        ] {
+            assert_eq!(
+                complete_word_prefix(raw, 4, finished).as_deref(),
+                expected,
+                "{raw:?}"
+            );
+        }
+        // Deadline salvage counts the same words.
+        for (raw, expected) in [
+            ("be able to re-try the", Some("be able to re-try")),
+            (" a b c re-try d", Some(" a b c re-try")),
+            (" re-", None),
+            (" able to re-", Some(" able to")),
+        ] {
+            assert_eq!(
+                super::available_complete_words(raw).as_deref(),
+                expected,
+                "{raw:?}"
+            );
+        }
     }
 }

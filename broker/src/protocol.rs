@@ -6,7 +6,7 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::{Uuid, Variant};
 
-use crate::metrics::MetricsSnapshot;
+use crate::metrics::{MetricsSnapshot, NoSuggestionReason};
 
 /// The legacy browser wire version. Constructors continue to default to this
 /// version so existing Chromium call sites cannot change behavior accidentally.
@@ -277,6 +277,10 @@ pub enum MessageType {
     MemoryClear,
     #[serde(rename = "memory.status")]
     MemoryStatus,
+    #[serde(rename = "probe.request")]
+    ProbeRequest,
+    #[serde(rename = "probe.result")]
+    ProbeResult,
     #[serde(rename = "error")]
     Error,
 }
@@ -1052,6 +1056,147 @@ impl HealthStatusPayload {
             Err(ProtocolError::InvalidPayload)
         } else {
             Ok(())
+        }
+    }
+}
+
+/// Private same-UID diagnostic request (protocol v2 CLI only). It opens no
+/// session and grants no commit authority; the broker neither logs nor keeps
+/// its text.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProbeRequestPayload {
+    pub before: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub after: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Grants the exact-replacement capability editor integrations negotiate.
+    pub allow_replacement: bool,
+    /// Uses the longer writing budget of an explicit (Tab) request.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub explicit: bool,
+}
+
+impl ProbeRequestPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.before.chars().count() > MAX_BEFORE_CHARS
+            || self.after.chars().count() > MAX_AFTER_CHARS
+            || self
+                .language
+                .as_ref()
+                .is_some_and(|language| !valid_language_tag(language))
+        {
+            Err(ProtocolError::InvalidPayload)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeOutcome {
+    Suggested,
+    NoSuggestion,
+    Paused,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProbeResultPayload {
+    pub outcome: ProbeOutcome,
+    pub provider: ProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace_before: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<NoSuggestionReason>,
+    /// Broker-local provider and validation time, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+}
+
+impl ProbeResultPayload {
+    #[must_use]
+    pub const fn paused(provider: ProviderKind) -> Self {
+        Self {
+            outcome: ProbeOutcome::Paused,
+            provider,
+            text: None,
+            replace_before: None,
+            reason: None,
+            latency_ms: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn suggested(
+        provider: ProviderKind,
+        text: String,
+        replace_before: Option<String>,
+        latency_ms: u64,
+    ) -> Self {
+        Self {
+            outcome: ProbeOutcome::Suggested,
+            provider,
+            text: Some(text),
+            replace_before,
+            reason: None,
+            latency_ms: Some(latency_ms),
+        }
+    }
+
+    #[must_use]
+    pub const fn no_suggestion(
+        provider: ProviderKind,
+        reason: NoSuggestionReason,
+        latency_ms: u64,
+    ) -> Self {
+        Self {
+            outcome: ProbeOutcome::NoSuggestion,
+            provider,
+            text: None,
+            replace_before: None,
+            reason: Some(reason),
+            latency_ms: Some(latency_ms),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let latency = self
+            .latency_ms
+            .is_some_and(|latency| latency <= MAX_SAFE_COUNTER);
+        let valid = match self.outcome {
+            ProbeOutcome::Suggested => {
+                latency
+                    && self.reason.is_none()
+                    && self.text.as_deref().is_some_and(|text| {
+                        match self.replace_before.as_deref() {
+                            Some(original) => valid_spelling_replacement(original, text),
+                            None => crate::segment::sanitize_suggestion(text)
+                                .is_ok_and(|sanitized| sanitized == text),
+                        }
+                    })
+            }
+            ProbeOutcome::NoSuggestion => {
+                latency
+                    && self.reason.is_some()
+                    && self.text.is_none()
+                    && self.replace_before.is_none()
+            }
+            ProbeOutcome::Paused => {
+                self.latency_ms.is_none()
+                    && self.reason.is_none()
+                    && self.text.is_none()
+                    && self.replace_before.is_none()
+            }
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(ProtocolError::InvalidPayload)
         }
     }
 }

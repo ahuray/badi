@@ -9,7 +9,7 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use crate::control_plane::{ControlPlane, ControlPlaneError, ControlPlaneSnapshot};
-use crate::metrics::{Metrics, MetricsSnapshot};
+use crate::metrics::{Metrics, MetricsSnapshot, NoSuggestionReason};
 use crate::personalization::{
     PersonalizationProvider, PersonalizationSignal, PersonalizationStoreError,
 };
@@ -18,12 +18,15 @@ use crate::protocol::{
     Acceptance, Activation, ActiveLocator, AdapterKind, AuthorityChangedPayload, Capability,
     CommitPreparePayload, CommitResultPayload, CommitStatus, ContextChangedPayload, Coordinates,
     DEFAULT_SUGGESTION_TTL_MS, MAX_FRAME_BYTES, MAX_SAFE_COUNTER, MessageType,
-    PolicyResolutionReason, PolicyStatusPayload, ProviderKind, ReasonCode,
-    SessionControlRequestPayload, SessionId, SessionOpenPayload, SuggestCancelPayload,
-    SuggestRequestPayload, SuggestionClearPayload, SuggestionShowPayload, TargetDescriptor,
-    WireEnvelope,
+    PolicyResolutionReason, PolicyStatusPayload, ProbeRequestPayload, ProbeResultPayload,
+    ProviderKind, ReasonCode, SessionControlRequestPayload, SessionId, SessionOpenPayload,
+    SuggestCancelPayload, SuggestRequestPayload, SuggestionClearPayload, SuggestionShowPayload,
+    TargetDescriptor, WireEnvelope,
 };
-use crate::provider::{CompletionProvider, ProviderError, ProviderRequest, WritingProposal};
+use crate::provider::{
+    CompletionProvider, ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger,
+    WritingProposal,
+};
 use crate::segment::{accept_word, sanitize_suggestion, validate_suggestion_shape};
 use crate::settings::{PrivateStorageError, SettingsStoreError, SettingsV1, StableIdentity};
 
@@ -44,6 +47,8 @@ pub const DEFAULT_PROVIDER_CONCURRENCY: usize = 4;
 pub const MAX_PROVIDER_CONCURRENCY: usize = 16;
 /// Maximum receiver-local age from an accepted request to provider completion.
 pub const MAX_GENERATION_TIMEOUT_MS: u64 = 600;
+/// The same limit for an explicit request, which has a longer writing budget.
+pub const MAX_EXPLICIT_GENERATION_TIMEOUT_MS: u64 = 1_250;
 /// Native panels need enough time to read and accept a continuation.
 pub const NATIVE_SUGGESTION_TTL_MS: u64 = 5_000;
 
@@ -53,6 +58,8 @@ pub struct BrokerConfig {
     pub provider_timeout: Duration,
     /// Includes broker debounce; late output is never displayed with a fresh TTL.
     pub generation_timeout: Duration,
+    /// `generation_timeout` for explicit requests; never shorter than it.
+    pub explicit_generation_timeout: Duration,
     /// Maximum provider generations admitted across all broker connections.
     pub provider_concurrency: usize,
     pub suggestion_ttl: Duration,
@@ -60,6 +67,15 @@ pub struct BrokerConfig {
     pub context_authority_lease: Duration,
     /// Receiver-local lease; adapters must report the authorized commit before it expires.
     pub commit_result_lease: Duration,
+}
+
+impl BrokerConfig {
+    const fn generation_timeout_for(&self, trigger: RequestTrigger) -> Duration {
+        match trigger {
+            RequestTrigger::Automatic => self.generation_timeout,
+            RequestTrigger::Explicit => self.explicit_generation_timeout,
+        }
+    }
 }
 
 impl Default for BrokerConfig {
@@ -70,6 +86,7 @@ impl Default for BrokerConfig {
             debounce: Duration::ZERO,
             provider_timeout: Duration::from_millis(1_300),
             generation_timeout: Duration::from_millis(MAX_GENERATION_TIMEOUT_MS),
+            explicit_generation_timeout: Duration::from_millis(MAX_EXPLICIT_GENERATION_TIMEOUT_MS),
             provider_concurrency: DEFAULT_PROVIDER_CONCURRENCY,
             suggestion_ttl: Duration::from_millis(DEFAULT_SUGGESTION_TTL_MS),
             context_authority_lease: Duration::from_millis(DEFAULT_CONTEXT_AUTHORITY_LEASE_MS),
@@ -498,6 +515,10 @@ impl Broker {
         outcome_recorder: Option<OutcomeRecorder>,
     ) -> Self {
         let provider_kind = provider.kind();
+        let generation_timeout = config.generation_timeout.clamp(
+            Duration::from_millis(1),
+            Duration::from_millis(MAX_GENERATION_TIMEOUT_MS),
+        );
         let config = BrokerConfig {
             provider_concurrency: config
                 .provider_concurrency
@@ -505,9 +526,10 @@ impl Broker {
             suggestion_ttl: config
                 .suggestion_ttl
                 .clamp(Duration::from_millis(1), Duration::from_millis(600)),
-            generation_timeout: config.generation_timeout.clamp(
-                Duration::from_millis(1),
-                Duration::from_millis(MAX_GENERATION_TIMEOUT_MS),
+            generation_timeout,
+            explicit_generation_timeout: config.explicit_generation_timeout.clamp(
+                generation_timeout,
+                Duration::from_millis(MAX_EXPLICIT_GENERATION_TIMEOUT_MS),
             ),
             commit_result_lease: config.commit_result_lease.clamp(
                 Duration::from_millis(1),
@@ -677,7 +699,13 @@ impl Broker {
         }
     }
 
-    fn renew_context_authority_lease(&self, session: &mut SessionState) {
+    /// `generation_timeout` is the limit of the request this renewal admits,
+    /// so a suggestion shown at that limit keeps its full reading window.
+    fn renew_context_authority_lease(
+        &self,
+        session: &mut SessionState,
+        generation_timeout: Duration,
+    ) {
         invalidate_context_authority_lease(session);
         let generation = session.context_lease_generation;
         let cancellation = CancellationToken::new();
@@ -691,10 +719,10 @@ impl Broker {
                     | AdapterKind::Terminal
                     | AdapterKind::Browser
             ) {
-            self.inner.config.context_authority_lease.max(
-                Duration::from_millis(NATIVE_SUGGESTION_TTL_MS)
-                    + self.inner.config.generation_timeout,
-            )
+            self.inner
+                .config
+                .context_authority_lease
+                .max(Duration::from_millis(NATIVE_SUGGESTION_TTL_MS) + generation_timeout)
         } else {
             self.inner.config.context_authority_lease
         };
@@ -765,7 +793,7 @@ impl Broker {
         match decision {
             PolicyDecision::Allow(_) => {
                 session.context = Some(StoredContext { payload });
-                self.renew_context_authority_lease(session);
+                self.renew_context_authority_lease(session, self.inner.config.generation_timeout);
                 Ok(ContextOutcome::Allowed)
             }
             PolicyDecision::ManualRequired(_) => {
@@ -796,6 +824,8 @@ impl Broker {
             return Err(BrokerError::InvalidPayload);
         }
 
+        let trigger = RequestTrigger::from_explicit(payload.explicit);
+        let generation_timeout = self.inner.config.generation_timeout_for(trigger);
         let (
             provider_request,
             allow_replacement,
@@ -857,7 +887,7 @@ impl Broker {
             let generation = session.generation;
             let cancellation = CancellationToken::new();
             session.cancellation = Some(cancellation.clone());
-            self.renew_context_authority_lease(session);
+            self.renew_context_authority_lease(session, generation_timeout);
             let suggestion_context = (
                 context.payload.before.clone(),
                 context.payload.after.clone(),
@@ -874,7 +904,7 @@ impl Broker {
                     .contains(&Capability::TextReplacement)
                     && context.payload.field.identity_known,
                 suggestion_context,
-                Instant::now() + self.inner.config.generation_timeout,
+                Instant::now() + generation_timeout,
                 cancellation,
                 generation,
                 provider_permit,
@@ -904,14 +934,22 @@ impl Broker {
             let provider_deadline = Instant::now() + broker.inner.config.provider_timeout;
             let effective_deadline = std::cmp::min(generation_deadline, provider_deadline);
             let result = tokio::select! {
-                () = cancellation.cancelled() => return,
-                () = broker.inner.shutdown.cancelled() => return,
+                () = cancellation.cancelled() => {
+                    broker.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
+                    return;
+                }
+                () = broker.inner.shutdown.cancelled() => {
+                    broker.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
+                    return;
+                }
                 result = time::timeout_at(
                     effective_deadline.into(),
-                    broker
-                        .inner
-                        .provider
-                        .propose(provider_request, cancellation.clone(), allow_replacement),
+                    broker.inner.provider.propose_outcome(
+                        provider_request,
+                        cancellation.clone(),
+                        allow_replacement,
+                        trigger,
+                    ),
                 ) => result,
             };
             broker
@@ -934,13 +972,14 @@ impl Broker {
     }
 
     // Keeping this result-state transition contiguous makes cancellation and
-    // stale-authority auditing clearer than splitting coupled branches.
+    // stale-authority auditing clearer than splitting coupled branches. Every
+    // return path records exactly one no-suggestion class or a shown result.
     #[allow(clippy::too_many_lines)]
     async fn finish_generation(
         &self,
         context: GenerationResultContext,
         cancellation: CancellationToken,
-        result: Result<Result<Option<WritingProposal>, ProviderError>, time::error::Elapsed>,
+        result: Result<Result<ProviderOutcome, ProviderError>, time::error::Elapsed>,
     ) {
         let GenerationResultContext {
             coordinates,
@@ -951,9 +990,11 @@ impl Broker {
             before,
             after,
         } = context;
+        let metrics = &self.inner.metrics;
         if Instant::now() >= deadline {
             cancellation.cancel();
-            self.inner.metrics.record_provider_error();
+            metrics.record_provider_error();
+            metrics.record_no_suggestion(NoSuggestionReason::Timeout);
             self.clear_failed_generation(
                 coordinates,
                 &fingerprint,
@@ -965,20 +1006,10 @@ impl Broker {
             return;
         }
         let timed_out = result.is_err();
-        let output = match result {
-            Ok(Ok(Some(raw))) => {
-                self.inner.metrics.record_provider_output(raw.text.len());
-                if let Some(original) = raw.replace_before.as_deref() {
-                    // A correction may preserve the single space typed after
-                    // its word. General continuation sanitization stays strict.
-                    crate::protocol::valid_spelling_replacement(original, &raw.text)
-                        .then_some((raw.text, raw.replace_before))
-                        .ok_or(crate::segment::OutputError::InvalidShape)
-                } else {
-                    sanitize_suggestion(&raw.text).map(|text| (text, raw.replace_before))
-                }
-            }
-            Ok(Ok(None)) => {
+        let raw = match result {
+            Ok(Ok(ProviderOutcome::Proposal(raw))) => raw,
+            Ok(Ok(ProviderOutcome::NoSuggestion(reason))) => {
+                metrics.record_no_suggestion(reason);
                 self.clear_failed_generation(
                     coordinates,
                     &fingerprint,
@@ -989,17 +1020,21 @@ impl Broker {
                 .await;
                 return;
             }
-            Ok(Err(ProviderError::Cancelled)) => return,
+            Ok(Err(ProviderError::Cancelled)) => {
+                metrics.record_no_suggestion(NoSuggestionReason::Stale);
+                return;
+            }
             Ok(Err(ProviderError::Unavailable)) | Err(_) => {
                 if timed_out {
                     cancellation.cancel();
                 }
-                self.inner.metrics.record_provider_error();
-                let reason = if timed_out {
-                    ReasonCode::ProviderTimeout
+                metrics.record_provider_error();
+                let (reason, class) = if timed_out {
+                    (ReasonCode::ProviderTimeout, NoSuggestionReason::Timeout)
                 } else {
-                    ReasonCode::ProviderError
+                    (ReasonCode::ProviderError, NoSuggestionReason::ProviderError)
                 };
+                metrics.record_no_suggestion(class);
                 self.clear_failed_generation(
                     coordinates,
                     &fingerprint,
@@ -1011,9 +1046,12 @@ impl Broker {
                 return;
             }
         };
-
-        let Ok((text, replace_before)) = output else {
-            self.inner.metrics.record_provider_error();
+        metrics.record_provider_output(raw.text.len());
+        let Some((text, replace_before)) =
+            checked_proposal(self.inner.provider_kind, &before, &after, raw)
+        else {
+            metrics.record_provider_error();
+            metrics.record_no_suggestion(NoSuggestionReason::OutputRejected);
             self.clear_failed_generation(
                 coordinates,
                 &fingerprint,
@@ -1024,45 +1062,13 @@ impl Broker {
             .await;
             return;
         };
-        let shape_valid = match replace_before.as_deref() {
-            Some(original) => {
-                crate::protocol::valid_spelling_replacement(original, &text)
-                    && before.ends_with(original)
-                    && after.is_empty()
-                    && before[..before.len() - original.len()]
-                        .chars()
-                        .next_back()
-                        .is_none_or(char::is_whitespace)
-            }
-            None => {
-                #[cfg(feature = "local-model")]
-                if self.inner.provider_kind == ProviderKind::LocalModel {
-                    crate::writing::validate_suggestion_shape(&before, &after, &text).is_ok()
-                } else {
-                    validate_suggestion_shape(&before, &after, &text).is_ok()
-                }
-                #[cfg(not(feature = "local-model"))]
-                validate_suggestion_shape(&before, &after, &text).is_ok()
-            }
-        };
-        if !shape_valid {
-            self.inner.metrics.record_provider_error();
-            self.clear_failed_generation(
-                coordinates,
-                &fingerprint,
-                generation,
-                request_id,
-                ReasonCode::InvalidOutput,
-            )
-            .await;
-            return;
-        }
 
         let mut state = self.inner.state.lock().await;
         if Instant::now() >= deadline {
             drop(state);
             cancellation.cancel();
-            self.inner.metrics.record_provider_error();
+            metrics.record_provider_error();
+            metrics.record_no_suggestion(NoSuggestionReason::Timeout);
             self.clear_failed_generation(
                 coordinates,
                 &fingerprint,
@@ -1077,17 +1083,20 @@ impl Broker {
         let settings = state.settings.clone();
         let settings_revision = state.settings_revision;
         if runtime_paused || settings.as_ref().is_some_and(|value| value.paused) {
-            self.inner.metrics.record_stale_result();
+            metrics.record_stale_result();
+            metrics.record_no_suggestion(NoSuggestionReason::Stale);
             return;
         }
         let Some(session) = state.sessions.get_mut(&coordinates.session_id) else {
-            self.inner.metrics.record_stale_result();
+            metrics.record_stale_result();
+            metrics.record_no_suggestion(NoSuggestionReason::Stale);
             return;
         };
         if settings.as_ref().is_some_and(|settings| {
             !settings_allows_data(runtime_paused, settings, &session.target.target)
         }) {
-            self.inner.metrics.record_stale_result();
+            metrics.record_stale_result();
+            metrics.record_no_suggestion(NoSuggestionReason::Stale);
             return;
         }
         let is_current = session.generation == generation
@@ -1098,7 +1107,8 @@ impl Broker {
                 .is_some_and(|context| context.payload.fingerprint == fingerprint)
             && !cancellation.is_cancelled();
         if !is_current {
-            self.inner.metrics.record_stale_result();
+            metrics.record_stale_result();
+            metrics.record_no_suggestion(NoSuggestionReason::Stale);
             return;
         }
 
@@ -1112,7 +1122,8 @@ impl Broker {
                     .as_ref()
                     .is_none_or(|context| !context.payload.field.identity_known))
         {
-            self.inner.metrics.record_provider_error();
+            metrics.record_provider_error();
+            metrics.record_no_suggestion(NoSuggestionReason::OutputRejected);
             session.cancellation = None;
             let _ = session.sink.send(BrokerEvent::SuggestionClear {
                 coordinates,
@@ -1157,7 +1168,8 @@ impl Broker {
         };
         if Instant::now() >= deadline {
             cancellation.cancel();
-            self.inner.metrics.record_provider_error();
+            metrics.record_provider_error();
+            metrics.record_no_suggestion(NoSuggestionReason::Timeout);
             session.cancellation = None;
             let _ = session.sink.send(BrokerEvent::SuggestionClear {
                 coordinates,
@@ -1179,10 +1191,11 @@ impl Broker {
             })
             .is_err()
         {
+            metrics.record_no_suggestion(NoSuggestionReason::Stale);
             return;
         }
         let target = session.target.target.clone();
-        self.inner.metrics.record_suggestion_shown();
+        metrics.record_suggestion_shown();
         let aggregate_day = current_unix_day().filter(|event_day| {
             self.queue_outcome(
                 &target,
@@ -1206,6 +1219,88 @@ impl Broker {
                 .expire_suggestion(coordinates, generation, suggestion_id)
                 .await;
         });
+    }
+
+    /// Runs one private diagnostic request through the provider and the same
+    /// display checks as a suggestion. It opens no session, creates no commit
+    /// authority, changes no counters, and neither logs nor retains the text.
+    pub async fn probe(
+        &self,
+        payload: ProbeRequestPayload,
+    ) -> Result<ProbeResultPayload, BrokerError> {
+        payload.validate()?;
+        let provider = self.inner.provider_kind;
+        if self.is_paused().await {
+            return Ok(ProbeResultPayload::paused(provider));
+        }
+        if self.inner.shutdown.is_cancelled() {
+            return Err(BrokerError::ShuttingDown);
+        }
+        let _permit = Arc::clone(&self.inner.provider_admissions)
+            .try_acquire_owned()
+            .map_err(|_| BrokerError::ProviderBusy)?;
+        let ProbeRequestPayload {
+            before,
+            after,
+            language,
+            allow_replacement,
+            explicit,
+        } = payload;
+        let trigger = RequestTrigger::from_explicit(explicit);
+        let started = Instant::now();
+        let generation_deadline = started + self.inner.config.generation_timeout_for(trigger);
+        let deadline = generation_deadline.min(started + self.inner.config.provider_timeout);
+        let cancellation = CancellationToken::new();
+        let request = ProviderRequest {
+            before: before.clone(),
+            after: after.clone(),
+            language,
+        };
+        let result = tokio::select! {
+            () = self.inner.shutdown.cancelled() => {
+                cancellation.cancel();
+                return Err(BrokerError::ShuttingDown);
+            }
+            result = time::timeout_at(
+                deadline.into(),
+                self.inner.provider.propose_outcome(
+                    request,
+                    cancellation.clone(),
+                    allow_replacement,
+                    trigger,
+                ),
+            ) => result,
+        };
+        let outcome = match result {
+            _ if Instant::now() >= generation_deadline => {
+                cancellation.cancel();
+                Err(NoSuggestionReason::Timeout)
+            }
+            Err(_) => {
+                cancellation.cancel();
+                Err(NoSuggestionReason::Timeout)
+            }
+            Ok(Err(ProviderError::Cancelled)) => Err(NoSuggestionReason::Stale),
+            Ok(Err(ProviderError::Unavailable)) => Err(NoSuggestionReason::ProviderError),
+            Ok(Ok(ProviderOutcome::NoSuggestion(reason))) => Err(reason),
+            Ok(Ok(ProviderOutcome::Proposal(raw))) => {
+                checked_proposal(provider, &before, &after, raw)
+                    .filter(|(_, replace_before)| allow_replacement || replace_before.is_none())
+                    .ok_or(NoSuggestionReason::OutputRejected)
+            }
+        };
+        let latency_ms = duration_millis(started.elapsed());
+        // A pause that arrived during inference withholds the result, as it
+        // withholds display from a real session.
+        if self.is_paused().await {
+            return Ok(ProbeResultPayload::paused(provider));
+        }
+        Ok(match outcome {
+            Ok((text, replace_before)) => {
+                ProbeResultPayload::suggested(provider, text, replace_before, latency_ms)
+            }
+            Err(reason) => ProbeResultPayload::no_suggestion(provider, reason, latency_ms),
+        })
     }
 
     async fn clear_failed_generation(
@@ -1434,7 +1529,7 @@ impl Broker {
                     return Err(BrokerError::EventSinkClosed);
                 }
                 session.pending = Some(pending);
-                self.renew_context_authority_lease(session);
+                self.renew_context_authority_lease(session, self.inner.config.generation_timeout);
                 self.inner.metrics.record_commit_prepared();
                 let broker = self.clone();
                 tokio::spawn(async move {
@@ -1911,6 +2006,49 @@ impl Broker {
     }
 }
 
+/// Display-side safety and shape checks shared by generation and diagnostic
+/// probes. A replacement must own the exact typed suffix at a word boundary.
+fn checked_proposal(
+    provider_kind: ProviderKind,
+    before: &str,
+    after: &str,
+    raw: WritingProposal,
+) -> Option<(String, Option<String>)> {
+    let (text, replace_before) = if let Some(original) = raw.replace_before.as_deref() {
+        // A correction may preserve the single space typed after its word.
+        // General continuation sanitization stays strict.
+        crate::protocol::valid_spelling_replacement(original, &raw.text)
+            .then_some((raw.text, raw.replace_before))?
+    } else {
+        (sanitize_suggestion(&raw.text).ok()?, None)
+    };
+    let shape_valid = match replace_before.as_deref() {
+        Some(original) => {
+            crate::protocol::valid_spelling_replacement(original, &text)
+                && before.ends_with(original)
+                && after.is_empty()
+                && before[..before.len() - original.len()]
+                    .chars()
+                    .next_back()
+                    .is_none_or(char::is_whitespace)
+        }
+        None => {
+            #[cfg(feature = "local-model")]
+            if provider_kind == ProviderKind::LocalModel {
+                crate::writing::validate_suggestion_shape(before, after, &text).is_ok()
+            } else {
+                validate_suggestion_shape(before, after, &text).is_ok()
+            }
+            #[cfg(not(feature = "local-model"))]
+            {
+                let _ = provider_kind;
+                validate_suggestion_shape(before, after, &text).is_ok()
+            }
+        }
+    };
+    shape_valid.then_some((text, replace_before))
+}
+
 fn current_unix_day() -> Option<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2319,6 +2457,7 @@ mod tests {
         validate_commit_authority,
     };
     use crate::control_plane::ControlPlane;
+    use crate::metrics::NoSuggestionReason;
     use crate::personalization::PersonalizationSignal;
     use crate::protocol::{
         Activation, AdapterKind, Capability, CommitResultPayload, CommitStatus,
@@ -2327,6 +2466,7 @@ mod tests {
         SessionControlRequestPayload, SessionId, SessionOpenPayload, SuggestRequestPayload,
         TargetDescriptor, TargetKind,
     };
+    use crate::protocol::{ProbeOutcome, ProbeRequestPayload};
     use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
     use crate::settings::{
         BrowserAdapter, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV1,
@@ -2643,7 +2783,98 @@ mod tests {
             panic!("expected clear")
         };
         assert_eq!(payload.reason, ReasonCode::NoSuggestion);
-        assert_eq!(broker.inner.metrics.snapshot().provider_errors, 0);
+        let metrics = broker.inner.metrics.snapshot();
+        assert_eq!(metrics.provider_errors, 0);
+        let breakdown = metrics.no_suggestion.expect("breakdown");
+        assert_eq!(breakdown.model_abstained, 1);
+        assert_eq!(breakdown.total(), 1);
+        assert_eq!(breakdown.last, Some(NoSuggestionReason::ModelAbstained));
+    }
+
+    #[tokio::test]
+    async fn request_side_abstention_is_counted_separately_from_the_model() {
+        let (broker, id, mut events) = setup(
+            std::sync::Arc::new(crate::provider::DeterministicPhraseProvider::default()),
+            BrokerConfig::default(),
+        )
+        .await;
+        let mut update = context(1, FieldPurpose::Normal);
+        update.language = Some("ar".to_owned());
+        broker
+            .update_context(coordinates(id, 1), update.clone())
+            .await
+            .expect("context");
+        broker
+            .request_suggestion(
+                coordinates(id, 1),
+                SuggestRequestPayload {
+                    fingerprint: update.fingerprint,
+                    explicit: false,
+                },
+                None,
+            )
+            .await
+            .expect("request");
+        assert!(matches!(
+            timeout(Duration::from_millis(100), events.recv()).await,
+            Ok(Some(BrokerEvent::SuggestionClear { payload, .. }))
+                if payload.reason == ReasonCode::NoSuggestion
+        ));
+        let breakdown = broker
+            .metrics()
+            .snapshot()
+            .no_suggestion
+            .expect("breakdown");
+        assert_eq!(breakdown.request_abstained, 1);
+        assert_eq!(breakdown.total(), 1);
+    }
+
+    #[tokio::test]
+    async fn superseded_provider_work_is_counted_as_stale_once() {
+        let provider = std::sync::Arc::new(PendingProvider::new());
+        let provider_view = std::sync::Arc::clone(&provider);
+        let (broker, id, _events) = setup(provider, BrokerConfig::default()).await;
+        let update = context(1, FieldPurpose::Normal);
+        broker
+            .update_context(coordinates(id, 1), update.clone())
+            .await
+            .expect("context");
+        broker
+            .request_suggestion(
+                coordinates(id, 1),
+                SuggestRequestPayload {
+                    fingerprint: update.fingerprint,
+                    explicit: false,
+                },
+                None,
+            )
+            .await
+            .expect("request");
+        let cancellation = wait_for_provider_token(&provider_view).await;
+        broker
+            .update_context(coordinates(id, 2), context(2, FieldPurpose::Normal))
+            .await
+            .expect("newer context");
+        assert!(cancellation.is_cancelled());
+        timeout(Duration::from_millis(100), async {
+            while broker
+                .metrics()
+                .snapshot()
+                .no_suggestion
+                .is_none_or(|breakdown| breakdown.stale == 0)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stale class recorded");
+        let breakdown = broker
+            .metrics()
+            .snapshot()
+            .no_suggestion
+            .expect("breakdown");
+        assert_eq!(breakdown.stale, 1);
+        assert_eq!(breakdown.total(), 1);
     }
 
     struct SpellingProvider(&'static str, &'static str);
@@ -2836,7 +3067,11 @@ mod tests {
                 panic!("unbound spelling preview for {before:?}")
             };
             assert_eq!(payload.reason, ReasonCode::InvalidOutput, "{before:?}");
-            assert_eq!(broker.metrics().snapshot().commits_prepared, 0);
+            let metrics = broker.metrics().snapshot();
+            assert_eq!(metrics.commits_prepared, 0);
+            let breakdown = metrics.no_suggestion.expect("breakdown");
+            assert_eq!(breakdown.output_rejected, 1, "{before:?}");
+            assert_eq!(breakdown.total(), 1, "{before:?}");
         }
     }
 
@@ -3009,6 +3244,7 @@ mod tests {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision,
             paused: false,
+            all_web_origins: false,
             subjects: vec![SubjectRule {
                 identity: StableIdentity::browser_origin(
                     BrowserAdapter::Chromium,
@@ -3041,6 +3277,7 @@ mod tests {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision,
             paused: false,
+            all_web_origins: false,
             subjects: vec![SubjectRule {
                 identity: StableIdentity::browser_origin(
                     BrowserAdapter::Chromium,
@@ -3344,6 +3581,13 @@ mod tests {
                 if payload.reason == ReasonCode::ProviderTimeout
         ));
         assert!(cancellation.is_cancelled());
+        let breakdown = broker
+            .metrics()
+            .snapshot()
+            .no_suggestion
+            .expect("breakdown");
+        assert_eq!(breakdown.timeout, 1);
+        assert_eq!(breakdown.total(), 1);
     }
 
     #[tokio::test]
@@ -4851,6 +5095,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn all_web_origins_opens_unlisted_sites_but_keeps_exact_and_field_denial() {
+        let temporary = tempdir().expect("temporary directory");
+        let paths = StoragePaths::new(
+            temporary.path().join("config/badi"),
+            temporary.path().join("data/badi"),
+        )
+        .expect("storage paths");
+        let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+        // The controlled localhost origin carries an exact block.
+        let mut settings = controlled_settings(1, false, false);
+        settings.all_web_origins = true;
+        control_plane
+            .replace_settings(0, settings)
+            .expect("all-web default");
+        let broker = Broker::with_control_plane(
+            std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+            BrokerConfig::default(),
+            std::sync::Arc::clone(&control_plane),
+        )
+        .expect("controlled broker");
+        let unlisted = TargetDescriptor {
+            origin: Some(Origin {
+                scheme: OriginScheme::Https,
+                host: "mail.example".to_owned(),
+                port: None,
+            }),
+            ..controlled_target()
+        };
+        let policy = broker.resolve_policy(&unlisted).await;
+        assert!(policy.context_allowed && policy.suggestions_allowed);
+        assert!(!policy.learning_allowed);
+        let blocked = broker.resolve_policy(&controlled_target()).await;
+        assert!(!blocked.context_allowed && !blocked.suggestions_allowed);
+        let native = broker
+            .resolve_policy(&TargetDescriptor {
+                kind: TargetKind::DesktopApplication,
+                app_id: "brave-browser".to_owned(),
+                target_id: "ic:1".to_owned(),
+                origin: None,
+            })
+            .await;
+        assert!(!native.context_allowed, "native apps keep exact app rules");
+
+        for (target, allowed) in [(unlisted, true), (controlled_target(), false)] {
+            let session_id = SessionId::new();
+            let (sink, _events) = mpsc::channel(8);
+            let opened = broker
+                .open_session(
+                    coordinates(session_id, 0),
+                    SessionOpenPayload {
+                        target,
+                        activation: Activation::Always,
+                    },
+                    controlled_authority(),
+                    event_sink(sink),
+                )
+                .await;
+            assert_eq!(opened.is_ok(), allowed);
+            if !allowed {
+                continue;
+            }
+            assert_eq!(
+                broker
+                    .update_context(coordinates(session_id, 1), context(1, FieldPurpose::Normal))
+                    .await
+                    .expect("allowed context"),
+                ContextOutcome::Allowed
+            );
+            let mut sensitive = context(2, FieldPurpose::Password);
+            sensitive.before.clear();
+            sensitive.field.sensitive = true;
+            assert_eq!(
+                broker
+                    .update_context(coordinates(session_id, 2), sensitive)
+                    .await
+                    .expect("sensitive context"),
+                ContextOutcome::Denied
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn broker_records_only_content_free_shown_and_dismissed_aggregates() {
         let temporary = tempdir().expect("temporary directory");
         let paths = StoragePaths::new(
@@ -5296,6 +5622,398 @@ mod tests {
                 .settings
                 .revision,
             3
+        );
+    }
+
+    fn probe_request(before: &str, language: &str, allow_replacement: bool) -> ProbeRequestPayload {
+        ProbeRequestPayload {
+            before: before.to_owned(),
+            after: String::new(),
+            language: Some(language.to_owned()),
+            allow_replacement,
+            explicit: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_uses_the_provider_and_display_checks_without_session_or_counters() {
+        let broker = Broker::new(
+            std::sync::Arc::new(crate::provider::DeterministicPhraseProvider::default()),
+            BrokerConfig::default(),
+        );
+        let suggested = broker
+            .probe(probe_request("Thank you", "en", false))
+            .await
+            .expect("probe");
+        assert_eq!(suggested.outcome, ProbeOutcome::Suggested);
+        assert_eq!(suggested.text.as_deref(), Some(" for your time"));
+        assert_eq!(suggested.provider, ProviderKind::PhraseV1);
+        assert!(suggested.latency_ms.is_some());
+        suggested.validate().expect("valid probe result");
+        for (before, language, reason) in [
+            ("Thank you", "de", NoSuggestionReason::RequestAbstained),
+            ("Unmatched", "en", NoSuggestionReason::ModelAbstained),
+        ] {
+            let result = broker
+                .probe(probe_request(before, language, false))
+                .await
+                .expect("probe");
+            assert_eq!(result.outcome, ProbeOutcome::NoSuggestion);
+            assert_eq!(result.reason, Some(reason));
+            assert_eq!(result.text, None);
+        }
+        assert!(matches!(
+            broker
+                .probe(probe_request(&"a".repeat(513), "en", false))
+                .await,
+            Err(BrokerError::Protocol(_))
+        ));
+        let metrics = broker.metrics().snapshot();
+        assert_eq!(metrics.provider_calls, 0);
+        assert_eq!(metrics.suggestions_shown, 0);
+        assert_eq!(metrics.no_suggestion.expect("breakdown").total(), 0);
+        assert_eq!(broker.session_count().await, 0);
+        assert!(broker.active_locator().await.is_none());
+
+        broker.set_paused(true).await;
+        let paused = broker
+            .probe(probe_request("Thank you", "en", false))
+            .await
+            .expect("paused probe");
+        assert_eq!(paused.outcome, ProbeOutcome::Paused);
+        assert_eq!(paused.text, None);
+        paused.validate().expect("valid paused result");
+    }
+
+    #[tokio::test]
+    async fn probe_times_out_like_generation_and_cancels_provider_work() {
+        let provider = std::sync::Arc::new(PendingProvider::new());
+        let provider_view = std::sync::Arc::clone(&provider);
+        let broker = Broker::new(
+            provider,
+            BrokerConfig {
+                provider_timeout: Duration::from_millis(5),
+                ..BrokerConfig::default()
+            },
+        );
+        let result = broker
+            .probe(probe_request("Thank you", "en", false))
+            .await
+            .expect("probe");
+        assert_eq!(result.outcome, ProbeOutcome::NoSuggestion);
+        assert_eq!(result.reason, Some(NoSuggestionReason::Timeout));
+        assert!(
+            provider_view
+                .cancellation()
+                .expect("provider token")
+                .is_cancelled()
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_replacement_requires_explicit_authority_and_a_bound_suffix() {
+        let broker = Broker::new(
+            std::sync::Arc::new(SpellingProvider("teh ", "the ")),
+            BrokerConfig::default(),
+        );
+        let denied = broker
+            .probe(probe_request("This is teh ", "en", false))
+            .await
+            .expect("probe");
+        assert_eq!(denied.reason, Some(NoSuggestionReason::OutputRejected));
+        let allowed = broker
+            .probe(probe_request("This is teh ", "en", true))
+            .await
+            .expect("probe");
+        assert_eq!(allowed.outcome, ProbeOutcome::Suggested);
+        assert_eq!(allowed.text.as_deref(), Some("the "));
+        assert_eq!(allowed.replace_before.as_deref(), Some("teh "));
+        allowed.validate().expect("valid replacement result");
+        let unbound = broker
+            .probe(probe_request("This is ten ", "en", true))
+            .await
+            .expect("probe");
+        assert_eq!(unbound.reason, Some(NoSuggestionReason::OutputRejected));
+        assert_eq!(broker.metrics().snapshot().commits_prepared, 0);
+    }
+
+    /// Holds each completion until the test releases it.
+    struct GatedProvider {
+        calls: AtomicU64,
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    #[async_trait]
+    impl CompletionProvider for GatedProvider {
+        fn kind(&self) -> ProviderKind {
+            ProviderKind::PhraseV1
+        }
+
+        async fn complete(
+            &self,
+            _request: ProviderRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<Option<String>, ProviderError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(Some(" for your time".to_owned()))
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_withholds_its_result_when_a_pause_arrives_during_inference() {
+        let temporary = tempdir().expect("temporary directory");
+        let paths = StoragePaths::new(
+            temporary.path().join("config/badi"),
+            temporary.path().join("data/badi"),
+        )
+        .expect("storage paths");
+        let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+        control_plane
+            .replace_settings(0, controlled_settings(1, true, false))
+            .expect("initial settings");
+        let provider = std::sync::Arc::new(GatedProvider {
+            calls: AtomicU64::new(0),
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let broker = Broker::with_control_plane(
+            std::sync::Arc::clone(&provider) as std::sync::Arc<dyn CompletionProvider>,
+            BrokerConfig::default(),
+            control_plane,
+        )
+        .expect("controlled broker");
+        let start = || {
+            let broker = broker.clone();
+            tokio::spawn(async move { broker.probe(probe_request("Thank you", "en", false)).await })
+        };
+
+        let pending = start();
+        provider.entered.notified().await;
+        provider.release.notify_one();
+        let shown = pending.await.expect("probe task").expect("probe");
+        assert_eq!(shown.outcome, ProbeOutcome::Suggested);
+        assert_eq!(shown.text.as_deref(), Some(" for your time"));
+
+        // Runtime pause (`badictl pause`) acknowledged while the provider runs.
+        let pending = start();
+        provider.entered.notified().await;
+        assert!(broker.set_paused(true).await);
+        provider.release.notify_one();
+        let paused = pending.await.expect("probe task").expect("probe");
+        assert_eq!(paused.outcome, ProbeOutcome::Paused);
+        assert_eq!((paused.text.as_deref(), paused.reason), (None, None));
+        paused.validate().expect("valid paused result");
+        assert!(!broker.set_paused(false).await);
+
+        // Persisted pause (`badi pause`) committed while the provider runs.
+        let pending = start();
+        provider.entered.notified().await;
+        broker
+            .replace_settings(
+                1,
+                SettingsV1 {
+                    paused: true,
+                    ..controlled_settings(2, true, false)
+                },
+            )
+            .await
+            .expect("persisted pause");
+        provider.release.notify_one();
+        let paused = pending.await.expect("probe task").expect("probe");
+        assert_eq!(paused.outcome, ProbeOutcome::Paused);
+        assert_eq!(paused.text, None);
+        paused.validate().expect("valid paused result");
+
+        // While persisted pause holds, a probe never reaches the provider.
+        assert_eq!(provider.calls.load(Ordering::Relaxed), 3);
+        let paused = broker
+            .probe(probe_request("Thank you", "en", false))
+            .await
+            .expect("probe");
+        assert_eq!(paused.outcome, ProbeOutcome::Paused);
+        assert_eq!(provider.calls.load(Ordering::Relaxed), 3);
+        let metrics = broker.metrics().snapshot();
+        assert_eq!(metrics.provider_calls, 0);
+        assert_eq!(metrics.no_suggestion.expect("breakdown").total(), 0);
+    }
+
+    /// Answers after `delay` and records the trigger each call received.
+    struct TriggerProvider {
+        delay: Duration,
+        triggers: std::sync::Mutex<Vec<crate::provider::RequestTrigger>>,
+    }
+
+    #[async_trait]
+    impl CompletionProvider for TriggerProvider {
+        fn kind(&self) -> ProviderKind {
+            ProviderKind::PhraseV1
+        }
+
+        async fn complete(
+            &self,
+            _request: ProviderRequest,
+            _cancellation: CancellationToken,
+        ) -> Result<Option<String>, ProviderError> {
+            unreachable!("the broker requests outcomes with a trigger")
+        }
+
+        async fn propose_outcome(
+            &self,
+            request: ProviderRequest,
+            _cancellation: CancellationToken,
+            _allow_replacement: bool,
+            trigger: crate::provider::RequestTrigger,
+        ) -> Result<crate::provider::ProviderOutcome, ProviderError> {
+            self.triggers.lock().expect("trigger log").push(trigger);
+            sleep(self.delay).await;
+            Ok(crate::provider::ProviderOutcome::Proposal(
+                crate::provider::WritingProposal {
+                    text: format!(" revision {}", request.before),
+                    replace_before: None,
+                },
+            ))
+        }
+    }
+
+    #[test]
+    fn explicit_generation_limit_stays_between_the_automatic_limit_and_its_ceiling() {
+        let broker = |generation: u64, explicit: u64| {
+            let broker = Broker::new(
+                std::sync::Arc::new(crate::provider::DeterministicPhraseProvider::default()),
+                BrokerConfig {
+                    generation_timeout: Duration::from_millis(generation),
+                    explicit_generation_timeout: Duration::from_millis(explicit),
+                    ..BrokerConfig::default()
+                },
+            );
+            let config = broker.inner.config;
+            (
+                config.generation_timeout,
+                config.explicit_generation_timeout,
+            )
+        };
+        let defaults = BrokerConfig::default();
+        assert_eq!(defaults.generation_timeout, Duration::from_millis(600));
+        assert_eq!(
+            defaults.explicit_generation_timeout,
+            Duration::from_millis(super::MAX_EXPLICIT_GENERATION_TIMEOUT_MS)
+        );
+        assert_eq!(
+            broker(600, 5_000),
+            (Duration::from_millis(600), Duration::from_millis(1_250))
+        );
+        assert_eq!(
+            broker(400, 100),
+            (Duration::from_millis(400), Duration::from_millis(400))
+        );
+        assert_eq!(
+            broker(9_000, 9_000),
+            (Duration::from_millis(600), Duration::from_millis(1_250))
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_requests_get_the_longer_generation_limit() {
+        for explicit in [false, true] {
+            let provider = std::sync::Arc::new(TriggerProvider {
+                delay: Duration::from_millis(750),
+                triggers: std::sync::Mutex::new(Vec::new()),
+            });
+            let provider_view = std::sync::Arc::clone(&provider);
+            let (broker, session_id, mut events) = setup(provider, BrokerConfig::default()).await;
+            let update = context(1, FieldPurpose::Normal);
+            broker
+                .update_context(coordinates(session_id, 1), update.clone())
+                .await
+                .expect("context");
+            broker
+                .request_suggestion(
+                    coordinates(session_id, 1),
+                    SuggestRequestPayload {
+                        fingerprint: update.fingerprint,
+                        explicit,
+                    },
+                    None,
+                )
+                .await
+                .expect("request");
+            let event = timeout(Duration::from_millis(1_500), events.recv())
+                .await
+                .expect("generation result")
+                .expect("event");
+            let breakdown = broker.metrics().snapshot().no_suggestion;
+            if explicit {
+                assert!(
+                    matches!(event, BrokerEvent::SuggestionShow { ref payload, .. }
+                        if payload.text == " revision 1"),
+                    "{event:?}"
+                );
+                assert_eq!(broker.metrics().snapshot().suggestions_shown, 1);
+            } else {
+                assert!(
+                    matches!(event, BrokerEvent::SuggestionClear { ref payload, .. }
+                        if payload.reason == ReasonCode::ProviderTimeout),
+                    "{event:?}"
+                );
+                assert_eq!(breakdown.expect("breakdown").timeout, 1);
+            }
+            assert_eq!(
+                *provider_view.triggers.lock().expect("trigger log"),
+                [crate::provider::RequestTrigger::from_explicit(explicit)]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn control_requests_and_explicit_probes_are_explicit() {
+        let provider = std::sync::Arc::new(TriggerProvider {
+            delay: Duration::from_millis(750),
+            triggers: std::sync::Mutex::new(Vec::new()),
+        });
+        let provider_view = std::sync::Arc::clone(&provider);
+        let (broker, session_id, mut events) = setup(provider, BrokerConfig::default()).await;
+        let update = context(1, FieldPurpose::Normal);
+        broker
+            .update_context(coordinates(session_id, 1), update.clone())
+            .await
+            .expect("context");
+        broker
+            .session_control(
+                coordinates(session_id, 1),
+                SessionControlRequestPayload {
+                    action: ControlAction::Request,
+                    fingerprint: update.fingerprint,
+                    suggestion_id: None,
+                },
+                None,
+            )
+            .await
+            .expect("control request");
+        assert!(matches!(
+            timeout(Duration::from_millis(1_500), events.recv()).await,
+            Ok(Some(BrokerEvent::SuggestionShow { .. }))
+        ));
+        for explicit in [false, true] {
+            let mut request = probe_request("Thank you", "en", false);
+            request.explicit = explicit;
+            let result = broker.probe(request).await.expect("probe");
+            if explicit {
+                assert_eq!(result.outcome, ProbeOutcome::Suggested);
+                assert!(result.latency_ms.is_some_and(|latency| latency >= 750));
+            } else {
+                assert_eq!(result.reason, Some(NoSuggestionReason::Timeout));
+            }
+        }
+        assert_eq!(
+            *provider_view.triggers.lock().expect("trigger log"),
+            [
+                crate::provider::RequestTrigger::Explicit,
+                crate::provider::RequestTrigger::Automatic,
+                crate::provider::RequestTrigger::Explicit,
+            ]
         );
     }
 }

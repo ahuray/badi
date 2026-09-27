@@ -1,0 +1,12 @@
+{
+  "v": 2,
+  "id": "ctl:probe",
+  "type": "probe.request",
+  "mono_ms": 0,
+  "payload": {
+    "before": "Vielen Dank für Ihre ",
+    "language": "de",
+    "allow_replacement": false,
+    "explicit": true
+  }
+}

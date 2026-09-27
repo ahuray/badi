@@ -14,14 +14,14 @@ use crate::engine::{Broker, BrokerError, BrokerEvent, BrokerEventSink, SessionAu
 use crate::ipc::{FrameError, read_envelope, verify_peer_uid, write_envelope};
 use crate::policy::PolicyReason;
 use crate::protocol::{
-    AuthorityAckPayload, AuthorityChangedPayload, Capability, CommitResultPayload,
-    ContextChangedPayload, ControlAction, ControlResultPayload, EmptyPayload, ErrorPayload,
-    GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
+    AuthorityAckPayload, AuthorityChangedPayload, CURRENT_PROTOCOL_VERSION, Capability,
+    CommitResultPayload, ContextChangedPayload, ControlAction, ControlResultPayload, EmptyPayload,
+    ErrorPayload, GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
     MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SAFE_COUNTER, MAX_SUGGESTION_CHARS,
-    MAX_SUGGESTION_WORDS, MemoryStatusPayload, MessageType, PolicyQueryPayload, ReasonCode,
-    SessionClosePayload, SessionControlRequestPayload, SessionId, SessionOpenPayload,
-    SettingsReplacePayload, SettingsStatusPayload, SuggestCancelPayload, SuggestRequestPayload,
-    WireEnvelope,
+    MAX_SUGGESTION_WORDS, MemoryStatusPayload, MessageType, PolicyQueryPayload,
+    ProbeRequestPayload, ReasonCode, SessionClosePayload, SessionControlRequestPayload, SessionId,
+    SessionOpenPayload, SettingsReplacePayload, SettingsStatusPayload, SuggestCancelPayload,
+    SuggestRequestPayload, WireEnvelope,
 };
 use crate::settings::{SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsV1};
 
@@ -540,7 +540,12 @@ async fn handle_message(
                     sessions: health.sessions,
                     socket_mode: "0600".to_owned(),
                     max_frame_bytes: health.max_frame_bytes,
-                    metrics: health.metrics,
+                    // The legacy v1 wire keeps its frozen counter set.
+                    metrics: if protocol_version == CURRENT_PROTOCOL_VERSION {
+                        health.metrics
+                    } else {
+                        health.metrics.without_no_suggestion()
+                    },
                     active: health.active,
                 },
             )?;
@@ -610,7 +615,7 @@ async fn handle_message(
                 .map_err(|_| ServerError::InvalidMessage)?;
             if protocol_version == crate::protocol::PROTOCOL_VERSION {
                 let current = broker.control_plane_snapshot().await?;
-                next = next.preserving_linux_rules_from(&current.settings);
+                next = next.preserving_v2_policy_from(&current.settings);
             }
             next.validate().map_err(|_| ServerError::InvalidMessage)?;
             let snapshot = broker
@@ -651,6 +656,21 @@ async fn handle_message(
                 .try_send(response)
                 .map_err(|_| ServerError::ConnectionClosed)?;
         }
+        MessageType::ProbeRequest => {
+            require_settings_authority(authority)?;
+            if protocol_version != CURRENT_PROTOCOL_VERSION {
+                return Err(ServerError::InvalidMessage);
+            }
+            let payload: ProbeRequestPayload = envelope.decode_payload()?;
+            let result = broker.probe(payload).await?;
+            result.validate()?;
+            let mut response =
+                WireEnvelope::global(MessageType::ProbeResult, broker.mono_ms(), &result)?;
+            response.id = envelope.id;
+            wire_tx
+                .try_send(response)
+                .map_err(|_| ServerError::ConnectionClosed)?;
+        }
         MessageType::Hello
         | MessageType::HelloAck
         | MessageType::SuggestionShow
@@ -662,6 +682,7 @@ async fn handle_message(
         | MessageType::AuthorityChanged
         | MessageType::SettingsStatus
         | MessageType::MemoryStatus
+        | MessageType::ProbeResult
         | MessageType::Error => return Err(ServerError::InvalidMessage),
     }
     Ok(())
@@ -920,8 +941,9 @@ mod tests {
     use crate::protocol::{
         Activation, AdapterDescriptor, AdapterKind, AuthorityAckPayload, AuthorityChangedPayload,
         CURRENT_PROTOCOL_VERSION, Capability, ContextChangedPayload, Coordinates, EmptyPayload,
-        FieldDescriptor, FieldPurpose, HelloAckPayload, HelloPayload, MessageType, OffsetUnit,
-        PROTOCOL_VERSION, Selection, SessionId, SessionOpenPayload, SettingsReplacePayload,
+        FieldDescriptor, FieldPurpose, HealthStatusPayload, HelloAckPayload, HelloPayload,
+        MessageType, OffsetUnit, PROTOCOL_VERSION, ProbeOutcome, ProbeRequestPayload,
+        ProbeResultPayload, Selection, SessionId, SessionOpenPayload, SettingsReplacePayload,
         SettingsStatusPayload, SuggestRequestPayload, TargetDescriptor, TargetKind, WireEnvelope,
     };
     use crate::provider::DeterministicPhraseProvider;
@@ -1263,6 +1285,7 @@ mod tests {
                     schema: SETTINGS_SCHEMA.to_owned(),
                     revision: 1,
                     paused: false,
+                    all_web_origins: false,
                     subjects: vec![
                         SubjectRule {
                             identity: StableIdentity::browser_origin(
@@ -1379,6 +1402,165 @@ mod tests {
             snapshot.settings.subjects[0].identity,
             StableIdentity::LinuxApp { .. }
         ));
+    }
+
+    async fn connect_test_client(
+        kind: AdapterKind,
+        version: u8,
+        capabilities: Vec<Capability>,
+    ) -> (UnixStream, tokio::task::JoinHandle<Result<(), ServerError>>) {
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                broker(),
+                CancellationToken::new(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+        });
+        let hello = WireEnvelope::global(
+            MessageType::Hello,
+            0,
+            &HelloPayload {
+                min_v: version,
+                max_v: version,
+                adapter: AdapterDescriptor {
+                    kind,
+                    name: "diagnostic-test".to_owned(),
+                    version: "1".to_owned(),
+                },
+                capabilities,
+            },
+        )
+        .expect("hello")
+        .at_version(version)
+        .expect("versioned hello");
+        write_envelope(&mut client, &hello)
+            .await
+            .expect("write hello");
+        let acknowledgment = read_envelope(&mut client)
+            .await
+            .expect("read acknowledgment")
+            .expect("acknowledgment");
+        assert_eq!(acknowledgment.message_type, MessageType::HelloAck);
+        (client, connection)
+    }
+
+    async fn exchange(
+        client: &mut UnixStream,
+        message_type: MessageType,
+        version: u8,
+        payload: &impl serde::Serialize,
+    ) -> WireEnvelope {
+        let mut request = WireEnvelope::global(message_type, 1, payload)
+            .expect("request")
+            .at_version(version)
+            .expect("versioned request");
+        request.id = Some("ctl:diagnostic".to_owned());
+        write_envelope(client, &request)
+            .await
+            .expect("write request");
+        read_envelope(client)
+            .await
+            .expect("read response")
+            .expect("response")
+    }
+
+    #[tokio::test]
+    async fn probe_is_a_private_v2_cli_request_and_v1_health_keeps_its_counters() {
+        let probe = ProbeRequestPayload {
+            before: "Thank you".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+            allow_replacement: false,
+            explicit: false,
+        };
+        let (mut cli, connection) = connect_test_client(
+            AdapterKind::Cli,
+            CURRENT_PROTOCOL_VERSION,
+            vec![
+                Capability::Control,
+                Capability::Health,
+                Capability::Settings,
+            ],
+        )
+        .await;
+        let response = exchange(
+            &mut cli,
+            MessageType::ProbeRequest,
+            CURRENT_PROTOCOL_VERSION,
+            &probe,
+        )
+        .await;
+        assert_eq!(response.message_type, MessageType::ProbeResult);
+        assert_eq!(response.id.as_deref(), Some("ctl:diagnostic"));
+        let result: ProbeResultPayload = response.decode_payload().expect("probe result");
+        result.validate().expect("valid probe result");
+        assert_eq!(result.outcome, ProbeOutcome::Suggested);
+        assert_eq!(result.text.as_deref(), Some(" for your time"));
+        let health = exchange(
+            &mut cli,
+            MessageType::HealthRequest,
+            CURRENT_PROTOCOL_VERSION,
+            &EmptyPayload {},
+        )
+        .await;
+        let health: HealthStatusPayload = health.decode_payload().expect("health");
+        assert_eq!(
+            health.metrics.provider_calls, 0,
+            "probes are not adapter traffic"
+        );
+        assert!(health.metrics.no_suggestion.is_some());
+        drop(cli);
+        connection.await.expect("CLI task").expect("CLI shutdown");
+
+        for (kind, version, capabilities) in [
+            (
+                AdapterKind::Fcitx,
+                CURRENT_PROTOCOL_VERSION,
+                vec![Capability::Health, Capability::Settings],
+            ),
+            (
+                AdapterKind::Cli,
+                CURRENT_PROTOCOL_VERSION,
+                vec![Capability::Control, Capability::Health],
+            ),
+            (
+                AdapterKind::Cli,
+                PROTOCOL_VERSION,
+                vec![Capability::Health, Capability::Settings],
+            ),
+        ] {
+            let (mut client, connection) = connect_test_client(kind, version, capabilities).await;
+            let rejected = exchange(&mut client, MessageType::ProbeRequest, version, &probe).await;
+            assert_eq!(
+                rejected.message_type,
+                MessageType::Error,
+                "{kind:?} v{version}"
+            );
+            connection
+                .await
+                .expect("connection task")
+                .expect("rejected probe closes cleanly");
+        }
+
+        let (mut legacy, connection) =
+            connect_test_client(AdapterKind::Cli, PROTOCOL_VERSION, vec![Capability::Health]).await;
+        let health = exchange(
+            &mut legacy,
+            MessageType::HealthRequest,
+            PROTOCOL_VERSION,
+            &EmptyPayload {},
+        )
+        .await;
+        assert!(health.payload["metrics"].get("no_suggestion").is_none());
+        drop(legacy);
+        connection
+            .await
+            .expect("legacy task")
+            .expect("legacy shutdown");
     }
 
     #[tokio::test]

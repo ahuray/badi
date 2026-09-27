@@ -263,8 +263,10 @@ change is removing trailing ASCII spaces from the inference prompt, requiring
 the model to reproduce those exact spaces, then excluding that echo from the
 suggestion. The supplied draft is never trimmed. Space healing retains the
 normal eight-token budget; existing English partial-word healing retains twelve.
-This mode ignores extra context/style and does not change installed defaults.
-It separates the boundary hypothesis from the broader `healed` experiment.
+This mode ignores extra context/style. It separates the boundary hypothesis
+from the broader `healed` experiment. Since 2026-09-26 it equals production;
+`production_baseline` keeps the earlier unhealed trailing-space prompt for
+comparison and marks its records `legacy_space_boundary_not_current_production`.
 
 The optional **instructions + word boundary** (`instructed_healed`) mode combines
 the existing non-thinking ChatML instruction prompt with the exact echo handling
@@ -650,8 +652,11 @@ The frozen screen assigned 24 new synthetic cases per language to each of five
 model/configuration arms, retaining all 360 opportunities, including absent and
 late results. It required at least 15 useful complete additions within 550 ms
 and zero harmful additions in every language before opening the separate
-40-case-per-language confirmation set. That set remains unused. No installed
-model or prediction default changed.
+40-case-per-language confirmation set. That set stayed unused by this screen;
+it was first opened on 2026-09-26 for a
+[healing harm review](#three-arm-review-inputs-first-use-of-the-2026-09-10-confirmation-set-2026-09-26),
+so it is no longer an untouched confirmation. No installed model or prediction
+default changed.
 
 The approximately 350M shortlist above tests a concrete cost hypothesis:
 Granite and SmolLM2 Base use direct continuation, while the official LFM2.5
@@ -662,7 +667,7 @@ is an English-focused control; neither those cards nor
 [LFM2.5's card](https://huggingface.co/LiquidAI/LFM2.5-350M) establishes Persian
 autocomplete quality. Exact revisions, conversion provenance, licenses and the
 Q8_0 acquisition rationale remain in the
-[research receipt](../../output/writing/2026-09-10-discovery/research/shortlist.md).
+research receipt (`output/writing/2026-09-10-discovery/research/shortlist.md`).
 
 Agents reviewed each entire displayed addition with model/configuration,
 timings and reference answers withheld. Natural open sentences were permitted;
@@ -720,15 +725,15 @@ separate from request latency; peak RSS is the largest sampled runtime value.
 | LFM2.5 `native_instructed` | 403 / ≥553 | 467 / ≥553 | ≥551 / ≥553 | 1.49 / 1.76 | 455.3 |
 | SmolLM2 `healed` | 156 / ≥551 | 243 / ≥553 | 548 / ≥553 | 1.45 / 1.70 | 515.2 |
 
-The [comparison summary](../../output/writing/2026-09-10-discovery/comparison-summary.json)
+The comparison summary (`output/writing/2026-09-10-discovery/comparison-summary.json`)
 retains exact values, model/runtime hashes, all five judgment counts and
 per-language ambiguity counts. The
-[input freeze](../../output/writing/2026-09-10-discovery/evaluation-inputs/freeze.json),
-[rubric](../../output/writing/2026-09-10-discovery/evaluation-inputs/rubric.json),
-[granularity clarification](../../output/writing/2026-09-10-discovery/review-clarification.md),
+input freeze (`output/writing/2026-09-10-discovery/evaluation-inputs/freeze.json`),
+rubric (`output/writing/2026-09-10-discovery/evaluation-inputs/rubric.json`),
+granularity clarification (`output/writing/2026-09-10-discovery/review-clarification.md`),
 blind reviews and per-arm raw reports remain under
 `output/writing/2026-09-10-discovery/`. The retained
-[benchmark runner](../../output/writing/2026-09-10-discovery/benchmark.mjs)
+benchmark runner (`output/writing/2026-09-10-discovery/benchmark.mjs`)
 records the exact suite/configuration and discovery workflow. Regenerate the
 aggregate from those saved reports and reviews with:
 
@@ -738,10 +743,10 @@ node output/writing/2026-09-10-discovery/summarize.mjs
 
 Separate completed runtime diagnostics used the same modes on an i7-12700H
 (14 cores/20 threads, AVX2) with 15.3 GiB RAM. The
-[device snapshot](../../output/writing/2026-09-10-discovery/development-granite350/workflow.json)
+device snapshot (`output/writing/2026-09-10-discovery/development-granite350/workflow.json`)
 reports `on_battery: null`; the separate sysfs check found mains online and the
 battery not charging, so AC power was not inferred from that unknown API field.
-The [Vulkan receipt](../../output/writing/2026-09-10-discovery/device/vulkan-proof.json)
+The Vulkan receipt (`output/writing/2026-09-10-discovery/device/vulkan-proof.json`)
 proves actual Qwen GPU execution through an increasing i915 render counter,
 about 1.27 GiB of system-backed GPU memory, a terminal request in 1.146 s and
 verified process cleanup. This separate device proof does not establish GPU
@@ -756,10 +761,10 @@ complete-delivery times from the scheduled event in English/German/Persian;
 
 | Diagnostic receipt | Cold / preparation, ms | Peak RSS, MiB | Sustained duration, s | Reused tokens, warm/repeat/sustained | Paced finals EN / DE / FA, ms |
 | --- | ---: | ---: | ---: | ---: | --- |
-| [Granite `healed`](../../output/writing/2026-09-10-discovery/development-granite350/diagnostics-300-healed.json) | 1082 / 110 | 539.8 | 300.00 | 0 / 39 / 58 | 106 / 109 / 146 |
-| [LFM2.5 `native_instructed`](../../output/writing/2026-09-10-discovery/development-lfm350/diagnostics-30-native_instructed.json) | 1880 / 122 | 467.9 | 30.48 | 0 / 0 / 0 | miss / miss / miss |
-| [SmolLM2 `healed`](../../output/writing/2026-09-10-discovery/development-smol360/diagnostics-30-healed.json) | 1539 / 97 | 525.8 | 30.07 | 0 / 54 / 13 | 147 / 274 / 154 |
-| [Qwen `healed`](../../output/writing/2026-09-10-discovery/development-baseline/diagnostics-30-healed.json) | 4197 / 201 | 2216.3 | 30.24 | 0 / 35 / 8 | miss / miss / miss |
+| Granite `healed` (`output/writing/2026-09-10-discovery/development-granite350/diagnostics-300-healed.json`) | 1082 / 110 | 539.8 | 300.00 | 0 / 39 / 58 | 106 / 109 / 146 |
+| LFM2.5 `native_instructed` (`output/writing/2026-09-10-discovery/development-lfm350/diagnostics-30-native_instructed.json`) | 1880 / 122 | 467.9 | 30.48 | 0 / 0 / 0 | miss / miss / miss |
+| SmolLM2 `healed` (`output/writing/2026-09-10-discovery/development-smol360/diagnostics-30-healed.json`) | 1539 / 97 | 525.8 | 30.07 | 0 / 54 / 13 | 147 / 274 / 154 |
+| Qwen `healed` (`output/writing/2026-09-10-discovery/development-baseline/diagnostics-30-healed.json`) | 4197 / 201 | 2216.3 | 30.24 | 0 / 35 / 8 | miss / miss / miss |
 
 All four runs observed nine scheduled typing events and passed cancellation,
 fresh-process recovery and verified cleanup. Granite and SmolLM2 delivered all
@@ -768,7 +773,7 @@ reused **93 prompt tokens in one Persian paced request**, so its zero counters
 in the other phases do not mean zero reuse everywhere. These diagnostics assign
 no usefulness labels and add no quality credit. Five minutes is still below the
 required 30-minute sustained gate. The earlier
-[Granite HTTP-client timeout](../../output/writing/2026-09-10-discovery/granite-diagnostic-interrupted.json)
+Granite HTTP-client timeout (`output/writing/2026-09-10-discovery/granite-diagnostic-interrupted.json`)
 is retained as an incomplete attempt with no qualification credit; the completed
 retry extended only the output-script client timeout, leaving product code and
 quality inputs unchanged.
@@ -778,7 +783,7 @@ acceptance, native undo or Cotypist parity. The resulting recommendation remains
 `no_qualified_model`.
 
 The existing 16-case regression set also completed for all four artifacts, with
-both baseline modes: [80 requests](../../output/writing/2026-09-10-discovery/regression-summary.json),
+both baseline modes: 80 requests (`output/writing/2026-09-10-discovery/regression-summary.json`),
 zero worker errors, five deadlines and verified cleanup. These exposed cases
 test execution and guards; their reference scores are not fresh quality evidence.
 The earlier source-unstable Granite development attempt remains separately under
@@ -788,15 +793,15 @@ before reviewing quality; its remaining 28 cases were not started.
 
 All completed development and regression runs bind their measured source hashes.
 A final cancellation regression fix changed the HTTP evaluator afterward;
-[a real saved-receipt reload returned HTTP 409](../../output/writing/2026-09-10-discovery/measured-build-invalidation.json)
+a real saved-receipt reload returned HTTP 409 (`output/writing/2026-09-10-discovery/measured-build-invalidation.json`)
 because that identity changed. The measurements remain historical evidence for
 their exact build; they do not qualify the final build. The fix preserves full
 reviews while invalidating superseded performance evidence and preventing old
 cleanup claims from surviving a cancelled, unsuccessful lifecycle trial.
-The final [rendered UI](../../output/writing/2026-09-10-discovery/qualification-ui-final.jpg)
+The final rendered UI (`output/writing/2026-09-10-discovery/qualification-ui-final.jpg`)
 exercised public search, fit, verified cache reuse, selection, a real prediction,
 full-addition review, explicit count-only saving, receipt reload, and cancellation
-during sustained work. The [cancelled diagnostic receipt](../../output/writing/2026-09-10-discovery/ui-diagnostic-cancelled-final.json)
+during sustained work. The cancelled diagnostic receipt (`output/writing/2026-09-10-discovery/ui-diagnostic-cancelled-final.json`)
 retains 98 assigned opportunities, verified cleanup and no qualification credit.
 Both visible status messages leave the running state after cancellation. The
 Lab selection was restored to the installed baseline afterward.
@@ -1096,7 +1101,9 @@ remain under `output/writing/2026-09-09-boundary-confirmation-*`.
 
 The blinded agent review withheld configuration identities and expected answers.
 The +4 substantive gain **failed the predeclared +8 gate**, so the isolated fix
-remains opt-in and is not promoted. No language lost substantive yield, and bad
+was not promoted then. On 2026-09-26 it was enabled in source for review under a
+harm criterion (below); promotion awaits that review. No language lost
+substantive yield, and bad
 outputs decreased, but these do not substitute for the failed primary criterion.
 Six low-confidence Persian judgments need native-language adjudication. These
 short synthetic cases and agent judgments do not measure human acceptance.
@@ -1108,6 +1115,291 @@ startup and adapter/display latency. Neither establishes the visible latency
 goal or Cotypist parity. The later paced context-preparation experiment above
 measures actual reuse counters and cancellation/queue costs; it also failed its
 quality gate.
+
+### Trailing-space healing candidate, explicit budget and resident runtime (2026-09-26)
+
+The user decided that a harm-reducing change is promoted when no language
+(EN/DE/FA) shows more harm, even if an old usefulness gate was missed.
+Trailing-space healing is enabled in source for `en`, `de` and `fa` **pending
+the blinded per-language harm verdict**; it is not promoted until that review
+finds no EN/DE/FA harm increase. The per-language switch and rollback is
+`TRAILING_SPACE_HEALING` in `broker/src/writing.rs` (see the review below). The same
+frozen 120 cases were rerun through the real model with disposable release
+brokers (production 512-token runtime, four threads, `badictl probe`, automatic
+550 ms budget, no replacement, installed model files read-only). Both arms came
+from one build that differed only in a measurement-only switch for the old
+prompt; each case ran in both arms in seeded random order, interleaved.
+Load average was 1.3–4.9 during the run.
+
+| Trailing-space cases (20 each) | EN shown | DE shown | FA shown | All-request p50/p95 |
+| --- | ---: | ---: | ---: | ---: |
+| Previous production | 1 | 1 | 9 | 540/551 ms (all 120) |
+| Healed (candidate) | 19 | 18 | 10 | 530/551 ms (all 120) |
+
+The previous prompt ended in a space token, so the model's next ` word` token
+doubled the space and the shape guard rejected it: 18 English and 13 German
+trailing-space requests ended as `output_rejected`. The healed arm rejected
+one and two. Persian stays deadline-bound (nine and ten `budget_stream`). The
+60 no-space controls send identical payloads (a regression test pins them);
+48 matched exactly, and all 12 differences were near the 550 ms deadline: ten
+continuations salvaged at different lengths and two Persian deadline misses.
+Shown controls were 19/19/9 (previous) and 19/19/7 (healed) for EN/DE/FA. A
+separate run of the actual release build reproduced the healed arm's shown
+counts within one per language; its 28 text differences were likewise deadline
+lengths or deadline misses. Shown counts are not usefulness: the paired outputs
+were exported, order-randomized and unlabeled, for the blinded harm review
+recorded below.
+
+Explicit requests (Tab or a control `request`) now get 1,200 ms of provider time
+and a 1,250 ms broker limit; automatic requests keep 550/600 ms. On the same 120
+cases with the release broker, each explicit probe followed the automatic probe
+of the same text, so its prompt was cached:
+
+| Language (40 cases) | Automatic shown | Explicit shown | Explicit p50/p95/max |
+| --- | ---: | ---: | ---: |
+| English | 38 | 38 | 335/523/822 ms |
+| German | 31 | 37 | 389/623/842 ms |
+| Persian | 24 | 37 | 443/720/1,143 ms |
+
+Thread count stays at four. Each configuration ran 36 fixed synthetic prompts
+(12 per language) after three warm-up probes, twice, in shuffled order, inside a
+transient `systemd-run --user --scope`; P-core pinning used `taskset -c 0-11`
+(the six hyperthreaded P-cores of this i7-12700H; E-cores are 12–19). Prefill
+and decode come from the runtime's own timings for the same prompts. The
+one-minute load average read 8–17 as idle runs began, partly residue of the
+preceding loaded run and partly other work on the machine.
+
+| Idle, threads/affinity | Prefill p50 (ms) | Decode (ms/token) | 8-token request p50 (ms) | Shown / 36 |
+| --- | --- | --- | --- | --- |
+| 4 / any | 285, 265 | 45, 43 | 673, 606 | 25, 30 |
+| 4 / P-cores | 239, 245 | 42, 42 | 583, 597 | 30, 29 |
+| 6 / any | 260, 244 | 45, 41 | 623, 562 | 30, 32 |
+| 6 / P-cores | 266, 243 | 46, 43 | 646, 576 | 27, 29 |
+| 8 / any | 236, 248 | 44, 43 | 558, 598 | 30, 26 |
+| 8 / P-cores | 231, 245 | 42, 42 | 567, 593 | 23, 30 |
+
+Idle differences stay within the spread between repetitions. With ten busy
+loops, every configuration collapsed: prefill p50 553–840 ms, decode
+97–126 ms/token and at most 6 of 36 shown. Six threads were 10–20% faster than
+four there, which still missed every budget, so this is not a clear gain.
+`CPUWeight=1000` changed nothing with ten loops: logical CPUs stayed free, and
+frequency samples showed the P-cores at 0.5–0.8 GHz and the E-cores at
+1.2 GHz (58 °C, 80 W RAPL limits), which scheduling priority cannot recover.
+With 24 loops, more runnable threads than CPUs, the weight mattered:
+
+| 24 busy loops, 4 threads | Prefill p50 (ms) | Decode (ms/token) | Request p50 (ms) |
+| --- | --- | --- | --- |
+| Default weight | 2,490, 2,507 | 379, 455 | 6,001, 6,553 |
+| `CPUWeight=1000` | 1,521, 1,593 | 284, 276 | 3,341, 3,571 |
+
+The idle desktop broker had 818 MB in swap and 11 MB resident when inspected.
+A warm runtime charges 757 MiB of anonymous memory (mostly repacked weights)
+and 1.2 GiB of mapped model file; inference referenced 671 MiB of the anonymous
+and 406 MiB of the file pages. Each forced-reclaim test used a private reflink
+copy of the model, so page cache was charged to the test, a reader of another
+copy in the same transient slice, and `memory.reclaim` on that slice:
+
+| Reclaim | Default: first request after | `MemorySwapMax=0`, `MemoryLow=1200M` |
+| --- | --- | --- |
+| 1 GiB (twice per run) | up to 762 MiB anonymous swapped; 439, 356, 378, 276 ms | anonymous kept; file partly dropped; 463, 120, 359, 140 ms |
+| 4 GiB (twice per run) | 7 MiB left resident; 4/4 `budget_stream` misses | 763 MiB kept, file dropped; 3/4 shown, 483–551 ms |
+
+A reclaim with nothing else reclaimable breaches `MemoryLow`, as the 4 GiB rows
+show; `MemorySwapMax=0` is the part that held. The user service tree
+(`user.slice` to `app.slice`) has no `memory.low`, and the kernel only honours a
+child's protection within its parents' protection, so `MemoryLow` does not
+protect the service against global pressure on this machine unless those
+slices reserve memory. The measurement scripts and raw results stayed in the
+task scratch directory; these numbers are synthetic latency and
+resource evidence, not usefulness, application coverage or visible latency.
+
+### Healing harm review, joined words and short-sentence context (2026-09-26)
+
+Three blinded judges labeled the paired trailing-space outputs above; this task
+received the majority-vote aggregates and the harmful healed outputs:
+
+| Trailing-space cases (20 each), previous → healed | Useful | Neutral | Harmful |
+| --- | ---: | ---: | ---: |
+| English | 0 → 7 | 0 → 7 | 1 → 5 |
+| German | 0 → 11 | 0 → 4 | 1 → 3 |
+| Persian | 0 → 1 | 2 → 6 | 7 → 3 |
+
+Under the no-harm-increase rule English and German fail on absolute harmful
+count; Persian passes. Six of the eight harmful English/German healed outputs
+followed a current sentence of fewer than four words, four of them a single
+word (`Please `, `Next `, `Perhaps `, `Bitte `) that sentence clipping left as
+the model's whole prompt; one English output displayed a partial word. The two
+fixes below target those mechanisms.
+They were motivated by this frozen confirmation set's outputs, so rerunning the
+same cases can show whether the mechanisms are gone, but it is not an
+independent confirmation of usefulness or harm.
+
+**Joined words.** The four-word display limit counted UAX #29 segments, which
+split hyphenated compounds. After the healed echo, the pinned model streamed
+` be able to re-try the request` for `…, the client should `; once ` the`
+arrived, the fourth segment was `re`, so the reader displayed `be able to re`.
+The limit now counts space-separated words (trailing punctuation of an
+intermediate word is still dropped). Unit and client-stream regression tests
+fail on the previous code; a disposable release broker showed `be able to re`
+three times out of three before and `be able to re-try` three times after.
+
+**Short-sentence context.** A current sentence of fewer than four words now keeps
+the preceding sentence(s) within the 160-scalar window, as documented in the
+[broker runbook](../../broker/README.md). **Per-language switch.**
+`TRAILING_SPACE_HEALING` in `broker/src/writing.rs` lists the languages whose
+trailing space is healed; unlisted languages keep the previous prompt. A unit
+test pins the list and checks each language independently. It still lists all
+three pending a per-language decision on a re-evaluation with these fixes.
+
+Latency used ten new synthetic multi-sentence texts per language (not from the
+confirmation set). Each progression probed about 20 prefixes (mid-word, word
+end and following space) from two words before a sentence end through five
+words after it, so the KV cache saw the text typed in order. One disposable
+release broker (automatic 550 ms budget, `badictl probe`, warm runtime) ran
+every arm: a measurement-only source copy read the word threshold per request
+from a private file, and threshold 1 reproduces the previous rule on these
+texts. Arms ran each text's whole progression in seeded-random order. The first
+probe of each progression, a new document in every arm, is excluded. The
+one-minute load average was 3.6 at the start and 5.3 at the end (p50 4.9,
+max 8.2 when texts began), including the measured runtime's four threads.
+"At budget" counts results at 549 ms or later: deadline salvage or a
+`budget_*` abstention.
+
+| Probes | Previous rule | Fewer than 3 words | Fewer than 4 words (source) |
+| --- | ---: | ---: | ---: |
+| All 569: p50 / p95 ms | 406 / 551 | 403 / 551 | 409 / 551 |
+| All: at budget / shown | 52 / 408 | 64 / 441 | 68 / 441 |
+| Short current sentence, 257: p50 ms | 420 | 407 | 410 |
+| Short: at budget / shown | 35 / 166 | 43 / 199 | 31 / 203 |
+| Short: `output_rejected` / `request_abstained` | 81 / 8 | 52 / 0 | 47 / 0 |
+| 160 after the switch to the current sentence: p50 ms / at budget | 412 / 1 | 410 / 12 | 425 / 19 |
+| English, 189: p50 / p95 ms / at budget | 366 / 494 / 1 | 361 / 498 / 4 | 362 / 492 / 4 |
+| German, 197 | 399 / 551 / 23 | 398 / 551 / 22 | 404 / 551 / 19 |
+| Persian, 183 | 438 / 551 / 28 | 450 / 551 / 38 | 468 / 551 / 45 |
+
+Other abstentions (previous/3/4): `budget_prefill` 4/1/0, `budget_stream`
+4/12/11, `model_abstained` 7/9/12. An earlier run with two separate broker
+instances (previous and current release builds) gave all-probe p50/p95 of
+382/536 versus 387/550 ms, 413 versus 448 shown and 139 versus 106
+`output_rejected`; separate instances also differed on identical prompts, so
+the single-instance run above is the comparison of record.
+
+The runtime's own timings (non-streaming, same DE/FA progressions) explain the
+post-switch cost. When the prompt switches to the current sentence, llama.cpp
+still reused most cached tokens, but in the following requests mean prompt
+evaluation rose from 52 to 75 ms (German) and from 66 to 103 ms (Persian), with
+unchanged medians: a few requests re-evaluate more tokens. p95 stays capped by
+the budget in every arm, so it cannot regress past 550 ms; the cost is the share
+of requests reaching the budget, concentrated in Persian (15% to 25%). English
+was unchanged and German improved. Reducing the rule to three words did not
+recover it (Persian 38 at budget, 64 overall), so the rule stays at four words;
+whether Persian keeps it belongs to the same per-language decision. Shown counts
+are availability, not usefulness; no outputs of these texts were judged.
+
+### Three-arm review inputs; first use of the 2026-09-10 confirmation set (2026-09-26)
+
+**The 2026-09-10 sealed confirmation set has now been used.** Its
+`confirmation-sealed.json` (SHA-256 `aca9c74e…c948a8`, 40 cases per language)
+matched `freeze.json`, and its `verification-summary.json` recorded it as
+unused. It was opened for the first time to produce outputs for the blinded
+per-language harm review of trailing-space healing and the short-sentence context.
+It is no longer untouched, so it cannot serve as the untouched confirmation that
+model qualification's hard gates require (see the
+[broker runbook](../../broker/README.md)). Only each case's draft `prefix`
+entered the broker. Reference answers were not read, and the case
+`context`/`style` fields were ignored, as in the Lab production modes. The five `completed_control` cases per language, the
+only ones ending at a complete word without a trailing space, also ran with one
+ASCII space appended (15 mechanical variants). The `partial` cases and two
+`mixed_language` cases without trailing whitespace end inside a word. The second
+set is the 60 trailing-space cases of the 2026-09-09 frozen suite above.
+
+Three arms ran through the pinned Qwen3-1.7B:
+
+- **L** is the previous production prompt: no healing, clipped to the current
+  sentence, and a four-word limit counted in UAX #29 segments.
+- **H** is Phase B as judged above: L plus healing for EN/DE/FA.
+- **G** is the current source: H plus the short-sentence context and the
+  space-separated word limit.
+
+All arms came from one release build of the current tree plus a measurement-only
+switch. The switch was read once per request, and the L/H bodies were copied
+verbatim from `HEAD`. One disposable broker ran every probe (`badictl probe`,
+automatic 550 ms budget, production runtime, model files read-only). Arm order
+was seeded-random per case, and both sets were interleaved. Before every probe
+the runtime's single KV slot was overwritten with an unrelated prompt, so each
+arm started equally cold. The load average was 1.0 at the start and 4.3 at the
+end (1.6–5.0 per case). "At budget" means 549 ms or later.
+
+Supporting checks:
+
+- An unswitched build of the current tree reproduced G's text in 31/60 and
+  113/135 items, and every difference involved a result at the budget.
+- L and H reproduced the judged Phase B outputs in 52/60 and 46/60 items, with
+  the same caveat. Only H displayed `be able to re`.
+- Each H/G difference came from a changed prompt (24), the budget (24) or a
+  hyphenated word under the old limit (2).
+
+| Arm | EN shown / at budget | DE shown / at budget | FA shown / at budget | p50/p95 ms EN · DE · FA |
+| --- | ---: | ---: | ---: | --- |
+| Development L (20 each) | 1 / 3 | 1 / 9 | 14 / 11 | 414/550 · 508/551 · 550/551 |
+| Development H | 19 / 3 | 17 / 4 | 15 / 12 | 390/550 · 476/551 · 550/551 |
+| Development G | 19 / 1 | 18 / 16 | 11 / 20 | 432/508 · 551/551 · 551/551 |
+| Confirmation L (45 each) | 10 / 16 | 7 / 20 | 31 / 35 | 506/551 · 542/551 · 550/551 |
+| Confirmation H | 37 / 11 | 34 / 15 | 28 / 33 | 391/551 · 457/551 · 550/551 |
+| Confirmation G | 38 / 9 | 34 / 10 | 29 / 32 | 414/551 · 451/551 · 550/551 |
+
+No-suggestion classes per language (EN/DE/FA) were:
+
+- Development `output_rejected`: 17/15/0 (L), 1/3/0 (H), 1/2/0 (G).
+- Development `budget_stream`: 1/1/6, 0/0/4, 0/0/9.
+- Development `model_abstained`: 1/3/0, 0/0/1, 0/0/0.
+- Confirmation `output_rejected`: 24/25/3, 7/11/4, 6/9/5.
+- Confirmation `budget_stream`: 5/10/10, 0/0/12, 0/2/10.
+- Confirmation `model_abstained`: 6/3/1, 1/0/1, 1/0/1.
+
+On the 103 confirmation items ending in a space, L showed 0/2/25 suggestions and
+G 28/30/23.
+
+The short-sentence rule changes the prompt of 26 development items but only one
+confirmation item, since most confirmation drafts are a single sentence. On the
+confirmation set H and G therefore differ mainly near the deadline.
+
+Probes are cold, which penalizes G's longer prompts. On the 26 changed
+development items, G reached the budget 20 times and H never did. A
+supplementary, unjudged run covered those 26 items and the one changed
+confirmation item. It primed the cache as if the text had been typed in order:
+one probe at the start of the current sentence, then the full draft. German G
+then reached the budget in 2 of 12 items instead of 11, and only one of its 12
+outputs equals the cold one. Persian stayed at the budget in all eight
+items. This run overlapped a concurrent desktop installation and live-service
+restart that this task did not make (load average up to 5.9). The judged run
+had finished before that. The judged German G outputs on these items are therefore mostly
+deadline-shortened.
+
+Shown counts are availability, not usefulness. The per-language harm verdicts
+come from the blinded review of these outputs. The build, patch, raw results and
+seeded keys stayed in the task scratch directory.
+
+**Blinded verdicts and promotion (2026-09-26).** Three independent blinded
+agent judges labelled every output; majority labels, counted as useful/harmful
+per 45 confirmation items ending in a space or not:
+
+| Language | No trailing space, L → G harmful | Trailing space, L → G useful / harmful |
+| --- | --- | --- |
+| English | 2 → 2 | 0 / 0 → 19 / 1 |
+| German | 1 → 0 | 0 / 1 → 9 / 9 |
+| Persian | 4 → 4 | 3 / 12 → 6 / 8 |
+
+The short-sentence context and space-separated word limit change only items
+without a trailing space and did not raise harm in any language, so they ship.
+Trailing-space healing is promoted for Persian (harm fell) and not for German
+(1 → 9 harmful, e.g. `Die Blumen stammen von ` → `einem anderen Planeten.`).
+English missed the no-increase rule by one item (`…find ` → `the probability
+that it`) while gaining 19 useful suggestions; the user chose to promote it.
+`TRAILING_SPACE_HEALING` is therefore English and Persian. On the development
+set, which motivated these fixes and is not independent, G had 14/10/2 useful
+and 1/1/0 harmful outputs in EN/DE/FA against legacy 0/0/1 and 1/1/11. These are
+synthetic drafts judged by agents, not human acceptance or keystroke savings.
 
 See [research and hypotheses](../../docs/research/competitive-landscape.md) for
 why these experiments were chosen. The older installed-broker evaluator below

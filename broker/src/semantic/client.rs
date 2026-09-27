@@ -2,10 +2,14 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use crate::metrics::NoSuggestionReason;
 use crate::protocol::{
     MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_SUGGESTION_CHARS, MAX_SUGGESTION_WORDS, ProviderKind,
 };
-use crate::provider::{CompletionProvider, ProviderError, ProviderRequest, WritingProposal};
+use crate::provider::{
+    CompletionProvider, ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger,
+    WritingProposal,
+};
 use async_trait::async_trait;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, Response, StatusCode, Url};
@@ -38,7 +42,15 @@ pub const MAX_RESPONSE_BYTES: usize = 16 * 1_024;
 const MAX_MODEL_ALIAS_BYTES: usize = 256;
 const MAX_TOKEN_BYTES: usize = 4_096;
 const MAX_RAW_OUTPUT_BYTES: usize = 1_024;
+// After the writing budget, the outer deadline still lets the reader return
+// words salvaged at the budget, and the HTTP timeout never ends it first.
+const WRITING_RESULT_GRACE: Duration = Duration::from_millis(20);
+const WRITING_HTTP_GRACE: Duration = Duration::from_millis(100);
 const AUTHORIZATION_CHALLENGE_TEXT: &str = "badi-owned-runtime-challenge";
+const WARM_UP_PROMPT: &str = "Thank you for your";
+const WARM_UP_TOKENS: u16 = 2;
+// A non-streaming reply also echoes generation settings; its body is discarded.
+const MAX_WARM_UP_RESPONSE_BYTES: usize = 64 * 1_024;
 const PROMPT_FORMAT_CONTRACT: &str = "{\"after\":\"must_be_empty\",\"language\":\"en_or_en_subtag\",\"prompt\":\"raw_before_caret\",\"transport\":\"llama_cpp_native_completion\"}";
 const SAMPLING_CONTRACT: &str = "{\"cache_prompt\":false,\"n_predict\":8,\"seed\":42,\"stop\":[\".\",\"\\n\"],\"stream\":true,\"temperature\":0.0}";
 
@@ -167,6 +179,8 @@ pub enum CompletionDisposition {
 #[derive(Clone, Debug)]
 pub struct ObservedCompletion {
     disposition: CompletionDisposition,
+    /// Diagnostic class of an abstention; `None` for output or errors.
+    no_suggestion: Option<NoSuggestionReason>,
     output: Option<String>,
     ttft: Option<Duration>,
     elapsed: Duration,
@@ -178,6 +192,11 @@ impl ObservedCompletion {
     #[must_use]
     pub const fn disposition(&self) -> CompletionDisposition {
         self.disposition
+    }
+
+    #[must_use]
+    pub const fn no_suggestion_reason(&self) -> Option<NoSuggestionReason> {
+        self.no_suggestion
     }
 
     #[must_use]
@@ -208,6 +227,7 @@ impl ObservedCompletion {
     fn language_abstention() -> Self {
         Self {
             disposition: CompletionDisposition::LanguageAbstained,
+            no_suggestion: Some(NoSuggestionReason::RequestAbstained),
             output: None,
             ttft: None,
             elapsed: Duration::ZERO,
@@ -221,6 +241,7 @@ impl ObservedCompletion {
         // spent writing budget, not a model refusal or a runtime health result.
         Self {
             disposition: CompletionDisposition::ModelAbstained,
+            no_suggestion: Some(NoSuggestionReason::BudgetPrefill),
             output: None,
             ttft: None,
             elapsed: started.elapsed(),
@@ -267,6 +288,24 @@ impl ClientError {
     pub const fn retryable_during_startup(&self) -> bool {
         matches!(self, Self::Transport(_) | Self::Timeout)
     }
+
+    /// Content-free class for diagnostics.
+    #[must_use]
+    pub const fn class(&self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+            Self::Timeout => "timeout",
+            Self::InvalidConfig(_)
+            | Self::InvalidRequest
+            | Self::InvalidEndpoint
+            | Self::Client(_) => "configuration",
+            Self::Transport(_) => "transport",
+            Self::UnexpectedStatus(_) => "http_status",
+            Self::UnexpectedContentType | Self::ResponseTooLarge | Self::MalformedStream => {
+                "malformed_response"
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -278,6 +317,9 @@ pub struct SemanticClient {
     completion_url: Url,
     #[cfg(feature = "writing-lab")]
     lab_trace: Option<std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>>,
+    /// Production heals a trailing ASCII space for the languages in
+    /// `writing::TRAILING_SPACE_HEALING`; only the Lab's historical baseline
+    /// turns it off for all of them.
     #[cfg(feature = "writing-lab")]
     lab_boundary_healing: bool,
 }
@@ -313,7 +355,7 @@ impl SemanticClient {
             #[cfg(feature = "writing-lab")]
             lab_trace: None,
             #[cfg(feature = "writing-lab")]
-            lab_boundary_healing: false,
+            lab_boundary_healing: true,
         })
     }
 
@@ -333,13 +375,30 @@ impl SemanticClient {
         }
     }
 
+    /// Completes with the automatic writing budget.
     pub async fn complete_observed(
         &self,
         request: ProviderRequest,
         cancellation: CancellationToken,
     ) -> Result<ObservedCompletion, ClientError> {
-        self.complete_observed_started(request, cancellation, Instant::now())
+        self.complete_observed_within(request, cancellation, RequestTrigger::Automatic)
             .await
+    }
+
+    /// Completes with the writing budget of `trigger`.
+    pub async fn complete_observed_within(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        trigger: RequestTrigger,
+    ) -> Result<ObservedCompletion, ClientError> {
+        self.complete_observed_started(
+            request,
+            cancellation,
+            Instant::now(),
+            trigger.writing_budget(),
+        )
+        .await
     }
 
     async fn complete_observed_started(
@@ -347,6 +406,7 @@ impl SemanticClient {
         request: ProviderRequest,
         cancellation: CancellationToken,
         started: Instant,
+        budget: Duration,
     ) -> Result<ObservedCompletion, ClientError> {
         match validate_request(&request, self.config.writing)? {
             InputEligibility::Abstain => return Ok(ObservedCompletion::language_abstention()),
@@ -356,20 +416,34 @@ impl SemanticClient {
         // The language boundary deliberately precedes construction and JSON
         // serialization. A rejected request therefore cannot allocate an HTTP
         // payload or send a runtime request/body byte.
-        let boundary_healing = {
+        let healed_languages: &[crate::writing::WritingLanguage] = {
             #[cfg(feature = "writing-lab")]
             {
-                self.lab_boundary_healing
+                if self.lab_boundary_healing {
+                    crate::writing::TRAILING_SPACE_HEALING
+                } else {
+                    &[]
+                }
             }
             #[cfg(not(feature = "writing-lab"))]
             {
-                false
+                crate::writing::TRAILING_SPACE_HEALING
             }
         };
         let plan = self
             .config
             .writing
-            .then(|| crate::writing::completion_plan(&request, boundary_healing));
+            .then(|| crate::writing::completion_plan(&request, healed_languages));
+        // Healing can consume the whole window (one unfinished English word),
+        // and an unhealed language can send only whitespace. Neither carries
+        // context, and the runtime answers an empty prompt with a malformed
+        // final chunk, so this is a request-side abstention, sent nowhere.
+        if plan
+            .as_ref()
+            .is_some_and(|plan| plan.prompt.trim().is_empty())
+        {
+            return Ok(ObservedCompletion::language_abstention());
+        }
         let payload = if let Some(plan) = &plan {
             serde_json::to_vec(&plan.payload())
         } else {
@@ -377,10 +451,10 @@ impl SemanticClient {
         }
         .map_err(|_| ClientError::InvalidRequest)?;
         let echo = plan.as_ref().and_then(|plan| plan.echo);
-        let operation = self.complete_inner(payload, started, cancellation.clone(), echo);
+        let operation = self.complete_inner(payload, started, budget, cancellation.clone(), echo);
         let deadline = started
             + if self.config.writing {
-                Duration::from_millis(crate::writing::STREAM_BUDGET_MS + 20)
+                budget + WRITING_RESULT_GRACE
             } else {
                 self.config.request_timeout()
             };
@@ -398,10 +472,12 @@ impl SemanticClient {
                     .as_deref()
                     .and_then(crate::writing::WritingLanguage::from_tag)
                     .is_some_and(|language| language.accepts_output(output))
+                    || crate::writing::introduces_unsupported_fact(&request.before, output)
             })
         {
             return Ok(ObservedCompletion {
                 disposition: CompletionDisposition::ModelAbstained,
+                no_suggestion: Some(NoSuggestionReason::OutputRejected),
                 output: None,
                 ..observed
             });
@@ -414,18 +490,22 @@ impl SemanticClient {
         request: ProviderRequest,
         cancellation: CancellationToken,
         started: Instant,
-    ) -> Result<Option<String>, ProviderError> {
+        budget: Duration,
+    ) -> Result<Result<String, NoSuggestionReason>, ProviderError> {
         let observed = self
-            .complete_observed_started(request, cancellation, started)
+            .complete_observed_started(request, cancellation, started, budget)
             .await
             .map_err(|error| match error {
                 ClientError::Cancelled => ProviderError::Cancelled,
                 _ => ProviderError::Unavailable,
             })?;
+        let abstention = observed
+            .no_suggestion
+            .unwrap_or(NoSuggestionReason::ModelAbstained);
         match observed.disposition {
-            CompletionDisposition::Suggested => Ok(observed.output),
+            CompletionDisposition::Suggested => Ok(observed.output.ok_or(abstention)),
             CompletionDisposition::ModelAbstained | CompletionDisposition::LanguageAbstained => {
-                Ok(None)
+                Ok(Err(abstention))
             }
             CompletionDisposition::InvalidOutput | CompletionDisposition::Truncated => {
                 Err(ProviderError::Unavailable)
@@ -442,6 +522,51 @@ impl SemanticClient {
             () = cancellation.cancelled() => Err(ClientError::Cancelled),
             result = self.probe_authorization_challenge_inner() => result,
         }
+    }
+
+    /// Run one fixed, tiny completion so that a real request is not the
+    /// runtime's first inference. It carries no user text; the reply is
+    /// checked for status, type and size only and then discarded.
+    pub async fn warm_up(
+        &self,
+        timeout: Duration,
+        cancellation: CancellationToken,
+    ) -> Result<(), ClientError> {
+        if timeout.is_zero() {
+            return Err(ClientError::InvalidConfig("warm_up_timeout"));
+        }
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => Err(ClientError::Cancelled),
+            result = tokio::time::timeout(timeout, self.warm_up_inner(timeout)) => {
+                result.map_err(|_| ClientError::Timeout)?
+            }
+        }
+    }
+
+    async fn warm_up_inner(&self, timeout: Duration) -> Result<(), ClientError> {
+        let response = self
+            .client
+            .post(self.completion_url.clone())
+            .timeout(timeout)
+            .header(AUTHORIZATION, self.config.authorization.clone())
+            .json(&serde_json::json!({
+                "prompt": WARM_UP_PROMPT,
+                "n_predict": WARM_UP_TOKENS,
+                "temperature": 0.0,
+                "seed": 42,
+                "stream": false,
+                "cache_prompt": false,
+            }))
+            .send()
+            .await
+            .map_err(transport_error)?;
+        if response.status() != StatusCode::OK {
+            return Err(ClientError::UnexpectedStatus(response.status()));
+        }
+        ensure_content_type(response.headers(), "application/json")?;
+        read_bounded_body(response, MAX_WARM_UP_RESPONSE_BYTES).await?;
+        Ok(())
     }
 
     async fn probe_health_inner(&self) -> Result<HealthStatus, ClientError> {
@@ -473,13 +598,14 @@ impl SemanticClient {
         &self,
         payload: Vec<u8>,
         started: Instant,
+        budget: Duration,
         cancellation: CancellationToken,
         echoed_prefix: Option<&str>,
     ) -> Result<ObservedCompletion, ClientError> {
         if cancellation.is_cancelled() {
             return Err(ClientError::Cancelled);
         }
-        let writing_deadline = started + Duration::from_millis(crate::writing::STREAM_BUDGET_MS);
+        let writing_deadline = started + budget;
         if self.config.writing && Instant::now() >= writing_deadline {
             // A spelling attempt and its continuation share one budget. Do
             // not submit another inference job after that budget is spent.
@@ -493,13 +619,18 @@ impl SemanticClient {
                 .map_err(|_| ClientError::InvalidRequest)?
                 .push(serde_json::from_slice(&payload).map_err(|_| ClientError::InvalidRequest)?);
         }
-        let send = self
+        let mut send = self
             .client
             .post(self.completion_url.clone())
             .header(AUTHORIZATION, self.config.authorization.clone())
             .header(CONTENT_TYPE, "application/json")
-            .body(payload)
-            .send();
+            .body(payload);
+        if self.config.writing {
+            // The client-wide timeout suits the automatic budget; an explicit
+            // budget can be longer. The writing deadline still ends first.
+            send = send.timeout(budget + WRITING_HTTP_GRACE);
+        }
+        let send = send.send();
         let response = tokio::select! {
             biased;
             () = cancellation.cancelled() => return Err(ClientError::Cancelled),
@@ -520,6 +651,7 @@ impl SemanticClient {
             response,
             request_body_bytes,
             started,
+            budget,
             cancellation,
             self.config.writing,
             echoed_prefix,
@@ -565,7 +697,25 @@ impl CompletionProvider for SemanticClient {
         cancellation: CancellationToken,
         allow_replacement: bool,
     ) -> Result<Option<WritingProposal>, ProviderError> {
+        self.propose_outcome(
+            request,
+            cancellation,
+            allow_replacement,
+            RequestTrigger::Automatic,
+        )
+        .await
+        .map(ProviderOutcome::into_proposal)
+    }
+
+    async fn propose_outcome(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        allow_replacement: bool,
+        trigger: RequestTrigger,
+    ) -> Result<ProviderOutcome, ProviderError> {
         let started = Instant::now();
+        let budget = trigger.writing_budget();
         if cancellation.is_cancelled() {
             return Err(ProviderError::Cancelled);
         }
@@ -587,7 +737,7 @@ impl CompletionProvider for SemanticClient {
                     if cancellation.is_cancelled() {
                         return Err(ProviderError::Cancelled);
                     }
-                    return Ok(Some(WritingProposal {
+                    return Ok(ProviderOutcome::Proposal(WritingProposal {
                         text: format!("{corrected}{}", target.delimiter),
                         replace_before: Some(target.suffix.to_owned()),
                     }));
@@ -598,17 +748,17 @@ impl CompletionProvider for SemanticClient {
                     biased;
                     () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
                     result = tokio::time::timeout_at(
-                        (started + Duration::from_millis(crate::writing::STREAM_BUDGET_MS + 20)).into(),
-                        self.complete_inner(payload, started, cancellation.clone(), None),
+                        (started + budget + WRITING_RESULT_GRACE).into(),
+                        self.complete_inner(payload, started, budget, cancellation.clone(), None),
                     ) => result.unwrap_or(Err(ClientError::Timeout)),
                 }
-                    .map_err(|error| match error {
-                        ClientError::Cancelled => ProviderError::Cancelled,
-                        _ => ProviderError::Unavailable,
-                    })?;
+                .map_err(|error| match error {
+                    ClientError::Cancelled => ProviderError::Cancelled,
+                    _ => ProviderError::Unavailable,
+                })?;
                 if let Some(corrected) = observed.output.as_deref().map(str::trim) {
                     if crate::writing::valid_correction(word, corrected) {
-                        return Ok(Some(WritingProposal {
+                        return Ok(ProviderOutcome::Proposal(WritingProposal {
                             text: format!("{corrected}{}", target.delimiter),
                             replace_before: Some(target.suffix.to_owned()),
                         }));
@@ -619,28 +769,26 @@ impl CompletionProvider for SemanticClient {
         let before = request.before.clone();
         let after = request.after.clone();
         let language = request.language.clone();
-        self.complete_started(request, cancellation, started)
-            .await
-            .map(|output| {
-                output
-                    .filter(|text| {
-                        if self.config.writing {
-                            crate::writing::validate_proposal(
-                                &before,
-                                &after,
-                                text,
-                                language.as_deref(),
-                            )
-                            .is_ok()
-                        } else {
-                            crate::segment::validate_suggestion_shape(&before, &after, text).is_ok()
-                        }
-                    })
-                    .map(|text| WritingProposal {
-                        text,
-                        replace_before: None,
-                    })
+        let text = match self
+            .complete_started(request, cancellation, started, budget)
+            .await?
+        {
+            Ok(text) => text,
+            Err(reason) => return Ok(ProviderOutcome::NoSuggestion(reason)),
+        };
+        let valid = if self.config.writing {
+            crate::writing::validate_proposal(&before, &after, &text, language.as_deref()).is_ok()
+        } else {
+            crate::segment::validate_suggestion_shape(&before, &after, &text).is_ok()
+        };
+        Ok(if valid {
+            ProviderOutcome::Proposal(WritingProposal {
+                text,
+                replace_before: None,
             })
+        } else {
+            ProviderOutcome::NoSuggestion(NoSuggestionReason::OutputRejected)
+        })
     }
 
     async fn complete(
@@ -648,8 +796,14 @@ impl CompletionProvider for SemanticClient {
         request: ProviderRequest,
         cancellation: CancellationToken,
     ) -> Result<Option<String>, ProviderError> {
-        self.complete_started(request, cancellation, Instant::now())
-            .await
+        self.complete_started(
+            request,
+            cancellation,
+            Instant::now(),
+            RequestTrigger::Automatic.writing_budget(),
+        )
+        .await
+        .map(Result::ok)
     }
 }
 
@@ -663,9 +817,6 @@ fn validate_request(
     request: &ProviderRequest,
     writing: bool,
 ) -> Result<InputEligibility, ClientError> {
-    if writing && !crate::segment::valid_orthographic_joiners(&request.before) {
-        return Err(ClientError::InvalidRequest);
-    }
     if request.before.chars().count() > MAX_BEFORE_CHARS
         || request.after.chars().count() > MAX_AFTER_CHARS
     {
@@ -676,6 +827,11 @@ fn validate_request(
     };
     if !valid_language_tag(language) {
         return Err(ClientError::InvalidRequest);
+    }
+    // A joiner not between two Arabic-script letters is an ordinary Persian
+    // typing state (ZWNJ just typed), not a runtime failure: send nothing.
+    if writing && !crate::segment::valid_orthographic_joiners(&request.before) {
+        return Ok(InputEligibility::Abstain);
     }
     if (writing && crate::writing::WritingLanguage::from_tag(language).is_some())
         || language
@@ -859,6 +1015,7 @@ async fn read_stream(
     mut response: Response,
     request_body_bytes: usize,
     started: Instant,
+    budget: Duration,
     cancellation: CancellationToken,
     writing: bool,
     echoed_prefix: Option<&str>,
@@ -867,9 +1024,7 @@ async fn read_stream(
     let mut response_body_bytes = 0_usize;
     let mut accumulator = StreamAccumulator::default();
     let mut saw_done = false;
-    let writing_deadline = tokio::time::sleep_until(
-        (started + Duration::from_millis(crate::writing::STREAM_BUDGET_MS)).into(),
-    );
+    let writing_deadline = tokio::time::sleep_until((started + budget).into());
     tokio::pin!(writing_deadline);
 
     loop {
@@ -884,6 +1039,7 @@ async fn read_stream(
                 return Ok(ObservedCompletion {
                     disposition: if output.is_some() { CompletionDisposition::Suggested }
                         else { CompletionDisposition::ModelAbstained },
+                    no_suggestion: output.is_none().then_some(NoSuggestionReason::BudgetStream),
                     output, ttft: accumulator.ttft, elapsed: started.elapsed(),
                     request_body_bytes, response_body_bytes,
                 });
@@ -920,6 +1076,7 @@ async fn read_stream(
                 {
                     return Ok(ObservedCompletion {
                         disposition: CompletionDisposition::Suggested,
+                        no_suggestion: None,
                         output: Some(output),
                         ttft: accumulator.ttft,
                         elapsed: started.elapsed(),
@@ -1001,6 +1158,8 @@ fn finish_observed_stream(
     };
     ObservedCompletion {
         disposition,
+        no_suggestion: (disposition == CompletionDisposition::ModelAbstained)
+            .then_some(NoSuggestionReason::ModelAbstained),
         output,
         ttft: accumulator.ttft,
         elapsed,
@@ -1164,21 +1323,26 @@ mod tests {
         let cancellation = CancellationToken::new();
         cancellation.cancel();
         let expired = Instant::now()
-            .checked_sub(Duration::from_secs(1))
-            .expect("one second before test request");
+            .checked_sub(Duration::from_secs(2))
+            .expect("two seconds before test request");
+        let budget = RequestTrigger::Explicit.writing_budget();
         assert!(matches!(
             client
-                .complete_inner(Vec::new(), expired, cancellation, None)
+                .complete_inner(Vec::new(), expired, budget, cancellation, None)
                 .await,
             Err(ClientError::Cancelled)
         ));
         let abstention = client
-            .complete_inner(Vec::new(), expired, CancellationToken::new(), None)
+            .complete_inner(Vec::new(), expired, budget, CancellationToken::new(), None)
             .await
             .expect("expired budget");
         assert_eq!(
             abstention.disposition(),
             CompletionDisposition::ModelAbstained
+        );
+        assert_eq!(
+            abstention.no_suggestion_reason(),
+            Some(NoSuggestionReason::BudgetPrefill)
         );
         assert_eq!(abstention.request_body_bytes(), 0);
         assert!(

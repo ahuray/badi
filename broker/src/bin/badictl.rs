@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use badi_broker::ipc::{
     default_socket_path, read_envelope, verify_peer_uid, verify_socket_metadata, write_envelope,
@@ -10,8 +10,9 @@ use badi_broker::protocol::{
     ActiveLocator, AdapterDescriptor, AdapterKind, CURRENT_PROTOCOL_VERSION, Capability,
     ControlAction, ControlResultPayload, Coordinates, ErrorPayload, GlobalControlRequestPayload,
     HealthStatusPayload, HelloAckPayload, HelloPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS,
-    MAX_SAFE_COUNTER, MemoryStatusPayload, MessageType, ProviderKind, ReasonCode,
-    SessionControlRequestPayload, SettingsReplacePayload, SettingsStatusPayload, WireEnvelope,
+    MAX_SAFE_COUNTER, MemoryStatusPayload, MessageType, ProbeRequestPayload, ProbeResultPayload,
+    ProviderKind, ReasonCode, SessionControlRequestPayload, SettingsReplacePayload,
+    SettingsStatusPayload, WireEnvelope,
 };
 use badi_broker::settings::{PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV1};
 use serde::Serialize;
@@ -42,6 +43,10 @@ async fn run() -> Result<(), CliError> {
             print!("{CLI_USAGE}");
             return Ok(());
         }
+        ParsedCommand::Version => {
+            println!("{}", badi_broker::build_info::version_line("badictl"));
+            return Ok(());
+        }
         ParsedCommand::Local(LocalCommand::Hardware) => {
             println!("{}", serde_json::to_string_pretty(&detect_hardware())?);
             return Ok(());
@@ -56,6 +61,9 @@ async fn run() -> Result<(), CliError> {
             command,
         } => (socket_path, command),
     };
+    // Read standard input before connecting, so typing it cannot outlast the
+    // handshake timeout.
+    let command = with_probe_stdin(command).await?;
     let mut stream = connect(&socket_path).await?;
     match command {
         Command::Status => {
@@ -122,8 +130,90 @@ async fn run() -> Result<(), CliError> {
             write_envelope(&mut stream, &request).await?;
             print_control_response(&mut stream, &request_id, action).await?;
         }
+        Command::Probe { payload, .. } => {
+            let report = request_probe(&mut stream, &payload).await?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
     }
     Ok(())
+}
+
+async fn with_probe_stdin(command: Command) -> Result<Command, CliError> {
+    let Command::Probe {
+        mut payload,
+        text_from_stdin: true,
+    } = command
+    else {
+        return Ok(command);
+    };
+    payload.before = read_probe_text(tokio::io::stdin()).await?;
+    payload.validate().map_err(|_| CliError::Arguments)?;
+    Ok(Command::Probe {
+        payload,
+        text_from_stdin: false,
+    })
+}
+
+/// Reads probe text without placing it in argv (visible to other local users
+/// in the process list) or shell history. One trailing newline is removed.
+async fn read_probe_text<R: tokio::io::AsyncRead + Unpin>(reader: R) -> Result<String, CliError> {
+    use tokio::io::AsyncReadExt as _;
+    // At most four UTF-8 bytes per character plus a CRLF terminator.
+    const LIMIT: usize = MAX_BEFORE_CHARS * 4 + 2;
+    let mut bytes = Vec::new();
+    reader
+        .take(u64::try_from(LIMIT + 1).unwrap_or(u64::MAX))
+        .read_to_end(&mut bytes)
+        .await?;
+    if bytes.len() > LIMIT {
+        return Err(CliError::Arguments);
+    }
+    let mut text = String::from_utf8(bytes).map_err(|_| CliError::Arguments)?;
+    if text.ends_with('\n') {
+        text.pop();
+        if text.ends_with('\r') {
+            text.pop();
+        }
+    }
+    Ok(text)
+}
+
+async fn request_probe(
+    stream: &mut UnixStream,
+    payload: &ProbeRequestPayload,
+) -> Result<ProbeReport, CliError> {
+    let mut request = cli_global(MessageType::ProbeRequest, payload)?;
+    let request_id = new_request_id();
+    request.id = Some(request_id.clone());
+    let started = Instant::now();
+    write_envelope(stream, &request).await?;
+    let response = read_correlated_response(stream, &request_id, MessageType::ProbeResult).await?;
+    Ok(ProbeReport {
+        result: validate_probe_response(&response, &request_id)?,
+        round_trip_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    })
+}
+
+/// Prints the broker's probe result with the client-observed round trip.
+#[derive(Debug, Serialize)]
+struct ProbeReport {
+    #[serde(flatten)]
+    result: ProbeResultPayload,
+    round_trip_ms: u64,
+}
+
+fn validate_probe_response(
+    response: &WireEnvelope,
+    request_id: &str,
+) -> Result<ProbeResultPayload, CliError> {
+    validate_correlated_response(response, request_id, MessageType::ProbeResult)?;
+    let payload: ProbeResultPayload = response
+        .decode_payload()
+        .map_err(|_| CliError::UnexpectedResponse)?;
+    payload
+        .validate()
+        .map_err(|_| CliError::UnexpectedResponse)?;
+    Ok(payload)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -669,7 +759,8 @@ const CLI_USAGE: &str = "Usage: badictl [--socket ABSOLUTE] COMMAND\n\
 Local commands:\n  hardware [--json]       Inspect content-free hardware capabilities\n  models [USE] [--json]   Recommend pinned local models; USE is writing or code\n\
 Broker commands:\n  status [--json]  Show content-free broker status as JSON\n  request          Request a suggestion for the sole active session\n  accept-word      Accept the authorized first word-part\n  accept-all       Accept the authorized full suggestion\n  dismiss          Dismiss the current suggestion\n  pause [MODE]     MODE is on, off, or toggle (default)\n\
   overview [--json]  Show broker, policy, privacy, and model readiness\n  settings show [--json]\n                    Show the strict badi.settings.v2 document\n  settings replace --if-revision N --json DOCUMENT\n                    Replace settings with compare-and-swap protection\n  memory clear      Clear local text-free origin/day interaction aggregates\n\
-Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n";
+  probe [--language TAG] [--after TEXT] [--replace] [--explicit] [--] TEXT|-\n                    Run TEXT (before the caret) through the live provider and\n                    display checks; print JSON. The broker opens no session or\n                    commit and stores nothing. Arguments stay in shell history\n                    and the process list; - reads TEXT from stdin instead.\n                    TAG defaults to en; --replace allows spelling replacement;\n                    --explicit uses the Tab-request budget (1200 ms, not 550 ms)\n\
+Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n  --version          Print the version and embedded source commit\n";
 
 fn parse_arguments<I>(arguments: I) -> Result<ParsedCommand, CliError>
 where
@@ -683,6 +774,17 @@ where
         let _ = arguments.next();
         return if arguments.next().is_none() {
             Ok(ParsedCommand::Help)
+        } else {
+            Err(CliError::Arguments)
+        };
+    }
+    if arguments
+        .peek()
+        .is_some_and(|argument| argument == "--version")
+    {
+        let _ = arguments.next();
+        return if arguments.next().is_none() {
+            Ok(ParsedCommand::Version)
         } else {
             Err(CliError::Arguments)
         };
@@ -739,6 +841,7 @@ where
             Command::Overview
         }
         Some("settings") => parse_settings_command(&rest)?,
+        Some("probe") => parse_probe_command(rest)?,
         Some("memory") if rest == ["clear"] => Command::MemoryClear,
         Some("request") if rest.is_empty() => Command::Session(ControlAction::Request),
         Some("accept-word") if rest.is_empty() => Command::Session(ControlAction::AcceptWord),
@@ -757,6 +860,42 @@ where
     Ok(ParsedCommand::Remote {
         socket_path,
         command,
+    })
+}
+
+fn parse_probe_command(arguments: Vec<String>) -> Result<Command, CliError> {
+    let mut language = Some("en".to_owned());
+    let mut after = String::new();
+    let mut allow_replacement = false;
+    let mut explicit = false;
+    let mut arguments = arguments.into_iter();
+    let (before, text_from_stdin) = loop {
+        let argument = arguments.next().ok_or(CliError::Arguments)?;
+        match argument.as_str() {
+            "--language" => language = Some(arguments.next().ok_or(CliError::Arguments)?),
+            "--after" => after = arguments.next().ok_or(CliError::Arguments)?,
+            "--replace" => allow_replacement = true,
+            "--explicit" => explicit = true,
+            "--" => break (arguments.next().ok_or(CliError::Arguments)?, false),
+            "-" => break (String::new(), true),
+            value if value.starts_with("--") => return Err(CliError::Arguments),
+            _ => break (argument, false),
+        }
+    };
+    if arguments.next().is_some() {
+        return Err(CliError::Arguments);
+    }
+    let payload = ProbeRequestPayload {
+        before,
+        after,
+        language,
+        allow_replacement,
+        explicit,
+    };
+    payload.validate().map_err(|_| CliError::Arguments)?;
+    Ok(Command::Probe {
+        payload,
+        text_from_stdin,
     })
 }
 
@@ -814,6 +953,11 @@ enum Command {
     Global(ControlAction),
     MemoryClear,
     Overview,
+    Probe {
+        payload: ProbeRequestPayload,
+        /// The positional TEXT was `-`; `payload.before` is filled from stdin.
+        text_from_stdin: bool,
+    },
     Session(ControlAction),
     SettingsReplace {
         expected_revision: u64,
@@ -837,6 +981,7 @@ enum ParsedCommand {
     },
     Local(LocalCommand),
     Help,
+    Version,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -884,17 +1029,18 @@ mod tests {
 
     use super::{
         CLI_CAPABILITIES, CliError, Command, LocalCommand, ParsedCommand, build_overview,
-        parse_arguments, redact_health_status, validate_control_response,
+        parse_arguments, read_probe_text, redact_health_status, validate_control_response,
         validate_correlated_response, validate_handshake, validate_health_response,
-        validate_settings_response,
+        validate_probe_response, validate_settings_response,
     };
     use badi_broker::metrics::MetricsSnapshot;
     use badi_broker::model_selection::ModelUseCase;
     use badi_broker::protocol::{
         ActiveLocator, CURRENT_PROTOCOL_VERSION, ControlAction, ControlResultPayload,
         HealthStatusPayload, HelloAckPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES,
-        MAX_SUGGESTION_CHARS, MAX_SUGGESTION_WORDS, MessageType, ProviderKind, ReasonCode,
-        SessionId, SettingsStatusPayload, WireEnvelope,
+        MAX_SUGGESTION_CHARS, MAX_SUGGESTION_WORDS, MessageType, ProbeRequestPayload,
+        ProbeResultPayload, ProviderKind, ReasonCode, SessionId, SettingsStatusPayload,
+        WireEnvelope,
     };
     use badi_broker::settings::SettingsV1;
     use jsonschema::Registry;
@@ -1401,5 +1547,175 @@ mod tests {
             serde_json::to_value(redact_health_status(&inactive)).expect("inactive JSON")["active"],
             json!({ "present": false, "has_suggestion": false })
         );
+    }
+
+    #[test]
+    fn version_is_local_and_exclusive() {
+        assert_eq!(
+            parse_arguments(arguments(&["--version"])).expect("version"),
+            ParsedCommand::Version
+        );
+        assert!(matches!(
+            parse_arguments(arguments(&["--version", "status"])),
+            Err(CliError::Arguments)
+        ));
+    }
+
+    #[test]
+    fn probe_parses_flags_text_and_bounds() {
+        let parsed = |values: &[&str]| {
+            let mut all = vec!["--socket", "/tmp/broker.sock", "probe"];
+            all.extend_from_slice(values);
+            parse_arguments(arguments(&all))
+        };
+        let probe_with =
+            |before: &str, after: &str, language: &str, allow_replacement: bool, explicit: bool| {
+                ParsedCommand::Remote {
+                    socket_path: PathBuf::from("/tmp/broker.sock"),
+                    command: Command::Probe {
+                        payload: ProbeRequestPayload {
+                            before: before.to_owned(),
+                            after: after.to_owned(),
+                            language: Some(language.to_owned()),
+                            allow_replacement,
+                            explicit,
+                        },
+                        text_from_stdin: false,
+                    },
+                }
+            };
+        let probe = |before: &str, after: &str, language: &str, allow_replacement: bool| {
+            probe_with(before, after, language, allow_replacement, false)
+        };
+        assert_eq!(
+            parsed(&["Please find attached the"]).expect("default probe"),
+            probe("Please find attached the", "", "en", false)
+        );
+        assert_eq!(
+            parsed(&["--language", "fa", "--replace", "--after", " tail", "متن"])
+                .expect("flagged probe"),
+            probe("متن", " tail", "fa", true)
+        );
+        assert_eq!(
+            parsed(&["--", "--not a flag"]).expect("separated text"),
+            probe("--not a flag", "", "en", false)
+        );
+        assert_eq!(
+            parsed(&["--explicit", "--language", "de", "Vielen Dank für Ihre "])
+                .expect("explicit probe"),
+            probe_with("Vielen Dank für Ihre ", "", "de", false, true)
+        );
+        assert_eq!(
+            parsed(&["--", "--explicit"]).expect("literal flag text"),
+            probe("--explicit", "", "en", false)
+        );
+        assert_eq!(
+            parsed(&["--", "-"]).expect("literal dash"),
+            probe("-", "", "en", false)
+        );
+        let ParsedCommand::Remote {
+            command:
+                Command::Probe {
+                    payload,
+                    text_from_stdin: true,
+                },
+            ..
+        } = parsed(&["--language", "de", "-"]).expect("stdin probe")
+        else {
+            panic!("- selects standard input");
+        };
+        assert_eq!(
+            (payload.before.as_str(), payload.language.as_deref()),
+            ("", Some("de"))
+        );
+        for invalid in [
+            &[][..],
+            &["--language"][..],
+            &["--unknown", "text"][..],
+            &["one", "two"][..],
+            &["-", "text"][..],
+            &["--language", "e", "text"][..],
+        ] {
+            assert!(
+                matches!(parsed(invalid), Err(CliError::Arguments)),
+                "{invalid:?}"
+            );
+        }
+        let oversized = "a".repeat(MAX_BEFORE_CHARS + 1);
+        assert!(matches!(
+            parsed(&[oversized.as_str()]),
+            Err(CliError::Arguments)
+        ));
+    }
+
+    #[tokio::test]
+    async fn probe_text_from_stdin_is_bounded_utf8_without_its_final_newline() {
+        for (input, expected) in [
+            (
+                &b"Please find attached the\n"[..],
+                "Please find attached the",
+            ),
+            (&b"Thank you\r\n"[..], "Thank you"),
+            (&b"two lines\nkept\n\n"[..], "two lines\nkept\n"),
+            (
+                "\u{0645}\u{062a}\u{0646} ".as_bytes(),
+                "\u{0645}\u{062a}\u{0646} ",
+            ),
+            (&b""[..], ""),
+        ] {
+            assert_eq!(read_probe_text(input).await.expect("probe text"), expected);
+        }
+        let widest = "\u{1f600}".repeat(MAX_BEFORE_CHARS) + "\r\n";
+        assert_eq!(
+            read_probe_text(widest.as_bytes())
+                .await
+                .expect("widest text")
+                .chars()
+                .count(),
+            MAX_BEFORE_CHARS
+        );
+        let oversized = "a".repeat(MAX_BEFORE_CHARS * 4 + 3);
+        for invalid in [&b"\xff\n"[..], oversized.as_bytes()] {
+            assert!(matches!(
+                read_probe_text(invalid).await,
+                Err(CliError::Arguments)
+            ));
+        }
+    }
+
+    #[test]
+    fn probe_response_requires_a_consistent_result() {
+        let response = |payload: serde_json::Value| {
+            let mut envelope = WireEnvelope::global(MessageType::ProbeResult, 1, &payload)
+                .expect("probe response")
+                .at_version(CURRENT_PROTOCOL_VERSION)
+                .expect("v2 probe response");
+            envelope.id = Some("ctl:probe".to_owned());
+            envelope
+        };
+        let suggested = ProbeResultPayload::suggested(
+            ProviderKind::PhraseV1,
+            " for your time".to_owned(),
+            None,
+            3,
+        );
+        assert_eq!(
+            validate_probe_response(
+                &response(serde_json::to_value(&suggested).expect("json")),
+                "ctl:probe"
+            )
+            .expect("valid result"),
+            suggested
+        );
+        for invalid in [
+            json!({"outcome": "no_suggestion", "provider": "local_model", "latency_ms": 1}),
+            json!({"outcome": "paused", "provider": "local_model", "text": " kept"}),
+            json!({"outcome": "suggested", "provider": "local_model", "text": " a", "reason": "stale", "latency_ms": 1}),
+        ] {
+            assert!(matches!(
+                validate_probe_response(&response(invalid), "ctl:probe"),
+                Err(CliError::UnexpectedResponse)
+            ));
+        }
     }
 }

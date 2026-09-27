@@ -165,3 +165,43 @@ fn linux_application_segments_match_the_formal_schema() {
         assert!(decoded.validate().is_err(), "Rust accepted {app_id}");
     }
 }
+
+#[test]
+fn all_web_origins_is_an_optional_v2_only_boolean() {
+    let mut document = json!({
+        "schema": "badi.settings.v2",
+        "revision": 4,
+        "paused": false,
+        "all_web_origins": true,
+        "subjects": []
+    });
+    assert!(validator(2).is_valid(&document));
+    let decoded: SettingsV2 = serde_json::from_value(document.clone()).expect("typed settings");
+    decoded.validate().expect("valid settings");
+    assert!(decoded.all_web_origins);
+    assert_eq!(serde_json::to_value(&decoded).expect("encoded"), document);
+
+    document["all_web_origins"] = json!("yes");
+    assert!(!validator(2).is_valid(&document));
+    assert!(serde_json::from_value::<SettingsV2>(document.clone()).is_err());
+
+    // Off is the canonical absence of the property.
+    document["all_web_origins"] = json!(false);
+    let off: SettingsV2 = serde_json::from_value(document.clone()).expect("explicit off");
+    assert!(!off.all_web_origins);
+    let encoded = serde_json::to_value(&off).expect("encoded");
+    assert!(encoded.get("all_web_origins").is_none());
+    assert!(validator(2).is_valid(&encoded));
+
+    for value in [true, false] {
+        let legacy = json!({
+            "schema": "badi.settings.v1",
+            "revision": 4,
+            "paused": false,
+            "all_web_origins": value,
+            "subjects": []
+        });
+        assert!(!validator(1).is_valid(&legacy));
+        assert!(serde_json::from_value::<SettingsV2>(legacy).is_err());
+    }
+}

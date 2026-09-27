@@ -2,6 +2,7 @@
 
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
+pub mod build_info;
 pub mod control_plane;
 pub mod engine;
 pub mod ipc;
@@ -26,12 +27,13 @@ pub mod writing_lab;
 
 pub use control_plane::{ControlPlane, ControlPlaneError, ControlPlaneSnapshot};
 pub use engine::{Broker, BrokerConfig, BrokerError, BrokerEvent, BrokerEventSink, ContextOutcome};
-pub use metrics::{Metrics, MetricsSnapshot};
+pub use metrics::{Metrics, MetricsSnapshot, NoSuggestionReason, NoSuggestionSnapshot};
 pub use model_selection::{
     HardwareProfile, ModelAdvice, ModelArtifact, ModelTier, ModelUseCase, detect_hardware,
     recommend_model,
 };
 pub use policy::{PolicyDecision, PolicyReason};
 pub use provider::{
-    CompletionProvider, DeterministicPhraseProvider, ProviderError, ProviderRequest,
+    CompletionProvider, DeterministicPhraseProvider, ProviderError, ProviderOutcome,
+    ProviderRequest, RequestTrigger,
 };

@@ -620,6 +620,7 @@ mod tests {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 1,
             paused: false,
+            all_web_origins: false,
             subjects: vec![SubjectRule {
                 identity: identity("example.com"),
                 permissions: SubjectPermissions {
@@ -1011,10 +1012,10 @@ mod tests {
         });
         subjects.sort_by(|left, right| left.identity.cmp(&right.identity));
         let mixed = SettingsV1 {
-            schema: SETTINGS_SCHEMA.to_owned(),
             revision: 1,
             paused: false,
             subjects,
+            ..SettingsV1::deny_by_default()
         };
         mixed.validate().expect("mixed settings");
 

@@ -28,6 +28,13 @@ async fn run() -> Result<(), ExitError> {
             print!("{HOST_USAGE}");
             Ok(())
         }
+        HostCommand::Version => {
+            println!(
+                "{}",
+                badi_broker::build_info::version_line("badi-native-host")
+            );
+            Ok(())
+        }
         HostCommand::Run { socket_path } => {
             connect_and_bridge(&socket_path, tokio::io::stdin(), tokio::io::stdout()).await?;
             Ok(())
@@ -41,11 +48,13 @@ where
 {
     let mut arguments = arguments.into_iter();
     let first = arguments.next().ok_or(ExitError::Arguments)?;
-    if first == "--help" || first == "-h" {
-        return if arguments.next().is_none() {
-            Ok(HostCommand::Help)
-        } else {
+    if first == "--help" || first == "-h" || first == "--version" {
+        return if arguments.next().is_some() {
             Err(ExitError::Arguments)
+        } else if first == "--version" {
+            Ok(HostCommand::Version)
+        } else {
+            Ok(HostCommand::Help)
         };
     }
     let caller_origin = first.into_string().map_err(|_| ExitError::CallerOrigin)?;
@@ -68,11 +77,12 @@ where
 const HOST_USAGE: &str = "Usage: badi-native-host CALLER_ORIGIN [--socket ABSOLUTE]\n\
 Bridges the fixed Badi development Chromium extension to the private broker.\n\
 Chrome supplies CALLER_ORIGIN as the first argument.\n\
-Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n";
+Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n  --version          Print the version and embedded source commit\n";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum HostCommand {
     Help,
+    Version,
     Run { socket_path: PathBuf },
 }
 
@@ -114,6 +124,14 @@ mod tests {
             parse_arguments(arguments(&["--help"])).expect("help"),
             HostCommand::Help
         );
+        assert_eq!(
+            parse_arguments(arguments(&["--version"])).expect("version"),
+            HostCommand::Version
+        );
+        assert!(matches!(
+            parse_arguments(arguments(&["--version", "--socket", "/tmp/broker.sock"])),
+            Err(ExitError::Arguments)
+        ));
     }
 
     #[test]

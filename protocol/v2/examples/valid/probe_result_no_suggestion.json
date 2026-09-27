@@ -1,0 +1,12 @@
+{
+  "v": 2,
+  "id": "ctl:probe",
+  "type": "probe.result",
+  "mono_ms": 12,
+  "payload": {
+    "outcome": "no_suggestion",
+    "provider": "local_model",
+    "reason": "budget_prefill",
+    "latency_ms": 551
+  }
+}

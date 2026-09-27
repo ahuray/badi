@@ -583,12 +583,12 @@ async fn baseline(
     result.warnings.push("production_raw_and_ttft_not_retained");
     let (client, trace) = runtime.client().with_lab_trace();
     let client = if request.config.mode == Mode::ProductionBoundary {
-        result
-            .warnings
-            .push("experimental_boundary_policy_not_enabled_in_production");
         client.with_lab_production_boundary()
     } else {
-        client
+        result
+            .warnings
+            .push("legacy_space_boundary_not_current_production");
+        client.with_lab_legacy_space_boundary()
     };
     let proposal = client
         .propose(request.provider_request(), cancellation, true)
@@ -922,18 +922,8 @@ enum FactRun {
     Letters,
 }
 
-fn fact_digit(character: char) -> Option<char> {
-    let value = match character {
-        '0'..='9' => character as u32 - '0' as u32,
-        '\u{0660}'..='\u{0669}' => character as u32 - '\u{0660}' as u32,
-        '\u{06F0}'..='\u{06F9}' => character as u32 - '\u{06F0}' as u32,
-        _ => return None,
-    };
-    char::from_u32('0' as u32 + value)
-}
-
 fn fact_run(character: char, current: Option<FactRun>) -> Option<FactRun> {
-    if fact_digit(character).is_some() {
+    if writing::ascii_digit(character).is_some() {
         Some(FactRun::Digits)
     } else if character.is_alphabetic()
         || (character == '\u{200c}' && current == Some(FactRun::Letters))
@@ -984,7 +974,8 @@ fn record_fact_run(
                 text[start..end]
                     .chars()
                     .map(|character| {
-                        fact_digit(character).expect("numeric fact run contains supported digits")
+                        writing::ascii_digit(character)
+                            .expect("numeric fact run contains supported digits")
                     })
                     .collect(),
             );

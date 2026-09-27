@@ -10,14 +10,20 @@ use badi_broker::{ControlPlane, server};
 async fn main() {
     let result = async {
         let command = parse_arguments(std::env::args_os().skip(1))?;
-        let BrokerCommand::Run {
-            socket_path,
-            provider,
-            model_directory,
-        } = command
-        else {
-            print!("{BROKER_USAGE}");
-            return Ok(());
+        let (socket_path, provider, model_directory) = match command {
+            BrokerCommand::Run {
+                socket_path,
+                provider,
+                model_directory,
+            } => (socket_path, provider, model_directory),
+            BrokerCommand::Help => {
+                print!("{BROKER_USAGE}");
+                return Ok(());
+            }
+            BrokerCommand::Version => {
+                println!("{}", badi_broker::build_info::version_line("badi-broker"));
+                return Ok(());
+            }
         };
         let control_plane =
             Arc::new(ControlPlane::open_from_environment().map_err(|_| ExitError::ControlPlane)?);
@@ -43,7 +49,7 @@ async fn main() {
 
 const BROKER_USAGE: &str = "Usage: badi-broker [--socket ABSOLUTE] [--provider local|phrase] [--model-directory ABSOLUTE]\n\
 Runs the local Unix-socket suggestion broker.\n\
-Options:\n  --provider local|phrase  Local LLM (default) or deterministic integration fixture\n  --model-directory ABSOLUTE  Override the Badi model/runtime data directory\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n";
+Options:\n  --provider local|phrase  Local LLM (default) or deterministic integration fixture\n  --model-directory ABSOLUTE  Override the Badi model/runtime data directory\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n  --version          Print the version and embedded source commit\n";
 
 async fn start_provider(
     kind: ProviderSelection,
@@ -57,12 +63,12 @@ async fn start_provider(
                 let directory = directory
                     .map_or_else(badi_broker::writing::data_directory, Ok)
                     .map_err(|error| ExitError::Model(error.to_string()))?;
-                let (runtime, model) = badi_broker::writing::activate(directory)
+                let (runtime, model, warm_up) = badi_broker::writing::activate(directory)
                     .await
                     .map_err(|error| ExitError::Model(error.to_string()))?;
                 eprintln!(
-                    "provider=local_model model={} quantization={}",
-                    model.filename, model.quantization
+                    "{}",
+                    badi_broker::writing::activation_report(&model, warm_up)
                 );
                 Ok(Arc::new(runtime))
             }
@@ -86,7 +92,7 @@ where
     let mut provider = None;
     let mut model_directory = None;
     while let Some(flag) = arguments.next() {
-        if flag == "--help" || flag == "-h" {
+        if flag == "--help" || flag == "-h" || flag == "--version" {
             if socket.is_some()
                 || provider.is_some()
                 || model_directory.is_some()
@@ -94,7 +100,11 @@ where
             {
                 return Err(ExitError::Arguments);
             }
-            return Ok(BrokerCommand::Help);
+            return Ok(if flag == "--version" {
+                BrokerCommand::Version
+            } else {
+                BrokerCommand::Help
+            });
         }
         let value = arguments.next().ok_or(ExitError::Arguments)?;
         if flag == "--socket" && socket.is_none() {
@@ -135,6 +145,7 @@ where
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum BrokerCommand {
     Help,
+    Version,
     Run {
         socket_path: PathBuf,
         provider: ProviderSelection,
@@ -185,6 +196,15 @@ mod tests {
         assert_eq!(
             parse_arguments(arguments(&["--help"])).expect("help"),
             BrokerCommand::Help
+        );
+        assert_eq!(
+            parse_arguments(arguments(&["--version"])).expect("version"),
+            BrokerCommand::Version
+        );
+        assert!(parse_arguments(arguments(&["--version", "--help"])).is_err());
+        assert!(
+            parse_arguments(arguments(&["--provider", "phrase", "--version"])).is_err(),
+            "--version never starts a broker with other options"
         );
         assert_eq!(
             parse_arguments(arguments(&["--socket", "/tmp/broker.sock"])).expect("absolute socket"),

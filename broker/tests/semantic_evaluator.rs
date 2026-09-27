@@ -344,6 +344,31 @@ async fn runtime_rejects_wrong_artifacts_bad_health_early_exit_and_orphans()
     Ok(())
 }
 
+#[tokio::test]
+async fn failed_warm_up_leaves_the_owned_runtime_serving() -> Result<(), Box<dyn Error>> {
+    let fixture = OwnedFixture::new()?;
+    let runtime = fixture.launch(FixtureBehavior::Ready)?.spawn().await?;
+    // The fixture accepts only the evaluator's sampling contract and closes
+    // the connection on any other completion request.
+    let report = runtime.warm_up().await;
+    assert_eq!(report.failure(), Some("transport"));
+    assert!(report.elapsed() < semantic::runtime::WARM_UP_TIMEOUT);
+    assert!(runtime.is_alive());
+    let observed = runtime
+        .client()
+        .complete_observed(
+            request("fixture:valid", Some("en")),
+            CancellationToken::new(),
+        )
+        .await?;
+    assert_eq!(observed.disposition(), CompletionDisposition::Suggested);
+    assert_eq!(observed.output(), Some(" for your time."));
+    let process_id = runtime.process_id().expect("owned child process");
+    drop(runtime);
+    assert!(!Path::new(&format!("/proc/{process_id}")).exists());
+    Ok(())
+}
+
 #[test]
 fn evaluator_stays_opt_in_while_local_writing_is_available_by_default() -> Result<(), Box<dyn Error>>
 {

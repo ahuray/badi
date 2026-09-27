@@ -243,6 +243,16 @@ impl Default for SubjectPermissions {
     }
 }
 
+/// Permissions of an http(s) origin that has no exact rule while
+/// `all_web_origins` is on: prediction only, never learning or retention.
+pub const ALL_WEB_ORIGINS_PERMISSIONS: SubjectPermissions = SubjectPermissions {
+    suggest: PermissionDecision::Allow,
+    display: PermissionDecision::Allow,
+    context_read: PermissionDecision::Allow,
+    learn: PermissionDecision::Block,
+    retention: RetentionPermission::None,
+};
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubjectRule {
@@ -256,6 +266,11 @@ pub struct SettingsV2 {
     pub schema: String,
     pub revision: u64,
     pub paused: bool,
+    /// Opt-in browser default: an http(s) origin without an exact rule gets
+    /// [`ALL_WEB_ORIGINS_PERMISSIONS`]. Exact rules win; field denial and the
+    /// extension's own host permission still apply. Omitted when off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all_web_origins: bool,
     pub subjects: Vec<SubjectRule>,
 }
 
@@ -265,6 +280,8 @@ struct SettingsDocument {
     schema: String,
     revision: u64,
     paused: bool,
+    #[serde(default)]
+    all_web_origins: Option<bool>,
     subjects: Vec<SubjectRule>,
 }
 
@@ -285,10 +302,16 @@ impl<'de> Deserialize<'de> for SettingsV2 {
         {
             return Err(serde::de::Error::custom("linux_app_requires_settings_v2"));
         }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.all_web_origins.is_some() {
+            return Err(serde::de::Error::custom(
+                "all_web_origins_requires_settings_v2",
+            ));
+        }
         Ok(Self {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: decoded.revision,
             paused: decoded.paused,
+            all_web_origins: decoded.all_web_origins.unwrap_or(false),
             subjects: decoded.subjects,
         })
     }
@@ -301,6 +324,7 @@ impl SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 0,
             paused: true,
+            all_web_origins: false,
             subjects: Vec::new(),
         }
     }
@@ -360,6 +384,18 @@ impl SettingsV2 {
                 configured: true,
                 permissions: self.subjects[index].permissions,
             },
+            Err(_)
+                if self.all_web_origins
+                    && matches!(identity, StableIdentity::BrowserOrigin { .. }) =>
+            {
+                PolicyResolution {
+                    settings_revision: self.revision,
+                    paused: self.paused,
+                    identity_known: true,
+                    configured: true,
+                    permissions: ALL_WEB_ORIGINS_PERMISSIONS,
+                }
+            }
             Err(_) => PolicyResolution {
                 settings_revision: self.revision,
                 paused: self.paused,
@@ -408,9 +444,11 @@ impl SettingsV2 {
     }
 
     /// A legacy settings client can still manage its browser-origin slice, but
-    /// cannot erase native policy that its schema is unable to represent.
+    /// cannot erase native rules or the all-web default that its schema is
+    /// unable to represent.
     #[must_use]
-    pub fn preserving_linux_rules_from(mut self, current: &Self) -> Self {
+    pub fn preserving_v2_policy_from(mut self, current: &Self) -> Self {
+        self.all_web_origins = current.all_web_origins;
         self.subjects.extend(
             current
                 .subjects
@@ -1242,6 +1280,7 @@ mod tests {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 1,
             paused: false,
+            all_web_origins: false,
             subjects: vec![rule],
         }
     }
@@ -1257,6 +1296,80 @@ mod tests {
         assert!(!resolution.allows_suggestion());
         assert!(!resolution.allows_display());
         assert!(!resolution.allows_learning());
+    }
+
+    #[test]
+    fn all_web_origins_allows_unlisted_web_origins_but_exact_rules_win() {
+        let blocked = SubjectRule {
+            identity: identity("bank.example"),
+            permissions: SubjectPermissions::deny_all(),
+        };
+        let mut settings = settings_with(blocked);
+        settings.subjects.push(SubjectRule {
+            identity: StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite").expect("app"),
+            permissions: SubjectPermissions::deny_all(),
+        });
+        settings.validate().expect("valid settings");
+        let http = StableIdentity::browser_origin(
+            BrowserAdapter::Chromium,
+            WebScheme::Http,
+            "localhost",
+            Some(8080),
+        )
+        .expect("http origin");
+        let unlisted_app =
+            StableIdentity::linux_app(LinuxAdapter::Fcitx, "brave-browser").expect("app");
+        for all_web_origins in [false, true] {
+            settings.all_web_origins = all_web_origins;
+            for origin in [identity("mail.example"), http.clone()] {
+                let resolution = settings.resolve_identity(&origin);
+                assert_eq!(resolution.configured, all_web_origins);
+                assert_eq!(resolution.allows_context_read(), all_web_origins);
+                assert_eq!(resolution.allows_display(), all_web_origins);
+                assert_eq!(resolution.allows_suggestion(), all_web_origins);
+                assert!(!resolution.allows_learning(), "never learns by default");
+                assert_eq!(resolution.permissions.retention, RetentionPermission::None);
+            }
+            // An exact block and every native app keep their own resolution.
+            assert!(
+                !settings
+                    .resolve_identity(&identity("bank.example"))
+                    .allows_context_read()
+            );
+            for app in [
+                StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite").expect("app"),
+                unlisted_app.clone(),
+            ] {
+                assert!(!settings.resolve_identity(&app).allows_context_read());
+            }
+        }
+        settings.paused = true;
+        assert!(
+            !settings
+                .resolve_identity(&identity("mail.example"))
+                .allows_context_read()
+        );
+    }
+
+    #[test]
+    fn legacy_browser_clients_neither_see_nor_erase_the_all_web_default() {
+        let mut current = settings_with(SubjectRule {
+            identity: StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite").expect("app"),
+            permissions: super::ALL_WEB_ORIGINS_PERMISSIONS,
+        });
+        current.all_web_origins = true;
+        let legacy = current.wire_document(1).expect("v1 wire document");
+        assert!(legacy.get("all_web_origins").is_none());
+        assert_eq!(legacy["subjects"], serde_json::json!([]));
+        let next: SettingsV1 = serde_json::from_value(legacy).expect("legacy replacement");
+        assert!(!next.all_web_origins);
+        let merged = next.preserving_v2_policy_from(&current);
+        assert!(merged.all_web_origins);
+        assert_eq!(merged.subjects, current.subjects);
+        assert_eq!(
+            current.wire_document(2).expect("v2 wire document")["all_web_origins"],
+            true
+        );
     }
 
     #[test]
@@ -1431,6 +1544,7 @@ mod tests {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 1,
             paused: false,
+            all_web_origins: false,
             subjects: vec![first.clone(), second.clone()],
         };
         valid.validate().expect("canonical settings");
@@ -1464,6 +1578,7 @@ mod tests {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: crate::protocol::MAX_SAFE_COUNTER,
             paused: true,
+            all_web_origins: false,
             subjects,
         };
         settings.validate().expect("maximum-shape settings");

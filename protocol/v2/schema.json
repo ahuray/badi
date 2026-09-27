@@ -35,6 +35,8 @@
         "settings.status",
         "memory.clear",
         "memory.status",
+        "probe.request",
+        "probe.result",
         "error"
       ]
     },
@@ -253,6 +255,24 @@
         "focus_epoch": false,
         "revision": false,
         "payload": { "$ref": "#/$defs/memoryStatusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "probe.request" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/probeRequestPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "probe.result" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/probeResultPayload" }
       }
     },
     {
@@ -938,8 +958,107 @@
         "commits_prepared": { "$ref": "#/$defs/counter" },
         "commits_applied": { "$ref": "#/$defs/counter" },
         "commit_failures": { "$ref": "#/$defs/counter" },
-        "provider_errors": { "$ref": "#/$defs/counter" }
+        "provider_errors": { "$ref": "#/$defs/counter" },
+        "no_suggestion": { "$ref": "#/$defs/noSuggestionMetrics" }
       }
+    },
+    "noSuggestionReason": {
+      "enum": [
+        "request_abstained",
+        "budget_prefill",
+        "budget_stream",
+        "model_abstained",
+        "output_rejected",
+        "stale",
+        "timeout",
+        "provider_error"
+      ]
+    },
+    "noSuggestionMetrics": {
+      "type": "object",
+      "description": "Content-free classes of provider calls that ended without a displayed suggestion; each call counts once. Optional for brokers that predate the breakdown.",
+      "additionalProperties": false,
+      "required": [
+        "request_abstained",
+        "budget_prefill",
+        "budget_stream",
+        "model_abstained",
+        "output_rejected",
+        "stale",
+        "timeout",
+        "provider_error"
+      ],
+      "properties": {
+        "request_abstained": { "$ref": "#/$defs/counter" },
+        "budget_prefill": { "$ref": "#/$defs/counter" },
+        "budget_stream": { "$ref": "#/$defs/counter" },
+        "model_abstained": { "$ref": "#/$defs/counter" },
+        "output_rejected": { "$ref": "#/$defs/counter" },
+        "stale": { "$ref": "#/$defs/counter" },
+        "timeout": { "$ref": "#/$defs/counter" },
+        "provider_error": { "$ref": "#/$defs/counter" },
+        "last": { "$ref": "#/$defs/noSuggestionReason" }
+      }
+    },
+    "probeRequestPayload": {
+      "type": "object",
+      "description": "Private same-UID CLI diagnostic. It opens no session, grants no commit authority, and its text is neither logged nor retained.",
+      "additionalProperties": false,
+      "required": ["before", "allow_replacement"],
+      "properties": {
+        "before": { "$ref": "#/$defs/contextText", "maxLength": 512 },
+        "after": { "$ref": "#/$defs/contextText", "maxLength": 128 },
+        "language": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 35,
+          "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$"
+        },
+        "allow_replacement": { "type": "boolean" },
+        "explicit": {
+          "type": "boolean",
+          "description": "Use the explicit-request writing budget (1200 ms) instead of the automatic one (550 ms)."
+        }
+      }
+    },
+    "probeResultPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "provider"],
+      "properties": {
+        "outcome": { "enum": ["suggested", "no_suggestion", "paused"] },
+        "provider": { "enum": ["phrase_v1", "local_model"] },
+        "text": { "type": "string" },
+        "replace_before": { "type": "string", "pattern": "^[a-z]{3,24} ?$" },
+        "reason": { "$ref": "#/$defs/noSuggestionReason" },
+        "latency_ms": { "$ref": "#/$defs/counter" }
+      },
+      "oneOf": [
+        {
+          "properties": { "outcome": { "const": "suggested" }, "reason": false },
+          "required": ["text", "latency_ms"],
+          "if": { "required": ["replace_before"] },
+          "then": { "$ref": "#/$defs/spellingSuffixPair" },
+          "else": { "properties": { "text": { "$ref": "#/$defs/safeSuggestionText" } } }
+        },
+        {
+          "properties": {
+            "outcome": { "const": "no_suggestion" },
+            "text": false,
+            "replace_before": false
+          },
+          "required": ["reason", "latency_ms"]
+        },
+        {
+          "properties": {
+            "outcome": { "const": "paused" },
+            "text": false,
+            "replace_before": false,
+            "reason": false,
+            "latency_ms": false
+          }
+        }
+      ]
     },
     "activeLocator": {
       "type": "object",
