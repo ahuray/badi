@@ -81,7 +81,7 @@ async fn writing_header_budget_and_cancellation_allow_next_persistent_request()
 -> Result<(), Box<dyn Error>> {
     for cancel_pending in [false, true] {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-        let client = SemanticClient::new(config(&listener)?.for_writing())?;
+        let client = SemanticClient::new(config(&listener)?)?;
         let cancellation = CancellationToken::new();
         let cancel = cancellation.clone();
         let server = tokio::spawn(async move {
@@ -130,7 +130,7 @@ async fn writing_header_budget_and_cancellation_allow_next_persistent_request()
 async fn exhausted_spelling_header_budget_does_not_submit_a_continuation()
 -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(config(&listener)?.for_writing())?;
+    let client = SemanticClient::new(config(&listener)?)?;
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("correction connection");
         let payload = read_request(&mut socket).await;
@@ -181,7 +181,7 @@ async fn writing_header_deadline_preserves_actual_http_errors() -> Result<(), Bo
         ),
     ] {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-        let client = SemanticClient::new(config(&listener)?.for_writing())?;
+        let client = SemanticClient::new(config(&listener)?)?;
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("connection");
             read_request(&mut socket).await;
@@ -203,7 +203,7 @@ async fn writing_header_deadline_preserves_actual_http_errors() -> Result<(), Bo
         server.await?;
     }
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(config(&listener)?.for_writing())?;
+    let client = SemanticClient::new(config(&listener)?)?;
     drop(listener);
     assert!(matches!(
         client
@@ -214,23 +214,11 @@ async fn writing_header_deadline_preserves_actual_http_errors() -> Result<(), Bo
     Ok(())
 }
 
+/// Runtime requests without a writing budget, such as the authorization
+/// challenge, end at the configured request timeout.
 #[tokio::test]
-async fn historical_semantic_header_wait_keeps_its_configured_deadline()
--> Result<(), Box<dyn Error>> {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(config(&listener)?)?;
-    let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("connection");
-        read_request(&mut socket).await;
-        tokio::time::sleep(Duration::from_millis(600)).await;
-        write_completion(&mut socket).await;
-    });
-    let observed = client
-        .complete_observed(request(), CancellationToken::new())
-        .await?;
-    assert_eq!(observed.disposition(), CompletionDisposition::Suggested);
-    server.await?;
-
+async fn configured_request_timeout_bounds_requests_without_a_budget() -> Result<(), Box<dyn Error>>
+{
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let client = SemanticClient::new(
         config(&listener)?.with_timeouts(Duration::from_millis(50), Duration::from_millis(100))?,
@@ -243,11 +231,12 @@ async fn historical_semantic_header_wait_keeps_its_configured_deadline()
     let started = Instant::now();
     assert!(matches!(
         client
-            .complete_observed(request(), CancellationToken::new())
+            .probe_authorization_challenge(CancellationToken::new())
             .await,
         Err(ClientError::Timeout)
     ));
-    assert!(started.elapsed() < Duration::from_millis(500));
+    let elapsed = started.elapsed();
+    assert!(elapsed >= Duration::from_millis(100) && elapsed < Duration::from_millis(500));
     server.await?;
     Ok(())
 }
@@ -328,7 +317,7 @@ async fn explicit_requests_have_their_own_budget_and_deadline_classes() -> Resul
         ),
     ] {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-        let client = SemanticClient::new(config(&listener)?.for_writing())?;
+        let client = SemanticClient::new(config(&listener)?)?;
         let server = tokio::spawn(serve_delayed(
             listener,
             Duration::from_millis(delay),
@@ -363,7 +352,7 @@ async fn explicit_requests_have_their_own_budget_and_deadline_classes() -> Resul
 async fn explicit_spelling_and_continuation_share_the_explicit_budget() -> Result<(), Box<dyn Error>>
 {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(config(&listener)?.for_writing())?;
+    let client = SemanticClient::new(config(&listener)?)?;
     let server = tokio::spawn(async move {
         // The ambiguous typo spends 700 ms of the explicit budget without an
         // answer; the continuation must still arrive before 1,200 ms.

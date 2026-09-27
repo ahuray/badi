@@ -42,8 +42,8 @@ pub fn run() -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// The owned-runtime launch environment; a mismatch fails startup like a
-/// misconfigured server would.
+/// The production writing launch environment; a mismatch fails startup
+/// like a misconfigured server would.
 fn launch_contract() -> Option<(u16, String)> {
     let variable = |name| std::env::var(name).ok();
     let port = variable("LLAMA_ARG_PORT")?.parse::<u16>().ok()?;
@@ -56,7 +56,10 @@ fn launch_contract() -> Option<(u16, String)> {
         ("LLAMA_ARG_N_GPU_LAYERS", "0"),
         ("LLAMA_ARG_UI", "0"),
         ("LLAMA_ARG_OFFLINE", "1"),
-        ("LLAMA_ARG_CACHE_PROMPT", "0"),
+        ("LLAMA_ARG_CACHE_PROMPT", "1"),
+        ("LLAMA_ARG_CACHE_RAM", "0"),
+        ("LLAMA_ARG_BATCH", "16"),
+        ("LLAMA_ARG_UBATCH", "16"),
         ("LLAMA_ARG_THREADS_BATCH", threads.as_str()),
     ];
     let valid = port != 0

@@ -24,14 +24,11 @@ fn request(before: &str, language: Option<&str>) -> ProviderRequest {
 #[tokio::test]
 async fn unsupported_writing_requests_never_reach_the_runtime() -> Result<(), Box<dyn Error>> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(
-        SemanticClientConfig::new(
-            listener.local_addr()?,
-            "writing-fixture",
-            "public-fixture-token",
-        )?
-        .for_writing(),
-    )?;
+    let client = SemanticClient::new(SemanticClientConfig::new(
+        listener.local_addr()?,
+        "writing-fixture",
+        "public-fixture-token",
+    )?)?;
     for language in [None, Some("fr"), Some("ar")] {
         let result = client
             .complete_observed(request("fixture:valid", language), CancellationToken::new())
@@ -103,14 +100,11 @@ async fn unsupported_writing_requests_never_reach_the_runtime() -> Result<(), Bo
 async fn healing_that_empties_the_prompt_abstains_before_any_request() -> Result<(), Box<dyn Error>>
 {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(
-        SemanticClientConfig::new(
-            listener.local_addr()?,
-            "writing-fixture",
-            "public-fixture-token",
-        )?
-        .for_writing(),
-    )?;
+    let client = SemanticClient::new(SemanticClientConfig::new(
+        listener.local_addr()?,
+        "writing-fixture",
+        "public-fixture-token",
+    )?)?;
     // Only whitespace, healed or not, or one unfinished English word leaves no
     // context. The runtime answers that with a malformed chunk, so these
     // abstain before any request instead of counting an error.
@@ -259,10 +253,11 @@ async fn stream_outcome_until(
                 .await;
         }
     });
-    let client = SemanticClient::new(
-        SemanticClientConfig::new(endpoint, "healing-fixture", "public-fixture-token")?
-            .for_writing(),
-    )?;
+    let client = SemanticClient::new(SemanticClientConfig::new(
+        endpoint,
+        "healing-fixture",
+        "public-fixture-token",
+    )?)?;
     let result = client
         .propose_outcome(
             request(before, Some(language)),
@@ -451,10 +446,11 @@ async fn spelling_and_continuation_share_one_deadline() -> Result<(), Box<dyn Er
             }
         }
     });
-    let client = SemanticClient::new(
-        SemanticClientConfig::new(endpoint, "deadline-fixture", "public-fixture-token")?
-            .for_writing(),
-    )?;
+    let client = SemanticClient::new(SemanticClientConfig::new(
+        endpoint,
+        "deadline-fixture",
+        "public-fixture-token",
+    )?)?;
     let started = std::time::Instant::now();
     let result = client
         .propose(
@@ -476,14 +472,11 @@ async fn spelling_and_continuation_share_one_deadline() -> Result<(), Box<dyn Er
 async fn unambiguous_spelling_does_not_require_an_inference_round_trip()
 -> Result<(), Box<dyn Error>> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(
-        SemanticClientConfig::new(
-            listener.local_addr()?,
-            "dictionary-fixture",
-            "public-fixture-token",
-        )?
-        .for_writing(),
-    )?;
+    let client = SemanticClient::new(SemanticClientConfig::new(
+        listener.local_addr()?,
+        "dictionary-fixture",
+        "public-fixture-token",
+    )?)?;
     for (before, expected, original) in [
         ("The shipping adress", "address", "adress"),
         ("Please give an exampel", "example", "exampel"),
@@ -711,10 +704,11 @@ async fn warm_up_endpoint(
 async fn warm_up_sends_one_fixed_tiny_completion_and_discards_its_reply()
 -> Result<(), Box<dyn Error>> {
     let (endpoint, server) = warm_up_endpoint(WarmUpReply::Json).await?;
-    let client = SemanticClient::new(
-        SemanticClientConfig::new(endpoint, "warm-up-fixture", "public-fixture-token")?
-            .for_writing(),
-    )?;
+    let client = SemanticClient::new(SemanticClientConfig::new(
+        endpoint,
+        "warm-up-fixture",
+        "public-fixture-token",
+    )?)?;
     client
         .warm_up(Duration::from_secs(2), CancellationToken::new())
         .await?;
@@ -900,9 +894,11 @@ async fn runtime_exchange(
         }
         payload
     });
-    let client = SemanticClient::new(
-        SemanticClientConfig::new(endpoint, "space-fixture", "public-fixture-token")?.for_writing(),
-    )?;
+    let client = SemanticClient::new(SemanticClientConfig::new(
+        endpoint,
+        "space-fixture",
+        "public-fixture-token",
+    )?)?;
     let outcome = client
         .propose_outcome(
             request(before, Some(language)),
@@ -1080,10 +1076,11 @@ async fn a_spelling_attempt_that_spends_the_budget_sends_no_continuation()
         );
         payload
     });
-    let client = SemanticClient::new(
-        SemanticClientConfig::new(endpoint, "deadline-fixture", "public-fixture-token")?
-            .for_writing(),
-    )?;
+    let client = SemanticClient::new(SemanticClientConfig::new(
+        endpoint,
+        "deadline-fixture",
+        "public-fixture-token",
+    )?)?;
     let result = client
         .propose(
             request("This is teh ", Some("en")),
@@ -1125,10 +1122,11 @@ async fn a_request_observer_sees_each_runtime_body_exactly_as_sent() -> Result<(
         payload
     });
     let recorder = std::sync::Arc::new(BodyRecorder::default());
-    let observed = SemanticClient::new(
-        SemanticClientConfig::new(endpoint, "observer-fixture", "public-fixture-token")?
-            .for_writing(),
-    )?
+    let observed = SemanticClient::new(SemanticClientConfig::new(
+        endpoint,
+        "observer-fixture",
+        "public-fixture-token",
+    )?)?
     .with_request_observer(std::sync::Arc::clone(&recorder) as _);
     // A dictionary correction sends nothing, so there is nothing to observe.
     let correction = observed

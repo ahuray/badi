@@ -260,8 +260,8 @@ Writing launches also cap both prefill batch sizes at 16 so interrupted prompts
 yield sooner between runtime decode operations. A clean development comparison
 preserved all 24 outputs/abstentions without a measured short-text penalty;
 this does not guarantee immediate cancellation of an in-flight runtime batch.
-Only the runtime test fixtures still use the original uncached, English-only
-request and launch contract with default batch sizes.
+Every launch, including the runtime test fixtures, uses this cached writing
+setup and request contract; the Lab substitutes only its own launch profile.
 
 The opt-in development probes exercise the installed model without opening an
 editor or reading a document:

@@ -28,7 +28,6 @@ use super::client::{ClientError, HealthStatus, SemanticClient, SemanticClientCon
 use super::provenance::{ProvenanceError, VerifiedDirectoryManifest, VerifiedFile};
 use super::wire::StatusCode;
 
-pub const LLAMA_CPP_LAUNCH_CONTRACT_ID: &str = "badi.llama-cpp-owned-eval.v1";
 pub const CONTEXT_SIZE: u16 = 512;
 pub const GPU_LAYERS: u16 = 0;
 const MAX_WRITING_CONTEXT_SIZE: u16 = 8_192;
@@ -145,7 +144,7 @@ pub struct LlamaCppLaunch {
     startup_timeout: Duration,
     threads: usize,
     fixture_behavior: Option<FixtureBehavior>,
-    writing: Option<WritingProfile>,
+    profile: WritingProfile,
     launcher: Launcher,
 }
 
@@ -165,7 +164,7 @@ impl LlamaCppLaunch {
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             threads,
             fixture_behavior: None,
-            writing: None,
+            profile: WritingProfile::PRODUCTION,
             launcher: Launcher::Direct,
         };
         launch.validate()?;
@@ -191,7 +190,7 @@ impl LlamaCppLaunch {
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             threads: 1,
             fixture_behavior: Some(behavior),
-            writing: None,
+            profile: WritingProfile::PRODUCTION,
             launcher: Launcher::Direct,
         };
         launch.validate()?;
@@ -202,16 +201,9 @@ impl LlamaCppLaunch {
         self.spawn_with_post_spawn_hook(|_| {}).await
     }
 
-    /// Launches the installed writing provider: [`WritingProfile::PRODUCTION`].
-    #[must_use]
-    pub const fn for_writing(mut self) -> Self {
-        self.writing = Some(WritingProfile::PRODUCTION);
-        self
-    }
-
-    /// Launches for writing with `profile` instead of production's settings.
+    /// Launches with `profile` instead of [`WritingProfile::PRODUCTION`].
     pub fn with_writing_profile(mut self, profile: WritingProfile) -> Result<Self, RuntimeError> {
-        self.writing = Some(profile);
+        self.profile = profile;
         self.validate()?;
         Ok(self)
     }
@@ -238,13 +230,11 @@ impl LlamaCppLaunch {
             SecretToken::new()
         };
         let negative_token = SecretToken::new();
-        let config = SemanticClientConfig::new(endpoint, &self.model_alias, token.expose())?;
-        let config = if self.writing.is_some() {
-            config.for_writing()
-        } else {
-            config
-        };
-        let client = SemanticClient::new(config)?;
+        let client = SemanticClient::new(SemanticClientConfig::new(
+            endpoint,
+            &self.model_alias,
+            token.expose(),
+        )?)?;
         let negative_config =
             SemanticClientConfig::new(endpoint, &self.model_alias, negative_token.expose())?;
         let negative_client = SemanticClient::new(negative_config)?;
@@ -262,14 +252,12 @@ impl LlamaCppLaunch {
             .env("LLAMA_ARG_MODEL", self.model.path())
             .env("LLAMA_ARG_ALIAS", &self.model_alias)
             .env("LLAMA_API_KEY", token.expose())
-            .env("LLAMA_ARG_CTX_SIZE", self.context_size().to_string())
             .env("LLAMA_ARG_N_PARALLEL", "1")
             .env("LLAMA_ARG_THREADS", self.threads.to_string())
             .env("LLAMA_ARG_THREADS_BATCH", self.threads.to_string())
             .env("LLAMA_ARG_N_GPU_LAYERS", GPU_LAYERS.to_string())
             .env("LLAMA_ARG_UI", "0")
             .env("LLAMA_ARG_OFFLINE", "1")
-            .env("LLAMA_ARG_CACHE_PROMPT", "0")
             .env("LLAMA_ARG_LOG_DISABLE", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -333,11 +321,9 @@ impl LlamaCppLaunch {
     /// The identity this launch's runtime will report.
     #[must_use]
     pub fn identity(&self) -> StableRuntimeIdentity {
-        let writing = self.writing;
+        let profile = self.profile;
         StableRuntimeIdentity {
-            launch_contract_id: writing.map_or(LLAMA_CPP_LAUNCH_CONTRACT_ID, |profile| {
-                profile.launch_contract_id
-            }),
+            launch_contract_id: profile.launch_contract_id,
             binary_sha256: self.binary.sha256().to_owned(),
             runtime_bundle_manifest_sha256: self
                 .runtime_bundle
@@ -346,37 +332,32 @@ impl LlamaCppLaunch {
             model_sha256: self.model.sha256().to_owned(),
             model_size: self.model.identity().size,
             model_alias: self.model_alias.clone(),
-            model_origin: writing.and_then(|profile| profile.model_origin),
+            model_origin: profile.model_origin,
             threads: self.threads,
-            context_size: self.context_size(),
+            context_size: profile.context_size,
             gpu_layers: GPU_LAYERS,
-            batch_size: writing.map(|profile| profile.batch_size),
-            ubatch_size: writing.map(|profile| profile.batch_size),
+            batch_size: Some(profile.batch_size),
+            ubatch_size: Some(profile.batch_size),
         }
-    }
-
-    fn context_size(&self) -> u16 {
-        self.writing
-            .map_or(CONTEXT_SIZE, |profile| profile.context_size)
     }
 
     fn configure_mode(&self, command: &mut Command) {
         if let Some(behavior) = self.fixture_behavior {
             command.env("BADI_FIXTURE_BEHAVIOR", behavior.environment_value());
         }
-        if let Some(profile) = self.writing {
-            // Reuse only the active slot's bounded KV state. Disable the
-            // separate RAM archive; no slot-save path or disk cache is enabled.
-            command
-                .env("LLAMA_ARG_CACHE_PROMPT", "1")
-                .env("LLAMA_ARG_CACHE_RAM", "0")
-                // The runtime observes cancellation between prefill batches,
-                // so the batch bounds the cost of a cancelled request.
-                .env("LLAMA_ARG_BATCH", profile.batch_size.to_string())
-                .env("LLAMA_ARG_UBATCH", profile.batch_size.to_string());
-            if let Some(checkpoints) = profile.context_checkpoints {
-                command.env("LLAMA_ARG_CTX_CHECKPOINTS", checkpoints.to_string());
-            }
+        let profile = self.profile;
+        // Reuse only the active slot's bounded KV state. Disable the separate
+        // RAM archive; no slot-save path or disk cache is enabled.
+        command
+            .env("LLAMA_ARG_CTX_SIZE", profile.context_size.to_string())
+            .env("LLAMA_ARG_CACHE_PROMPT", "1")
+            .env("LLAMA_ARG_CACHE_RAM", "0")
+            // The runtime observes cancellation between prefill batches, so
+            // the batch bounds the cost of a cancelled request.
+            .env("LLAMA_ARG_BATCH", profile.batch_size.to_string())
+            .env("LLAMA_ARG_UBATCH", profile.batch_size.to_string());
+        if let Some(checkpoints) = profile.context_checkpoints {
+            command.env("LLAMA_ARG_CTX_CHECKPOINTS", checkpoints.to_string());
         }
     }
 
@@ -393,9 +374,7 @@ impl LlamaCppLaunch {
         if self.startup_timeout.is_zero() || self.startup_timeout > MAX_STARTUP_TIMEOUT {
             return Err(RuntimeError::InvalidConfig("startup_timeout"));
         }
-        if let Some(profile) = &self.writing {
-            profile.validate()?;
-        }
+        self.profile.validate()?;
         match (&self.runtime_bundle, self.fixture_behavior) {
             (Some(bundle), None) if self.binary.path().parent() == Some(bundle.path()) => {}
             // The parent-death helper passes no fixture arguments.
@@ -862,57 +841,6 @@ mod tests {
         verify_directory_manifest, verify_file,
     };
 
-    #[test]
-    fn writing_bounds_batches_without_changing_evaluation_defaults() -> Result<(), Box<dyn Error>> {
-        let temporary = tempfile::tempdir()?;
-        let binary_path = temporary.path().join("fixture");
-        let model_path = temporary.path().join("model");
-        fs::write(&binary_path, b"fixture")?;
-        fs::write(&model_path, b"model")?;
-        let launch = LlamaCppLaunch::for_fixture(
-            verify_observed_file(&binary_path)?,
-            verify_observed_file(&model_path)?,
-            FixtureBehavior::Ready,
-        )?;
-        let baseline_identity = launch.identity();
-        for (launch, writing) in [(launch.clone(), false), (launch.for_writing(), true)] {
-            let mut command = Command::new(&binary_path);
-            command.env_clear().env("LLAMA_ARG_CACHE_PROMPT", "0");
-            launch.configure_mode(&mut command);
-            let identity = launch.identity();
-            let serialized_identity = serde_json::to_value(&identity)?;
-            for name in ["batch_size", "ubatch_size"] {
-                assert_eq!(
-                    serialized_identity.get(name),
-                    writing.then_some(&serde_json::json!(16))
-                );
-            }
-            assert_eq!(identity.sha256() == baseline_identity.sha256(), !writing);
-            if writing {
-                let mut previous_writing_identity = identity.clone();
-                previous_writing_identity.batch_size = None;
-                previous_writing_identity.ubatch_size = None;
-                assert_ne!(identity.sha256(), previous_writing_identity.sha256());
-            }
-            let environment: std::collections::BTreeMap<_, _> = command
-                .get_envs()
-                .map(|(key, value)| (key.to_str().unwrap(), value.unwrap().to_str().unwrap()))
-                .collect();
-            assert_eq!(
-                environment["LLAMA_ARG_CACHE_PROMPT"],
-                if writing { "1" } else { "0" }
-            );
-            for name in ["LLAMA_ARG_BATCH", "LLAMA_ARG_UBATCH"] {
-                assert_eq!(environment.get(name).copied(), writing.then_some("16"));
-            }
-            assert_eq!(
-                environment.get("LLAMA_ARG_CACHE_RAM").copied(),
-                writing.then_some("0")
-            );
-        }
-        Ok(())
-    }
-
     const TEST_PROFILE: WritingProfile = WritingProfile {
         launch_contract_id: "badi.test.writing-profile.v1",
         context_size: 1_024,
@@ -948,7 +876,7 @@ mod tests {
     fn a_writing_profile_binds_its_launch_and_identity() -> Result<(), Box<dyn Error>> {
         let temporary = tempfile::tempdir()?;
         let launch = fixture_launch(temporary.path())?;
-        let production = launch.clone().for_writing();
+        let production = launch.clone();
         assert_eq!(
             launch
                 .clone()
@@ -1066,27 +994,21 @@ mod tests {
     }
 
     /// Installed runtimes, lifecycle receipts and run provenance compare the
-    /// identity digest, so the evaluation and production launches keep their
-    /// exact serialized identity.
+    /// identity digest, so the production launch keeps its exact serialized
+    /// identity.
     #[test]
-    fn evaluation_and_production_identity_serialization_is_pinned() -> Result<(), Box<dyn Error>> {
+    fn production_identity_serialization_is_pinned() -> Result<(), Box<dyn Error>> {
         let temporary = tempfile::tempdir()?;
         let launch = fixture_launch(temporary.path())?;
-        let common = concat!(
-            ",\"binary_sha256\":\"7c63829baa2f5451c23789c5085b4de0627e5208b6c4bb2483217998f8cc38f0\"",
-            ",\"runtime_bundle_manifest_sha256\":null",
-            ",\"model_sha256\":\"c7a3a8c7435ef8e4cf1ca2d261f7e09ca85de6cdb70f7c689a836680523a180c\"",
-            ",\"model_size\":13,\"model_alias\":\"fixture-en-v1\",\"threads\":1",
-            ",\"context_size\":512,\"gpu_layers\":0",
-        );
         assert_eq!(
             serde_json::to_string(&launch.identity())?,
-            format!("{{\"launch_contract_id\":\"badi.llama-cpp-owned-eval.v1\"{common}}}")
-        );
-        assert_eq!(
-            serde_json::to_string(&launch.for_writing().identity())?,
-            format!(
-                "{{\"launch_contract_id\":\"badi.writing.completion-and-spelling.en-de-fa.v2\"{common},\"batch_size\":16,\"ubatch_size\":16}}"
+            concat!(
+                "{\"launch_contract_id\":\"badi.writing.completion-and-spelling.en-de-fa.v2\"",
+                ",\"binary_sha256\":\"7c63829baa2f5451c23789c5085b4de0627e5208b6c4bb2483217998f8cc38f0\"",
+                ",\"runtime_bundle_manifest_sha256\":null",
+                ",\"model_sha256\":\"c7a3a8c7435ef8e4cf1ca2d261f7e09ca85de6cdb70f7c689a836680523a180c\"",
+                ",\"model_size\":13,\"model_alias\":\"fixture-en-v1\",\"threads\":1",
+                ",\"context_size\":512,\"gpu_layers\":0,\"batch_size\":16,\"ubatch_size\":16}",
             )
         );
         Ok(())
@@ -1242,10 +1164,11 @@ mod tests {
         Ok(OwnedRuntime {
             child: Mutex::new(Some(child)),
             exit_notice,
-            client: SemanticClient::new(
-                SemanticClientConfig::new(endpoint, "fixture", "public-fixture-token")?
-                    .for_writing(),
-            )?,
+            client: SemanticClient::new(SemanticClientConfig::new(
+                endpoint,
+                "fixture",
+                "public-fixture-token",
+            )?)?,
             endpoint,
             token_credential: SecretToken::fixture(),
             identity: StableRuntimeIdentity {

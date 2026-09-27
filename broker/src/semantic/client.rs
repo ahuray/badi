@@ -13,10 +13,8 @@ use crate::provider::{
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
-use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::wire::{
@@ -24,8 +22,6 @@ use super::wire::{
     event_data, next_event_boundary, read_bounded_body,
 };
 
-pub const PROMPT_CONTRACT_ID: &str = "badi.semantic.inline-en.native-prefix.dev1";
-pub const MAX_OUTPUT_TOKENS: u16 = 8;
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_millis(200);
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_millis(1_000);
 pub const MAX_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
@@ -45,23 +41,7 @@ const WARM_UP_PROMPT: &str = "Thank you for your";
 const WARM_UP_TOKENS: u16 = 2;
 // A non-streaming reply also echoes generation settings; its body is discarded.
 const MAX_WARM_UP_RESPONSE_BYTES: usize = 64 * 1_024;
-const PROMPT_FORMAT_CONTRACT: &str = "{\"after\":\"must_be_empty\",\"language\":\"en_or_en_subtag\",\"prompt\":\"raw_before_caret\",\"transport\":\"llama_cpp_native_completion\"}";
-const SAMPLING_CONTRACT: &str = "{\"cache_prompt\":false,\"n_predict\":8,\"seed\":42,\"stop\":[\".\",\"\\n\"],\"stream\":true,\"temperature\":0.0}";
-
-#[must_use]
-pub fn prompt_contract_sha256() -> String {
-    let mut hasher = Sha256::new();
-    for part in [
-        PROMPT_CONTRACT_ID,
-        PROMPT_FORMAT_CONTRACT,
-        SAMPLING_CONTRACT,
-    ] {
-        hasher.update(part.as_bytes());
-        hasher.update(b"\0");
-    }
-    encode_lower_hex(hasher.finalize())
-}
-
+/// How to reach and bound the owned writing runtime.
 #[derive(Clone)]
 pub struct SemanticClientConfig {
     endpoint: SocketAddr,
@@ -70,7 +50,6 @@ pub struct SemanticClientConfig {
     authorization: String,
     connect_timeout: Duration,
     request_timeout: Duration,
-    writing: bool,
 }
 
 impl SemanticClientConfig {
@@ -96,7 +75,6 @@ impl SemanticClientConfig {
             authorization: format!("Bearer {raw_token}"),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
-            writing: false,
         };
         config.validate()?;
         Ok(config)
@@ -121,12 +99,6 @@ impl SemanticClientConfig {
     #[must_use]
     pub const fn request_timeout(&self) -> Duration {
         self.request_timeout
-    }
-
-    #[must_use]
-    pub const fn for_writing(mut self) -> Self {
-        self.writing = true;
-        self
     }
 
     fn validate(&self) -> Result<(), ClientError> {
@@ -160,7 +132,6 @@ impl fmt::Debug for SemanticClientConfig {
             .field("authorization", &"[redacted]")
             .field("connect_timeout", &self.connect_timeout)
             .field("request_timeout", &self.request_timeout)
-            .field("writing", &self.writing)
             .finish()
     }
 }
@@ -172,7 +143,6 @@ pub enum CompletionDisposition {
     ModelAbstained,
     LanguageAbstained,
     InvalidOutput,
-    Truncated,
 }
 
 #[derive(Clone, Debug)]
@@ -425,7 +395,7 @@ impl SemanticClient {
         started: Instant,
         budget: Duration,
     ) -> Result<ObservedCompletion, ClientError> {
-        match validate_request(&request, self.config.writing)? {
+        match validate_request(&request)? {
             InputEligibility::Abstain => return Ok(ObservedCompletion::language_abstention()),
             InputEligibility::Eligible => {}
         }
@@ -433,33 +403,20 @@ impl SemanticClient {
         // The language boundary deliberately precedes construction and JSON
         // serialization. A rejected request therefore cannot allocate an HTTP
         // payload or send a runtime request/body byte.
-        let plan = self.config.writing.then(|| {
-            crate::writing::completion_plan(&request, crate::writing::TRAILING_SPACE_HEALING)
-        });
+        let plan =
+            crate::writing::completion_plan(&request, crate::writing::TRAILING_SPACE_HEALING);
         // Healing can consume the whole window (one unfinished English word),
         // and an unhealed language can send only whitespace. Neither carries
         // context, and the runtime answers an empty prompt with a malformed
         // final chunk, so this is a request-side abstention, sent nowhere.
-        if plan
-            .as_ref()
-            .is_some_and(|plan| plan.prompt.trim().is_empty())
-        {
+        if plan.prompt.trim().is_empty() {
             return Ok(ObservedCompletion::language_abstention());
         }
-        let payload = if let Some(plan) = &plan {
-            serde_json::to_vec(&plan.payload())
-        } else {
-            serde_json::to_vec(&NativeStreamingRequest::new(&request))
-        }
-        .map_err(|_| ClientError::InvalidRequest)?;
-        let echo = plan.as_ref().and_then(|plan| plan.echo);
-        let operation = self.complete_inner(payload, started, budget, cancellation.clone(), echo);
-        let deadline = started
-            + if self.config.writing {
-                budget + WRITING_RESULT_GRACE
-            } else {
-                self.config.request_timeout()
-            };
+        let payload =
+            serde_json::to_vec(&plan.payload()).map_err(|_| ClientError::InvalidRequest)?;
+        let operation =
+            self.complete_inner(payload, started, budget, cancellation.clone(), plan.echo);
+        let deadline = started + budget + WRITING_RESULT_GRACE;
         let observed = tokio::select! {
             biased;
             () = cancellation.cancelled() => Err(ClientError::Cancelled),
@@ -467,16 +424,14 @@ impl SemanticClient {
                 result.map_err(|_| ClientError::Timeout)?
             }
         }?;
-        if self.config.writing
-            && observed.output.as_deref().is_some_and(|output| {
-                !request
-                    .language
-                    .as_deref()
-                    .and_then(crate::writing::WritingLanguage::from_tag)
-                    .is_some_and(|language| language.accepts_output(output))
-                    || crate::writing::introduces_unsupported_fact(&request.before, output)
-            })
-        {
+        if observed.output.as_deref().is_some_and(|output| {
+            !request
+                .language
+                .as_deref()
+                .and_then(crate::writing::WritingLanguage::from_tag)
+                .is_some_and(|language| language.accepts_output(output))
+                || crate::writing::introduces_unsupported_fact(&request.before, output)
+        }) {
             return Ok(ObservedCompletion {
                 disposition: CompletionDisposition::ModelAbstained,
                 no_suggestion: Some(NoSuggestionReason::OutputRejected),
@@ -509,9 +464,7 @@ impl SemanticClient {
             CompletionDisposition::ModelAbstained | CompletionDisposition::LanguageAbstained => {
                 Ok(Err(abstention))
             }
-            CompletionDisposition::InvalidOutput | CompletionDisposition::Truncated => {
-                Err(ProviderError::Unavailable)
-            }
+            CompletionDisposition::InvalidOutput => Err(ProviderError::Unavailable),
         }
     }
 
@@ -598,20 +551,20 @@ impl SemanticClient {
             return Err(ClientError::Cancelled);
         }
         let writing_deadline = started + budget;
-        if self.config.writing && Instant::now() >= writing_deadline {
+        if Instant::now() >= writing_deadline {
             // A spelling attempt and its continuation share one budget. Do
             // not submit another inference job after that budget is spent.
             return Ok(ObservedCompletion::writing_budget_abstention(started, 0));
         }
         let request_body_bytes = payload.len();
-        // The client-wide timeout suits the automatic budget; an explicit
-        // budget can be longer. The writing deadline still ends first.
-        let timeout = self.config.writing.then(|| budget + WRITING_HTTP_GRACE);
-        let send = self.post_runtime("/completion", payload, timeout);
+        // An explicit budget can outlast the client's request timeout. The
+        // writing deadline still ends first.
+        let timeout = budget + WRITING_HTTP_GRACE;
+        let send = self.post_runtime("/completion", payload, Some(timeout));
         let response = tokio::select! {
             biased;
             () = cancellation.cancelled() => return Err(ClientError::Cancelled),
-            () = tokio::time::sleep_until(writing_deadline.into()), if self.config.writing => {
+            () = tokio::time::sleep_until(writing_deadline.into()) => {
                 // llama.cpp can withhold streaming headers during prefill.
                 // That wait consumes the same budget as the response stream.
                 return Ok(ObservedCompletion::writing_budget_abstention(
@@ -630,7 +583,6 @@ impl SemanticClient {
             started,
             budget,
             cancellation,
-            self.config.writing,
             echoed_prefix,
         )
         .await
@@ -691,12 +643,8 @@ impl CompletionProvider for SemanticClient {
         if cancellation.is_cancelled() {
             return Err(ProviderError::Cancelled);
         }
-        if self.config.writing
-            && allow_replacement
-            && matches!(
-                validate_request(&request, true),
-                Ok(InputEligibility::Eligible)
-            )
+        if allow_replacement
+            && matches!(validate_request(&request), Ok(InputEligibility::Eligible))
             && request
                 .language
                 .as_deref()
@@ -748,11 +696,8 @@ impl CompletionProvider for SemanticClient {
             Ok(text) => text,
             Err(reason) => return Ok(ProviderOutcome::NoSuggestion(reason)),
         };
-        let valid = if self.config.writing {
-            crate::writing::validate_proposal(&before, &after, &text, language.as_deref()).is_ok()
-        } else {
-            crate::segment::validate_suggestion_shape(&before, &after, &text).is_ok()
-        };
+        let valid =
+            crate::writing::validate_proposal(&before, &after, &text, language.as_deref()).is_ok();
         Ok(if valid {
             ProviderOutcome::Proposal(WritingProposal {
                 text,
@@ -801,10 +746,7 @@ enum InputEligibility {
     Abstain,
 }
 
-fn validate_request(
-    request: &ProviderRequest,
-    writing: bool,
-) -> Result<InputEligibility, ClientError> {
+fn validate_request(request: &ProviderRequest) -> Result<InputEligibility, ClientError> {
     if request.before.chars().count() > MAX_BEFORE_CHARS
         || request.after.chars().count() > MAX_AFTER_CHARS
     {
@@ -818,22 +760,14 @@ fn validate_request(
     }
     // A joiner not between two Arabic-script letters is an ordinary Persian
     // typing state (ZWNJ just typed), not a runtime failure: send nothing.
-    if writing && !crate::segment::valid_orthographic_joiners(&request.before) {
-        return Ok(InputEligibility::Abstain);
-    }
-    if (writing && crate::writing::WritingLanguage::from_tag(language).is_some())
-        || language
-            .split('-')
-            .next()
-            .is_some_and(|primary| primary.eq_ignore_ascii_case("en"))
+    if !crate::segment::valid_orthographic_joiners(&request.before)
+        || crate::writing::WritingLanguage::from_tag(language).is_none()
+        || request.before.is_empty()
+        || !request.after.is_empty()
     {
-        if request.before.is_empty() || !request.after.is_empty() {
-            Ok(InputEligibility::Abstain)
-        } else {
-            Ok(InputEligibility::Eligible)
-        }
-    } else {
         Ok(InputEligibility::Abstain)
+    } else {
+        Ok(InputEligibility::Eligible)
     }
 }
 
@@ -842,31 +776,6 @@ fn valid_language_tag(value: &str) -> bool {
         && value.split('-').all(|subtag| {
             !subtag.is_empty() && subtag.bytes().all(|byte| byte.is_ascii_alphanumeric())
         })
-}
-
-#[derive(Debug, Serialize)]
-struct NativeStreamingRequest<'a> {
-    prompt: &'a str,
-    n_predict: u16,
-    temperature: f32,
-    stop: [&'static str; 2],
-    stream: bool,
-    seed: u32,
-    cache_prompt: bool,
-}
-
-impl<'a> NativeStreamingRequest<'a> {
-    fn new(request: &'a ProviderRequest) -> Self {
-        Self {
-            prompt: &request.before,
-            n_predict: MAX_OUTPUT_TOKENS,
-            temperature: 0.0,
-            stop: [".", "\n"],
-            stream: true,
-            seed: 42,
-            cache_prompt: false,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -980,7 +889,6 @@ async fn read_stream(
     started: Instant,
     budget: Duration,
     cancellation: CancellationToken,
-    writing: bool,
     echoed_prefix: Option<&str>,
 ) -> Result<ObservedCompletion, ClientError> {
     let mut pending = Vec::new();
@@ -994,7 +902,7 @@ async fn read_stream(
         let chunk = tokio::select! {
             biased;
             () = cancellation.cancelled() => return Err(ClientError::Cancelled),
-            () = &mut writing_deadline, if writing => {
+            () = &mut writing_deadline => {
                 let output = (!accumulator.invalid)
                     .then(|| crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
                         .and_then(crate::writing::available_complete_words))
@@ -1025,14 +933,13 @@ async fn read_stream(
                 continue;
             };
             saw_done = accumulator.accept_event(&data, started)?;
-            if writing
-                && crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
-                    .is_none_or(str::is_empty)
+            if crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
+                .is_none_or(str::is_empty)
             {
                 // Echo tokens are not a visible continuation token.
                 accumulator.ttft = None;
             }
-            if writing && !accumulator.invalid {
+            if !accumulator.invalid {
                 if let Some(output) =
                     crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
                         .and_then(|raw| crate::writing::complete_word_prefix(raw, 4, false))
@@ -1061,8 +968,7 @@ async fn read_stream(
         return Err(ClientError::MalformedStream);
     }
     Ok(finish_observed_stream(
-        accumulator,
-        writing,
+        &accumulator,
         echoed_prefix,
         started,
         request_body_bytes,
@@ -1071,43 +977,31 @@ async fn read_stream(
 }
 
 fn finish_observed_stream(
-    accumulator: StreamAccumulator,
-    writing: bool,
+    accumulator: &StreamAccumulator,
     echoed_prefix: Option<&str>,
     started: Instant,
     request_body_bytes: usize,
     response_body_bytes: usize,
 ) -> ObservedCompletion {
     let elapsed = started.elapsed();
-    let (disposition, output) = match accumulator.finish {
-        _ if accumulator.invalid => (CompletionDisposition::InvalidOutput, None),
-        finish if writing => {
-            // At a token limit the last token may contain only part of a
-            // word. Keep only the prefix before its final separator.
-            let continuation =
-                crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
-                    .unwrap_or("");
-            let raw = if finish == Some(StreamFinish::Length) {
-                continuation
-                    .rsplit_once(char::is_whitespace)
-                    .map_or("", |(prefix, _)| prefix)
-            } else {
-                continuation
-            };
-            let output = crate::writing::complete_word_prefix(raw, 4, true);
-            match output {
-                Some(output) => (CompletionDisposition::Suggested, Some(output)),
-                None => (CompletionDisposition::ModelAbstained, None),
-            }
+    let (disposition, output) = if accumulator.invalid {
+        (CompletionDisposition::InvalidOutput, None)
+    } else {
+        // At a token limit the last token may contain only part of a word.
+        // Keep only the prefix before its final separator.
+        let continuation =
+            crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix).unwrap_or("");
+        let raw = if accumulator.finish == Some(StreamFinish::Length) {
+            continuation
+                .rsplit_once(char::is_whitespace)
+                .map_or("", |(prefix, _)| prefix)
+        } else {
+            continuation
+        };
+        match crate::writing::complete_word_prefix(raw, 4, true) {
+            Some(output) => (CompletionDisposition::Suggested, Some(output)),
+            None => (CompletionDisposition::ModelAbstained, None),
         }
-        Some(StreamFinish::Length) => (CompletionDisposition::Truncated, None),
-        Some(StreamFinish::Stop) if accumulator.output.is_empty() => {
-            (CompletionDisposition::ModelAbstained, None)
-        }
-        Some(StreamFinish::Stop) if valid_english_output(&accumulator.output) => {
-            (CompletionDisposition::Suggested, Some(accumulator.output))
-        }
-        Some(StreamFinish::Stop) | None => (CompletionDisposition::InvalidOutput, None),
     };
     let output = output.filter(|value| {
         value.chars().count() <= MAX_SUGGESTION_CHARS
@@ -1131,66 +1025,6 @@ fn finish_observed_stream(
     }
 }
 
-pub(crate) fn valid_english_output(value: &str) -> bool {
-    if value.is_empty() || value.ends_with(char::is_whitespace) {
-        return false;
-    }
-    let mut saw_latin = false;
-    let mut mark_has_latin_base = false;
-    for character in value.chars() {
-        match character.script() {
-            Script::Latin => {
-                saw_latin = true;
-                mark_has_latin_base = true;
-            }
-            Script::Inherited
-                if mark_has_latin_base && ('\u{0300}'..='\u{036f}').contains(&character) => {}
-            Script::Common if allowed_common_scalar(character) => {
-                mark_has_latin_base = false;
-            }
-            _ => return false,
-        }
-    }
-    saw_latin
-}
-
-pub(crate) const fn allowed_common_scalar(character: char) -> bool {
-    matches!(
-        character,
-        ' ' | '0'
-            ..='9'
-                | '.'
-                | ','
-                | ';'
-                | ':'
-                | '!'
-                | '?'
-                | '\''
-                | '\u{2019}'
-                | '-'
-                | '\u{2013}'
-                | '\u{2014}'
-                | '('
-                | ')'
-                | '['
-                | ']'
-                | '/'
-                | '%'
-                | '\u{2026}'
-    )
-}
-
-fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {
-    use std::fmt::Write as _;
-
-    let bytes = bytes.as_ref();
-    let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
-        write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    encoded
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1206,8 +1040,7 @@ mod tests {
                 "budget-priority-fixture",
                 "public-fixture-token",
             )
-            .expect("config")
-            .for_writing(),
+            .expect("config"),
         )
         .expect("client");
         let cancellation = CancellationToken::new();

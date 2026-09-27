@@ -55,7 +55,7 @@ impl WritingLanguage {
     #[must_use]
     pub fn accepts_output(self, value: &str) -> bool {
         if self != Self::Persian {
-            return crate::semantic::client::valid_english_output(value);
+            return valid_english_output(value);
         }
         if !crate::segment::valid_orthographic_joiners(value) {
             return false;
@@ -69,7 +69,7 @@ impl WritingLanguage {
             } else if arabic_base && matches!(character, '\u{064b}'..='\u{065f}' | '\u{0670}') {
                 // Arabic combining vowel marks require an actual preceding base.
             } else if character == '\u{200c}'
-                || crate::semantic::client::allowed_common_scalar(character)
+                || allowed_common_scalar(character)
                 || matches!(
                     character,
                     '\u{060c}' | '\u{061b}' | '\u{061f}' | '\u{06f0}'..='\u{06f9}'
@@ -82,6 +82,59 @@ impl WritingLanguage {
         }
         saw_letter
     }
+}
+
+/// Whether `value` is Latin-script text with only the shared punctuation,
+/// digits and combining accents on a Latin base: the English and German
+/// output rule.
+fn valid_english_output(value: &str) -> bool {
+    if value.is_empty() || value.ends_with(char::is_whitespace) {
+        return false;
+    }
+    let mut saw_latin = false;
+    let mut mark_has_latin_base = false;
+    for character in value.chars() {
+        match character.script() {
+            Script::Latin => {
+                saw_latin = true;
+                mark_has_latin_base = true;
+            }
+            Script::Inherited
+                if mark_has_latin_base && ('\u{0300}'..='\u{036f}').contains(&character) => {}
+            Script::Common if allowed_common_scalar(character) => {
+                mark_has_latin_base = false;
+            }
+            _ => return false,
+        }
+    }
+    saw_latin
+}
+
+/// Space, digits and the punctuation every writing language may use.
+const fn allowed_common_scalar(character: char) -> bool {
+    matches!(
+        character,
+        ' ' | '0'
+            ..='9'
+                | '.'
+                | ','
+                | ';'
+                | ':'
+                | '!'
+                | '?'
+                | '\''
+                | '\u{2019}'
+                | '-'
+                | '\u{2013}'
+                | '\u{2014}'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '/'
+                | '%'
+                | '\u{2026}'
+    )
 }
 
 /// Checks a completion's spacing, overlap and boundaries against the text
@@ -262,9 +315,7 @@ async fn start(
 ) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
     let (model, threads) = installed_model(&directory)?;
     wait_for_memory(model).await;
-    let launch = verify_launch(directory, model, threads)
-        .await?
-        .for_writing();
+    let launch = verify_launch(directory, model, threads).await?;
     let launch = if contained {
         launch.contained()
     } else {

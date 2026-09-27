@@ -409,9 +409,7 @@ mod tests {
             payload
         });
         let client = SemanticClient::new(
-            SemanticClientConfig::new(endpoint, "fixture", "local-test-secret")
-                .expect("config")
-                .for_writing(),
+            SemanticClientConfig::new(endpoint, "fixture", "local-test-secret").expect("config"),
         )
         .expect("client");
         (client, task)
