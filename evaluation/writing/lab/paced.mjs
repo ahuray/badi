@@ -189,8 +189,10 @@ async function captureRuntime(ready, workerPid, cache) {
 
 // The diagnostic owns one process until close and verified runtime disappearance.
 // A transport failure never silently turns a surviving process into another trial.
+// An abortable `deadline` replaces the `timeoutMs` timer.
 export async function runPacedChild(input, { executable = WORKER_BINARY, args = ['--paced-probe'], signal,
-  timeoutMs = 65000, terminateMs = 6500, fileCache = new Map(), artifact = null } = {}) {
+  timeoutMs = 65000, deadline, terminateMs = 6500, fileCache = new Map(), artifact = null,
+  onRuntimeVerified = () => {} } = {}) {
   const started = performance.now();
   signal?.throwIfAborted();
   const frame = JSON.stringify(input) + '\n';
@@ -242,18 +244,23 @@ export async function runPacedChild(input, { executable = WORKER_BINARY, args = 
           runtime = value; // Retain verified ownership even if the model claim fails.
           try { assertModelArtifactIdentity(ready.identity, artifact); }
           catch { reject('The runtime model identity differs from the frozen Lab artifact.'); }
+          onRuntimeVerified(value);
         })
           .catch(() => reject('Could not verify paced runtime ownership.'));
       } else if (exactKeys(event, ['type', 'report']) && event.type === 'paced_report') report = event.report;
       else reject('Unexpected paced worker event.');
     }
   });
+  const expire = () => reject('Paced worker exceeded its process deadline.');
   signal?.addEventListener('abort', abort, { once: true });
-  const timer = setTimeout(() => reject('Paced worker exceeded its process deadline.'), timeoutMs);
+  deadline?.addEventListener('abort', expire, { once: true });
+  const timer = deadline ? undefined : setTimeout(expire, timeoutMs);
   child.stdin.end(frame);
   if (signal?.aborted) abort();
+  if (deadline?.aborted) expire();
   const exit = await closed;
-  clearTimeout(timer); clearTimeout(force); signal?.removeEventListener('abort', abort);
+  clearTimeout(timer); clearTimeout(force);
+  signal?.removeEventListener('abort', abort); deadline?.removeEventListener('abort', expire);
   await capture;
   const execution = await captureWorker;
   if ((pending + decoder.end()).trim()) failure ??= 'Paced response ended with an incomplete event.';

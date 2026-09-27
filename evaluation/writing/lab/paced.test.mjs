@@ -353,14 +353,15 @@ const exited = once(runtime, 'exit'); await once(runtime, 'spawn');
 let closing = false;
 async function stop() { if(closing)return; closing=true; runtime.kill('SIGTERM'); await exited; process.exit(0); }
 process.on('SIGTERM',stop);
+const verified = once(process,'SIGUSR2');
 if(mode==='no-ready') { await new Promise(resolve=>setTimeout(resolve,100)); await stop(); }
 const identity = {launch_contract_id:'fixture-no-model',binary_sha256:digest,model_sha256:'c'.repeat(64),context_size:2048,
   ...(descriptor?{model_origin:'explicit_lab_artifact',model_sha256:descriptor.sha256,model_size:descriptor.bytes,
     model_alias:mode==='artifact-mismatch'?'wrong':descriptor.alias}:{})};
 const emit = value => process.stdout.write(JSON.stringify(value)+'\\n');
 emit({type:'ready',schema:'badi.prediction-lab.worker.v1',runtime_pid:runtime.pid,identity,runtime_identity_sha256:'a'.repeat(64)});
-await new Promise(resolve=>setTimeout(resolve,100));
 if(mode==='hang') { await new Promise(()=>{}); }
+await verified;
 const report = JSON.parse(reportText);
 report.identity=identity; report.cleanup.process_id=runtime.pid;
 for(const row of report.events) if(row.result) row.result.identity=identity;
@@ -377,10 +378,16 @@ test('disposable subprocesses verify actual executable ownership, reject malform
   const artifact = await artifactFixture(f.directory);
   for (const mode of ['normal', 'malformed', 'extra', 'hang', 'no-ready', 'oversized', 'artifact-normal', 'artifact-mismatch']) {
     const input = trialInput(planPacedTrials(suite(1)).trials[0]);
+    // A worker keeps its runtime until the owner has verified it; a hanging
+    // worker instead meets its deadline then, never while still starting.
+    const deadline = new AbortController();
     const child = await runPacedChild(input, { executable: process.execPath,
       args: ['--input-type=module', '-e', processFixture, runtimePath, digest, mode, JSON.stringify(reportFor(input))],
-      timeoutMs: mode === 'hang' ? 200 : 2000, terminateMs: 300, artifact: mode.startsWith('artifact-') ? artifact : null });
+      deadline: mode === 'hang' ? deadline.signal : undefined, terminateMs: 300,
+      artifact: mode.startsWith('artifact-') ? artifact : null,
+      onRuntimeVerified: runtime => mode === 'hang' ? deadline.abort() : process.kill(runtime.parent, 'SIGUSR2') });
     assert.equal(child.cleanup_confirmed, mode !== 'no-ready');
+    if (mode === 'hang') assert.equal(child.error, 'Paced worker exceeded its process deadline.');
     assert.equal(child.execution.executable.path, await import('node:fs/promises').then(fs => fs.realpath(process.execPath)));
     if (mode !== 'no-ready') assert.equal(child.runtime.verified_executable.sha256, digest);
     assert.throws(() => process.kill(child.execution.pid, 0), error => error.code === 'ESRCH');
