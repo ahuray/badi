@@ -41,7 +41,6 @@ Chromium, Zen, Telegram, VS Code, Cursor, Omawrite, Obsidian and Bash.
       Fcitx addon core with one transport session path, an observer
       desktop/field split, and one app-identity list checked across addon and
       observer.
-- [ ] Cache Cargo builds in CI.
 
 ## Prediction quality
 
