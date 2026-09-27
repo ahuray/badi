@@ -2,7 +2,6 @@
 //! as a release qualification; startup verifies the bytes actually executed.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -177,28 +176,49 @@ pub(crate) fn introduces_unsupported_fact(context: &str, proposal: &str) -> bool
     !proposed.is_empty() && !proposed.is_subset(&digit_runs(context))
 }
 
-fn english_words() -> &'static [&'static str] {
-    static WORDS: OnceLock<Vec<&'static str>> = OnceLock::new();
-    WORDS.get_or_init(|| {
-        include_str!("../data/writing-lexicon/en.txt")
-            .lines()
-            .collect()
-    })
+/// The pinned English lexicon: lowercase ASCII words, one per line, each
+/// ending in a newline, in byte order.
+const ENGLISH_LEXICON: &str = include_str!("../data/writing-lexicon/en.txt");
+
+/// The first lexicon word not less than `target` in byte order, found by
+/// bisecting the embedded text in place: lookups need no index or heap.
+fn first_english_word_from(target: &str) -> Option<&'static str> {
+    let text = ENGLISH_LEXICON.as_bytes();
+    // Every word starting before `low` is less than `target`; every word
+    // starting at or after `high` is not. Both are always line starts.
+    let (mut low, mut high) = (0, text.len());
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let start = text[low..middle]
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map_or(low, |newline| low + newline + 1);
+        let end = start + line_length(&text[start..]);
+        if &text[start..end] < target.as_bytes() {
+            low = end + 1;
+        } else {
+            high = start;
+        }
+    }
+    (low < text.len()).then(|| &ENGLISH_LEXICON[low..low + line_length(&text[low..])])
+}
+
+fn line_length(text: &[u8]) -> usize {
+    text.iter()
+        .position(|&byte| byte == b'\n')
+        .unwrap_or(text.len())
 }
 
 fn known_english_word(word: &str) -> bool {
-    word.bytes().all(|byte| byte.is_ascii_alphabetic())
-        && english_words()
-            .binary_search(&word.to_ascii_lowercase().as_str())
-            .is_ok()
+    if !word.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        return false;
+    }
+    let word = word.to_ascii_lowercase();
+    first_english_word_from(&word) == Some(word.as_str())
 }
 
 fn english_word_prefix(word: &str) -> bool {
-    let words = english_words();
-    let index = words.partition_point(|candidate| *candidate < word);
-    words
-        .get(index)
-        .is_some_and(|candidate| candidate.starts_with(word))
+    first_english_word_from(word).is_some_and(|candidate| candidate.starts_with(word))
 }
 
 pub fn data_directory() -> Result<PathBuf, WritingError> {
@@ -779,7 +799,50 @@ impl WritingError {
 
 #[cfg(test)]
 mod tests {
-    use super::{complete_word_prefix, correction_word, memory_retry_delay, valid_correction};
+    use super::{
+        ENGLISH_LEXICON, complete_word_prefix, correction_word, english_word_prefix,
+        known_english_word, memory_retry_delay, valid_correction,
+    };
+
+    #[test]
+    fn in_place_lexicon_lookups_match_a_sorted_word_list() {
+        // The reference is the former heap index: every line in a sorted slice.
+        let words: Vec<&str> = ENGLISH_LEXICON.lines().collect();
+        assert_eq!(words.len(), 77_928);
+        assert!(words.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(ENGLISH_LEXICON.ends_with('\n') && !ENGLISH_LEXICON.contains('\r'));
+        let known = |word: &str| {
+            word.bytes().all(|byte| byte.is_ascii_alphabetic())
+                && words
+                    .binary_search(&word.to_ascii_lowercase().as_str())
+                    .is_ok()
+        };
+        let prefix = |word: &str| {
+            let index = words.partition_point(|candidate| *candidate < word);
+            words
+                .get(index)
+                .is_some_and(|candidate| candidate.starts_with(word))
+        };
+        let mut probes: Vec<String> = [
+            "", "A", "Zzz", "zzzzzz", "{", "0", "`", "a b", "\u{200c}", "naïve", "é", "Teh",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        for word in &words {
+            // Each word in both cases, its shorter prefix, and probes just
+            // after it, among its extensions and past them.
+            probes.push((*word).to_owned());
+            probes.push(word.to_ascii_uppercase());
+            probes.push(word[..word.len() - 1].to_owned());
+            probes.push(format!("{word}\0"));
+            probes.push(format!("{word}q"));
+            probes.push(format!("{word}{{"));
+        }
+        for probe in &probes {
+            assert_eq!(known_english_word(probe), known(probe), "{probe:?}");
+            assert_eq!(english_word_prefix(probe), prefix(probe), "{probe:?}");
+        }
+    }
 
     #[test]
     fn short_memory_delays_start_with_bounded_backoff() {
