@@ -5,11 +5,6 @@ on:
     branches: [main, develop]
   pull_request:
   workflow_dispatch:
-    inputs:
-      capability_base_sha:
-        description: Commit before the capability evidence changes under review
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -147,26 +142,19 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python adapters/accessibility/tests/run-isolated.py
           PYTHONDONTWRITEBYTECODE=1 python adapters/fcitx5/tests/observed-desktop.py
 
-  chromium:
-    name: Chromium adapter / Node ${{ matrix.node }}
+  checks:
+    name: Repository checks / Node 24
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        node: [22.23.2, 24.20.0]
     steps:
       - name: Check out source
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-          # The evidence gate verifies tracked artifacts at the receipt's
-          # recorded base commit; a depth-1 checkout cannot prove that anchor.
-          fetch-depth: 0
       - name: Install Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 24.20.0
           cache: npm
       - name: Install locked dependencies
         run: npm ci
@@ -174,9 +162,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bash-builtins libreadline-dev
-      - name: Type, test, build reproducibly, and validate evidence
-        env:
-          CAPABILITY_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || inputs.capability_base_sha || 'missing-capability-base' }}
+      - name: Run docs, editor, desktop, accessibility, Omarchy and writing checks
         run: npm run check
       - name: Check whitespace
         run: git diff --check

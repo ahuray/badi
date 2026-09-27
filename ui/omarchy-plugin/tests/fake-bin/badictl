@@ -8,75 +8,23 @@ if [[ -n ${BADI_FAKE_CALL_LOG:-} ]]; then
   printf '%s\n' "$*" >>"$BADI_FAKE_CALL_LOG"
 fi
 
+# Stand in for a wedged badictl: ignore TERM, record the PID and wait for KILL.
+hang_ignoring_term() {
+  trap '' TERM
+  if [[ -n ${BADI_FAKE_PID_LOG:-} ]]; then
+    printf '%s\n' "$$" >>"$BADI_FAKE_PID_LOG"
+  fi
+  exec sleep 300
+}
+
 if [[ ${1:-} == overview && ${2:-} == --json ]]; then
   if [[ -n ${BADI_FAKE_HOLD_OVERVIEW:-} && -f $BADI_FAKE_HOLD_OVERVIEW ]]; then
     trap '' TERM
     exec sleep 300
   fi
   case "$scenario" in
-  term-ignoring)
-    trap '' TERM
-    if [[ -n ${BADI_FAKE_PID_LOG:-} ]]; then
-      printf '%s\n' "$$" >>"$BADI_FAKE_PID_LOG"
-    fi
-    exec sleep 300
-    ;;
-  timeout)
-    sleep 8
-    exit 0
-    ;;
-  malformed)
-    printf '%s\n' '{not-json'
-    exit 0
-    ;;
-  stale)
-    broker_revision=8
-    settings_revision=7
-    store_available=true
-    command_available=true
-    degraded=false
-    capacity=false
-    ;;
-  unavailable)
-    broker_revision=7
-    settings_revision=7
-    store_available=false
-    command_available=false
-    degraded=false
-    capacity=false
-    ;;
-  degraded)
-    broker_revision=7
-    settings_revision=7
-    store_available=true
-    command_available=true
-    degraded=true
-    capacity=false
-    ;;
-  capacity)
-    broker_revision=7
-    settings_revision=7
-    store_available=true
-    command_available=true
-    degraded=false
-    capacity=true
-    ;;
-  memory-repair)
-    broker_revision=7
-    settings_revision=7
-    store_available=false
-    command_available=true
-    degraded=false
-    capacity=false
-    ;;
-  healthy | term-ignoring-mutation)
-    broker_revision=7
-    settings_revision=7
-    store_available=true
-    command_available=true
-    degraded=false
-    capacity=false
-    ;;
+  term-ignoring) hang_ignoring_term ;;
+  healthy) ;;
   *)
     printf 'unknown fake scenario: %s\n' "$scenario" >&2
     exit 64
@@ -86,14 +34,7 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
   all_web_origins=false
   [[ ${BADI_FAKE_ALL_WEB_ORIGINS:-} == 1 ]] && all_web_origins=true
 
-  jq -n \
-    --argjson all_web_origins "$all_web_origins" \
-    --argjson broker_revision "$broker_revision" \
-    --argjson settings_revision "$settings_revision" \
-    --argjson store_available "$store_available" \
-    --argjson command_available "$command_available" \
-    --argjson degraded "$degraded" \
-    --argjson capacity "$capacity" '
+  jq -n --argjson all_web_origins "$all_web_origins" '
     {
       schema: "badi.overview.v2",
       broker: {
@@ -101,41 +42,23 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
         provider: "phrase_v1",
         paused: false,
         authority_epoch: 11,
-        settings_revision: $broker_revision,
-        control_plane_degraded: $degraded,
+        settings_revision: 7,
+        control_plane_degraded: false,
         sessions: 0,
         socket_mode: "0600",
         max_frame_bytes: 65536
       },
       settings: ((if $all_web_origins then {all_web_origins: true} else {} end) + {
         schema: "badi.settings.v2",
-        revision: $settings_revision,
+        revision: 7,
         paused: false,
-        subjects: (if $capacity then [
-          range(0; 64) as $index |
+        subjects: [
           {
             identity: {
               kind: "browser_origin",
               adapter: "chromium",
               scheme: "https",
-              host: ("subject-" + (($index + 100) | tostring) + ".example"),
-              port: 443
-            },
-            permissions: {
-              suggest: "block",
-              display: "block",
-              context_read: "block",
-              learn: "block",
-              retention: {mode: "none"}
-            }
-          }
-        ] else [
-          {
-            identity: {
-              kind: "browser_origin",
-              adapter: "chromium",
-              scheme: "https",
-              host: "dillinger.io",
+              host: "example.com",
               port: 443
             },
             permissions: {
@@ -160,81 +83,23 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
               retention: {mode: "none"}
             }
           }
-        ] end)
-      }),
-      privacy: {
-        memory_store_available: $store_available,
-        memory_command_available: $command_available,
-        memory_integrity: (if $store_available then "healthy" else "unavailable" end),
-        memory_records: (if $store_available then 0 else null end),
-        memory_bytes: (if $store_available then 0 else null end)
-      },
-      support: {
-        scope: "verified_test_cells_only",
-        generalization: "none",
-        authorization: "not_granted_by_evidence",
-        verified_cells: [
-          {
-            id: "chromium_fixture",
-            adapter: "chromium",
-            application: "badi_fixture",
-            application_version: null,
-            toolkit: "web_platform",
-            test_surface: "http://localhost:4173/chromium.html :: HTMLTextAreaElement#draft",
-            required_policy_subject: "http://localhost:4173",
-            required_activation: "always",
-            evidence_class: "historical_not_current_tree_proof",
-            verified_trials: null
-          },
-          {
-            id: "omawrite_0_5_0_qt6",
-            adapter: "fcitx",
-            application: "Omawrite",
-            application_version: "0.5.0",
-            toolkit: "qt6",
-            test_surface: "markdown_editor",
-            required_policy_subject: "omawrite",
-            required_activation: "explicit_manual",
-            evidence_class: "live_native_application_proof",
-            verified_trials: 20
-          },
-          {
-            id: "xournalpp_1_3_7_gtk3_text_tool",
-            adapter: "fcitx",
-            application: "Xournal++",
-            application_version: "1.3.7",
-            toolkit: "gtk3",
-            test_surface: "text_tool_canvas",
-            required_policy_subject: "com.github.xournalpp.xournalpp",
-            required_activation: "explicit_manual",
-            evidence_class: "live_native_application_proof",
-            verified_trials: 20
-          }
         ]
-      }
+      })
     }
   '
   exit 0
 fi
 
 if [[ ${1:-} == settings && ${2:-} == replace ]]; then
+  if [[ -n ${BADI_FAKE_HOLD_MUTATION:-} && -f $BADI_FAKE_HOLD_MUTATION ]]; then
+    hang_ignoring_term
+  fi
   [[ ${3:-} == --if-revision && ${5:-} == --json && -n ${4:-} && -n ${6:-} ]]
   jq -e '
     .schema == "badi.settings.v2"
     and any(.subjects[];
       .identity == {kind: "linux_app", adapter: "fcitx", app_id: "omawrite"})
   ' <<<"$6" >/dev/null
-  exit 0
-fi
-
-if [[ ${1:-} == memory && ${2:-} == clear ]]; then
-  if [[ $scenario == term-ignoring-mutation ]]; then
-    trap '' TERM
-    if [[ -n ${BADI_FAKE_PID_LOG:-} ]]; then
-      printf '%s\n' "$$" >>"$BADI_FAKE_PID_LOG"
-    fi
-    exec sleep 300
-  fi
   exit 0
 fi
 

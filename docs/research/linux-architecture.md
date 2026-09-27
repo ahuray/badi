@@ -1,7 +1,7 @@
 # Linux architecture recommendation
 
 > **Historical architecture baseline:** this research remains source evidence,
-> but [Vision V2](../../VISION-V2.md) and the
+> but [the vision](../../VISION.md) and the
 > [V2 implementation plan](../../what-have-been.md) supersede its
 > 48-hour scope, product terminology, and delivery gates.
 

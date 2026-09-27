@@ -45,7 +45,6 @@ COMPAT_FILES = ("launch.py", "build-receipt.json", "addons/libwaylandim.so")
 # Retired frontends are removed only while no service command references them.
 OBSOLETE_COMPAT = ("5.1.21",)
 STOCK_FCITX_COMMAND = "/usr/bin/fcitx5 --disable notificationitem"
-VSCODE_EDIT_CONTEXT = "editor.editContext"
 
 
 def run(command, **kwargs):
@@ -479,139 +478,6 @@ def wait_compat_frontend(module):
     return True
 
 
-JSON_SPACE = re.compile(r"[ \t\r\n]*")
-
-
-def jsonc_mask(text):
-    """Blank comments and trailing commas outside strings, keeping every offset."""
-    masked = list(text)
-
-    def blank(start, end):
-        for index in range(start, end):
-            if masked[index] not in "\r\n":
-                masked[index] = " "
-
-    index, length, string, commas = 0, len(text), False, []
-    while index < length:
-        char = text[index]
-        if string:
-            if char == "\\":
-                index += 2
-                continue
-            string = char != '"'
-        elif char == '"':
-            string = True
-        elif char == ",":
-            commas.append(index)
-        elif text.startswith("//", index):
-            end = text.find("\n", index)
-            end = length if end < 0 else end
-            blank(index, end)
-            index = end
-            continue
-        elif text.startswith("/*", index):
-            end = text.find("*/", index + 2)
-            if end < 0:
-                raise ValueError("unterminated comment")
-            blank(index, end + 2)
-            index = end + 2
-            continue
-        index += 1
-    if string:
-        raise ValueError("unterminated string")
-    without_comments = "".join(masked)
-    for comma in commas:
-        following = JSON_SPACE.match(without_comments, comma + 1).end()
-        if without_comments[following:following + 1] in ("}", "]"):
-            masked[comma] = " "
-    return "".join(masked)
-
-
-def jsonc_object(text):
-    """Parse a top-level JSONC object: (opening, members, values, duplicate_keys).
-
-    Members are (key, value, key_start, value_start, value_end) offsets into text.
-    """
-    masked = jsonc_mask(text)
-    decoder = json.JSONDecoder()
-    position = JSON_SPACE.match(masked, 0).end()
-    if masked[position:position + 1] != "{":
-        raise ValueError("not an object")
-    opening = position
-    position, members = position + 1, []
-    while True:
-        position = JSON_SPACE.match(masked, position).end()
-        if masked[position:position + 1] == "}" and not members:
-            break
-        if masked[position:position + 1] != '"':
-            raise ValueError("expected key")
-        key_start = position
-        key, position = json.decoder.scanstring(masked, position + 1)
-        position = JSON_SPACE.match(masked, position).end()
-        if masked[position:position + 1] != ":":
-            raise ValueError("expected colon")
-        start = JSON_SPACE.match(masked, position + 1).end()
-        value, position = decoder.raw_decode(masked, start)
-        members.append((key, value, key_start, start, position))
-        position = JSON_SPACE.match(masked, position).end()
-        if masked[position:position + 1] == ",":
-            position += 1
-            continue
-        if masked[position:position + 1] != "}":
-            raise ValueError("expected end of object")
-        break
-    if masked[position + 1:].strip(" \t\r\n"):
-        raise ValueError("trailing data")
-    keys = [member[0] for member in members]
-    return opening, members, {member[0]: member[1] for member in members}, len(keys) != len(set(keys))
-
-
-def vscode_edit_context_off(text):
-    """Return settings text with editor.editContext false; None when already set.
-
-    Only that top-level member is written. Comments, formatting and every other
-    member stay byte-identical; unparseable or ambiguous files raise ValueError.
-    An empty or whitespace-only file is an empty object, as VS Code and
-    `badi doctor` read it.
-    """
-    bom = "﻿" if text is not None and text.startswith("﻿") else ""
-    body = None if text is None else text[len(bom):]
-    if body is None or not body.strip(" \t\r\n"):
-        return bom + '{\n    "%s": false\n}\n' % VSCODE_EDIT_CONTEXT
-    opening, members, data, duplicates = jsonc_object(body)
-    if duplicates:
-        raise ValueError("duplicate top-level settings")
-    match = next((member for member in members if member[0] == VSCODE_EDIT_CONTEXT), None)
-    if match is not None and match[1] is False:
-        return None
-    if match is not None:
-        updated = body[:match[3]] + "false" + body[match[4]:]
-    else:
-        newline = "\r\n" if "\r\n" in body else "\n"
-        indent = "    "
-        if members:
-            key_start = members[0][2]
-            line = body[body.rfind("\n", 0, key_start) + 1:key_start]
-            if line and not line.strip(" \t"):
-                indent = line
-            ending = ","
-        else:
-            ending = "" if body[opening + 1:].lstrip(" \t").startswith(("\r", "\n")) else newline
-        updated = body[:opening + 1] + f'{newline}{indent}"{VSCODE_EDIT_CONTEXT}": false{ending}' + body[opening + 1:]
-    _opening, _members, result, duplicates = jsonc_object(updated)
-    if duplicates or result != {**data, VSCODE_EDIT_CONTEXT: False}:
-        raise ValueError("unexpected rewrite")
-    return bom + updated
-
-
-def vscode_settings_target(home, config_home):
-    target = observed_config_target(home, config_home, "Code/User/settings.json")
-    for parent in (target.parent.parent, target.parent):
-        if parent.is_symlink():
-            raise RuntimeError("Inspect the VS Code settings directory symlink before changing it.")
-    return target
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--broker-only", action="store_true",
@@ -622,13 +488,11 @@ def main():
                         help="Leave omarchy-fcitx5.service on its current frontend (skip the pinned Fcitx 5.1.22 compatibility frontend)")
     parser.add_argument("--wayland-compat-build", type=Path, metavar="DIR",
                         help="Install this existing checked compatibility build instead of building one")
-    parser.add_argument("--vscode-edit-context-off", action="store_true",
-                        help='Set "editor.editContext": false in VS Code user settings (backed up; other settings unchanged)')
     args = parser.parse_args()
     if args.broker_only and args.observed_app:
         parser.error("--observed-app requires the complete unlocked native installation")
-    if args.broker_only and (args.wayland_compat_build or args.vscode_edit_context_off):
-        parser.error("--wayland-compat-build and --vscode-edit-context-off require the complete unlocked native installation")
+    if args.broker_only and args.wayland_compat_build:
+        parser.error("--wayland-compat-build requires the complete unlocked native installation")
     if args.no_wayland_compat and args.wayland_compat_build:
         parser.error("--no-wayland-compat and --wayland-compat-build are exclusive")
     home = Path.home().resolve()
@@ -648,14 +512,6 @@ def main():
             flags_present.append(app)
         else:
             flag_updates[target] = (original, text)
-    vscode = None
-    if args.vscode_edit_context_off:
-        target = vscode_settings_target(home, config_home)
-        original = target.read_text(encoding="utf-8") if target.exists() else None
-        try:
-            vscode = (target, original, vscode_edit_context_off(original))
-        except (ValueError, UnicodeError):
-            raise RuntimeError(f"Inspect {target}: it is not a JSON object after comment and trailing-comma handling, or repeats a setting. It was not changed.") from None
     runtime = session_runtime()
     updating = service_installed()
     accessibility_updating = False
@@ -744,15 +600,6 @@ def main():
             with tempfile.TemporaryDirectory() as directory:
                 staged = Path(directory) / target.name
                 staged.write_text(text)
-                staged.chmod(stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600)
-                install(staged, target)
-        if vscode is not None and vscode[2] is not None:
-            target, original, text = vscode
-            if target.is_symlink() or (target.read_text(encoding="utf-8") if target.exists() else None) != original:
-                raise RuntimeError("VS Code settings changed during the build; newer user settings were preserved.")
-            with tempfile.TemporaryDirectory() as directory:
-                staged = Path(directory) / target.name
-                staged.write_text(text, encoding="utf-8")
                 staged.chmod(stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600)
                 install(staged, target)
         if compat and compat["install"]:
@@ -851,8 +698,6 @@ def main():
         print("The Wayland compatibility frontend is installed, but launch.py selected the system frontend for this runtime. Inspect journalctl --user -u omarchy-fcitx5.service; input continues with stock Fcitx.")
     for directory in compat["kept"] if compat and compat["install"] else ():
         print(f"Kept {directory}: it is still referenced or holds unexpected files. Rerun the installer after inspecting it.")
-    if vscode is not None:
-        print("VS Code editor.editContext " + ("was already false." if vscode[2] is None else "set to false; reload open VS Code windows to apply it."))
     if args.observed_app:
         prepared = [app for app in dict.fromkeys(args.observed_app) if app not in flags_present]
         if prepared:

@@ -74,7 +74,7 @@ increase, keep the model resident, and give explicit requests about 1.2 s.
 - [x] Verify the rendered workflow and required source checks; document exact
       candidate identities, results, limitations and reproducible commands.
 
-The [360-request development comparison](evaluation/writing/README.md#measured-shortlist-development-2026-09-10)
+The 360-request development comparison (its dated log is in Git history)
 and 80 regression requests completed with verified cleanup. Three approximately
 350M models used less RAM but none passed English/German/Persian usefulness and
 harm gates at 550 ms. The confirmation set remains sealed; no model was promoted.
@@ -203,7 +203,8 @@ session. The normal installed runtime was preserved.
 
 The Lab is an opt-in development surface and does not enable the quarantined
 native browser/Codex editing path or qualify application coverage. The earlier
-132-case heldout and 120-case confirmation sets are exposed development evidence.
+132-case heldout and 120-case confirmation sets were exposed development evidence
+and have been removed (Git history keeps them).
 The next development suite is frozen in
 `output/writing/2026-09-09-context-traces-frozen/`: 12 independent contextual
 traces, four per language, with four snapshots and exactly one Unicode scalar
@@ -402,7 +403,7 @@ versus 24/38. Candidate review was not independent because the support agents
 reached their usage limit. Broker suggestion p50/p95 rose to 346/553 ms. The
 final 16-sample visible Chromium run measured 348/589 ms, missing both targets;
 a concurrent-build run missed a suggestion. Persian coverage remains 12/44.
-Full evidence and review limitations are in `evaluation/writing/README.md`.
+Full evidence and review limitations are in the writing runbook's Git history.
 Continue with an independent review, a new confirmation set before further model
 tuning, Persian quality/latency, sustained-load reliability, and real writing
 acceptance/keystroke measurements. Items 4 and 5 remain open for those gates.
@@ -419,7 +420,7 @@ and supported Mac. Source research cannot establish comparative performance.
       Preserve exact field binding, native undo and per-site consent.
 - [ ] Support Fish/Zsh and selected terminal editors through their own editable
       buffers. Never accept by executing a generated command.
-- [ ] Native/Obsidian/general-web spelling correction with exact replacement
+- [ ] Native/Obsidian spelling correction with exact replacement
       ranges, conservative precision and explicit acceptance. Multilingual
       prediction needs a separate evaluation corpus and language controls.
       German/Persian correction needs full dictionary semantics and explicit

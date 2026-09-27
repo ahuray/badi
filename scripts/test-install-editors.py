@@ -15,15 +15,6 @@ spec.loader.exec_module(installer)
 
 
 class InstallEditorsTests(unittest.TestCase):
-    def test_native_host_reaches_installed_browser_variants(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            config = Path(temporary)
-            for browser in ('BraveSoftware/Brave-Origin', 'BraveSoftware/Brave-Browser', 'google-chrome'):
-                (config / browser).mkdir(parents=True)
-            targets = [str(path.relative_to(config)) for path in installer.native_host_directories(config)]
-            self.assertCountEqual(targets, [f'{browser}/NativeMessagingHosts' for browser in
-                ('chromium', 'google-chrome', 'BraveSoftware/Brave-Origin', 'BraveSoftware/Brave-Browser')])
-
     def test_bash_install_preserves_customizations_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)

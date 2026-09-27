@@ -11,7 +11,10 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ("manifest.json", "BarWidget.qml", "BadiMark.qml", "DesktopPanel.qml", "BadiClient.qml", "Panel.qml")
+FILES = ("manifest.json", "BarWidget.qml", "BadiMark.qml", "DesktopPanel.qml", "BadiClient.qml")
+# Files earlier versions installed. An update backs them up and removes them so
+# the plugin directory holds only what the current manifest loads.
+OBSOLETE = ("Panel.qml",)
 
 
 def ipc(target, method):
@@ -66,6 +69,11 @@ def main():
                 temporary.replace(destination)
             finally:
                 temporary.unlink(missing_ok=True)
+        for name in OBSOLETE:
+            stale = target / name
+            if stale.exists() or stale.is_symlink():
+                shutil.copy2(stale, backup / name, follow_symlinks=False)
+                stale.unlink()
         print(f"Plugin backup: {backup}", flush=True)
         # The supported restart performs its own lock check. It also clears Qt's
         # cached nested components, which a plugin rescan alone may retain.

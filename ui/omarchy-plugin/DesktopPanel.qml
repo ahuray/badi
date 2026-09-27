@@ -273,7 +273,7 @@ Item {
               }
               PanelSeparator { Layout.fillWidth: true; foreground: Color.popups.text }
               SectionTitle { text: "Connect your editors" }
-              BodyText { text: "Obsidian needs the Badi vault plugin. Bash needs the shell hook. Browser text fields need the Badi extension and permission for each site." }
+              BodyText { text: "Obsidian needs the Badi vault plugin. Bash needs the shell hook. Chromium-based apps and Zen need the field observer and an app grant (badi app) or, for web pages, a site grant (badi site)." }
               Caption { text: "Run badi doctor or badi debug watch to check activity. Rich website editors and native spelling replacement are still in development." }
               Controls.ComboBox {
                 Layout.fillWidth: true

@@ -123,7 +123,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(command.call_count, 2)
 
     def test_app_toggle_preserves_other_subjects_and_canonical_order(self):
-        browser = {'identity': {'kind': 'browser_origin', 'adapter': 'chromium', 'scheme': 'https', 'host': 'dillinger.io', 'port': 443},
+        browser = {'identity': {'kind': 'browser_origin', 'adapter': 'chromium', 'scheme': 'https', 'host': 'example.com', 'port': 443},
                    'permissions': {'suggest': 'block'}}
         document = {'subjects': [browser]}
         desktop.set_app(document, 'omawrite', True)
@@ -222,12 +222,12 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(report['problems'], [])
             self.assertTrue(any('use IME-parity' in note for note in report['notes']))
             self.assertFalse(any('writing is disabled' in note for note in report['notes']))
-        # Site-all also opens the extension-free observed path, which has no
-        # second host gate; both the note and help must say so.
+        # Site-all also opens the observed browser path, which has no second
+        # host gate; both the note and help must say so.
         # Zen shares the Chromium browser-origin grants, so the disclosure names it.
-        self.assertIn('extension-free Chromium/Brave/Zen fields, which have no second site gate', desktop.ALL_SITES_NOTE)
+        self.assertIn('Chromium/Brave/Zen fields, which have no second site gate', desktop.ALL_SITES_NOTE)
         self.assertIn('private windows', desktop.ALL_SITES_NOTE)
-        self.assertIn('Covers extension-free\n', desktop.HELP)
+        self.assertIn('Covers\n', desktop.HELP)
         self.assertIn('Chromium/Brave/Zen fields', desktop.HELP)
         self.assertIn('one site grant covers all three\nbrowsers', desktop.HELP)
 

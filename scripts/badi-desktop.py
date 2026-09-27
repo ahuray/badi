@@ -32,9 +32,9 @@ HELP = """Badi — local writing controls
                                Allow or block predictions in one app
   badi site ORIGIN on|off       Allow or block one exact browser origin
   badi site all on|off          Allow every http(s) site unless its exact rule
-                               blocks it (off by default). Covers extension-free
+                               blocks it (off by default). Covers
                                Chromium/Brave/Zen fields, which have no second
-                               site gate; the web extension still needs site access
+                               site gate
   badi service start|stop|restart|status
                                Manage the local model process
   badi autostart on|off         Start with the graphical session (next login)
@@ -53,7 +53,7 @@ Telegram and IME-parity apps (Chromium, Brave, Zen, Codex, VS Code, Cursor,
 Discord), each with an app or site grant; one site grant covers all three
 browsers. IME-parity accepts once, append-only, like
 typing: undo may merge it with earlier typing. Not verified cells yet.
-Web extension/Obsidian: Tab accepts a word, Ctrl/Command+Right all.
+Obsidian: Tab accepts a word, Ctrl/Command+Right all.
 Bash: Ctrl-X then Tab requests/accepts. Escape dismisses (Bash: Ctrl-X then Escape).
 Native tested applications: Omawrite and Xournal++ text cells.
 For advanced protocol commands: badictl --help
@@ -62,9 +62,9 @@ RECEIPTS = Path(".local/state/badi/receipts")
 VSCODE_SETTINGS = Path(".config/Code/User/settings.json")
 CLOSING = re.compile(r"\s*[}\]]")
 ALL_SITES_NOTE = ("Every http(s) site is allowed for predictions unless its exact site rule blocks it "
-                  "(badi site all off to return to listed sites). This includes extension-free "
+                  "(badi site all off to return to listed sites). This includes "
                   "Chromium/Brave/Zen fields, which have no second site gate and cannot exclude private "
-                  "windows; the web extension still needs its own site access. Sensitive fields stay denied.")
+                  "windows. Sensitive fields stay denied.")
 RECEIPT_SCHEMA = "badi.install-receipt.v1"
 INSTALLED_BROKER = ".local/lib/badi/badi-broker"
 VERSION_LINE = re.compile(r"[a-z][a-z-]* \S+ commit=(?:[0-9a-f]{40}|unknown) dirty=(?:true|false|unknown)")
@@ -347,8 +347,7 @@ def vscode_edit_context_note():
     path = Path.home() / VSCODE_SETTINGS
     if not (shutil.which("code") or path.parents[1].is_dir()):
         return None
-    fix = ('add "editor.editContext": false to ~/.config/Code/User/settings.json (or run '
-           'scripts/install-desktop.py --vscode-edit-context-off) and reload VS Code')
+    fix = 'add "editor.editContext": false to ~/.config/Code/User/settings.json and reload VS Code'
     try:
         with open(path, "rb") as stream:
             raw = stream.read((1 << 20) + 1)
@@ -373,20 +372,20 @@ def vscode_edit_context_note():
 def health_report():
     report = {"schema": "badi.desktop-health.v1", "service": service_state(),
               "native_apps": list(APPS), "problems": [], "notes": []}
-    report["notes"].append("Extension-free Chromium, Brave, Zen, Codex, VS Code, Cursor and Discord fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it. Source and nested-session evidence only.")
+    report["notes"].append("Chromium, Brave, Zen, Codex, VS Code, Cursor and Discord fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it. Source and nested-session evidence only.")
     problems = report["problems"]
     observer = report["accessibility"] = accessibility_state()
     if observer.get("loaded"):
         if not observer["ready"]:
             problems.append({"code": "accessibility_unavailable",
-                             "message": "The extension-free field observer is unavailable.",
+                             "message": "The accessibility field observer is unavailable.",
                              "action": "Inspect systemctl --user status badi-accessibility.service and the accessibility runbook."})
         elif observer.get("bus_enabled") is False:
             problems.append({"code": "accessibility_disabled",
                              "message": "Desktop accessibility is disabled, so applications may expose no fields.",
                              "action": "Complete the accessibility setup and relaunch the target application with its supported accessibility/input-method flags."})
     else:
-        report["notes"].append("The extension-free field observer is not installed or could not be inspected, so IME-parity apps and observed fields get no suggestions. Model readiness alone does not establish those integrations.")
+        report["notes"].append("The accessibility field observer is not installed or could not be inspected, so IME-parity apps and observed fields get no suggestions. Model readiness alone does not establish those integrations.")
     try:
         report["native"] = native_state()
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
@@ -467,7 +466,7 @@ def status_text(health, settings=None):
     return (f"Badi: {state} · {health['provider']}\n"
             f"Requests: {counters['provider_calls']} · Suggestions: {counters['suggestions_shown']} · Errors: {counters['provider_errors']} · {misses}\n"
             "Native Fcitx: automatic in Omawrite; Tab request/accept in the Xournal++ Text tool\n"
-            "Editors: Obsidian automatic/Tab · Bash Ctrl-X then Tab · web extension on granted sites\n"
+            "Editors: Obsidian automatic/Tab · Bash Ctrl-X then Tab\n"
             "Observed fields: automatic for Omawrite, Telegram and IME-parity apps (Chromium, Brave, Zen, Codex, VS Code, Cursor, Discord); Tab accepts a visible suggestion, otherwise stays Tab; Ctrl+Shift+Space requests\n"
             + ("Web sites: every http(s) site unless blocked (badi site all off)\n"
                if (settings or {}).get("all_web_origins") is True else "")

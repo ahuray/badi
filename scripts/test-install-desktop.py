@@ -364,8 +364,8 @@ class DesktopInstallTests(unittest.TestCase):
             self.assertEqual(receipt['installed_at'], '2026-09-26T12:00:00Z')
             self.assertEqual(receipt['source'], first)
             entry = receipt['files']['.local/lib/badi/badi-broker']
-            # A binary copied from an earlier build (install-editors reuses the
-            # desktop installer's native host) keeps its own embedded identity.
+            # A binary built from an earlier checkout keeps its own embedded
+            # identity rather than the installing checkout's.
             self.assertEqual(entry, {'sha256': hashlib.sha256(broker.read_bytes()).hexdigest(),
                                      'installed_at': '2026-09-26T12:00:00Z', 'commit': 'a' * 40,
                                      'dirty': False, 'version': line})
@@ -777,8 +777,8 @@ class WaylandCompatTests(FullInstall, unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'symlink'):
                 plan(installer.STOCK_FCITX_COMMAND)
 
-    def test_compat_and_editor_flags_are_not_broker_only_side_effects(self):
-        for argv in (['--broker-only', '--vscode-edit-context-off'], ['--broker-only', '--wayland-compat-build', '/x'],
+    def test_compat_flags_are_not_broker_only_side_effects(self):
+        for argv in (['--broker-only', '--wayland-compat-build', '/x'],
                      ['--no-wayland-compat', '--wayland-compat-build', '/x']):
             with self.subTest(argv=argv), patch('sys.argv', ['install-desktop.py', *argv]), \
                  patch.object(installer.subprocess, 'run') as command, contextlib.redirect_stderr(io.StringIO()):
@@ -866,119 +866,6 @@ class ObservedAppInstallTests(FullInstall, unittest.TestCase):
                 installer.main()
         self.assertEqual(stopped.exception.code, 2)
         command.assert_not_called()
-
-
-class VSCodeSettingsTests(FullInstall, unittest.TestCase):
-    def assert_only_setting_changed(self, before, after):
-        _o, _m, original, _d = installer.jsonc_object(before.lstrip('﻿'))
-        _o, _m, result, duplicates = installer.jsonc_object(after.lstrip('﻿'))
-        self.assertFalse(duplicates)
-        self.assertEqual(result, {**original, 'editor.editContext': False})
-        self.assertIsNone(installer.vscode_edit_context_off(after), 'The edit is idempotent')
-
-    def test_insertion_preserves_comments_formatting_and_other_values(self):
-        original = ('{\n\t// Theme chosen by hand\n\t"workbench.colorTheme": "Default Dark+",\n'
-                    '\t"files.exclude": {\n\t\t"**/.git": true, // keep\n\t},\n'
-                    '\t"url": "http://example.test/*not a comment*/",\n\t"quote": "a\\"//b",\n'
-                    '\t"[markdown]": {"editor.editContext": true},\n}\n')
-        updated = installer.vscode_edit_context_off(original)
-        self.assertEqual(updated, original.replace('{\n\t// Theme', '{\n\t"editor.editContext": false,\n\t// Theme', 1))
-        self.assert_only_setting_changed(original, updated)
-
-    def test_existing_value_is_replaced_in_place(self):
-        original = '{\r\n  "editor.fontSize": 14,\r\n  "editor.editContext": /* default */ true\r\n}'
-        updated = installer.vscode_edit_context_off(original)
-        self.assertEqual(updated, original.replace('true', 'false'))
-        self.assert_only_setting_changed(original, updated)
-        self.assertIsNone(installer.vscode_edit_context_off('{"editor.editContext": false}'))
-
-    def test_absent_empty_bom_and_crlf_objects(self):
-        created = installer.vscode_edit_context_off(None)
-        self.assertEqual(json.loads(created), {'editor.editContext': False})
-        for original in ('{}', '{\n}\n', '﻿{"a": 1}', '{\r\n    "a": [1, 2,],\r\n}\r\n'):
-            with self.subTest(original=original):
-                updated = installer.vscode_edit_context_off(original)
-                self.assertEqual(updated.startswith('﻿'), original.startswith('﻿'))
-                self.assert_only_setting_changed(original, updated)
-        self.assertEqual(installer.vscode_edit_context_off('{\r\n    "a": 1\r\n}'),
-                         '{\r\n    "editor.editContext": false,\r\n    "a": 1\r\n}')
-        # VS Code and badi doctor read a blank file as {}, so the fix doctor
-        # recommends must apply to it rather than abort the installation.
-        for original in ('', '\n', '   \n', ' \t\r\n', '\ufeff', '\ufeff \n'):
-            with self.subTest(original=original):
-                updated = installer.vscode_edit_context_off(original)
-                self.assertEqual(updated, created if not original.startswith('\ufeff') else '\ufeff' + created)
-                self.assertEqual(json.loads(updated.removeprefix('\ufeff')), {'editor.editContext': False})
-
-    def test_unparseable_or_ambiguous_settings_are_refused(self):
-        for text in ('[]', 'null', '{"a": 1', '{"a": 1} {}', '{"a": /* open', '{"a": "open}',
-                     '{a: 1}', '{"a": 1,, "b": 2}', "{'a': 1}", '{"a": 1, "a": 2}',
-                     '{"editor.editContext": true, "editor.editContext": false}'):
-            with self.subTest(text=text), self.assertRaises(ValueError):
-                installer.vscode_edit_context_off(text)
-
-    def test_settings_directory_symlinks_are_refused(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary) / 'home'
-            config = home / '.config'
-            (config / 'real/User').mkdir(parents=True)
-            self.assertEqual(installer.vscode_settings_target(home, config), config / 'Code/User/settings.json')
-            (config / 'Code').symlink_to(config / 'real', target_is_directory=True)
-            with self.assertRaisesRegex(RuntimeError, 'symlink'):
-                installer.vscode_settings_target(home, config)
-
-    def test_full_install_backs_up_settings_and_keeps_their_mode(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            settings = root / 'home/.config/Code/User/settings.json'
-            settings.parent.mkdir(parents=True)
-            original = '{\n    // mine\n    "editor.fontSize": 15\n}\n'
-            settings.write_text(original)
-            settings.chmod(0o644)
-            home, _project, _calls, _frontend = self.full_install(
-                root, ['--vscode-edit-context-off', '--no-wayland-compat'])
-            self.assertEqual(settings.read_text(), '{\n    "editor.editContext": false,\n    // mine\n    "editor.fontSize": 15\n}\n')
-            self.assertEqual(settings.stat().st_mode & 0o777, 0o644)
-            backup, = (home / '.local/state/badi/install-backups').iterdir()
-            self.assertEqual((backup / '.config/Code/User/settings.json').read_text(), original)
-            self.assertIn('.config/Code/User/settings.json', json.loads((backup / 'changed-files.json').read_text()))
-            self.assertIn('set to false', self.output)
-
-    def test_blank_settings_are_replaced_and_backed_up(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            settings = root / 'home/.config/Code/User/settings.json'
-            settings.parent.mkdir(parents=True)
-            settings.write_text('\n')
-            settings.chmod(0o644)
-            home, _project, _calls, _frontend = self.full_install(
-                root, ['--vscode-edit-context-off', '--no-wayland-compat'])
-            self.assertEqual(json.loads(settings.read_text()), {'editor.editContext': False})
-            self.assertEqual(settings.stat().st_mode & 0o777, 0o644)
-            backup, = (home / '.local/state/badi/install-backups').iterdir()
-            self.assertEqual((backup / '.config/Code/User/settings.json').read_text(), '\n')
-            self.assertIn('set to false', self.output)
-
-    def test_absent_settings_are_created_privately_and_listed_for_rollback(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            home, _project, _calls, _frontend = self.full_install(Path(temporary), ['--vscode-edit-context-off', '--no-wayland-compat'])
-            settings = home / '.config/Code/User/settings.json'
-            self.assertEqual(json.loads(settings.read_text()), {'editor.editContext': False})
-            self.assertEqual(settings.stat().st_mode & 0o777, 0o600)
-            backup, = (home / '.local/state/badi/install-backups').iterdir()
-            self.assertFalse((backup / '.config/Code/User/settings.json').exists())
-            self.assertIn('.config/Code/User/settings.json', json.loads((backup / 'changed-files.json').read_text()))
-
-    def test_invalid_settings_stop_before_building_or_changing_files(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            settings = root / 'home/.config/Code/User/settings.json'
-            settings.parent.mkdir(parents=True)
-            settings.write_text('{"broken": ')
-            with self.assertRaisesRegex(RuntimeError, 'was not changed'):
-                self.full_install(root, ['--vscode-edit-context-off'])
-            self.assertEqual(settings.read_text(), '{"broken": ')
-            self.assertFalse((root / 'home/.local/state/badi/install-backups').exists())
 
 
 if __name__ == '__main__':

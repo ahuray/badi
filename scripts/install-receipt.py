@@ -11,7 +11,7 @@ import tempfile
 
 SCHEMA = "badi.install-receipt.v1"
 RECEIPT_DIRECTORY = Path(".local/state/badi/receipts")
-VERSIONED = frozenset(("badi-broker", "badictl", "badi-native-host"))
+VERSIONED = frozenset(("badi-broker", "badictl"))
 VERSION_LINE = re.compile(r"[a-z][a-z-]* \S+ commit=([0-9a-f]{40}|unknown) dirty=(true|false|unknown)")
 UNKNOWN = {"commit": "unknown", "dirty": None}
 

@@ -14,14 +14,6 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def native_host_directories(config):
-    browsers = ("chromium", "google-chrome", "google-chrome-beta", "google-chrome-unstable",
-                "BraveSoftware/Brave-Browser", "BraveSoftware/Brave-Browser-Beta",
-                "BraveSoftware/Brave-Browser-Nightly", "BraveSoftware/Brave-Origin")
-    return [config / browser / "NativeMessagingHosts" for browser in browsers
-            if browser == "chromium" or (config / browser).is_dir()]
-
-
 def receipt_module():
     spec = importlib.util.spec_from_file_location("badi_install_receipt", Path(__file__).with_name("install-receipt.py"))
     module = importlib.util.module_from_spec(spec)
@@ -38,10 +30,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vault", type=Path, help="Existing Obsidian vault to install into")
     parser.add_argument("--bash", action="store_true", help="Add the Badi hook to this user's Bash rc")
-    parser.add_argument("--chromium", action="store_true", help="Install the ordinary website extension and native host")
     args = parser.parse_args()
-    if not args.vault and not args.bash and not args.chromium:
-        parser.error("Select --vault PATH, --bash and/or --chromium")
+    if not args.vault and not args.bash:
+        parser.error("Select --vault PATH and/or --bash")
     receipts = receipt_module()
     checkout = receipts.source_identity(ROOT)
     # Finish the native build before touching a user's shell or installation.
@@ -108,25 +99,6 @@ def main():
             install_bytes((text.rstrip() + "\n\n" + source + "\n").encode(), bashrc)
         subprocess.run(["bash", "-n", str(bashrc)], check=True)
         print("Bash installed with grey inline previews. New interactive shells: Ctrl-X then Tab requests/accepts; ordinary Tab is unchanged.")
-    if args.chromium:
-        host = ROOT / "target/release/badi-native-host"
-        renderer = ROOT / "target/release/badi-native-manifest"
-        if not host.is_file() or not renderer.is_file():
-            raise RuntimeError("Run the desktop installer first to build the native host")
-        subprocess.run(["npm", "run", "build:web", "--workspace", "@badi/chromium"], cwd=ROOT, check=True)
-        destination = home / ".local/lib/badi/chromium"
-        for source in sorted((ROOT / "adapters/chromium/dist-web").iterdir()):
-            if source.is_file():
-                install_bytes(source.read_bytes(), destination / source.name)
-        installed_host = home / ".local/lib/badi/badi-native-host"
-        install_bytes(host.read_bytes(), installed_host, 0o755)
-        manifest = subprocess.run([str(renderer), "--host-path", str(installed_host)],
-                                  check=True, capture_output=True).stdout
-        config = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
-        for directory in native_host_directories(config):
-            install_bytes(manifest, directory / "io.github.ahuray.badi.json", 0o600)
-        print(f"Chromium files installed. Load unpacked from {destination} in chrome://extensions.")
-        print("Enable the site in the Badi popup and grant its exact origin with badi site ORIGIN on.")
     print(f"Rollback map and original files: {backup}")
     print(f"Install receipt: {receipts.write_receipt(home, 'editors', checkout, installed)}")
 

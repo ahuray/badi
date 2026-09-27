@@ -10,7 +10,7 @@ development comparison returned six suggestions and two first-word reference
 matches per arm, with overlapping scores for matching and nonmatching outputs.
 No confidence threshold or production default was selected.
 
-The 2026-09-10 [model discovery development screen](evaluation/writing/README.md#measured-shortlist-development-2026-09-10)
+The 2026-09-10 model discovery development screen
 retained 360 requests across the production Qwen baseline, its terminal-observed
 boundary mode, and three approximately 350M candidates. Granite, LFM2.5 and
 SmolLM2 yielded 12/4/0, 9/5/2 and 11/3/0 useful on-time English/German/Persian
@@ -119,9 +119,8 @@ probe supports a separate conservative correction experiment, not auto-correctio
 - Cooperative Fcitx addon: tested Omawrite and Xournal++ text cells, manual
   Tab request/accept and Escape dismissal. Explicit grants now support
   further canonical app identities where the toolkit supplies suitable context.
-- Chromium: separate localhost fixture and opt-in Dillinger/Monaco extension;
-  guarded append and narrow spelling replacement. A separate ordinary-web build
-  adds input/textarea predictions and separate undo, including normal Brave setup.
+- Chromium-based apps and Zen: extension-free IME-parity through the focused
+  accessibility observer and Fcitx, with append-only acceptance.
 - Obsidian CodeMirror and Bash Readline integrations: real local-model prediction,
   explicit acceptance, dismissal, revision/focus checks and native undo.
 - Persistent desktop model service, terminal controls, native launchers, and
@@ -131,8 +130,10 @@ probe supports a separate conservative correction experiment, not auto-correctio
   verified pause/resume and 45 stable captures across polling cycles.
 - Physical Omarchy typing checks showed real Qwen words in Omawrite, Xournal++,
   Obsidian and Bash; browser/Obsidian/Bash also exercise acceptance and undo.
-- Historical compatibility receipts remain in `capabilities/`; they are
-  immutable observations of earlier code, not certification of today's tree.
+- On 2026-09-27 the Badi browser extension (fixture, Dillinger/Monaco and
+  general-web builds), capability receipts and their gates, the old corpus
+  runner, the legacy Omarchy privacy panel, the VS Code settings installer flag
+  and superseded vision/research prose were removed; Git history keeps them.
 
 The repeated dated plans and delivery reports were consolidated on 2026-09-05.
 Their recovery archive is stored outside the checkout under
@@ -152,7 +153,8 @@ Omarchy panel with backups. English partial-word filtering uses a pinned,
 reproducible 77,928-word lexicon with complete notices. German and Persian
 continuations and contextual Persian half-spaces have explicit, experimental
 contracts. The 132-prefix evaluation and its non-independent candidate review
-are documented in [writing evaluation](evaluation/writing/README.md); parity and
+were logged in the [writing evaluation](evaluation/writing/README.md) before its
+dated logs moved to Git history; parity and
 human keystroke savings remain unproved. Current Rust/MSRV and aggregate source
 checks passed, as did real-broker Fcitx/editor integrations, actual headless
 Obsidian/Chromium flows and installed native D-Bus routing. A current Omawrite

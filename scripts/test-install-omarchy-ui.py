@@ -1,7 +1,9 @@
 """A missing or partial lock status must never authorize a shell reload."""
 
 import importlib.util
+import json
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -28,6 +30,33 @@ class LockBoundaryTests(unittest.TestCase):
         with patch.object(installer, 'ipc', side_effect=RuntimeError('unavailable')):
             with self.assertRaisesRegex(RuntimeError, 'unavailable'):
                 installer.unlocked()
+
+
+class UpdateTests(unittest.TestCase):
+    def test_update_replaces_current_files_and_backs_up_then_removes_obsolete_ones(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            target = home / '.config/omarchy/plugins/io.github.ahuray.badi'
+            target.mkdir(parents=True)
+            (target / 'manifest.json').write_text(json.dumps({'id': 'io.github.ahuray.badi', 'kinds': ['panel']}))
+            (target / 'Panel.qml').write_text('legacy panel')
+            unlocked = dict.fromkeys(('locked', 'secure', 'requested', 'pending', 'sessionLocked'), False)
+            answers = {('lock', 'status'): unlocked, ('badi-writing', 'state'): {'page': 0, 'service': {}}}
+            with patch.object(installer.Path, 'home', return_value=home), \
+                 patch.object(installer, 'ipc', side_effect=lambda *call: answers[call]), \
+                 patch.object(installer.subprocess, 'run') as run, \
+                 patch('sys.argv', ['install-omarchy-ui.py']):
+                installer.main()
+            # Only the source gate and the supported shell restart run; no real shell is touched.
+            self.assertEqual([call.args[0][:2] for call in run.call_args_list],
+                             [['bash', 'ui/omarchy-plugin/tests/check-source.sh'], ['omarchy', 'restart']])
+            self.assertCountEqual([path.name for path in target.iterdir()], installer.FILES)
+            for name in installer.FILES:
+                self.assertEqual((target / name).read_bytes(),
+                                 (installer.ROOT / 'ui/omarchy-plugin' / name).read_bytes())
+            [backup] = (home / '.local/state/badi/ui-backups').iterdir()
+            self.assertEqual((backup / 'Panel.qml').read_text(), 'legacy panel')
+            self.assertIn('"panel"', (backup / 'manifest.json').read_text())
 
 
 if __name__ == '__main__':
