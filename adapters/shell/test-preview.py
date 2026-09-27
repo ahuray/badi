@@ -186,7 +186,7 @@ class PreviewTests(unittest.TestCase):
         output = shell.buffer('از همکاری شما')
         version = tuple(int(part) for part in subprocess.check_output(
             ['bash', '-c', 'printf "%s %s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"'], text=True).split())
-        point = len('از همکاری شما') if version >= (5, 3) else len('از همکاری شما'.encode())
+        point = len('از همکاری شما') if version >= (5, 0) else len('از همکاری شما'.encode())
         self.assertIn(f'POINT:{point}\r\n'.encode(), output)
         shell.send('\x1f')
         shell.buffer('از همکاری')

@@ -54,9 +54,8 @@ _badi_start() {
 }
 
 _badi_words() {
-  # Bash 5.3 changed READLINE_POINT from byte offsets to character offsets.
-  # Keep the caller's locale for modern Bash; older Bash requires byte lengths.
-  if (( BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 3) )); then local LC_ALL=C; fi
+  # READLINE_POINT counts characters since Bash 5.0 and bytes before it.
+  if (( BASH_VERSINFO[0] < 5 )); then local LC_ALL=C; fi
   local badi_encoded badi_text badi_replace badi_display
   [[ -v READLINE_LINE ]] || return 0
   _badi_renderer || return 0
