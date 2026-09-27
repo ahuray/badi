@@ -1,12 +1,14 @@
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::{self, Read};
 use std::path::Path;
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
+use badi_broker::model_selection::detect_hardware;
 use serde::{Deserialize, Serialize};
 
-use super::super::{detect_hardware, is_drm_card, run_bounded_command};
 use super::{MIB, digest, now_unix_s};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -229,9 +231,136 @@ fn parse_disk(text: &str) -> Option<(u64, u64)> {
     (fields.next().is_none() && total > 0 && available <= total).then_some((total, available))
 }
 
+// The broker's hardware detection keeps these helpers private; the Lab
+// repeats them rather than widen the broker's API for its inspection.
+
+fn is_drm_card(name: &str) -> bool {
+    name.strip_prefix("card").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
+
+#[derive(Debug)]
+struct BoundedOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    truncated: bool,
+}
+
+fn run_bounded_command(
+    command: &mut Command,
+    timeout: Duration,
+    max_stdout_bytes: usize,
+) -> Option<BoundedOutput> {
+    // This supervises and reaps the direct child. A descendant that inherits stdout could keep
+    // the reader open after that child exits; nvidia-smi is invoked directly and is not expected
+    // to create such descendants. A future general-purpose runner would need process-group control.
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let Some(stdout) = child.stdout.take() else {
+        kill_and_reap(&mut child);
+        return None;
+    };
+    let reader = thread::spawn(move || read_capped(stdout, max_stdout_bytes));
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() < timeout => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) | Err(_) => {
+                kill_and_reap(&mut child);
+                break None;
+            }
+        }
+    };
+    let captured = reader.join().ok()?.ok()?;
+    Some(BoundedOutput {
+        status: status?,
+        stdout: captured.bytes,
+        truncated: captured.truncated,
+    })
+}
+
+fn kill_and_reap(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[derive(Debug)]
+struct CappedBytes {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+fn read_capped(mut reader: impl Read, limit: usize) -> io::Result<CappedBytes> {
+    let mut bytes = Vec::with_capacity(limit.min(4_096));
+    let mut buffer = [0_u8; 4_096];
+    let mut truncated = false;
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        let retained = count.min(limit.saturating_sub(bytes.len()));
+        bytes.extend_from_slice(&buffer[..retained]);
+        truncated |= retained < count;
+    }
+    Ok(CappedBytes { bytes, truncated })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bounded_command_kills_and_reaps_a_blocking_direct_child() {
+        let root = tempfile::tempdir().expect("temporary probe root");
+        let pid_path = root.path().join("probe.pid");
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "printf '%s\\n' \"$$\" > \"$1\"; while :; do :; done",
+            "badi-probe",
+            pid_path.to_str().expect("UTF-8 temporary path"),
+        ]);
+
+        let started = Instant::now();
+        assert!(
+            run_bounded_command(&mut command, Duration::from_millis(250), 64).is_none(),
+            "a timed-out probe must not produce output"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "direct-child timeout must remain bounded"
+        );
+
+        let pid = fs::read_to_string(&pid_path)
+            .expect("probe PID")
+            .trim()
+            .parse::<u32>()
+            .expect("numeric probe PID");
+        assert!(
+            !Path::new("/proc").join(pid.to_string()).exists(),
+            "wait must reap the killed direct child"
+        );
+    }
+
+    #[test]
+    fn bounded_command_caps_and_marks_noisy_stdout() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf '%01000d' 0"]);
+        let output = run_bounded_command(&mut command, Duration::from_secs(1), 64)
+            .expect("bounded noisy probe");
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 64);
+        assert!(output.truncated);
+    }
 
     #[test]
     fn disk_probe_does_not_treat_missing_or_inconsistent_values_as_capacity() {

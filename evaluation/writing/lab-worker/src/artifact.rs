@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::semantic::provenance::FileExpectation;
+use badi_broker::semantic::provenance::FileExpectation;
 
 const MAX_DESCRIPTOR_BYTES: u64 = 16 * 1024;
 const MAX_MODEL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
@@ -85,7 +85,7 @@ impl ModelArtifactOverride {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::semantic::provenance::verify_file;
+    use badi_broker::semantic::provenance::verify_file;
     use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
     use std::fmt::Write as _;

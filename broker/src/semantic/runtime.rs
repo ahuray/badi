@@ -1042,8 +1042,8 @@ mod tests {
             (batch(1_025), "batch_size"),
             (checkpoints(Some(65)), "context_checkpoints"),
             (origin(Some("")), "model_origin"),
-            (origin(Some("Lab")), "model_origin"),
-            (origin(Some("lab-artifact")), "model_origin"),
+            (origin(Some("Origin")), "model_origin"),
+            (origin(Some("test-artifact")), "model_origin"),
             (origin(Some(long_origin)), "model_origin"),
         ] {
             assert!(
@@ -1065,7 +1065,7 @@ mod tests {
         Ok(())
     }
 
-    /// Installed runtimes, lifecycle receipts and Lab provenance compare the
+    /// Installed runtimes, lifecycle receipts and run provenance compare the
     /// identity digest, so the evaluation and production launches keep their
     /// exact serialized identity.
     #[test]

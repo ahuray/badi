@@ -11,8 +11,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::artifact::ModelArtifactOverride;
 use super::transport::stop_token::{self, Arm, Observation, REQUEST_MS, Step, TokenCheck, Word};
-use crate::semantic::client::ClientError;
-use crate::semantic::runtime::{RuntimeLifecycleObservation, StableRuntimeIdentity};
+use badi_broker::semantic::client::ClientError;
+use badi_broker::semantic::runtime::{RuntimeLifecycleObservation, StableRuntimeIdentity};
 
 const MODEL_SHA: &str = "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5";
 const MODEL_BYTES: u64 = 1_282_439_264;
@@ -299,7 +299,7 @@ fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::semantic::provenance::FileExpectation;
+    use badi_broker::semantic::provenance::FileExpectation;
 
     fn artifact() -> ModelArtifactOverride {
         ModelArtifactOverride {

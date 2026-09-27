@@ -1,4 +1,4 @@
-#![cfg(all(feature = "writing-lab", target_os = "linux"))]
+#![cfg(target_os = "linux")]
 
 use serde_json::{Value, json};
 use std::error::Error;

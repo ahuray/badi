@@ -1,10 +1,10 @@
-#![cfg(all(feature = "writing-lab", target_os = "linux"))]
+#![cfg(target_os = "linux")]
 
 use std::error::Error;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-use badi_broker::writing_lab::process::EXEC_HELPER_FLAG;
+use badi_broker::writing::EXEC_HELPER_FLAG;
 
 #[test]
 fn lab_binary_exec_helper_runs_before_model_or_tokio_startup() -> Result<(), Box<dyn Error>> {

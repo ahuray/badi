@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, writeFile, readFile, stat, rm, mkdir, symlink, copyFile, chmod } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, readdir, stat, rm, mkdir, symlink, copyFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { parseOptions, validateOutputPath, prepareOutput, fileIdentity, sourceHashes, validateCleanup, decodeEvents, runSuite, ObservedWorker } from './run.mjs';
+import { parseOptions, validateOutputPath, prepareOutput, fileIdentity, sourceHashes, labCrateSources, validateCleanup, decodeEvents, runSuite, ObservedWorker } from './run.mjs';
 import { createLabServer } from './server.mjs';
 import { readModelArtifact } from './model-artifact.mjs';
 
@@ -160,16 +161,28 @@ test('file/source provenance hashes exact bytes and cached hashing notices conte
   assert.notEqual(changed.sha256, first.sha256);
   assert.deepEqual(await sourceHashes(['suite.json'], f.directory), { 'suite.json': changed.sha256 });
   const sources = await sourceHashes();
-  for (const path of ['broker/src/writing_lab/transport.rs', 'Cargo.lock', 'broker/src/provider.rs',
-    'broker/src/semantic/process.rs', 'broker/src/writing_lab/prefill_probe.rs',
-    'evaluation/writing/lab/paced.mjs', 'broker/src/writing_lab/paced_probe.rs',
-    'broker/src/writing_lab/paced_probe/scheduler.rs', 'broker/src/writing_lab/artifact.rs', 'broker/src/writing_lab/attestation.rs',
-    'evaluation/writing/lab/model-artifact.mjs',
-    'broker/src/writing_lab/transport/prefill.rs', 'broker/src/writing_lab/transport/stop_token.rs',
-    'broker/src/semantic/wire.rs', 'broker/src/segment.rs',
+  for (const path of ['evaluation/writing/lab-worker/src/transport.rs', 'Cargo.lock', 'broker/src/provider.rs',
+    'broker/src/semantic/process.rs', 'evaluation/writing/lab-worker/src/prefill_probe.rs',
+    'evaluation/writing/lab/paced.mjs', 'evaluation/writing/lab-worker/src/paced_probe.rs',
+    'evaluation/writing/lab-worker/src/paced_probe/scheduler.rs', 'evaluation/writing/lab-worker/src/main.rs',
+    'evaluation/writing/lab-worker/src/qualification/device.rs', 'evaluation/writing/lab-worker/Cargo.toml',
+    'evaluation/writing/lab/model-artifact.mjs', 'broker/src/semantic/wire.rs', 'broker/src/segment.rs',
     'broker/data/writing-lexicon/en.txt']) assert.match(sources[path], /^[a-f0-9]{64}$/u);
-  assert.equal(sources['broker/src/writing_lab/attestation.rs'],
-    hash(await readFile(new URL('../../../broker/src/writing_lab/attestation.rs', import.meta.url))));
+  assert.equal(sources['evaluation/writing/lab-worker/src/attestation.rs'],
+    hash(await readFile(new URL('../lab-worker/src/attestation.rs', import.meta.url))));
+});
+
+test('run provenance hashes every Lab worker source file in a stable order', async () => {
+  const crate = new URL('../lab-worker/', import.meta.url);
+  const onDisk = (await readdir(new URL('src/', crate), { recursive: true, withFileTypes: true }))
+    .filter(entry => entry.isFile())
+    .map(entry => relative(fileURLToPath(new URL('../../../', import.meta.url)), join(entry.parentPath, entry.name)));
+  assert.ok(onDisk.includes('evaluation/writing/lab-worker/src/lib.rs') && onDisk.length > 20);
+  const listed = await labCrateSources();
+  assert.deepEqual(listed, ['evaluation/writing/lab-worker/Cargo.toml', ...[...onDisk].sort()]);
+  const sources = await sourceHashes();
+  for (const path of listed) assert.match(sources[path], /^[a-f0-9]{64}$/u, path);
+  assert.equal(Object.keys(sources).some(path => path.startsWith('broker/src/writing_lab')), false);
 });
 
 test('cleanup receipts preserve runtime identity and reject malformed lifecycle observations', () => {

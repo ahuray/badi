@@ -14,8 +14,10 @@ npm run writing:lab -- --port 36889          # reuse a known local address
 npm run writing:lab -- --prefill-batch 64    # explicit runtime experiment (default 16)
 ```
 
-Open the printed `http://127.0.0.1:PORT` address. The command builds the
-opt-in `writing-lab` feature; the worker
+Open the printed `http://127.0.0.1:PORT` address. The command builds the Lab
+worker, `badi-writing-lab`: its own workspace crate in [lab-worker](lab-worker/)
+that uses only the broker's public API. The broker never depends on it, and
+installs, `cargo build` and `-p badi-broker` builds never compile it. The worker
 verifies the already installed model/runtime and creates an isolated local model
 process. Missing artifacts produce a startup error, not mock output. The server
 binds only to `127.0.0.1`, and an occupied port reports an error rather than
@@ -108,9 +110,26 @@ unsafe permissions reject it, and it never bypasses a fresh resource assessment.
 Starting new diagnostics clears older performance evidence; unverified cleanup
 prevents receipt reload for that run.
 
+The worker also offers read-only JSON helpers. They inspect resources or assess
+supplied metadata; they neither download nor launch an inference model:
+
+```sh
+cargo build --release --locked -p badi-writing-lab
+target/release/badi-writing-lab --inspect-device
+target/release/badi-writing-lab --assess-model < /absolute/path/assessment-input.json
+target/release/badi-writing-lab --rank-models < /absolute/path/ranking-input.json
+```
+
+`--assess-model` takes `{candidate, settings, evidence}`; `--rank-models` takes
+an array of at most 32 such objects. JSON input is limited to 128 KiB, and the
+qualification engine below defines their strict types and stages. Optional
+`--cache-directory /absolute/path` selects the filesystem whose free capacity is
+inspected. The browser sends server-issued IDs instead of these low-level
+metadata/settings objects, arbitrary paths or runtime flags.
+
 ### Qualification contract and local API
 
-[The Rust qualification engine](../../broker/src/model_selection/qualification.rs)
+[The Rust qualification engine](lab-worker/src/qualification.rs)
 separates `discovered`, `estimated_fit`, `loaded_and_exercised`,
 `meets_performance`, `meets_prediction_quality` and `recommended`. Fit charges
 weights, architecture-specific attention/recurrent state, runtime buffers and
@@ -276,13 +295,13 @@ The **Spelling** tab checks the last completed German or Persian word through a
 separate native Hunspell worker and needs explicit local artifact configuration:
 
 ```sh
-cargo build --release --locked --features writing-lab --bin badi-writing-lab
+cargo build --release --locked -p badi-writing-lab
 node evaluation/writing/lab/server.mjs \
   --spelling-de /absolute/canonical/path/spelling-manifest.json \
   --spelling-fa /absolute/canonical/path/spelling-manifest.json
 ```
 
-One manifest may configure both languages. [The manifest validator](../../broker/src/writing_lab/spelling/artifact.rs)
+One manifest may configure both languages. [The manifest validator](lab-worker/src/spelling/artifact.rs)
 defines the strict `badi.spelling-artifact.v1` schema: pinned native executable,
 loaded library and German/Persian dictionary pairs, each with canonical path,
 byte count and SHA-256. Paths and engine settings cannot come from the browser.
@@ -364,7 +383,7 @@ matches readiness against its hash, size, alias and
 Two fixed runtime probes accept no prompt, grammar or generation settings:
 
 ```sh
-cargo build --release --locked --features writing-lab --bin badi-writing-lab
+cargo build --release --locked -p badi-writing-lab
 target/release/badi-writing-lab --prefill-probe
 target/release/badi-writing-lab --stop-token-probe --model-artifact /absolute/path/descriptor.json
 ```
@@ -418,5 +437,5 @@ context availability remain unmeasured.
 
 ```sh
 npm run writing:lab:check
-cargo test --locked --features writing-lab writing_lab
+cargo test --locked -p badi-writing-lab
 ```

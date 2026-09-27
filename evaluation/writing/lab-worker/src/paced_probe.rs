@@ -13,7 +13,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::transport::prefill::PrefillMetrics;
-use crate::semantic::runtime::{RuntimeLifecycleObservation, StableRuntimeIdentity};
+use badi_broker::semantic::runtime::{RuntimeLifecycleObservation, StableRuntimeIdentity};
 
 use super::{Config, Mode, Request, ResultRecord};
 
@@ -112,7 +112,7 @@ fn transient_joiner(request: &Request) -> bool {
     let mut precursor = request.clone();
     precursor.before.truncate(before.len());
     precursor.validate().is_ok()
-        && crate::segment::valid_orthographic_joiners(&format!("{}ا", request.before))
+        && badi_broker::segment::valid_orthographic_joiners(&format!("{}ا", request.before))
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -297,7 +297,7 @@ where
 }
 
 async fn prime(
-    client: &crate::semantic::client::SemanticClient,
+    client: &badi_broker::semantic::client::SemanticClient,
     prefix: &str,
     deadline: Instant,
     cancellation: &ProbeCancellation,
@@ -314,7 +314,7 @@ async fn prime(
     .await;
     record.preflight_ms = Some(milliseconds(started));
     let count = count.map_err(|error| match error {
-        crate::semantic::client::ClientError::Timeout => "prelude_deadline",
+        badi_broker::semantic::client::ClientError::Timeout => "prelude_deadline",
         _ => "primer_preflight_failed",
     })?;
     if count + 2 > usize::from(super::CONTEXT_TOKENS) {
@@ -330,7 +330,7 @@ async fn prime(
     .await;
     record.priming_ms = Some(milliseconds(started));
     let metrics = metrics.map_err(|error| match error {
-        crate::semantic::client::ClientError::Timeout => "prelude_deadline",
+        badi_broker::semantic::client::ClientError::Timeout => "prelude_deadline",
         _ => "primer_request_failed",
     })?;
     let verified = metrics.resolved_n_predict == Some(1)

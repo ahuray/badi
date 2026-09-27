@@ -1,4 +1,4 @@
-use crate::semantic::provenance::{FileIdentity, VerifiedFile};
+use badi_broker::semantic::provenance::{FileIdentity, VerifiedFile};
 use std::fs::File;
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
@@ -244,7 +244,7 @@ mod tests {
     }
     #[test]
     fn executed_file_verification_rejects_same_bytes_on_another_inode_and_changed_bytes() {
-        use crate::semantic::provenance::{FileExpectation, verify_file};
+        use badi_broker::semantic::provenance::{FileExpectation, verify_file};
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("file");
         std::fs::write(&path, b"fixture").unwrap();

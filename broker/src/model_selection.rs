@@ -7,9 +7,6 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-#[cfg(feature = "local-model")]
-pub mod qualification;
-
 const MIB: u64 = 1_048_576;
 const HOST_RESERVE_MIB: u64 = 2_048;
 const RUNTIME_BASE_MIB: u64 = 768;

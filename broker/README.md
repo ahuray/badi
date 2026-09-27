@@ -11,10 +11,12 @@ API.
   explicitly selects the deterministic integration fixture.
 - `badictl` sends explicit control and health requests to that socket and runs
   offline hardware/model recommendation commands.
-- `badi-writing-lab`, behind the `writing-lab` feature, is the Prediction Lab's
-  worker; see below.
 
-Build the default binaries without installing them:
+The Prediction Lab worker is a separate workspace crate in
+[evaluation/writing/lab-worker](../evaluation/writing/lab-worker/) built on this
+crate's public API. This crate never depends on it and has no Lab feature.
+
+Build the shipped binaries without installing them:
 
 ```sh
 cargo build -p badi-broker --bins
@@ -80,26 +82,9 @@ Open the printed HTTP address and expand **Choose and qualify a local model**:
 inspect the device, search/inspect metadata, assess fit, verify a download, select
 it for a local comparison, then review and measure its results. Opening the raw
 HTML file does not run the application. See the
-[writing workflow, API and persistence contract](../evaluation/writing/README.md#discover-assess-and-compare-a-model).
+[writing workflow, API, JSON helpers and persistence contract](../evaluation/writing/README.md#discover-assess-and-compare-a-model).
 
-The `writing-lab` feature also exposes read-only JSON helpers after building the
-Lab worker. These commands inspect resources or assess supplied metadata; they
-do not download or launch an inference model:
-
-```sh
-target/release/badi-writing-lab --inspect-device
-target/release/badi-writing-lab --assess-model < /absolute/path/assessment-input.json
-target/release/badi-writing-lab --rank-models < /absolute/path/ranking-input.json
-```
-
-`--assess-model` takes `{candidate, settings, evidence}`; `--rank-models` takes an
-array of at most 32 such objects. JSON input is limited to 128 KiB. Their strict types and stages are defined in
-[the qualification module](src/model_selection/qualification.rs). Optional
-`--cache-directory /absolute/path` selects the filesystem whose free capacity is
-inspected. The browser sends server-issued IDs instead of these low-level
-metadata/settings objects, arbitrary paths or runtime flags.
-
-Qualification separates discovery, estimated fit, verified local exercise,
+The Lab owns qualification. It separates discovery, estimated fit, verified local exercise,
 measured performance, measured prediction quality and recommendation. It reuses
 hardware inspection, exact artifact/runtime verification and owned Lab cleanup.
 Unknown architecture-specific memory costs block loading; shared GPU/RAM

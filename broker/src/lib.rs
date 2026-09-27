@@ -19,8 +19,6 @@ pub mod server;
 pub mod settings;
 #[cfg(feature = "local-model")]
 pub mod writing;
-#[cfg(feature = "writing-lab")]
-pub mod writing_lab;
 
 pub use control_plane::{ControlPlane, ControlPlaneError, ControlPlaneSnapshot};
 pub use engine::{Broker, BrokerConfig, BrokerError, BrokerEvent, BrokerEventSink, ContextOutcome};

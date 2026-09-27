@@ -1,14 +1,17 @@
 //! Opt-in, memory-only prediction experiments. This is not an adapter authority
 //! surface: inputs are explicitly supplied and results never edit a document.
+//!
+//! The Lab is its own crate on the broker's public API. The broker never
+//! depends on it, so no experiment can change what the broker ships.
+
+#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
 pub mod artifact;
 mod attestation;
 pub mod context_lookup;
 pub mod paced_probe;
 pub mod prefill_probe;
-#[cfg(target_os = "linux")]
-#[doc(hidden)]
-pub use crate::semantic::process;
+pub mod qualification;
 pub mod spelling;
 pub mod stop_token_probe;
 mod transport;
@@ -23,14 +26,14 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::model_selection::current_memory;
-use crate::provider::{CompletionProvider, ProviderRequest};
-use crate::semantic::client::ClientError;
-use crate::semantic::provenance::verify_file;
-use crate::semantic::runtime::{
+use badi_broker::model_selection::current_memory;
+use badi_broker::provider::{CompletionProvider, ProviderRequest};
+use badi_broker::semantic::client::ClientError;
+use badi_broker::semantic::provenance::verify_file;
+use badi_broker::semantic::runtime::{
     LlamaCppLaunch, OwnedRuntime, RuntimeError, StableRuntimeIdentity, WritingProfile,
 };
-use crate::writing::{self, WritingError, WritingLanguage};
+use badi_broker::writing::{self, WritingError, WritingLanguage};
 use transport::{LabObservation, LabStream, RequestTrace, TokenLogprob};
 
 pub const REQUEST_SCHEMA: &str = "badi.prediction-lab.request.v1";
@@ -249,7 +252,7 @@ fn valid_text(text: &str, limit: usize) -> bool {
             (ch.is_control() && !matches!(ch, '\n' | '\t'))
                 || matches!(ch, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200b}' | '\u{feff}')
         })
-        && crate::segment::valid_orthographic_joiners(text)
+        && badi_broker::segment::valid_orthographic_joiners(text)
 }
 
 impl Request {
@@ -631,8 +634,8 @@ async fn baseline(
         .propose(request.provider_request(), cancellation, true)
         .await
         .map_err(|error| match error {
-            crate::provider::ProviderError::Cancelled => LabError::Cancelled,
-            crate::provider::ProviderError::Unavailable => LabError::RuntimeUnavailable,
+            badi_broker::provider::ProviderError::Cancelled => LabError::Cancelled,
+            badi_broker::provider::ProviderError::Unavailable => LabError::RuntimeUnavailable,
         })?;
     result.model_requests = trace.requests().ok_or(LabError::RuntimeUnavailable)?;
     result.effective_prompt = result
@@ -864,7 +867,7 @@ fn complete_constrained_word(
     match word.unicode_words().count() {
         0 => Err("word_count"),
         1 => {
-            let candidate = crate::segment::sanitize_suggestion(candidate)
+            let candidate = badi_broker::segment::sanitize_suggestion(candidate)
                 .map_err(|_| "output_language_or_shape")?;
             if !WritingLanguage::from_tag(language)
                 .is_some_and(|value| value.accepts_output(&candidate))
@@ -2229,8 +2232,8 @@ mod tests {
     /// the exact serialized identity of each Lab launch variant.
     #[test]
     fn lab_launch_identity_serialization_is_pinned() {
-        use crate::semantic::provenance::{FileExpectation, VerifiedFile, verify_file};
-        use crate::semantic::runtime::FixtureBehavior;
+        use badi_broker::semantic::provenance::{FileExpectation, VerifiedFile, verify_file};
+        use badi_broker::semantic::runtime::FixtureBehavior;
         use sha2::{Digest, Sha256};
         use std::fmt::Write as _;
 

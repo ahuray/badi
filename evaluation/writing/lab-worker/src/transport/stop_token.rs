@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::semantic::client::{ClientError, SemanticClient};
-use crate::semantic::wire::{
+use badi_broker::semantic::client::{ClientError, SemanticClient};
+use badi_broker::semantic::wire::{
     NativeStreamChunk, StatusCode, TokenizeResponse, ensure_content_type, event_data,
     next_event_boundary, read_bounded_body, transport_error,
 };
@@ -339,7 +339,7 @@ mod tests {
 
     fn fixture_client(endpoint: std::net::SocketAddr) -> SemanticClient {
         SemanticClient::new(
-            crate::semantic::client::SemanticClientConfig::new(
+            badi_broker::semantic::client::SemanticClientConfig::new(
                 endpoint,
                 "fixed-probe-fixture",
                 "public-fixture-token",

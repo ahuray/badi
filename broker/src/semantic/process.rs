@@ -116,10 +116,10 @@ mod tests {
     use super::{arm_parent_death, exec_runtime_helper, require_no_file_capabilities};
 
     const FIXTURE: &str = "semantic::process::tests::lifecycle_fixture";
-    const DIRECTORY: &str = "BADI_LAB_LIFECYCLE_DIRECTORY";
-    const ROLE: &str = "BADI_LAB_LIFECYCLE_ROLE";
-    const STAGE: &str = "BADI_LAB_LIFECYCLE_STAGE";
-    const PARENT: &str = "BADI_LAB_LIFECYCLE_PARENT";
+    const DIRECTORY: &str = "BADI_RUNTIME_LIFECYCLE_DIRECTORY";
+    const ROLE: &str = "BADI_RUNTIME_LIFECYCLE_ROLE";
+    const STAGE: &str = "BADI_RUNTIME_LIFECYCLE_STAGE";
+    const PARENT: &str = "BADI_RUNTIME_LIFECYCLE_PARENT";
     const LIMIT: Duration = Duration::from_secs(5);
 
     fn wait_until(mut condition: impl FnMut() -> bool) {
@@ -240,7 +240,7 @@ mod tests {
             // fixture. SIGSTOP keeps the exec'd process observable until kill.
             fs::write(
                 &target,
-                b"#!/bin/sh\nprintf after_exec > \"$BADI_LAB_LIFECYCLE_DIRECTORY/ready\"\nkill -STOP \"$$\"\nexit 0\n",
+                b"#!/bin/sh\nprintf after_exec > \"$BADI_RUNTIME_LIFECYCLE_DIRECTORY/ready\"\nkill -STOP \"$$\"\nexit 0\n",
             )?;
             fs::set_permissions(&target, fs::Permissions::from_mode(0o700))?;
             let mut tree = ProcessTree {

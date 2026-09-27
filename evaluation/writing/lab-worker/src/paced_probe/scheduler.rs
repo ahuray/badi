@@ -6,7 +6,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::{EventInput, EventRecord, ProbeCancellation, milliseconds};
-use crate::writing_lab::{LabError, Request, ResultRecord};
+use crate::{LabError, Request, ResultRecord};
 
 pub(super) struct Schedule {
     pub events: Vec<EventRecord>,

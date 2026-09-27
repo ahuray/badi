@@ -7,8 +7,8 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::semantic::client::{ClientError, SemanticClient};
-use crate::semantic::wire::{
+use badi_broker::semantic::client::{ClientError, SemanticClient};
+use badi_broker::semantic::wire::{
     StatusCode, ensure_content_type, event_data, next_event_boundary, read_bounded_body,
     transport_error,
 };
@@ -169,7 +169,7 @@ async fn diagnostic_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::semantic::client::SemanticClientConfig;
+    use badi_broker::semantic::client::SemanticClientConfig;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     const PROMPT: &str = "Disposable prefill fixture.";

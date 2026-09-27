@@ -75,6 +75,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "badi-writing-lab"
+version = "0.1.0"
+dependencies = [
+ "badi-broker",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "unicode-segmentation",
+ "uuid",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

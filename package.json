@@ -11,7 +11,7 @@
     "desktop:check": "PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-desktop.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-install-desktop.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-install-omarchy-ui.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-install-editors.py && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/fcitx5-wayland-compat/tests -p 'test_*.py' -v",
     "accessibility:check": "BADI_A11Y_REQUIRE_SESSION_BUS=0 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s adapters/accessibility/tests -v",
     "accessibility:integration": "PYTHONDONTWRITEBYTECODE=1 python3 adapters/accessibility/tests/run-isolated.py",
-    "writing:lab": "cargo build --release --locked --features writing-lab --bin badi-writing-lab && node evaluation/writing/lab/server.mjs",
+    "writing:lab": "cargo build --release --locked -p badi-writing-lab && node evaluation/writing/lab/server.mjs",
     "writing:lab:check": "node --test evaluation/writing/lab/*.test.mjs",
     "writing:check": "npm run writing:lab:check && python3 scripts/build-writing-lexicon.py --verify && PYTHONDONTWRITEBYTECODE=1 python3 broker/data/writing-lexicon/test_generator.py",
     "check": "node scripts/run-checks.mjs",

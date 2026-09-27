@@ -1,4 +1,4 @@
-#![cfg(all(feature = "writing-lab", target_os = "linux"))]
+#![cfg(target_os = "linux")]
 
 use std::error::Error;
 use std::process::Command;
@@ -45,7 +45,7 @@ fn spelling_exec_helper_rejects_parent_mismatch_before_artifact_or_tokio_startup
 -> Result<(), Box<dyn Error>> {
     let foreign_parent = rustix::process::getppid().ok_or("missing test parent")?;
     let output = Command::new(env!("CARGO_BIN_EXE_badi-writing-lab"))
-        .arg(badi_broker::writing_lab::spelling::engine::HELPER_FLAG)
+        .arg(badi_writing_lab::spelling::engine::HELPER_FLAG)
         .arg(foreign_parent.as_raw_pid().to_string())
         .args(["/missing/private-manifest", "de"])
         .env_clear()

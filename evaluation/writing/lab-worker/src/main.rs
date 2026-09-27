@@ -4,7 +4,7 @@
 use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
 
-use badi_broker::writing_lab::{MAX_FRAME_BYTES, Request};
+use badi_writing_lab::{MAX_FRAME_BYTES, Request};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -31,8 +31,8 @@ fn directory_from(args: &[std::ffi::OsString]) -> Result<PathBuf, &'static str> 
 
 struct LabOptions {
     directory: PathBuf,
-    artifact: Option<badi_broker::writing_lab::artifact::ModelArtifactOverride>,
-    prefill_batch: badi_broker::writing_lab::PrefillBatch,
+    artifact: Option<badi_writing_lab::artifact::ModelArtifactOverride>,
+    prefill_batch: badi_writing_lab::PrefillBatch,
 }
 
 fn lab_options_from(args: &[std::ffi::OsString]) -> Result<LabOptions, &'static str> {
@@ -42,7 +42,7 @@ fn lab_options_from(args: &[std::ffi::OsString]) -> Result<LabOptions, &'static 
     let mut pairs = args.chunks_exact(2);
     for pair in &mut pairs {
         if pair[0] == "--prefill-batch" && prefill_batch.is_none() {
-            prefill_batch = Some(badi_broker::writing_lab::PrefillBatch::parse(&pair[1])?);
+            prefill_batch = Some(badi_writing_lab::PrefillBatch::parse(&pair[1])?);
             continue;
         }
         let path = PathBuf::from(&pair[1]);
@@ -61,7 +61,7 @@ fn lab_options_from(args: &[std::ffi::OsString]) -> Result<LabOptions, &'static 
         return Err("invalid_arguments");
     }
     let artifact = descriptor
-        .map(|path| badi_broker::writing_lab::artifact::ModelArtifactOverride::read(&path))
+        .map(|path| badi_writing_lab::artifact::ModelArtifactOverride::read(&path))
         .transpose()?;
     Ok(LabOptions {
         directory: directory.map_or_else(|| directory_from(&[]), Ok)?,
@@ -82,9 +82,9 @@ fn main() {
         return;
     }
     if args.first().is_some_and(|arg| arg == "--context-lookup") {
-        if let Err(code) = badi_broker::writing_lab::context_lookup::run_stdio(&args[1..]) {
+        if let Err(code) = badi_writing_lab::context_lookup::run_stdio(&args[1..]) {
             let _ = emit(
-                &json!({"schema":badi_broker::writing_lab::context_lookup::ERROR_SCHEMA,"error":code}),
+                &json!({"schema":badi_writing_lab::context_lookup::ERROR_SCHEMA,"error":code}),
             );
             std::process::exit(1);
         }
@@ -96,9 +96,9 @@ fn main() {
     {
         if args
             .first()
-            .is_some_and(|arg| arg == badi_broker::writing_lab::spelling::engine::HELPER_FLAG)
+            .is_some_and(|arg| arg == badi_writing_lab::spelling::engine::HELPER_FLAG)
         {
-            match badi_broker::writing_lab::spelling::engine::exec_helper(&args[1..]) {
+            match badi_writing_lab::spelling::engine::exec_helper(&args[1..]) {
                 Ok(never) => match never {},
                 Err(code) => {
                     eprintln!("{code}");
@@ -108,9 +108,9 @@ fn main() {
         }
         if args
             .first()
-            .is_some_and(|arg| arg == badi_broker::writing_lab::process::EXEC_HELPER_FLAG)
+            .is_some_and(|arg| arg == badi_broker::writing::EXEC_HELPER_FLAG)
         {
-            match badi_broker::writing_lab::process::exec_runtime_helper(&args[1..]) {
+            match badi_broker::writing::exec_runtime_helper(&args[1..]) {
                 Ok(never) => match never {},
                 Err(code) => {
                     eprintln!("{code}");
@@ -123,7 +123,7 @@ fn main() {
 }
 
 fn qualification(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
-    use badi_broker::model_selection::qualification::{
+    use badi_writing_lab::qualification::{
         CandidateMetadata, QualificationEvidence, QualificationSettings, assess_current,
         inspect_device, rank,
     };
@@ -184,7 +184,7 @@ fn qualification(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
 async fn run_worker() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.first().is_some_and(|arg| arg == "--spelling-lab") {
-        if let Err(code) = badi_broker::writing_lab::spelling::run(&args[1..]).await {
+        if let Err(code) = badi_writing_lab::spelling::run(&args[1..]).await {
             let _ = error(None, code);
             std::process::exit(1);
         }
@@ -230,9 +230,7 @@ async fn run_worker() {
 }
 
 async fn paced_probe(args: &[std::ffi::OsString]) -> Result<bool, &'static str> {
-    use badi_broker::writing_lab::paced_probe::{
-        Control, MAX_INPUT_BYTES, ProbeCancellation, ProbeInput,
-    };
+    use badi_writing_lab::paced_probe::{Control, MAX_INPUT_BYTES, ProbeCancellation, ProbeInput};
     let LabOptions {
         directory,
         artifact,
@@ -291,7 +289,7 @@ async fn paced_probe(args: &[std::ffi::OsString]) -> Result<bool, &'static str> 
     let input: ProbeInput = serde_json::from_slice(&frame).map_err(|_| "invalid_paced_request")?;
     input.validate()?;
     // Direct await keeps owned runtime creation on main's block_on thread.
-    let report = badi_broker::writing_lab::paced_probe::run_with_options(
+    let report = badi_writing_lab::paced_probe::run_with_options(
         directory,
         artifact,
         prefill_batch,
@@ -306,7 +304,7 @@ async fn paced_probe(args: &[std::ffi::OsString]) -> Result<bool, &'static str> 
 }
 
 async fn stop_token_probe(args: &[std::ffi::OsString]) -> Result<bool, &'static str> {
-    let artifact = badi_broker::writing_lab::stop_token_probe::artifact_from(args)?;
+    let artifact = badi_writing_lab::stop_token_probe::artifact_from(args)?;
     let directory = directory_from(&[])?;
     let cancellation = CancellationToken::new();
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
@@ -318,13 +316,11 @@ async fn stop_token_probe(args: &[std::ffi::OsString]) -> Result<bool, &'static 
     });
     // Fixed diagnostic: stdin is never read and this future owns startup on
     // main's block_on thread, exactly like the other owned runtime probes.
-    let report = badi_broker::writing_lab::stop_token_probe::run(
-        directory,
-        artifact,
-        cancellation,
-        |event| emit(event).map_err(|_| ()),
-    )
-    .await;
+    let report =
+        badi_writing_lab::stop_token_probe::run(directory, artifact, cancellation, |event| {
+            emit(event).map_err(|_| ())
+        })
+        .await;
     let complete = report.complete;
     emit(&serde_json::to_value(report).map_err(|_| "serialization_failed")?)
         .map_err(|_| "output_closed")?;
@@ -343,7 +339,7 @@ async fn prefill_probe(args: &[std::ffi::OsString]) -> Result<bool, &'static str
     });
     // Direct await retains the same main-thread parent-death invariant as the
     // interactive Lab worker. Stdin never supplies diagnostic prompts.
-    let report = badi_broker::writing_lab::prefill_probe::run(directory, cancellation).await;
+    let report = badi_writing_lab::prefill_probe::run(directory, cancellation).await;
     let complete = report.complete;
     emit(&serde_json::to_value(report).map_err(|_| "serialization_failed")?)
         .map_err(|_| "output_closed")?;
@@ -399,7 +395,7 @@ async fn worker(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
     let runtime = tokio::select! {
         biased;
         () = cancellation.cancelled() => return Ok(()),
-        runtime = badi_broker::writing_lab::activate_with_options(directory, artifact, prefill_batch) => runtime.map_err(|_| "runtime_start_failed")?,
+        runtime = badi_writing_lab::activate_with_options(directory, artifact, prefill_batch) => runtime.map_err(|_| "runtime_start_failed")?,
     };
     emit(
         &json!({"type":"ready","identity":runtime.identity(),"runtime_pid":runtime.process_id(),
@@ -429,7 +425,7 @@ async fn worker(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
             continue;
         };
         let id = request.id.clone();
-        let result = badi_broker::writing_lab::run(&runtime, request, cancellation.clone()).await;
+        let result = badi_writing_lab::run(&runtime, request, cancellation.clone()).await;
         if cancellation.is_cancelled() {
             break;
         }
@@ -451,7 +447,7 @@ async fn worker(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::lab_options_from;
-    use badi_broker::writing_lab::PrefillBatch;
+    use badi_writing_lab::PrefillBatch;
     use std::ffi::OsString;
 
     #[test]

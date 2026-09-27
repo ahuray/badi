@@ -281,11 +281,6 @@ export async function runPacedChild(input, { executable = WORKER_BINARY, args = 
     owner_wall_ms: performance.now() - started };
 }
 
-export async function pacedSourceHashes() {
-  return { ...await sourceHashes(), ...await sourceHashes(['evaluation/writing/lab/paced.mjs',
-    'broker/src/writing_lab/paced_probe.rs', 'broker/src/writing_lab/paced_probe/scheduler.rs']) };
-}
-
 export function summarizePaced(trials) {
   return Object.fromEntries(ARMS.map(arm => {
     const selected = trials.filter(trial => trial.arm === arm);
@@ -312,7 +307,7 @@ export function summarizePaced(trials) {
 }
 
 export async function runPacedSuite(options, { runTrial, outputRoot = OUTPUT_ROOT, signal, onProgress = () => {},
-  captureSources = pacedSourceHashes, workerPath = WORKER_BINARY } = {}) {
+  captureSources = sourceHashes, workerPath = WORKER_BINARY } = {}) {
   signal?.throwIfAborted();
   const suiteBytes = await readFile(options.suitePath), decisionBytes = await readFile(options.decisionPath);
   if (suiteBytes.length > 512 * 1024 || decisionBytes.length > 64 * 1024) fail('Paced input exceeds its file bounds.');

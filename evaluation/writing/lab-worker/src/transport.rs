@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::semantic::client::{ClientError, RequestObserver, SemanticClient};
-use crate::semantic::wire::{
+use badi_broker::semantic::client::{ClientError, RequestObserver, SemanticClient};
+use badi_broker::semantic::wire::{
     NativeStreamChunk, StatusCode, TokenizeResponse, ensure_content_type, event_data,
     next_event_boundary, read_bounded_body, transport_error,
 };
@@ -109,12 +109,12 @@ impl LabObservation<'_> {
             return;
         };
         let eligible = |words| {
-            crate::writing::complete_word_prefix(raw, words, natural_stop).is_some_and(
+            badi_broker::writing::complete_word_prefix(raw, words, natural_stop).is_some_and(
                 |candidate| {
                     candidate.unicode_words().count() >= words
-                        && crate::writing::WritingLanguage::from_tag(self.language)
+                        && badi_broker::writing::WritingLanguage::from_tag(self.language)
                             .is_some_and(|language| language.accepts_output(&candidate))
-                        && crate::writing::validate_proposal(
+                        && badi_broker::writing::validate_proposal(
                             self.before,
                             "",
                             &candidate,
@@ -343,7 +343,7 @@ pub(crate) async fn stream(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::semantic::client::SemanticClientConfig;
+    use badi_broker::semantic::client::SemanticClientConfig;
     use std::fmt::Write as _;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

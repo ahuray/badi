@@ -1,5 +1,7 @@
 [workspace]
-members = ["broker"]
+members = ["broker", "evaluation/writing/lab-worker"]
+# Plain `cargo build` builds only the shipped broker; name the Lab to build it.
+default-members = ["broker"]
 resolver = "3"
 
 [workspace.package]

@@ -8,12 +8,13 @@ prediction quality. The existing hardware/advice JSON contracts remain unchanged
 
 ## Shared implementation
 
-The Rust [model-selection module](../../broker/src/model_selection.rs) owns the
-pinned catalog and existing hardware detector. Its
-[qualification module](../../broker/src/model_selection/qualification.rs) extends
-that architecture for dynamic candidates. It is available with `local-model` and
-does not start inference, contact the network, install a model, or change editing
-policy. The [Lab bridge](../../evaluation/writing/lab/device-qualification.mjs)
+The broker's Rust [model-selection module](../../broker/src/model_selection.rs)
+owns the pinned catalog and existing hardware detector. The Prediction Lab owns
+qualification: the Lab worker crate's
+[qualification module](../../evaluation/writing/lab-worker/src/qualification.rs)
+builds on that detector for dynamic candidates, and the shipped broker does not
+contain it. It does not start inference, contact the network, install a model, or
+change editing policy. The [Lab bridge](../../evaluation/writing/lab/device-qualification.mjs)
 uses this engine instead of duplicating its gates in JavaScript.
 
 | API | Contract |
@@ -38,6 +39,7 @@ the requested languages each need their own measurements.
 The worker exposes the same read-only operations:
 
 ```sh
+cargo build --release --locked -p badi-writing-lab
 target/release/badi-writing-lab --inspect-device \
   --cache-directory "$HOME/.cache/badi/prediction-lab"
 target/release/badi-writing-lab --assess-model \
@@ -204,8 +206,9 @@ installed working model.
 ## Verification
 
 ```sh
-cargo test --lib --all-features --locked model_selection
-cargo clippy --lib --tests --all-features --locked -- -D warnings
+cargo test --lib --locked -p badi-broker model_selection
+cargo test --lib --locked -p badi-writing-lab qualification
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 npm run docs:check
 ```
 

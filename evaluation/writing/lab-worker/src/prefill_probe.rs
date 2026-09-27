@@ -8,8 +8,8 @@ use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use super::transport::prefill::{self, PrefillMetrics};
-use crate::semantic::client::ClientError;
-use crate::semantic::runtime::{RuntimeLifecycleObservation, StableRuntimeIdentity};
+use badi_broker::semantic::client::ClientError;
+use badi_broker::semantic::runtime::{RuntimeLifecycleObservation, StableRuntimeIdentity};
 
 const TOTAL_BUDGET: Duration = Duration::from_secs(60);
 const REQUEST_BUDGET: Duration = Duration::from_secs(5);

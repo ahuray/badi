@@ -30,7 +30,7 @@ Omarchy first. Preserve exact editing authority and prove the affected user flow
 | `adapters/obsidian/`, `adapters/shell/`, `adapters/shared/` | V2 editor clients, editor-owned acquisition/mutation, and native undo. Read [editor integrations](adapters/shared/README.md). |
 | `ui/omarchy-plugin/` | Omarchy settings panel and native writing bar. Read [controls and lifecycle checks](ui/omarchy-plugin/README.md). |
 | `scripts/badi-desktop.py`, `scripts/install-*.py`, `packaging/` | Persistent desktop broker controls, user-local installers, service units, and launcher integration. Check the affected script and its existing tests. |
-| `evaluation/` | Prediction Lab (`evaluation/writing/lab/`). Read the [Lab runbook](evaluation/writing/README.md) before changing qualification behavior. |
+| `evaluation/` | Prediction Lab: the browser workbench (`evaluation/writing/lab/`) and its worker crate `badi-writing-lab` (`evaluation/writing/lab-worker/`), which owns model qualification and uses only the broker's public API. The broker never references the Lab: no Lab feature, hook or dependency. Read the [Lab runbook](evaluation/writing/README.md) before changing Lab or qualification behavior. |
 
 ## Editing and privacy invariants
 
@@ -92,6 +92,7 @@ every integration for every edit.
 | Fcitx5 | `npm run fcitx5:check`; `npm run fcitx5:integration` for transport or broker changes. Native UI claims additionally need real application trials. |
 | Obsidian/Bash/shared clients | `npm run editors:check` and `npm run editors:integration`; real editor checks for acceptance, focus, rendering, or undo changes. |
 | Desktop controller/installers | `npm run desktop:check`; include Omarchy/editor checks when those boundaries change. |
+| Prediction Lab | `npm run writing:check` and `cargo test --locked -p badi-writing-lab`; a real-model `run.mjs` comparison when inference behavior changes. |
 | Omarchy UI | `npm run omarchy:check`; host/lifecycle checks below for QML or runtime changes. |
 | Shared schemas, dependencies, or broad changes | Relevant Rust checks plus `npm run check` and affected integrations. |
 

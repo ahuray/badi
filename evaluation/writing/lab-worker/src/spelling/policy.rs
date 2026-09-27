@@ -1,10 +1,10 @@
-use crate::writing::WritingLanguage;
+use badi_broker::writing::WritingLanguage;
 
 pub(super) fn word_valid(word: &str, language: &str) -> bool {
     !word.is_empty() && word.chars().all(|c| c.is_alphabetic()
         || matches!(c, '\u{200c}' | '\u{0300}'..='\u{036f}' | '\u{064b}'..='\u{065f}' | '\u{0670}'))
         && WritingLanguage::from_tag(language).is_some_and(|value| value.accepts_output(word))
-        && crate::segment::valid_orthographic_joiners(word)
+        && badi_broker::segment::valid_orthographic_joiners(word)
 }
 
 pub(super) fn target<'a>(before: &'a str, language: &str) -> Option<&'a str> {

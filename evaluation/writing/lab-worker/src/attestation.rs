@@ -4,7 +4,7 @@
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::Request;
-use crate::writing::{self, WritingLanguage};
+use badi_broker::writing::{self, WritingLanguage};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Source {
@@ -52,7 +52,7 @@ pub(super) fn recover_from_complete_candidate<'a>(
     {
         return None;
     }
-    crate::segment::sanitize_suggestion(candidate).ok()?;
+    badi_broker::segment::sanitize_suggestion(candidate).ok()?;
     writing::validate_suggestion_shape(&request.before, "", candidate).ok()?;
     if writing::validate_proposal(&request.before, "", candidate, Some(&request.language)).is_ok() {
         return None;
@@ -80,7 +80,7 @@ pub(super) fn recover_from_complete_candidate<'a>(
     }
     // Shortening a previously guarded multiword candidate must not introduce
     // an overlap or a standalone joiner at the resulting suggestion boundary.
-    crate::segment::sanitize_suggestion(suffix).ok()?;
+    badi_broker::segment::sanitize_suggestion(suffix).ok()?;
     writing::validate_suggestion_shape(&request.before, "", suffix).ok()?;
 
     let source = if contains_closed_word(&request.context, &completed) {
@@ -106,7 +106,7 @@ pub(super) fn word_scalars(word: &str) -> bool {
                     '\u{200c}' | '\u{0300}'..='\u{036f}' | '\u{064b}'..='\u{065f}' | '\u{0670}'
                 )
         })
-        && crate::segment::valid_orthographic_joiners(word)
+        && badi_broker::segment::valid_orthographic_joiners(word)
 }
 
 fn contains_closed_word(source: &str, word: &str) -> bool {
@@ -158,7 +158,7 @@ pub(super) fn lexical_separator(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::writing_lab::{Config, Mode, REQUEST_SCHEMA, complete_output};
+    use crate::{Config, Mode, REQUEST_SCHEMA, complete_output};
 
     fn request(before: &str, language: &str, context: &str) -> Request {
         Request {

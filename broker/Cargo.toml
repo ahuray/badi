@@ -14,12 +14,6 @@ path = "src/lib.rs"
 [features]
 default = ["local-model"]
 local-model = ["dep:reqwest", "dep:sha2", "dep:unicode-script"]
-writing-lab = ["local-model"]
-
-[[bin]]
-name = "badi-writing-lab"
-path = "src/bin/badi-writing-lab.rs"
-required-features = ["writing-lab"]
 
 [[bin]]
 name = "badi-broker"

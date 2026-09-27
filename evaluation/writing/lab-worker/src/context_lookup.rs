@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::attestation::{lexical_separator, word_scalars};
-use crate::writing::{self, WritingLanguage};
+use badi_broker::writing::{self, WritingLanguage};
 
 pub const REQUEST_SCHEMA: &str = "badi.context-lookup.request.v1";
 pub const ERROR_SCHEMA: &str = "badi.context-lookup.error.v1";
@@ -176,7 +176,7 @@ pub fn lookup(request: &Request) -> Result<ResultRecord, &'static str> {
             // must not turn two plausible source words into a unique choice.
             if suffix.chars().next().is_some_and(char::is_alphabetic)
                 && language.accepts_output(suffix)
-                && crate::segment::sanitize_suggestion(suffix).is_ok()
+                && badi_broker::segment::sanitize_suggestion(suffix).is_ok()
                 && writing::validate_suggestion_shape(&request.before, "", suffix).is_ok()
             {
                 result.outcome = "suggestion";
