@@ -51,9 +51,7 @@ struct ContextWindow {
     std::uint64_t anchor = 0;
     std::uint64_t head = 0;
     std::string language;
-    bool sensitive = false;
     bool multiline = false;
-    bool composing = false;
     bool identityKnown = false;
     bool explicitRequest = true;
     // Fcitx reported exactly Chromium's paragraph end after the caret,
@@ -63,21 +61,19 @@ struct ContextWindow {
     bool operator==(const ContextWindow &other) const {
         // Invocation mode is request metadata, not an edit to the field.
         return before == other.before && after == other.after && anchor == other.anchor &&
-            head == other.head && language == other.language && sensitive == other.sensitive &&
-            multiline == other.multiline && composing == other.composing && identityKnown == other.identityKnown &&
-            paragraphEndAfter == other.paragraphEndAfter;
+            head == other.head && language == other.language && multiline == other.multiline &&
+            identityKnown == other.identityKnown && paragraphEndAfter == other.paragraphEndAfter;
     }
 };
 
-// Chromium's text-input surrounding text ends every <p> with "\n\n" (margins
-// or not) when anything is rendered after the editor, so the caret at the end
-// of a ProseMirror composer's last paragraph reports after == "\n\n"
-// (Chromium 152, WAYLAND_DEBUG, 2026-09-27). For an observed IME-parity field
-// that exact suffix counts as end of field: `after` becomes empty for
-// eligibility and the broker, and `paragraphEndAfter` keeps the raw text. The
-// caller normalizes only observed IME-parity contexts; each observer agreement
-// check compares observedAfter(). Any other suffix, a single "\n" included,
-// is unchanged.
+// Chromium's text-input surrounding text ends every <p> with "\n\n" when
+// anything is rendered after the editor, so the caret at the end of a
+// ProseMirror composer's last paragraph reports after == "\n\n". For an
+// observed IME-parity field that exact suffix counts as end of field: `after`
+// becomes empty for eligibility and the broker, and `paragraphEndAfter` keeps
+// the raw text. The caller normalizes only observed IME-parity contexts; each
+// observer agreement check compares observedAfter(). Any other suffix, a
+// single "\n" included, is unchanged.
 void normalizeObservedParagraphEnd(ContextWindow &context);
 // The after-caret text exactly as Fcitx reported it.
 std::string observedAfter(const ContextWindow &context);
@@ -95,7 +91,6 @@ struct Suggestion {
     std::string suggestionId;
     std::string text;
     std::uint64_t expiresAtMs = 0;
-    std::string replaceBefore{};
 };
 
 struct AcceptRequest {
@@ -103,7 +98,6 @@ struct AcceptRequest {
     std::string controlId;
     std::string suggestionId;
     std::string expectedText;
-    std::string replaceBefore{};
 };
 
 struct DismissRequest {
@@ -118,7 +112,6 @@ struct CommitPrepare {
     std::string suggestionId;
     std::string text;
     std::string acceptance;
-    std::string replaceBefore{};
 };
 
 struct CommitDispatch {
@@ -126,7 +119,6 @@ struct CommitDispatch {
     std::string controlId;
     std::string suggestionId;
     std::string text;
-    std::string replaceBefore{};
 };
 
 struct PanelObservation {
@@ -163,7 +155,6 @@ private:
 bool hasForeignImeUi(const PanelObservation &panel);
 bool hasOwnedCandidate(const PanelObservation &panel);
 bool allowsNativeContext(::fcitx::CapabilityFlags capabilities);
-bool supportedAppId(std::string_view appId);
 bool supportedWritingLanguage(std::string_view language);
 bool matchesCapturedContext(
     const std::optional<ContextUpdate> &captured,
@@ -174,12 +165,12 @@ LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
 LocalAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
                             const PanelObservation &panel, NativeEditPath path);
 bool tabEligibleContext(const std::optional<ContextWindow> &context);
+// The bounded window around a collapsed caret. The caller has already denied
+// sensitive, special-purpose and composing contexts.
 std::optional<ContextWindow> captureContextWindow(std::string_view text,
                                                   std::size_t cursor,
                                                   std::size_t anchor,
-                                                  bool sensitive,
                                                   bool multiline,
-                                                  bool composing,
                                                   std::string language);
 
 class SessionState {
@@ -212,9 +203,7 @@ public:
     [[nodiscard]] bool editingAvailable() const {
         return nativeEditingAvailable(appId_, editTarget_, editPath_);
     }
-    [[nodiscard]] NativeAppClass appClass() const { return classifyNativeApp(appId_); }
     [[nodiscard]] NativeEditPath editPath() const { return editPath_; }
-    [[nodiscard]] bool sensitive() const { return sensitive_; }
     [[nodiscard]] bool suggestionVisible() const { return visible_.has_value(); }
     [[nodiscard]] const Coordinates &coordinates() const { return coordinates_; }
     [[nodiscard]] const std::string &appId() const { return appId_; }
@@ -233,7 +222,6 @@ private:
     NativeEditTarget editTarget_ = NativeEditTarget::Unsupported;
     NativeEditPath editPath_ = NativeEditPath::Manual;
     bool focused_ = false;
-    bool sensitive_ = false;
     std::optional<ContextUpdate> lastContext_;
     std::optional<Suggestion> visible_;
     std::optional<AcceptRequest> pendingAcceptance_;

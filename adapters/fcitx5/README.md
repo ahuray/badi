@@ -14,7 +14,9 @@ uses evdev, `wtype`, the clipboard, a virtual keyboard, or global input capture.
   it is folded to lowercase once at focus-in (Qt's `Telegram` becomes
   `telegram`) and that id is used for policy, sessions, debug and the observer.
   Each focus/authority epoch queries policy before reading text; only a current
-  grant opens a session. Queries expire after two seconds. Omawrite and
+  grant opens a session. A reply still missing after two seconds is logged as
+  overdue; the connection and other sessions continue, and the late reply
+  still applies to its own session. Omawrite and
   Xournal++ remain the visually tested applications. The app class below
   selects which edit paths exist at all.
 - **Tab** invokes at the end of a nonempty phrase with an English, German or
@@ -103,7 +105,16 @@ geometry), Badi shows its owned Fcitx panel: the suggestion text as the single
 candidate with “Badi · Tab to accept · Escape to dismiss”. On the `wayland_v2`
 frontend Fcitx's own cursor rectangle is `[0,0,0,0]`; Hyprland places the input
 popup at the application's text-input caret rectangle. Foreign preedit or
-candidates still take the panel over.
+candidates still take the panel over. The addon asks the observer to hide its
+preview only while one may be on screen, not on every key.
+
+Automatic inspection runs 120 ms after Fcitx input pauses. When the observer
+invalidates a field without Fcitx input (keys or changed surrounding text) since
+the last inspection, a change of the field itself waits for the next input;
+other invalidations inspect again after 240, 480 and 960 ms and then wait for
+input (`observer_awaiting_input`), so a busy page cannot drive an inspection
+loop. With `badi debug on`, a missing or invalid debug control is rechecked at
+most once a second and at every focus-in.
 
 Nested-session facts (stock Fcitx 5.1.22, Hyprland 0.56.2): Chromium 152, Brave
 Origin (Chromium 154) and Electron 42 apps use text-input-v3 by default and

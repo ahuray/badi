@@ -167,7 +167,7 @@ def session(root, report):
             if time.monotonic() >= self.deadline:
                 raise Denied('operation_timeout')
 
-        def metadata(self, app, _geometry=False):
+        def metadata(self, app, _calibrate=False, _check_lock=False):
             self.budget()
             self.inspections += 1
             self.requested.append(app)
@@ -175,10 +175,14 @@ def session(root, report):
                 raise Denied('unsupported_app')
             return {'bus': ':1.synthetic', 'path': f'/synthetic/field/{self.field}',
                     'process_id': os.getpid(), 'app_id': app, 'uri': self.uri,
-                    'browser': self.browser, 'role': self.role, 'tag': 'textarea', 'input_type': 'textarea',
-                    'focused': True, 'editable': True, 'showing': True, 'visible': True, 'enabled': True,
-                    'selection_count': 0, 'caret': len(self.value) if self.caret is None else self.caret,
-                    'total_chars': len(self.value)}
+                    'browser': self.browser, 'web': self.browser, 'role': self.role, 'tag': 'textarea',
+                    'input_type': 'textarea', 'focused': True, 'editable': True, 'showing': True, 'visible': True,
+                    'enabled': True, **self.position({})}
+
+        def position(self, metadata):
+            self.budget()
+            return {**metadata, 'selection_count': 0, 'total_chars': len(self.value),
+                    'caret': len(self.value) if self.caret is None else self.caret}
 
         def text(self, metadata, start, end):
             self.budget()
@@ -196,7 +200,7 @@ def session(root, report):
     render_result = {'value': False}
     daemon.observer.render = lambda focus, _text, _ttl: render_calls.append(focus) or render_result['value']
     original_request = daemon.observer.request
-    observer_calls = {'snapshot': 0, 'preview': 0}
+    observer_calls = {'snapshot': 0, 'preview': 0, 'hide': 0}
     silent_change = {'op': None, 'call': 0, 'mode': 'repeat', 'triggered': False}
 
     def observer_request(request):
@@ -471,7 +475,10 @@ def session(root, report):
         daemon.observer.invalidate('fixture_field_changed')
         context.text(PREFIX)
         quiet(.3)
+        hides = observer_calls['hide']
         assert not context.key(desktop.TAB)
+        quiet(.1)
+        assert observer_calls['hide'] == hides, 'A key without a requested preview sends the observer nothing'
         assert backend.reads == 0 and context.candidate() is None and context.commits() == []
         assert control('status')['metrics']['context_updates'] == 0
         assert control('status')['metrics']['provider_calls'] == 0
@@ -500,6 +507,16 @@ def session(root, report):
         assert context.candidate() == SUFFIX
         assert control('status')['metrics']['context_updates'] == metrics['context_updates']
         checks.append('Unchanged toolkit context preserves the visible candidate and session')
+
+        inspections, awaiting = backend.inspections, reason_count('observer_awaiting_input')
+        daemon.observer.invalidate('field_changed')
+        wait(lambda: context.candidate() is None, 'a field event retires the observed candidate')
+        quiet(.5)
+        assert backend.inspections == inspections and reason_count('observer_awaiting_input') > awaiting, \
+            'A field event without Fcitx input waits for input instead of inspecting again'
+        context.text(PREFIX)
+        wait(lambda: context.candidate() == SUFFIX, 'the next surrounding-text publication inspects again')
+        checks.append('A field event without Fcitx input waits for the next publication before inspecting again')
 
         assert context.key(desktop.TAB)
         wait(lambda: context.commits() == [SUFFIX], 'Tab dispatch after observed verification')

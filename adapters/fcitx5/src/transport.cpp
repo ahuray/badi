@@ -31,6 +31,8 @@ using Json = nlohmann::json;
 constexpr std::size_t kMaxQueuedFrames = 32;
 constexpr std::size_t kMaxQueuedBytes = 1U << 20U;
 constexpr std::size_t kMaxDecodedFrames = 32;
+constexpr std::size_t kMaxPendingPolicies = 64;
+constexpr std::uint64_t kPolicyReplyMs = 2'000;
 constexpr std::uint64_t kMaxSafeCounter = (std::uint64_t{1} << 53U) - 1U;
 constexpr std::array<std::string_view, 5> kRequiredCapabilities{
     "context", "suggestion", "commit.dispatched_unverified", "control", "policy"};
@@ -248,8 +250,8 @@ std::optional<Json> contextEnvelope(const ContextUpdate &update,
     if (!validLinuxAppId(update.appId) || !validOpaqueId(update.targetId) ||
         !validSessionId(coordinates.sessionId) ||
         coordinates.fingerprint.size() < 16 ||
-        !validOpaqueId(coordinates.fingerprint) || context.sensitive ||
-        context.composing || context.anchor != context.head || (!context.identityKnown && !context.explicitRequest) ||
+        !validOpaqueId(coordinates.fingerprint) || context.anchor != context.head ||
+        (!context.identityKnown && !context.explicitRequest) ||
         !validLanguageTag(context.language) || !validContextText(context.before) || !validContextText(context.after) ||
         !before || before->size() > kMaxBeforeScalars || !after ||
         after->size() > kMaxAfterScalars) {
@@ -496,7 +498,7 @@ public:
         decoder_ = FrameDecoder{};
         writes_.clear();
         pendingPolicies_.clear();
-        if (policyTimeout_) policyTimeout_->setEnabled(false);
+        if (policyTimer_) policyTimer_->setEnabled(false);
         if (handshakeTimeout_) handshakeTimeout_->setEnabled(false);
         writeOffset_ = 0;
         queuedBytes_ = 0;
@@ -548,18 +550,15 @@ public:
 
     bool queryTargetPolicy(const Coordinates &coordinates, const Json &target) {
         if (!ready() || !validSessionId(coordinates.sessionId) ||
-            !target.is_object() || target.dump().size() > 4096 || pendingPolicies_.size() >= 64) return false;
+            !target.is_object() || target.dump().size() > 4096) return false;
         const auto id = "fcitx.policy." + coordinates.sessionId;
+        // One query per session: an overdue reply is still owed and delivered.
         if (pendingPolicies_.contains(id)) return true;
-        if (!queue(envelope("policy.query", id, nowMs(),
-            Json{{"target", target}}))) return false;
-        pendingPolicies_.emplace(id, coordinates.sessionId);
-        if (pendingPolicies_.size() == 1) {
-            if (!policyTimeout_) policyTimeout_ = eventLoop_.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
-                [this](::fcitx::EventSourceTime *, std::uint64_t) { close(true); return true; });
-            policyTimeout_->setNextInterval(2'000'000);
-            policyTimeout_->setOneShot();
-        }
+        if (pendingPolicies_.size() >= kMaxPendingPolicies ||
+            !queue(envelope("policy.query", id, nowMs(), Json{{"target", target}}))) return false;
+        pendingPolicies_.emplace(id, PendingPolicy{.session = coordinates.sessionId,
+                                                   .deadlineMs = nowMs() + kPolicyReplyMs});
+        schedulePolicyDeadline();
         return true;
     }
 
@@ -590,12 +589,7 @@ public:
     }
 
     bool publishContext(const ContextUpdate &update) {
-        if (!ready() || !validLinuxAppId(update.appId) ||
-            !validOpaqueId(update.targetId) || update.context.sensitive ||
-            update.context.composing ||
-            update.context.anchor != update.context.head) {
-            return false;
-        }
+        if (!ready()) return false;
         const auto &coordinates = update.coordinates;
         const auto &context = update.context;
         const auto requestId = "fcitx.suggest." +
@@ -604,9 +598,6 @@ public:
         const auto serialized = serializeContextEnvelope(update, nowMs());
         if (!serialized || !queueBody(*serialized)) {
             return false;
-        }
-        if (context.sensitive || context.composing || context.anchor != context.head) {
-            return true;
         }
         return queue(envelope(
             "suggest.request", requestId, nowMs(),
@@ -650,6 +641,41 @@ public:
 
 private:
     using Clock = std::chrono::steady_clock;
+
+    struct PendingPolicy {
+        std::string session;
+        std::uint64_t deadlineMs = 0;
+        bool overdue = false;
+    };
+
+    // An overdue policy reply ends only its own wait. The connection, other
+    // sessions and the eventual reply are unaffected; the session keeps no
+    // grant until that reply arrives.
+    void schedulePolicyDeadline() {
+        std::optional<std::uint64_t> next;
+        for (const auto &[_, pending] : pendingPolicies_) {
+            if (!pending.overdue && (!next || pending.deadlineMs < *next)) next = pending.deadlineMs;
+        }
+        if (!next) {
+            if (policyTimer_) policyTimer_->setEnabled(false);
+            return;
+        }
+        if (!policyTimer_) policyTimer_ = eventLoop_.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
+            [this](::fcitx::EventSourceTime *, std::uint64_t) {
+                const auto now = nowMs();
+                for (auto &[_, pending] : pendingPolicies_) {
+                    if (!pending.overdue && pending.deadlineMs <= now) {
+                        pending.overdue = true;
+                        FCITX_WARN() << "Badi broker policy reply is overdue";
+                    }
+                }
+                schedulePolicyDeadline();
+                return true;
+            });
+        const auto now = nowMs();
+        policyTimer_->setNextInterval((*next > now ? *next - now : 0) * 1000);
+        policyTimer_->setOneShot();
+    }
 
     ::fcitx::IOEventFlags ioFlags() const {
         ::fcitx::IOEventFlags flags{::fcitx::IOEventFlag::In};
@@ -858,7 +884,7 @@ private:
         authoritySeen_ = true;
         authorityEpoch_ = epoch;
         pendingPolicies_.clear();
-        if (policyTimeout_) policyTimeout_->setEnabled(false);
+        if (policyTimer_) policyTimer_->setEnabled(false);
         if (!queue(envelope("authority.ack", std::nullopt, nowMs(),
                             Json{{"authority_epoch", epoch}}))) {
             return false;
@@ -885,9 +911,9 @@ private:
         if (payload["authority_epoch"] != authorityEpoch_) return false;
         const auto pending = pendingPolicies_.find(value["id"].get<std::string>());
         if (pending == pendingPolicies_.end()) return false;
-        const auto session = pending->second;
+        const auto session = pending->second.session;
         pendingPolicies_.erase(pending);
-        if (pendingPolicies_.empty() && policyTimeout_) policyTimeout_->setEnabled(false);
+        schedulePolicyDeadline();
         const bool allowed = payload["paused"] == false &&
             payload["activation"] == "always" && payload["context_allowed"] == true &&
             payload["display_allowed"] == true && payload["suggestions_allowed"] == true;
@@ -972,8 +998,8 @@ private:
     bool authoritySeen_ = false;
     bool ready_ = false;
     std::uint64_t authorityEpoch_ = 0;
-    std::unordered_map<std::string, std::string> pendingPolicies_;
-    std::unique_ptr<::fcitx::EventSourceTime> policyTimeout_;
+    std::unordered_map<std::string, PendingPolicy> pendingPolicies_;
+    std::unique_ptr<::fcitx::EventSourceTime> policyTimer_;
     std::unique_ptr<::fcitx::EventSourceTime> handshakeTimeout_;
     std::unique_ptr<::fcitx::EventSourceTime> reconnectTimer_;
     bool wantConnection_ = false;

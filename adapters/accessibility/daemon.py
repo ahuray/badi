@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 from dataclasses import dataclass
 import fcntl
 import json
@@ -16,6 +17,7 @@ import struct
 import subprocess
 import time
 from urllib.parse import urlsplit
+import warnings
 
 from contract import Denied, MAX_FRAME, Observer, SCHEMA, canonical_origin
 
@@ -40,8 +42,7 @@ APPS = {
     "chromium-browser": App(frozenset({"/usr/lib/chromium/chromium"}), frozenset({"chromium-browser"}),
                             browser=True, web=True),
     "brave-origin": App(frozenset({"/opt/brave-origin-bin/brave"}), frozenset({"brave-origin"}), browser=True, web=True),
-    # Zen 1.22.3b (Gecko 156.0.1), live 2026-09-26: /usr/bin/zen-browser execs
-    # this binary; its Wayland app id and Fcitx program() are both "zen".
+    # /usr/bin/zen-browser execs this binary; its Wayland app id and Fcitx program() are both "zen".
     "zen": App(frozenset({"/opt/zen-browser-bin/zen-bin"}), frozenset({"zen"}), browser=True, web=True, gecko=True),
     "chatgpt": App(frozenset({"/usr/lib/chatgpt/ChatGPT"}), frozenset({"chatgpt"}), web=True),
     "code": App(frozenset({"/usr/share/code/code"}), frozenset({"code"}), web=True),
@@ -53,6 +54,8 @@ APPS = {
 }
 OPERATION_SECONDS = 0.35
 MAX_CMDLINE = 64 * 1024
+MAX_HYPRLAND_REPLY = 32 * 1024
+LOCK_FLAGS = ("locked", "secure", "pending", "requested", "sessionLocked")
 ELECTRON_NON_ENTRY_OPTIONS = frozenset({b"-r", b"--require", b"-i", b"--interactive", b"-repl",
                                         b"-v", b"--version", b"-a", b"--abi"})
 DISCORD_BUILD = re.compile(r"app-[0-9]{1,9}(?:\.[0-9]{1,9}){0,3}\Z")
@@ -60,18 +63,21 @@ CALIBRATED = "atspi_frame_calibrated"
 SCALE_TOLERANCE = 0.01
 EDGE_TOLERANCE = 1
 # Gecko's glyph extents are device pixels. Only integer scales keep device
-# pixels an exact multiple of logical ones: 2 was measured, and 1 is the
-# identity. Fractional or larger scales are unverified and use the Fcitx panel.
+# pixels an exact multiple of logical ones; other scales use the Fcitx panel.
 GECKO_SCALES = (1, 2)
 # A rich editor root exposes each block as one U+FFFC embedded object. Larger
 # documents are unsupported rather than slow; each block costs a few calls.
 EMBEDDED_OBJECT = "\ufffc"
 MAX_RICH_BLOCKS = 64
-# Chromium 152's text-input-v3 surrounding text ends every <p> with two line
-# breaks, margins or not, when anything is rendered after the editor, and only
-# one after a paragraph whose text already ends in a line break (WAYLAND_DEBUG
-# set_surrounding_text, 2026-09-27).
+# Chromium's text-input-v3 surrounding text ends every <p> with two line
+# breaks when anything is rendered after the editor, and only one after a
+# paragraph whose text already ends in a line break.
 PARAGRAPH_END = "\n\n"
+# Producer interest requested from the armed application. Its events reach
+# this helper only through a match on the armed field's exact sender and path.
+FIELD_EVENTS = ("object:text-changed", "object:text-caret-moved", "object:text-selection-changed",
+                "object:state-changed:editable", "object:state-changed:showing",
+                "object:state-changed:defunct", "object:property-change:accessible-role")
 
 
 def browser_interface(uri):
@@ -98,9 +104,9 @@ def application_entry(cmdline):
     arguments = cmdline.split(b"\0")
     if arguments and arguments[-1] == b"":
         arguments.pop()
-    # The Cursor GUI process rewrites its title into one space-joined argument
-    # (observed on electron42). A path with spaces then yields a wrong first
-    # token, which cannot equal the pinned entry, so this fails closed.
+    # The Cursor GUI process rewrites its title into one space-joined argument.
+    # A path with spaces then yields a wrong first token, which cannot equal
+    # the pinned entry, so this fails closed.
     if len(arguments) == 1 and b" " in arguments[0]:
         arguments = [argument for argument in arguments[0].split(b" ") if argument]
     remaining = iter(arguments[1:])
@@ -158,9 +164,9 @@ def verify_process(pid, app, uid, config, proc=Path("/proc")):
 def visual_direction(previous, last):
     """Run direction from the two glyphs before the caret, or "".
 
-    Gecko exposes no "direction" text attribute (Zen 1.22.3b, 2026-09-27), so
-    the caret edge follows glyph order instead: on one line, a later glyph to
-    the right means left-to-right. Missing, empty or wrapped glyphs give "".
+    Gecko exposes no "direction" text attribute, so the caret edge follows
+    glyph order instead: on one line, a later glyph to the right means
+    left-to-right. Missing, empty or wrapped glyphs give "".
     """
     try:
         boxes = [(float(box.x), float(box.y), float(box.width), float(box.height)) for box in (previous, last)]
@@ -245,17 +251,14 @@ def calibrated_geometry(frame, document, field, glyph, window, monitors, caret):
 def gecko_calibrated_geometry(frame, document, field, glyph, window, monitors, caret):
     """Window-local logical caret geometry for a Gecko field, or None.
 
-    Gecko 156 on Wayland (Zen 1.22.3b, live 2026-09-26 at scale 2) reports
-    SCREEN extents relative to its own window, identical to WINDOW extents:
-    the frame sits at (0, 0), and frame, document and field are logical
-    pixels, but character extents are device pixels. A marker screenshot put
-    the viewport at the Hyprland window origin plus the document offset, and
-    the glyph's right edge within 0.3 logical pixels of the page's own caret.
-    The frame must start at the origin and span the window's width (a
-    physical frame would be twice as wide), the document must lie inside the
-    frame, the field inside the document and the scaled glyph inside the
-    field. Gecko's surface can be taller than the tile Hyprland shows, so the
-    caret is bounded by the window size, never by the frame height.
+    Gecko on Wayland reports SCREEN extents relative to its own window: the
+    frame sits at (0, 0), and frame, document and field are logical pixels,
+    but character extents are device pixels. The frame must start at the
+    origin and span the window's width (a physical frame would be twice as
+    wide), the document must lie inside the frame, the field inside the
+    document and the scaled glyph inside the field. Gecko's surface can be
+    taller than the tile Hyprland shows, so the caret is bounded by the window
+    size, never by the frame height.
     """
     try:
         output = _output(frame, document, field, glyph, window, monitors, caret)
@@ -276,34 +279,66 @@ def gecko_calibrated_geometry(frame, document, field, glyph, window, monitors, c
         return None
 
 
+def hyprland_directory():
+    signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+    if not signature or "/" in signature or signature in (".", "..") or not os.path.isabs(runtime):
+        raise RuntimeError("hyprland_session_required")
+    return Path(runtime) / "hypr" / signature
+
+
 class DesktopBackend:
-    def __init__(self, atspi):
+    def __init__(self, atspi, hyprland=None):
         self.atspi = atspi
-        self.cached = None
+        self.hyprland = hyprland  # Hyprland's request socket
         self.deadline = 0
 
     def budget(self):
         if time.monotonic() >= self.deadline:
             raise Denied("operation_timeout")
 
-    def command(self, *args):
+    def remaining(self, limit):
         self.budget()
+        return min(limit, max(.001, self.deadline - time.monotonic()))
+
+    def hypr(self, request):
+        """Hyprland's JSON reply to one IPC request, within the operation budget."""
+        if self.hyprland is None:
+            raise Denied("desktop_unavailable")
         try:
-            raw = subprocess.check_output(args, timeout=min(.15, max(.001, self.deadline-time.monotonic())), stderr=subprocess.DEVNULL)
-            if len(raw) > 32 * 1024:
-                raise Denied("desktop_unavailable")
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                connection.settimeout(self.remaining(.15))
+                connection.connect(str(self.hyprland))
+                connection.sendall(request.encode())
+                raw = b""
+                while part := connection.recv(8192):
+                    raw += part
+                    if len(raw) > MAX_HYPRLAND_REPLY:
+                        raise Denied("desktop_unavailable")
+                    connection.settimeout(self.remaining(.15))
             return json.loads(raw)
-        except (OSError, ValueError, subprocess.SubprocessError):
+        except (OSError, ValueError):
             raise Denied("desktop_unavailable") from None
 
-    def window(self, app_id):
+    def require_unlocked(self):
+        try:
+            raw = subprocess.check_output(("omarchy-shell", "lock", "status"), timeout=self.remaining(.15),
+                                          stderr=subprocess.DEVNULL)
+            state = json.loads(raw) if len(raw) <= MAX_HYPRLAND_REPLY else None
+        except (OSError, ValueError, subprocess.SubprocessError):
+            raise Denied("desktop_unavailable") from None
+        if not isinstance(state, dict) or any(state.get(flag) is not False for flag in LOCK_FLAGS):
+            raise Denied("desktop_locked")
+
+    def window(self, app_id, check_lock=False):
         app = APPS.get(app_id)
         if app is None:
             raise Denied("unsupported_app")
-        locked = self.command("omarchy-shell", "lock", "status")
-        if any(locked.get(k) is not False for k in ("locked", "secure", "pending", "requested", "sessionLocked")):
-            raise Denied("desktop_locked")
-        window = self.command("hyprctl", "-j", "activewindow")
+        if check_lock:
+            self.require_unlocked()
+        window = self.hypr("j/activewindow")
+        if not isinstance(window, dict):
+            raise Denied("focus_unavailable")
         pid = window.get("pid")
         if type(pid) is not int or pid <= 0:
             raise Denied("focus_unavailable")
@@ -358,34 +393,21 @@ class DesktopBackend:
                     queue.extend(node.get_child_at_index(i) for i in range(min(node.get_child_count(), 128)))
         focused = [node for node in focused if node.get_state_set().contains(A.StateType.EDITABLE)]
         if gecko:
-            # Gecko 156 (Zen 1.22.3b, live 2026-09-26) reported exactly one
-            # focused editable node in every state: the urlbar while it had the
-            # keyboard, otherwise the page field. Nothing is filtered out, so a
-            # second focused field is ambiguous and fails closed. The urlbar
-            # shares the page's Fcitx input context and carries no Url purpose,
-            # so unlike Chromium's omnibox the addon cannot deny it: this
-            # observer must. The one field's nearest Document must be web
-            # content with an HTTP(S) DocURL; the urlbar's is the browser
-            # window itself (chrome://browser/content/browser.xhtml).
+            # Gecko reports exactly one focused editable node: the urlbar while
+            # it has the keyboard, otherwise the page field. The urlbar shares
+            # the page's Fcitx input context without a Url purpose, so this
+            # observer, not the addon, must deny it: the one field's nearest
+            # Document must be web content with an HTTP(S) DocURL.
             if len(focused) != 1 or focused[0].get_process_id() != pid:
                 raise Denied("focus_unavailable")
             self.gecko_document_url(focused[0])
         elif browser:
-            # Chromium reports FOCUSED on several fields at once. While a page
-            # field has the keyboard, its omnibox popup's combo box still
-            # reports focused, editable and showing; while the omnibox has the
-            # keyboard, the page field still does too (Chromium 152, verified
-            # 2026-09-26). AT-SPI alone cannot tell which receives keys, so
-            # browser UI is ignored and exactly one page field must remain;
-            # two page fields, or none, still fail closed. Selecting the page
-            # field while the omnibox is typed into is safe: the omnibox's
-            # Fcitx input context carries the Url purpose, which the addon's
-            # allowsNativeContext() denies before any inspection, request,
-            # display or dispatch. Every display and dispatch also requires
-            # this field's snapshot text before and after the caret to equal
-            # Fcitx's live surrounding text (non-empty before, empty after) of
-            # the field that really has the keyboard, and the caret and length
-            # to stay unchanged between inspection and snapshot.
+            # Chromium reports FOCUSED on the page field, the omnibox and its
+            # popup at once, so browser UI is ignored and exactly one page field
+            # must remain. Picking the page field while the omnibox has the
+            # keyboard is safe: the omnibox's Url purpose denies it in the
+            # addon, and every display and dispatch requires this field's
+            # snapshot to equal Fcitx's live surrounding text and caret.
             focused = [node for node in focused if self.page_content(node)]
             if len(focused) == 1:
                 try:
@@ -396,8 +418,7 @@ class DesktopBackend:
                     raise Denied("focus_unavailable") from None
         if len(focused) != 1 or focused[0].get_process_id() != pid:
             raise Denied("focus_unavailable")
-        self.cached = focused[0]
-        return self.cached
+        return focused[0]
 
     def nearest_document_uri(self, node):
         """The nearest document's URI; None only when no ancestor is a document."""
@@ -487,7 +508,7 @@ class DesktopBackend:
                 rects[name] = item.get_component_iface().get_extents(A.CoordType.SCREEN)
             self.budget()
             rects["glyph"] = text.get_character_extents(caret - 1, A.CoordType.SCREEN)
-            monitors = self.command("hyprctl", "-j", "monitors")
+            monitors = self.hypr("j/monitors")
         except Denied as error:
             if str(error) == "operation_timeout":
                 raise
@@ -502,15 +523,14 @@ class DesktopBackend:
     def rich_layout(self, node, count, caret):
         """Flattened coordinates of a Chromium rich editor root, or None for a plain field.
 
-        A ProseMirror composer (Codex desktop, Chromium 153, live 2026-09-27)
-        is a focused `entry` whose text is one U+FFFC per paragraph; the
-        paragraph holds the typed text, reports the caret, and the root's
-        caret is the offset of that paragraph's embedded object. Only lengths,
-        caret offsets and structure are read here, never prose. Anything the
-        flattening cannot resolve fails closed: root text that is not solely
-        embedded paragraphs, a paragraph with its own embedded objects
-        (placeholder, image, mention, link), another role, a foreign parent,
-        or an ambiguous caret.
+        A ProseMirror composer (Codex desktop) is a focused `entry` whose text
+        is one U+FFFC per paragraph; the paragraph holds the typed text,
+        reports the caret, and the root's caret is the offset of that
+        paragraph's embedded object. Only lengths, caret offsets and structure
+        are read here, never prose. Anything the flattening cannot resolve
+        fails closed: root text that is not solely embedded paragraphs, a
+        paragraph with its own embedded objects (placeholder, image, mention,
+        link), another role, a foreign parent, or an ambiguous caret.
         """
         A = self.atspi
         if "Hypertext" not in node.get_interfaces():
@@ -553,10 +573,10 @@ class DesktopBackend:
                 "selections": selections, "text": block["node"].get_text_iface(),
                 "local_caret": carets[caret], "local_count": block["length"]}
 
-    def metadata(self, app_id, calibrate=False):
+    def metadata(self, app_id, calibrate=False, check_lock=False):
         self.budget()
         A = self.atspi
-        window, app = self.window(app_id)
+        window, app = self.window(app_id, check_lock)
         browser = app.browser
         node = self.focused(window["pid"], browser, app.gecko)
         node.clear_cache()
@@ -573,17 +593,13 @@ class DesktopBackend:
         uri = ""
         if browser:
             uri = self.gecko_document_url(node) if app.gecko else self.document_uri(node)
-        text = node.get_text_iface()
-        self.budget()
-        caret, count, selections = text.get_caret_offset(), text.get_character_count(), text.get_n_selections()
         # Gecko serializes block boundaries differently and is unverified;
         # its embedded objects stay in the plain text and never agree.
-        rich = self.rich_layout(node, count, caret) if app.web and not app.gecko else None
+        flatten = app.web and not app.gecko
+        caret, count, selections, rich = self.caret_position(node, flatten)
         # The glyph before the caret: in the field, or in a rich root's caret paragraph.
-        local, local_caret, local_count = (text, caret, count) if rich is None else (
+        local, local_caret, local_count = (node.get_text_iface(), caret, count) if rich is None else (
             rich["text"], rich["local_caret"], rich["local_count"])
-        if rich is not None:
-            caret, count, selections = rich["caret"], rich["total_chars"], selections + rich["selections"]
         geometry = None
         if (calibrate and 1 <= local_caret <= local_count and flags.contains(A.StateType.SHOWING) and
                 window.get("xwayland") is False):
@@ -600,9 +616,25 @@ class DesktopBackend:
                 "tag": attributes.get("tag", ""), "input_type": attributes.get("text-input-type", ""),
                 "focused": flags.contains(A.StateType.FOCUSED), "editable": flags.contains(A.StateType.EDITABLE),
                 "showing": flags.contains(A.StateType.SHOWING), "visible": flags.contains(A.StateType.VISIBLE),
-                "enabled": flags.contains(A.StateType.ENABLED), "sensitive": False,
+                "enabled": flags.contains(A.StateType.ENABLED),
                 "caret": caret, "total_chars": count, "selection_count": selections,
-                "geometry": geometry, "node": node, "blocks": rich["blocks"] if rich else None}
+                "geometry": geometry, "node": node, "flatten": flatten, "blocks": rich["blocks"] if rich else None}
+
+    def caret_position(self, node, flatten):
+        """(caret, length, selections, rich layout or None) in the field's flattened coordinates."""
+        self.budget()
+        text = node.get_text_iface()
+        caret, count, selections = text.get_caret_offset(), text.get_character_count(), text.get_n_selections()
+        rich = self.rich_layout(node, count, caret) if flatten else None
+        if rich is not None:
+            caret, count, selections = rich["caret"], rich["total_chars"], selections + rich["selections"]
+        return caret, count, selections, rich
+
+    def position(self, metadata):
+        """`metadata` with the same field's caret, length and selections read again."""
+        caret, count, selections, rich = self.caret_position(metadata["node"], metadata["flatten"])
+        return {**metadata, "caret": caret, "total_chars": count, "selection_count": selections,
+                "blocks": rich["blocks"] if rich else None}
 
     def text(self, metadata, start, end):
         self.budget()
@@ -670,63 +702,101 @@ class Daemon:
         self.lock_fd = None
         self.failed = False
         self.preview = None
+        self.preview_unavailable = False
         self.observer.render = self.render_preview
         self.observer.hide = self.hide_preview
-        self.observer.authorize = self.arm_text_events
-        self.observer.disarm = self.disarm_text_events
-        self.text_bus = None
-        self.text_subscription = None
-        self.text_binding = None
+        self.observer.authorize = self.arm_field_events
+        self.observer.disarm = self.disarm_field_events
+        self.event_bus = None
+        self.producer = None
+        self.field_subscription = None
+        self.field_binding = None
 
-    def connect_text_bus(self):
+    def connect_event_bus(self):
         # Connection/authentication happens before serving requests; individual
         # field operations never perform an unbounded synchronous connection.
         from gi.repository import Gio
         session = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         address = session.call_sync("org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus", "GetAddress", None,
                                     self.GLib.VariantType.new("(s)"), Gio.DBusCallFlags.NONE, 50, None).unpack()[0]
-        self.text_bus = Gio.DBusConnection.new_for_address_sync(address, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
+        self.event_bus = Gio.DBusConnection.new_for_address_sync(address, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
 
-    def arm_text_events(self, binding):
+    def registry(self, method, signature, arguments, sync):
         from gi.repository import Gio
-        if self.text_binding == binding:
-            return
-        self.disarm_text_events()
-        if self.text_bus is None or self.text_bus.is_closed():
-            raise Denied("accessibility_unavailable")
-        # Register producer interest only after the exact target's caller grant.
-        # The separate connection's bus match is narrowed to this unique sender
-        # and object path, so unrelated fields' typed signal payloads never arrive.
-        self.text_bus.call_sync("org.a11y.atspi.Registry", "/org/a11y/atspi/registry", "org.a11y.atspi.Registry", "RegisterEvent",
-                                self.GLib.Variant("(sass)", ("object:text-changed", [], binding["bus"])), None,
-                                Gio.DBusCallFlags.NONE, 50, None)
-        self.text_binding = dict(binding)
-        self.text_subscription = self.text_bus.signal_subscribe(binding["bus"], "org.a11y.atspi.Event.Object", "TextChanged", binding["path"], None,
-                                                               Gio.DBusSignalFlags.NONE, self.text_event, None)
+        call = ("org.a11y.atspi.Registry", "/org/a11y/atspi/registry", "org.a11y.atspi.Registry", method,
+                self.GLib.Variant(signature, arguments), None, Gio.DBusCallFlags.NONE, 50, None)
+        if sync:
+            self.event_bus.call_sync(*call)
+        else:
+            # A reply is expected (and discarded) so the bus never rejects it.
+            self.event_bus.call(*call, lambda *_result: None, None)
 
-    def text_event(self, _connection, _sender, _path, _interface, _signal, _parameters, _data):
-        # Never unpack the event's text payload, including for the approved field.
+    def arm_field_events(self, binding):
+        """Receive the granted field's own events until the next invalidation."""
+        from gi.repository import Gio
+        if self.field_binding == binding:
+            return
+        self.disarm_field_events()
+        if self.event_bus is None or self.event_bus.is_closed():
+            raise Denied("accessibility_unavailable")
+        # Producer interest is first requested after a caller grant in this
+        # application and lasts while its window stays active. The match is
+        # narrowed to this unique sender and object path, so other fields'
+        # events, including their typed text, never arrive.
+        if self.producer != binding["bus"]:
+            self.withdraw_producer()
+            self.producer = binding["bus"]
+            for event in FIELD_EVENTS:
+                self.registry("RegisterEvent", "(sass)", (event, [], binding["bus"]), sync=True)
+        self.field_binding = dict(binding)
+        self.field_subscription = self.event_bus.signal_subscribe(
+            binding["bus"], "org.a11y.atspi.Event.Object", None, binding["path"], None,
+            Gio.DBusSignalFlags.NONE, self.field_event, None)
+
+    def field_event(self, _connection, _sender, _path, _interface, _signal, _parameters, _data):
+        # Any event on the field ends its epoch. The payload is never unpacked:
+        # a text change carries the typed text itself.
         self.observer.invalidate("field_changed")
 
-    def disarm_text_events(self):
-        if self.text_subscription is not None:
-            self.text_bus.signal_unsubscribe(self.text_subscription)
-            self.text_subscription = None
-        if self.text_binding is not None:
-            from gi.repository import Gio
-            self.text_bus.call("org.a11y.atspi.Registry", "/org/a11y/atspi/registry", "org.a11y.atspi.Registry", "DeregisterEvent",
-                               self.GLib.Variant("(ss)", ("object:text-changed", self.text_binding["bus"])), None,
-                               Gio.DBusCallFlags.NONE, 50, None, None, None)
-            self.text_binding = None
+    def disarm_field_events(self):
+        if self.field_subscription is not None:
+            self.event_bus.signal_unsubscribe(self.field_subscription)
+            self.field_subscription = None
+        self.field_binding = None
 
-    def render_preview(self, focus, text, ttl_ms):
-        try:
-            if self.preview is None:
+    def withdraw_producer(self):
+        if self.producer is not None:
+            for event in FIELD_EVENTS:
+                self.registry("DeregisterEvent", "(ss)", (event, self.producer), sync=False)
+            self.producer = None
+
+    def load_preview(self):
+        """The GTK preview, built at most once; None if it cannot be built here."""
+        if self.preview is None and not self.preview_unavailable:
+            try:
                 from preview import Preview
                 self.preview = Preview()
-            return self.preview.render(focus, text, ttl_ms)
+            except Exception:
+                self.preview_unavailable = True
+        return self.preview
+
+    def warm_preview(self):
+        """Build the preview and load its fonts before the first request needs them."""
+        preview = self.load_preview()
+        if preview is not None:
+            # Only an optimization: a broken preview reports itself on render.
+            with contextlib.suppress(Exception):
+                preview.warm()
+        return False
+
+    def render_preview(self, focus, text, ttl_ms):
+        preview = self.load_preview()
+        if preview is None:
+            return False
+        try:
+            return preview.render(focus, text, ttl_ms)
         except Exception:
-            self.hide_preview()
+            preview.hide()
             return False
 
     def hide_preview(self):
@@ -891,48 +961,19 @@ class Daemon:
             self.GLib.idle_add(self.process_next, fd, client)
         return False
 
-    def event(self, event, *_args):
-        tracked = self.observer.tracked
-        if tracked is None:
-            return
-        try:
-            local_disposal = (event.type == "object:state-changed:defunct" and event.detail1 == 1 and
-                              event.detail2 == 0 and event.sender is None)
-            if local_disposal:
-                # libatspi 2.60.6 emits sender-null defunct from local proxy
-                # disposal, including unrelated nodes visited by inspection.
-                # Dropping the focused cache for those events disposes that
-                # proxy too and invalidates every snapshot. Ignore only a
-                # positively identified different object; the tracked object,
-                # unknown identity and all remote events still fail closed.
-                bus, path = event.source.app.bus_name, event.source.path
-                if (isinstance(bus, str) and bus and isinstance(path, str) and path and
-                        (bus, path) != (tracked["bus"], tracked["path"])):
-                    return
-            source_pid = None if local_disposal else event.source.get_process_id()
-            focus_event = event.type.startswith("object:state-changed:focused")
-            if local_disposal or focus_event or source_pid == tracked["process_id"]:
-                # Invalidate before any later read; never retain event.any_data,
-                # which can contain text typed in another application.
-                self.backend.cached = None
-                self.observer.invalidate("focus_changed" if focus_event else "field_changed")
-        except Exception:
-            self.backend.cached = None
-            self.observer.invalidate("accessibility_unavailable")
+    def focus_event(self, _event, *_args):
+        # Focus moved somewhere: the tracked field may no longer have the keyboard.
+        if self.observer.tracked is not None:
+            self.observer.invalidate("focus_changed")
 
     def watch(self):
-        self.connect_text_bus()
-        self.listener = self.A.EventListener.new(self.event, None)
-        for event in ("object:state-changed:focused", "object:text-caret-moved",
-                      "object:text-selection-changed", "object:state-changed:editable", "object:state-changed:showing",
-                      "object:state-changed:defunct", "object:property-change:accessible-role", "object:children-changed", "window:deactivate", "window:move", "window:resize"):
-            self.listener.register(event)
-        signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
-        if not signature or "/" in signature:
-            raise RuntimeError("hyprland_session_required")
-        endpoint = Path(os.environ["XDG_RUNTIME_DIR"]) / "hypr" / signature / ".socket2.sock"
+        directory = hyprland_directory()
+        self.backend.hyprland = directory / ".socket.sock"
+        self.connect_event_bus()
+        self.listener = self.A.EventListener.new(self.focus_event, None)
+        self.listener.register("object:state-changed:focused")
         self.hypr = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.hypr.connect(str(endpoint))
+        self.hypr.connect(str(directory / ".socket2.sock"))
         self.hypr.setblocking(False)
         self.GLib.io_add_watch(self.hypr.fileno(), self.GLib.IO_IN | self.GLib.IO_HUP | self.GLib.IO_ERR, self.hypr_event)
 
@@ -952,9 +993,11 @@ class Daemon:
             while b"\n" in self.hypr_buffer:
                 line, self.hypr_buffer = self.hypr_buffer.split(b"\n", 1)
                 event = line.split(b">>", 1)[0]
-                if self.observer.tracked and event in (b"activewindowv2", b"focusedmon", b"workspacev2", b"movewindowv2", b"closewindow", b"monitoraddedv2", b"monitorremoved"):
-                    self.backend.cached = None
-                    self.observer.invalidate("window_changed")
+                if event in (b"activewindowv2", b"focusedmon", b"workspacev2", b"movewindowv2", b"closewindow",
+                             b"fullscreen", b"changefloatingmode", b"monitoraddedv2", b"monitorremoved"):
+                    if self.observer.tracked:
+                        self.observer.invalidate("window_changed")
+                    self.withdraw_producer()
         except OSError:
             self.observer.invalidate("desktop_unavailable")
             self.failed = True
@@ -967,13 +1010,16 @@ class Daemon:
         try:
             self.bind()
             self.watch()
+            self.GLib.idle_add(self.warm_preview)
             self.loop.run()
         finally:
             for fd in list(self.clients):
                 self.close_client(fd)
-            self.disarm_text_events()
-            if self.text_bus is not None:
-                self.text_bus.close_sync(None)
+            self.disarm_field_events()
+            if self.event_bus is not None and not self.event_bus.is_closed():
+                self.withdraw_producer()
+                self.event_bus.flush_sync(None)
+                self.event_bus.close_sync(None)
             if self.hypr:
                 self.hypr.close()
             if self.server:
@@ -988,13 +1034,29 @@ class Daemon:
                 os.close(self.lock_fd)
 
 
+def quiet_missing_cache(domain, level, message, _data=None):
+    # libatspi warns once per application without an AT-SPI cache object and
+    # then reads its nodes directly; any other warning is kept.
+    from gi.repository import GLib
+    if not message.startswith("AT-SPI: Error in GetItems"):
+        GLib.log_default_handler(domain, level, message, None)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", default=str(Path(os.environ.get("XDG_RUNTIME_DIR", "/nonexistent")) / "badi/accessibility.sock"))
     args = parser.parse_args()
+    # The preview draws one label: software rendering avoids loading GPU
+    # drivers, and the helper never takes text input through an input method.
+    os.environ.update(GSK_RENDERER="cairo", GDK_DISABLE="gl,vulkan", GTK_IM_MODULE="gtk-im-context-simple")
+    # PyGObject binds this name to the deprecated C alias of
+    # atspi_document_get_document_attribute_value; both send GetAttributeValue.
+    warnings.filterwarnings("ignore", message=r"Atspi\.Document\.get_document_attribute_value is deprecated",
+                            category=DeprecationWarning)
     import gi
     gi.require_version("Atspi", "2.0")
     from gi.repository import Atspi, GLib, GLibUnix
+    GLib.log_set_handler("dbind", GLib.LogLevelFlags.LEVEL_WARNING, quiet_missing_cache, None)
     Atspi.set_timeout(50, 50)
     Atspi.init()
     daemon = Daemon(args.socket, Atspi, GLib)

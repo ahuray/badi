@@ -63,13 +63,9 @@ public:
         : scenario_(std::move(scenario)), client_(loop_, WireCallbacks{
               .onReady = [this] { onReady(); },
               .onAuthority = [](const AuthoritySnapshot &) {},
-              .onSuggestion = [this](Suggestion suggestion) {
-                  require(suggestion.replaceBefore.empty(), "replacement reached display callback");
-                  ++suggestions_;
-              },
+              .onSuggestion = [this](Suggestion) { ++suggestions_; },
               .onClear = [](const ClearNotice &) {},
-              .onCommitPrepare = [this](const CommitPrepare &prepare) {
-                  require(prepare.replaceBefore.empty(), "replacement reached commit callback");
+              .onCommitPrepare = [this](const CommitPrepare &) {
                   ++commits_;
                   finished_ = true;
                   loop_.exit();

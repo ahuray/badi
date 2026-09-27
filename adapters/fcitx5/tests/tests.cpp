@@ -43,9 +43,7 @@ ContextUpdate explicitContext(SessionState &state, std::string before = "thank y
         .anchor = 9,
         .head = 9,
         .language = "en",
-        .sensitive = false,
         .multiline = true,
-        .composing = false,
     });
     check(update.has_value(), "explicit context should be accepted");
     return *update;
@@ -66,11 +64,11 @@ void stateTransitionsAndIdentity() {
           supportedWritingLanguage("fa"), "tested writing language tags must reach manual invocation");
     check(!supportedWritingLanguage("end") && !supportedWritingLanguage("fr") &&
           !supportedWritingLanguage("de_"), "unknown language tags must not be treated as supported");
-    check(supportedAppId("omawrite"), "Omawrite must be supported");
-    check(supportedAppId("com.github.xournalpp.xournalpp"),
+    check(validLinuxAppId("omawrite"), "Omawrite must be supported");
+    check(validLinuxAppId("com.github.xournalpp.xournalpp"),
           "canonical Xournal++ id must be supported");
-    check(supportedAppId("org.gnome.texteditor"), "native identity must not require a compiled allowlist");
-    check(!supportedAppId("A window title"), "native identity must be canonical");
+    check(validLinuxAppId("org.gnome.texteditor"), "native identity must not require a compiled allowlist");
+    check(!validLinuxAppId("A window title"), "native identity must be canonical");
 
     auto state = focusedState();
     check(state.focused() && state.coordinates().focusEpoch == 1 &&
@@ -309,25 +307,32 @@ void sensitiveCompositionAndSelectionAreZeroContext() {
         check(!allowsNativeContext(capabilities),
               "sensitive and special-purpose capabilities must fail closed");
     }
-    check(!captureContextWindow(std::string_view("\xff", 1), 999, 999, true,
-                                false, false, "en"),
-          "sensitive path must reject before inspecting bytes");
-    check(!captureContextWindow("secret", 6, 6, false, false, true, "en"),
-          "composing path must serialize nothing");
-    check(!captureContextWindow("selected", 8, 0, false, false, false, "en"),
+    check(!captureContextWindow("selected", 8, 0, false, "en"),
           "noncollapsed selection must serialize nothing");
     check(!captureContextWindow(std::string(kMaxContextSourceBytes + 1, 'x'), 0,
-                                0, false, false, false, "en"),
+                                0, false, "en"),
           "oversized toolkit context must fail before proportional allocation");
+    check(!captureContextWindow("thank you", 10, 10, false, "en"),
+          "a caret beyond the text serializes nothing");
+    check(!captureContextWindow(std::string("thank you") + std::string(200, 'x') + "\xff", 9, 9, false, "en"),
+          "invalid UTF-8 anywhere in the toolkit text, even outside the window, serializes nothing");
+}
 
-    auto state = focusedState();
-    auto sensitive = ContextWindow{};
-    sensitive.before = "secret";
-    sensitive.language = "en";
-    sensitive.sensitive = true;
-    check(!state.updateContext(std::move(sensitive)),
-          "constructed sensitive context must fail closed");
-    check(!state.lastContext(), "sensitive context must not be retained");
+void contextWindowIsBoundedInScalarValues() {
+    std::string text;
+    for (int index = 0; index < 600; ++index) text += "\u0622";
+    for (int index = 0; index < 200; ++index) text += "\U0001F98A";
+    const auto context = captureContextWindow(text, 600, 600, true, "fa");
+    check(context && context->before.size() == 512 * 2 && context->after.size() == 128 * 4 &&
+              context->before.substr(0, 2) == "\u0622" && context->after.substr(0, 4) == "\U0001F98A" &&
+              context->head == 600 && context->anchor == 600,
+          "the window holds 512 scalar values before and 128 after the caret");
+    const auto start = captureContextWindow("thank you", 0, 0, false, "en");
+    check(start && start->before.empty() && start->after == "thank you", "a caret at the start has no prefix");
+    const auto end = captureContextWindow("thank you", 9, 9, false, "en");
+    check(end && end->before == "thank you" && end->after.empty(), "a caret at the end has no suffix");
+    const auto window = scalarWindow("abcdef", 3, 2, 2);
+    check(window && window->before == "bc" && window->after == "de", "scalarWindow clamps both sides");
 }
 
 void transportReconnectKeepsFcitxTextButNoBrokerGrant() {
@@ -335,7 +340,7 @@ void transportReconnectKeepsFcitxTextButNoBrokerGrant() {
     // carries every broker-bound revision, candidate and commit grant.
     const auto capture = [](const SurroundingFreshness &freshness) {
         return freshness.fresh()
-                   ? captureContextWindow("thank you", 9, 9, false, true, false, "en")
+                   ? captureContextWindow("thank you", 9, 9, true, "en")
                    : std::nullopt;
     };
     AuthorityContinuity authority;
@@ -435,10 +440,10 @@ void contextWireIsExplicitManualV2() {
     invalidLanguage.context.language = "";
     check(!serializeContextEnvelope(invalidLanguage, 42),
           "missing language must fail before serialization");
-    auto sensitive = update;
-    sensitive.context.sensitive = true;
-    check(!serializeContextEnvelope(sensitive, 42),
-          "sensitive context must not serialize");
+    auto selected = update;
+    selected.context.anchor = 0;
+    check(!serializeContextEnvelope(selected, 42),
+          "a noncollapsed selection must not serialize");
 }
 
 void sessionWireSeparatesPolicyFromExplicitRequest() {
@@ -619,7 +624,7 @@ void nativePolicyMustBeCoherent() {
     check(strictPolicyStatus(denied.dump()), "a coherent denial is a valid response");
 }
 
-void observedFieldsRejectReplacementAuthority() {
+void observedFieldsAreAppendOnly() {
     auto state = focusedState();
     auto context = explicitContext(state, "check adress ").context;
     context.anchor = context.head = context.before.size();
@@ -635,41 +640,16 @@ void observedFieldsRejectReplacementAuthority() {
     auto unknown = *update;
     unknown.context.identityKnown = false;
     check(!serializeContextEnvelope(unknown, 0), "unknown-widget automatic context must not serialize");
-    auto suggestion = suggestionFor(*update);
-    suggestion.text = "address ";
-    suggestion.replaceBefore = "adress ";
-    check(!state.showSuggestion(suggestion, 0), "even exact observed spelling replacements must be rejected");
-    check(!state.suggestionVisible() && !state.requestAcceptance(1, kOwnedPanel),
-          "a rejected replacement cannot create acceptance authority");
-    auto noSpaceContext = context;
-    noSpaceContext.before = "check adress";
-    noSpaceContext.anchor = noSpaceContext.head = noSpaceContext.before.size();
-    const auto noSpaceUpdate = state.updateContext(noSpaceContext);
-    check(noSpaceUpdate.has_value(), "a no-space observed context remains eligible");
-    suggestion.coordinates = noSpaceUpdate->coordinates;
-    suggestion.text = "address";
-    suggestion.replaceBefore = "adress";
-    check(!state.showSuggestion(suggestion, 0), "append-shaped replacement text must still be rejected");
-
-    const auto append = suggestionFor(*noSpaceUpdate);
+    const auto append = suggestionFor(*update);
     check(state.showSuggestion(append, 0), "ordinary observed append suggestions remain eligible");
     const auto accept = state.requestAcceptance(1, kOwnedPanel);
-    check(accept && accept->replaceBefore.empty(), "native acceptance never authorizes a removed suffix");
-    CommitPrepare prepare{accept->coordinates, accept->controlId, accept->suggestionId, accept->expectedText, "all", "adress"};
-    check(!state.authorizeCommit(prepare, 2, kOwnedPanel), "injected deletion cannot upgrade an append acceptance");
-    prepare.replaceBefore.clear();
-    check(!state.authorizeCommit(prepare, 3, kOwnedPanel), "rejected replacement retires acceptance against replay");
-    check(state.showSuggestion(append, 4), "fresh append can recover after rejection");
-    const auto fresh = state.requestAcceptance(5, kOwnedPanel);
-    check(fresh.has_value(), "fresh append acceptance remains available");
-    prepare = {fresh->coordinates, fresh->controlId, fresh->suggestionId, fresh->expectedText, "all"};
-    const auto dispatch = state.authorizeCommit(prepare, 6, kOwnedPanel);
-    check(dispatch && dispatch->text == append.text && dispatch->replaceBefore.empty(), "native dispatch remains append only");
-    check(!state.authorizeCommit(prepare, 7, kOwnedPanel), "append grants remain one shot");
-    auto manual = focusedState();
-    auto manualUpdate = explicitContext(manual, "check adress ");
-    suggestion.coordinates = manualUpdate.coordinates;
-    check(!manual.showSuggestion(suggestion, 0), "unknown native widgets cannot replace text");
+    check(accept.has_value(), "observed append acceptance");
+    CommitPrepare prepare{accept->coordinates, accept->controlId, accept->suggestionId, "address", "all"};
+    check(!state.authorizeCommit(prepare, 2, kOwnedPanel), "a different text cannot use an append acceptance");
+    prepare.text = accept->expectedText;
+    const auto dispatch = state.authorizeCommit(prepare, 3, kOwnedPanel);
+    check(dispatch && dispatch->text == append.text, "native dispatch is the accepted append");
+    check(!state.authorizeCommit(prepare, 4, kOwnedPanel), "append grants remain one shot");
 }
 
 constexpr std::array kImeParityBrowsers{"chromium", "chromium-browser", "chrome", "google-chrome",
@@ -790,7 +770,7 @@ void canonicalAppIdsFoldAsciiCase() {
     }
     for (const auto program : {"Telegram", "Org.Gnome.TextEditor", "Code", "Brave-Origin", "FIREFOX"}) {
         const auto canonical = canonicalAppId(program);
-        check(canonical && validLinuxAppId(*canonical) && supportedAppId(*canonical),
+        check(canonical && validLinuxAppId(*canonical),
               "every folded identity satisfies the broker's lowercase validator");
     }
     check(classifyNativeApp(*canonicalAppId("Code")) == NativeAppClass::ImeParityDesktop &&
@@ -849,25 +829,20 @@ void imeParityRequiresObservedAppendOnlyField() {
         const auto update = state.updateContext(automatic);
         check(update.has_value(), "automatic observed context is accepted");
 
-        auto replacement = suggestionFor(*update);
-        replacement.text = " for your time";
-        replacement.replaceBefore = "you";
-        check(!state.showSuggestion(replacement, 0) && !state.suggestionVisible(),
-              "IME-parity fields refuse replacement suggestions");
         const auto append = suggestionFor(*update);
         check(state.showSuggestion(append, 0), "append suggestions display on the observed field");
         const auto accept = state.requestAcceptance(1, kOwnedPanel);
-        check(accept && accept->replaceBefore.empty(), "IME-parity acceptance is append-only");
+        check(accept.has_value(), "IME-parity acceptance");
         CommitPrepare prepare{accept->coordinates, accept->controlId, accept->suggestionId,
-                              accept->expectedText, "all", "you"};
+                              accept->expectedText, "some"};
         check(!state.authorizeCommit(prepare, 2, kOwnedPanel),
-              "an injected deletion cannot upgrade an IME-parity append");
-        check(state.showSuggestion(append, 3), "a fresh append recovers after the refused replacement");
+              "only an acceptance of the whole append can dispatch");
+        check(state.showSuggestion(append, 3), "a fresh append recovers after the refused dispatch");
         const auto fresh = state.requestAcceptance(4, kOwnedPanel);
         check(fresh.has_value(), "fresh append acceptance");
         prepare = {fresh->coordinates, fresh->controlId, fresh->suggestionId, fresh->expectedText, "all"};
         const auto dispatch = state.authorizeCommit(prepare, 5, kOwnedPanel);
-        check(dispatch && dispatch->text == append.text && dispatch->replaceBefore.empty() &&
+        check(dispatch && dispatch->text == append.text &&
                   !state.authorizeCommit(prepare, 5, kOwnedPanel),
               "an IME-parity append dispatches exactly once");
 
@@ -943,10 +918,10 @@ void unobservedParityAndUnavailableAppsCannotEdit() {
 }
 
 void observedParagraphEndIsEndOfField() {
-    // Chromium 152 sent after == "\n\n" for the caret at the end of a <p>
-    // (WAYLAND_DEBUG, 2026-09-27); Codex's ProseMirror composer is such a <p>.
+    // Chromium sends after == "\n\n" for the caret at the end of a <p>;
+    // Codex's ProseMirror composer is such a <p>.
     const auto capture = [](std::string_view text, std::size_t caret) {
-        auto context = captureContextWindow(text, caret, caret, false, true, false, "en");
+        auto context = captureContextWindow(text, caret, caret, true, "en");
         check(context.has_value(), "the composer text is captured");
         context->identityKnown = true;
         context->explicitRequest = false;
@@ -973,7 +948,7 @@ void observedParagraphEndIsEndOfField() {
         check(other == copy && !other.paragraphEndAfter && !tabEligibleContext(other),
               "every other after-caret text stays mid-text and fails closed");
     }
-    check(!captureContextWindow("thank you\r\n\r\n", 9, 9, false, true, false, "en"),
+    check(!captureContextWindow("thank you\r\n\r\n", 9, 9, true, "en"),
           "a carriage return is never context, so it cannot become end of field");
 
     SessionState state;
@@ -997,7 +972,7 @@ void observedParagraphEndIsEndOfField() {
     const CommitPrepare prepare{accept->coordinates, accept->controlId, accept->suggestionId,
                                 accept->expectedText, "all"};
     const auto dispatch = state.authorizeCommit(prepare, 2, kOwnedPanel);
-    check(dispatch && dispatch->replaceBefore.empty(), "acceptance stays one append at the caret");
+    check(dispatch && dispatch->text == suggestionFor(*update).text, "acceptance stays one append at the caret");
 
     auto unobserved = normalized;
     unobserved.identityKnown = false;
@@ -1022,7 +997,7 @@ int main(int argc, char **argv) {
         {"IME parity requires an observed append-only field", imeParityRequiresObservedAppendOnlyField},
         {"unobserved IME parity and unavailable apps", unobservedParityAndUnavailableAppsCannotEdit},
         {"observed paragraph end is end of field", observedParagraphEndIsEndOfField},
-        {"observed fields reject replacement authority", observedFieldsRejectReplacementAuthority},
+        {"observed fields are append-only", observedFieldsAreAppendOnly},
         {"state transitions and identity", stateTransitionsAndIdentity},
         {"native app policy coherence", nativePolicyMustBeCoherent},
         {"unchanged toolkit republish",
@@ -1035,6 +1010,7 @@ int main(int argc, char **argv) {
         {"optional suggestion clear field",
          suggestionClearMatchesOptionalWireField},
         {"sensitive zero context", sensitiveCompositionAndSelectionAreZeroContext},
+        {"context window scalar bounds", contextWindowIsBoundedInScalarValues},
         {"transport reconnect keeps Fcitx text but no broker grant",
          transportReconnectKeepsFcitxTextButNoBrokerGrant},
         {"explicit manual context wire", contextWireIsExplicitManualV2},

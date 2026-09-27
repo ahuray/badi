@@ -17,9 +17,16 @@ constexpr std::size_t kMaxContextSourceBytes = 65'536;
 
 std::optional<std::vector<std::uint32_t>> decodeUtf8(std::string_view value);
 std::optional<std::string> sanitizeSuggestion(std::string_view value);
-std::optional<std::string> scalarSlice(std::string_view value,
-                                       std::size_t first,
-                                       std::size_t count);
+
+struct ScalarWindow {
+    std::string_view before;
+    std::string_view after;
+};
+// Up to `beforeCount` Unicode scalar values before scalar offset `caret` and up
+// to `afterCount` after it, decoding `value` once. Nullopt when any of `value`
+// is invalid UTF-8 or the caret lies beyond its end.
+std::optional<ScalarWindow> scalarWindow(std::string_view value, std::size_t caret,
+                                         std::size_t beforeCount, std::size_t afterCount);
 bool validLinuxAppId(std::string_view value);
 // Folds an ASCII app identifier (^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)*$,
 // at most 128 bytes) to the lowercase form validLinuxAppId accepts.

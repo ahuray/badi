@@ -15,10 +15,6 @@ constexpr std::uint64_t kMaxSafeCounter = (std::uint64_t{1} << 53U) - 1U;
 // Chromium's text-input serialization of a <p> block end (see state.h).
 constexpr std::string_view kParagraphEnd = "\n\n";
 
-bool sameAddress(const Coordinates &left, const Coordinates &right) {
-    return left == right;
-}
-
 std::uint64_t mix(std::string_view value, std::uint64_t seed) {
     auto hash = seed;
     for (const auto byte : value) {
@@ -100,18 +96,13 @@ bool allowsNativeContext(::fcitx::CapabilityFlags capabilities) {
                         });
 }
 
-bool supportedAppId(std::string_view appId) {
-    return validLinuxAppId(appId);
-}
-
 NativeAppClass classifyNativeApp(std::string_view appId) {
     // Browser/Electron commitString behaves like a typed keystroke: page script
     // can retarget it during beforeinput and undo may coalesce it with typing.
     // These apps therefore accept only through an observed field, append-only.
-    // Zen (Gecko) is the one Gecko identity with a verified observer rule and
-    // input-method path: its wayland_v2 program() is exactly "zen" (live,
-    // 2026-09-26). Its urlbar shares that input context without a Url purpose,
-    // so the observer, not allowsNativeContext(), keeps browser UI out.
+    // Zen is the one Gecko identity with an observer rule; its urlbar shares
+    // the page's input context without a Url purpose, so the observer, not
+    // allowsNativeContext(), keeps browser UI out.
     constexpr std::array<std::string_view, 8> browsers{
         "chromium", "chromium-browser", "chrome", "google-chrome", "brave",
         "brave-origin", "brave-browser", "zen"};
@@ -197,38 +188,21 @@ bool supportedWritingLanguage(std::string_view language) {
 std::optional<ContextWindow> captureContextWindow(std::string_view text,
                                                   std::size_t cursor,
                                                   std::size_t anchor,
-                                                  bool sensitive,
                                                   bool multiline,
-                                                  bool composing,
                                                   std::string language) {
     // Do not inspect or copy text that policy cannot serialize.
-    if (sensitive || composing || cursor != anchor ||
-        text.size() > kMaxContextSourceBytes ||
-        !validLanguageTag(language)) {
+    if (cursor != anchor || text.size() > kMaxContextSourceBytes || !validLanguageTag(language)) {
         return std::nullopt;
     }
-    const auto scalars = decodeUtf8(text);
-    if (!scalars || cursor > scalars->size() || anchor > scalars->size()) {
-        return std::nullopt;
-    }
+    const auto window = scalarWindow(text, cursor, kMaxBeforeScalars, kMaxAfterScalars);
+    if (!window || !validContextText(window->before) || !validContextText(window->after)) return std::nullopt;
     ContextWindow result;
-    result.language = std::move(language);
-    result.multiline = multiline;
-
-    const auto selectionStart = std::min(cursor, anchor);
-    const auto selectionEnd = std::max(cursor, anchor);
-    const auto beforeStart = selectionStart > kMaxBeforeScalars
-                                 ? selectionStart - kMaxBeforeScalars
-                                 : 0;
-    const auto afterCount = std::min(kMaxAfterScalars,
-                                     scalars->size() - selectionEnd);
-    auto before = scalarSlice(text, beforeStart, selectionStart - beforeStart);
-    auto after = scalarSlice(text, selectionEnd, afterCount);
-    if (!before || !after || !validContextText(*before) || !validContextText(*after)) return std::nullopt;
-    result.before = std::move(*before);
-    result.after = std::move(*after);
+    result.before = std::string(window->before);
+    result.after = std::string(window->after);
     result.anchor = anchor;
     result.head = cursor;
+    result.language = std::move(language);
+    result.multiline = multiline;
     return result;
 }
 
@@ -245,8 +219,7 @@ std::string observedAfter(const ContextWindow &context) {
 bool SessionState::focusIn(std::string sessionId, std::string targetId,
                            std::string appId, std::string fingerprintSalt,
                            NativeEditTarget target, NativeEditPath path) {
-    if (!validOpaqueId(targetId) || !validLinuxAppId(appId) ||
-        !supportedAppId(appId) || !validSessionId(sessionId) ||
+    if (!validOpaqueId(targetId) || !validLinuxAppId(appId) || !validSessionId(sessionId) ||
         fingerprintSalt.size() < 16 || !validOpaqueId(fingerprintSalt)) {
         focusOut();
         return false;
@@ -262,7 +235,6 @@ bool SessionState::focusIn(std::string sessionId, std::string targetId,
     coordinates_.revision = 0;
     coordinates_.fingerprint.clear();
     focused_ = true;
-    sensitive_ = false;
     lastContext_.reset();
     clearSuggestion();
     return true;
@@ -270,7 +242,6 @@ bool SessionState::focusIn(std::string sessionId, std::string targetId,
 
 void SessionState::focusOut() {
     focused_ = false;
-    sensitive_ = false;
     lastContext_.reset();
     clearSuggestion();
     coordinates_ = {};
@@ -310,7 +281,7 @@ SessionState::updateContext(ContextWindow context) {
     if ((imeParityApp(appId_) && !context.identityKnown) ||
         (context.paragraphEndAfter && (!imeParityApp(appId_) || !context.identityKnown ||
                                     editPath_ != NativeEditPath::Observed || !context.after.empty())) ||
-        context.sensitive || context.composing || context.anchor != context.head ||
+        context.anchor != context.head ||
         !validLanguageTag(context.language) || !validContextText(context.before) || !validContextText(context.after)) {
         invalidateContext();
         return std::nullopt;
@@ -319,7 +290,6 @@ SessionState::updateContext(ContextWindow context) {
                                 ? 1
                                 : coordinates_.revision + 1;
     coordinates_.fingerprint = nextFingerprint(context);
-    sensitive_ = context.sensitive;
     clearSuggestion();
     ContextUpdate update{
         .coordinates = coordinates_,
@@ -332,18 +302,16 @@ SessionState::updateContext(ContextWindow context) {
 }
 
 bool SessionState::showSuggestion(Suggestion suggestion, std::uint64_t nowMs) {
-    // Generic Fcitx deletion and insertion cannot form one exact-field edit:
-    // an application input handler can change focus between those operations.
-    if (!editingAvailable() || !suggestion.replaceBefore.empty()) {
+    if (!editingAvailable()) {
         clearSuggestion();
         return false;
     }
     const auto clean = sanitizeSuggestion(suggestion.text);
-    if (!focused_ || sensitive_ || !clean || suggestion.expiresAtMs <= nowMs ||
+    if (!focused_ || !clean || suggestion.expiresAtMs <= nowMs ||
         suggestion.expiresAtMs > kMaxSafeCounter ||
         !validOpaqueId(suggestion.requestId) ||
         !validOpaqueId(suggestion.suggestionId) ||
-        !sameAddress(suggestion.coordinates, coordinates_)) {
+        suggestion.coordinates != coordinates_) {
         return false;
     }
     suggestion.text = *clean;
@@ -359,9 +327,9 @@ SessionState::requestAcceptance(std::uint64_t nowMs,
         clearSuggestion();
         return std::nullopt;
     }
-    if (!focused_ || sensitive_ || hasForeignImeUi(panel) ||
+    if (!focused_ || hasForeignImeUi(panel) ||
         pendingAcceptance_ || !visible_ || visible_->expiresAtMs <= nowMs ||
-        !sameAddress(visible_->coordinates, coordinates_)) {
+        visible_->coordinates != coordinates_) {
         if (visible_ && visible_->expiresAtMs <= nowMs) clearSuggestion();
         return std::nullopt;
     }
@@ -372,7 +340,6 @@ SessionState::requestAcceptance(std::uint64_t nowMs,
                      std::to_string(visible_->coordinates.revision),
         .suggestionId = visible_->suggestionId,
         .expectedText = visible_->text,
-        .replaceBefore = visible_->replaceBefore,
     };
     pendingAcceptance_ = request;
     return request;
@@ -385,9 +352,9 @@ SessionState::requestDismissal(std::uint64_t nowMs,
         clearSuggestion();
         return std::nullopt;
     }
-    if (!focused_ || sensitive_ || hasForeignImeUi(panel) || !visible_ ||
+    if (!focused_ || hasForeignImeUi(panel) || !visible_ ||
         visible_->expiresAtMs <= nowMs ||
-        !sameAddress(visible_->coordinates, coordinates_)) {
+        visible_->coordinates != coordinates_) {
         if (visible_ && visible_->expiresAtMs <= nowMs) clearSuggestion();
         return std::nullopt;
     }
@@ -406,18 +373,17 @@ std::optional<CommitDispatch>
 SessionState::authorizeCommit(const CommitPrepare &prepare,
                               std::uint64_t nowMs,
                               const PanelObservation &panel) {
-    if (!editingAvailable() || !prepare.replaceBefore.empty() || !hasOwnedCandidate(panel)) {
+    if (!editingAvailable() || !hasOwnedCandidate(panel)) {
         clearSuggestion();
         return std::nullopt;
     }
     if (!focused_ || !visible_ || !pendingAcceptance_ ||
         visible_->expiresAtMs <= nowMs ||
-        !sameAddress(prepare.coordinates, coordinates_) ||
-        !sameAddress(prepare.coordinates, pendingAcceptance_->coordinates) ||
+        prepare.coordinates != coordinates_ ||
+        prepare.coordinates != pendingAcceptance_->coordinates ||
         prepare.controlId != pendingAcceptance_->controlId ||
         prepare.suggestionId != pendingAcceptance_->suggestionId ||
         prepare.text != pendingAcceptance_->expectedText ||
-        prepare.replaceBefore != pendingAcceptance_->replaceBefore ||
         prepare.acceptance != "all") {
         return std::nullopt;
     }
@@ -426,7 +392,6 @@ SessionState::authorizeCommit(const CommitPrepare &prepare,
         .controlId = prepare.controlId,
         .suggestionId = prepare.suggestionId,
         .text = prepare.text,
-        .replaceBefore = prepare.replaceBefore,
     };
     clearSuggestion();
     return dispatch;
@@ -435,7 +400,7 @@ SessionState::authorizeCommit(const CommitPrepare &prepare,
 bool SessionState::clearSuggestionIf(
     const Coordinates &coordinates,
     const std::optional<std::string> &suggestionId) {
-    if (!visible_ || !sameAddress(coordinates, visible_->coordinates) ||
+    if (!visible_ || coordinates != visible_->coordinates ||
         (suggestionId && *suggestionId != visible_->suggestionId)) {
         return false;
     }

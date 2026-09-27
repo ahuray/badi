@@ -152,6 +152,12 @@ class PreviewGeometryTests(unittest.TestCase):
             self.assertNotIn(("visible", True), calls)
             self.assertFalse(any(call[0] == "timer" for call in calls))
 
+    def test_warming_lays_out_text_without_showing_it(self):
+        preview, calls, _monitor = self.render_fixture()
+        preview.warm()
+        self.assertEqual(calls, [("text", "Badi"), ("text", "")])
+        self.assertIsNone(preview.timer)
+
     def test_hide_and_expiry_remove_text_and_old_timer_authority(self):
         preview = object.__new__(Preview)
         preview.GLib = SimpleNamespace(source_remove=Mock())

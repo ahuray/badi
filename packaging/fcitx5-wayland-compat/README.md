@@ -136,13 +136,20 @@ the build, and the exact candidate hash. It refuses loader overrides, a separate
 user `libwayland.so` override, an unrecognized/missing receipt, or another active
 compositor/display. The selected Hyprland instance, Wayland socket, exact version,
 commit and clean-build status must match the inspected cell. Build-time runtime
-files must remain unchanged through receipt creation.
+files must remain unchanged through receipt creation. The local checks run
+first; a mismatch there never waits for the compositor. At login the service
+can start before Hyprland answers IPC, so a failed or unreadable `hyprctl`
+reply, or an instance not yet listed, is retried with backoff from 50 ms up to
+0.5 s for at most four seconds. A definite mismatch is not retried.
 
 An upgrade or mismatch executes `/usr/bin/fcitx5` with the original arguments,
-environment and addon paths. Only a previously inherited exact compatibility
-directory is removed. Thus it falls back to the normal frontend instead of
-leaving Wayland input unavailable. Other user addon paths remain intact. This
-does not sandbox unrelated addons or change how Fcitx loads the user's own addons.
+environment and addon paths, after logging a content-free reason to the service
+journal, for example `Badi Fcitx compatibility override inactive (Hyprland
+instance not listed); launching the system frontend.` Only a previously
+inherited exact compatibility directory is removed. Thus it falls back to the
+normal frontend instead of leaving Wayland input unavailable. Other user addon
+paths remain intact. This does not sandbox unrelated addons or change how Fcitx
+loads the user's own addons.
 
 ## Installation
 

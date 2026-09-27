@@ -84,6 +84,25 @@ std::string canonicalProgram(const ::fcitx::InputContext &inputContext) {
 }
 
 constexpr auto kObserverUnavailableNotice = "Badi cannot see this text field — check badi doctor";
+// Automatic inspection waits for typing to pause.
+constexpr std::uint64_t kObserveDelayUs = 120'000;
+// Invalidations without Fcitx input back off, then wait for input.
+constexpr unsigned int kMaxIdleReinspections = 3;
+
+const ::fcitx::Key &invokeChord() {
+    static const ::fcitx::Key key("Control+Shift+space");
+    return key;
+}
+
+const ::fcitx::Key &acceptChord() {
+    static const ::fcitx::Key key("Control+Shift+Y");
+    return key;
+}
+
+std::size_t surroundingDigest(const ::fcitx::SurroundingText &surrounding) {
+    return std::hash<std::string_view>{}(surrounding.text()) ^
+           (static_cast<std::size_t>(surrounding.cursor()) * 0x9e3779b97f4a7c15ULL) ^ surrounding.anchor();
+}
 
 bool matchesObservedFocus(const nlohmann::json &captured,
                           const nlohmann::json &observed,
@@ -222,6 +241,16 @@ private:
         std::optional<std::string> pendingSuggestion;
         unsigned int observeRetries = 0;
         std::optional<ContextWindow> dismissedContext;
+        // Fcitx input (keys and surrounding-text changes) since the last inspection.
+        std::uint64_t inputSerial = 0;
+        std::uint64_t inspectedSerial = 0;
+        std::size_t surroundingDigest = 0;
+        unsigned int idleInvalidations = 0;
+
+        void noteInput() {
+            ++inputSerial;
+            idleInvalidations = 0;
+        }
     };
 
     static WireCallbacks callbacksFor(BadiAddon *addon) {
@@ -265,6 +294,7 @@ private:
 
     void focusIn(::fcitx::InputContext &inputContext) {
         const auto appId = canonicalProgram(inputContext);
+        debug_.refresh();
         debug_.record("focus", appId, appId.empty() ? "unidentified_app" :
             !nativeObservationAvailable(appId) ? "editor_transaction_unavailable" :
             imeParityApp(appId) ? "awaiting_observed_field" : "checking_app_policy");
@@ -286,6 +316,7 @@ private:
         binding.observationExplicit = false;
         binding.waitingForForeignUi = false;
         binding.dismissedContext.reset();
+        binding.noteInput();
         if (binding.observeTimer) binding.observeTimer->setEnabled(false);
         binding.surroundingFreshness.focusIn();
         if (!binding.state.focusIn(*sessionId, contextId, appId, *salt)) {
@@ -347,6 +378,11 @@ private:
         auto *binding = bindingFor(inputContext);
         if (binding == nullptr) return;
         binding->surroundingFreshness.surroundingTextUpdated();
+        const auto digest = surroundingDigest(inputContext.surroundingText());
+        if (digest != binding->surroundingDigest) {
+            binding->surroundingDigest = digest;
+            binding->noteInput();
+        }
         // Unavailable apps never hold editing context. Toolkit publication must
         // not erase their explicit, timed unavailable notice. Classify the app
         // itself: observed targets of other classes still require invalidation
@@ -385,11 +421,19 @@ private:
         };
     }
 
+    // One observer preview exists. It may be on screen from its request until
+    // a hide is sent or the observer reports that it did not render.
+    void hidePreview() {
+        if (!previewMayBeVisible_) return;
+        previewMayBeVisible_ = false;
+        accessibility_->hide();
+    }
+
     void clearOwnedPanel(Binding &binding) {
         binding.pendingSuggestion.reset();
         if (binding.overlayOwned) {
             binding.overlayOwned = false;
-            accessibility_->hide();
+            hidePreview();
         }
         if (binding.expiryTimer) binding.expiryTimer->setEnabled(false);
         if (binding.inputContext != nullptr) {
@@ -447,6 +491,7 @@ private:
 
     void observerInvalidated(const nlohmann::json &event) {
         const auto app = event.value("app_id", nlohmann::json());
+        const bool fieldChanged = event.value("reason", nlohmann::json()) == "field_changed";
         for (auto &[_, binding] : bindings_) {
             if (!binding.state.focused() || (app.is_string() && app != "" && app != binding.state.appId())) continue;
             debug_.record("observer", binding.state.appId(), "observer_invalidated");
@@ -459,6 +504,16 @@ private:
                 binding.state.retireObservation();
                 binding.observedFocus = nullptr;
                 clearOwnedPanel(binding);
+            }
+            // Without Fcitx input since the last inspection, a changed field
+            // waits for input and other invalidations back off, so a busy page
+            // cannot drive an inspection loop. The next input inspects again.
+            if (binding.inputSerial == binding.inspectedSerial) {
+                if (fieldChanged || binding.idleInvalidations == kMaxIdleReinspections) {
+                    debug_.record("observer", binding.state.appId(), "observer_awaiting_input");
+                    continue;
+                }
+                ++binding.idleInvalidations;
             }
             observeLater(binding);
         }
@@ -477,7 +532,7 @@ private:
                 if (found != bindings_.end() && found->second.inputContext->hasFocus()) inspectField(found->second);
                 return true;
             });
-        binding.observeTimer->setNextInterval(explicitRequest && !retry ? 1 : 120'000);
+        binding.observeTimer->setNextInterval(explicitRequest && !retry ? 1 : kObserveDelayUs << binding.idleInvalidations);
         binding.observeTimer->setOneShot();
     }
 
@@ -500,6 +555,7 @@ private:
             return;
         }
         binding.waitingForForeignUi = false;
+        binding.inspectedSerial = binding.inputSerial;
         const auto session = binding.state.coordinates().sessionId;
         const auto generation = binding.observationGeneration;
         const bool sent = accessibility_->request(nlohmann::json{{"op", "inspect"}, {"app_id", binding.state.appId()}},
@@ -659,7 +715,7 @@ private:
         if (binding.observeTimer) binding.observeTimer->setEnabled(false);
         binding.state.invalidateContext();
         clearOwnedPanel(binding);
-        accessibility_->hide();
+        hidePreview();
     }
 
     void preKeyEvent(::fcitx::KeyEvent &event) {
@@ -671,6 +727,7 @@ private:
         debug_.record(tab ? "tab" : "input", app, app.empty() ? "unidentified_app" : "input_received");
         auto *binding = bindingFor(*event.inputContext());
         if (binding == nullptr || !binding->state.focused()) return;
+        if (!event.key().isModifier()) binding->noteInput();
         if (!binding->state.editingAvailable()) {
             // Preserve original Tab/navigation. Only the explicit invocation
             // chord may display a notice or request an observed field below.
@@ -725,9 +782,7 @@ private:
                                        panel.candidatesOwnedByBadi;
         if (decideLocalAction(false, false, escapeKey, hasOwnedCandidate,
                               panel) != LocalAction::Dismiss) {
-            if (!key.isModifier() &&
-                !key.check(::fcitx::Key("Control+Shift+space")) &&
-                !key.check(::fcitx::Key("Control+Shift+Y"))) {
+            if (!key.isModifier() && !key.check(invokeChord()) && !key.check(acceptChord())) {
                 if (escapeKey && binding->state.lastContext())
                     binding->dismissedContext = binding->state.lastContext()->context;
                 cancelForInput(*binding);
@@ -752,16 +807,16 @@ private:
         if (binding == nullptr || !binding->state.focused()) return;
         const auto panel = observePanel(*binding);
         const auto key = event.key().normalize();
-        const bool invokeChord = key.check(::fcitx::Key("Control+Shift+space"));
-        const bool acceptChord = key.check(::fcitx::Key("Control+Shift+Y"));
+        const bool invokeKey = key.check(invokeChord());
+        const bool acceptKey = key.check(acceptChord());
         const bool escapeKey = key.check(::fcitx::Key(FcitxKey_Escape));
         if (event.isVirtual() || event.filtered() || event.accepted()) return;
         if (!binding->state.editingAvailable()) {
-            if (invokeChord && !hasForeignImeUi(panel) && invoke(*binding)) event.filterAndAccept();
+            if (invokeKey && !hasForeignImeUi(panel) && invoke(*binding)) event.filterAndAccept();
             return;
         }
         const auto action = decideLocalAction(
-            invokeChord, acceptChord, escapeKey,
+            invokeKey, acceptKey, escapeKey,
             binding->state.suggestionVisible() && panel.candidatesOwnedByBadi,
             panel);
         switch (action) {
@@ -806,9 +861,8 @@ private:
             return std::nullopt;
         }
         auto context = captureContextWindow(
-            surrounding.text(), surrounding.cursor(), surrounding.anchor(), false,
-            hasFlag(capabilities, ::fcitx::CapabilityFlag::Multiline), false,
-            inputMethod->languageCode());
+            surrounding.text(), surrounding.cursor(), surrounding.anchor(),
+            hasFlag(capabilities, ::fcitx::CapabilityFlag::Multiline), inputMethod->languageCode());
         if (context) {
             context->identityKnown = !binding.observedFocus.is_null();
             context->explicitRequest = context->identityKnown ? binding.observationExplicit : true;
@@ -997,10 +1051,6 @@ private:
 
     void onSuggestion(Suggestion suggestion) {
         auto *binding = bindingFor(suggestion.coordinates.sessionId);
-        if (!suggestion.replaceBefore.empty()) {
-            if (binding) clearOwnedPanel(*binding);
-            return;
-        }
         if (!binding || !safeToObserve(*binding)) return;
         // SessionState keeps IME-parity apps off this unobserved display path.
         if (binding->observedFocus.is_null()) { displaySuggestion(std::move(suggestion)); return; }
@@ -1038,7 +1088,7 @@ private:
             hasForeignImeUi(observePanel(*binding)) ||
             !matchesCapturedContext(binding->state.lastContext(), currentContext(*binding)) ||
             !binding->state.showSuggestion(suggestion, transport_.nowMs())) {
-            if (overlay) accessibility_->hide();
+            if (overlay) hidePreview();
             return;
         }
         binding->overlayOwned = overlay;
@@ -1092,7 +1142,7 @@ private:
         const auto focus = binding.observedFocus;
         const auto generation = binding.observationGeneration;
         const auto now = transport_.nowMs();
-        if (!suggestion.replaceBefore.empty() || suggestion.expiresAtMs <= now) return;
+        if (suggestion.expiresAtMs <= now) return;
         // The observer re-verifies caret and length before rendering. A
         // verified reply with rendered:false means its preview is unavailable
         // (e.g. uncalibrated geometry); Badi's owned Fcitx panel is then shown,
@@ -1105,16 +1155,17 @@ private:
                 const bool verified = response.value("ok", nlohmann::json()) == true &&
                     response.contains("focus") && response["focus"].is_object();
                 const bool rendered = verified && response["focus"].value("rendered", nlohmann::json()) == true;
+                if (!rendered) previewMayBeVisible_ = false;
                 auto *current = bindingFor(coordinates.sessionId);
                 if (!current || !current->inputContext->hasFocus() || current->state.coordinates() != coordinates ||
                     current->observationGeneration != generation) {
-                    if (rendered) accessibility_->hide();
+                    hidePreview();
                     return;
                 }
                 if (!verified || !matchesObservedFocus(focus, response["focus"], true) ||
                     !matchesCapturedContext(current->state.lastContext(), currentContext(*current)) ||
                     hasForeignImeUi(observePanel(*current))) {
-                    if (rendered) accessibility_->hide();
+                    hidePreview();
                     debug_.record("suggestion_blocked", current->state.appId(),
                         !verified ? "observer_display_unavailable" :
                         hasForeignImeUi(observePanel(*current)) ? "foreign_ime_active" : "observer_display_mismatch");
@@ -1122,7 +1173,8 @@ private:
                 }
                 displaySuggestion(suggestion, rendered);
             });
-        if (!sent) debug_.record("suggestion_blocked", binding.state.appId(), "observer_display_unavailable");
+        if (sent) previewMayBeVisible_ = true;
+        else debug_.record("suggestion_blocked", binding.state.appId(), "observer_display_unavailable");
     }
 
     void onClear(const ClearNotice &notice) {
@@ -1158,7 +1210,7 @@ private:
 
     void onCommitPrepare(const CommitPrepare &prepare) {
         auto *binding = bindingFor(prepare.coordinates.sessionId);
-        if (!prepare.replaceBefore.empty() || (binding && !binding->state.editingAvailable()) ||
+        if ((binding && !binding->state.editingAvailable()) ||
             (binding && binding->observedFocus.is_null() && imeParityApp(binding->state.appId()))) {
             if (binding) clearOwnedPanel(*binding);
             transport_.reportCommit(prepare.coordinates, prepare.controlId, prepare.suggestionId, "stale");
@@ -1226,7 +1278,7 @@ private:
         const auto dispatch =
             binding->state.authorizeCommit(prepare, transport_.nowMs(),
                                            observePanel(*binding));
-        if (!dispatch || !dispatch->replaceBefore.empty()) {
+        if (!dispatch) {
             transport_.reportCommit(prepare.coordinates, prepare.controlId,
                                     prepare.suggestionId, "stale");
             return;
@@ -1266,6 +1318,7 @@ private:
     std::unordered_map<std::string, Binding> bindings_;
     AuthorityContinuity authorityContinuity_;
     bool authorityPaused_ = true;
+    bool previewMayBeVisible_ = false;
 };
 
 class BadiModuleFactory final : public ::fcitx::AddonFactory {

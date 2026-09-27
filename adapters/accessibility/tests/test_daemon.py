@@ -197,93 +197,165 @@ class RuntimeTests(unittest.TestCase):
         self.assertIs(self.daemon.clients[fd], current)
 
 
+class PreviewLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.daemon = Daemon("/unused/accessibility.sock", None, FakeGLib)
+        self.builds = []
+
+    def fake_module(self, preview):
+        def build():
+            self.builds.append(True)
+            if isinstance(preview, Exception):
+                raise preview
+            return preview
+        return unittest.mock.patch.dict(sys.modules, {"preview": SimpleNamespace(Preview=build)})
+
+    def test_a_failed_construction_is_remembered(self):
+        with self.fake_module(RuntimeError("preview_wayland_unavailable")):
+            self.assertFalse(self.daemon.warm_preview())
+            self.assertFalse(self.daemon.render_preview({}, " text", 1000))
+            self.assertFalse(self.daemon.render_preview({}, " text", 1000))
+            self.daemon.hide_preview()
+        self.assertEqual(self.builds, [True])
+
+    def test_warming_builds_once_and_rendering_reuses_it(self):
+        calls = []
+        preview = SimpleNamespace(warm=lambda: calls.append("warm"), hide=lambda: calls.append("hide"),
+                                  render=lambda focus, text, ttl: calls.append(("render", text, ttl)) or True)
+        with self.fake_module(preview):
+            self.assertFalse(self.daemon.warm_preview(), "an idle callback runs once")
+            self.assertTrue(self.daemon.render_preview({}, " text", 1000))
+        self.assertEqual((self.builds, calls), ([True], ["warm", ("render", " text", 1000)]))
+
+    def test_a_render_failure_hides_and_reports_no_preview(self):
+        calls = []
+
+        def broken(*_args):
+            raise RuntimeError("gtk")
+        preview = SimpleNamespace(warm=lambda: None, hide=lambda: calls.append("hide"), render=broken)
+        with self.fake_module(preview):
+            self.assertFalse(self.daemon.render_preview({}, " text", 1000))
+        self.assertEqual(calls, ["hide"])
+
+
 class EventTests(unittest.TestCase):
     def setUp(self):
         self.daemon = Daemon("/unused/accessibility.sock", None, FakeGLib)
         self.tracked = {"app_id": "chromium", "process_id": 42,
                         "bus": ":1.7", "path": "/field"}
         self.daemon.observer.tracked = dict(self.tracked)
-        self.cached = object()
-        self.daemon.backend.cached = self.cached
         self.notifications, self.hidden, self.disarmed = [], [], []
         self.daemon.observer.notify = self.notifications.append
         self.daemon.observer.hide = lambda: self.hidden.append(True)
         self.daemon.observer.disarm = lambda: self.disarmed.append(True)
 
-    def event(self, *, bus=":1.7", path="/unrelated", pid=42, sender=None,
-              event_type="object:state-changed:defunct", detail1=1, detail2=0):
-        source = SimpleNamespace(app=SimpleNamespace(bus_name=bus), path=path,
-                                 get_process_id=lambda: pid)
-        class Event(SimpleNamespace):
-            @property
-            def any_data(self):
-                raise AssertionError("Metadata events must never read text payloads")
-        return Event(type=event_type, source=source, sender=sender,
-                     detail1=detail1, detail2=detail2)
-
-    def assert_preserved(self):
-        self.assertEqual(self.daemon.observer.tracked, self.tracked)
-        self.assertEqual(self.daemon.observer.epoch, 1)
-        self.assertIs(self.daemon.backend.cached, self.cached)
-        self.assertEqual((self.notifications, self.hidden, self.disarmed), ([], [], []))
-
-    def assert_invalidated(self, reason="field_changed"):
+    def assert_invalidated(self, reason):
         self.assertIsNone(self.daemon.observer.tracked)
-        self.assertIsNone(self.daemon.backend.cached)
         self.assertEqual(self.daemon.observer.epoch, 2)
         self.assertEqual(self.notifications, [{"schema": SCHEMA, "event": "invalidate",
                          "epoch": 2, "reason": reason, "app_id": "chromium"}])
         self.assertEqual((self.hidden, self.disarmed), ([True], [True]))
 
-    def test_unrelated_local_proxy_disposal_preserves_focused_authority(self):
-        event = self.event()
-        def no_remote_pid_query():
-            self.fail("Local unrelated proxy disposal needs no remote query")
-        event.source.get_process_id = no_remote_pid_query
-        self.daemon.event(event)
-        self.assert_preserved()
-
-    def test_same_path_in_another_bus_is_an_unrelated_local_proxy(self):
-        self.daemon.event(self.event(bus=":1.8", path="/field"))
-        self.assert_preserved()
-
-    def test_tracked_local_proxy_disposal_invalidates(self):
-        event = self.event(path="/field")
-        def no_remote_pid_query():
-            self.fail("Tracked proxy identity suffices even during disposal")
-        event.source.get_process_id = no_remote_pid_query
-        self.daemon.event(event)
-        self.assert_invalidated()
-
-    def test_remote_unrelated_defunct_in_tracked_process_still_invalidates(self):
-        self.daemon.event(self.event(sender=object()))
-        self.assert_invalidated()
-
-    def test_remote_tracked_defunct_still_invalidates(self):
-        self.daemon.event(self.event(path="/field", sender=object()))
-        self.assert_invalidated()
-
-    def test_incomplete_local_proxy_identity_cannot_bypass_invalidation(self):
-        self.daemon.event(self.event(bus=None, pid=99))
-        self.assert_invalidated()
-
-    def test_unreadable_local_proxy_identity_fails_closed(self):
-        event = self.event()
-        event.source.app = None
-        self.daemon.event(event)
-        self.assert_invalidated("accessibility_unavailable")
-
-    def test_sender_null_is_not_a_general_event_exemption(self):
-        self.daemon.event(self.event(event_type="object:children-changed"))
-        self.assert_invalidated()
-
-    def test_defunct_state_clear_is_not_a_proxy_disposal(self):
-        self.daemon.event(self.event(detail1=0))
-        self.assert_invalidated()
-
-    def test_focus_change_from_another_process_still_invalidates(self):
-        self.daemon.event(self.event(pid=99, event_type="object:state-changed:focused"))
+    def test_any_focus_change_invalidates_without_querying_its_source(self):
+        class Event:
+            def __getattr__(self, name):
+                raise AssertionError("A focus event is never inspected: " + name)
+        self.daemon.focus_event(Event())
         self.assert_invalidated("focus_changed")
+
+    def test_focus_changes_without_a_tracked_field_are_ignored(self):
+        self.daemon.observer.tracked = None
+        self.daemon.focus_event(object())
+        self.assertEqual((self.daemon.observer.epoch, self.notifications), (1, []))
+
+    def test_field_events_invalidate_without_unpacking_their_payload(self):
+        class Payload:
+            def __getattr__(self, name):
+                raise AssertionError("A field event payload is never read: " + name)
+        self.daemon.field_event(None, ":1.7", "/field", "org.a11y.atspi.Event.Object", "TextChanged", Payload(), None)
+        self.assert_invalidated("field_changed")
+
+    def test_only_the_focus_listener_is_global(self):
+        registered = []
+        listener = SimpleNamespace(register=registered.append)
+        self.daemon.A = SimpleNamespace(EventListener=SimpleNamespace(new=lambda callback, _data: listener))
+        self.daemon.connect_event_bus = lambda: None
+        with tempfile.TemporaryDirectory() as runtime, unittest.mock.patch.dict(
+                os.environ, {"XDG_RUNTIME_DIR": runtime, "HYPRLAND_INSTANCE_SIGNATURE": "private"}), \
+                self.assertRaises(OSError):
+            self.daemon.watch()  # Stops at the missing private Hyprland event socket.
+        self.daemon.hypr.close()
+        self.assertEqual(registered, ["object:state-changed:focused"])
+        self.assertEqual(self.daemon.backend.hyprland, pathlib.Path(runtime) / "hypr/private/.socket.sock")
+
+    def test_hyprland_session_must_be_exact(self):
+        for environment in ({"XDG_RUNTIME_DIR": "/run/user/1", "HYPRLAND_INSTANCE_SIGNATURE": ""},
+                            {"XDG_RUNTIME_DIR": "/run/user/1", "HYPRLAND_INSTANCE_SIGNATURE": "../other"},
+                            {"XDG_RUNTIME_DIR": "/run/user/1", "HYPRLAND_INSTANCE_SIGNATURE": ".."},
+                            {"XDG_RUNTIME_DIR": "relative", "HYPRLAND_INSTANCE_SIGNATURE": "private"}):
+            with self.subTest(environment=environment), unittest.mock.patch.dict(os.environ, environment), \
+                    self.assertRaisesRegex(RuntimeError, "hyprland_session_required"):
+                observer_daemon.hyprland_directory()
+
+
+class FieldSubscriptionTests(unittest.TestCase):
+    """Producer interest follows the armed application; the match follows the field."""
+
+    class Bus:
+        def __init__(self):
+            self.calls, self.subscriptions = [], []
+
+        def is_closed(self):
+            return False
+
+        def call_sync(self, *args):
+            self.calls.append(("sync", args[3], args[4].unpack()))
+
+        def call(self, *args):
+            self.calls.append(("async", args[3], args[4].unpack()))
+
+        def signal_subscribe(self, sender, interface, member, path, arg0, _flags, _callback, _data):
+            self.subscriptions.append((sender, interface, member, path, arg0))
+            return len(self.subscriptions)
+
+        def signal_unsubscribe(self, subscription):
+            self.subscriptions[subscription - 1] = None
+
+    def setUp(self):
+        from gi.repository import GLib
+        self.daemon = Daemon("/unused/accessibility.sock", None, GLib)
+        self.bus = self.daemon.event_bus = self.Bus()
+
+    def binding(self, bus=":1.7", path="/field", epoch=1):
+        return {"epoch": epoch, "bus": bus, "path": path, "process_id": 42, "app_id": "chromium", "uri": ""}
+
+    def test_arming_registers_the_application_once_and_matches_only_the_field(self):
+        self.daemon.arm_field_events(self.binding())
+        self.assertEqual(self.bus.calls, [("sync", "RegisterEvent", (event, [], ":1.7")) for event in observer_daemon.FIELD_EVENTS])
+        self.assertEqual(self.bus.subscriptions, [(":1.7", "org.a11y.atspi.Event.Object", None, "/field", None)])
+        self.daemon.disarm_field_events()
+        self.assertEqual(self.bus.subscriptions, [None])
+        self.daemon.arm_field_events(self.binding(path="/other", epoch=2))
+        self.assertEqual(len(self.bus.calls), len(observer_daemon.FIELD_EVENTS), "same application: no new registration")
+        self.assertEqual(self.bus.subscriptions[-1], (":1.7", "org.a11y.atspi.Event.Object", None, "/other", None))
+
+    def test_another_application_or_window_withdraws_producer_interest(self):
+        self.daemon.arm_field_events(self.binding())
+        self.daemon.arm_field_events(self.binding(bus=":1.8", epoch=2))
+        count = len(observer_daemon.FIELD_EVENTS)
+        self.assertEqual(self.bus.calls[count:2 * count], [("async", "DeregisterEvent", (event, ":1.7"))
+                                                           for event in observer_daemon.FIELD_EVENTS])
+        self.assertEqual(self.bus.calls[2 * count:], [("sync", "RegisterEvent", (event, [], ":1.8"))
+                                                      for event in observer_daemon.FIELD_EVENTS])
+        self.assertEqual(self.bus.subscriptions, [None, (":1.8", "org.a11y.atspi.Event.Object", None, "/field", None)])
+        self.daemon.hypr, self.daemon.loop = SimpleNamespace(recv=lambda _size: b"activewindowv2>>55\n"), None
+        self.daemon.observer.tracked = {"app_id": "chromium"}
+        self.assertTrue(self.daemon.hypr_event(None, 0))
+        self.assertIsNone(self.daemon.observer.tracked)
+        self.assertEqual(self.bus.calls[3 * count:], [("async", "DeregisterEvent", (event, ":1.8"))
+                                                      for event in observer_daemon.FIELD_EVENTS])
+        self.assertIsNone(self.daemon.producer)
+        self.assertEqual(self.bus.subscriptions[-1], None, "invalidation removed the field match")
 
 
 class IdentityTests(unittest.TestCase):
@@ -462,11 +534,46 @@ class IdentityTests(unittest.TestCase):
 
 
 class WindowTests(unittest.TestCase):
-    def backend(self, window, locked=None):
+    UNLOCKED = {key: False for key in observer_daemon.LOCK_FLAGS}
+
+    def backend(self, window):
         backend = DesktopBackend(None)
-        state = locked or {key: False for key in ("locked", "secure", "pending", "requested", "sessionLocked")}
-        backend.command = lambda *args: state if args[0] == "omarchy-shell" else window
+        backend.hypr = lambda request: self.assertEqual(request, "j/activewindow") or window
         return backend
+
+    def check_lock(self, backend, state):
+        with unittest.mock.patch.object(observer_daemon.subprocess, "check_output",
+                                        return_value=json.dumps(state).encode()) as command:
+            backend.deadline = observer_daemon.time.monotonic() + 1
+            backend.require_unlocked()
+        self.assertEqual(command.call_args.args[0], ("omarchy-shell", "lock", "status"))
+
+    def test_every_lock_flag_denies_and_only_an_explicit_unlock_passes(self):
+        backend = DesktopBackend(None)
+        self.check_lock(backend, self.UNLOCKED)
+        for state in ({**self.UNLOCKED, "requested": True}, {**self.UNLOCKED, "pending": True},
+                      {**self.UNLOCKED, "sessionLocked": True}, {**self.UNLOCKED, "secure": None},
+                      {key: False for key in observer_daemon.LOCK_FLAGS[1:]}, [], "unlocked"):
+            with self.subTest(state=state), self.assertRaisesRegex(Denied, "desktop_locked"):
+                self.check_lock(backend, state)
+
+    def test_only_inspect_checks_the_session_lock(self):
+        window = {"pid": 42, "class": "org.telegram.desktop", "mapped": True, "hidden": False}
+        backend = self.backend(window)
+        checks = []
+        backend.require_unlocked = lambda: checks.append(True)
+        with unittest.mock.patch.object(observer_daemon, "verify_process", return_value=True):
+            backend.window("telegram")
+            self.assertEqual(checks, [])
+            backend.window("telegram", check_lock=True)
+            self.assertEqual(checks, [True])
+
+        def locked():
+            raise Denied("desktop_locked")
+        backend.require_unlocked = locked
+        backend.hypr = lambda _request: self.fail("A locked session is not queried further")
+        with self.assertRaisesRegex(Denied, "desktop_locked"):
+            backend.window("telegram", check_lock=True)
 
     def test_class_uid_and_executable_rules_all_apply(self):
         window = {"pid": 42, "class": "org.telegram.desktop", "mapped": True, "hidden": False}
@@ -492,10 +599,10 @@ class WindowTests(unittest.TestCase):
             for app_id in ("zen-browser", "firefox"):
                 with self.assertRaisesRegex(Denied, "unsupported_app"):
                     self.backend(zen).window(app_id)
-            with self.assertRaisesRegex(Denied, "desktop_locked"):
-                self.backend(window, {"locked": True}).window("telegram")
             with self.assertRaisesRegex(Denied, "focus_unavailable"):
                 self.backend({**window, "pid": 0}).window("telegram")
+            with self.assertRaisesRegex(Denied, "focus_unavailable"):
+                self.backend([window]).window("telegram")
         with unittest.mock.patch.object(observer_daemon, "verify_process", return_value=False):
             with self.assertRaisesRegex(Denied, "app_mismatch"):
                 self.backend(window).window("telegram")
@@ -940,7 +1047,7 @@ class GeometryWiringTests(unittest.TestCase):
         self.backend = DesktopBackend(SimpleNamespace(CoordType=SimpleNamespace(SCREEN="screen")))
         self.backend.budget = lambda: None
         self.monitors = [CalibrationTests.MONITOR]
-        self.backend.command = lambda *args: self.monitors
+        self.backend.hypr = lambda request: self.assertEqual(request, "j/monitors") or self.monitors
         self.window = dict(CalibrationTests.WINDOW)
 
     def test_every_request_reads_live_extents_and_calibrates(self):
@@ -961,7 +1068,7 @@ class GeometryWiringTests(unittest.TestCase):
         self.setUp()
         def unavailable(*_args):
             raise Denied("desktop_unavailable")
-        self.backend.command = unavailable
+        self.backend.hypr = unavailable
         self.assertIsNone(self.backend.geometry(self.field, self.text, 12, self.window))
         self.setUp()
         self.monitors = {"not": "a list"}
@@ -1024,7 +1131,7 @@ class MetadataTests(unittest.TestCase):
         backend = DesktopBackend(atspi)
         backend.budget = lambda: None
         window = {"pid": 42, "xwayland": False}
-        backend.window = lambda app_id: (window, APPS[app_id])
+        backend.window = lambda app_id, _check_lock: (window, APPS[app_id])
         backend.focused = lambda pid, browser, gecko: node
         calibrations = []
         backend.geometry = lambda *args: calibrations.append(args) or {"coordinate_convention": CALIBRATED}
@@ -1054,7 +1161,7 @@ class GeckoMetadataTests(unittest.TestCase):
             "Text": SimpleNamespace(get_attribute_run=lambda *_args: ({"direction": "lr"}, 0, 24))}))
         self.backend.budget = lambda: None
         self.window = {"pid": 42, "xwayland": False}
-        self.backend.window = lambda app_id: (self.window, APPS[app_id])
+        self.backend.window = lambda app_id, _check_lock: (self.window, APPS[app_id])
         self.selections = []
         self.backend.focused = lambda pid, browser, gecko: self.selections.append((browser, gecko)) or self.node
         self.calibrations = []
@@ -1204,7 +1311,7 @@ class RichEditorTests(unittest.TestCase):
         self.backend = DesktopBackend(RICH_ATSPI)
         self.backend.budget = lambda: None
         self.window = {"pid": 42, "xwayland": False}
-        self.backend.window = lambda app_id: (self.window, APPS[app_id])
+        self.backend.window = lambda app_id, _check_lock: (self.window, APPS[app_id])
         self.root = None
         self.backend.focused = lambda pid, browser, gecko: self.root
         self.calibrations = []
@@ -1357,7 +1464,7 @@ class RichEditorTests(unittest.TestCase):
         rich.children[1].text.get_character_extents = lambda offset, kind: SimpleNamespace(
             x=10400, y=6220, width=20, height=40)
         self.backend.frame_and_document = lambda node: (frame, document)
-        self.backend.command = lambda *args: [CalibrationTests.MONITOR]
+        self.backend.hypr = lambda _request: [CalibrationTests.MONITOR]
         self.window.update(CalibrationTests.WINDOW)
         geometry = self.backend.metadata("chatgpt", True)["geometry"]
         self.assertEqual((geometry["character_offset"], geometry["caret"]), (9, {"x": 210, "y": 110, "height": 20}))

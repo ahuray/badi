@@ -37,7 +37,7 @@ def canonical_origin(uri):
 
 def eligible(metadata):
     """Reject purpose/selection before asking a provider for any prose."""
-    if metadata["role"] == "password text" or metadata.get("sensitive", False):
+    if metadata["role"] == "password text":
         raise Denied("sensitive_field")
     if not all(metadata.get(flag, False) for flag in ("focused", "editable", "showing", "visible", "enabled")):
         raise Denied("ineligible_field")
@@ -50,7 +50,7 @@ def eligible(metadata):
     # Electron apps and Gecko render web content too: the same HTML purpose
     # gates apply. A field whose tag or input type is not yet exposed (Gecko's
     # first query of a new document can omit them) is ineligible, never guessed.
-    if metadata.get("web", metadata["browser"]):
+    if metadata["web"]:
         if tag == "input" and input_type != "text":
             raise Denied("unsupported_field")
         if tag not in ("input", "textarea", "div", "p"):
@@ -89,9 +89,11 @@ class Observer:
         self.notify({"schema": SCHEMA, "event": "invalidate", "epoch": self.epoch,
                      "reason": reason, "app_id": previous["app_id"] if previous else ""})
 
-    def describe(self, app_id, geometry=False):
+    def describe(self, app_id, calibrate=False, check_lock=False):
         # Only a preview draws, so only it pays for per-request calibration.
-        metadata = self.backend.metadata(app_id, geometry)
+        # Only inspect issues a binding, so only it checks the session lock;
+        # snapshot and preview require that binding's unchanged epoch.
+        metadata = self.backend.metadata(app_id, calibrate, check_lock)
         eligible(metadata)
         key = {name: metadata[name] for name in ("bus", "path", "process_id", "app_id", "uri")}
         if self.tracked is not None and self.tracked != key:
@@ -157,7 +159,7 @@ class Observer:
                 app_id = binding["app_id"]
             if not isinstance(app_id, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,128}", app_id):
                 raise Denied("invalid_request")
-            metadata, focus = self.describe(app_id, op == "preview")
+            metadata, focus = self.describe(app_id, calibrate=op == "preview", check_lock=op == "inspect")
             if op in ("snapshot", "preview"):
                 if request["binding"] != focus["binding"]:
                     raise Denied("stale_binding")
@@ -180,10 +182,12 @@ class Observer:
                 caret = metadata["caret"]
                 start, end = max(0, caret - MAX_BEFORE), min(metadata["total_chars"], caret + MAX_AFTER)
                 text = self.backend.text(metadata, start, end)
-                # Recheck both metadata and the bounded text after acquisition.
-                # This is a snapshot contract, never an atomic mutation claim.
-                updated, again = self.describe(app_id)
-                if again["binding"] != focus["binding"] or any(updated[k] != metadata[k] for k in ("caret", "total_chars", "selection_count")):
+                # Recheck the same field's position and the bounded text after
+                # acquisition. This is a snapshot contract, never an atomic
+                # mutation claim.
+                updated = self.backend.position(metadata)
+                if self.epoch != focus["binding"]["epoch"] or any(
+                        updated[k] != metadata[k] for k in ("caret", "total_chars", "selection_count")):
                     raise Denied("stale_binding")
                 if text != self.backend.text(updated, start, end) or len(text) != end - start:
                     raise Denied("stale_binding")

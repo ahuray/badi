@@ -50,7 +50,12 @@ browsers. A missing tag or input type is ineligible, never guessed.
 
 `inspect` verifies the unlocked Omarchy session, current Hyprland window PID,
 the identity rule above, and exactly one focused editable accessibility object.
-Only that process is queried. Chromium browser nodes must supply a valid
+Only that process is queried. Every binding comes from an `inspect`; `snapshot`
+and `preview` require its unchanged epoch and do not query the lock again.
+Hyprland's active window and monitors are read over its IPC socket
+(`$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket.sock`) within the
+operation budget; only the lock check starts a process (`omarchy-shell lock
+status`). Chromium browser nodes must supply a valid
 HTTP(S) Document `URI`, Gecko ones a `DocURL` (below); cross-origin frames
 retain their own address. Desktop apps need
 exactly one focused editable node. The helper reads no field prose during
@@ -154,25 +159,25 @@ URI, epoch and broker-policy target. Its trusted Fcitx caller must already hold 
 current broker context-read grant for that target. Password/sensitive,
 noneditable, invisible, selected, unsupported field purposes and stale bindings
 fail before `Text.GetText`. Reads are at most 512 Unicode characters before the
-caret and 128 after it; metadata and the bounded text are reread to detect
-changes. Neither the accessible object nor this helper provides an atomic edit
+caret and 128 after it; the same field's caret, length and selections and the
+bounded text are reread to detect changes. Neither the accessible object nor this helper provides an atomic edit
 transaction. Fcitx must still compare its exact live surrounding text, caret,
 focus epoch and one-shot commit authority before dispatch.
 
-Relevant accessibility events and compositor focus/window changes invalidate the
-current epoch and clear the preview. Global listeners receive only metadata events. Text-change notifications are
-subscribed on a separate D-Bus connection only after an approved snapshot, with
-a match restricted to the exact unique sender and field object path.
-Invalidation/disconnect removes that match; event prose is never unpacked.
-Notifications do not retain event text, document labels, or URIs. Browser origin policy stays centralized in the broker;
-this helper does not grant blanket browser access.
-
-Libatspi also emits local, sender-null `defunct` events when its temporary proxy
-objects are disposed. The helper ignores that exact disposal signal only for a
-positively identified different bus/object path. Disposal of the tracked object,
-unknown proxy identity, and genuine remote events retain invalidation. This
-prevents inspection itself from repeatedly invalidating a stable Chromium field;
-snapshot identity and text rereads remain unchanged.
+Accessibility events and compositor focus/window changes invalidate the current
+epoch and clear the preview. The only global listener is for focus changes; any
+focus change invalidates without querying its source. After an approved
+snapshot, the field's own events (text, caret, selection, editable, showing,
+defunct and role changes) are subscribed on a separate D-Bus connection with a
+match restricted to the exact unique sender and field object path, so events
+from other fields or a busy page never arrive. Any of them invalidates, and
+invalidation or disconnect removes that match; event payloads, including typed
+text, are never unpacked. The application is asked to produce these events
+(`RegisterEvent` for its bus name) after the first grant in it; that interest
+stays while its window stays active and is withdrawn when the active window or
+armed application changes, or the helper exits. Notifications do not retain
+event text, document labels, or URIs. Browser origin policy stays centralized in
+the broker; this helper does not grant blanket browser access.
 
 ## Socket contract
 
@@ -191,7 +196,8 @@ recovered only after the exclusive lock and a refused connection verify there
 is no live observer. No typed text is written to logs or disk. Coalesced frames and partial tails are supported, with at most 64 KiB buffered
 per connection and 16 KiB per frame including the newline. One operation runs per
 GLib dispatch so authority events can invalidate between queued requests.
-Each operation has a 350 ms overall budget and AT-SPI calls have 50 ms timeouts.
+Each operation has a 350 ms overall budget; AT-SPI calls have 50 ms timeouts and
+Hyprland IPC and the lock check at most 150 ms.
 Only one connection owns acquisition and preview authority. A second acquisition
 client receives `observer_busy`; its disconnect cannot alter the owner's state.
 Queued callbacks bind to a connection object, preventing reuse of a file
@@ -297,7 +303,15 @@ box. There is no pill or background. It renders only LTR suggestions that end
 inside the field, window and monitor; otherwise it returns `rendered: false` and
 the addon falls back to the Fcitx panel. The surface uses the overlay layer, no
 keyboard interactivity, an empty input region and no focus. Any invalidation,
-new render or expiry hides it.
+new render or expiry hides it. The helper sets `GSK_RENDERER=cairo`,
+`GDK_DISABLE=gl,vulkan` and `GTK_IM_MODULE=gtk-im-context-simple` for itself
+before GTK loads, so one grey label loads no GPU driver and the helper never
+connects to an input method. It builds the preview and lays out sample text
+once from an idle callback after startup, so font setup does not count against
+the first preview's deadline. If the preview cannot be built (no layer-shell
+support), the helper remembers that and returns `rendered: false` until it
+restarts. Software rendering at a fractional monitor scale may look slightly
+softer than GPU rendering; it has not been compared live.
 
 ## Verified evidence and limits
 

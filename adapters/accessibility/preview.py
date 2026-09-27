@@ -120,7 +120,7 @@ class Preview:
         gi.require_version("Gtk4LayerShell", "1.0")
         from gi.repository import Gdk, GLib, Gtk, Gtk4LayerShell, Pango
         Gtk.init()
-        if not Gtk4LayerShell.is_supported() or Gdk.Display.get_default() is None:
+        if Gdk.Display.get_default() is None or not Gtk4LayerShell.is_supported():
             raise RuntimeError("preview_wayland_unavailable")
         self.Gdk, self.GLib, self.Gtk, self.Layer = Gdk, GLib, Gtk, Gtk4LayerShell
         self.cairo, self.Pango = cairo, Pango
@@ -172,6 +172,13 @@ class Preview:
         surface = self.window.get_surface()
         if surface is not None:
             surface.set_input_region(self.cairo.Region())
+
+    def warm(self):
+        """Load fonts and the layout path once, before any request's deadline."""
+        self.label.set_text("Badi")
+        self.window.measure(self.Gtk.Orientation.HORIZONTAL, -1)
+        self.label.get_layout().get_baseline()
+        self.label.set_text("")
 
     def hide(self):
         if self.timer is not None:
