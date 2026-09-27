@@ -1,68 +1,120 @@
-# Opt-in Fcitx Wayland acknowledgement compatibility
+# Fcitx Wayland done-refresh backport
 
-This is a narrow compatibility experiment for Fcitx **5.1.21**, the inspected
+This is a narrow, version-pinned backport for Fcitx **5.1.22**, the inspected
 Hyprland **0.56.2** commit `efb50993780079460b0cbed1363e2166a2de1d9f`, and the
-Chromium 151 / Brave Origin 152 text-input-v3 publication stall. It is not a
-general upstream fix or a claim of physical editor compatibility. When enabled,
-it affects **all idle input-method-v2 clients of this Fcitx instance**, including
-applications other than Badi's allowed targets. Badi's acquisition, policy,
-field-identity, composition and acceptance checks remain separate.
+Chromium 151 / Brave Origin 152 text-input-v3 publication stall. It carries the
+upstream Fcitx change released in 5.1.23 into a privately rebuilt frontend. It
+is not a claim of physical editor compatibility. When selected, it affects
+**all input-method-v2 clients of this Fcitx instance**, including applications
+other than Badi's allowed targets. Badi's acquisition, policy, field-identity,
+composition and acceptance checks remain separate. The full desktop installer
+builds and selects it by default on exactly this Fcitx version; see
+[installation](#installation) for the opt-out.
 
 Chromium serializes a new state publication behind the previous `done`.
-Hyprland forwards `done` after an input-method commit. An idle Fcitx frontend
-otherwise sends no commit, so surrounding text stalls. The patch sends a bare
-protocol commit for an unacknowledged current serial while focused and idle.
-It sends no insertion, deletion, synthetic key, or fabricated preedit request.
-Existing commits for that serial suppress the acknowledgement. Sent preedit,
-local preedit and XCompose suppress it too; protocol activation resets only the
-previous field's preedit bookkeeping before focus callbacks run.
+Hyprland relays each client commit to the input method as `done`, but sends the
+client `done` only after an input-method `commit`. Stock 5.1.22 sends no commit
+while idle, so surrounding text stalls. Upstream commit
+[`1e00551`](https://github.com/fcitx/fcitx5/commit/1e00551899f9d0fa5418d899f468b6e421401adf)
+([PR #1690](https://github.com/fcitx/fcitx5/pull/1690)) answers every focused
+`done` with a forced preedit update: the current client preedit, if any, and one
+`commit` for the current serial. It sends no insertion, deletion, synthetic key,
+or new preedit content.
 
-The new `IdleDoneAcknowledgement` option defaults to **False**. A bare commit
-can clear a client's preedit, which is why those composition guards are required.
-This patch does not repair the separate text-input-v1 `commit_state` mismatch.
-Fcitx 5.1.22 and the inspected newer upstream source do not contain this idle
-acknowledgement change.
+Upstream adds `InputContext::updatePreedit(bool)` to the core library. This
+slice links the system 5.1.22 core, so [the pinned patch](done-preedit-refresh.patch)
+changes only `waylandimserverv2.cpp`. It posts the same `UpdatePreeditEvent` and,
+unless an addon filters it, calls the frontend's preedit delegate, which is the
+delivery path of the upstream call. Two core-private details are not reproduced.
+The core's last-empty-preedit marker is not refreshed, which can cause at most
+one extra empty preedit commit later. The event is also not queued while an
+addon blocks client events; no in-tree 5.1.22 caller blocks them. The separate
+5.1.23 capability reset on activation is not included.
 
-Primary sources: [pinned Fcitx frontend](https://github.com/fcitx/fcitx5/blob/1319952f284eae17a36cba9e800843ca61a163c1/src/frontend/waylandim/waylandimserverv2.cpp),
-[input-method-v2 protocol](https://github.com/fcitx/fcitx5/blob/1319952f284eae17a36cba9e800843ca61a163c1/src/lib/fcitx-wayland/input-method-v2/input-method-unstable-v2.xml),
+### Differences from the retired 5.1.21 acknowledgement
+
+The earlier `idle-done-ack.patch` (in Git history) does not apply to 5.1.22.
+The upstream behavior replaces it with three semantic differences:
+
+- There is no `IdleDoneAcknowledgement` option. The launcher and service
+  drop-in below are the opt-in; the selected module always refreshes.
+- Active client preedit is re-sent instead of suppressing the commit. Hyprland
+  clears a client's preedit on any input-method commit without one, so the
+  re-send keeps composition visible. Panel-only preedit and XCompose state
+  without client preedit receive a bare commit; the client has nothing to clear.
+- There is no per-serial duplicate suppression. If a focus callback already
+  committed during that `done`, one extra same-serial commit follows, and
+  Hyprland sends the client one extra `done`.
+
+The feedback cycle is one client commit, one input-method `done`, and one
+refresh commit. Hyprland never answers an input-method commit with another
+input-method `done`. The exchange continues only while the client publishes after
+a `done`. Chromium 151 commits only pending content type, cursor rectangle or
+surrounding text. GTK 4.22 republishes only when a `done` changed its commit or
+preedit text; an identical re-sent preedit changes neither. A client that commits
+after every `done` would loop. The upstream maintainer cites KWin, which already
+gives text-input-v3 clients one `done` per commit.
+
+Chromium sets surrounding text before `enable`, and `enable` resets it
+([Chromium issue 565066842](https://issues.chromium.org/issues/565066842)).
+Hyprland therefore forwards no initial surrounding text on focus. The refresh
+unblocks later publications only. [PR #1689](https://github.com/fcitx/fcitx5/pull/1689)
+reported that an earlier, activation-only revision of #1690 did not unblock
+Electron 43. The merged revision refreshes on every `done`; it has not been
+physically verified with Chromium here.
+
+Primary sources: [pinned Fcitx frontend](https://github.com/fcitx/fcitx5/blob/c7ecdb931d8b378ccdcd87382a3ef7ff0bd10def/src/frontend/waylandim/waylandimserverv2.cpp),
+[input-method-v2 protocol](https://github.com/fcitx/fcitx5/blob/c7ecdb931d8b378ccdcd87382a3ef7ff0bd10def/src/lib/fcitx-wayland/input-method-v2/input-method-unstable-v2.xml),
 [Chromium 151 state queue](https://github.com/chromium/chromium/blob/151.0.7922.173/ui/ozone/platform/wayland/host/zwp_text_input_v3.cc),
 [Hyprland relay](https://github.com/hyprwm/Hyprland/blob/v0.56.2/src/managers/input/TextInput.cpp).
+
+## Upstream status and retirement
+
+Fcitx 5.1.23 contains the fix. Arch `extra` has published `fcitx5 5.1.23-1`
+since 2026-09-24. On 2026-09-26, Omarchy's stable mirror still served
+`5.1.22-1`. After an upgrade to 5.1.23, [launch.py](launch.py) detects the
+changed runtime hashes and runs the system frontend, which includes the same
+refresh. The installer then installs nothing new and leaves an existing drop-in
+in place; remove it with the [rollback](#rollback).
 
 ## Reproducible isolated build
 
 Requirements: Python 3.12+, CMake, Ninja, a C++20 compiler, `pkg-config`, GNU
 `patch`, Wayland client/scanner/protocols and xkbcommon development files, and
-exactly 5.1.21 Fcitx Core/Config/Utils development files and runtime. Protocol
+exactly 5.1.22 Fcitx Core/Config/Utils development files and runtime. Protocol
 tests additionally need `wayland-server`, `dbus-run-session` and the installed
-Fcitx executable/keyboard addon. This standalone slice builds only the frontend
-and its original protocol wrappers; it links the existing system Fcitx libraries.
-It does not rebuild the core, compositor, or normal Wayland module. No ECM,
-Plasma-protocol or Yoga installation is needed for this slice.
+Fcitx executable/keyboard addon. This standalone slice builds the frontend, its
+shared virtual input-context sources and original protocol wrappers. It links
+the existing system Fcitx libraries. It does not rebuild the core, compositor,
+or normal Wayland module. No ECM, Plasma-protocol or Yoga installation is needed.
 
 From the repository root, choose a **new** work directory:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 packaging/fcitx5-wayland-compat/build.py \
-  --work-dir output/extensionless/fcitx-wayland-compat-verified --jobs 2 --check
+  --work-dir output/extensionless/fcitx-wayland-compat-5.1.22 --jobs 2 --check
 ```
 
 `--archive /absolute/path/fcitx5-source.tar.gz` uses an offline copy of the exact
 archive in [manifest.json](manifest.json). The source commit, archive byte count,
-SHA256 and patch SHA256 are verified. Existing work directories are refused.
-Source and full license notices remain alongside the build. The frontend patch
-and linked upstream code are LGPL-2.1-or-later; the full [license text](LICENSE.LGPL-2.1-or-later)
-is retained here. Protocol files also retain their original notices in the source
-archive. The output is `libwaylandim.so` and `build-receipt.json`; nothing is
-installed or enabled by this command.
+SHA256 and patch SHA256 are verified. The archive's tar stream matches `git
+archive` of the signed `5.1.22` tag used by Arch's package. Existing work
+directories are refused. Source and full license notices remain alongside the
+build. The frontend patch and linked upstream code are LGPL-2.1-or-later; the
+full [license text](LICENSE.LGPL-2.1-or-later) is retained here. Protocol files
+also retain their original notices in the source archive. The output is
+`libwaylandim.so` and `build-receipt.json`; nothing is installed or enabled.
 
-The real-Fcitx/private-compositor tests compare the unpatched baseline, disabled
-option, and enabled candidate. They cover current serials, an eight-publication
-feedback chain that drains and stops, zero document operations for bare commits,
-sent/local preedit and XCompose, uncleared composition across reactivation,
-explicit insertion/deletion, and duplicate suppression when a focus callback
-already committed. They use private D-Bus, XDG state, a short `/tmp` Wayland
-socket, and fixed synthetic text. They do not connect to the user's compositor
-or prove Chromium rendering, editing, or native undo.
+The real-Fcitx/private-compositor tests compare the unpatched baseline with the
+backport. They cover one bare latest-serial commit on activation and idle quiet.
+They also cover later publications, an eight-publication chain that drains and
+stops, and twenty queued `done` events yielding exactly twenty ordered refreshes.
+Further cases re-send client preedit and keep panel-only preedit and XCompose
+refreshes bare. The rest cover explicit insertion/deletion, deactivation,
+reactivation after uncleared preedit, and one same-serial refresh after a
+focus-callback commit. They use private D-Bus, XDG state, a short `/tmp` Wayland
+socket, and fixed synthetic text. They do not connect to the user's compositor,
+exercise application detection, or prove Chromium rendering, editing, or undo.
 
 The portable packaging/selector source check is:
 
@@ -74,7 +126,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 ## Runtime selection and upgrade fallback
 
 Keep the candidate **outside** all ordinary Fcitx addon directories. The intended
-location is `~/.local/lib/badi/compat/fcitx5-5.1.21/addons/libwaylandim.so`.
+location is `~/.local/lib/badi/compat/fcitx5-5.1.22/addons/libwaylandim.so`.
 Never copy it to `~/.local/lib/fcitx5/` or `/usr/lib/fcitx5/`.
 
 [launch.py](launch.py) prepends that isolated directory only for the inspected
@@ -92,28 +144,59 @@ directory is removed. Thus it falls back to the normal frontend instead of
 leaving Wayland input unavailable. Other user addon paths remain intact. This
 does not sandbox unrelated addons or change how Fcitx loads the user's own addons.
 
-## Installation recipe for the reviewed local candidate
+## Installation
 
-These commands are a reviewable recipe, **not an instruction to install while
-the desktop is locked**. First verify an unlocked session and the existing
-service command, active/enabled state, current addon paths and relevant files:
+The complete, unlocked `python3 scripts/install-desktop.py` run selects this
+frontend by default. `--no-wayland-compat` leaves the Fcitx service command
+unchanged, and `--broker-only` never touches it. The installer:
 
-```sh
-omarchy-shell lock status
-systemctl --user cat omarchy-fcitx5.service
-systemctl --user show omarchy-fcitx5.service -p ActiveState -p UnitFileState -p MainPID
-```
+1. Reads `/usr/bin/fcitx5 --version` before building. Any version other than
+   5.1.22 gets no frontend (5.1.23 and later contain the refresh). The service's
+   effective `ExecStart` must be the stock `/usr/bin/fcitx5 --disable
+   notificationitem` or a Badi drop-in command; anything else stops the
+   installation before any file changes.
+2. Runs `build.py --check` in a new
+   `output/extensionless/fcitx-wayland-compat-5.1.22-<ns>` directory, which
+   downloads the pinned archive. `--wayland-compat-build DIR` instead reuses an
+   existing checked build. Either way, the receipt must name this manifest,
+   passed protocol checks, the installed Core/Config/Utils version, today's
+   runtime hashes and the artifact hash.
+3. Installs `launch.py`, `build-receipt.json` and `addons/libwaylandim.so` under
+   `~/.local/lib/badi/compat/fcitx5-5.1.22/`, plus this drop-in:
 
-The lock response must report false for `locked`, `secure`, `pending`,
-`requested`, and `sessionLocked`. The inspected base service uses
-`/usr/bin/fcitx5 --disable notificationitem`. Preserve the existing `50-badi.conf`
-environment drop-in; this recipe adds only `60-badi-wayland-compat.conf`.
-Stopping/restarting this service briefly interrupts input-method handling for
-the whole desktop, including XCompose. Save disposable trial text first.
-Run each block only after the previous block succeeded; stop on any error.
-Use this wrapper for **every** stop/start below, including rollback. It rechecks
-all five lock flags immediately before the service operation because the session
-can relock during a build or trial:
+   ```ini
+   # ~/.config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf
+   [Service]
+   ExecStart=
+   ExecStart=/usr/bin/python3 -B %h/.local/lib/badi/compat/fcitx5-5.1.22/launch.py --disable notificationitem
+   ```
+
+   The existing `50-badi.conf` environment drop-in is kept. Replaced files go to
+   the installer's backup directory and `changed-files.json`; the install
+   receipt records the new digests.
+4. Removes the retired `fcitx5-5.1.21` directory, after backing it up, only when
+   no service command references it and it holds exactly its three files.
+   Otherwise the installer keeps it and names it in its output.
+5. After `daemon-reload`, confirms that the effective `ExecStart` is the new
+   command. Then it performs the single Fcitx restart that the addon update
+   already needs, and checks that the running service maps the installed module
+   (exact inode, stable PID). If `launch.py` fell back to the stock frontend,
+   the installer says so. Input continues with the stock frontend.
+
+The restart briefly interrupts input-method handling for the whole desktop,
+including XCompose. A leftover 5.1.21 `IdleDoneAcknowledgement` option in
+`~/.config/fcitx5/conf/waylandim.conf` is ignored by 5.1.22 and left unchanged.
+
+After installation, run the disposable physical Chromium/Brave v3 trial:
+automatic surrounding text after the first page change, visible prediction,
+explicit acceptance, native undo, stale focus and real IME composition. Report
+it separately from the synthetic protocol proof.
+
+## Rollback
+
+Use the directory that the installer printed as `Rollback files and
+changed-file list`. The desktop must be unlocked; this helper rechecks all five
+lock flags before each service operation:
 
 ```sh
 compat_fcitx_service() {
@@ -133,154 +216,44 @@ PY
 }
 ```
 
-Before stopping or copying, refuse symbolic links (including dangling links) or
-unexpected target types. This file-copy recipe cannot preserve their topology;
-inspect and adapt the concrete backup before proceeding if this preflight fails:
+To return to the stock frontend, delete only the drop-in and restart:
 
 ```sh
-python3 - <<'PY'
-from pathlib import Path
-home = Path.home()
-targets = [
-  '.local/lib/badi/compat/fcitx5-5.1.21/launch.py',
-  '.local/lib/badi/compat/fcitx5-5.1.21/build-receipt.json',
-  '.local/lib/badi/compat/fcitx5-5.1.21/addons/libwaylandim.so',
-  '.config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf',
-  '.config/fcitx5/conf/waylandim.conf', '.config/fcitx5/profile',
-]
-for relative in targets:
-    target = home / relative
-    for path in (target, *target.parents):
-        if path == home:
-            break
-        assert not path.is_symlink(), f'Symlink requires a preserving backup: {path}'
-        if path.exists():
-            assert path.is_file() if path == target else path.is_dir(), path
-print('Exact compatibility targets are ordinary files or absent')
-PY
-```
-
-Choose the successfully checked build and create a private backup directory:
-
-```sh
-compat_build="$PWD/output/extensionless/fcitx-wayland-compat-verified"
-compat_root="$HOME/.local/lib/badi/compat/fcitx5-5.1.21"
-mkdir -p "$HOME/.local/state/badi/compat-backups"
-compat_backup=$(mktemp -d "$HOME/.local/state/badi/compat-backups/install-XXXXXXXX")
-systemctl --user is-active omarchy-fcitx5.service > "$compat_backup/active-before.txt"
-systemctl --user is-enabled omarchy-fcitx5.service > "$compat_backup/enabled-before.txt"
 compat_fcitx_service stop
-```
-
-Back up these exact targets **after stopping**, so Fcitx cannot rewrite them
-during the copy. Record absent files too; the profile is included because Fcitx
-can save input-method choices on shutdown:
-
-```sh
-python3 - "$compat_backup" <<'PY'
-import json, pathlib, shutil, sys
-home = pathlib.Path.home()
-backup = pathlib.Path(sys.argv[1])
-files = [
-  '.local/lib/badi/compat/fcitx5-5.1.21/launch.py',
-  '.local/lib/badi/compat/fcitx5-5.1.21/build-receipt.json',
-  '.local/lib/badi/compat/fcitx5-5.1.21/addons/libwaylandim.so',
-  '.config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf',
-  '.config/fcitx5/conf/waylandim.conf', '.config/fcitx5/profile',
-]
-entries = []
-for index, relative in enumerate(files):
-    source = home / relative
-    entries.append({'path': relative, 'existed': source.exists(), 'backup': str(index)})
-    if source.exists():
-        shutil.copy2(source, backup / str(index))
-(backup / 'files.json').write_text(json.dumps(entries, indent=2) + '\n')
-PY
-install -Dm644 "$compat_build/libwaylandim.so" "$compat_root/addons/libwaylandim.so"
-install -Dm644 "$compat_build/build-receipt.json" "$compat_root/build-receipt.json"
-install -Dm644 packaging/fcitx5-wayland-compat/launch.py "$compat_root/launch.py"
-mkdir -p "$HOME/.config/systemd/user/omarchy-fcitx5.service.d"
-cat > "$HOME/.config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf" <<'UNIT'
-[Service]
-ExecStart=
-ExecStart=/usr/bin/python3 -B %h/.local/lib/badi/compat/fcitx5-5.1.21/launch.py --disable notificationitem
-UNIT
-```
-
-Set the one top-level option while retaining other settings and sections:
-
-```sh
-python3 - <<'PY'
-from pathlib import Path
-p = Path.home() / '.config/fcitx5/conf/waylandim.conf'
-p.parent.mkdir(parents=True, exist_ok=True)
-lines = p.read_text().splitlines() if p.exists() else []
-kept, top_level = [], True
-for line in lines:
-    if line.lstrip().startswith('['):
-        top_level = False
-    if top_level and line.split('=', 1)[0].strip() == 'IdleDoneAcknowledgement':
-        continue
-    kept.append(line)
-p.write_text('IdleDoneAcknowledgement=True\n' + '\n'.join(kept) + '\n')
-PY
+rm ~/.config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf
 systemctl --user daemon-reload
-if [ "$(cat "$compat_backup/active-before.txt")" = active ]; then
-  compat_fcitx_service start
-fi
-systemctl --user is-enabled omarchy-fcitx5.service
+compat_fcitx_service start
 ```
 
-The enabled state must still match the saved state; this recipe never enables or
-disables the service. Verify the running process actually loaded the intended
-module, instead of inferring selection from a successful service start. Reuse
-the installer's check of exact file inode/device and a stable service PID:
+To restore the exact pre-install frontend files instead, including a retired
+5.1.21 directory, replace the `rm` line with this. Other Badi files keep their
+update:
 
 ```sh
-python3 - "$compat_root/addons/libwaylandim.so" <<'PY'
-from pathlib import Path
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location('desktop_installer', 'scripts/install-desktop.py')
-installer = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(installer)
-assert installer.native_addon_loaded(Path(sys.argv[1])), 'Current service does not map the exact candidate file'
-print('Verified candidate frontend in the current service process')
-PY
-```
-
-Then run the disposable physical Chromium/Brave v3 trial: automatic surrounding
-text, visible prediction, explicit acceptance, native undo, stale focus, and real
-IME composition. Report this separately from the synthetic protocol proof.
-
-## Rollback
-
-Stop `omarchy-fcitx5.service` before restoring any files. Compare the saved file
-map against current files and preserve edits made after the trial, especially
-the profile and other Fcitx configuration options. Restore an existing original
-file from its numbered backup; remove only a target recorded as originally
-absent. For an unchanged trial installation, the exact restoration is:
-
-```sh
-compat_fcitx_service stop
-python3 - "$compat_backup" <<'PY'
+python3 - ~/.local/state/badi/install-backups/NNN <<'PY'
 import json, pathlib, shutil, sys
 home, backup = pathlib.Path.home(), pathlib.Path(sys.argv[1])
-for entry in json.loads((backup / 'files.json').read_text()):
-    target = home / entry['path']
-    if entry['existed']:
+for relative in json.loads((backup / 'changed-files.json').read_text()):
+    if not (relative.startswith('.local/lib/badi/compat/') or relative.endswith('/60-badi-wayland-compat.conf')):
+        continue
+    target, saved = home / relative, backup / relative
+    if saved.exists():
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(backup / entry['backup'], target)
+        shutil.copy2(saved, target)
     else:
         target.unlink(missing_ok=True)
 PY
-systemctl --user daemon-reload
-if [ "$(cat "$compat_backup/active-before.txt")" = active ]; then
-  compat_fcitx_service start
-fi
-systemctl --user is-enabled omarchy-fcitx5.service
 ```
 
-Verify the saved enabled state and `/proc/<MainPID>/maps` again; a fresh
-installation rollback should load `/usr/lib/fcitx5/libwaylandim.so`. Retain the
-backup. Do not remove `50-badi.conf`, the Badi addon, the broker, the accessibility
-helper, or unrelated user configuration as part of this frontend-only rollback.
+Verify the result in the running process instead of inferring it from a
+successful start:
+
+```sh
+grep -F libwaylandim.so /proc/$(systemctl --user show omarchy-fcitx5.service -p MainPID --value)/maps
+```
+
+The stock frontend maps `/usr/lib/fcitx5/libwaylandim.so`. Retain the backup.
+Rerunning the installer reinstalls the frontend unless `--no-wayland-compat` is
+given. Do not remove `50-badi.conf`, the Badi addon, the broker, the
+accessibility helper, or unrelated user configuration as part of this
+frontend-only rollback.

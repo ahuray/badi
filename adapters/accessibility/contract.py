@@ -47,7 +47,10 @@ def eligible(metadata):
         raise Denied("unsupported_field")
     tag = metadata.get("tag", "")
     input_type = metadata.get("input_type", "")
-    if metadata["browser"]:
+    # Electron apps and Gecko render web content too: the same HTML purpose
+    # gates apply. A field whose tag or input type is not yet exposed (Gecko's
+    # first query of a new document can omit them) is ineligible, never guessed.
+    if metadata.get("web", metadata["browser"]):
         if tag == "input" and input_type != "text":
             raise Denied("unsupported_field")
         if tag not in ("input", "textarea", "div", "p"):
@@ -86,8 +89,9 @@ class Observer:
         self.notify({"schema": SCHEMA, "event": "invalidate", "epoch": self.epoch,
                      "reason": reason, "app_id": previous["app_id"] if previous else ""})
 
-    def describe(self, app_id):
-        metadata = self.backend.metadata(app_id)
+    def describe(self, app_id, geometry=False):
+        # Only a preview draws, so only it pays for per-request calibration.
+        metadata = self.backend.metadata(app_id, geometry)
         eligible(metadata)
         key = {name: metadata[name] for name in ("bus", "path", "process_id", "app_id", "uri")}
         if self.tracked is not None and self.tracked != key:
@@ -96,6 +100,8 @@ class Observer:
         binding = {"epoch": self.epoch, **key}
         target_id = hashlib.sha256(f"{key['bus']}\0{key['path']}\0{self.epoch}".encode()).hexdigest()
         if metadata["browser"]:
+            # The broker has one browser-origin policy namespace (adapter
+            # "chromium"): Brave and Zen share Chromium's per-origin site grants.
             target = {"kind": "browser", "app_id": "chromium", "target_id": target_id,
                       "origin": canonical_origin(metadata["uri"])}
         else:
@@ -151,7 +157,7 @@ class Observer:
                 app_id = binding["app_id"]
             if not isinstance(app_id, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,128}", app_id):
                 raise Denied("invalid_request")
-            metadata, focus = self.describe(app_id)
+            metadata, focus = self.describe(app_id, op == "preview")
             if op in ("snapshot", "preview"):
                 if request["binding"] != focus["binding"]:
                     raise Denied("stale_binding")

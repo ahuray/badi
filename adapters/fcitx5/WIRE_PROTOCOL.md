@@ -24,6 +24,9 @@ The first frame is `hello` with `v: 2`, `min_v: 2`, `max_v: 2`, adapter
 The adapter waits for `hello.ack` and the initial `authority.changed`, queues an
 `authority.ack`, and only then opens sessions. Later authority epochs retire
 local candidate/context authority before reopening eligible focused sessions.
+A closed connection retires the same authority. A reconnect's initial snapshot
+counts as a new authority when its epoch, settings revision or pause state
+differs from the last one observed.
 
 ## Desktop session and context
 
@@ -36,14 +39,18 @@ frame contains:
 {
   "target": {
     "kind": "desktop_application",
-    "app_id": "<exact InputContext::program()>",
+    "app_id": "<canonical app id>",
     "target_id": "<opaque InputContext UUID>"
   }
 }
 ```
 
-Desktop targets omit `origin`. Their settings identity is assumed to be
-`{kind:"linux_app",adapter:"fcitx",app_id:<the same exact app_id>}`.
+The canonical app id is `InputContext::program()` folded to ASCII lowercase
+once at focus-in, accepted only when it matches
+`^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)*$` within 128 bytes; the
+broker's validator stays lowercase-only. Desktop targets omit `origin`. Their
+settings identity is assumed to be
+`{kind:"linux_app",adapter:"fcitx",app_id:<the same canonical app_id>}`.
 The target ID is an opaque Fcitx context UUID, not a stable widget identity.
 Compatibility is proven only for named editor cells; runtime authorization is
 the exact application ID plus explicit invocation in an eligible native text
@@ -57,6 +64,22 @@ validated input-method language, and selection unit `unicode_scalar_values`.
 Before/after are UTF-8 bounded to 512/128 Unicode scalar values. Sensitive,
 disabled, special-purpose, composing, selected, and invalid-language contexts
 are not serialized.
+
+The manual path above is limited to native exact apps. An observed field uses
+the observer's `inspect` target verbatim for `policy.query` and `session.open`
+(`browser` with `origin` for exact-origin policy, or `desktop_application` with
+the same canonical app id) and sends `identity_known:true`, purpose `normal`,
+activation `always` (automatic) or `manual` with `explicit:true`. IME-parity
+apps (see [README](README.md#app-classes-and-ime-parity)) send only observed
+frames. The addon relies on these observer (`badi.accessibility.v1`) semantics:
+`snapshot` returns `before`/`after`/`caret`/`total_chars` for the exact binding;
+a `preview` reply with `ok:true` has re-verified caret and length, and
+`focus.rendered:false` then selects Badi's owned Fcitx panel. An `ok:false`
+reply or no reply displays nothing and a stale snapshot dispatches nothing.
+When an observed IME-parity field's after-caret text is exactly Chromium's
+paragraph end `"\n\n"` and the snapshot's `after` agrees, `context.changed`
+carries `after: ""` with the unchanged selection
+([rich editors](README.md#app-classes-and-ime-parity)).
 
 ## Suggestion and commit
 

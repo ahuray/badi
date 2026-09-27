@@ -59,8 +59,21 @@ bool dispatchSuggestionClear(
 
 struct AuthoritySnapshot {
     std::uint64_t authorityEpoch = 0;
+    std::uint64_t settingsRevision = 0;
     bool paused = true;
     bool initial = false;
+};
+
+// Each connection starts with an initial snapshot. Returns true when a
+// snapshot carries authority the adapter has not observed: every later epoch
+// on a connection, or a reconnect whose initial authority differs from the
+// last one observed on an earlier connection.
+class AuthorityContinuity {
+public:
+    bool observe(const AuthoritySnapshot &snapshot);
+
+private:
+    std::optional<AuthoritySnapshot> observed_;
 };
 
 struct WireCallbacks {

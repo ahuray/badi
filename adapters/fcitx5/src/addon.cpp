@@ -77,6 +77,14 @@ bool hasFlag(::fcitx::CapabilityFlags flags, ::fcitx::CapabilityFlag flag) {
     return !!(flags & flag);
 }
 
+// The one app identity used for policy, sessions, debug and the observer.
+// Empty when program() is not an app identifier.
+std::string canonicalProgram(const ::fcitx::InputContext &inputContext) {
+    return canonicalAppId(inputContext.program()).value_or("");
+}
+
+constexpr auto kObserverUnavailableNotice = "Badi cannot see this text field — check badi doctor";
+
 bool matchesObservedFocus(const nlohmann::json &captured,
                           const nlohmann::json &observed,
                           bool requireLength = false) {
@@ -256,12 +264,14 @@ private:
     }
 
     void focusIn(::fcitx::InputContext &inputContext) {
-        const auto appId = inputContext.program();
-        debug_.record("focus", appId, supportedAppId(appId) ? "checking_app_policy" : "unidentified_app");
+        const auto appId = canonicalProgram(inputContext);
+        debug_.record("focus", appId, appId.empty() ? "unidentified_app" :
+            !nativeObservationAvailable(appId) ? "editor_transaction_unavailable" :
+            imeParityApp(appId) ? "awaiting_observed_field" : "checking_app_policy");
         const auto contextId = uuidString(inputContext.uuid());
         const auto sessionId = randomUuid();
         const auto salt = randomSalt();
-        if (!sessionId || !salt || !supportedAppId(appId)) return;
+        if (!sessionId || !salt || appId.empty()) return;
         const auto existing = bindings_.find(contextId);
         if (existing != bindings_.end()) {
             if (existing->second.opened) {
@@ -291,7 +301,7 @@ private:
     }
 
     void focusOut(::fcitx::InputContext &inputContext) {
-        debug_.record("blur", inputContext.program(), "focus_left");
+        debug_.record("blur", canonicalProgram(inputContext), "focus_left");
         auto *binding = bindingFor(inputContext);
         if (binding == nullptr) return;
         if (binding->opened) transport_.closeSession(binding->brokerCoordinates);
@@ -331,18 +341,17 @@ private:
     }
 
     void surroundingTextUpdated(::fcitx::InputContext &inputContext) {
-        debug_.record("context", inputContext.program(),
-            !supportedAppId(inputContext.program()) ? "unidentified_app" :
+        const auto app = canonicalProgram(inputContext);
+        debug_.record("context", app, app.empty() ? "unidentified_app" :
             allowsNativeContext(inputContext.capabilityFlags()) ? "context_received" : "field_denied");
         auto *binding = bindingFor(inputContext);
         if (binding == nullptr) return;
         binding->surroundingFreshness.surroundingTextUpdated();
-        // These canonical app aliases never hold editing context. Toolkit
-        // publication must not erase their explicit, timed unavailable notice.
-        // Classify the app itself: observed browser targets with another alias
-        // still require invalidation and fresh field metadata below.
-        if (supportedAppId(binding->state.appId()) &&
-            !nativeEditingAvailable(binding->state.appId())) return;
+        // Unavailable apps never hold editing context. Toolkit publication must
+        // not erase their explicit, timed unavailable notice. Classify the app
+        // itself: observed targets of other classes still require invalidation
+        // and fresh field metadata below.
+        if (binding->state.focused() && !nativeObservationAvailable(binding->state.appId())) return;
         const bool unchangedObserved = !binding->observedFocus.is_null() &&
             matchesCapturedContext(binding->state.lastContext(), currentContext(*binding));
         invalidate(inputContext);
@@ -350,13 +359,14 @@ private:
     }
 
     void capabilityChanged(::fcitx::InputContext &inputContext) {
-        debug_.record("authority", inputContext.program(), "capabilities_changed");
+        const auto app = canonicalProgram(inputContext);
+        debug_.record("authority", app, "capabilities_changed");
         auto *binding = bindingFor(inputContext);
-        if (binding == nullptr) return;
+        if (binding == nullptr || app.empty()) return;
         // Capability changes can leave the previous widget's buffer cached.
         binding->surroundingFreshness.capabilityChanged();
         invalidate(inputContext);
-        observerInvalidated(nlohmann::json{{"app_id", inputContext.program()}});
+        observerInvalidated(nlohmann::json{{"app_id", app}});
     }
 
     PanelObservation observePanel(const Binding &binding) const {
@@ -411,7 +421,28 @@ private:
         binding.state.denyEditing();
         binding.observedFocus = nullptr;
         clearOwnedPanel(binding);
-        debug_.record("request_blocked", binding.state.appId(), "editor_transaction_unavailable");
+        debug_.record("request_blocked", binding.state.appId(),
+            imeParityApp(binding.state.appId()) ? "ime_parity_target_invalid" : "editor_transaction_unavailable");
+    }
+
+    // Content-free reason for a focused binding that cannot edit.
+    std::string_view editingUnavailableReason(const Binding &binding) const {
+        if (!imeParityApp(binding.state.appId())) return "editor_transaction_unavailable";
+        // IME-parity apps never fall back to the unknown-identity manual path.
+        return binding.observedFocus.is_null() ? "ime_parity_unobserved" : "ime_parity_target_mismatch";
+    }
+
+    // IME-parity has no manual fallback, so an explicit request says why the
+    // observer produced no field: the field's own purpose, or no observer.
+    void observerUnavailable(Binding &binding, const nlohmann::json &error = nullptr) {
+        if (!imeParityApp(binding.state.appId())) return;
+        const bool fieldDenied = error == "sensitive_field" || error == "unsupported_field" ||
+            error == "ineligible_field" || error == "selection_present" || error == "invalid_caret";
+        debug_.record("request_blocked", binding.state.appId(),
+            fieldDenied ? "ime_parity_field_denied" : "ime_parity_observer_unavailable");
+        if (binding.observationExplicit)
+            showNotice(binding, fieldDenied ? "Badi cannot read this text field — run badi debug status"
+                                            : kObserverUnavailableNotice);
     }
 
     void observerInvalidated(const nlohmann::json &event) {
@@ -425,7 +456,7 @@ private:
                 binding.opened = false;
                 binding.policyKnown = false;
                 binding.policyAllowed = false;
-                binding.state.invalidateContext();
+                binding.state.retireObservation();
                 binding.observedFocus = nullptr;
                 clearOwnedPanel(binding);
             }
@@ -435,7 +466,7 @@ private:
 
     void observeLater(Binding &binding, bool explicitRequest = false, bool retry = false) {
         if (!binding.inputContext->hasFocus() || !binding.state.focused() ||
-            !nativeEditingAvailable(binding.state.appId())) return;
+            !nativeObservationAvailable(binding.state.appId())) return;
         if (!retry) binding.observeRetries = 0;
         binding.observationExplicit = explicitRequest;
         if (explicitRequest) binding.dismissedContext.reset();
@@ -451,7 +482,7 @@ private:
     }
 
     void inspectField(Binding &binding) {
-        if (!nativeEditingAvailable(binding.state.appId()) ||
+        if (!nativeObservationAvailable(binding.state.appId()) ||
             !allowsNativeContext(binding.inputContext->capabilityFlags()) ||
             !binding.surroundingFreshness.fresh()) return;
         if (accessibility_->pending()) {
@@ -460,6 +491,8 @@ private:
             // absent service or a denied field in an unbounded timer loop.
             if (binding.observeRetries++ < 5)
                 observeLater(binding, binding.observationExplicit, true);
+            else
+                observerUnavailable(binding);
             return;
         }
         if (hasForeignImeUi(observePanel(binding)) || instance_->isComposing(binding.inputContext)) {
@@ -469,11 +502,14 @@ private:
         binding.waitingForForeignUi = false;
         const auto session = binding.state.coordinates().sessionId;
         const auto generation = binding.observationGeneration;
-        accessibility_->request(nlohmann::json{{"op", "inspect"}, {"app_id", binding.state.appId()}},
+        const bool sent = accessibility_->request(nlohmann::json{{"op", "inspect"}, {"app_id", binding.state.appId()}},
             [this, session, generation](const nlohmann::json &response) {
                 auto *current = bindingFor(session);
-                if (!current || !current->inputContext->hasFocus() || current->observationGeneration != generation ||
-                    response.value("ok", nlohmann::json()) != true || !response.contains("focus")) return;
+                if (!current || !current->inputContext->hasFocus() || current->observationGeneration != generation) return;
+                if (response.value("ok", nlohmann::json()) != true || !response.contains("focus")) {
+                    observerUnavailable(*current, response.value("error", nlohmann::json()));
+                    return;
+                }
                 const auto &focus = response["focus"];
                 if (!focus.is_object() || !focus.contains("binding") || !focus.contains("target") ||
                     !focus["binding"].is_object() || !focus["target"].is_object() ||
@@ -507,14 +543,16 @@ private:
                 current->policyKnown = false;
                 current->policyAllowed = false;
                 const auto appId = current->state.appId();
-                if (!current->state.focusIn(*newSession, focus["target"]["target_id"].get<std::string>(), appId, *salt, editTarget)) return;
+                if (!current->state.focusIn(*newSession, focus["target"]["target_id"].get<std::string>(), appId, *salt,
+                                            editTarget, NativeEditPath::Observed)) return;
                 current->observedFocus = focus;
                 if (!current->state.editingAvailable()) {
-                    debug_.record("request_blocked", appId, "editor_transaction_unavailable");
+                    debug_.record("request_blocked", appId, editingUnavailableReason(*current));
                     return;
                 }
                 queryPolicy(*current);
             });
+        if (!sent) observerUnavailable(binding);
     }
 
     void requestObservedContext(Binding &binding) {
@@ -523,6 +561,11 @@ private:
         const auto focus = binding.observedFocus;
         if (focus.is_null() || !safeToObserve(binding)) {
             debug_.record("request_blocked", binding.state.appId(), "observer_not_ready");
+            return;
+        }
+        if (!binding.observationExplicit && !binding.surroundingFreshness.freshForAutomatic()) {
+            // A reconnect alone must not republish unchanged prose automatically.
+            debug_.record("request_blocked", binding.state.appId(), "observer_awaiting_input");
             return;
         }
         const bool requested = accessibility_->request(nlohmann::json{{"op", "snapshot"}, {"binding", focus["binding"]}, {"policy_target", focus["target"]}},
@@ -541,11 +584,14 @@ private:
                     return;
                 }
                 const auto &observed = response["focus"];
-                if (!matchesObservedFocus(focus, observed, true)) return;
+                if (!matchesObservedFocus(focus, observed, true)) {
+                    debug_.record("request_blocked", current->state.appId(), "observer_context_mismatch");
+                    return;
+                }
                 const auto context = currentContext(*current);
                 if (!context || !context->identityKnown || !context->after.empty() || context->before.empty() ||
                     observed.value("before", nlohmann::json()) != context->before ||
-                    observed.value("after", nlohmann::json()) != context->after ||
+                    observed.value("after", nlohmann::json()) != observedAfter(*context) ||
                     hasForeignImeUi(observePanel(*current))) {
                     debug_.record("request_blocked", current->state.appId(),
                         !context ? unavailableContextReason(*current) :
@@ -562,10 +608,14 @@ private:
                 const auto update = current->state.updateContext(*context);
                 if (update && open(*current) && transport_.publishContext(*update)) {
                     current->brokerCoordinates = update->coordinates;
-                    debug_.record("request", current->state.appId(), "observed_field_request", context->before.size());
+                    debug_.record("request", current->state.appId(), context->paragraphEndAfter ?
+                        "observed_field_request_paragraph_end" : "observed_field_request", context->before.size());
                 }
             });
-        if (!requested) debug_.record("request_blocked", binding.state.appId(), "observer_busy");
+        if (!requested) {
+            debug_.record("request_blocked", binding.state.appId(), "observer_busy");
+            if (binding.observationExplicit) observerUnavailable(binding);
+        }
     }
 
     void showNotice(Binding &binding, std::string message) {
@@ -616,17 +666,16 @@ private:
         if (event.isRelease() || event.isVirtual()) {
             return;
         }
-        const auto app = event.inputContext()->program();
+        const auto app = canonicalProgram(*event.inputContext());
         const auto tab = event.key().normalize().check(::fcitx::Key(FcitxKey_Tab));
-        debug_.record(tab ? "tab" : "input", app,
-            supportedAppId(app) ? "input_received" : "unidentified_app");
+        debug_.record(tab ? "tab" : "input", app, app.empty() ? "unidentified_app" : "input_received");
         auto *binding = bindingFor(*event.inputContext());
         if (binding == nullptr || !binding->state.focused()) return;
         if (!binding->state.editingAvailable()) {
             // Preserve original Tab/navigation. Only the explicit invocation
-            // chord may display a notice in the post-input hook below.
+            // chord may display a notice or request an observed field below.
             if (!event.key().isModifier()) cancelForInput(*binding);
-            debug_.record("request_blocked", app, "editor_transaction_unavailable");
+            debug_.record("request_blocked", app, editingUnavailableReason(*binding));
             return;
         }
         const auto panel = observePanel(*binding);
@@ -642,10 +691,9 @@ private:
             // Claim plain Tab before Fcitx's candidate-navigation fallback, but
             // leave indentation/navigation and foreign IMEs alone elsewhere.
             const auto context = hasForeignImeUi(panel) ? std::nullopt : currentContext(*binding);
-            const bool eligible = context && context->after.empty() &&
-                supportedWritingLanguage(context->language) &&
-                context->before.find_first_not_of(" \t\r\n") != std::string::npos;
-            const auto action = decideTabAction(eligible, binding->state.suggestionVisible(), panel);
+            const bool eligible = tabEligibleContext(context);
+            const auto action = decideTabAction(eligible, binding->state.suggestionVisible(), panel,
+                                                binding->state.editPath());
             debug_.record("decision", app, !binding->policyKnown ? "checking_app_policy" :
                 !binding->policyAllowed ? "app_disabled" : hasForeignImeUi(panel) ? "foreign_ime" :
                 !allowsNativeContext(event.inputContext()->capabilityFlags()) ? "field_denied" :
@@ -764,13 +812,17 @@ private:
         if (context) {
             context->identityKnown = !binding.observedFocus.is_null();
             context->explicitRequest = context->identityKnown ? binding.observationExplicit : true;
+            // Only an observed IME-parity field treats Chromium's paragraph end
+            // as end of field; every observer check still compares observedAfter().
+            if (context->identityKnown && imeParityApp(binding.state.appId()))
+                normalizeObservedParagraphEnd(*context);
         }
         return context;
     }
 
     std::string_view unavailableContextReason(const Binding &binding) const {
         auto &input = *binding.inputContext;
-        if (!binding.state.editingAvailable()) return "editor_transaction_unavailable";
+        if (!binding.state.editingAvailable()) return editingUnavailableReason(binding);
         if (!input.hasFocus() || !binding.state.focused() || !binding.policyAllowed)
             return "native_authority_changed";
         if (!binding.surroundingFreshness.fresh()) return "native_context_stale";
@@ -792,6 +844,22 @@ private:
     }
 
     bool invoke(Binding &binding) {
+        if (!binding.state.editingAvailable() && imeParityApp(binding.state.appId()) &&
+            binding.observedFocus.is_null()) {
+            // An explicit IME-parity request inspects the field; it never
+            // becomes an unknown-identity manual request.
+            debug_.record("observer", binding.state.appId(), "explicit_inspect_requested");
+            if (!binding.surroundingFreshness.fresh()) {
+                showNotice(binding, "Badi needs fresh context — type, then invoke again");
+            } else if (!allowsNativeContext(binding.inputContext->capabilityFlags())) {
+                showNotice(binding, "Badi cannot read this text field — run badi debug status");
+            } else {
+                clearOwnedPanel(binding);
+                transport_.connect();
+                observeLater(binding, true);
+            }
+            return true;
+        }
         if (!binding.state.editingAvailable()) {
             showNotice(binding, "Badi cannot safely insert suggestions in this app yet");
             return true;
@@ -823,7 +891,7 @@ private:
         const auto context = currentContext(binding);
         if (!context) {
             binding.state.invalidateContext();
-            debug_.record("request_blocked", binding.inputContext->program(), "context_unavailable");
+            debug_.record("request_blocked", binding.state.appId(), "context_unavailable");
             showNotice(binding, "Badi cannot read this text field — run badi debug status");
             return true;
         }
@@ -834,7 +902,7 @@ private:
             return true;
         }
         if (transport_.publishContext(*update)) {
-            debug_.record("request", binding.inputContext->program(), "sent_to_model", context->before.size());
+            debug_.record("request", binding.state.appId(), "sent_to_model", context->before.size());
             binding.brokerCoordinates = update->coordinates;
             showNotice(binding, "Badi is thinking…");
         } else {
@@ -895,14 +963,22 @@ private:
         if (!binding || !binding->state.focused() || !binding->state.editingAvailable()) return;
         binding->policyKnown = true;
         binding->policyAllowed = allowed;
-        debug_.record("policy", binding->inputContext->program(), allowed ? "app_allowed" : "app_disabled");
+        debug_.record("policy", binding->state.appId(), allowed ? "app_allowed" : "app_disabled");
         if (allowed && !binding->observedFocus.is_null()) requestObservedContext(*binding);
         if (allowed) open(*binding);
     }
 
     void onAuthority(const AuthoritySnapshot &snapshot) {
         authorityPaused_ = snapshot.paused;
-        if (snapshot.initial) return;
+        const bool changed = authorityContinuity_.observe(snapshot);
+        if (snapshot.initial) {
+            // onDisconnected already retired the previous connection's grants.
+            // Authority that changed meanwhile also retires cached text.
+            if (changed) {
+                for (auto &[_, binding] : bindings_) binding.surroundingFreshness.capabilityChanged();
+            }
+            return;
+        }
         for (auto &[_, binding] : bindings_) {
             // The broker already retired these sessions at the new authority epoch.
             binding.opened = false;
@@ -926,25 +1002,34 @@ private:
             return;
         }
         if (!binding || !safeToObserve(*binding)) return;
+        // SessionState keeps IME-parity apps off this unobserved display path.
         if (binding->observedFocus.is_null()) { displaySuggestion(std::move(suggestion)); return; }
         binding->pendingSuggestion = suggestion.suggestionId;
         const auto focus = binding->observedFocus;
         const auto generation = binding->observationGeneration;
-        accessibility_->request(nlohmann::json{{"op", "snapshot"}, {"binding", focus["binding"]}, {"policy_target", focus["target"]}},
+        const bool sent = accessibility_->request(nlohmann::json{{"op", "snapshot"}, {"binding", focus["binding"]}, {"policy_target", focus["target"]}},
             [this, suggestion, focus, generation](const nlohmann::json &response) {
                 auto *current = bindingFor(suggestion.coordinates.sessionId);
                 if (!current || !safeToObserve(*current) || current->observationGeneration != generation ||
-                    current->state.coordinates() != suggestion.coordinates || response.value("ok", nlohmann::json()) != true ||
-                    !response.contains("focus") || !response["focus"].is_object()) return;
+                    current->state.coordinates() != suggestion.coordinates) return;
+                if (response.value("ok", nlohmann::json()) != true ||
+                    !response.contains("focus") || !response["focus"].is_object()) {
+                    debug_.record("suggestion_blocked", current->state.appId(), "observer_display_unavailable");
+                    return;
+                }
                 const auto context = currentContext(*current);
                 const auto &observed = response["focus"];
                 if (!context || !matchesCapturedContext(current->state.lastContext(), context) ||
                     !matchesObservedFocus(focus, observed, true) ||
                     observed.value("before", nlohmann::json()) != context->before ||
-                    observed.value("after", nlohmann::json()) != context->after) return;
+                    observed.value("after", nlohmann::json()) != observedAfter(*context)) {
+                    debug_.record("suggestion_blocked", current->state.appId(), "observer_display_mismatch");
+                    return;
+                }
                 current->observedFocus = observed;
                 showObservedPreview(*current, suggestion);
             });
+        if (!sent) debug_.record("suggestion_blocked", binding->state.appId(), "observer_display_unavailable");
     }
 
     void displaySuggestion(Suggestion suggestion, bool overlay = false) {
@@ -998,7 +1083,7 @@ private:
         binding->expiryTimer->setOneShot();
         binding->inputContext->updateUserInterface(
             ::fcitx::UserInterfaceComponent::InputPanel);
-        debug_.record("suggestion", binding->inputContext->program(), "display_dispatched");
+        debug_.record("suggestion", binding->state.appId(), overlay ? "display_overlay" : "display_dispatched");
     }
 
     void showObservedPreview(Binding &binding, const Suggestion &suggestion) {
@@ -1008,25 +1093,36 @@ private:
         const auto generation = binding.observationGeneration;
         const auto now = transport_.nowMs();
         if (!suggestion.replaceBefore.empty() || suggestion.expiresAtMs <= now) return;
-        accessibility_->request(nlohmann::json{{"op", "preview"}, {"binding", focus["binding"]},
+        // The observer re-verifies caret and length before rendering. A
+        // verified reply with rendered:false means its preview is unavailable
+        // (e.g. uncalibrated geometry); Badi's owned Fcitx panel is then shown,
+        // which Wayland compositors place at the text-input caret rectangle.
+        const bool sent = accessibility_->request(nlohmann::json{{"op", "preview"}, {"binding", focus["binding"]},
             {"policy_target", focus["target"]}, {"text", suggestion.text},
             {"expected_caret", focus["caret"]}, {"expected_total_chars", focus["total_chars"]},
             {"ttl_ms", suggestion.expiresAtMs - now}},
             [this, coordinates, suggestion, focus, generation](const nlohmann::json &response) {
-                const bool rendered = response.value("ok", nlohmann::json()) == true &&
-                    response.contains("focus") && response["focus"].is_object() &&
-                    response["focus"].value("rendered", nlohmann::json()) == true;
+                const bool verified = response.value("ok", nlohmann::json()) == true &&
+                    response.contains("focus") && response["focus"].is_object();
+                const bool rendered = verified && response["focus"].value("rendered", nlohmann::json()) == true;
                 auto *current = bindingFor(coordinates.sessionId);
                 if (!current || !current->inputContext->hasFocus() || current->state.coordinates() != coordinates ||
-                    current->observationGeneration != generation ||
-                    !response.contains("focus") || !matchesObservedFocus(focus, response["focus"], true) ||
-                    !matchesCapturedContext(current->state.lastContext(), currentContext(*current)) ||
-                    hasForeignImeUi(observePanel(*current))) {
+                    current->observationGeneration != generation) {
                     if (rendered) accessibility_->hide();
                     return;
                 }
-                if (response.value("ok", nlohmann::json()) == true) displaySuggestion(suggestion, rendered);
+                if (!verified || !matchesObservedFocus(focus, response["focus"], true) ||
+                    !matchesCapturedContext(current->state.lastContext(), currentContext(*current)) ||
+                    hasForeignImeUi(observePanel(*current))) {
+                    if (rendered) accessibility_->hide();
+                    debug_.record("suggestion_blocked", current->state.appId(),
+                        !verified ? "observer_display_unavailable" :
+                        hasForeignImeUi(observePanel(*current)) ? "foreign_ime_active" : "observer_display_mismatch");
+                    return;
+                }
+                displaySuggestion(suggestion, rendered);
             });
+        if (!sent) debug_.record("suggestion_blocked", binding.state.appId(), "observer_display_unavailable");
     }
 
     void onClear(const ClearNotice &notice) {
@@ -1035,7 +1131,7 @@ private:
             clearOwnedPanel(*binding);
             return;
         }
-        if (binding) debug_.record("clear", binding->inputContext->program(), notice.reason);
+        if (binding) debug_.record("clear", binding->state.appId(), notice.reason);
         if (binding && binding->state.coordinates() == notice.coordinates && binding->pendingSuggestion &&
             (!notice.suggestionId || *notice.suggestionId == *binding->pendingSuggestion)) {
             // A broker cancellation can arrive before the preview RPC returns.
@@ -1062,7 +1158,8 @@ private:
 
     void onCommitPrepare(const CommitPrepare &prepare) {
         auto *binding = bindingFor(prepare.coordinates.sessionId);
-        if (!prepare.replaceBefore.empty() || (binding && !binding->state.editingAvailable())) {
+        if (!prepare.replaceBefore.empty() || (binding && !binding->state.editingAvailable()) ||
+            (binding && binding->observedFocus.is_null() && imeParityApp(binding->state.appId()))) {
             if (binding) clearOwnedPanel(*binding);
             transport_.reportCommit(prepare.coordinates, prepare.controlId, prepare.suggestionId, "stale");
             return;
@@ -1073,6 +1170,8 @@ private:
                 transport_.reportCommit(prepare.coordinates, prepare.controlId, prepare.suggestionId, "stale");
                 return;
             }
+            // Re-snapshot immediately before commitString: the observer must
+            // still agree with Fcitx's live text and caret for this field.
             const auto focus = binding->observedFocus;
             const auto generation = binding->observationGeneration;
             const bool sent = accessibility_->request(nlohmann::json{{"op", "snapshot"},
@@ -1080,18 +1179,24 @@ private:
                 [this, prepare, focus, generation](const nlohmann::json &response) {
                     auto *current = bindingFor(prepare.coordinates.sessionId);
                     const auto context = current ? currentContext(*current) : std::nullopt;
+                    const bool answered = response.value("ok", nlohmann::json()) == true &&
+                        response.contains("focus") && response["focus"].is_object();
                     const bool valid = current && current->observationGeneration == generation && context &&
-                        response.value("ok", nlohmann::json()) == true && response.contains("focus") && response["focus"].is_object() &&
-                        matchesObservedFocus(focus, response["focus"], true) &&
+                        answered && matchesObservedFocus(focus, response["focus"], true) &&
                         response["focus"].value("before", nlohmann::json()) == context->before &&
-                        response["focus"].value("after", nlohmann::json()) == context->after;
+                        response["focus"].value("after", nlohmann::json()) == observedAfter(*context);
                     if (valid) applyCommitPrepare(prepare);
                     else {
-                        if (current) clearOwnedPanel(*current);
+                        if (current) {
+                            debug_.record("commit_blocked", current->state.appId(),
+                                answered ? "observer_dispatch_mismatch" : "observer_dispatch_unavailable");
+                            clearOwnedPanel(*current);
+                        }
                         transport_.reportCommit(prepare.coordinates, prepare.controlId, prepare.suggestionId, "stale");
                     }
                 });
             if (!sent) {
+                debug_.record("commit_blocked", binding->state.appId(), "observer_dispatch_unavailable");
                 clearOwnedPanel(*binding);
                 transport_.reportCommit(prepare.coordinates, prepare.controlId, prepare.suggestionId, "stale");
             }
@@ -1128,7 +1233,7 @@ private:
         }
         clearOwnedPanel(*binding);
         binding->inputContext->commitString(dispatch->text);
-        debug_.record("commit", binding->inputContext->program(), "dispatched_unverified");
+        debug_.record("commit", binding->state.appId(), "dispatched_unverified");
         transport_.reportCommit(dispatch->coordinates, dispatch->controlId,
                                 dispatch->suggestionId,
                                 "dispatched-unverified");
@@ -1137,11 +1242,17 @@ private:
     void onDisconnected() {
         authorityPaused_ = true;
         for (auto &[_, binding] : bindings_) {
+            // Sessions, revisions, candidates, commit grants and in-flight
+            // observer replies end with the connection. Fcitx's surrounding
+            // text does not, so an explicit request after reconnect may read
+            // it once fresh policy reopens the session.
             binding.opened = false;
             binding.policyKnown = false;
             binding.policyAllowed = false;
+            binding.observationGeneration++;
+            binding.observationExplicit = false;
             binding.state.invalidateContext();
-            binding.surroundingFreshness.capabilityChanged();
+            binding.surroundingFreshness.transportLost();
             clearOwnedPanel(binding);
         }
     }
@@ -1153,6 +1264,7 @@ private:
     std::vector<std::unique_ptr<::fcitx::HandlerTableEntry<::fcitx::EventHandler>>>
         handlers_;
     std::unordered_map<std::string, Binding> bindings_;
+    AuthorityContinuity authorityContinuity_;
     bool authorityPaused_ = true;
 };
 

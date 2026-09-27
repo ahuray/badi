@@ -12,8 +12,9 @@ import threading
 import time
 
 HERE=None
+VERSION=json.loads((Path(__file__).resolve().parents[1]/'manifest.json').read_text())['upstream_version']
 
-def run(module, baseline, disabled=False):
+def run(module, baseline):
     root=Path(tempfile.mkdtemp(prefix='protocol-',dir=HERE))
     runtime=tempfile.TemporaryDirectory(prefix='badi-ack-')
     for name in ['home','config','data','cache','state','runtime','addons','share/addon']:
@@ -22,9 +23,9 @@ def run(module, baseline, disabled=False):
     shutil.copy2(module,root/'addons/libwaylandim.so')
     shutil.copy2(HERE/'build/libackprobe.so',root/'addons/libackprobe.so')
     shutil.copy2('/usr/share/fcitx5/addon/waylandim.conf',root/'share/addon/waylandim.conf')
-    (root/'share/addon/ackprobe.conf').write_text('[Addon]\nName=Private protocol probe\nType=SharedLibrary\nLibrary=libackprobe\nCategory=Module\nVersion=1\n[Addon/Dependencies]\n0=core:5.1.21\n')
+    (root/'share/addon/ackprobe.conf').write_text('[Addon]\nName=Private protocol probe\nType=SharedLibrary\nLibrary=libackprobe\nCategory=Module\nVersion=1\n[Addon/Dependencies]\n0=core:'+VERSION+'\n')
     (root/'config/fcitx5/conf').mkdir(parents=True)
-    (root/'config/fcitx5/conf/waylandim.conf').write_text('DetectApplication=False\nIdleDoneAcknowledgement='+('False' if disabled else 'True')+'\n')
+    (root/'config/fcitx5/conf/waylandim.conf').write_text('DetectApplication=False\n')
     (root/'config/fcitx5/profile').write_text('[Groups/0]\nName=Default\nDefault Layout=us\nDefaultIM=keyboard-us\n[Groups/0/Items/0]\nName=keyboard-us\nLayout=\n[GroupOrder]\n0=Default\n')
     env=dict(os.environ)
     for key in ['DISPLAY','DBUS_SESSION_BUS_ADDRESS','AT_SPI_BUS_ADDRESS','HYPRLAND_INSTANCE_SIGNATURE','XDG_CURRENT_DESKTOP','GTK_IM_MODULE','QT_IM_MODULE']:
@@ -77,51 +78,66 @@ def run(module, baseline, disabled=False):
             quiet(.08)
         command('activate');wait(lambda:'PROBE_FOCUS' in fcitx_lines,'focused actual input context')
         quiet()
-        if baseline or disabled:
+        def latest_preedit():return next(r for r in reversed(records) if r['event']=='preedit')
+        def bare(record):return not any(record[key] for key in ['insert','delete','preedit'])
+        if baseline:
             assert len(commits())==0, commits()
-            checks.append(('disabled compatibility option' if disabled else 'unpatched actual frontend')+' produces no activation acknowledgement')
+            checks.append('unpatched actual frontend produces no activation acknowledgement')
         else:
             assert len(commits())==1 and commits()[-1]=={'event':'commit','serial':1,'latest':1,'preedit':0,'insert':0,'delete':0},commits()
             checks.append('activation receives exactly one bare latest-serial commit with zero mutation requests')
             quiet(.5);assert len(commits())==1
             checks.append('idle connection remains quiet rather than producing autonomous commits')
-            command('surround');wait(lambda:len(commits())==2,'later surrounding-state ack')
-            assert commits()[-1]['serial']==2 and not any(commits()[-1][key] for key in ['insert','delete','preedit'])
-            checks.append('later surrounding-text publication receives its own bounded bare acknowledgement')
+            command('surround');wait(lambda:len(commits())==2,'later surrounding-state refresh')
+            assert commits()[-1]['serial']==2 and bare(commits()[-1])
+            checks.append('later surrounding-text publication receives its own bare refresh commit')
             before=len(commits());command('chain');wait(lambda:len(commits())>=before+8,'bounded publication feedback chain')
             quiet(.5);assert len(commits())==before+8
-            assert not any(r[key] for r in commits()[before:] for key in ['insert','delete','preedit'])
+            assert all(bare(r) for r in commits()[before:])
             checks.append('eight queued serial-gated client publications drain and stop without a feedback loop or mutation')
+            before=len(commits())
+            for _ in range(20):command('done')
+            wait(lambda:len(commits())>=before+20,'one refresh per done');quiet(.5)
+            storm=commits()[before:];assert len(storm)==20 and all(bare(r) for r in storm)
+            assert [r['serial'] for r in storm]==list(range(storm[0]['serial'],storm[0]['serial']+20)) and storm[-1]['serial']==storm[-1]['latest']
+            checks.append('twenty queued bare dones yield exactly twenty ordered bare refreshes and no self-sustaining output')
             driver('P');wait(lambda:any(r['event']=='preedit' and r['bytes']==7 for r in records),'real preedit protocol request')
-            before=len(commits());command('done');quiet();assert len(commits())==before
-            checks.append('active sent preedit blocks bare acknowledgement on a newer done')
-            driver('R');wait(lambda:len(commits())==before+1,'explicit preedit clear')
-            before=len(commits());command('done');wait(lambda:len(commits())==before+1,'ack resumes after preedit clear')
-            checks.append('acknowledgement resumes after explicit native preedit clear')
-            driver('L');before=len(commits());command('done');quiet();assert len(commits())==before
-            driver('S');command('done');wait(lambda:len(commits())==before+1,'ack after local preedit clear')
-            checks.append('local engine preedit also blocks idle acknowledgement')
-            driver('X');before=len(commits());command('done');quiet();assert len(commits())==before
-            driver('Z');command('done');wait(lambda:len(commits())==before+1,'ack after compose reset')
-            checks.append('real XCompose state blocks acknowledgement until reset')
+            preedits=sum(r['event']=='preedit' for r in records)
+            before=len(commits());command('done');wait(lambda:len(commits())==before+1,'refresh with active preedit');quiet()
+            assert len(commits())==before+1 and commits()[-1]['preedit']==1 and not commits()[-1]['insert'] and not commits()[-1]['delete']
+            assert sum(r['event']=='preedit' for r in records)==preedits+1 and latest_preedit()['bytes']==7
+            checks.append('active client preedit is re-sent with the refresh commit instead of being cleared')
+            driver('R');wait(lambda:len(commits())==before+2,'explicit preedit clear')
+            before=len(commits());command('done');wait(lambda:len(commits())==before+1,'bare refresh after preedit clear');quiet()
+            assert len(commits())==before+1 and bare(commits()[-1])
+            checks.append('after an explicit native preedit clear the refresh is bare')
+            driver('L');before=len(commits());command('done');wait(lambda:len(commits())==before+1,'refresh with local preedit');quiet()
+            assert len(commits())==before+1 and bare(commits()[-1])
+            driver('S')
+            checks.append('local engine preedit is not sent to the client; its refresh stays bare')
+            driver('X');before=len(commits());command('done');wait(lambda:len(commits())==before+1,'refresh while composing');quiet()
+            assert len(commits())==before+1 and bare(commits()[-1])
+            driver('Z')
+            checks.append('XCompose state without client preedit receives one bare refresh')
             before=len(commits());driver('C');assert len(commits())==before+1 and commits()[-1]['insert']==1
             before=len(commits());driver('D');assert len(commits())==before+1 and commits()[-1]['delete']==1
             checks.append('ordinary explicit insertion and deletion remain single committed protocol operations')
             before=len(commits());command('deactivate');quiet();assert len(commits())==before
-            checks.append('deactivation does not emit an idle commit')
-            command('activate');wait(lambda:len(commits())==before+1,'fresh activation ack')
-            assert commits()[-1]['serial']==commits()[-1]['latest']
-            checks.append('new activation acknowledges fresh serial after focus loss')
+            checks.append('deactivation does not emit a refresh commit')
+            command('activate');wait(lambda:len(commits())==before+1,'fresh activation refresh');quiet()
+            assert len(commits())==before+1 and bare(commits()[-1]) and commits()[-1]['serial']==commits()[-1]['latest']
+            checks.append('new activation refreshes the fresh serial after focus loss')
             driver('P');command('deactivate');quiet();before=len(commits());command('activate')
-            wait(lambda:len(commits())==before+1,'fresh activation after uncleared prior preedit')
-            assert not any(commits()[-1][key] for key in ['insert','delete','preedit'])
-            checks.append('activation resets old protocol preedit state before focus callbacks')
+            wait(lambda:len(commits())==before+1,'activation after uncleared prior preedit');quiet()
+            assert len(commits())==before+1 and bare(commits()[-1])
+            checks.append('preedit left in a previous field is not re-sent to the newly activated field')
             driver('A');command('deactivate');quiet();before=len(commits());command('activate')
-            wait(lambda:len(commits())>=before+1,'focus callback explicit commit');quiet()
-            assert len(commits())==before+1 and commits()[-1]['insert']==1
-            checks.append('a real focus callback commit suppresses a duplicate bare commit for the same serial')
-            assert all(r['serial']==r['latest'] for r in commits())
-        result={'passed':True,'baseline':baseline,'disabled':disabled,'checks':checks,'events':records,'process_ids':[p.pid for p in children]+[fcitx_pid], 'loaded_frontend':str(root/'addons/libwaylandim.so'),'boundary':'actual Fcitx5.1.21/frontend + synthetic private Wayland compositor + explicit fixture driver; no physical editor', 'normal_desktop_mutated':False}
+            wait(lambda:len(commits())>=before+2,'focus callback commit plus refresh');quiet()
+            assert len(commits())==before+2 and commits()[-2]['insert']==1 and bare(commits()[-1])
+            assert commits()[-2]['serial']==commits()[-1]['serial']
+            checks.append('a focus callback commit is followed by exactly one same-serial bare refresh')
+            assert all(r['serial']==r['latest'] for r in commits() if r not in storm[:-1])
+        result={'passed':True,'baseline':baseline,'checks':checks,'events':records,'process_ids':[p.pid for p in children]+[fcitx_pid], 'loaded_frontend':str(root/'addons/libwaylandim.so'),'boundary':f'actual Fcitx {VERSION} frontend + synthetic private Wayland compositor + explicit fixture driver; no physical editor', 'normal_desktop_mutated':False}
         (root/'result.json').write_text(json.dumps(result,indent=2)+'\n')
         print(json.dumps({'report':str(root/'result.json'),'checks':checks}),flush=True)
     except BaseException:
@@ -138,6 +154,6 @@ def run(module, baseline, disabled=False):
         runtime.cleanup()
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('--work-dir',type=Path,required=True);parser.add_argument('--baseline',action='store_true');parser.add_argument('--disabled',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--work-dir',type=Path,required=True);parser.add_argument('--baseline',action='store_true');args=parser.parse_args()
     HERE=args.work_dir.resolve()
-    run(HERE/'libwaylandim-baseline.so' if args.baseline else HERE/'build/libwaylandim.so',args.baseline,args.disabled)
+    run(HERE/'libwaylandim-baseline.so' if args.baseline else HERE/'build/libwaylandim.so',args.baseline)

@@ -9,8 +9,8 @@ from pathlib import Path
 import subprocess
 import sys
 
-VERSION = "5.1.21"
-COMMIT = "1319952f284eae17a36cba9e800843ca61a163c1"
+VERSION = "5.1.22"
+COMMIT = "c7ecdb931d8b378ccdcd87382a3ef7ff0bd10def"
 COMPOSITOR_COMMIT = "efb50993780079460b0cbed1363e2166a2de1d9f"
 PROGRAM = "/usr/bin/fcitx5"
 RUNTIME_FILES = (

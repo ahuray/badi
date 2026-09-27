@@ -303,6 +303,15 @@ bool strictPolicyStatus(std::string_view body) {
     return value && value->contains("payload") && policyStatus(*value, (*value)["payload"]);
 }
 
+bool AuthorityContinuity::observe(const AuthoritySnapshot &snapshot) {
+    const bool changed = !snapshot.initial ||
+        (observed_ && (observed_->authorityEpoch != snapshot.authorityEpoch ||
+                       observed_->settingsRevision != snapshot.settingsRevision ||
+                       observed_->paused != snapshot.paused));
+    observed_ = snapshot;
+    return changed;
+}
+
 bool dispatchSuggestionClear(
     const nlohmann::json &value,
     const std::function<void(const ClearNotice &)> &onClear) {
@@ -861,6 +870,7 @@ private:
         if (callbacks_.onAuthority) {
             callbacks_.onAuthority(AuthoritySnapshot{
                 .authorityEpoch = epoch,
+                .settingsRevision = payload["settings_revision"].get<std::uint64_t>(),
                 .paused = payload["paused"].get<bool>(),
                 .initial = initial,
             });

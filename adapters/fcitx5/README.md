@@ -8,10 +8,15 @@ uses evdev, `wtype`, the clipboard, a virtual keyboard, or global input capture.
 
 ## Native application contract
 
-- A canonical `InputContext::program()` identity and an explicit broker app
-  rule are required. Each focus/authority epoch queries policy before reading
-  text; only a current grant opens a session. Queries expire after two seconds.
-  Omawrite and Xournal++ remain the visually tested applications.
+- A canonical app identity and an explicit broker rule are required.
+  `InputContext::program()` counts only when it is an ASCII identifier
+  (`^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)*$`, at most 128 bytes);
+  it is folded to lowercase once at focus-in (Qt's `Telegram` becomes
+  `telegram`) and that id is used for policy, sessions, debug and the observer.
+  Each focus/authority epoch queries policy before reading text; only a current
+  grant opens a session. Queries expire after two seconds. Omawrite and
+  Xournal++ remain the visually tested applications. The app class below
+  selects which edit paths exist at all.
 - **Tab** invokes at the end of a nonempty phrase with an English, German or
   Persian input-method language and no selection;
   it accepts an already visible owned candidate. Empty or ineligible fields
@@ -22,10 +27,10 @@ uses evdev, `wtype`, the clipboard, a virtual keyboard, or global input capture.
 - Manual invocation requires a collapsed, non-composing, non-sensitive
   surrounding-text snapshot, the live Fcitx `SurroundingText` capability, and
   a validated language from the active input-method entry. Each focus epoch
-  must first receive a surrounding-text update; focus-out and capability
-  changes reset that freshness latch. Missing or stale capability, sensitive,
-  special-purpose, composing, selected, unknown-language, and unknown-app
-  states produce zero outbound context.
+  must first receive a surrounding-text update; focus-out, capability changes
+  and changed broker authority reset that freshness latch. Missing or stale
+  capability, sensitive, special-purpose, composing, selected,
+  unknown-language, and unknown-app states produce zero outbound context.
 - A suggestion uses Fcitx's native candidate panel. Tab or `Ctrl+Shift+Y` accepts
   one owned, unexpired, exact-revision candidate; `Escape` dismisses it. Badi
   also shows a bounded thinking, no-continuation, or connection/error notice.
@@ -36,33 +41,158 @@ uses evdev, `wtype`, the clipboard, a virtual keyboard, or global input capture.
   timer also clears the candidate when its lease expires, independently of
   broker clear delivery.
 
-### Browser and Codex native editing is unavailable
+### App classes and IME parity
 
-The native addon quarantines Chromium/Chrome, Brave, Firefox and the installed
-Codex `chatgpt` program aliases. App/site permission cannot enable their native
-prediction or acceptance: these bindings acquire no prose and publish no model
-context. Browser-origin targets are also rejected independently of the program
-alias. Missing, unknown or mismatched observed target metadata retires prior
-authority rather than falling back to an app-wide manual grant.
+One classification of the canonical id (`classifyNativeApp` in `src/state.cpp`)
+decides every native path:
 
-Ordinary Tab and navigation pass through. `Ctrl+Shift+Space` can show “Badi cannot
-safely insert suggestions in this app yet”; this requires no surrounding
-text or working browser input-method handshake. Unsupported fields never display
-an acceptance candidate or “Tab to accept” instruction. The separate manual
-unknown-widget contract for native applications remains unchanged.
-For the explicitly quarantined app aliases, surrounding-text publication retains
-the auxiliary notice until its original five-second expiry. Input, focus loss and
-foreign composition still clear it. Observed browser targets with other aliases
-retain normal field invalidation and metadata reinspection. Physical visibility
-on the stock Wayland frontend remains a separate check from auxiliary-panel
-signals in the private fixture.
+| Class | App ids | Edit path |
+| --- | --- | --- |
+| Native exact | any other granted id, e.g. `omawrite`, `com.github.xournalpp.xournalpp`, `telegram` | Manual unknown-identity contract or an observed desktop field; unchanged |
+| IME-parity browser | `chromium`, `chromium-browser`, `chrome`, `google-chrome`, `brave`, `brave-origin`, `brave-browser`, `zen` (Gecko) | Observed browser-origin field only, origin policy (exact rule, else `badi site all on`), append-only |
+| IME-parity desktop | `chatgpt` (Codex), `code`, `cursor`, `discord` | Observed desktop field of the same app id only, app policy, append-only |
+| Unavailable | Gecko-family browsers other than `zen`: Firefox and its channels (`firefox*`, `org.mozilla.firefox*`), PWAsForFirefox windows (`ffpwa-*`), other Zen builds (`zen-*`, `app.zen_browser.*`, `io.github.zen_browser.*`) and forks (LibreWolf, Floorp, Waterfox, Mullvad and Tor Browser, IceCat, …); `obsidian`; Chromium-family ids without an observer rule: web-app windows (`chrome-*`, `crx_*`, `brave-*`, `msedge-*`), Flatpak ids (`com.google.chrome`, `org.chromium.*`, `com.brave.*`, …), other Chromium browsers and channels (Edge, Vivaldi, Opera, Helium, `google-chrome-*`, …), `electron*`, and other VS Code/Discord builds (`code-oss`, `vscodium`, `discord-canary`, `vesktop`, …) | None; Obsidian's editor plugin owns its fields |
 
-A sandbox-enabled Chromium 151 physical test on 2026-09-08 confirmed that a single
-Fcitx append can reach another field: a `beforeinput` handler moved focus before
-the browser chose the insertion target. Moving the caret in that handler also
-changed the insertion position. In the benign baseline, Ctrl+Z removed the
-previously typed prefix together with the accepted append. External field/caret
-checks therefore cannot establish the required transaction or separate undo.
+Case folding admits mixed-case window classes such as `Vivaldi-stable` or
+`chrome-app.hey.com__-Default`; the Chromium- and Gecko-family rules keep them
+from becoming native exact apps. Gecko mail clients (Thunderbird) are not
+browsers and keep the native exact contract. An Electron app with an unrelated
+id (for example a chat client) cannot be recognized by id: granting it uses the
+native exact manual contract, whose append has the same typed-text semantics as
+IME-parity.
+
+IME-parity (user decision, 2026-09-26) accepts through one Fcitx
+`commitString` that behaves like typed text. Undo may coalesce the append with
+preceding typing, and page script that moves focus or the caret during
+`beforeinput` may redirect it exactly like a keystroke. The result is
+`dispatched-unverified`; Badi claims neither exact undo nor verified field
+authority there. Every other guard stays:
+
+- IME-parity apps never use the unknown-identity manual path, even with a
+  `linux_app` grant. Without an observed field, Tab and navigation pass through
+  and no context is sent. `Ctrl+Shift+Space` requests an explicit inspection;
+  an absent observer or unobservable window shows “Badi cannot see this text
+  field — check badi doctor” (`ime_parity_observer_unavailable`), and a field
+  the observer denies (password, purpose, selection) shows “Badi cannot read
+  this text field” (`ime_parity_field_denied`).
+- On an observed field Tab only accepts a visible suggestion; without one it
+  stays the application's Tab (next field, indentation). Ctrl+Shift+Space is the
+  explicit observed request: the field is inspected again and policy is queried
+  for its exact target.
+- The observer's target kind must match the class. Otherwise authority is
+  retired without reading prose (`ime_parity_target_mismatch`, or
+  `ime_parity_target_invalid` for malformed metadata).
+- A browser field needs an origin allow: its exact `browser_origin` rule, or
+  `badi site all on` for every origin without one. There is no browser
+  host-permission gate on this path, and the observer cannot tell private
+  windows apart, so site-all covers private windows here.
+- Before context publication, display and `commitString`, a fresh observer
+  snapshot must agree with Fcitx's live surrounding text, absolute caret and
+  document length. Disagreement or an unanswered RPC fails closed with a
+  content-free debug reason: `observer_context_mismatch`,
+  `observer_display_mismatch`/`observer_display_unavailable`,
+  `observer_dispatch_mismatch`/`observer_dispatch_unavailable`, or
+  `ime_parity_observer_unavailable`.
+- Replacement is never negotiated or dispatched; sensitive/purpose denial,
+  foreign-IME yield, revision/fingerprint/expiry binding and one-shot
+  acceptance are unchanged. There are no retries or synthetic keys.
+
+Display prefers the observer's caret preview. When the observer verifies the
+field but reports `rendered:false` (preview unavailable, e.g. uncalibrated
+geometry), Badi shows its owned Fcitx panel: the suggestion text as the single
+candidate with “Badi · Tab to accept · Escape to dismiss”. On the `wayland_v2`
+frontend Fcitx's own cursor rectangle is `[0,0,0,0]`; Hyprland places the input
+popup at the application's text-input caret rectangle. Foreign preedit or
+candidates still take the panel over.
+
+Nested-session facts (stock Fcitx 5.1.22, Hyprland 0.56.2): Chromium 152, Brave
+Origin (Chromium 154) and Electron 42 apps use text-input-v3 by default and
+arrive through `wayland_v2` with their Wayland app id as `program()`;
+Telegram (Qt, `QT_IM_MODULE=fcitx`) arrives through `dbus` as `Telegram`.
+Chromium/Electron send no multiline, email or other purpose hints for page
+fields, so the observer's field-purpose checks carry sensitive-field denial.
+Chromium's own omnibox does send the `Url` purpose: live on Chromium 152
+(2026-09-26) its context had capabilities `0x1072` against `0x80072` for a page
+textarea. `allowsNativeContext()` therefore denies omnibox typing before any
+observer request, even though AT-SPI keeps the page field focused. The stock
+frontend's surrounding text stalls, which fails the snapshot comparison closed;
+the backported [compatibility frontend](../../packaging/fcitx5-wayland-compat/README.md)
+makes it exact after every character. VS Code's default EditContext sends
+corrupted surrounding text, which also fails closed; `editor.editContext: false`
+makes it exact. These are probe facts, not per-app proof.
+
+Zen 1.22.3b (Gecko 156.0.1), live on this desktop (2026-09-26, compatibility
+frontend): Zen arrives through `wayland_v2` with `program()` exactly `zen`. One
+input context serves every page field and the urlbar. A field change arrives as
+blur, focus and `capabilities_changed`. Text fields, the contenteditable and the
+urlbar all had capabilities `0x72` (Preedit, FormattedPreedit,
+ClientUnfocusCommit, SurroundingText). There was no Multiline, spell-check or
+`Url` hint. The password field added Password and Sensitive (`0x100000007a`)
+and was recorded as `field_denied`. Every typed character produced surrounding-text
+updates. Fcitx exposes no call that returns that text, so whether it equals the
+page text was not checked live; the snapshot comparison fails closed if it does
+not. Gecko's GTK input method publishes only the caret's paragraph
+(`IMContextWrapper::GetCurrentParagraph`, Firefox source 2026-09), so observed
+requests agree only while no newline precedes the caret in the field.
+Because the urlbar carries no `Url` purpose, `allowsNativeContext()` cannot deny
+it; the observer's Gecko rule denies it instead (see the
+[observer runbook](../accessibility/README.md#authority-boundary)). How Gecko
+applies a Badi `commitString` (plain insertion or a composition commit), its
+undo grouping and page events are not live-tested. Typed text there undid in
+one Ctrl+Z step.
+
+Rich editors: Codex desktop (`openai-codex-desktop` 26.915.31945, Chromium 153,
+`chatgpt`) composes in a ProseMirror contenteditable, whose paragraphs the
+[observer](../accessibility/README.md#rich-editors) flattens. Live on 2026-09-27
+with the previous build, the disposable phrase typed at the end of the composer
+gave Fcitx all 24 bytes before the caret and more text after it
+(`caret_not_at_end`), although the paragraph had nothing after the caret.
+Chromium 152's own text-input-v3 requests, recorded with `WAYLAND_DEBUG=1` on an
+isolated window, show why: `set_surrounding_text` ends every `<p>` with `"\n\n"`,
+with or without margins, when anything is rendered after the editor. A phrase at
+the end of one paragraph was sent as `"Please find attached the"` + `"\n\n"`.
+Two paragraphs were sent as `"Hello\n\nPlease find attached the"` + `"\n\n"`.
+A paragraph that already ends in a line break gets one more. A bare-text
+contenteditable ends at the caret.
+
+For an observed IME-parity field only, `normalizeObservedParagraphEnd()`
+therefore treats after-caret text of exactly `"\n\n"` as end of field. Tab
+eligibility and the broker context use `after: ""` at the unchanged caret, and
+the fingerprint binds the raw text. Request, display and dispatch agreement
+still compare the raw `"\n\n"` (`observedAfter()`), which the observer
+reproduces from the paragraphs. A request that used the rule records
+`observed_field_request_paragraph_end`. Any other suffix (one or three line
+breaks, text after them) stays `caret_not_at_end`, and `"\r\n"` is never
+context. An observer that disagrees fails as `observer_context_mismatch`. A
+textarea whose text continues with exactly `"\n\n"` after the caret behaves the
+same, and the append lands at the caret. Native exact apps and unobserved
+contexts keep the unnormalized contract.
+
+Verified live with this build: in isolated Chromium 152 (fixture origin, no
+extensions), ProseMirror-shaped `<div contenteditable role=textbox><p>` editors
+with zero and default paragraph margins each displayed a suggestion for the
+typed phrase. Tab appended one continuation; Escape dismissed without a commit.
+The narrow window tile put the caret outside Hyprland's window size, so the Fcitx
+panel was shown instead of the overlay. Not verified live with this build: the
+Codex composer itself, whose window was closed during the session (Chromium 153
+is assumed to serialize like 152), and the Zen regression, since Zen was no
+longer running. The Zen regression (textarea, input, contenteditable, password
+denial, focus change) passed on the intermediate installed build, whose plain
+paths are unchanged.
+
+Unavailable apps acquire no prose and are never inspected. Ordinary Tab and
+navigation pass through; `Ctrl+Shift+Space` can show “Badi cannot safely insert
+suggestions in this app yet”, which needs no surrounding text. Surrounding-text
+publication retains that notice until its five-second expiry; input, focus loss
+and foreign composition clear it. A browser-origin target for a native exact app
+is also unavailable. Missing, unknown or mismatched observed target metadata
+retires prior authority rather than falling back to an app-wide manual grant.
+
+A sandbox-enabled Chromium 151 physical test on 2026-09-08 established the
+IME-parity semantics above: a `beforeinput` handler that moved focus redirected a
+single Fcitx append to another field, moving the caret changed its position, and
+Ctrl+Z removed the previously typed prefix together with the append. External
+field/caret checks cannot make this a transaction or separate undo.
 Receipt: `output/extensionless/installed-browser-04/before-focus-result.json`.
 
 The native adapter does **not** negotiate `text_replacement` or dispatch
@@ -74,32 +204,43 @@ those two native operations atomic. Unexpected replacement suggestions and
 commit grants fail closed at the wire, state and dispatch boundaries. Spelling
 remains available through the editor-owned integrations.
 
-The [accessibility observer](../accessibility/README.md) and version-pinned
+The [accessibility observer](../accessibility/README.md) supplies IME-parity
+field identity and corroboration; the version-pinned
 [Wayland compatibility frontend](../../packaging/fcitx5-wayland-compat/README.md)
-retain diagnostic and upstream-research value. Restoring surrounding-text
-publication did not establish safe editing. Installer `--observed-app` options
-prepare diagnostic observation on a subsequent launch; they do not enable
-browser/Codex writing. The quarantine works with the stock Fcitx frontend.
-The installed stock-frontend Chromium trial in
-`output/extensionless/installed-browser-05/` preserved original Tab navigation
-and text, emitted no model context or commit despite an explicit origin allow,
-and visibly displayed the unavailable notice. This auxiliary-panel observation
-does not qualify caret alignment or browser editing.
-Extension-free support requires a cooperating editor transaction or upstream
-support that preserves expected field/revision authority through execution; see
-the [pinned architecture findings](../../docs/research/linux-architecture.md#2026-09-08-extension-free-editing-transaction-limits).
+supplies exact surrounding text. Neither provides an editor transaction:
+IME-parity accepts typed-text semantics instead. The earlier stock-frontend
+Chromium trial in `output/extensionless/installed-browser-05/` verified the
+former quarantine (original Tab, no context or commit despite an origin allow);
+it does not qualify IME-parity. Exact editor transactions remain limited to
+editor-owned integrations; see the
+[pinned architecture findings](../../docs/research/linux-architecture.md#2026-09-08-extension-free-editing-transaction-limits).
 
-The actual-addon isolated D-Bus lane proves the quarantine with configured app
-and exact-origin allow rules, no prose/model context or CommitString, original
-Tab/navigation, and the explicit notice without surrounding text. The
-notice-lifetime checks inspect the latest auxiliary panel after repeated
-publication, input, focus loss, foreign composition and expiry. Separate
-**synthetic desktop** targets exercise the observer's automatic acquisition,
-snapshot corroboration, absolute caret/document-length gates, delayed preview
-cancellation, field switches, foreign Unicode preedit, pause and broker recovery.
-A native manual Omawrite context still invokes and dispatches an exact append.
-Those fixtures prove transport/state behavior, not browser compatibility,
-application mutation, overlay rendering or undo:
+The actual-addon isolated D-Bus lane covers each class with configured
+`linux_app` and exact-origin allow rules. Unavailable apps keep Tab/navigation,
+read no prose and send no context; notice-lifetime checks inspect the latest
+auxiliary panel after publication, input, focus loss, foreign composition and
+expiry. For IME-parity browsers (`brave-origin`, with Chromium's
+`UppercaseWords` hint, and `zen` without hints) and a desktop target (`code`)
+it proves: a declined field or absent observer service sends no manual context
+despite the app grant, a mismatched target kind or observer-denied password
+field reads no prose, automatic suggestion in the Fcitx panel fallback with its
+hint, one exact Tab dispatch, explicit Tab re-inspection, and
+request/display/dispatch disagreement and an unanswered dispatch snapshot
+failing closed with their reasons. For `zen`, an observer-denied urlbar on the
+same unhinted context reads no prose, sends no context and keeps Tab.
+`brave-origin` also covers foreign Unicode preedit yield and a rendered preview;
+`brave-origin` and `code` cover a peer-injected replacement suggestion or
+commit grant closing the transport. `chatgpt` covers the paragraph end: an
+agreed `"\n\n"` displays and dispatches one exact append, the broker receives
+`after: ""`, and observer disagreement, one or three line breaks and text after
+them fail closed. `Telegram` is canonicalized
+for observer, policy and session, and a non-identifier program gets no binding.
+**Synthetic desktop** targets still
+exercise snapshot corroboration, absolute caret/document-length gates, delayed
+preview cancellation, field switches, pause, broker recovery and Tab after an
+unchanged-authority reconnect; a native manual Omawrite context still dispatches
+an exact append. These fixtures prove transport/state behavior, not app
+compatibility, application mutation, overlay rendering or undo:
 
 ```sh
 python3 adapters/fcitx5/tests/observed-desktop.py
@@ -199,10 +340,13 @@ with `changed-files.json`. Roll back from the actual unlocked graphical session:
    system-provided unit.
 3. Restore the entries in `changed-files.json` from their matching backup paths;
    remove only listed new files confirmed to have had no predecessor. Include the
-   observed-app startup files, normally `chromium-flags.conf` and
-   `codex-flags.conf` under the configured `XDG_CONFIG_HOME`, plus the Fcitx drop-in
-   and launcher overrides when listed. Preserve subsequent unrelated edits rather
-   than overwriting them with an older whole file. Run
+   observed-app startup files under the configured `XDG_CONFIG_HOME`
+   (`chromium-flags.conf`, `brave-origin-flags.conf`, `codex-flags.conf`,
+   `code-flags.conf` or `cursor-flags.conf`), plus the Fcitx drop-in and launcher
+   overrides when listed. To undo only the renderer accessibility flag, delete the
+   `# Badi: renderer accessibility for the focused-field observer` line and the
+   flag line after it. Preserve subsequent unrelated edits rather than
+   overwriting them with an older whole file. Run
    `systemctl --user daemon-reload`, restore the prior broker/helper running states,
    and restart `omarchy-fcitx5.service` for a complete native rollback. Do not start
    a newly introduced helper whose unit has just been removed. Save work and
@@ -286,7 +430,9 @@ and observed native fields remain continuation-only; native spelling replacement
 has been withdrawn. Additional cooperative applications can be
 granted with `badi app APP_ID on`, using the exact identity from `badi debug status`.
 A grant does not add missing toolkit context support. Apps without a canonical
-Fcitx identity, browsers, Electron editors and terminals need suitable adapters.
+Fcitx identity, Gecko browsers other than Zen, and terminals need suitable
+adapters. The listed Chromium-based apps and Zen use the observed IME-parity
+path above; other Chromium-family ids are unavailable.
 
 ### Judge usefulness and editing safety separately
 
@@ -350,9 +496,16 @@ candidate is visible. The client reconnects without a new focus/key event,
 obtains fresh policy, and rejects the retired candidate. Production reconnect
 uses at most ten retries with backoff capped at five seconds; an explicit key
 or new focus can renew the budget. Handshakes time out after two seconds.
-After a disconnect or policy epoch change, the native adapter requires a fresh
-surrounding-text event before reading again. Typing supplies this in cooperative
-fields; the explicit-manual invocation contract remains unchanged.
+A closed connection, including the broker's five-minute idle close, retires
+every session, context revision, candidate, commit grant and pending observer
+reply. After fresh policy the adapter reopens the session and republishes
+context before any request. Surrounding text is Fcitx state: when the new
+connection reports the same authority epoch, settings revision and pause state,
+Tab reads it without new input, while automatic observed requests still wait for
+new surrounding text. A changed authority, on the same or a new connection,
+requires a fresh surrounding-text event before reading again. Typing supplies
+this in cooperative fields; the explicit-manual invocation contract remains
+unchanged.
 
 After desktop installation, the opt-in check below uses Gio to drive synthetic
 input contexts through the **installed Fcitx addon and local model**:
@@ -425,11 +578,12 @@ Rollback must also stop the disposable broker and remove its isolated
 HOME/XDG/runtime data. Do not remove or rewrite the user's existing Fcitx
 configuration.
 
-The deterministic tests cover state transitions, exact app identity,
-fingerprint salting/binding, UTF-8 and output sanitization, bounded framing,
-unchanged-toolkit republish handling, stale focus/revision rejection, sensitive
+The deterministic tests cover state transitions, app classes and canonical
+app ids, observed-only append-only IME parity, fingerprint salting/binding,
+UTF-8 and output sanitization, bounded framing, unchanged-toolkit republish
+handling, stale focus/revision rejection, sensitive
 zero-context behavior, manual key decisions, foreign-IME yielding, duplicate
-JSON-key rejection, optional `suggestion.clear` fields, and duplicate commit
-authorization.
+JSON-key rejection, optional `suggestion.clear` fields, duplicate commit
+authorization, and reconnect freshness without surviving candidates or grants.
 
 See [WIRE_PROTOCOL.md](WIRE_PROTOCOL.md) for the isolated v2 assumptions.

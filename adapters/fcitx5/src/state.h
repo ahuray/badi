@@ -10,9 +10,31 @@
 namespace badi::fcitx5 {
 
 enum class NativeEditTarget { DesktopApplication, BrowserOrigin, Unsupported };
+// Manual is the unknown-identity explicit contract; Observed is a field bound
+// by the accessibility observer's inspect result.
+enum class NativeEditPath { Manual, Observed };
 
-bool nativeEditingAvailable(std::string_view appId,
-                           NativeEditTarget target = NativeEditTarget::DesktopApplication);
+// Every native decision starts from the class of the canonical app id.
+enum class NativeAppClass {
+    // Existing contract for user-granted native apps: manual unknown identity
+    // or an observed desktop field.
+    NativeExact,
+    // Chromium-based apps and Zen (Gecko) without an editor-owned channel. Only
+    // an observed field of the matching target kind may accept, append-only,
+    // like typing.
+    ImeParityBrowser,
+    ImeParityDesktop,
+    // Other Gecko browsers, Chromium-family ids without an observer rule, and
+    // apps whose own Badi integration owns editing.
+    Unavailable,
+};
+
+NativeAppClass classifyNativeApp(std::string_view appId);
+bool imeParityApp(std::string_view appId);
+// Whether this app may be inspected by the observer at all.
+bool nativeObservationAvailable(std::string_view appId);
+bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target,
+                            NativeEditPath path);
 
 struct Coordinates {
     std::string sessionId;
@@ -34,14 +56,31 @@ struct ContextWindow {
     bool composing = false;
     bool identityKnown = false;
     bool explicitRequest = true;
+    // Fcitx reported exactly Chromium's paragraph end after the caret,
+    // normalized away from `after` (see normalizeObservedParagraphEnd).
+    bool paragraphEndAfter = false;
 
     bool operator==(const ContextWindow &other) const {
         // Invocation mode is request metadata, not an edit to the field.
         return before == other.before && after == other.after && anchor == other.anchor &&
             head == other.head && language == other.language && sensitive == other.sensitive &&
-            multiline == other.multiline && composing == other.composing && identityKnown == other.identityKnown;
+            multiline == other.multiline && composing == other.composing && identityKnown == other.identityKnown &&
+            paragraphEndAfter == other.paragraphEndAfter;
     }
 };
+
+// Chromium's text-input surrounding text ends every <p> with "\n\n" (margins
+// or not) when anything is rendered after the editor, so the caret at the end
+// of a ProseMirror composer's last paragraph reports after == "\n\n"
+// (Chromium 152, WAYLAND_DEBUG, 2026-09-27). For an observed IME-parity field
+// that exact suffix counts as end of field: `after` becomes empty for
+// eligibility and the broker, and `paragraphEndAfter` keeps the raw text. The
+// caller normalizes only observed IME-parity contexts; each observer agreement
+// check compares observedAfter(). Any other suffix, a single "\n" included,
+// is unchanged.
+void normalizeObservedParagraphEnd(ContextWindow &context);
+// The after-caret text exactly as Fcitx reported it.
+std::string observedAfter(const ContextWindow &context);
 
 struct ContextUpdate {
     Coordinates coordinates;
@@ -105,11 +144,20 @@ public:
     void focusIn() { fresh_ = false; }
     void focusOut() { fresh_ = false; }
     void capabilityChanged() { fresh_ = false; }
-    void surroundingTextUpdated() { fresh_ = true; }
+    // Losing the broker transport retires broker grants, not Fcitx's current
+    // surrounding text. Explicit requests may read it again after reconnect;
+    // automatic requests wait for a new surrounding-text event.
+    void transportLost() { automatic_ = false; }
+    void surroundingTextUpdated() {
+        fresh_ = true;
+        automatic_ = true;
+    }
     [[nodiscard]] bool fresh() const { return fresh_; }
+    [[nodiscard]] bool freshForAutomatic() const { return fresh_ && automatic_; }
 
 private:
     bool fresh_ = false;
+    bool automatic_ = false;
 };
 
 bool hasForeignImeUi(const PanelObservation &panel);
@@ -124,7 +172,8 @@ LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
                               bool escapeKey, bool hasLiveOwnedCandidate,
                               const PanelObservation &panel);
 LocalAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
-                            const PanelObservation &panel);
+                            const PanelObservation &panel, NativeEditPath path);
+bool tabEligibleContext(const std::optional<ContextWindow> &context);
 std::optional<ContextWindow> captureContextWindow(std::string_view text,
                                                   std::size_t cursor,
                                                   std::size_t anchor,
@@ -137,10 +186,14 @@ class SessionState {
 public:
     bool focusIn(std::string sessionId, std::string targetId,
                  std::string appId, std::string fingerprintSalt,
-                 NativeEditTarget target = NativeEditTarget::DesktopApplication);
+                 NativeEditTarget target = NativeEditTarget::DesktopApplication,
+                 NativeEditPath path = NativeEditPath::Manual);
     void focusOut();
     void invalidateContext();
     void denyEditing();
+    // The observer lost this field: context and candidates end, and only the
+    // native exact class may continue through the manual path.
+    void retireObservation();
     std::optional<ContextUpdate> updateContext(ContextWindow context);
 
     bool showSuggestion(Suggestion suggestion, std::uint64_t nowMs);
@@ -157,8 +210,10 @@ public:
 
     [[nodiscard]] bool focused() const { return focused_; }
     [[nodiscard]] bool editingAvailable() const {
-        return nativeEditingAvailable(appId_, editTarget_);
+        return nativeEditingAvailable(appId_, editTarget_, editPath_);
     }
+    [[nodiscard]] NativeAppClass appClass() const { return classifyNativeApp(appId_); }
+    [[nodiscard]] NativeEditPath editPath() const { return editPath_; }
     [[nodiscard]] bool sensitive() const { return sensitive_; }
     [[nodiscard]] bool suggestionVisible() const { return visible_.has_value(); }
     [[nodiscard]] const Coordinates &coordinates() const { return coordinates_; }
@@ -176,6 +231,7 @@ private:
     std::string targetId_;
     std::string fingerprintSalt_;
     NativeEditTarget editTarget_ = NativeEditTarget::Unsupported;
+    NativeEditPath editPath_ = NativeEditPath::Manual;
     bool focused_ = false;
     bool sensitive_ = false;
     std::optional<ContextUpdate> lastContext_;

@@ -56,9 +56,10 @@ class LaunchTests(unittest.TestCase):
                 self.assertEqual(result, self.environment)
 
     def test_unknown_receipt_version_and_missing_receipt_fall_back(self):
-        self.receipt["source"]["upstream_version"] = "5.1.22"
-        self.write_receipt()
-        self.assertEqual(self.select(), (self.environment, False))
+        for version in ("5.1.21", "5.1.23"):
+            self.receipt["source"]["upstream_version"] = version
+            self.write_receipt()
+            self.assertEqual(self.select(), (self.environment, False))
         (self.root / "build-receipt.json").unlink()
         self.assertEqual(self.select(), (self.environment, False))
 

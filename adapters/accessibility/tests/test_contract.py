@@ -12,6 +12,7 @@ class FakeBackend:
     def __init__(self):
         self.content = "Same text"
         self.reads = []
+        self.geometry_requests = []
         self.change = None
         self.meta = {"bus": ":1.25", "path": "/org/a11y/atspi/accessible/2", "process_id": 42,
                      "app_id": "chromium", "uri": "https://example.test/writing", "browser": True,
@@ -19,7 +20,8 @@ class FakeBackend:
                      "editable": True, "showing": True, "visible": True, "enabled": True,
                      "sensitive": False, "caret": 9, "total_chars": 9, "selection_count": 0}
 
-    def metadata(self, app_id):
+    def metadata(self, app_id, geometry=False):
+        self.geometry_requests.append(geometry)
         if app_id != self.meta["app_id"]:
             raise Denied("app_mismatch")
         return copy.deepcopy(self.meta)
@@ -83,6 +85,30 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(self.backend.reads, [], change)
             self.backend.meta = before
 
+    def test_electron_web_content_keeps_html_purpose_gates(self):
+        self.backend.meta.update(app_id="code", browser=False, web=True, uri="")
+        for change in ({"tag": "input", "input_type": "email"}, {"tag": "input", "input_type": "search"},
+                       {"tag": "unknown"}, {"role": "password text"}):
+            with self.subTest(change=change):
+                before = copy.deepcopy(self.backend.meta)
+                self.backend.meta.update(change)
+                result = self.observer.request({"schema": SCHEMA, "id": "1", "op": "inspect", "app_id": "code"})
+                self.assertIn(result["error"], ("unsupported_field", "sensitive_field"))
+                self.backend.meta = before
+        focus = self.observer.request({"schema": SCHEMA, "id": "1", "op": "inspect", "app_id": "code"})["focus"]
+        self.assertEqual(focus["target"], {"kind": "desktop_application", "app_id": "code",
+                                           "target_id": focus["target"]["target_id"]})
+        # Native toolkits (Telegram, Omawrite) expose no HTML tag or input type.
+        self.backend.meta.update(app_id="telegram", web=False, tag="", input_type="")
+        self.assertTrue(self.observer.request({"schema": SCHEMA, "id": "1", "op": "inspect", "app_id": "telegram"})["ok"])
+
+    def test_brave_shares_chromium_site_policy_but_keeps_its_binding(self):
+        self.backend.meta.update(app_id="brave-origin")
+        focus = self.observer.request({"schema": SCHEMA, "id": "1", "op": "inspect", "app_id": "brave-origin"})["focus"]
+        self.assertEqual((focus["target"]["kind"], focus["target"]["app_id"]), ("browser", "chromium"))
+        self.assertEqual(focus["target"]["origin"], {"scheme": "https", "host": "example.test"})
+        self.assertEqual(focus["binding"]["app_id"], "brave-origin")
+
     def test_exact_same_text_different_field_rejects(self):
         focus = self.inspect()["focus"]
         self.backend.meta["path"] = "/org/a11y/atspi/accessible/3"
@@ -145,6 +171,7 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(result["focus"]["total_chars"], focus["total_chars"])
         self.assertEqual(self.backend.reads, reads)
         self.assertEqual(len(renders), 1)
+        self.assertEqual(self.backend.geometry_requests, [False, False, False, True], "only preview calibrates")
         self.backend.meta["path"] = "/other"
         self.assertFalse(self.observer.request(request)["ok"])
         self.assertEqual(len(renders), 1)

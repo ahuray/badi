@@ -12,6 +12,8 @@ namespace badi::fcitx5 {
 namespace {
 
 constexpr std::uint64_t kMaxSafeCounter = (std::uint64_t{1} << 53U) - 1U;
+// Chromium's text-input serialization of a <p> block end (see state.h).
+constexpr std::string_view kParagraphEnd = "\n\n";
 
 bool sameAddress(const Coordinates &left, const Coordinates &right) {
     return left == right;
@@ -24,6 +26,46 @@ std::uint64_t mix(std::string_view value, std::uint64_t seed) {
         hash *= 0x100000001b3ULL;
     }
     return hash;
+}
+
+// Chromium-family identities without an observer rule: other Chromium
+// browsers, channels and Flatpak ids, installed web-app windows (Wayland
+// chrome-<id>-<profile>, X11 crx_<id>), shared Electron runtimes and other
+// builds of the IME-parity apps. Their commitString is equally retargetable,
+// and nothing can corroborate their fields, so none may use the manual path.
+bool unobservedChromiumFamily(std::string_view appId) {
+    constexpr std::array<std::string_view, 18> exact{
+        "opera", "vivaldi", "msedge", "helium", "helium-browser", "thorium", "thorium-browser",
+        "cromite", "ungoogled-chromium", "code-oss", "code-insiders", "codium", "vscodium",
+        "discordcanary", "discordptb", "vesktop", "legcord", "webcord"};
+    constexpr std::array<std::string_view, 23> prefixes{
+        "chrome-", "crx_", "chromium-", "google-chrome", "brave-", "microsoft-edge", "msedge-",
+        "vivaldi-", "opera-", "yandex-browser", "electron", "discord-", "com.google.chrome",
+        "org.chromium.", "com.brave.", "com.microsoft.edge", "com.vivaldi.", "com.opera.",
+        "io.github.ungoogled_software.", "com.visualstudio.code", "com.vscodium.", "com.discordapp.",
+        "dev.vencord."};
+    return std::find(exact.begin(), exact.end(), appId) != exact.end() ||
+           std::any_of(prefixes.begin(), prefixes.end(),
+                       [appId](std::string_view prefix) { return appId.starts_with(prefix); });
+}
+
+// Gecko-family browser identities other than the observed "zen": Firefox and
+// its channels, Flatpak ids and PWAsForFirefox web-app windows (FFPWA-<id>),
+// other Zen builds (Twilight, Flatpak), and Firefox forks. Their commitString
+// is as retargetable as Zen's, their urlbar need not carry a Url purpose, and
+// no observer rule corroborates their fields, so none may use the manual path.
+// Gecko mail clients (Thunderbird) are not browsers and keep the native contract.
+bool unobservedGeckoFamily(std::string_view appId) {
+    constexpr std::array<std::string_view, 6> exact{
+        "iceweasel", "icecat", "palemoon", "seamonkey", "basilisk", "torbrowser"};
+    constexpr std::array<std::string_view, 17> prefixes{
+        "firefox", "org.mozilla.firefox", "ffpwa-", "zen-", "app.zen_browser.",
+        "io.github.zen_browser.", "librewolf", "io.gitlab.librewolf", "floorp", "one.ablaze.",
+        "waterfox", "net.waterfox.", "mullvadbrowser", "mullvad-browser", "net.mullvad.",
+        "tor-browser", "org.torproject."};
+    return std::find(exact.begin(), exact.end(), appId) != exact.end() ||
+           std::any_of(prefixes.begin(), prefixes.end(),
+                       [appId](std::string_view prefix) { return appId.starts_with(prefix); });
 }
 
 } // namespace
@@ -62,14 +104,54 @@ bool supportedAppId(std::string_view appId) {
     return validLinuxAppId(appId);
 }
 
-bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target) {
-    // Browser/Electron commitString can retarget during beforeinput. Policy
-    // and an external field snapshot cannot supply an editor transaction.
-    constexpr std::array<std::string_view, 9> unavailable{
+NativeAppClass classifyNativeApp(std::string_view appId) {
+    // Browser/Electron commitString behaves like a typed keystroke: page script
+    // can retarget it during beforeinput and undo may coalesce it with typing.
+    // These apps therefore accept only through an observed field, append-only.
+    // Zen (Gecko) is the one Gecko identity with a verified observer rule and
+    // input-method path: its wayland_v2 program() is exactly "zen" (live,
+    // 2026-09-26). Its urlbar shares that input context without a Url purpose,
+    // so the observer, not allowsNativeContext(), keeps browser UI out.
+    constexpr std::array<std::string_view, 8> browsers{
         "chromium", "chromium-browser", "chrome", "google-chrome", "brave",
-        "brave-origin", "brave-browser", "firefox", "chatgpt"};
-    return target == NativeEditTarget::DesktopApplication && supportedAppId(appId) &&
-           std::find(unavailable.begin(), unavailable.end(), appId) == unavailable.end();
+        "brave-origin", "brave-browser", "zen"};
+    constexpr std::array<std::string_view, 4> desktop{"chatgpt", "code", "cursor", "discord"};
+    // Other Gecko builds have no tested observer or input-method path; Obsidian's
+    // editor plugin owns its fields, so a second integration would double-suggest.
+    constexpr std::array<std::string_view, 2> unavailable{"obsidian", "md.obsidian.obsidian"};
+    const auto listed = [appId](const auto &ids) {
+        return std::find(ids.begin(), ids.end(), appId) != ids.end();
+    };
+    if (!validLinuxAppId(appId) || listed(unavailable) || unobservedGeckoFamily(appId))
+        return NativeAppClass::Unavailable;
+    if (listed(browsers)) return NativeAppClass::ImeParityBrowser;
+    if (listed(desktop)) return NativeAppClass::ImeParityDesktop;
+    if (unobservedChromiumFamily(appId)) return NativeAppClass::Unavailable;
+    return NativeAppClass::NativeExact;
+}
+
+bool imeParityApp(std::string_view appId) {
+    const auto kind = classifyNativeApp(appId);
+    return kind == NativeAppClass::ImeParityBrowser || kind == NativeAppClass::ImeParityDesktop;
+}
+
+bool nativeObservationAvailable(std::string_view appId) {
+    return classifyNativeApp(appId) != NativeAppClass::Unavailable;
+}
+
+bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target,
+                            NativeEditPath path) {
+    switch (classifyNativeApp(appId)) {
+    case NativeAppClass::NativeExact:
+        return target == NativeEditTarget::DesktopApplication;
+    case NativeAppClass::ImeParityBrowser:
+        return path == NativeEditPath::Observed && target == NativeEditTarget::BrowserOrigin;
+    case NativeAppClass::ImeParityDesktop:
+        return path == NativeEditPath::Observed && target == NativeEditTarget::DesktopApplication;
+    case NativeAppClass::Unavailable:
+        return false;
+    }
+    return false;
 }
 
 bool matchesCapturedContext(
@@ -92,10 +174,19 @@ LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
 }
 
 LocalAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
-                            const PanelObservation &panel) {
+                            const PanelObservation &panel, NativeEditPath path) {
     if (hasForeignImeUi(panel)) return LocalAction::PassThrough;
     if (hasLiveOwnedCandidate && hasOwnedCandidate(panel)) return LocalAction::Accept;
-    return eligibleContext ? LocalAction::Invoke : LocalAction::PassThrough;
+    // Observed fields suggest on their own, so Tab without a suggestion keeps
+    // its meaning (next field, indent); requesting there takes the chord.
+    const bool tabRequests = eligibleContext && path == NativeEditPath::Manual;
+    return tabRequests ? LocalAction::Invoke : LocalAction::PassThrough;
+}
+
+bool tabEligibleContext(const std::optional<ContextWindow> &context) {
+    return context && context->after.empty() &&
+           supportedWritingLanguage(context->language) &&
+           context->before.find_first_not_of(" \t\r\n") != std::string::npos;
 }
 
 bool supportedWritingLanguage(std::string_view language) {
@@ -141,9 +232,19 @@ std::optional<ContextWindow> captureContextWindow(std::string_view text,
     return result;
 }
 
+void normalizeObservedParagraphEnd(ContextWindow &context) {
+    if (context.paragraphEndAfter || context.after != kParagraphEnd) return;
+    context.after.clear();
+    context.paragraphEndAfter = true;
+}
+
+std::string observedAfter(const ContextWindow &context) {
+    return context.paragraphEndAfter ? std::string(kParagraphEnd) : context.after;
+}
+
 bool SessionState::focusIn(std::string sessionId, std::string targetId,
                            std::string appId, std::string fingerprintSalt,
-                           NativeEditTarget target) {
+                           NativeEditTarget target, NativeEditPath path) {
     if (!validOpaqueId(targetId) || !validLinuxAppId(appId) ||
         !supportedAppId(appId) || !validSessionId(sessionId) ||
         fingerprintSalt.size() < 16 || !validOpaqueId(fingerprintSalt)) {
@@ -155,6 +256,7 @@ bool SessionState::focusIn(std::string sessionId, std::string targetId,
     appId_ = std::move(appId);
     fingerprintSalt_ = std::move(fingerprintSalt);
     editTarget_ = target;
+    editPath_ = path;
     coordinates_.focusEpoch =
         coordinates_.focusEpoch >= kMaxSafeCounter ? 1 : coordinates_.focusEpoch + 1;
     coordinates_.revision = 0;
@@ -176,10 +278,16 @@ void SessionState::focusOut() {
     targetId_.clear();
     fingerprintSalt_.clear();
     editTarget_ = NativeEditTarget::Unsupported;
+    editPath_ = NativeEditPath::Manual;
 }
 
 void SessionState::denyEditing() {
     editTarget_ = NativeEditTarget::Unsupported;
+    invalidateContext();
+}
+
+void SessionState::retireObservation() {
+    editPath_ = NativeEditPath::Manual;
     invalidateContext();
 }
 
@@ -196,7 +304,13 @@ void SessionState::invalidateContext() {
 std::optional<ContextUpdate>
 SessionState::updateContext(ContextWindow context) {
     if (!focused_ || !editingAvailable()) return std::nullopt;
-    if (context.sensitive || context.composing || context.anchor != context.head ||
+    // IME-parity context is always corroborated by the observer; the unknown
+    // identity manual contract is limited to native exact apps.
+    // The paragraph-end normalization is the observed IME-parity rule.
+    if ((imeParityApp(appId_) && !context.identityKnown) ||
+        (context.paragraphEndAfter && (!imeParityApp(appId_) || !context.identityKnown ||
+                                    editPath_ != NativeEditPath::Observed || !context.after.empty())) ||
+        context.sensitive || context.composing || context.anchor != context.head ||
         !validLanguageTag(context.language) || !validContextText(context.before) || !validContextText(context.after)) {
         invalidateContext();
         return std::nullopt;
@@ -337,7 +451,7 @@ void SessionState::clearSuggestion() {
 std::string SessionState::nextFingerprint(const ContextWindow &context) const {
     const auto material = fingerprintSalt_ + "\x1f" + coordinates_.sessionId +
                           "\x1f" + appId_ + "\x1f" + targetId_ + "\x1f" +
-                          context.before + "\x1f" + context.after + "\x1f" +
+                          context.before + "\x1f" + observedAfter(context) + "\x1f" +
                           context.language + "\x1f" +
                           std::to_string(context.anchor) + ":" +
                           std::to_string(context.head) + ":" +

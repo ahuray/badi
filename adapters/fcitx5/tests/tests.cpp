@@ -12,6 +12,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -329,6 +330,85 @@ void sensitiveCompositionAndSelectionAreZeroContext() {
     check(!state.lastContext(), "sensitive context must not be retained");
 }
 
+void transportReconnectKeepsFcitxTextButNoBrokerGrant() {
+    // Mirrors the addon: Fcitx freshness gates capture, while SessionState
+    // carries every broker-bound revision, candidate and commit grant.
+    const auto capture = [](const SurroundingFreshness &freshness) {
+        return freshness.fresh()
+                   ? captureContextWindow("thank you", 9, 9, false, true, false, "en")
+                   : std::nullopt;
+    };
+    AuthorityContinuity authority;
+    const AuthoritySnapshot connected{
+        .authorityEpoch = 4, .settingsRevision = 2, .paused = false, .initial = true};
+    check(!authority.observe(connected), "the first connection has no earlier authority to retire");
+
+    SurroundingFreshness freshness;
+    auto state = focusedState();
+    freshness.surroundingTextUpdated();
+    const auto before = state.updateContext(*capture(freshness));
+    check(before && state.showSuggestion(suggestionFor(*before), 100),
+          "a candidate is visible before the idle disconnect");
+    const auto accept = state.requestAcceptance(100, kOwnedPanel);
+    check(accept.has_value(), "an acceptance is pending before the idle disconnect");
+    const CommitPrepare prepare{accept->coordinates, accept->controlId,
+                                accept->suggestionId, accept->expectedText, "all"};
+
+    state.invalidateContext();
+    freshness.transportLost();
+    check(!state.suggestionVisible() && !state.lastContext(),
+          "transport loss retires the candidate and captured context");
+    check(!state.authorizeCommit(prepare, 101, kOwnedPanel),
+          "a commit grant cannot survive its connection");
+    check(!state.showSuggestion(suggestionFor(*before), 101),
+          "a suggestion from the closed connection cannot redisplay");
+    check(freshness.fresh() && !freshness.freshForAutomatic(),
+          "unchanged Fcitx text stays readable only for an explicit request");
+
+    check(!authority.observe(connected), "an unchanged reconnect keeps Fcitx freshness");
+    const auto context = capture(freshness);
+    check(decideTabAction(tabEligibleContext(context), state.suggestionVisible(), {},
+                          NativeEditPath::Manual) == LocalAction::Invoke,
+          "Tab is claimed after a transport-only reconnect without new input");
+    const auto republished = state.updateContext(*context);
+    check(republished && republished->coordinates.sessionId == before->coordinates.sessionId &&
+              republished->coordinates.focusEpoch == before->coordinates.focusEpoch &&
+              republished->coordinates.revision > before->coordinates.revision &&
+              republished->coordinates.fingerprint != before->coordinates.fingerprint,
+          "the reopened session receives context at a new revision and fingerprint");
+    check(!state.showSuggestion(suggestionFor(*before), 102) &&
+              !state.authorizeCommit(prepare, 102, kOwnedPanel),
+          "republished context cannot revive the retired suggestion or grant");
+    check(state.showSuggestion(suggestionFor(*republished), 102),
+          "a suggestion for the republished revision may display");
+    const auto current = state.requestAcceptance(102, kOwnedPanel);
+    check(current && current->controlId != accept->controlId,
+          "acceptance after reconnect uses a new control identity");
+    const CommitPrepare currentPrepare{current->coordinates, current->controlId,
+                                       current->suggestionId, current->expectedText, "all"};
+    check(state.authorizeCommit(currentPrepare, 103, kOwnedPanel).has_value() &&
+              !state.authorizeCommit(currentPrepare, 103, kOwnedPanel),
+          "the new grant dispatches exactly once");
+    freshness.surroundingTextUpdated();
+    check(freshness.freshForAutomatic(), "new surrounding text resumes automatic requests");
+
+    for (const auto changed : {
+             AuthoritySnapshot{.authorityEpoch = 0, .settingsRevision = 2, .paused = false, .initial = true},
+             AuthoritySnapshot{.authorityEpoch = 0, .settingsRevision = 3, .paused = false, .initial = true},
+             AuthoritySnapshot{.authorityEpoch = 0, .settingsRevision = 3, .paused = true, .initial = true},
+             AuthoritySnapshot{.authorityEpoch = 1, .settingsRevision = 3, .paused = true, .initial = false},
+         }) {
+        freshness.transportLost();
+        check(authority.observe(changed),
+              "an epoch, settings or pause change must retire Fcitx freshness");
+        freshness.capabilityChanged();
+        check(decideTabAction(tabEligibleContext(capture(freshness)), false, {},
+                              NativeEditPath::Manual) == LocalAction::PassThrough,
+              "changed authority requires new surrounding text before Tab reads");
+        freshness.surroundingTextUpdated();
+    }
+}
+
 void contextWireIsExplicitManualV2() {
     auto state = focusedState();
     const auto update = explicitContext(state);
@@ -471,16 +551,22 @@ void foreignImeAndManualKeysYieldCooperatively() {
     check(decideLocalAction(true, false, false, false, foreignPreedit) ==
               LocalAction::PassThrough,
           "foreign IME must win even over invoke chord");
-    check(decideTabAction(true, false, {}) == LocalAction::Invoke,
-          "Tab requests at an eligible end-of-text caret");
-    check(decideTabAction(true, true, ownedCandidates) == LocalAction::Accept,
+    constexpr auto manual = NativeEditPath::Manual;
+    constexpr auto observed = NativeEditPath::Observed;
+    check(decideTabAction(true, false, {}, manual) == LocalAction::Invoke,
+          "manual Tab requests at an eligible end-of-text caret");
+    check(decideTabAction(true, true, ownedCandidates, manual) == LocalAction::Accept,
           "Tab accepts the owned live candidate before generic IME navigation");
-    check(decideTabAction(false, false, {}) == LocalAction::PassThrough,
+    check(decideTabAction(false, false, {}, manual) == LocalAction::PassThrough,
           "Tab preserves navigation and indentation without eligible context");
-    check(decideTabAction(true, true, foreignCandidates) == LocalAction::PassThrough,
+    check(decideTabAction(true, true, foreignCandidates, manual) == LocalAction::PassThrough,
           "Tab leaves foreign candidate navigation intact");
-    check(decideTabAction(true, false, {.foreignAuxiliary = true}) == LocalAction::PassThrough,
+    check(decideTabAction(true, false, {.foreignAuxiliary = true}, manual) == LocalAction::PassThrough,
           "Tab yields to foreign auxiliary UI");
+    check(decideTabAction(true, false, {}, observed) == LocalAction::PassThrough,
+          "observed Tab without a suggestion stays the application's Tab (next field, indent)");
+    check(decideTabAction(true, true, ownedCandidates, observed) == LocalAction::Accept,
+          "observed Tab accepts a visible suggestion");
 
     auto state = focusedState();
     const auto update = explicitContext(state);
@@ -586,22 +672,254 @@ void observedFieldsRejectReplacementAuthority() {
     check(!manual.showSuggestion(suggestion, 0), "unknown native widgets cannot replace text");
 }
 
-void browserNativeEditingIsUnavailable() {
+constexpr std::array kImeParityBrowsers{"chromium", "chromium-browser", "chrome", "google-chrome",
+                                         "brave", "brave-origin", "brave-browser", "zen"};
+constexpr std::array kImeParityDesktop{"chatgpt", "code", "cursor", "discord"};
+// Only Zen's live-verified program() is IME-parity; other Gecko ids, including
+// other Zen builds and Flatpak ids, have no observer rule.
+constexpr std::array kUnavailableApps{"firefox", "firefox-esr", "org.mozilla.firefox", "zen-browser",
+                                      "zen-alpha", "zen-beta", "app.zen_browser.zen", "librewolf",
+                                      "floorp", "obsidian", "md.obsidian.obsidian"};
+// Gecko-family browser ids beyond the explicit list: channels, Flatpak ids,
+// PWAsForFirefox windows, other Zen builds and forks never reach the manual path.
+constexpr std::array kUnobservedGeckoFamily{
+    "firefox-beta", "firefox-nightly", "firefox-developer-edition", "firefoxdeveloperedition",
+    "org.mozilla.firefox_beta", "org.mozilla.firefox.nightly", "ffpwa-01hvy3f0gdt6dcg5v6ttrhk4bt",
+    "zen-twilight", "zen-browser-bin", "io.github.zen_browser.zen", "app.zen_browser.zen-twilight",
+    "librewolf-bin", "io.gitlab.librewolf-community", "one.ablaze.floorp", "waterfox-g",
+    "net.waterfox.waterfox", "mullvadbrowser", "mullvad-browser", "net.mullvad.mullvadbrowser",
+    "tor-browser", "torbrowser", "org.torproject.torbrowser-launcher", "icecat", "palemoon",
+    "seamonkey", "basilisk", "iceweasel"};
+// Chromium-family ids with no observer rule never reach the manual path.
+constexpr std::array kUnobservedChromiumFamily{
+    "chrome-app.hey.com__-default", "chrome-nngceckbapebfimnlniiiahkandclblb-default",
+    "crx_nngceckbapebfimnlniiiahkandclblb", "brave-nngceckbapebfimnlniiiahkandclblb-default",
+    "msedge-_nngceckbapebfimnlniiiahkandclblb-default", "com.google.chrome", "com.google.chromedev",
+    "org.chromium.chromium", "com.brave.browser", "com.microsoft.edge", "com.vivaldi.vivaldi",
+    "com.opera.opera", "io.github.ungoogled_software.ungoogled_chromium", "google-chrome-stable",
+    "google-chrome-beta", "google-chrome-unstable", "chromium-freeworld", "brave-browser-beta",
+    "brave-browser-nightly", "microsoft-edge", "microsoft-edge-stable", "microsoft-edge-beta",
+    "vivaldi", "vivaldi-stable", "vivaldi-snapshot", "opera", "opera-beta", "helium", "thorium-browser",
+    "yandex-browser", "electron", "electron42", "code-oss", "code-insiders", "codium", "vscodium",
+    "com.visualstudio.code", "com.vscodium.codium", "discord-canary", "discord-ptb", "discordcanary",
+    "vesktop", "com.discordapp.discord", "dev.vencord.vesktop"};
+
+void nativeAppClassesAreExplicit() {
+    for (const auto app : kImeParityBrowsers) {
+        check(classifyNativeApp(app) == NativeAppClass::ImeParityBrowser && imeParityApp(app) &&
+                  nativeObservationAvailable(app),
+              "Chromium-family browsers and Zen use IME parity");
+    }
+    for (const auto app : kImeParityDesktop) {
+        check(classifyNativeApp(app) == NativeAppClass::ImeParityDesktop && imeParityApp(app) &&
+                  nativeObservationAvailable(app),
+              "Chromium-based desktop apps use IME parity");
+    }
+    for (const auto app : kUnavailableApps) {
+        check(classifyNativeApp(app) == NativeAppClass::Unavailable && !imeParityApp(app) &&
+                  !nativeObservationAvailable(app),
+              "Gecko browsers and Obsidian stay unavailable to the native module");
+    }
+    for (const auto app : kUnobservedChromiumFamily) {
+        check(classifyNativeApp(app) == NativeAppClass::Unavailable && !imeParityApp(app) &&
+                  !nativeObservationAvailable(app),
+              "Chromium-family ids without an observer rule are unavailable, never native exact");
+    }
+    for (const auto app : kUnobservedGeckoFamily) {
+        check(classifyNativeApp(app) == NativeAppClass::Unavailable && !imeParityApp(app) &&
+                  !nativeObservationAvailable(app),
+              "Gecko-family browser ids other than zen are unavailable, never native exact");
+    }
+    // Family prefixes must not capture unrelated native identities. Gecko mail
+    // clients are not browsers and keep the native exact contract.
+    for (const auto app : {"omawrite", "com.github.xournalpp.xournalpp", "telegram",
+                           "org.telegram.desktop", "org.gnome.texteditor", "electrum", "chromaprint",
+                           "codeblocks", "org.kde.kate", "com.google.earthpro", "operator", "zenity",
+                           "firefly", "waterfall", "torrential", "thunderbird", "org.mozilla.thunderbird"}) {
+        check(classifyNativeApp(app) == NativeAppClass::NativeExact && nativeObservationAvailable(app),
+              "user-granted native apps keep the exact native contract");
+    }
+    for (const auto app : {"", "Telegram", "A window title", "code ", "chromium\n"}) {
+        check(classifyNativeApp(app) == NativeAppClass::Unavailable && !imeParityApp(app),
+              "non-canonical or invalid identities are never classified as editable");
+    }
+
+    using Target = NativeEditTarget;
+    using Path = NativeEditPath;
+    for (const auto target : {Target::DesktopApplication, Target::BrowserOrigin, Target::Unsupported}) {
+        for (const auto path : {Path::Manual, Path::Observed}) {
+            check(nativeEditingAvailable("omawrite", target, path) == (target == Target::DesktopApplication),
+                  "native exact apps edit desktop targets on either path");
+            for (const auto app : {"brave-origin", "zen"}) {
+                check(nativeEditingAvailable(app, target, path) ==
+                          (path == Path::Observed && target == Target::BrowserOrigin),
+                      "IME-parity browsers edit only observed browser-origin fields");
+            }
+            check(nativeEditingAvailable("code", target, path) ==
+                      (path == Path::Observed && target == Target::DesktopApplication),
+                  "IME-parity desktop apps edit only observed desktop fields");
+            for (const auto app : kUnavailableApps) {
+                check(!nativeEditingAvailable(app, target, path), "unavailable apps never edit");
+            }
+            for (const auto app : kUnobservedChromiumFamily) {
+                check(!nativeEditingAvailable(app, target, path),
+                      "unobserved Chromium-family apps never edit, even with a linux_app grant");
+            }
+            for (const auto app : kUnobservedGeckoFamily) {
+                check(!nativeEditingAvailable(app, target, path),
+                      "unobserved Gecko-family browsers never edit, even with a linux_app grant");
+            }
+        }
+    }
+}
+
+void canonicalAppIdsFoldAsciiCase() {
+    check(canonicalAppId("Telegram") == "telegram", "Qt window-class identity folds to lowercase");
+    check(canonicalAppId("org.Telegram.Desktop") == "org.telegram.desktop", "reverse DNS folds per segment");
+    check(canonicalAppId("com.github.xournalpp.xournalpp") == "com.github.xournalpp.xournalpp" &&
+              canonicalAppId("brave-origin") == "brave-origin" && canonicalAppId("zen_Browser-2") == "zen_browser-2",
+          "canonical identities are unchanged apart from case");
+    const std::string longest = "a" + std::string(127, 'B');
+    check(canonicalAppId(longest) == "a" + std::string(127, 'b'), "128-byte identities are accepted");
+    for (const auto &invalid : {std::string(), std::string("A window title"), std::string("1password"),
+                                      std::string("-app"), std::string("_app"), std::string("app..id"),
+                                      std::string(".app"), std::string("app."), std::string("app.1id"),
+                                      std::string("app._id"), std::string("app.-id"), std::string("caf\xC3\xA9"),
+                                      std::string("app/id"), std::string("app\0id", 6), "a" + std::string(128, 'b')}) {
+        check(!canonicalAppId(invalid), "non-identifier programs are rejected, not repaired");
+    }
+    for (const auto program : {"Telegram", "Org.Gnome.TextEditor", "Code", "Brave-Origin", "FIREFOX"}) {
+        const auto canonical = canonicalAppId(program);
+        check(canonical && validLinuxAppId(*canonical) && supportedAppId(*canonical),
+              "every folded identity satisfies the broker's lowercase validator");
+    }
+    check(classifyNativeApp(*canonicalAppId("Code")) == NativeAppClass::ImeParityDesktop &&
+              classifyNativeApp(*canonicalAppId("Brave-Origin")) == NativeAppClass::ImeParityBrowser &&
+              classifyNativeApp(*canonicalAppId("FIREFOX")) == NativeAppClass::Unavailable &&
+              classifyNativeApp(*canonicalAppId("Zen")) == NativeAppClass::ImeParityBrowser &&
+              classifyNativeApp(*canonicalAppId("App.Zen_browser.Zen")) == NativeAppClass::Unavailable &&
+              classifyNativeApp(*canonicalAppId("Telegram")) == NativeAppClass::NativeExact,
+          "classification uses the folded identity");
+    // Folding newly admits these mixed-case window classes; none may become
+    // a native exact app with the unknown-identity manual path.
+    for (const auto program : {"chrome-app.hey.com__-Default", "chrome-nngceckbapebfimnlniiiahkandclblb-Default",
+                               "com.google.Chrome", "org.chromium.Chromium", "com.brave.Browser",
+                               "Microsoft-edge", "Vivaldi-stable", "Code-OSS", "VSCodium", "Electron",
+                               "FFPWA-01HVY3F0GDT6DCG5V6TTRHK4BT", "Zen-Twilight", "org.mozilla.Firefox",
+                               "Firefox-Nightly", "LibreWolf"}) {
+        const auto canonical = canonicalAppId(program);
+        check(canonical && classifyNativeApp(*canonical) == NativeAppClass::Unavailable,
+              "folded Chromium- and Gecko-family window classes stay unavailable");
+    }
+}
+
+void imeParityRequiresObservedAppendOnlyField() {
+    auto allowedState = focusedState();
+    const auto manual = explicitContext(allowedState).context;
+    auto observed = manual;
+    observed.identityKnown = true;
+    for (const auto &[app, target, wrongTarget] : {
+             std::tuple{"brave-origin", NativeEditTarget::BrowserOrigin, NativeEditTarget::DesktopApplication},
+             std::tuple{"zen", NativeEditTarget::BrowserOrigin, NativeEditTarget::DesktopApplication},
+             std::tuple{"code", NativeEditTarget::DesktopApplication, NativeEditTarget::BrowserOrigin}}) {
+        auto unobserved = focusedState(app);
+        check(!unobserved.editingAvailable() && unobserved.editPath() == NativeEditPath::Manual,
+              "an IME-parity focus without an observed field cannot edit");
+        check(!unobserved.updateContext(manual) && !unobserved.updateContext(observed),
+              "the unknown-identity manual path is refused for IME-parity apps");
+        SessionState mismatched;
+        check(mismatched.focusIn(kSession, "observed-target", app, kSalt, wrongTarget, NativeEditPath::Observed) &&
+                  !mismatched.editingAvailable() && !mismatched.updateContext(observed),
+              "an observed field of the other target kind cannot edit");
+
+        SessionState state;
+        check(state.focusIn(kSession, "observed-target", app, kSalt, target, NativeEditPath::Observed) &&
+                  state.editingAvailable(),
+              "an observed field of the app's target kind may edit");
+        check(!state.updateContext(manual) && !state.lastContext(),
+              "even an observed session refuses unknown-identity context");
+        auto explicitObserved = state.updateContext(observed);
+        check(explicitObserved.has_value(), "explicit observed context is accepted");
+        const auto wire = nlohmann::json::parse(*serializeContextEnvelope(*explicitObserved, 0))["payload"];
+        check(wire["field"]["identity_known"] == true && wire["field"]["purpose"] == "normal" &&
+                  wire["explicit"] == true && wire["activation"] == "manual",
+              "explicit IME-parity requests remain observed requests on the wire");
+        auto automatic = observed;
+        automatic.explicitRequest = false;
+        const auto update = state.updateContext(automatic);
+        check(update.has_value(), "automatic observed context is accepted");
+
+        auto replacement = suggestionFor(*update);
+        replacement.text = " for your time";
+        replacement.replaceBefore = "you";
+        check(!state.showSuggestion(replacement, 0) && !state.suggestionVisible(),
+              "IME-parity fields refuse replacement suggestions");
+        const auto append = suggestionFor(*update);
+        check(state.showSuggestion(append, 0), "append suggestions display on the observed field");
+        const auto accept = state.requestAcceptance(1, kOwnedPanel);
+        check(accept && accept->replaceBefore.empty(), "IME-parity acceptance is append-only");
+        CommitPrepare prepare{accept->coordinates, accept->controlId, accept->suggestionId,
+                              accept->expectedText, "all", "you"};
+        check(!state.authorizeCommit(prepare, 2, kOwnedPanel),
+              "an injected deletion cannot upgrade an IME-parity append");
+        check(state.showSuggestion(append, 3), "a fresh append recovers after the refused replacement");
+        const auto fresh = state.requestAcceptance(4, kOwnedPanel);
+        check(fresh.has_value(), "fresh append acceptance");
+        prepare = {fresh->coordinates, fresh->controlId, fresh->suggestionId, fresh->expectedText, "all"};
+        const auto dispatch = state.authorizeCommit(prepare, 5, kOwnedPanel);
+        check(dispatch && dispatch->text == append.text && dispatch->replaceBefore.empty() &&
+                  !state.authorizeCommit(prepare, 5, kOwnedPanel),
+              "an IME-parity append dispatches exactly once");
+
+        const auto again = state.updateContext(automatic);
+        check(again && state.showSuggestion(suggestionFor(*again), 6), "candidate before observer loss");
+        const auto pending = state.requestAcceptance(6, kOwnedPanel);
+        check(pending.has_value(), "acceptance pending before observer loss");
+        const CommitPrepare lost{pending->coordinates, pending->controlId, pending->suggestionId,
+                                 pending->expectedText, "all"};
+        state.retireObservation();
+        check(!state.editingAvailable() && !state.suggestionVisible() && !state.lastContext() &&
+                  !state.authorizeCommit(lost, 7, kOwnedPanel),
+              "observer loss retires IME-parity context, candidate and commit grant");
+        check(!state.updateContext(manual) && !state.updateContext(observed),
+              "observer loss never falls back to the manual path");
+    }
+
+    SessionState native;
+    check(native.focusIn(kSession, "observed-target", "omawrite", kSalt, NativeEditTarget::DesktopApplication,
+                         NativeEditPath::Observed) && native.editingAvailable(),
+          "native exact apps keep observed desktop fields");
+    native.retireObservation();
+    check(native.editingAvailable() && native.updateContext(manual).has_value(),
+          "native exact apps keep their manual contract after observer loss");
+    for (const auto app : kUnavailableApps) {
+        for (const auto target : {NativeEditTarget::DesktopApplication, NativeEditTarget::BrowserOrigin}) {
+            SessionState state;
+            check(state.focusIn(kSession, "observed-target", app, kSalt, target, NativeEditPath::Observed) &&
+                      !state.editingAvailable() && !state.updateContext(observed),
+                  "unavailable apps cannot edit even through an observed field");
+        }
+    }
+}
+
+void unobservedParityAndUnavailableAppsCannotEdit() {
     auto allowedState = focusedState();
     const auto allowed = explicitContext(allowedState);
-    for (const auto app : {"chromium", "chromium-browser", "chrome", "google-chrome",
-                           "brave", "brave-origin", "brave-browser", "firefox", "chatgpt"}) {
+    std::vector<std::string_view> blocked(kImeParityBrowsers.begin(), kImeParityBrowsers.end());
+    blocked.insert(blocked.end(), kImeParityDesktop.begin(), kImeParityDesktop.end());
+    blocked.insert(blocked.end(), kUnavailableApps.begin(), kUnavailableApps.end());
+    for (const auto app : blocked) {
         auto state = focusedState(app);
-        check(!state.editingAvailable(), "known browser/desktop composer cannot gain native editing");
+        check(!state.editingAvailable(), "IME-parity and unavailable apps cannot edit without an observed field");
         check(!state.updateContext(allowed.context), "blocked app must not publish manual context");
         auto context = allowed.context;
         context.identityKnown = true;
         context.explicitRequest = false;
-        check(!state.updateContext(context), "an exact observed field cannot bypass app quarantine");
+        check(!state.updateContext(context), "a claimed identity cannot bypass the missing observed field");
         auto suggestion = suggestionFor(allowed);
         suggestion.coordinates = state.coordinates();
         check(!state.showSuggestion(suggestion, 0) && !state.requestAcceptance(1, kOwnedPanel),
-              "quarantined app cannot display or accept injected suggestions");
+              "an unobserved app cannot display or accept injected suggestions");
     }
     for (const auto kind : {NativeEditTarget::BrowserOrigin, NativeEditTarget::Unsupported}) {
         SessionState state;
@@ -624,11 +942,86 @@ void browserNativeEditingIsUnavailable() {
     check(!state.updateContext(allowed.context), "invalid target remains denied until fresh field binding");
 }
 
+void observedParagraphEndIsEndOfField() {
+    // Chromium 152 sent after == "\n\n" for the caret at the end of a <p>
+    // (WAYLAND_DEBUG, 2026-09-27); Codex's ProseMirror composer is such a <p>.
+    const auto capture = [](std::string_view text, std::size_t caret) {
+        auto context = captureContextWindow(text, caret, caret, false, true, false, "en");
+        check(context.has_value(), "the composer text is captured");
+        context->identityKnown = true;
+        context->explicitRequest = false;
+        return *context;
+    };
+    auto raw = capture("thank you\n\n", 9);
+    check(raw.after == "\n\n" && !tabEligibleContext(raw), "an unnormalized paragraph end is mid-text");
+    auto normalized = raw;
+    normalizeObservedParagraphEnd(normalized);
+    check(normalized.after.empty() && normalized.paragraphEndAfter && observedAfter(normalized) == "\n\n" &&
+              normalized.before == raw.before && normalized.head == 9 && tabEligibleContext(normalized),
+          "the paragraph end is end of field, and observer agreement still sees it");
+    auto twice = normalized;
+    normalizeObservedParagraphEnd(twice);
+    check(twice == normalized, "normalization is idempotent");
+    check(normalized != capture("thank you", 9) && observedAfter(capture("thank you", 9)).empty(),
+          "a field that ends at the caret is a different field state");
+    for (const auto text : {std::string_view("thank you\n"), std::string_view("thank you\n\n\n"),
+                            std::string_view("thank you \n\n"), std::string_view("thank you\n\nmore"),
+                            std::string_view("thank you all")}) {
+        auto other = capture(text, 9);
+        const auto copy = other;
+        normalizeObservedParagraphEnd(other);
+        check(other == copy && !other.paragraphEndAfter && !tabEligibleContext(other),
+              "every other after-caret text stays mid-text and fails closed");
+    }
+    check(!captureContextWindow("thank you\r\n\r\n", 9, 9, false, true, false, "en"),
+          "a carriage return is never context, so it cannot become end of field");
+
+    SessionState state;
+    check(state.focusIn(kSession, "observed-target", "chatgpt", kSalt, NativeEditTarget::DesktopApplication,
+                        NativeEditPath::Observed), "observed Codex composer");
+    const auto update = state.updateContext(normalized);
+    check(update && update->context.after.empty() && update->context.paragraphEndAfter,
+          "the observed IME-parity context is accepted as end of field");
+    const auto wire = nlohmann::json::parse(*serializeContextEnvelope(*update, 0))["payload"];
+    check(wire["after"] == "" && wire["before"] == "thank you" && wire["selection"]["head"] == 9,
+          "the broker receives after = \"\" at the unchanged caret");
+    SessionState plain;
+    check(plain.focusIn(kSession, "observed-target", "chatgpt", kSalt, NativeEditTarget::DesktopApplication,
+                        NativeEditPath::Observed), "observed plain field");
+    const auto ending = plain.updateContext(capture("thank you", 9));
+    check(ending && ending->coordinates.fingerprint != update->coordinates.fingerprint,
+          "the fingerprint binds the raw after-caret text");
+    check(state.showSuggestion(suggestionFor(*update), 0), "append suggestion on the normalized context");
+    const auto accept = state.requestAcceptance(1, kOwnedPanel);
+    check(accept.has_value(), "acceptance of the normalized context");
+    const CommitPrepare prepare{accept->coordinates, accept->controlId, accept->suggestionId,
+                                accept->expectedText, "all"};
+    const auto dispatch = state.authorizeCommit(prepare, 2, kOwnedPanel);
+    check(dispatch && dispatch->replaceBefore.empty(), "acceptance stays one append at the caret");
+
+    auto unobserved = normalized;
+    unobserved.identityKnown = false;
+    check(!state.updateContext(unobserved), "the normalization requires an observed identity");
+    auto extra = normalized;
+    extra.after = "x";
+    check(!state.updateContext(extra), "a normalized context cannot carry other after-caret text");
+    auto native = focusedState("omawrite");
+    check(!native.updateContext(normalized), "native exact apps keep their unnormalized contract");
+    SessionState browser;
+    check(browser.focusIn(kSession, "observed-target", "brave-origin", kSalt, NativeEditTarget::BrowserOrigin,
+                          NativeEditPath::Observed) && browser.updateContext(normalized).has_value(),
+          "IME-parity browsers share the observed rule");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
     const std::vector<std::pair<const char *, void (*)()>> tests{
-        {"browser native editing quarantine", browserNativeEditingIsUnavailable},
+        {"native app classes", nativeAppClassesAreExplicit},
+        {"canonical app ids", canonicalAppIdsFoldAsciiCase},
+        {"IME parity requires an observed append-only field", imeParityRequiresObservedAppendOnlyField},
+        {"unobserved IME parity and unavailable apps", unobservedParityAndUnavailableAppsCannotEdit},
+        {"observed paragraph end is end of field", observedParagraphEndIsEndOfField},
         {"observed fields reject replacement authority", observedFieldsRejectReplacementAuthority},
         {"state transitions and identity", stateTransitionsAndIdentity},
         {"native app policy coherence", nativePolicyMustBeCoherent},
@@ -642,6 +1035,8 @@ int main(int argc, char **argv) {
         {"optional suggestion clear field",
          suggestionClearMatchesOptionalWireField},
         {"sensitive zero context", sensitiveCompositionAndSelectionAreZeroContext},
+        {"transport reconnect keeps Fcitx text but no broker grant",
+         transportReconnectKeepsFcitxTextButNoBrokerGrant},
         {"explicit manual context wire", contextWireIsExplicitManualV2},
         {"session policy and explicit request split",
          sessionWireSeparatesPolicyFromExplicitRequest},

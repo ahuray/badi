@@ -177,6 +177,32 @@ bool validLinuxAppId(std::string_view value) {
     return true;
 }
 
+std::optional<std::string> canonicalAppId(std::string_view program) {
+    // Toolkits report reverse-DNS or window-class names with capitals, e.g.
+    // Qt's "Telegram". Only an ASCII identifier shape is folded; titles and
+    // other display strings never become a policy identity.
+    if (program.empty() || program.size() > 128) return std::nullopt;
+    std::string result;
+    result.reserve(program.size());
+    bool segmentStart = true;
+    for (const auto character : program) {
+        const auto byte = static_cast<unsigned char>(character);
+        const bool letter = (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z');
+        if (byte == '.') {
+            if (segmentStart) return std::nullopt;
+            segmentStart = true;
+        } else if (segmentStart ? !letter
+                                : !(letter || (byte >= '0' && byte <= '9') || byte == '_' || byte == '-')) {
+            return std::nullopt;
+        } else {
+            segmentStart = false;
+        }
+        result.push_back(static_cast<char>(byte >= 'A' && byte <= 'Z' ? byte - 'A' + 'a' : byte));
+    }
+    if (segmentStart) return std::nullopt;
+    return result;
+}
+
 bool validLanguageTag(std::string_view value) {
     if (value.size() < 2 || value.size() > 35) return false;
     std::size_t subtagStart = 0;

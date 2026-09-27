@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import json
 import pathlib
 import tarfile
 import tempfile
@@ -16,14 +17,29 @@ spec.loader.exec_module(builder)
 
 class BuildSafetyTests(unittest.TestCase):
     def test_every_linked_fcitx_component_must_match_exact_version(self):
-        for replies in (["5.1.22"], ["5.1.21", "5.1.22"], ["5.1.21", "5.1.21", "5.1.22"]):
-            with self.subTest(replies=replies), patch.object(builder.subprocess, "check_output", side_effect=replies):
-                with self.assertRaisesRegex(RuntimeError, "exactly 5.1.21"):
-                    builder.installed_versions()
+        pinned = builder.VERSION
+        for other in ("5.1.21", "5.1.23"):
+            for replies in ([other], [pinned, other], [pinned, pinned, other]):
+                with self.subTest(replies=replies), patch.object(builder.subprocess, "check_output", side_effect=replies):
+                    with self.assertRaisesRegex(RuntimeError, f"exactly {pinned}"):
+                        builder.installed_versions()
 
     def test_same_version_for_all_components_is_admitted(self):
-        with patch.object(builder.subprocess, "check_output", return_value="5.1.21\n"):
+        with patch.object(builder.subprocess, "check_output", return_value=builder.VERSION + "\n"):
             self.assertEqual(set(builder.installed_versions()), {"Fcitx5Core", "Fcitx5Config", "Fcitx5Utils"})
+
+    def test_pinned_patch_changes_only_the_rebuilt_frontend(self):
+        # The build links the system core, so a core API change (as in the
+        # full upstream change) would fail to load. Keep the backport local.
+        manifest = json.loads((ROOT / "manifest.json").read_text())
+        self.assertEqual((manifest["upstream_version"], manifest["upstream_commit"], manifest["patch"]),
+                         (builder.VERSION, builder.SOURCE_COMMIT, builder.PATCH))
+        patch_file = ROOT / builder.PATCH
+        self.assertEqual(builder.digest(patch_file), manifest["patch_sha256"])
+        targets = {line.split(None, 1)[1] for line in patch_file.read_text().splitlines()
+                   if line.startswith(("--- ", "+++ "))}
+        self.assertEqual(targets, {"a/src/frontend/waylandim/waylandimserverv2.cpp",
+                                   "b/src/frontend/waylandim/waylandimserverv2.cpp"})
 
     def test_archive_hash_and_size_are_both_required(self):
         with tempfile.TemporaryDirectory() as directory:
