@@ -8,7 +8,7 @@
     "fcitx5:integration": "npm run fcitx5:check && cargo build -p badi-broker --bins --locked && python3 adapters/fcitx5/tests/broker-smoke.py",
     "docs:check": "node scripts/check-docs.mjs",
     "omarchy:check": "bash ui/omarchy-plugin/tests/check-fast.sh",
-    "desktop:check": "PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-desktop.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-install-desktop.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-install-omarchy-ui.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-install-editors.py && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/fcitx5-wayland-compat/tests -p 'test_*.py' -v",
+    "desktop:check": "PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-badi-install.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-desktop.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-install-desktop.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-install-omarchy-ui.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-install-editors.py && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/fcitx5-wayland-compat/tests -p 'test_*.py' -v",
     "accessibility:check": "BADI_A11Y_REQUIRE_SESSION_BUS=0 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s adapters/accessibility/tests -v",
     "accessibility:integration": "PYTHONDONTWRITEBYTECODE=1 python3 adapters/accessibility/tests/run-isolated.py",
     "writing:lab": "cargo build --release --locked -p badi-writing-lab && node evaluation/writing/lab/server.mjs",

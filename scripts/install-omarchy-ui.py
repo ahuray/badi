@@ -6,9 +6,11 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
-import tempfile
 import time
+
+import badi_install
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ("manifest.json", "BarWidget.qml", "BadiMark.qml", "DesktopPanel.qml", "BadiClient.qml")
@@ -24,9 +26,16 @@ def ipc(target, method):
 
 
 def unlocked():
-    state = ipc("lock", "status")
     # Missing or unavailable lock state is not permission to restart the shell.
-    return all(state.get(key) is False for key in ("locked", "secure", "requested", "pending", "sessionLocked"))
+    return badi_install.explicitly_unlocked(ipc("lock", "status"))
+
+
+def panel_ready():
+    try:
+        state = ipc("badi-writing", "state")
+    except (ValueError, subprocess.SubprocessError):
+        return False
+    return isinstance(state, dict) and "page" in state and "service" in state
 
 
 def main():
@@ -42,54 +51,34 @@ def main():
         raise RuntimeError("The installed plugin identity does not match Badi")
     subprocess.run(["bash", "ui/omarchy-plugin/tests/check-source.sh"], cwd=ROOT,
                    env={**os.environ, "BADI_OMARCHY_REQUIRE_HOST_CHECKS": "1"}, check=True)
-    with tempfile.TemporaryDirectory(prefix="badi-ui-update-") as directory:
-        stage = Path(directory)
-        for name in FILES:
-            shutil.copy2(ROOT / "ui/omarchy-plugin" / name, stage / name)
-        deadline = time.monotonic() + args.wait_for_unlock
-        waiting = False
-        while not unlocked():
-            if time.monotonic() >= deadline:
-                raise RuntimeError("Desktop locked: no UI files changed. Unlock and rerun this command.")
-            if not waiting:
-                print("Validated UI staged. Waiting for normal desktop unlock; the lock client remains intact.", flush=True)
-                waiting = True
-            time.sleep(2)
-        backup = Path.home() / ".local/state/badi/ui-backups" / time.strftime("%Y%m%d-%H%M%S")
-        backup.mkdir(parents=True, mode=0o700)
-        for name in FILES:
-            destination = target / name
-            if destination.exists() or destination.is_symlink():
-                shutil.copy2(destination, backup / name, follow_symlinks=False)
-            # Atomic replacement avoids the shell reading a partially written QML file.
-            with tempfile.NamedTemporaryFile(dir=target, delete=False) as stream:
-                temporary = Path(stream.name)
-            try:
-                shutil.copy2(stage / name, temporary)
-                temporary.replace(destination)
-            finally:
-                temporary.unlink(missing_ok=True)
-        for name in OBSOLETE:
-            stale = target / name
-            if stale.exists() or stale.is_symlink():
-                shutil.copy2(stale, backup / name, follow_symlinks=False)
-                stale.unlink()
-        print(f"Plugin backup: {backup}", flush=True)
-        # The supported restart performs its own lock check. It also clears Qt's
-        # cached nested components, which a plugin rescan alone may retain.
-        subprocess.run(["omarchy", "restart", "shell"], check=True, timeout=30)
-        deadline = time.monotonic() + 20
-        while True:
-            try:
-                state = ipc("badi-writing", "state")
-                if "page" in state and "service" in state:
-                    print("Badi writing, application and system controls loaded in the Omarchy bar.", flush=True)
-                    break
-            except (ValueError, subprocess.SubprocessError):
-                pass
-            if time.monotonic() >= deadline:
-                raise RuntimeError("Updated panel did not answer IPC; inspect the Omarchy shell log")
-            time.sleep(.25)
+    # Stage the validated bytes: a checkout edited while waiting is not installed.
+    staged = {name: ((ROOT / "ui/omarchy-plugin" / name).read_bytes(),
+                     stat.S_IMODE((ROOT / "ui/omarchy-plugin" / name).stat().st_mode)) for name in FILES}
+    if not unlocked():
+        if args.wait_for_unlock:
+            print("Validated UI staged. Waiting for normal desktop unlock; the lock client remains intact.", flush=True)
+        if not badi_install.poll(unlocked, args.wait_for_unlock, 2):
+            raise RuntimeError("Desktop locked: no UI files changed. Unlock and rerun this command.")
+    backup = Path.home() / ".local/state/badi/ui-backups" / time.strftime("%Y%m%d-%H%M%S")
+    backup.mkdir(parents=True, mode=0o700)
+    for name, (data, mode) in staged.items():
+        destination = target / name
+        if destination.exists() or destination.is_symlink():
+            shutil.copy2(destination, backup / name, follow_symlinks=False)
+        # Atomic replacement avoids the shell reading a partially written QML file.
+        badi_install.atomic_write(destination, data, mode)
+    for name in OBSOLETE:
+        stale = target / name
+        if stale.exists() or stale.is_symlink():
+            shutil.copy2(stale, backup / name, follow_symlinks=False)
+            stale.unlink()
+    print(f"Plugin backup: {backup}", flush=True)
+    # The supported restart performs its own lock check. It also clears Qt's
+    # cached nested components, which a plugin rescan alone may retain.
+    subprocess.run(["omarchy", "restart", "shell"], check=True, timeout=30)
+    if not badi_install.poll(panel_ready, 20, .25):
+        raise RuntimeError("Updated panel did not answer IPC; inspect the Omarchy shell log")
+    print("Badi writing, application and system controls loaded in the Omarchy bar.", flush=True)
 
 
 if __name__ == "__main__":

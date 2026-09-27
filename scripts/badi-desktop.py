@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Control the persistent desktop broker, its settings and its diagnostics."""
 
-import hashlib
 import importlib.util
 import json
 import os
@@ -11,10 +10,12 @@ import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 from urllib.parse import urlsplit
+
+# Installed beside this CLI (~/.local/lib/badi); in the checkout, beside it in scripts/.
+import badi_install
 
 ROOT = Path(__file__).resolve().parents[1]
 APPS = ("xournalpp", "omawrite")
@@ -58,16 +59,13 @@ Bash: Ctrl-X then Tab requests/accepts. Escape dismisses (Bash: Ctrl-X then Esca
 Native tested applications: Omawrite and Xournal++ text cells.
 For advanced protocol commands: badictl --help
 """
-RECEIPTS = Path(".local/state/badi/receipts")
 VSCODE_SETTINGS = Path(".config/Code/User/settings.json")
 CLOSING = re.compile(r"\s*[}\]]")
 ALL_SITES_NOTE = ("Every http(s) site is allowed for predictions unless its exact site rule blocks it "
                   "(badi site all off to return to listed sites). This includes "
                   "Chromium/Brave/Zen fields, which have no second site gate and cannot exclude private "
                   "windows. Sensitive fields stay denied.")
-RECEIPT_SCHEMA = "badi.install-receipt.v1"
 INSTALLED_BROKER = ".local/lib/badi/badi-broker"
-VERSION_LINE = re.compile(r"[a-z][a-z-]* \S+ commit=(?:[0-9a-f]{40}|unknown) dirty=(?:true|false|unknown)")
 # Broker no-suggestion classes; counters never include typed text.
 NO_SUGGESTION = {
     "request_abstained": "the field language is missing or unsupported, text follows the caret, nothing but spaces (or one unfinished English word) precedes it, or a Persian joiner is not yet between two letters",
@@ -96,13 +94,7 @@ def control(arguments, endpoint=None):
 
 
 def service_state():
-    result = subprocess.run([
-        "systemctl", "--user", "show", SERVICE,
-        "--property=LoadState,ActiveState,SubState,UnitFileState",
-    ], capture_output=True, text=True, timeout=4)
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or "Cannot reach the user service manager")
-    fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    fields = badi_install.unit_properties(SERVICE, "LoadState", "ActiveState", "SubState", "UnitFileState", timeout=4)
     return {"loaded": fields.get("LoadState") == "loaded",
             "active": fields.get("ActiveState", "unknown"),
             "state": fields.get("SubState", "unknown"),
@@ -110,12 +102,7 @@ def service_state():
 
 
 def native_state():
-    result = subprocess.run([
-        "systemctl", "--user", "show", "omarchy-fcitx5.service", "--property=ActiveState,MainPID",
-    ], capture_output=True, text=True, timeout=4)
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or "Cannot inspect the native input service")
-    fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    fields = badi_install.unit_properties("omarchy-fcitx5.service", "ActiveState", "MainPID", timeout=4)
     pid = fields.get("MainPID", "0")
     loaded = False
     update_pending = False
@@ -136,11 +123,8 @@ def native_state():
 def startup_problem():
     """Classify this service invocation's startup error without returning logs."""
     try:
-        invocation = subprocess.run([
-            "systemctl", "--user", "show", SERVICE, "--property=InvocationID", "--value",
-        ], capture_output=True, text=True, timeout=3)
-        identifier = invocation.stdout.strip()
-        if invocation.returncode or not re.fullmatch(r"[a-f0-9]{32}", identifier):
+        identifier = badi_install.unit_value(SERVICE, "InvocationID")
+        if not re.fullmatch(r"[a-f0-9]{32}", identifier):
             return None
         journal = subprocess.run([
             "journalctl", "--user", f"_SYSTEMD_INVOCATION_ID={identifier}",
@@ -172,19 +156,13 @@ def startup_problem():
                         "action": "Run badictl hardware and check the runtime requirements in the Badi runbook."}
             return {"code": "model_startup_failed", "message": "The local inference runtime failed to start.",
                     "action": "Run badi logs to inspect the local startup error, then badi service restart."}
-    except (OSError, subprocess.SubprocessError):
+    except (RuntimeError, OSError, subprocess.SubprocessError):
         pass
     return None
 
 
 def observer_service_state():
-    result = subprocess.run([
-        "systemctl", "--user", "show", ACCESSIBILITY_SERVICE,
-        "--property=LoadState,ActiveState,MainPID",
-    ], capture_output=True, text=True, timeout=3)
-    if result.returncode:
-        raise RuntimeError("observer_service_uninspectable")
-    fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    fields = badi_install.unit_properties(ACCESSIBILITY_SERVICE, "LoadState", "ActiveState", "MainPID")
     pid = fields.get("MainPID", "0")
     return {"loaded": fields.get("LoadState") == "loaded",
             "active": fields.get("ActiveState", "unknown"),
@@ -241,12 +219,12 @@ def no_suggestion_summary(metrics):
 def receipt(name):
     """Read one private install receipt; None when that installer never ran."""
     try:
-        document = private_json(Path.home() / RECEIPTS / f"{name}.json", 1 << 20)
+        document = private_json(badi_install.receipt_path(Path.home(), name), 1 << 20)
     except FileNotFoundError:
         return None
     except (RuntimeError, ValueError, OSError):
         return {"error": "receipt_unreadable"}
-    if not isinstance(document, dict) or document.get("schema") != RECEIPT_SCHEMA \
+    if not isinstance(document, dict) or document.get("schema") != badi_install.SCHEMA \
             or not isinstance(document.get("source"), dict) or not isinstance(document.get("files"), dict):
         return {"error": "receipt_invalid"}
     return document
@@ -255,10 +233,11 @@ def receipt(name):
 def running_broker_identity():
     """Hash and version the exact executable image of the running service."""
     def main_pid():
-        result = subprocess.run(["systemctl", "--user", "show", SERVICE, "--property=MainPID", "--value"],
-                                capture_output=True, text=True, timeout=3)
-        value = result.stdout.strip()
-        return int(value) if result.returncode == 0 and value.isdigit() else 0
+        try:
+            value = badi_install.unit_value(SERVICE, "MainPID")
+        except RuntimeError:
+            return 0
+        return int(value) if value.isdigit() else 0
 
     pid = main_pid()
     if pid <= 0:
@@ -267,10 +246,7 @@ def running_broker_identity():
     try:
         if process.stat().st_uid != os.getuid():
             return {"error": "running_broker_uninspectable"}
-        digest = hashlib.sha256()
-        with open(process / "exe", "rb") as stream:
-            for block in iter(lambda: stream.read(1 << 20), b""):
-                digest.update(block)
+        digest = badi_install.file_sha256(process / "exe")
         # /proc/PID/exe runs the image in memory even after an update replaced
         # the installed file, so this is the running build, not the file on disk.
         version = subprocess.run([str(process / "exe"), "--version"], capture_output=True, text=True, timeout=3)
@@ -279,7 +255,7 @@ def running_broker_identity():
     if main_pid() != pid:
         return {"error": "service_changed"}
     line = version.stdout.strip() if version.returncode == 0 else ""
-    return {"version": line if VERSION_LINE.fullmatch(line) else None, "sha256": digest.hexdigest()}
+    return {"version": line if badi_install.VERSION_LINE.fullmatch(line) else None, "sha256": digest}
 
 
 def install_state():
@@ -492,9 +468,7 @@ def set_app(document, app, enabled):
     if subject is None:
         subject = {"identity": identity}
         document["subjects"].append(subject)
-    decision = "allow" if enabled else "block"
-    subject["permissions"] = {"context_read": decision, "display": decision, "suggest": decision,
-                              "learn": "block", "retention": {"mode": "none"}}
+    subject["permissions"] = badi_install.grant("allow" if enabled else "block")
     document["subjects"].sort(key=lambda item: identity_key(item["identity"]))
 
 
@@ -519,9 +493,7 @@ def set_site(document, value, enabled):
     if subject is None:
         subject = {"identity": identity}
         document["subjects"].append(subject)
-    decision = "allow" if enabled else "block"
-    subject["permissions"] = {"context_read": decision, "display": decision, "suggest": decision,
-                              "learn": "block", "retention": {"mode": "none"}}
+    subject["permissions"] = badi_install.grant("allow" if enabled else "block")
     document["subjects"].sort(key=lambda item: identity_key(item["identity"]))
 
 
@@ -608,10 +580,8 @@ def debug_mode(mode):
             for adapter in ("obsidian", "terminal"):
                 (directory / f"debug-{adapter}.json").unlink(missing_ok=True)
         else:
-            with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as stream:
-                temporary = Path(stream.name)
-                json.dump({"id": str(uuid.uuid4()), "expires_at": int(time.time()) + 900}, stream)
-            temporary.replace(directory / "debug-control.json")
+            marker = {"id": str(uuid.uuid4()), "expires_at": int(time.time()) + 900}
+            badi_install.atomic_write(directory / "debug-control.json", json.dumps(marker).encode())
         print("Activity debug enabled for 15 minutes; no typed text is stored."
               if mode == "on" else "Activity debug disabled and its snapshot removed.")
         return

@@ -19,9 +19,9 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location('install_desktop', Path(__file__).with_name('install-desktop.py'))
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
-receipts = installer.receipt_module()
+import badi_install as receipts  # noqa: E402  (scripts/ is this test's own directory)
 CHECKOUT = Path(__file__).resolve().parents[1]
-NATIVE_SOURCES = ('target/release/badi-broker', 'target/release/badictl', 'scripts/badi-desktop.py',
+NATIVE_SOURCES = ('target/release/badi-broker', 'target/release/badictl', 'scripts/badi-desktop.py', 'scripts/badi_install.py',
                   'packaging/io.github.ahuray.badi.desktop', 'packaging/io.github.ahuray.badi.svg',
                   'packaging/systemd/badi-broker.service', 'broker/data/writing-lexicon/LICENSE',
                   'broker/data/writing-lexicon/README.md', 'adapters/fcitx5/build/libbadi-fcitx5.so',
@@ -331,7 +331,7 @@ class DesktopInstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             home, project = root / 'home', root / 'project'
-            sources = ('target/release/badi-broker', 'target/release/badictl', 'scripts/badi-desktop.py',
+            sources = ('target/release/badi-broker', 'target/release/badictl', 'scripts/badi-desktop.py', 'scripts/badi_install.py',
                        'packaging/io.github.ahuray.badi.desktop', 'packaging/io.github.ahuray.badi.svg',
                        'packaging/systemd/badi-broker.service', 'broker/data/writing-lexicon/LICENSE',
                        'broker/data/writing-lexicon/README.md')
@@ -339,6 +339,9 @@ class DesktopInstallTests(unittest.TestCase):
                 source = project / name
                 source.parent.mkdir(parents=True, exist_ok=True)
                 source.write_text('new ' + name)
+            # The real CLI and its helper module, to run them from the installed layout.
+            for name in ('badi-desktop.py', 'badi_install.py'):
+                shutil.copy2(CHECKOUT / 'scripts' / name, project / 'scripts' / name)
             native = home / '.local/lib/fcitx5/libbadi-fcitx5.so'
             native.parent.mkdir(parents=True)
             native.write_text('keep native addon')
@@ -396,7 +399,17 @@ class DesktopInstallTests(unittest.TestCase):
             self.assertEqual((receipt['schema'], receipt['installer']), ('badi.install-receipt.v1', 'desktop'))
             # The mocked Git boundary yields no identity rather than a guess.
             self.assertEqual(receipt['source'], {'commit': 'unknown', 'dirty': None})
-            self.assertEqual(sorted(receipt['files']), sorted(changed))
+            links = {'.local/bin/badi': '../lib/badi/badi-desktop.py', '.local/bin/badictl': '../lib/badi/badictl',
+                     '.local/bin/badi-desktop': '../lib/badi/badi-desktop.py'}
+            self.assertEqual({relative: os.readlink(home / relative) for relative in links}, links,
+                             'Each command is installed once; PATH names are links')
+            self.assertEqual(sorted(receipt['files']), sorted(set(changed) - set(links)))
+            # The installed CLI imports its helper module from beside its real path.
+            for command in ('badi', 'badi-desktop'):
+                result = subprocess.run([str(home / '.local/bin' / command), '--help'], capture_output=True,
+                                        text=True, timeout=10, env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
+                self.assertEqual((result.returncode, result.stderr), (0, ''))
+                self.assertIn('badi status [--json]', result.stdout)
             broker = receipt['files']['.local/lib/badi/badi-broker']
             self.assertEqual(broker['sha256'], hashlib.sha256(b'new target/release/badi-broker').hexdigest())
             self.assertIsNone(broker['version'])

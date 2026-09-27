@@ -29,8 +29,10 @@ The window uses Omarchy colors, typography, spacing and button components.
 
 `python scripts/install-desktop.py` installs `badi`, `badi-desktop`, `badictl`, and a
 standard Badi application launcher entry, alongside the native runtime described
-in the Fcitx runbook. The helpers use the installed broker CLI, so everyday controls
-do not require the checkout. The advanced `badictl` interface remains available.
+in the Fcitx runbook. Each command is installed once under `~/.local/lib/badi/`;
+the names in `~/.local/bin` are links to it. The helpers use the installed broker
+CLI, so everyday controls do not require the checkout. The advanced `badictl`
+interface remains available.
 
 `python scripts/install-desktop.py --broker-only` updates the model service and
 commands without restarting Fcitx or touching its addon/profile. It can run while
@@ -96,7 +98,8 @@ failed broker with backoff; only a missing, unsupported or too-large model
 activation still precedes model readiness, which the broker health probe
 verifies separately.
 
-`scripts/badi-desktop.py` is installed as `~/.local/bin/badi` and `badi-desktop`. It starts the
+`scripts/badi-desktop.py` is installed as `~/.local/lib/badi/badi-desktop.py`, beside the
+`badi_install.py` helpers it imports, and linked as `~/.local/bin/badi` and `badi-desktop`. It starts the
 persistent `badi-broker.service` and opens regular editors through transient user
 services, preserving Wayland/runtime values and selecting their Fcitx modules.
 The panel controls only the private desktop socket,

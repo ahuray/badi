@@ -2,23 +2,16 @@
 """Install the tested, user-local Obsidian and Bash integrations."""
 
 import argparse
-import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
-import tempfile
 import time
 
+import badi_install
+
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def receipt_module():
-    spec = importlib.util.spec_from_file_location("badi_install_receipt", Path(__file__).with_name("install-receipt.py"))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def build_shell_preview():
@@ -33,8 +26,7 @@ def main():
     args = parser.parse_args()
     if not args.vault and not args.bash:
         parser.error("Select --vault PATH and/or --bash")
-    receipts = receipt_module()
-    checkout = receipts.source_identity(ROOT)
+    checkout = badi_install.source_identity(ROOT)
     # Finish the native build before touching a user's shell or installation.
     shell_preview = build_shell_preview() if args.bash else None
     home = Path.home()
@@ -57,14 +49,7 @@ def main():
         changed.append({"path": str(destination), "backup": index})
         installed.append(destination)
         (backup / "changes.json").write_text(json.dumps(changed, indent=2) + "\n")
-        with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
-            temporary = Path(stream.name)
-            stream.write(data)
-            os.fchmod(stream.fileno(), mode)
-        try:
-            temporary.replace(destination)
-        finally:
-            temporary.unlink(missing_ok=True)
+        badi_install.atomic_write(destination, data, mode)
 
     if args.vault:
         vault = args.vault.resolve(strict=True)
@@ -100,7 +85,7 @@ def main():
         subprocess.run(["bash", "-n", str(bashrc)], check=True)
         print("Bash installed with grey inline previews. New interactive shells: Ctrl-X then Tab requests/accepts; ordinary Tab is unchanged.")
     print(f"Rollback map and original files: {backup}")
-    print(f"Install receipt: {receipts.write_receipt(home, 'editors', checkout, installed)}")
+    print(f"Install receipt: {badi_install.write_receipt(home, 'editors', checkout, installed)}")
 
 
 if __name__ == "__main__":
