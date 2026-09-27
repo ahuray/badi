@@ -42,6 +42,8 @@ OBSERVED_APP_FLAGS = {
 OBSERVED_FLAG = "--force-renderer-accessibility=complete"
 ACCESSIBILITY_SWITCH = "--force-renderer-accessibility"
 COMPLETE_ACCESSIBILITY = (ACCESSIBILITY_SWITCH, OBSERVED_FLAG)
+# Every module the installed observer imports, beside its daemon.
+OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geometry.py", "preview.py", "health.py")
 COMPAT_LIBRARY = Path(".local/lib/badi/compat")
 COMPAT_DROPIN = Path(".config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf")
 COMPAT_MODULE = "addons/libwaylandim.so"
@@ -690,7 +692,7 @@ def install_files(plan):
     if native:
         install(ROOT / "adapters/fcitx5/build/libbadi-fcitx5.so", home / ".local/lib/fcitx5/libbadi-fcitx5.so")
         install(ROOT / "adapters/fcitx5/build/badi.conf", home / ".local/share/fcitx5/addon/badi.conf")
-        for name in ("daemon.py", "contract.py", "preview.py", "health.py"):
+        for name in OBSERVER_MODULES:
             install(ROOT / "adapters/accessibility" / name, library / "accessibility" / name)
         install(ROOT / "packaging/systemd/badi-accessibility.service",
                 home / ".config/systemd/user/badi-accessibility.service")

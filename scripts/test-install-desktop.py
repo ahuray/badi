@@ -27,7 +27,7 @@ NATIVE_SOURCES = ('target/release/badi-broker', 'target/release/badictl', 'scrip
                   'broker/data/writing-lexicon/README.md', 'adapters/fcitx5/build/libbadi-fcitx5.so',
                   'adapters/fcitx5/build/badi.conf', 'packaging/systemd/fcitx-badi.conf',
                   'packaging/systemd/badi-accessibility.service') + tuple(
-                  'adapters/accessibility/' + name for name in ('daemon.py', 'contract.py', 'preview.py', 'health.py'))
+                  'adapters/accessibility/' + name for name in installer.OBSERVER_MODULES)
 STOCK = '{ path=/usr/bin/fcitx5 ; argv[]=%s ; ignore_errors=no ; start_time=[n/a] ; pid=0 }\n'
 
 
@@ -134,6 +134,10 @@ def broker_only_install(root):
 
 
 class DesktopInstallTests(unittest.TestCase):
+    def test_every_observer_module_is_installed(self):
+        modules = {path.name for path in (CHECKOUT / 'adapters/accessibility').glob('*.py')}
+        self.assertEqual(set(installer.OBSERVER_MODULES), modules)
+
     def test_retired_browser_selection_spares_foreign_and_unexpected_entries(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary).resolve()
