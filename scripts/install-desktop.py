@@ -575,7 +575,8 @@ def main():
     receipts = receipt_module()
     # Record the checkout state that is about to be built and copied.
     checkout = receipts.source_identity(ROOT)
-    run(["cargo", "build", "--release", "--locked", "--workspace", "--bins"], cwd=ROOT)
+    # Build only the shipped package: installs never compile the Prediction Lab.
+    run(["cargo", "build", "--release", "--locked", "-p", "badi-broker", "--bins"], cwd=ROOT)
     if not args.broker_only:
         run(["npm", "run", "fcitx5:check"], cwd=ROOT)
         if compat and compat["install"]:

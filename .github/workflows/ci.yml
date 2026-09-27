@@ -44,7 +44,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bash-builtins libreadline-dev
           python3 adapters/shell/build-preview.py
-          cargo build --workspace --bins --locked
+          cargo build -p badi-broker --bins --locked
           node --test adapters/shared/broker-client.test.mjs
 
   rust-msrv:
@@ -137,7 +137,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.98.0
       - name: Exercise the C++ transport against the real Rust broker
         run: |
-          cargo build --workspace --bins --locked
+          cargo build -p badi-broker --bins --locked
           python adapters/fcitx5/tests/broker-smoke.py
       - name: Exercise isolated accessibility buses and actual addon event flow
         run: |

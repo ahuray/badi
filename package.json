@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "fcitx5:check": "cmake -S adapters/fcitx5 -B adapters/fcitx5/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON && cmake --build adapters/fcitx5/build && ctest --test-dir adapters/fcitx5/build --output-on-failure",
-    "fcitx5:integration": "npm run fcitx5:check && cargo build --workspace --bins --locked && python3 adapters/fcitx5/tests/broker-smoke.py",
+    "fcitx5:integration": "npm run fcitx5:check && cargo build -p badi-broker --bins --locked && python3 adapters/fcitx5/tests/broker-smoke.py",
     "docs:check": "node scripts/check-docs.mjs",
     "omarchy:check": "bash ui/omarchy-plugin/tests/check-fast.sh",
     "desktop:check": "PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-desktop.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-install-desktop.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-install-omarchy-ui.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-install-editors.py && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/fcitx5-wayland-compat/tests -p 'test_*.py' -v",
@@ -17,7 +17,7 @@
     "check": "node scripts/run-checks.mjs",
     "shell:check": "bash -n adapters/shell/badi.bash && PYTHONDONTWRITEBYTECODE=1 python3 adapters/shell/test-preview.py",
     "editors:check": "node --test adapters/shared/activity.test.mjs adapters/shared/recovering-client.test.mjs adapters/shared/writing-language.test.mjs adapters/shared/text-safety.test.mjs adapters/obsidian/main.test.mjs && node adapters/obsidian/build.mjs && npm run shell:check",
-    "editors:integration": "cargo build --workspace --bins --locked && python3 adapters/shell/build-preview.py && node --test adapters/shared/broker-client.test.mjs"
+    "editors:integration": "cargo build -p badi-broker --bins --locked && python3 adapters/shell/build-preview.py && node --test adapters/shared/broker-client.test.mjs"
   },
   "engines": {
     "node": "^22.20.0 || ^24.12.0 || >=25.0.0"

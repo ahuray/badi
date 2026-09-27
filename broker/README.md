@@ -17,7 +17,7 @@ API.
 Build the default binaries without installing them:
 
 ```sh
-cargo build --workspace --bins
+cargo build -p badi-broker --bins
 ```
 
 ## Diagnostics and build identity
