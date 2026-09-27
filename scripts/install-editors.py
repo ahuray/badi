@@ -2,6 +2,7 @@
 """Install the tested, user-local Obsidian and Bash integrations."""
 
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,13 @@ def native_host_directories(config):
             if browser == "chromium" or (config / browser).is_dir()]
 
 
+def receipt_module():
+    spec = importlib.util.spec_from_file_location("badi_install_receipt", Path(__file__).with_name("install-receipt.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def build_shell_preview():
     subprocess.run(["python3", "adapters/shell/build-preview.py"], cwd=ROOT, check=True)
     return (ROOT / "adapters/shell/build/badi-preview.so").read_bytes()
@@ -34,12 +42,15 @@ def main():
     args = parser.parse_args()
     if not args.vault and not args.bash and not args.chromium:
         parser.error("Select --vault PATH, --bash and/or --chromium")
+    receipts = receipt_module()
+    checkout = receipts.source_identity(ROOT)
     # Finish the native build before touching a user's shell or installation.
     shell_preview = build_shell_preview() if args.bash else None
     home = Path.home()
     backup = home / ".local/state/badi/editor-backups" / str(time.time_ns())
     backup.mkdir(parents=True, mode=0o700)
     changed = []
+    installed = []
 
     def install_bytes(data, destination, mode=0o644):
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -53,6 +64,7 @@ def main():
         else:
             index = None
         changed.append({"path": str(destination), "backup": index})
+        installed.append(destination)
         (backup / "changes.json").write_text(json.dumps(changed, indent=2) + "\n")
         with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
             temporary = Path(stream.name)
@@ -116,6 +128,7 @@ def main():
         print(f"Chromium files installed. Load unpacked from {destination} in chrome://extensions.")
         print("Enable the site in the Badi popup and grant its exact origin with badi site ORIGIN on.")
     print(f"Rollback map and original files: {backup}")
+    print(f"Install receipt: {receipts.write_receipt(home, 'editors', checkout, installed)}")
 
 
 if __name__ == "__main__":

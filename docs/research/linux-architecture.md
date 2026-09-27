@@ -613,3 +613,40 @@ field/document generation and edit revision through both Wayland legs and
 renderer IPC, revalidate through callbacks, define the undo transaction, and
 return an operation-specific outcome. No browser fork or upstream publication
 has been made.
+
+## 2026-09-26: IME-parity addendum
+
+The user accepted input-method parity for Chromium-based apps without an
+editor-owned channel: Chromium, Brave, Codex desktop, VS Code, Cursor and
+Discord (see [AGENTS.md](../../AGENTS.md)). Acceptance is one append-only Fcitx
+commit that behaves like typed text. The transaction gap above remains: undo
+may coalesce with typing, and `beforeinput` script may redirect the commit like
+a keystroke. Badi does not claim exact undo or verified field authority there.
+Replacement stays editor-owned.
+
+Two measured prerequisites changed the route. Fcitx 5.1.22 sends no
+input-method `commit` while idle, so Hyprland withholds the client `done` and
+Chromium's queued surrounding text stalls. Upstream
+[PR #1690](https://github.com/fcitx/fcitx5/pull/1690), released in 5.1.23,
+refreshes on every `done`. The
+[pinned frontend backport](../../packaging/fcitx5-wayland-compat/README.md)
+carries it to 5.1.22 and passes private protocol checks; physical Chromium
+behavior is unverified. The accessibility observer also no longer trusts a
+Chromium version for caret geometry. In a private nested Hyprland session, the
+frame, document and glyph `SCREEN` extents gave window-local coordinates within
+0.5 logical px of Chromium's (scales 1 and 2), Brave's and VS Code's (scale 2)
+own caret rectangles. The document/frame width ratio must equal the monitor
+scale on every request. `WINDOW` coordinates are viewport-relative in Chromium
+and Electron's frame origin is arbitrary. Qt reports zero character extents.
+These are source and nested-session observations, not live-app trials.
+
+On 2026-09-26 the user extended the decision to the Zen browser (Gecko 156,
+exact `zen` identity only), with the same typed-text commit semantics. Its
+urlbar shares the page's Fcitx context without a `Url` purpose, so the
+accessibility observer alone keeps browser UI out: one focused field whose
+nearest Document is an HTTP(S) `document web`. Gecko's
+[IME surrounding text](https://github.com/mozilla-firefox/firefox/blob/main/widget/gtk/IMContextWrapper.cpp)
+is only the caret's paragraph, and its
+[text attributes](https://github.com/mozilla-firefox/firefox/blob/main/accessible/base/TextAttrs.cpp)
+carry no direction, so Zen has multi-line agreement failures and no inline
+preview. Other Gecko browsers stay unavailable.

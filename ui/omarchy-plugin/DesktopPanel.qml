@@ -232,9 +232,9 @@ Item {
               Caption { text: "Pause keeps the model loaded. Your choice persists after restart." }
               PanelSeparator { Layout.fillWidth: true; foreground: Color.popups.text }
               SectionTitle { text: "Try a continuation" }
-              BodyText { text: "In Omawrite or a Xournal++ text cell, press Tab at the end of a phrase to request words; press Tab again to insert them. Web and Obsidian integrations suggest automatically: Tab takes one word, Ctrl/Command+Right takes all." }
+              BodyText { text: "Suggestions appear on their own in supported apps: Tab inserts a visible suggestion, Escape dismisses, Ctrl+Shift+Space asks explicitly. In a Xournal++ text cell, press Tab to request words and Tab again to insert them. Obsidian: Tab takes one word, Ctrl/Command+Right takes all." }
               RowLayout {
-                ActionButton { text: "Open Omawrite"; bordered: true; focusable: true; enabled: !root.controlsBusy; onClicked: root.runAction(["launch", "omawrite"], "Opening Omawrite…", "Omawrite opened. Type a phrase and press Tab.") }
+                ActionButton { text: "Open Omawrite"; bordered: true; focusable: true; enabled: !root.controlsBusy; onClicked: root.runAction(["launch", "omawrite"], "Opening Omawrite…", "Omawrite opened. Type a phrase; press Tab to insert the suggestion.") }
                 ActionButton { text: "Open Xournal++"; bordered: true; focusable: true; enabled: !root.controlsBusy; onClicked: root.runAction(["launch", "xournalpp"], "Opening Xournal++…", "Xournal++ opened. Select the Text tool and click the page.") }
               }
               Caption { text: "Example: Please find attached the\nEscape dismisses. Suggestions last five seconds and clear when text or focus changes." }

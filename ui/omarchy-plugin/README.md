@@ -71,15 +71,18 @@ badi logs                      # last 60 broker journal entries
 ```
 
 Settings mutations use the broker's revision compare-and-swap API. Conflicts
-fail visibly rather than retrying over another change. `doctor` exits nonzero
+fail visibly rather than retrying over another change. Panel writes carry the
+optional `all_web_origins` flag (`badi site all on`) through unchanged. `doctor` exits nonzero
 when the broker is unreachable/degraded or the running native addon is missing.
 The CLI uses Linux user services; the GUI and desktop installer target Omarchy.
 This plugin is not a portable StatusNotifier tray implementation.
 
 When startup fails, the System view shows the classified current-invocation
 error. `badi doctor` includes actionable `problems` for missing model files,
-resource or integrity failures, unreachable broker, degraded settings and an
-unloaded addon. Journal prose is not copied into these diagnostics. Starting or
+resource or integrity failures, unreachable broker, degraded settings, an
+unloaded addon, and a running broker that differs from the last install receipt.
+Its notes name the content-free classes of requests that showed no suggestion.
+Journal prose is not copied into these diagnostics. Starting or
 restarting a failed service clears its restart limit; service activation still
 precedes model readiness, which the broker health probe verifies separately.
 

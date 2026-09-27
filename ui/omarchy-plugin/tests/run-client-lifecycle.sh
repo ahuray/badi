@@ -58,6 +58,8 @@ runtime_env=(
   "XDG_RUNTIME_DIR=$runtime_dir"
   "PATH=$tests_dir/fake-bin:$PATH"
   "BADI_FAKE_SCENARIO=term-ignoring-mutation"
+  # `badi site all on` state: the panel must accept and preserve it.
+  "BADI_FAKE_ALL_WEB_ORIGINS=1"
   "BADI_FAKE_CALL_LOG=$call_log"
   "BADI_FAKE_PID_LOG=$pid_log"
   "BADI_FAKE_HOLD_OVERVIEW=$test_root/hold-overview"
@@ -171,6 +173,16 @@ linux_learning_settings=$(jq -cn '{
   }]
 }')
 [[ $(ipc validateSettings "$linux_learning_settings") == false ]]
+for all_web_origins in true false; do
+  document=$(jq -cn --argjson value "$all_web_origins" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, all_web_origins: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == true ]]
+done
+for all_web_origins in '"true"' null 1; do
+  document=$(jq -cn --argjson value "$all_web_origins" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, all_web_origins: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == false ]]
+done
 
 # A browser-policy mutation must preserve the native Fcitx rule that the same
 # settings v2 document carries through the control center.
@@ -180,6 +192,7 @@ wait_until_idle
 replacement=$(sed -n '2p' "$call_log" | cut -d' ' -f6-)
 jq -e '
   .schema == "badi.settings.v2"
+  and .all_web_origins == true
   and any(.subjects[];
     .identity == {kind: "linux_app", adapter: "fcitx", app_id: "omawrite"})
 ' <<<"$replacement" >/dev/null

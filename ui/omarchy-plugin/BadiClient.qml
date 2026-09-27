@@ -221,7 +221,13 @@ Scope {
   }
 
   function isSettingsDocument(value) {
-    if (!hasExactKeys(value, ["schema", "revision", "paused", "subjects"])
+    // `badi site all on` adds all_web_origins; producers omit it when false.
+    // Panel writes clone the document, so they carry it through unchanged.
+    var keys = ["schema", "revision", "paused", "subjects"]
+    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "all_web_origins"))
+      keys.push("all_web_origins")
+    if (!hasExactKeys(value, keys)
+        || (keys.length === 5 && typeof value.all_web_origins !== "boolean")
         || value.schema !== "badi.settings.v2"
         || !Number.isSafeInteger(value.revision)
         || value.revision < 0

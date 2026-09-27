@@ -8,18 +8,44 @@ import json
 import mmap
 import os
 from pathlib import Path
+import re
 import shutil
 import shlex
 import socket
+import stat
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-OBSERVED_APP_FLAGS = {"chromium": "chromium-flags.conf", "chatgpt": "codex-flags.conf"}
-OBSERVED_FLAGS = ("--ozone-platform=wayland", "--enable-wayland-ime",
-                  "--wayland-text-input-version=3", "--force-renderer-accessibility=complete")
+# Each launcher's user flags file and how that wrapper turns it into arguments:
+# "glib" is /usr/bin/chromium's GLib shell parsing, "words" strips # comments
+# and splits on whitespace without quote handling (Codex: read -a; VS Code:
+# sed plus unquoted expansion), and "line" passes every non-comment line as one
+# argument (mapfile). Discord has no such file; see the accessibility runbook.
+OBSERVED_APP_FLAGS = {
+    "chromium": ("chromium-flags.conf", "glib"),
+    "brave-origin": ("brave-origin-flags.conf", "line"),
+    "chatgpt": ("codex-flags.conf", "words"),
+    "code": ("code-flags.conf", "words"),
+    "cursor": ("cursor-flags.conf", "line"),
+}
+# Measured on Chromium 152: "basic" and "form-controls" omit the HTML tag the
+# observer's purpose gate needs and the character extents its caret geometry
+# needs. The bare switch also selects the complete mode. Native Wayland
+# text-input-v3 is the Chromium 152 / Electron 42 default, so no input flags.
+OBSERVED_FLAG = "--force-renderer-accessibility=complete"
+ACCESSIBILITY_SWITCH = "--force-renderer-accessibility"
+COMPLETE_ACCESSIBILITY = (ACCESSIBILITY_SWITCH, OBSERVED_FLAG)
+COMPAT_LIBRARY = Path(".local/lib/badi/compat")
+COMPAT_DROPIN = Path(".config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf")
+COMPAT_FILES = ("launch.py", "build-receipt.json", "addons/libwaylandim.so")
+# Retired frontends are removed only while no service command references them.
+OBSOLETE_COMPAT = ("5.1.21",)
+STOCK_FCITX_COMMAND = "/usr/bin/fcitx5 --disable notificationitem"
+VSCODE_EDIT_CONTEXT = "editor.editContext"
 
 
 def run(command, **kwargs):
@@ -49,31 +75,37 @@ def chromium_line_tokens(line):
     return shlex.split(line, comments=False, posix=True)
 
 
-def observed_flags(text, app="chromium"):
-    """Preserve comments and unrelated options in the installed line-based wrappers."""
-    if app == "chromium":
+def observed_tokens(text, parser):
+    """The arguments a launcher's flags file supplies, as that wrapper parses it."""
+    if parser == "glib":
         try:
-            current = [token for line in text.splitlines() for token in chromium_line_tokens(line)]
+            return [token for line in text.splitlines() for token in chromium_line_tokens(line)]
         except ValueError:
             raise RuntimeError("Inspect unbalanced quoting in Chromium startup flags before changing them.") from None
-    elif app == "chatgpt":
-        # This wrapper uses Bash read -a after stripping comments, without
-        # evaluating shell quotes; Chromium's launcher uses GLib shell parsing.
-        current = [token for line in text.splitlines() for token in line.split("#", 1)[0].split()]
-    else:
-        raise RuntimeError("Unknown observed application startup parser")
-    missing = []
-    for flag in OBSERVED_FLAGS:
-        key = flag.split("=", 1)[0]
-        matches = [token for token in current if token.split("=", 1)[0] == key]
-        if matches and any(token != flag for token in matches):
-            raise RuntimeError(f"Existing {key} conflicts with the measured Wayland input/accessibility recipe; startup flags were not changed.")
-        if not matches:
-            missing.append(flag)
-    if not missing:
-        return text
+    # Bash reads lines at \n and splits words at the default IFS only.
+    if parser == "words":
+        return [token for line in text.split("\n") for token in re.split(r"[ \t]+", line.split("#", 1)[0]) if token]
+    if parser == "line":
+        return [line for line in text.split("\n") if line.strip(" \t") and not line.lstrip(" \t").startswith("#")]
+    raise RuntimeError("Unknown observed application startup parser")
+
+
+def observed_flags(text, app="chromium"):
+    """Add only the renderer accessibility switch; None when it is already effective.
+
+    Comments and every other option stay byte-identical. A reduced or disabled
+    accessibility choice is the user's and is reported instead of overridden.
+    """
+    tokens = observed_tokens(text, OBSERVED_APP_FLAGS[app][1])
+    if any(token.split("=", 1)[0] == "--disable-renderer-accessibility" for token in tokens):
+        raise RuntimeError(f"Existing --disable-renderer-accessibility in {OBSERVED_APP_FLAGS[app][0]} conflicts with the observer's accessibility requirement; startup flags were not changed.")
+    current = [token for token in tokens if token.split("=", 1)[0] == ACCESSIBILITY_SWITCH]
+    if any(token not in COMPLETE_ACCESSIBILITY for token in current):
+        raise RuntimeError(f"Existing {ACCESSIBILITY_SWITCH} value in {OBSERVED_APP_FLAGS[app][0]} conflicts with the measured complete accessibility mode; startup flags were not changed.")
+    if current:
+        return None
     return text + ("\n" if text and not text.endswith("\n") else "") + \
-        "# Badi: cooperative Wayland input and focused accessibility\n" + "\n".join(missing) + "\n"
+        "# Badi: renderer accessibility for the focused-field observer\n" + OBSERVED_FLAG + "\n"
 
 
 def observed_config_target(home, config_home, filename):
@@ -267,6 +299,13 @@ from gi.repository import Atspi, Gtk, Gtk4LayerShell, GLibUnix
         raise RuntimeError("The accessibility helper needs system Python with PyGObject, pycairo, AT-SPI, GTK4 and gtk4-layer-shell. Install the missing runtime before updating native integration.") from None
 
 
+def receipt_module():
+    spec = importlib.util.spec_from_file_location("badi_install_receipt", Path(__file__).with_name("install-receipt.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def accessibility_health_module():
     spec = importlib.util.spec_from_file_location("badi_accessibility_health", ROOT / "adapters/accessibility/health.py")
     module = importlib.util.module_from_spec(spec)
@@ -315,15 +354,283 @@ def wait_accessibility(helper, endpoint):
         time.sleep(.2)
 
 
+def compat_launcher():
+    """The pinned frontend selector; its constants define the supported Fcitx cell."""
+    spec = importlib.util.spec_from_file_location("badi_fcitx_compat_launch", ROOT / "packaging/fcitx5-wayland-compat/launch.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def compat_command(home, version):
+    return f"/usr/bin/python3 -B {home}/{COMPAT_LIBRARY}/fcitx5-{version}/launch.py --disable notificationitem"
+
+
+def compat_dropin(version):
+    return ("[Service]\n# Badi: pinned Fcitx Wayland frontend; launch.py falls back to /usr/bin/fcitx5.\n"
+            f"ExecStart=\nExecStart=/usr/bin/python3 -B %h/{COMPAT_LIBRARY}/fcitx5-{version}/launch.py --disable notificationitem\n")
+
+
+def fcitx_command():
+    """The effective argv of the Fcitx service's single ExecStart, verbatim."""
+    result = run(["systemctl", "--user", "show", "omarchy-fcitx5.service", "--property=ExecStart", "--value"],
+                 capture_output=True, text=True, timeout=3)
+    commands = re.findall(r"argv\[\]=(.*?) ; ignore_errors=", result.stdout)
+    return commands[0] if len(commands) == 1 else None
+
+
+def retirable_compat(home, directory):
+    """The exact files of a retired frontend; None when anything unexpected is present."""
+    for path in (directory, *directory.parents):
+        if path == home:
+            break
+        if path.is_symlink():
+            raise RuntimeError(f"Inspect existing symlink before replacing {directory}")
+    if not directory.exists():
+        return []
+    expected = {directory / name for name in COMPAT_FILES}
+    files, folders = set(), set()
+    for path in directory.rglob("*"):
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            return None
+        (folders if path.is_dir() else files).add(path)
+    if not directory.is_dir() or files - expected or folders - {directory / "addons"}:
+        return None
+    return sorted(files)
+
+
+def verify_compat_build(directory, launcher):
+    """Accept only a checked build of the pinned source for today's exact runtime."""
+    directory = Path(directory).expanduser().resolve()
+    module = directory / "libwaylandim.so"
+    try:
+        receipt = json.loads((directory / "build-receipt.json").read_text())
+        manifest = json.loads((ROOT / "packaging/fcitx5-wayland-compat/manifest.json").read_text())
+        runtime = receipt["runtime_files_sha256"]
+        valid = (receipt["schema"] == "badi.fcitx-wayland-compat-build.v1" and receipt["source"] == manifest
+                 and receipt["protocol_checks_passed"] is True
+                 and receipt["installed_build_versions"] == {name: launcher.VERSION for name in ("Fcitx5Core", "Fcitx5Config", "Fcitx5Utils")}
+                 and set(runtime) == set(launcher.RUNTIME_FILES)
+                 and all(launcher.digest(Path(path)) == runtime[path] for path in launcher.RUNTIME_FILES)
+                 and not module.is_symlink() and module.is_file()
+                 and launcher.digest(module) == receipt["artifact_sha256"])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        valid = False
+    if not valid:
+        raise RuntimeError("The Wayland compatibility build is not a checked build of the pinned source for this system's Fcitx runtime. Rebuild it, or rerun with --no-wayland-compat.")
+    return directory
+
+
+def plan_wayland_compat(home, build=None):
+    """Decide the pinned frontend action before building or changing any file.
+
+    Another Fcitx version gets no frontend: 5.1.23 contains the upstream
+    refresh, and launch.py already falls back to the system frontend.
+    """
+    launcher = compat_launcher()
+    try:
+        version = run(["/usr/bin/fcitx5", "--version"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        raise RuntimeError("Cannot determine the system Fcitx version. Rerun with --no-wayland-compat to leave its frontend unchanged.") from None
+    if version != launcher.VERSION:
+        if build is not None:
+            raise RuntimeError(f"The system Fcitx is {version or 'unknown'}, not the pinned {launcher.VERSION}; the supplied compatibility build was not installed.")
+        return {"install": False, "version": version, "pinned": launcher.VERSION}
+    homes = dict.fromkeys((str(Path.home()), str(home)))
+    command = fcitx_command()
+    active = {old for old in OBSOLETE_COMPAT if command in {compat_command(item, old) for item in homes}}
+    managed = {compat_command(item, old) for item in homes for old in (version, *OBSOLETE_COMPAT)}
+    if command != STOCK_FCITX_COMMAND and (command not in managed or not (home / COMPAT_DROPIN).is_file()):
+        raise RuntimeError("omarchy-fcitx5.service runs an unrecognized command. Inspect its overrides, or rerun with --no-wayland-compat.")
+    root = home / COMPAT_LIBRARY / f"fcitx5-{version}"
+    if retirable_compat(home, root) is None:
+        raise RuntimeError(f"Inspect unexpected files in {root} before installing the compatibility frontend.")
+    obsolete, kept = [], []
+    for old in OBSOLETE_COMPAT:
+        directory = home / COMPAT_LIBRARY / f"fcitx5-{old}"
+        files = retirable_compat(home, directory)
+        if files is None or (files and old in active):
+            kept.append(directory)
+        elif files:
+            obsolete.append((directory, files))
+    plan = {"install": True, "version": version, "pinned": launcher.VERSION, "root": root, "launcher": launcher,
+            "homes": tuple(homes), "build": None, "obsolete": obsolete, "kept": kept}
+    if build is not None:
+        plan["build"] = verify_compat_build(build, launcher)
+    return plan
+
+
+def build_wayland_compat(plan):
+    if plan["build"] is None:
+        work = ROOT / "output/extensionless" / f"fcitx-wayland-compat-{plan['version']}-{time.time_ns()}"
+        run([sys.executable, "-B", str(ROOT / "packaging/fcitx5-wayland-compat/build.py"),
+             "--work-dir", str(work), "--jobs", "2", "--check"], cwd=ROOT)
+        plan["build"] = verify_compat_build(work, plan["launcher"])
+    return plan["build"]
+
+
+def wait_compat_frontend(module):
+    """Report whether launch.py selected the installed frontend; bounded."""
+    deadline = time.monotonic() + 3
+    while not native_addon_loaded(module):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(.2)
+    return True
+
+
+JSON_SPACE = re.compile(r"[ \t\r\n]*")
+
+
+def jsonc_mask(text):
+    """Blank comments and trailing commas outside strings, keeping every offset."""
+    masked = list(text)
+
+    def blank(start, end):
+        for index in range(start, end):
+            if masked[index] not in "\r\n":
+                masked[index] = " "
+
+    index, length, string, commas = 0, len(text), False, []
+    while index < length:
+        char = text[index]
+        if string:
+            if char == "\\":
+                index += 2
+                continue
+            string = char != '"'
+        elif char == '"':
+            string = True
+        elif char == ",":
+            commas.append(index)
+        elif text.startswith("//", index):
+            end = text.find("\n", index)
+            end = length if end < 0 else end
+            blank(index, end)
+            index = end
+            continue
+        elif text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            if end < 0:
+                raise ValueError("unterminated comment")
+            blank(index, end + 2)
+            index = end + 2
+            continue
+        index += 1
+    if string:
+        raise ValueError("unterminated string")
+    without_comments = "".join(masked)
+    for comma in commas:
+        following = JSON_SPACE.match(without_comments, comma + 1).end()
+        if without_comments[following:following + 1] in ("}", "]"):
+            masked[comma] = " "
+    return "".join(masked)
+
+
+def jsonc_object(text):
+    """Parse a top-level JSONC object: (opening, members, values, duplicate_keys).
+
+    Members are (key, value, key_start, value_start, value_end) offsets into text.
+    """
+    masked = jsonc_mask(text)
+    decoder = json.JSONDecoder()
+    position = JSON_SPACE.match(masked, 0).end()
+    if masked[position:position + 1] != "{":
+        raise ValueError("not an object")
+    opening = position
+    position, members = position + 1, []
+    while True:
+        position = JSON_SPACE.match(masked, position).end()
+        if masked[position:position + 1] == "}" and not members:
+            break
+        if masked[position:position + 1] != '"':
+            raise ValueError("expected key")
+        key_start = position
+        key, position = json.decoder.scanstring(masked, position + 1)
+        position = JSON_SPACE.match(masked, position).end()
+        if masked[position:position + 1] != ":":
+            raise ValueError("expected colon")
+        start = JSON_SPACE.match(masked, position + 1).end()
+        value, position = decoder.raw_decode(masked, start)
+        members.append((key, value, key_start, start, position))
+        position = JSON_SPACE.match(masked, position).end()
+        if masked[position:position + 1] == ",":
+            position += 1
+            continue
+        if masked[position:position + 1] != "}":
+            raise ValueError("expected end of object")
+        break
+    if masked[position + 1:].strip(" \t\r\n"):
+        raise ValueError("trailing data")
+    keys = [member[0] for member in members]
+    return opening, members, {member[0]: member[1] for member in members}, len(keys) != len(set(keys))
+
+
+def vscode_edit_context_off(text):
+    """Return settings text with editor.editContext false; None when already set.
+
+    Only that top-level member is written. Comments, formatting and every other
+    member stay byte-identical; unparseable or ambiguous files raise ValueError.
+    An empty or whitespace-only file is an empty object, as VS Code and
+    `badi doctor` read it.
+    """
+    bom = "﻿" if text is not None and text.startswith("﻿") else ""
+    body = None if text is None else text[len(bom):]
+    if body is None or not body.strip(" \t\r\n"):
+        return bom + '{\n    "%s": false\n}\n' % VSCODE_EDIT_CONTEXT
+    opening, members, data, duplicates = jsonc_object(body)
+    if duplicates:
+        raise ValueError("duplicate top-level settings")
+    match = next((member for member in members if member[0] == VSCODE_EDIT_CONTEXT), None)
+    if match is not None and match[1] is False:
+        return None
+    if match is not None:
+        updated = body[:match[3]] + "false" + body[match[4]:]
+    else:
+        newline = "\r\n" if "\r\n" in body else "\n"
+        indent = "    "
+        if members:
+            key_start = members[0][2]
+            line = body[body.rfind("\n", 0, key_start) + 1:key_start]
+            if line and not line.strip(" \t"):
+                indent = line
+            ending = ","
+        else:
+            ending = "" if body[opening + 1:].lstrip(" \t").startswith(("\r", "\n")) else newline
+        updated = body[:opening + 1] + f'{newline}{indent}"{VSCODE_EDIT_CONTEXT}": false{ending}' + body[opening + 1:]
+    _opening, _members, result, duplicates = jsonc_object(updated)
+    if duplicates or result != {**data, VSCODE_EDIT_CONTEXT: False}:
+        raise ValueError("unexpected rewrite")
+    return bom + updated
+
+
+def vscode_settings_target(home, config_home):
+    target = observed_config_target(home, config_home, "Code/User/settings.json")
+    for parent in (target.parent.parent, target.parent):
+        if parent.is_symlink():
+            raise RuntimeError("Inspect the VS Code settings directory symlink before changing it.")
+    return target
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--broker-only", action="store_true",
                         help="Update only the broker, commands and service; leave the native input method running")
     parser.add_argument("--observed-app", action="append", choices=tuple(OBSERVED_APP_FLAGS), default=[],
-                        help="Prepare diagnostic accessibility/input observation on next launch; native browser/Codex editing is disabled")
+                        help=f"Add {OBSERVED_FLAG} to this app's user flags file for its next launch (backed up)")
+    parser.add_argument("--no-wayland-compat", action="store_true",
+                        help="Leave omarchy-fcitx5.service on its current frontend (skip the pinned Fcitx 5.1.22 compatibility frontend)")
+    parser.add_argument("--wayland-compat-build", type=Path, metavar="DIR",
+                        help="Install this existing checked compatibility build instead of building one")
+    parser.add_argument("--vscode-edit-context-off", action="store_true",
+                        help='Set "editor.editContext": false in VS Code user settings (backed up; other settings unchanged)')
     args = parser.parse_args()
     if args.broker_only and args.observed_app:
         parser.error("--observed-app requires the complete unlocked native installation")
+    if args.broker_only and (args.wayland_compat_build or args.vscode_edit_context_off):
+        parser.error("--wayland-compat-build and --vscode-edit-context-off require the complete unlocked native installation")
+    if args.no_wayland_compat and args.wayland_compat_build:
+        parser.error("--no-wayland-compat and --wayland-compat-build are exclusive")
     home = Path.home().resolve()
     if not os.environ.get("WAYLAND_DISPLAY") or not os.environ.get("XDG_RUNTIME_DIR"):
         raise RuntimeError("Run the installer from your graphical session")
@@ -332,23 +639,45 @@ def main():
         require_accessibility_runtime()
     flag_updates = {}
     config_home = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    flags_present = []
     for app in dict.fromkeys(args.observed_app):
-        target = observed_config_target(home, config_home, OBSERVED_APP_FLAGS[app])
+        target = observed_config_target(home, config_home, OBSERVED_APP_FLAGS[app][0])
         original = target.read_text() if target.exists() else None
-        flag_updates[target] = (original, observed_flags(original or "", app))
+        text = observed_flags(original or "", app)
+        if text is None:
+            flags_present.append(app)
+        else:
+            flag_updates[target] = (original, text)
+    vscode = None
+    if args.vscode_edit_context_off:
+        target = vscode_settings_target(home, config_home)
+        original = target.read_text(encoding="utf-8") if target.exists() else None
+        try:
+            vscode = (target, original, vscode_edit_context_off(original))
+        except (ValueError, UnicodeError):
+            raise RuntimeError(f"Inspect {target}: it is not a JSON object after comment and trailing-comma handling, or repeats a setting. It was not changed.") from None
     runtime = session_runtime()
     updating = service_installed()
     accessibility_updating = False
+    compat = None
     if not args.broker_only:
         accessibility_updating = service_installed("badi-accessibility.service")
         run(["systemctl", "--user", "is-active", "omarchy-fcitx5.service"], capture_output=True)
+        if not args.no_wayland_compat:
+            compat = plan_wayland_compat(home, args.wayland_compat_build)
+    receipts = receipt_module()
+    # Record the checkout state that is about to be built and copied.
+    checkout = receipts.source_identity(ROOT)
     run(["cargo", "build", "--release", "--locked", "--workspace", "--bins"], cwd=ROOT)
     if not args.broker_only:
         run(["npm", "run", "fcitx5:check"], cwd=ROOT)
+        if compat and compat["install"]:
+            build_wayland_compat(compat)
         require_unlocked()
     backup = home / ".local/state/badi/install-backups" / str(time.time_ns())
     backup.mkdir(parents=True, mode=0o700)
     changes = []
+    installed = []
 
     def install(source, target):
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -360,6 +689,7 @@ def main():
             saved.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(target, saved, follow_symlinks=False)
         changes.append(str(target.relative_to(home)))
+        installed.append(target)
         # Keep recovery discoverable even if a later target or startup fails.
         (backup / "changed-files.json").write_text(json.dumps(changes, indent=2))
         # Never truncate a library or executable that another process may map.
@@ -370,6 +700,22 @@ def main():
             staged.replace(target)
         finally:
             staged.unlink(missing_ok=True)
+
+    def retire(directory, files):
+        # Recorded like replaced files: restoring changed-files.json from the
+        # backup recreates them, and they leave the install receipt's new set.
+        for path in files:
+            saved = backup / path.relative_to(home)
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, saved, follow_symlinks=False)
+            changes.append(str(path.relative_to(home)))
+            (backup / "changed-files.json").write_text(json.dumps(changes, indent=2))
+            path.unlink()
+        for folder in (directory / "addons", directory):
+            try:
+                folder.rmdir()
+            except FileNotFoundError:
+                pass
 
     for name in ("badi-broker", "badictl"):
         install(ROOT / "target/release" / name, home / ".local/lib/badi" / name)
@@ -398,8 +744,29 @@ def main():
             with tempfile.TemporaryDirectory() as directory:
                 staged = Path(directory) / target.name
                 staged.write_text(text)
-                staged.chmod(0o600)
+                staged.chmod(stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600)
                 install(staged, target)
+        if vscode is not None and vscode[2] is not None:
+            target, original, text = vscode
+            if target.is_symlink() or (target.read_text(encoding="utf-8") if target.exists() else None) != original:
+                raise RuntimeError("VS Code settings changed during the build; newer user settings were preserved.")
+            with tempfile.TemporaryDirectory() as directory:
+                staged = Path(directory) / target.name
+                staged.write_text(text, encoding="utf-8")
+                staged.chmod(stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600)
+                install(staged, target)
+        if compat and compat["install"]:
+            root = compat["root"]
+            install(compat["build"] / "libwaylandim.so", root / "addons/libwaylandim.so")
+            install(compat["build"] / "build-receipt.json", root / "build-receipt.json")
+            install(ROOT / "packaging/fcitx5-wayland-compat/launch.py", root / "launch.py")
+            with tempfile.TemporaryDirectory() as directory:
+                staged = Path(directory) / COMPAT_DROPIN.name
+                staged.write_text(compat_dropin(compat["version"]))
+                staged.chmod(0o644)
+                install(staged, home / COMPAT_DROPIN)
+            for directory, files in compat["obsolete"]:
+                retire(directory, files)
     unit = home / ".config/systemd/user/badi-broker.service"
     install(ROOT / "packaging/systemd/badi-broker.service", unit)
     if not args.broker_only:
@@ -430,9 +797,13 @@ def main():
             install(staged, target)
     (backup / "changed-files.json").write_text(json.dumps(changes, indent=2))
     print(f"Rollback files and changed-file list: {backup}", flush=True)
+    receipt = receipts.write_receipt(home, "desktop", checkout, installed)
+    print(f"Install receipt: {receipt}", flush=True)
     run(["systemd-analyze", "--user", "verify", str(unit)])
     if not args.broker_only:
         run(["systemd-analyze", "--user", "verify", str(home / ".config/systemd/user/badi-accessibility.service")])
+    if compat and compat["install"]:
+        run(["systemd-analyze", "--user", "verify", "omarchy-fcitx5.service"])
     run(["systemctl", "--user", "daemon-reload"])
     if not updating:
         run(["systemctl", "--user", "enable", "badi-broker.service"])
@@ -460,6 +831,8 @@ def main():
     wait_accessibility(home / ".local/lib/badi/accessibility/daemon.py", runtime / "badi/accessibility.sock")
     if args.observed_app:
         enable_accessibility(backup)
+    if compat and compat["install"] and fcitx_command() not in {compat_command(item, compat["version"]) for item in compat["homes"]}:
+        raise RuntimeError(f"Another omarchy-fcitx5.service override replaces the compatibility command, so Fcitx was not restarted. Inspect its drop-ins, restore from {backup}, or rerun with --no-wayland-compat.")
     require_unlocked()
     profile = home / ".config/fcitx5/profile"
     previous = hashlib.sha256(profile.read_bytes()).digest()
@@ -468,9 +841,26 @@ def main():
     if hashlib.sha256(profile.read_bytes()).digest() != previous:
         raise RuntimeError("Fcitx rewrote the keyboard profile; inspect it before continuing")
     print("Local model and accessibility helper ready. Desktop addon loaded by the normal Fcitx service. Keyboard profile preserved. Application accessibility and exact target policy determine coverage; use badi doctor to inspect setup." + pause_note)
+    if compat is None:
+        print("Fcitx Wayland frontend left unchanged (--no-wayland-compat).")
+    elif not compat["install"]:
+        print(f"System Fcitx {compat['version'] or 'unknown'} is not the pinned {compat['pinned']}, so the Wayland compatibility frontend was not installed; Fcitx 5.1.23 and later include the upstream refresh.")
+    elif wait_compat_frontend(compat["root"] / "addons/libwaylandim.so"):
+        print(f"Pinned Fcitx {compat['version']} Wayland compatibility frontend verified in the running service.")
+    else:
+        print("The Wayland compatibility frontend is installed, but launch.py selected the system frontend for this runtime. Inspect journalctl --user -u omarchy-fcitx5.service; input continues with stock Fcitx.")
+    for directory in compat["kept"] if compat and compat["install"] else ():
+        print(f"Kept {directory}: it is still referenced or holds unexpected files. Rerun the installer after inspecting it.")
+    if vscode is not None:
+        print("VS Code editor.editContext " + ("was already false." if vscode[2] is None else "set to false; reload open VS Code windows to apply it."))
     if args.observed_app:
-        print("Diagnostic startup flags prepared for " + ", ".join(dict.fromkeys(args.observed_app)) +
-              ". Native browser/Codex writing is disabled because the external input path lacks safe editor transaction authority. Relaunch normally only for diagnostic observation. Existing windows were not closed; app/site policy is unchanged.")
+        prepared = [app for app in dict.fromkeys(args.observed_app) if app not in flags_present]
+        if prepared:
+            print(f"{OBSERVED_FLAG} added for " + ", ".join(prepared) +
+                  ". Relaunch the app to apply it; existing windows were not closed and app/site policy is unchanged."
+                  " Complete renderer accessibility costs some browser CPU and memory on every page.")
+        if flags_present:
+            print("Renderer accessibility was already enabled for " + ", ".join(flags_present) + "; its flags file was not changed.")
 
 
 if __name__ == "__main__":

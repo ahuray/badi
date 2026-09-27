@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Control the persistent desktop broker or an explicitly selected native trial."""
 
+import hashlib
 import importlib.util
 import json
 import os
 import re
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -29,10 +31,15 @@ HELP = """Badi — local writing controls
   badi app APP_ID on|off
                                Allow or block predictions in one app
   badi site ORIGIN on|off       Allow or block one exact browser origin
+  badi site all on|off          Allow every http(s) site unless its exact rule
+                               blocks it (off by default). Covers extension-free
+                               Chromium/Brave/Zen fields, which have no second
+                               site gate; the web extension still needs site access
   badi service start|stop|restart|status
                                Manage the local model process
   badi autostart on|off         Start with the graphical session (next login)
-  badi doctor                  Inspect service and model health as JSON
+  badi doctor                  Inspect service, model, install identity and
+                               no-suggestion reasons as JSON
   badi debug on|off|status|watch
                                Trace activity for 15 minutes, without typed text
   badi logs                    Print the last 60 service log entries
@@ -40,12 +47,38 @@ HELP = """Badi — local writing controls
                                Open a supported editor
 
 Native manual fields: Tab requests words; Tab again accepts.
-Observed fields: automatic suggestions after exact field and app/site checks.
+Observed fields: suggestions appear on their own; Tab accepts a visible one and
+otherwise stays Tab; Ctrl+Shift+Space requests. Automatic for Omawrite,
+Telegram and IME-parity apps (Chromium, Brave, Zen, Codex, VS Code, Cursor,
+Discord), each with an app or site grant; one site grant covers all three
+browsers. IME-parity accepts once, append-only, like
+typing: undo may merge it with earlier typing. Not verified cells yet.
 Web extension/Obsidian: Tab accepts a word, Ctrl/Command+Right all.
 Bash: Ctrl-X then Tab requests/accepts. Escape dismisses (Bash: Ctrl-X then Escape).
 Native tested applications: Omawrite and Xournal++ text cells.
 For advanced protocol commands: badictl --help
 """
+RECEIPTS = Path(".local/state/badi/receipts")
+VSCODE_SETTINGS = Path(".config/Code/User/settings.json")
+CLOSING = re.compile(r"\s*[}\]]")
+ALL_SITES_NOTE = ("Every http(s) site is allowed for predictions unless its exact site rule blocks it "
+                  "(badi site all off to return to listed sites). This includes extension-free "
+                  "Chromium/Brave/Zen fields, which have no second site gate and cannot exclude private "
+                  "windows; the web extension still needs its own site access. Sensitive fields stay denied.")
+RECEIPT_SCHEMA = "badi.install-receipt.v1"
+INSTALLED_BROKER = ".local/lib/badi/badi-broker"
+VERSION_LINE = re.compile(r"[a-z][a-z-]* \S+ commit=(?:[0-9a-f]{40}|unknown) dirty=(?:true|false|unknown)")
+# Broker no-suggestion classes; counters never include typed text.
+NO_SUGGESTION = {
+    "request_abstained": "the field language is missing or unsupported, text follows the caret, nothing but spaces (or one unfinished English word) precedes it, or a Persian joiner is not yet between two letters",
+    "budget_prefill": "the writing budget (550 ms while typing, 1.2 s after Tab) ended before the model started answering (prompt prefill)",
+    "budget_stream": "the writing budget (550 ms while typing, 1.2 s after Tab) ended before a complete word arrived",
+    "model_abstained": "the model finished without a complete word",
+    "output_rejected": "the output failed language, dictionary, number, shape or safety checks",
+    "stale": "the text, focus or pause state changed before display",
+    "timeout": "the broker deadline (600 ms while typing, 1.25 s after Tab) expired",
+    "provider_error": "the local model runtime failed or answered malformed",
+}
 
 
 def cli_path():
@@ -194,10 +227,153 @@ def accessibility_state():
     return result
 
 
+def no_suggestion_summary(metrics):
+    """Summarize content-free no-suggestion classes; None for older brokers."""
+    breakdown = metrics.get("no_suggestion") if isinstance(metrics, dict) else None
+    if not isinstance(breakdown, dict):
+        return None
+    counts = {reason: breakdown[reason] for reason in NO_SUGGESTION
+              if isinstance(breakdown.get(reason), int) and breakdown[reason] > 0}
+    last = breakdown.get("last") if breakdown.get("last") in NO_SUGGESTION else None
+    return {"total": sum(counts.values()), "counts": counts, "last": last}
+
+
+def receipt(name):
+    """Read one private install receipt; None when that installer never ran."""
+    try:
+        document = private_json(Path.home() / RECEIPTS / f"{name}.json", 1 << 20)
+    except FileNotFoundError:
+        return None
+    except (RuntimeError, ValueError, OSError):
+        return {"error": "receipt_unreadable"}
+    if not isinstance(document, dict) or document.get("schema") != RECEIPT_SCHEMA \
+            or not isinstance(document.get("source"), dict) or not isinstance(document.get("files"), dict):
+        return {"error": "receipt_invalid"}
+    return document
+
+
+def running_broker_identity():
+    """Hash and version the exact executable image of the running service."""
+    def main_pid():
+        result = subprocess.run(["systemctl", "--user", "show", SERVICE, "--property=MainPID", "--value"],
+                                capture_output=True, text=True, timeout=3)
+        value = result.stdout.strip()
+        return int(value) if result.returncode == 0 and value.isdigit() else 0
+
+    pid = main_pid()
+    if pid <= 0:
+        return None
+    process = Path(f"/proc/{pid}")
+    try:
+        if process.stat().st_uid != os.getuid():
+            return {"error": "running_broker_uninspectable"}
+        digest = hashlib.sha256()
+        with open(process / "exe", "rb") as stream:
+            for block in iter(lambda: stream.read(1 << 20), b""):
+                digest.update(block)
+        # /proc/PID/exe runs the image in memory even after an update replaced
+        # the installed file, so this is the running build, not the file on disk.
+        version = subprocess.run([str(process / "exe"), "--version"], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return {"error": "running_broker_uninspectable"}
+    if main_pid() != pid:
+        return {"error": "service_changed"}
+    line = version.stdout.strip() if version.returncode == 0 else ""
+    return {"version": line if VERSION_LINE.fullmatch(line) else None, "sha256": digest.hexdigest()}
+
+
+def install_state():
+    state = {}
+    expected = None
+    for name in ("desktop", "editors"):
+        document = receipt(name)
+        if document is None or "error" in document:
+            state[name] = document
+            continue
+        state[name] = {"installed_at": document.get("installed_at"), **document["source"]}
+        if name == "desktop":
+            expected = document["files"].get(INSTALLED_BROKER)
+            state[name]["broker_version"] = expected.get("version") if isinstance(expected, dict) else None
+    try:
+        running = running_broker_identity()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        running = {"error": "running_broker_uninspectable"}
+    if running and "error" not in running and isinstance(expected, dict):
+        running["version_matches_receipt"] = running["version"] is not None and running["version"] == expected.get("version")
+        running["sha256_matches_receipt"] = running["sha256"] == expected.get("sha256")
+    state["running_broker"] = running
+    return state
+
+
+def jsonc_object(text):
+    """Decode JSON with comments and trailing commas, as VS Code settings allow."""
+    def scan(source, skipped):
+        kept, index, quoted = [], 0, False
+        while index < len(source):
+            character = source[index]
+            if quoted or character == '"':
+                kept.append(character)
+                if quoted and character == "\\":
+                    kept.append(source[index + 1:index + 2])
+                    index += 2
+                    continue
+                quoted = character != '"' if quoted else True
+                index += 1
+                continue
+            length = skipped(source, index)
+            kept.append(" " if length else character)
+            index += length or 1
+        return "".join(kept)
+
+    def comment(source, index):
+        if source.startswith("//", index):
+            end = source.find("\n", index)
+            return (len(source) if end < 0 else end) - index
+        if source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            if end < 0:
+                raise ValueError("unterminated comment")
+            return end + 2 - index
+        return 0
+
+    def trailing_comma(source, index):
+        return int(source[index] == "," and CLOSING.match(source, index + 1) is not None)
+
+    return json.loads(scan(scan(text, comment), trailing_comma))
+
+
+def vscode_edit_context_note():
+    """Read-only check of VS Code's EditContext switch; never returns file text."""
+    path = Path.home() / VSCODE_SETTINGS
+    if not (shutil.which("code") or path.parents[1].is_dir()):
+        return None
+    fix = ('add "editor.editContext": false to ~/.config/Code/User/settings.json (or run '
+           'scripts/install-desktop.py --vscode-edit-context-off) and reload VS Code')
+    try:
+        with open(path, "rb") as stream:
+            raw = stream.read((1 << 20) + 1)
+        if len(raw) > 1 << 20:
+            raise ValueError("settings too large")
+        # Like VS Code and the installer: an optional BOM, and blank means {}.
+        text = raw.decode("utf-8-sig")
+        settings = jsonc_object(text) if text.strip() else {}
+        if not isinstance(settings, dict):
+            raise ValueError("settings are not an object")
+    except FileNotFoundError:
+        settings = {}
+    except (OSError, ValueError, UnicodeDecodeError):
+        return ("VS Code is installed, but Badi could not read its user settings to check EditContext. "
+                f"If Badi misreads text in VS Code, {fix}.")
+    if settings.get("editor.editContext") is False:
+        return None
+    return ("VS Code is installed with EditContext on (its default). EditContext sends Fcitx corrupted "
+            f"surrounding text, so Badi cannot read the text before the caret there; {fix}.")
+
+
 def health_report():
     report = {"schema": "badi.desktop-health.v1", "service": service_state(),
               "native_apps": list(APPS), "problems": [], "notes": []}
-    report["notes"].append("Native browser/Codex writing is disabled: the external input path cannot guarantee the intended field and caret. App/site permissions and model readiness cannot enable this unsupported path.")
+    report["notes"].append("Extension-free Chromium, Brave, Zen, Codex, VS Code, Cursor and Discord fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it. Source and nested-session evidence only.")
     problems = report["problems"]
     observer = report["accessibility"] = accessibility_state()
     if observer.get("loaded"):
@@ -210,7 +386,7 @@ def health_report():
                              "message": "Desktop accessibility is disabled, so applications may expose no fields.",
                              "action": "Complete the accessibility setup and relaunch the target application with its supported accessibility/input-method flags."})
     else:
-        report["notes"].append("Extension-free browser/Codex observation is not installed or could not be inspected. Model readiness alone does not establish those integrations.")
+        report["notes"].append("The extension-free field observer is not installed or could not be inspected, so IME-parity apps and observed fields get no suggestions. Model readiness alone does not establish those integrations.")
     try:
         report["native"] = native_state()
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
@@ -236,7 +412,16 @@ def health_report():
                          "action": "Inspect the Fcitx user service from the graphical session. Browser and editor broker health is reported separately."})
     elif report["native"]["addon_loaded"] is False:
         problems.append({"code": "native_addon_unavailable", "message": "The running Fcitx service has not loaded Badi.",
-                         "action": "Check the native installation in the Badi runbook. Browser/Codex native writing remains unavailable independently of addon or observer health."})
+                         "action": "Check the native installation in the Badi runbook. Native manual, observed and IME-parity fields all need the loaded addon."})
+    install = report["install"] = install_state()
+    running = install.get("running_broker") or {}
+    if install.get("desktop") is None:
+        report["notes"].append("No desktop install receipt exists, so the installed files cannot be matched to a source commit. The next scripts/install-desktop.py run records one.")
+    elif "error" in install["desktop"]:
+        report["notes"].append("The desktop install receipt is unreadable or not private; installed files cannot be matched to a source commit.")
+    elif running.get("sha256_matches_receipt") is False or running.get("version_matches_receipt") is False:
+        problems.append({"code": "broker_build_mismatch", "message": "The running broker is not the build recorded by the last desktop installation.",
+                         "action": "Run badi service restart after an installation; otherwise reinstall with scripts/install-desktop.py."})
     broker = report.get("broker", {})
     if report["native"].get("addon_update_pending"):
         report["notes"].append("Fcitx is still using the previous addon build. Apply the native update after normal desktop unlock.")
@@ -244,7 +429,49 @@ def health_report():
         report["notes"].append("Predictions are paused. Run badi resume when you want suggestions again.")
     elif broker and broker.get("metrics", {}).get("provider_calls") == 0:
         report["notes"].append("The model is ready but has received no prediction requests since startup. Run badi debug on and badi debug watch, then type in a supported field. Native manual fields require Tab; observed fields need matching accessibility and Fcitx context.")
+    if broker and web_settings().get("all_web_origins") is True:
+        report["notes"].append(ALL_SITES_NOTE)
+    editor = vscode_edit_context_note()
+    if editor:
+        report["notes"].append(editor)
+    if broker:
+        summary = no_suggestion_summary(broker.get("metrics", {}))
+        if summary is None:
+            report["notes"].append("The running broker predates no-suggestion reason counters. Install and restart the current build to see why suggestions are missing.")
+        elif summary["total"]:
+            detail = "; ".join(f"{reason}={count}: {NO_SUGGESTION[reason]}"
+                               for reason, count in sorted(summary["counts"].items(), key=lambda item: -item[1]))
+            report["notes"].append(f"{summary['total']} model request(s) since broker start showed no suggestion. {detail}. Last: {summary['last']}.")
     return report
+
+
+def web_settings():
+    """The current settings document, or {} when it cannot be read."""
+    try:
+        document = json.loads(control(["settings", "show", "--json"]))
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        return {}
+    return document if isinstance(document, dict) else {}
+
+
+def status_text(health, settings=None):
+    state = "Paused" if health["paused"] else "Model ready"
+    counters = health["metrics"]
+    summary = no_suggestion_summary(counters)
+    if summary is None:
+        misses = "No-suggestion reasons: not reported by this broker"
+    elif summary["total"]:
+        misses = f"No suggestion: {summary['total']} (last: {summary['last']})"
+    else:
+        misses = "No suggestion: 0"
+    return (f"Badi: {state} · {health['provider']}\n"
+            f"Requests: {counters['provider_calls']} · Suggestions: {counters['suggestions_shown']} · Errors: {counters['provider_errors']} · {misses}\n"
+            "Native Fcitx: automatic in Omawrite; Tab request/accept in the Xournal++ Text tool\n"
+            "Editors: Obsidian automatic/Tab · Bash Ctrl-X then Tab · web extension on granted sites\n"
+            "Observed fields: automatic for Omawrite, Telegram and IME-parity apps (Chromium, Brave, Zen, Codex, VS Code, Cursor, Discord); Tab accepts a visible suggestion, otherwise stays Tab; Ctrl+Shift+Space requests\n"
+            + ("Web sites: every http(s) site unless blocked (badi site all off)\n"
+               if (settings or {}).get("all_web_origins") is True else "")
+            + "Escape: dismiss · Why nothing appeared: badi doctor; badi debug on; badi debug watch")
 
 
 def update_settings(change):
@@ -270,6 +497,14 @@ def set_app(document, app, enabled):
     subject["permissions"] = {"context_read": decision, "display": decision, "suggest": decision,
                               "learn": "block", "retention": {"mode": "none"}}
     document["subjects"].sort(key=lambda item: identity_key(item["identity"]))
+
+
+def set_all_sites(document, enabled):
+    # Absent is the canonical off state; exact site rules are left untouched.
+    if enabled:
+        document["all_web_origins"] = True
+    else:
+        document.pop("all_web_origins", None)
 
 
 def set_site(document, value, enabled):
@@ -351,6 +586,9 @@ def debug_line(report):
     for name, activity in report.get("editors", {}).items():
         reads = activity.get("reason_counts", {}).get("sent context.changed", 0)
         adapters.append(f"{name}={activity.get('reason', 'unknown')}({reads} contexts)")
+    summary = no_suggestion_summary(metrics)
+    if summary and summary["total"]:
+        adapters.insert(0, f"no_show={summary['total']}(last={summary['last']})")
     return (f"{time.strftime('%H:%M:%S')}  {'debug' if report['enabled'] else 'debug off'}  "
             f"model={model.get('provider', 'offline')}  "
             f"input={native.get('counts', {}).get('input', 0)}  "
@@ -383,6 +621,10 @@ def debug_mode(mode):
         try:
             health = json.loads(control(["status"]))
             report["model"] = {key: health[key] for key in ("provider", "paused", "sessions", "metrics")}
+            summary = no_suggestion_summary(health["metrics"])
+            if summary and summary["last"]:
+                summary["last_meaning"] = NO_SUGGESTION[summary["last"]]
+            report["model"]["no_suggestion"] = summary
         except RuntimeError as error:
             report["model_error"] = str(error)
         print(json.dumps(report, indent=2) if mode == "status" else debug_line(report), flush=True)
@@ -437,14 +679,7 @@ def main(arguments):
         if arguments[-1] == "--json":
             print(json.dumps(health))
         else:
-            state = "Paused" if health["paused"] else "Model ready"
-            counters = health["metrics"]
-            print(f"Badi: {state} · {health['provider']}\n"
-                  f"Requests: {counters['provider_calls']} · Suggestions: {counters['suggestions_shown']} · Errors: {counters['provider_errors']}\n"
-                  "Adapters: Fcitx + optional field observer · Obsidian · Bash · optional web extension\n"
-                  "Observed fields: automatic · Native manual: Tab request/accept · Editor plugins: Tab next word\n"
-                  "Escape: dismiss · Bash: Ctrl-X then Tab\n"
-                  "Input diagnostics: badi debug on; badi debug watch")
+            print(status_text(health, web_settings()))
         return
     if arguments in (["pause"], ["resume"]):
         paused = arguments == ["pause"]
@@ -454,6 +689,11 @@ def main(arguments):
     if len(arguments) == 3 and arguments[0] == "app" and arguments[2] in ("on", "off"):
         update_settings(lambda document: set_app(document, arguments[1], arguments[2] == "on"))
         print(f"{arguments[1]} predictions {arguments[2]}.")
+        return
+    if arguments[:2] == ["site", "all"] and len(arguments) == 3 and arguments[2] in ("on", "off"):
+        update_settings(lambda document: set_all_sites(document, arguments[2] == "on"))
+        print(ALL_SITES_NOTE if arguments[2] == "on" else
+              "Predictions are limited to sites with their own allow rule again.")
         return
     if len(arguments) == 3 and arguments[0] == "site" and arguments[2] in ("on", "off"):
         update_settings(lambda document: set_site(document, arguments[1], arguments[2] == "on"))

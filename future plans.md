@@ -6,6 +6,59 @@ assistance throughout Linux, with Omarchy first. Tested coverage is in README;
 
 ## Next
 
+### Working app in daily apps (2026-09-26)
+
+The user reported that Badi still does nothing in the apps they use. Causes:
+no integration for Brave/Codex/VS Code/Cursor/Telegram/Discord, a quarantined
+native browser path, silent deadline misses, a swapped-out idle model and
+junk or silence after a trailing space. Decisions: IME-parity for Chromium-based
+apps (see AGENTS.md), promote harm-reducing fixes with no per-language harm
+increase, keep the model resident, and give explicit requests about 1.2 s.
+
+- [x] Content-free no-suggestion reasons, `badictl probe`, build identity and
+      install receipts in `badi doctor`.
+- [x] Keep Fcitx freshness across a transport-only broker reconnect.
+- [x] Warm the runtime after startup; fence invented numbers and dates.
+- [x] Explicit requests get 1.2 s; resident (`MemorySwapMax=0`) broker service
+      with `CPUWeight=1000`; `badi site all`; thread count measured, kept at 4.
+- [x] Production trailing-space healing per language, from blinded review on the
+      sealed 2026-09-10 set: Persian on (harm 12 -> 8), German off (1 -> 9),
+      English on by user decision (+1 harmful, +19 useful of 40). Short-sentence
+      context and the hyphen-safe word limit ship for all three languages.
+- [x] IME-parity native path in source: Fcitx 5.1.22 surrounding-text fix
+      installed by default, Chromium-based app classes with append-only
+      acceptance, Codex/VS Code/Cursor/Discord/Telegram identities, runtime
+      caret calibration and a grey inline preview. No input-method launch flags
+      are needed: Chromium 152+ and Electron 42 use text-input-v3 by default.
+- [x] Live Chromium 152 observer fixes (2026-09-26): renderer accessibility is
+      required and `complete` is the lightest working mode; browser UI with a
+      stale focus is ignored for the one page field (omnibox typing is denied by
+      its Fcitx `Url` purpose); `chromium-browser` alias; `--observed-app` writes
+      only that flag for Chromium, Brave, Codex, VS Code and Cursor. Discord has
+      no supported flags file.
+- [x] Zen (Gecko) IME-parity in source by user request (2026-09-26): exact
+      `zen` identity and observer rule from a live probe, one focused field whose
+      nearest Document is an HTTP(S) `document web` (the urlbar has no Fcitx
+      `Url` purpose), window-relative calibration; other Gecko browsers are
+      unavailable. Gecko limits: Fcitx panel only (no `direction` attribute),
+      paragraph-only surrounding text, typeless `<input>` ineligible.
+- [x] Installed and confirmed live on 2026-09-27 with disposable text (guarded
+      UInput, no Enter, drafts cleared): Zen tab, Chromium 152, Telegram Saved
+      Messages, VS Code 1.138, Cursor 3.21 and Omawrite each showed a suggestion
+      (0.5-0.8 s) and Tab appended exactly once; Escape dismissed; password
+      fields sent no request. Fixes found live: Cursor's rewritten process
+      title, Zen's missing `direction` attribute (glyph-order fallback now gives
+      the grey inline preview), and Zen/new-tab focus handoff in the trial tool.
+      The inline preview falls back to the Fcitx panel when the suggestion does
+      not fit the field, as in narrow tiled windows.
+- [ ] Codex desktop composer: rich contenteditable root (U+FFFC) and a trailing
+      line break after the caret block every request; needs observer text
+      flattening plus end-of-field handling of that break.
+- [ ] Discord: its updater drops command-line flags and environment, so
+      renderer accessibility cannot be enabled through a supported launcher.
+- [ ] Brave full acceptance trial; Zen undo grouping after acceptance. Zen,
+      Chromium and Brave share one broker browser-origin site-grant namespace.
+
 ### Device model discovery and qualification (2026-09-10)
 
 - [x] Inspect this laptop and current primary model/runtime sources; choose a

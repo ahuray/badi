@@ -8,13 +8,18 @@ with guarded, explicit acceptance. This is pre-release software.
 
 | Surface | Implemented behavior | Remaining boundary |
 | --- | --- | --- |
-| Omawrite / Xournal++ Text tool | Fcitx candidate; Tab request/accept; Escape dismiss | Exact tested native cells; English continuation |
+| Omawrite / Xournal++ Text tool | Omawrite suggests automatically through the observer (Tab accepts); Xournal++ uses Tab request/accept; Escape dismisses | Omawrite automatic suggestion and chained Tab acceptance passed live 2026-09-27; English continuation |
 | Dillinger in Chromium | Monaco ghost text, append and narrow spelling correction | Separate opt-in product extension |
 | Obsidian desktop | CodeMirror inline words, automatic/Tab request, Tab accepts a word, Ctrl/Command+Right accepts all | Caret at note end; reload the installed vault plugin after an update |
 | Bash in a terminal | Grey inline Readline preview; continuation and narrow English spelling correction; Ctrl-X then Tab accepts; native undo | Installed Ghostty 1.3.1 / Bash 5.3.15 physical preview, correction, acceptance and undo passed; explicit shortcut |
 | Chromium text inputs / textareas | Automatic/Tab request, Tab accepts a word, Ctrl/Command+Right accepts all, Escape and native undo | Optional site access; top-level fields with stable identity; inline LTR or caret callout |
-| Extension-free Chromium / Codex desktop | Experimental accessibility/Fcitx path is quarantined | Chromium preview rendered, but native acceptance failed field/caret binding and separate undo; a safe editor transaction is required |
-| Other editors / rich websites / shells | Cooperative integration backlog | Contenteditable, canvas editors, TUIs, Fish/Zsh and Firefox remain unverified |
+| Chromium, VS Code, Cursor (IME-parity, no extension) | Accessibility observer and Fcitx: automatic suggestion, grey inline preview when it fits the field (else the Fcitx panel at the caret), Tab accepts once like typed text, Escape dismisses | Live 2026-09-27 with disposable text: Chromium 152 textarea/input/contenteditable, VS Code 1.138 (`editor.editContext: false`) and Cursor 3.21 each showed a suggestion in 0.5–0.8 s and appended exactly once; password fields sent no request. Needs `--force-renderer-accessibility=complete` (`install-desktop.py --observed-app`); undo may merge with prior typing; no correction |
+| Brave Origin (IME-parity) | Same Chromium path and per-site policy | Page-field selection verified live on a Brave page; no full acceptance trial yet |
+| Zen browser (Gecko, IME-parity) | Same observer/Fcitx path; grey inline preview from glyph-order direction (Gecko has no `direction` attribute) | Live 2026-09-27 in the user's running Zen: inline preview, one exact append, Escape and password denial passed in textarea, input and contenteditable; undo untested; its urlbar has no Url purpose, so the observer alone denies it; Gecko's surrounding text stops at the caret's paragraph; other Gecko builds are unavailable |
+| Telegram desktop | Native Fcitx path (`telegram`); suggestion in the Fcitx panel | Live 2026-09-27 in Saved Messages: suggestion, one exact append, draft cleared; Qt reports no caret geometry for an inline preview |
+| Codex desktop (`chatgpt`) | IME-parity identity and flag are installed | Its rich composer (U+FFFC root, trailing line break) is not yet supported: no suggestion |
+| Discord | IME-parity identity | Its updater drops accessibility flags and environment, so the observer sees no fields and Badi stays silent |
+| Other editors / rich websites / shells | Cooperative integration backlog | Contenteditable, canvas editors, TUIs, Fish/Zsh, Firefox and other Gecko builds remain unverified |
 
 The desktop broker currently uses Qwen3-1.7B Q4_K_M on this workstation. Startup
 selects among installed pinned models that fit current resources and verifies
@@ -62,13 +67,14 @@ badi service restart
 badi autostart on
 ```
 
-Type an English prefix such as `Please find attached the` at the end of a native
-text field. Press **Tab** to request, **Tab again** to accept, or **Escape** to
-dismiss. In Xournal++, select the Text tool first. Candidates last five seconds
-and disappear when focus or text changes. These previously tested native cells
-use manual invocation. `Ctrl+Shift+Space` / `Ctrl+Shift+Y` are alternate shortcuts.
-The experimental browser/Codex native path is disabled after failed editing
-tests; a site permission alone cannot enable it.
+Where suggestions appear automatically (Omawrite and the extension-free apps),
+**Tab** accepts a visible suggestion and is otherwise the normal Tab; **Escape**
+dismisses and **Ctrl+Shift+Space** requests explicitly. In a Xournal++ text cell,
+type a phrase such as `Please find attached the`, press **Tab** to request and
+**Tab again** to accept. Candidates last five seconds and disappear when focus or
+text changes.
+Chromium-based apps and Zen without an editor integration use the
+extension-free IME-parity path below; each needs its own app or site grant.
 
 The new Omarchy speech-bubble **b** mark opens settings; right-click pauses/resumes. The panel also
 controls app permissions, model service, login startup and activity diagnostics.
@@ -93,22 +99,58 @@ checks the exact scheme, host and port. Private windows and sensitive fields are
 excluded. See [editor integrations](adapters/shared/README.md) for verification
 and installation boundaries.
 
-The extension-free path uses the [focused accessibility observer](adapters/accessibility/README.md)
-and the Fcitx addon. It needs application accessibility and native input-method
-support; a browser extension is not part of that path. The opt-in
-[pinned Fcitx compatibility frontend](packaging/fcitx5-wayland-compat/README.md)
-resolves the measured Chromium v3 publication stall. Physical Chromium trials
-showed a grey real-model preview and accepted insertion, but undo also removed
-the preceding typed prefix. Sandbox-enabled tests then proved wrong-field and
-wrong-caret edits, including with a single native insertion when a page changed
-focus or selection during `beforeinput`. The native browser/Codex path is
-quarantined, and native replacement is disabled. Editor-owned correction paths
-remain separate. Safe extension-free editing needs authority that reaches the
-editor transaction; the current external observation and input protocols do not
-provide it. See the [source-backed findings](docs/research/linux-architecture.md).
-Preview geometry is currently restricted to the measured Chromium 151 native
-Wayland LTR cell. Other coordinate conventions fall back to Fcitx's candidate
-display. Do not treat this source implementation as completed app coverage.
+## Extension-free apps (IME-parity)
+
+```sh
+python3 scripts/install-desktop.py                            # includes the Fcitx 5.1.22 frontend
+python3 scripts/install-desktop.py --vscode-edit-context-off  # also sets VS Code's editor.editContext
+python3 scripts/install-desktop.py --observed-app chromium --observed-app code  # renderer accessibility flag
+badi app chatgpt on       # Codex desktop; likewise code, cursor, discord, telegram
+badi site https://example.com on    # Chromium, Brave and Zen, per exact origin
+```
+
+This path uses the [focused accessibility observer](adapters/accessibility/README.md)
+and the Fcitx addon; no browser extension is involved. `badi site all on`
+therefore allows every Chromium/Brave/Zen origin there with no second host gate,
+private windows included. Other Chromium-family browsers, web-app windows and
+builds without an observer rule (Edge, Vivaldi, Code-OSS, …) are unavailable, as
+are Gecko browsers other than Zen (Firefox and its web-app windows, LibreWolf,
+Zen Twilight, Flatpak Zen, …). Each app must run natively
+on Wayland with its input method, and the desktop accessibility bus must be on.
+Each Chromium-based IME-parity app must also start with
+`--force-renderer-accessibility=complete` (Zen needs no flag). Without it Chromium
+exposes no page content to the observer, and lighter modes
+lack the field details it checks. This costs some browser CPU and memory on every
+page. `--observed-app chromium|brave-origin|chatgpt|code|cursor` (repeatable)
+adds only that flag to the app's own flags file, with a backup, on the app's next
+launch. Discord has no supported flags file; see the
+[observer runbook](adapters/accessibility/README.md#renderer-accessibility-flag).
+
+On Fcitx 5.1.22, the full desktop install builds and selects the pinned
+[compatibility frontend](packaging/fcitx5-wayland-compat/README.md) by default. It
+backports upstream Fcitx 5.1.23's refresh so Chromium-based text-input-v3 clients
+keep publishing surrounding text. The backport is protocol-tested only; the
+earlier 5.1.21 variant resolved the measured stall physically.
+`--no-wayland-compat` skips it, the packaging runbook documents rollback, and
+other Fcitx versions get no frontend.
+
+Under the IME-parity decision in [AGENTS.md](AGENTS.md) (2026-09-26), Chromium,
+Brave, Codex, VS Code, Cursor, Discord and (by user request) Zen accept a
+suggestion through one append-only Fcitx commit that behaves like typed text. Undo can merge it with the
+preceding typing, and a page that moves focus or caret during `beforeinput` can
+redirect it like a keystroke. Earlier physical Chromium trials showed both
+effects; see the [source-backed findings](docs/research/linux-architecture.md).
+Exact observer identity, snapshot/caret agreement, revision and expiry binding,
+one-shot acceptance, sensitive-field denial and foreign-IME yield still apply.
+Replacement stays editor-owned. The grey preview is calibrated against the
+app's own frame on every request and appears as inline text after the caret.
+LTR text that fits in the field uses it; everything else, including Qt apps
+such as Telegram, uses Fcitx's candidate panel. These apps have source and
+private nested-session evidence only until live trials. Zen's observer rules
+come from a live probe with disposable text; its acceptance and undo are
+untested. Gecko exposes no text `direction` attribute, so Zen suggestions use
+the Fcitx panel, and its surrounding text covers only the caret's paragraph, so
+a field with a newline before the caret fails the snapshot agreement closed.
 
 ## Debug missing suggestions
 
@@ -119,7 +161,33 @@ badi debug on
 badi debug watch           # type in another app; Ctrl+C stops watching
 badi debug status
 badi debug off
+badictl probe -            # type a disposable phrase, Enter, Ctrl+D; JSON result
 ```
+
+`badi status` counts model requests that showed nothing; `badi doctor` and
+`badi debug` name their content-free classes: `request_abstained` (language
+missing or unsupported, text after the caret, an empty or spaces-only prefix, a
+lone unfinished English word, or a Persian joiner not yet between two letters),
+`budget_prefill` / `budget_stream` (the writing budget, 550 ms while typing and
+1.2 s after an explicit request, ended before the model answered, or before a
+complete word), `model_abstained`, `output_rejected` (language, dictionary,
+number, shape or safety checks), `stale`, `timeout` and `provider_error`.
+`badictl probe [--language TAG] [--after TEXT] [--replace] [--explicit] TEXT|-`
+sends one request through the running broker's provider and display checks and
+prints the suggestion or class with latency; `--explicit` uses the 1.2 s budget. It needs no app grant, opens no
+session, cannot commit, reports `paused` while paused and changes no counters;
+the broker neither logs nor stores the text. Argument text stays in shell
+history and the process list, so `-` reads TEXT from standard input instead
+(one trailing newline removed).
+
+Both installers write `~/.local/state/badi/receipts/{desktop,editors}.json` with
+the checkout HEAD, dirty flag and each installed file's SHA-256; a tree that is
+not itself a Git checkout records `unknown`. The broker, `badictl` and native
+host print their embedded commit with `--version`, and their receipt entries
+record that embedded identity, since the editors installer copies the native
+host the desktop installer built.
+`badi doctor` shows the receipt identity and reports `broker_build_mismatch`
+when the running broker's version or bytes differ from the recorded install.
 
 Debug mode expires after 15 minutes. It records counts and reasons for focus,
 input, context, Tab decisions, model requests, display and commit dispatch.
@@ -156,7 +224,9 @@ cargo test --workspace --all-features --locked
 
 The desktop installer builds user-local binaries and restarts the Badi/Fcitx
 user services in an unlocked session, preserving the keyboard profile, existing
-autostart preference and settings, and backing up replaced files. Use
+autostart preference and settings, and backing up replaced files. On Fcitx
+5.1.22 the full install also builds the Wayland compatibility frontend from its
+pinned source download and runs its protocol checks. Use
 `python3 scripts/install-desktop.py --broker-only` for a model/controller update
 that leaves the input method running, including while the desktop is locked.
 Model assets must already exist. The UI updater requires an unlocked desktop

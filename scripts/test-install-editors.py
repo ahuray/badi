@@ -1,4 +1,5 @@
 """Keep editor installation local, idempotent and recoverable."""
+import hashlib
 import importlib.util
 import json
 import os
@@ -49,6 +50,14 @@ class InstallEditorsTests(unittest.TestCase):
                     if entry['path'] == str(rc):
                         originals.append((backup / entry['backup']).read_text())
             self.assertEqual(originals, [original])
+            receipt = json.loads((home / '.local/state/badi/receipts/editors.json').read_text())
+            self.assertEqual(receipt['installer'], 'editors')
+            preview = receipt['files']['.local/lib/badi/editors/shell/badi-preview.so']
+            self.assertEqual(preview['sha256'], hashlib.sha256(b'test display builtin').hexdigest())
+            self.assertIn('.bashrc', receipt['files'])
+            # Both runs use this checkout's actual Git identity (or explicit unknown).
+            self.assertRegex(receipt['source']['commit'], r'^([0-9a-f]{40}|unknown)$')
+            self.assertEqual(preview['commit'], receipt['source']['commit'])
 
             # Execute the installed entrypoint outside the checkout: a missing
             # imported helper must fail this test even though Bash syntax passes.

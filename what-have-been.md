@@ -178,3 +178,58 @@ The writing client's shared 550 ms deadline now includes waiting for HTTP
 headers; expiry closes the request and prevents another inference after an
 exhausted spelling attempt. Real errors and cancellation remain distinct from
 budget exhaustion. Rust, MSRV, desktop and aggregate source checks pass.
+
+Broker diagnostics now name why a request showed nothing: each provider call
+without a displayed suggestion counts once under a content-free class (request
+abstention, prefill or stream budget, model abstention, rejected output, stale,
+timeout, provider error). `badi status`, `badi doctor` and `badi debug` report
+them. `badictl probe` measures one private request through the running broker's
+provider and display checks without a session, commit authority or counters;
+`badictl probe -` reads the text from standard input, out of shell history and
+the process list. Binaries embed their source commit (`--version`), installers
+write per-file SHA-256 receipts, and doctor flags a running broker that differs
+from them.
+`badi status` states observed-field coverage and its evidence level without
+claiming verified cells.
+
+Local writing startup now sends one fixed two-token warm-up completion, bounded
+at 2 s, after the runtime is ready and before the broker binds its socket, so the
+first real request is not the cold one; a failure is logged by class and startup
+continues. A production numeric fact fence abstains, counted as
+`output_rejected`, on continuations whose digit runs (ASCII, Arabic-Indic or
+Persian) are absent from the typed text, and on any number ending at the
+restored `.` stop word, such as `die Teilnahme am 1.`.
+
+Live Chromium 152 runs showed that IME-parity apps need
+`--force-renderer-accessibility=complete`. Without it no page content reaches
+AT-SPI; `basic` and `form-controls` lack the HTML tag and character extents the
+observer checks. Chromium also keeps browser UI (the omnibox and its
+`top-chrome` WebUI popup) focused beside the page field. The observer now
+ignores that UI and still requires exactly one page field with a web origin.
+While the omnibox has the keyboard, its Fcitx context carries the `Url` purpose,
+so the addon denies it before any request. Directly launched Chromium
+(`chromium-browser`) has its own identity rule. `install-desktop.py
+--observed-app` now adds only the accessibility flag, for Chromium, Brave, Codex,
+VS Code and Cursor, with backups and receipts. Discord has no supported flags
+file, so it is documented but not changed.
+
+By user request Zen 1.22.3b (Gecko 156) joined IME-parity in source under its
+exact `zen` identity. A live probe with disposable text showed one Fcitx context
+for page fields and the urlbar, without a `Url` purpose, so the observer denies
+browser UI: exactly one focused field whose nearest Document is an HTTP(S)
+`document web` (`DocURL`). Gecko caret geometry uses its own window-relative
+rule. Gecko source shows no text `direction` attribute (Fcitx panel only),
+paragraph-only IME surrounding text and no `text-input-type` without a `type`
+attribute. Other Gecko browser ids, including Zen Twilight and Firefox web-app
+windows, are unavailable. Zen shares the `chromium` browser-origin site grants.
+
+On 2026-09-27 the installed build passed live trials with disposable text in
+the user's apps: a Zen tab, Chromium 152, Telegram Saved Messages, VS Code
+1.138, Cursor 3.21 and Omawrite showed suggestions in 0.5-0.8 s, and one Tab
+appended exactly one continuation; Escape dismissed, password fields sent no
+request, and drafts were cleared. Two gaps found live are fixed: the observer
+parses Cursor's rewritten, space-joined process title, and Gecko's missing text
+`direction` attribute now falls back to glyph order, so Zen shows the grey inline
+preview. The preview still yields to the Fcitx panel when the suggestion does
+not fit the field. Codex desktop's rich composer and Discord (its updater drops
+accessibility flags) remain unsupported.

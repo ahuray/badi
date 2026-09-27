@@ -83,7 +83,11 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
     ;;
   esac
 
+  all_web_origins=false
+  [[ ${BADI_FAKE_ALL_WEB_ORIGINS:-} == 1 ]] && all_web_origins=true
+
   jq -n \
+    --argjson all_web_origins "$all_web_origins" \
     --argjson broker_revision "$broker_revision" \
     --argjson settings_revision "$settings_revision" \
     --argjson store_available "$store_available" \
@@ -103,7 +107,7 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
         socket_mode: "0600",
         max_frame_bytes: 65536
       },
-      settings: {
+      settings: ((if $all_web_origins then {all_web_origins: true} else {} end) + {
         schema: "badi.settings.v2",
         revision: $settings_revision,
         paused: false,
@@ -157,7 +161,7 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
             }
           }
         ] end)
-      },
+      }),
       privacy: {
         memory_store_available: $store_available,
         memory_command_available: $command_available,

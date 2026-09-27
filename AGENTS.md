@@ -48,6 +48,19 @@ Omarchy first. Preserve exact editing authority and prove the affected user flow
 - Fcitx `commitString` proves `dispatched-unverified`, never verified `applied`.
   Preserve native undo and explicit user acceptance. Bash suggestions edit the
   Readline buffer without submitting or evaluating generated commands.
+- IME-parity (user decision, 2026-09-26) covers Chromium-based apps without an
+  editor-owned channel: Chromium, Brave, Codex/ChatGPT desktop, VS Code, Cursor
+  and Discord. By user request (2026-09-26) it also covers the Zen browser
+  (Gecko, exact `zen` identity only); its urlbar has no Url purpose, so the
+  observer alone must deny browser UI there. Other Gecko builds stay
+  unavailable. These apps may accept through one append-only Fcitx `commitString`
+  that behaves like typed text: undo may coalesce with preceding typing, and
+  page script that moves focus or caret during `beforeinput` may redirect it
+  like a keystroke. Document that; never claim exact undo or verified field
+  authority there. Every other guard stays: sensitive/purpose denial, foreign
+  composition yield, exact observer identity with snapshot/caret agreement
+  before display and dispatch, revision/fingerprint/expiry binding, one-shot
+  acceptance, no retries or synthetic keys. Replacement stays editor-owned.
 - Keep fixture, product, and general-web manifests and permissions separate.
   Browser host permission and exact broker-origin policy are distinct gates.
 - Spelling replacement requires negotiated `text_replacement`, an exactly bound
