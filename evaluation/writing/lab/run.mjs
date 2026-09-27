@@ -27,7 +27,7 @@ const SOURCE_PATHS = ['evaluation/writing/lab/run.mjs', 'evaluation/writing/lab/
   'broker/src/semantic/client/writing_lab.rs', 'broker/src/semantic/client/prefill_probe.rs', 'broker/src/semantic/runtime.rs',
   'Cargo.toml', 'Cargo.lock', 'broker/Cargo.toml', 'broker/src/lib.rs', 'broker/src/provider.rs',
   'broker/src/segment.rs', 'broker/src/protocol.rs', 'broker/src/model_selection.rs',
-  'broker/src/semantic/candidate.rs', 'broker/src/semantic/provenance.rs', 'broker/data/writing-lexicon/en.txt'];
+  'broker/src/semantic/pinned_runtime.rs', 'broker/src/semantic/provenance.rs', 'broker/data/writing-lexicon/en.txt'];
 const hash = value => createHash('sha256').update(value).digest('hex');
 const jsonBytes = value => JSON.stringify(value, null, 2) + '\n';
 

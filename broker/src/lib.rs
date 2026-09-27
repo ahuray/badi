@@ -6,11 +6,8 @@ pub mod build_info;
 pub mod control_plane;
 pub mod engine;
 pub mod ipc;
-#[cfg(feature = "local-model")]
-pub mod local_model;
 pub mod metrics;
 pub mod model_selection;
-pub mod native_host;
 pub mod personalization;
 pub mod policy;
 pub mod protocol;

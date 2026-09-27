@@ -379,18 +379,19 @@ experiments and natural writing benefit remain open.
        zero wrong-field or stale edits in the exercised matrix and all affected
        repository checks passing. Review results independently before delivery.
 
-The current service failure was `start-limit-hit`: hardware advice selected an
+The 2026-09-07 service failure was `start-limit-hit`: hardware advice selected an
 uninstalled Qwen3-0.6B model despite the existing Qwen3-1.7B installation. A
 2026-09-07 restart with sufficient current resources restored the old binary in
 4.03 seconds. The installed fix selects a verified pinned model already present
 within hard resource limits. Broker, native addon, editor files and Omarchy panel
 are updated; full installation verified the mapped addon and preserved the
-keyboard profile, app/site policy, pause and autostart settings.
+keyboard profile, app/site policy, pause and autostart settings. The unit now
+restarts a failed broker with backoff and never gives up; only a model that is
+missing, unsupported or too large for the host (exit 78) leaves it stopped.
 
-The actual broker and native host now recover from owned-model exit and socket
-EOF. Browser retries retain backoff through a cold restart. Real Obsidian and
-Chromium local-model checks passed open-document recovery, fresh acceptance and
-undo. Installed native Fcitx routing passed both app identities and denied-field
+The actual broker and its clients now recover from owned-model exit and socket
+EOF. Real Obsidian local-model checks passed open-document recovery, fresh
+acceptance and undo. Installed native Fcitx routing passed both app identities and denied-field
 checks; an Omawrite 0.5.0 / Qt 6.11.2 desktop trial verified visible prediction,
 saved insertion and exact native undo. The broader native composition/app matrix
 still needs current physical trials.
@@ -424,8 +425,7 @@ and supported Mac. Source research cannot establish comparative performance.
       ranges, conservative precision and explicit acceptance. Multilingual
       prediction needs a separate evaluation corpus and language controls.
       German/Persian correction needs full dictionary semantics and explicit
-      Unicode replacement counts; see the dated feasibility note in
-      [Linux architecture research](docs/research/linux-architecture.md).
+      Unicode replacement counts.
 - [ ] Complete the active evaluation's independent review and observed writing
       benefit; evaluate spelling replacement separately from continuation.
       Keep useful yield, abstention, errors and visible latency separate.
@@ -445,6 +445,7 @@ and supported Mac. Source research cannot establish comparative performance.
 - [ ] Source-bound release receipts, packaging, licensing and naming review.
       No publication or Git history changes without the user's request.
 
-Read `AGENTS.md` and the relevant source/runbook, not the research corpus by
-default. Update this file in place. Keep comments for non-obvious invariants and
-complex decisions. Completed context: [what has been built](what-have-been.md).
+Read `AGENTS.md` and the relevant source/runbook. Update this file in place.
+Keep comments for non-obvious invariants and complex decisions, and record
+durable decisions in [docs/decisions](docs/decisions/). Git history keeps
+completed context.

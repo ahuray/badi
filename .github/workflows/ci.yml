@@ -29,10 +29,12 @@ jobs:
           components: clippy, rustfmt
       - name: Check formatting
         run: cargo fmt --all --check
-      - name: Lint
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Lint default features
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Lint all features
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Test
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace --all-features --locked
       - name: Install Node for editor protocol and Readline checks
         uses: actions/setup-node@v7
         with:

@@ -352,11 +352,10 @@ Native replacement is disabled in negotiation, parsing, authorization and
 dispatch; editor-owned correction is separate. Matching observation never grants
 an atomic editor operation. AT-SPI cannot supply one because Chromium does not
 expose `EditableText`, and identical caret/selection calls return without closing
-the typing group. The [research findings](../../docs/research/linux-architecture.md)
-describe the missing transaction authority. Under the 2026-09-26 IME-parity
-decision in [AGENTS.md](../../AGENTS.md), Chromium, Brave, Codex, VS Code, Cursor
-and Discord may nonetheless accept through one append-only Fcitx `commitString`
-that behaves like typed text. Undo may coalesce with preceding typing, and page
+the typing group. Under the 2026-09-26
+[IME-parity decision](../../docs/decisions/0003-ime-parity-append-only.md),
+Chromium, Brave, Codex, VS Code, Cursor and Discord may nonetheless accept
+through one append-only Fcitx `commitString` that behaves like typed text. Undo may coalesce with preceding typing, and page
 script that moves focus or caret during `beforeinput` may redirect it like a
 keystroke. Neither exact undo nor verified field authority is claimed. This
 helper's share is exact identity, snapshot/caret agreement before display and
@@ -375,9 +374,9 @@ Fcitx. On Fcitx 5.1.22 it also selects the pinned
 which Chromium-based text-input-v3 clients stop publishing surrounding text.
 `--broker-only` leaves this helper and the frontend untouched. In the private
 nested session, VS Code published its editor's surrounding text with
-`"editor.editContext": false`; `install-desktop.py --vscode-edit-context-off`
-sets only that user setting, with a backup (a blank file counts as `{}`, as in
-VS Code and `badi doctor`).
+`"editor.editContext": false`. Set it in the VS Code user settings; `badi doctor`
+names this one-line fix while the setting is missing (a blank file counts as
+`{}`, as in VS Code).
 
 ### Renderer accessibility flag
 

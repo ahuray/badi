@@ -126,12 +126,12 @@ earlier 5.1.21 variant resolved the measured stall physically.
 `--no-wayland-compat` skips it, the packaging runbook documents rollback, and
 other Fcitx versions get no frontend.
 
-Under the IME-parity decision in [AGENTS.md](AGENTS.md) (2026-09-26), Chromium,
+Under the [IME-parity decision](docs/decisions/0003-ime-parity-append-only.md) (2026-09-26), Chromium,
 Brave, Codex, VS Code, Cursor, Discord and (by user request) Zen accept a
 suggestion through one append-only Fcitx commit that behaves like typed text. Undo can merge it with the
 preceding typing, and a page that moves focus or caret during `beforeinput` can
-redirect it like a keystroke. Earlier physical Chromium trials showed both
-effects; see the [source-backed findings](docs/research/linux-architecture.md).
+redirect it like a keystroke; earlier physical Chromium trials showed both
+effects.
 Exact observer identity, snapshot/caret agreement, revision and expiry binding,
 one-shot acceptance, sensitive-field denial and foreign-IME yield still apply.
 Replacement stays editor-owned. The grey preview is calibrated against the
@@ -148,7 +148,7 @@ a field with a newline before the caret fails the snapshot agreement closed.
 
 ```sh
 badi doctor
-badi service restart      # clears a failed service's restart limit
+badi service restart      # restarts a service stopped on a startup error
 badi debug on
 badi debug watch           # type in another app; Ctrl+C stops watching
 badi debug status
@@ -193,7 +193,9 @@ Doctor reports startup failures, missing native integration and degraded setting
 without copying arbitrary logs or writing into its output. A paused broker stays
 paused across service restart; use `badi resume` to enable predictions.
 If the inference process exits, the broker clears sessions and exits too, letting
-the desktop service restart it with fresh model verification and editor authority.
+the desktop service restart it, with backoff, fresh model verification and editor
+authority. A missing, unsupported or too-large model exits with status 78 instead
+and stays stopped for `badi doctor` to report.
 Additional cooperative native apps can be granted with `badi app APP_ID on`;
 policy is checked before reading. Use the exact debug identity. This cannot add
 context support to an application that does not expose it through Fcitx.
@@ -228,10 +230,9 @@ focus/revision binding, cancellation and one-shot acceptance. Password fields,
 foreign IME composition and stale requests must fail closed. Raw keylogging,
 clipboard replacement and blind synthetic typing are not product integrations.
 
-Only [future plans](<future plans.md>) is the active backlog. Read the short
-[what has been built](what-have-been.md) for history and [the vision](VISION.md)
-for the product contract. Research documents are on-demand references, not
-required startup context.
+Only [future plans](<future plans.md>) is the active backlog. Read [the
+vision](VISION.md) for the product contract and [docs/decisions](docs/decisions/)
+for durable architecture decisions; Git history keeps earlier notes.
 
 Badi's source and documentation are MIT-licensed ([LICENSE](LICENSE)); model
 weights, tokenizers and other third-party artifacts keep their own licenses and

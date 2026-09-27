@@ -75,7 +75,97 @@ def old_compat(home):
     return old
 
 
+def retired_browser(home):
+    """What the former install-editors.py --chromium left, beside foreign files."""
+    host = home / '.local/lib/badi/badi-native-host'
+    renderer = home / '.local/lib/badi/badi-native-manifest'
+    extension = home / '.local/lib/badi/chromium'
+    (extension / 'icons').mkdir(parents=True)
+    for path in (host, renderer, extension / 'manifest.json', extension / 'icons/badi-16.png'):
+        path.write_text('retired ' + path.name)
+    hosts = lambda browser: home / '.config' / browser / 'NativeMessagingHosts'
+    badi = [hosts(browser) / 'io.github.ahuray.badi.json' for browser in ('chromium', 'BraveSoftware/Brave-Browser')]
+    foreign = hosts('google-chrome') / 'io.github.ahuray.badi.json'
+    malformed = hosts('BraveSoftware/Brave-Browser-Beta') / 'io.github.ahuray.badi.json'
+    linked = hosts('BraveSoftware/Brave-Origin') / 'io.github.ahuray.badi.json'
+    for path, text in ((badi[0], json.dumps({'name': 'io.github.ahuray.badi', 'path': str(host)})),
+                       (badi[1], json.dumps({'name': 'io.github.ahuray.badi', 'path': str(host)})),
+                       (foreign, json.dumps({'name': 'io.github.ahuray.badi', 'path': '/opt/other/host'})),
+                       (malformed, '{')):
+        path.parent.mkdir(parents=True)
+        path.write_text(text)
+    linked.parent.mkdir(parents=True)
+    linked.symlink_to(badi[0])
+    return SimpleNamespace(retired=[host, renderer, extension / 'icons/badi-16.png', extension / 'manifest.json', *badi],
+                           extension=extension, kept=[foreign, malformed, linked])
+
+
+def broker_only_install(root):
+    home, project = root / 'home', root / 'project'
+    native_project(project)
+
+    def execute(command, **kwargs):
+        output = str(root / 'runtime') if command[0] == 'loginctl' else 'loaded' if '--property=LoadState' in command else '{}'
+        return subprocess.CompletedProcess(command, 0, output, '')
+
+    with patch.object(installer, 'ROOT', project), \
+         patch.object(installer.Path, 'home', return_value=home), \
+         patch.object(installer.subprocess, 'run', side_effect=execute), \
+         patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
+         patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(root / 'runtime'),
+                                 'XDG_CONFIG_HOME': str(home / '.config')}), \
+         patch('sys.argv', ['install-desktop.py', '--broker-only']), \
+         contextlib.redirect_stdout(io.StringIO()) as output:
+        installer.main()
+    return output.getvalue()
+
+
 class DesktopInstallTests(unittest.TestCase):
+    def test_retired_browser_selection_spares_foreign_and_unexpected_entries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary).resolve()
+            browser = retired_browser(home)
+            files, folders, kept = installer.retired_browser_components(home, home / '.config')
+            self.assertEqual(sorted(files), sorted(browser.retired))
+            self.assertEqual(folders, [browser.extension / 'icons', browser.extension])
+            self.assertEqual(kept, [])
+            (browser.extension / 'link').symlink_to(home)
+            files, folders, kept = installer.retired_browser_components(home, home / '.config')
+            self.assertFalse(any(path.is_relative_to(browser.extension) for path in files))
+            self.assertEqual((folders, kept), ([], [browser.extension]))
+
+    def test_install_retires_the_browser_extension_with_backup_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / 'home'
+            browser = retired_browser(home)
+            shell = home / '.local/lib/badi/editors/shell/badi.bash'
+            shell.parent.mkdir(parents=True)
+            shell.write_text('kept editor')
+            editors = {'.local/lib/badi/editors/shell/badi.bash': {'sha256': 'b' * 64},
+                       **{str(path.relative_to(home)): {'sha256': 'a' * 64} for path in browser.retired}}
+            receipts.store(receipts.receipt_path(home, 'editors'), {
+                'schema': receipts.SCHEMA, 'installer': 'editors', 'installed_at': '2026-09-01T00:00:00Z',
+                'source': {'commit': 'c' * 40, 'dirty': False}, 'files': editors})
+            original = {str(path.relative_to(home)): path.read_text() for path in browser.retired}
+            output = broker_only_install(root)
+            self.assertEqual(output.count('brave://extensions'), 1)
+            self.assertFalse(any(path.exists() for path in browser.retired))
+            self.assertFalse(browser.extension.exists())
+            self.assertTrue(all(path.is_symlink() or path.exists() for path in browser.kept))
+            backup, = (home / '.local/state/badi/install-backups').iterdir()
+            changed = json.loads((backup / 'changed-files.json').read_text())
+            for relative, text in original.items():
+                self.assertIn(relative, changed)
+                self.assertEqual((backup / relative).read_text(), text)
+            receipt = json.loads(receipts.receipt_path(home, 'editors').read_text())
+            self.assertEqual(receipt['files'], {'.local/lib/badi/editors/shell/badi.bash': {'sha256': 'b' * 64}})
+            self.assertEqual((receipt['installed_at'], receipt['source']['commit']), ('2026-09-01T00:00:00Z', 'c' * 40))
+            self.assertEqual(shell.read_text(), 'kept editor')
+            second = broker_only_install(root)
+            self.assertNotIn('brave://extensions', second)
+            self.assertTrue(all(path.is_symlink() or path.exists() for path in browser.kept))
+
     def test_observed_flags_add_only_accessibility_and_are_idempotent(self):
         original = '# user comment\n--ozone-platform=wayland\n--some-user-option'
         for app in installer.OBSERVED_APP_FLAGS:

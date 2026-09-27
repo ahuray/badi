@@ -565,10 +565,6 @@ pub enum OriginScheme {
     Http,
     #[serde(rename = "https")]
     Https,
-    #[serde(rename = "chrome-extension")]
-    ChromeExtension,
-    #[serde(rename = "moz-extension")]
-    MozExtension,
     #[serde(rename = "file")]
     File,
 }

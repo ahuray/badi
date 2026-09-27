@@ -718,10 +718,7 @@ impl Broker {
         let lease = if session.authority.protocol_version == 2
             && matches!(
                 session.authority.adapter_kind,
-                AdapterKind::Fcitx
-                    | AdapterKind::Obsidian
-                    | AdapterKind::Terminal
-                    | AdapterKind::Browser
+                AdapterKind::Fcitx | AdapterKind::Obsidian | AdapterKind::Terminal
             ) {
             self.inner
                 .config
@@ -1142,15 +1139,12 @@ impl Broker {
         }
         session.cancellation = None;
         let suggestion_id = format!("s:{}", uuid::Uuid::new_v4());
-        // The native candidate panel has a human reading window. Browser v1
-        // retains its existing lease; revision/focus guards still revoke both.
+        // The native candidate panel has a human reading window. Protocol v1
+        // keeps its configured lease; revision/focus guards still revoke both.
         let suggestion_ttl = if session.authority.protocol_version == 2
             && matches!(
                 session.authority.adapter_kind,
-                AdapterKind::Fcitx
-                    | AdapterKind::Obsidian
-                    | AdapterKind::Terminal
-                    | AdapterKind::Browser
+                AdapterKind::Fcitx | AdapterKind::Obsidian | AdapterKind::Terminal
             ) {
             Duration::from_millis(NATIVE_SUGGESTION_TTL_MS)
         } else {
@@ -2378,12 +2372,10 @@ fn validate_commit_authority(
             ) && authority.capabilities.contains(&Capability::CommitApplied)
         }
         CommitStatus::DispatchedUnverified => {
-            matches!(
-                authority.adapter_kind,
-                AdapterKind::Browser | AdapterKind::Fcitx
-            ) && authority
-                .capabilities
-                .contains(&Capability::CommitDispatchedUnverified)
+            authority.adapter_kind == AdapterKind::Fcitx
+                && authority
+                    .capabilities
+                    .contains(&Capability::CommitDispatchedUnverified)
         }
         CommitStatus::Stale | CommitStatus::Blocked | CommitStatus::Failed => true,
     };
@@ -2547,14 +2539,12 @@ mod tests {
             adapter_kind: AdapterKind::Browser,
             capabilities: vec![Capability::CommitDispatchedUnverified],
         };
-        assert!(
-            validate_commit_authority(&browser_dispatch, CommitStatus::DispatchedUnverified)
-                .is_ok()
-        );
-        assert!(matches!(
-            validate_commit_authority(&browser_dispatch, CommitStatus::Applied),
-            Err(BrokerError::InvalidCapability)
-        ));
+        for status in [CommitStatus::DispatchedUnverified, CommitStatus::Applied] {
+            assert!(matches!(
+                validate_commit_authority(&browser_dispatch, status),
+                Err(BrokerError::InvalidCapability)
+            ));
+        }
 
         let browser_applied = SessionAuthority {
             protocol_version: 1,

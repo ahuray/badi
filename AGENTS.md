@@ -6,10 +6,10 @@ Omarchy first. Preserve exact editing authority and prove the affected user flow
 ## Start here
 
 - Read this file, the affected source, and its runbook. Use
-  [future plans.md](<future plans.md>) as the only active backlog;
-  [what-have-been.md](what-have-been.md) is compact history and
-  [VISION.md](VISION.md) the durable product contract. Research documents are
-  references to consult when relevant.
+  [future plans.md](<future plans.md>) as the only active backlog,
+  [VISION.md](VISION.md) as the durable product contract and
+  [docs/decisions](docs/decisions/) for durable architecture decisions. Git
+  history keeps everything removed; delete stale material rather than archive it.
 - Inspect Git status before editing. This checkout may contain substantial work
   in progress; preserve existing changes, untracked files, and intentional
   deletions. Work on the user's requested outcome without expanding into the
@@ -29,8 +29,8 @@ Omarchy first. Preserve exact editing authority and prove the affected user flow
 | `adapters/fcitx5/` | Cooperative C++20 module. Read [native contract, trials, installation, and rollback](adapters/fcitx5/README.md). |
 | `adapters/obsidian/`, `adapters/shell/`, `adapters/shared/` | V2 editor clients, editor-owned acquisition/mutation, and native undo. Read [editor integrations](adapters/shared/README.md). |
 | `ui/omarchy-plugin/` | Omarchy settings panel and native writing bar. Read [controls and lifecycle checks](ui/omarchy-plugin/README.md). |
-| `scripts/badi-desktop.py`, `scripts/install-*.py`, `packaging/` | Persistent desktop broker, exact registered trial sockets, user-local installers, service units, and launcher integration. Check the affected script and its existing tests. |
-| `evaluation/` | Prediction Lab (`evaluation/writing/lab/`) and the Rust model evaluator. Read the [Lab runbook](evaluation/writing/README.md) before changing qualification behavior. |
+| `scripts/badi-desktop.py`, `scripts/install-*.py`, `packaging/` | Persistent desktop broker controls, user-local installers, service units, and launcher integration. Check the affected script and its existing tests. |
+| `evaluation/` | Prediction Lab (`evaluation/writing/lab/`). Read the [Lab runbook](evaluation/writing/README.md) before changing qualification behavior. |
 
 ## Editing and privacy invariants
 
@@ -48,19 +48,21 @@ Omarchy first. Preserve exact editing authority and prove the affected user flow
 - Fcitx `commitString` proves `dispatched-unverified`, never verified `applied`.
   Preserve native undo and explicit user acceptance. Bash suggestions edit the
   Readline buffer without submitting or evaluating generated commands.
-- IME-parity (user decision, 2026-09-26) covers Chromium-based apps without an
-  editor-owned channel: Chromium, Brave, Codex/ChatGPT desktop, VS Code, Cursor
-  and Discord. By user request (2026-09-26) it also covers the Zen browser
-  (Gecko, exact `zen` identity only); its urlbar has no Url purpose, so the
-  observer alone must deny browser UI there. Other Gecko builds stay
-  unavailable. These apps may accept through one append-only Fcitx `commitString`
-  that behaves like typed text: undo may coalesce with preceding typing, and
-  page script that moves focus or caret during `beforeinput` may redirect it
-  like a keystroke. Document that; never claim exact undo or verified field
-  authority there. Every other guard stays: sensitive/purpose denial, foreign
-  composition yield, exact observer identity with snapshot/caret agreement
-  before display and dispatch, revision/fingerprint/expiry binding, one-shot
-  acceptance, no retries or synthetic keys. Replacement stays editor-owned.
+- IME-parity (user decision, 2026-09-26,
+  [ADR 0003](docs/decisions/0003-ime-parity-append-only.md)) covers
+  Chromium-based apps without an editor-owned channel: Chromium, Brave,
+  Codex/ChatGPT desktop, VS Code, Cursor and Discord. By user request
+  (2026-09-26) it also covers the Zen browser (Gecko, exact `zen` identity
+  only); its urlbar has no Url purpose, so the observer alone must deny browser
+  UI there. Other Gecko builds stay unavailable. These apps may accept through
+  one append-only Fcitx `commitString` that behaves like typed text: undo may
+  coalesce with preceding typing, and page script that moves focus or caret
+  during `beforeinput` may redirect it like a keystroke. Document that; never
+  claim exact undo or verified field authority there. Every other guard stays:
+  sensitive/purpose denial, foreign composition yield, exact observer identity
+  with snapshot/caret agreement before display and dispatch,
+  revision/fingerprint/expiry binding, one-shot acceptance, no retries or
+  synthetic keys. Replacement stays editor-owned.
 - Spelling replacement requires negotiated `text_replacement`, an exactly bound
   suffix/range, and explicit acceptance. Test stale replacement and undo behavior.
 - Do not implement raw keylogging, clipboard replacement, or blind synthetic
@@ -68,8 +70,7 @@ Omarchy first. Preserve exact editing authority and prove the affected user flow
   headed tests. Keep typed prose and credentials out of diagnostics by default.
 - The normal broker uses the hardware-selected local writing model.
   `--provider phrase` explicitly selects the deterministic integration fixture.
-  `local-model-eval` gates the historical evaluator; its receipts do not qualify
-  the current writing path. Model readiness alone does not prove adapter input.
+  Model readiness alone does not prove adapter input.
 
 ## Development and verification
 
@@ -98,6 +99,7 @@ Rust verification:
 
 ```sh
 cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 cargo +1.85.0 check --workspace --all-targets --all-features --locked
@@ -131,14 +133,16 @@ Report missing prerequisites and the precise unverified boundary.
 
 - Source checks run without installation. Inspect current installed state before
   assuming this workstation matches the checkout.
-- `scripts/badi-desktop.py` mutations must bind to the exact session selected by
-  the overview. Never substitute a guessed socket or a different running broker.
+- `scripts/badi-desktop.py` controls only the persistent broker's private
+  socket; settings mutations stay compare-and-swap bound to the revision the
+  overview read. Never substitute a guessed socket or a different running broker.
 - `badi pause` persists across restarts; `badictl pause` is runtime control.
   Preserve this distinction in the UI, CLI, tests, and documentation.
 - `scripts/install-desktop.py` installs the broker, addon, commands, and launcher,
-  and restarts user services. `scripts/install-editors.py` updates selected editor
-  integrations. Use them when the task authorizes installation; inspect backups,
-  targets, and service/editor recovery before changing the running session.
+  removes retired components with a backup, and restarts user services.
+  `scripts/install-editors.py` updates selected editor integrations. Use them
+  when the task authorizes installation; inspect backups, targets, and
+  service/editor recovery before changing the running session.
 - `scripts/install-omarchy-ui.py` updates the installed panel only after explicit
   unlocked state. Preserve the lock gate and existing user customizations.
   Validate source first and verify health after an authorized install/reload.

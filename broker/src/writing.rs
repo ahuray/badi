@@ -16,7 +16,7 @@ use crate::model_selection::{
     select_installed_writing_model,
 };
 use crate::provider::ProviderRequest;
-use crate::semantic::candidate::{
+use crate::semantic::pinned_runtime::{
     RUNTIME_ARCHIVE_BYTES, RUNTIME_ARCHIVE_FILENAME, RUNTIME_ARCHIVE_SHA256,
     RUNTIME_BUNDLE_MANIFEST_SHA256, RUNTIME_BYTES, RUNTIME_SHA256,
 };
@@ -954,8 +954,8 @@ mod tests {
     #[test]
     fn trailing_space_healing_is_promoted_per_language() {
         use super::WritingLanguage::{English, German, Persian};
-        // A reviewed promotion decision: change it only with the per-language
-        // harm review recorded in evaluation/writing/README.md.
+        // A reviewed per-language promotion: a blinded review cleared English
+        // and Persian, and German failed it. Change it only after a new review.
         assert_eq!(super::TRAILING_SPACE_HEALING, [English, Persian]);
         for (tag, language, before) in [
             ("en-US", English, "Please review the "),

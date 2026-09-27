@@ -6,7 +6,6 @@ Scope {
   id: root
 
   property var cliPrefix: ["badictl"]
-  property var mutationPrefix: cliPrefix
 
   property var overview: ({})
   property string message: ""
@@ -257,7 +256,7 @@ Scope {
     message = ""
     mutationTimedOut = false
     mutationGeneration = lifecycleGeneration
-    mutationProcess.exec(mutationPrefix.concat([
+    mutationProcess.exec(cliPrefix.concat([
       "settings", "replace",
       "--if-revision", String(settingsRevision),
       "--json", JSON.stringify(document)

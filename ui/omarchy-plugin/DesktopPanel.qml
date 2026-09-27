@@ -17,7 +17,6 @@ Item {
     : client.controlPlaneDegraded ? "Settings need attention" : paused ? "Predictions paused"
     : !anyAppEnabled ? "Applications disabled" : "Model ready"
   readonly property var activity: client.overview.desktop ? client.overview.desktop.activity || ({}) : ({})
-  property string selectedTrial: ""
   property int page: 0
   property var serviceState: ({})
   property string serviceError: ""
@@ -25,7 +24,6 @@ Item {
   property string actionSuccess: ""
   property bool actionFailed: false
   property bool actionTimedOut: false
-  readonly property bool desktopSelected: !selectedTrial || selectedTrial === "desktop"
   readonly property bool controlsBusy: action.running || client.mutating
   readonly property string modelName: client.broker.provider === "local_model"
     ? "Local writing model · CPU" : "Provider: " + (client.broker.provider || "offline")
@@ -107,8 +105,7 @@ Item {
 
   BadiClient {
     id: client
-    cliPrefix: root.selectedTrial ? [root.helper, "ctl", "--trial", root.selectedTrial] : [root.helper, "ctl"]
-    mutationPrefix: [root.helper, "ctl", "--trial", overview.desktop ? overview.desktop.id : ""]
+    cliPrefix: [root.helper, "ctl"]
   }
 
   Timer {
@@ -275,20 +272,6 @@ Item {
               SectionTitle { text: "Connect your editors" }
               BodyText { text: "Obsidian needs the Badi vault plugin. Bash needs the shell hook. Chromium-based apps and Zen need the field observer and an app grant (badi app) or, for web pages, a site grant (badi site)." }
               Caption { text: "Run badi doctor or badi debug watch to check activity. Rich website editors and native spelling replacement are still in development." }
-              Controls.ComboBox {
-                Layout.fillWidth: true
-                visible: !!client.overview.desktop && client.overview.desktop.sessions.length > 1
-                model: client.overview.desktop ? client.overview.desktop.sessions : []
-                textRole: "label"
-                currentIndex: {
-                  if (!client.overview.desktop) return -1
-                  for (var i = 0; i < model.length; i++) if (model[i].id === client.overview.desktop.id) return i
-                  return -1
-                }
-                onActivated: (index) => { root.selectedTrial = model[index].id; root.actionMessage = ""; client.refresh() }
-                Accessible.name: "Writing session controlled by this panel"
-              }
-              Caption { visible: !root.desktopSelected; text: "These prediction controls apply to the selected trial. System controls always manage the desktop model." }
             }
             ColumnLayout {
               visible: root.page === 2

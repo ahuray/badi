@@ -116,9 +116,7 @@ impl StableIdentity {
                 let scheme = match origin.scheme {
                     OriginScheme::Http => WebScheme::Http,
                     OriginScheme::Https => WebScheme::Https,
-                    OriginScheme::ChromeExtension
-                    | OriginScheme::MozExtension
-                    | OriginScheme::File => return Err(IdentityError::UnsupportedScheme),
+                    OriginScheme::File => return Err(IdentityError::UnsupportedScheme),
                 };
                 Self::browser_origin(BrowserAdapter::Chromium, scheme, &origin.host, origin.port)
             }

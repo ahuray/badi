@@ -224,7 +224,7 @@ Chromium trial in `output/extensionless/installed-browser-05/` verified the
 former quarantine (original Tab, no context or commit despite an origin allow);
 it does not qualify IME-parity. Exact editor transactions remain limited to
 editor-owned integrations; see the
-[pinned architecture findings](../../docs/research/linux-architecture.md#2026-09-08-extension-free-editing-transaction-limits).
+[IME-parity decision](../../docs/decisions/0003-ime-parity-append-only.md).
 
 The actual-addon isolated D-Bus lane covers each class with configured
 `linux_app` and exact-origin allow rules. Unavailable apps keep Tab/navigation,
@@ -278,9 +278,7 @@ fields in the two allowlisted processes remain unverified.
 
 The selected input method remained `keyboard-us`. The module does not claim
 other fields, versions, Qt/GTK applications, terminals, unknown application
-IDs, or broad Fcitx compatibility. See the
-[native-app handoff](../../what-have-been.md)
-for the evidence boundary and observed metrics.
+IDs, or broad Fcitx compatibility.
 
 The 2026-09-07 installed update was rechecked on Omawrite 0.5.0-1 with Qt
 6.11.2-2 and Fcitx5 5.1.21-1: the visible local-model candidate was accepted,
@@ -293,8 +291,8 @@ synthetic D-Bus contexts verified both native app identities for Tab, Escape,
 empty/selected/mid-text fields, stale text and sensitive-field denial. That
 D-Bus lane proves input-method dispatch; the saved-file desktop trials prove
 the observed application mutations. Current synthetic artifacts are retained in
-`output/playwright/native-installed-htjvil8m/`; they do not requalify historical
-capability receipts or establish multilingual native quality.
+`output/playwright/native-installed-htjvil8m/`; they do not establish
+multilingual native quality.
 
 ## Desktop installation
 
@@ -322,7 +320,12 @@ The complete installation requires an explicitly unlocked Omarchy session.
 `python scripts/install-desktop.py --broker-only` updates just the broker and
 commands while preserving the running input method; use the complete installer
 after normal unlock to apply a changed native addon. Both paths preserve existing
-settings and record replaced files in a recoverable backup.
+settings and record replaced files in a recoverable backup. They also remove what
+the retired Chromium extension left installed, backed up the same way:
+`~/.local/lib/badi/chromium/`, `badi-native-host`, `badi-native-manifest`, and
+`io.github.ahuray.badi.json` native-messaging manifests in Chromium, Chrome and
+Brave configuration folders that name that host. Remove the unpacked extension
+itself in `brave://extensions` if it was loaded.
 
 The service creates `$XDG_RUNTIME_DIR/badi` with mode `0700`; its socket is `0600`.
 The model stays loaded after editor closure and starts with the graphical session.
@@ -399,40 +402,25 @@ Initial private Badi settings and downloaded model files are retained. Service
 recovery and restored settings do not establish physical prediction, insertion,
 or undo behavior in an application; those remain separate verification steps.
 
-## Try it without changing your desktop
+## Try it
 
-Run from the repository in a terminal in your actual Wayland session:
-
-```sh
-python scripts/try-native.py xournalpp
-# Alternative supported editor:
-python scripts/try-native.py omawrite
-```
-
-The trial requires the development dependencies below, Cargo, Python 3,
-`dbus-run-session`, `gdbus`, Fcitx5, the target app and its Fcitx toolkit module.
-The local model and runtime must already be provisioned, as they are on this
-workstation; see the
-[local writing implementation and evidence](../../what-have-been.md).
-The launcher uses your existing model assets, builds the current broker/addon,
-and starts an isolated session with an English/US input profile. It does not
-install the addon into or restart your normal desktop Fcitx.
+After the desktop installation below, open an editor from the Badi panel or
+with `badi launch xournalpp` or `badi launch omawrite`. The local model and
+runtime must already be provisioned; `badictl models writing` prints the pinned
+download plan.
 
 1. In Xournal++, select the **Text** tool and click a blank page. In Omawrite,
-   type directly into the document. Use the new trial window.
+   type directly into the document.
 2. Type `Please find attached the` with the caret at the end and no selection.
-3. Press **Tab** to request a short continuation from the local LLM.
-   A suggestion appears in the Fcitx candidate panel, when one is available.
-4. Press **Tab again** to accept or **Escape** to dismiss. The native candidate
-   remains for up to **five seconds**, provided the text and focus stay unchanged.
-   A disappeared candidate requires another request. Typing alone does not invoke
-   the current manual native implementation.
-5. Save any writing you want to keep and close the app normally. Services stop
-   automatically; the printed `output/native-trials/` folder, logs, and any files
-   saved there remain available.
+3. Omawrite suggests on its own. In Xournal++, press **Tab** to request a short
+   continuation from the local LLM. A suggestion appears in the Fcitx candidate
+   panel when one is available.
+4. Press **Tab** to accept or **Escape** to dismiss. The candidate remains for
+   up to **five seconds**, provided the text and focus stay unchanged; a
+   disappeared candidate needs another request.
 
 The current model on this workstation is **Qwen3-1.7B-Q4_K_M**, running locally
-through llama.cpp. Native suggestions are manual continuations of up to four
+through llama.cpp. Native suggestions are continuations of up to four
 words. English has the historical application proof above; German and Persian
 language routing is experimental and follows the active input-method language.
 Persian half-spaces are preserved only between the exact permitted Arabic
@@ -459,23 +447,14 @@ and the app's native undo removes the accepted text. Type another character or
 move focus while a suggestion is visible: an obsolete suggestion must not be
 inserted. Never interpret transport acknowledgements as proof of visible edits.
 
-For a service and real-model transport check without opening an editor:
-
-```sh
-python scripts/try-native.py xournalpp --check
-python scripts/try-native.py omawrite --check
-```
-
-These checks load the addon and exercise the C++ broker client with the real
-model. They do not simulate typing through the editor, prove visible acceptance,
-or measure general writing quality. Diagnostics are retained in each trial
-folder; learning is blocked and retention is set to `none` for both app policies.
+`badictl probe -` runs disposable text through the installed model without an
+editor; it does not prove visible acceptance or measure general writing quality.
 
 On the configured Omarchy workstation, click the **Badi keyboard icon just left
-of Wi-Fi** for launch buttons, a session selector, request/suggestion/error counts,
-and pause/resume. A zero request count means inference has not been invoked;
-check the Text tool, focus, and Tab first. Counts apply only to the
-selected session. See the [desktop controls runbook](../../ui/omarchy-plugin/README.md).
+of Wi-Fi** for launch buttons, request/suggestion/error counts, and
+pause/resume. A zero request count means inference has not been invoked; check
+the Text tool, focus, and Tab first. See the
+[desktop controls runbook](../../ui/omarchy-plugin/README.md).
 
 ## Build and test
 
@@ -507,16 +486,16 @@ candidate is visible. The client reconnects without a new focus/key event,
 obtains fresh policy, and rejects the retired candidate. Production reconnect
 uses at most ten retries with backoff capped at five seconds; an explicit key
 or new focus can renew the budget. Handshakes time out after two seconds.
-A closed connection, including the broker's five-minute idle close, retires
-every session, context revision, candidate, commit grant and pending observer
-reply. After fresh policy the adapter reopens the session and republishes
-context before any request. Surrounding text is Fcitx state: when the new
-connection reports the same authority epoch, settings revision and pause state,
-Tab reads it without new input, while automatic observed requests still wait for
-new surrounding text. A changed authority, on the same or a new connection,
-requires a fresh surrounding-text event before reading again. Typing supplies
-this in cooperative fields; the explicit-manual invocation contract remains
-unchanged.
+The broker keeps an idle policy-capable connection open. A closed connection,
+such as a broker restart, retires every session, context revision, candidate,
+commit grant and pending observer reply. After fresh policy the adapter reopens
+the session and republishes context before any request. Surrounding text is
+Fcitx state: when the new connection reports the same authority epoch, settings
+revision and pause state, Tab reads it without new input, while automatic
+observed requests still wait for new surrounding text. A changed authority, on
+the same or a new connection, requires a fresh surrounding-text event before
+reading again. Typing supplies this in cooperative fields; the explicit-manual
+invocation contract remains unchanged.
 
 After desktop installation, the opt-in check below uses Gio to drive synthetic
 input contexts through the **installed Fcitx addon and local model**:

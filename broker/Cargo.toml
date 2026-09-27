@@ -14,7 +14,6 @@ path = "src/lib.rs"
 [features]
 default = ["local-model"]
 local-model = ["dep:reqwest", "dep:sha2", "dep:unicode-script"]
-local-model-eval = ["local-model"]
 writing-lab = ["local-model"]
 
 [[bin]]
@@ -30,19 +29,10 @@ path = "src/main.rs"
 name = "badictl"
 path = "src/bin/badictl.rs"
 
-[[bin]]
-name = "badi-native-host"
-path = "src/bin/badi-native-host.rs"
-
-[[bin]]
-name = "badi-native-manifest"
-path = "src/bin/badi-native-manifest.rs"
-
-[[bin]]
-name = "badi-evaluator"
-path = "../evaluation/src/main.rs"
-required-features = ["local-model-eval"]
-test = false
+[[test]]
+name = "owned_runtime"
+harness = false
+required-features = ["local-model"]
 
 [dependencies]
 async-trait = "0.1"

@@ -1,8 +1,8 @@
-# Badi broker and native bridge
+# Badi broker
 
-This crate contains the local policy broker, its control CLI, and the narrow
-Chromium native-messaging bridge. It is Linux/Unix-socket only in the current
-proof and never drives a keyboard, clipboard, or accessibility API.
+This crate contains the local policy broker and its control CLI. It is
+Linux/Unix-socket only and never drives a keyboard, clipboard, or accessibility
+API.
 
 ## Binaries
 
@@ -11,13 +11,10 @@ proof and never drives a keyboard, clipboard, or accessibility API.
   explicitly selects the deterministic integration fixture.
 - `badictl` sends explicit control and health requests to that socket and runs
   offline hardware/model recommendation commands.
-- `badi-native-host` translates Chrome native-message frames to validated
-  Badi protocol frames on the existing broker socket. It does not start the
-  broker or provide suggestions itself.
-- `badi-native-manifest` prints one deterministic native-host manifest to
-  standard output. It never installs or writes that manifest.
+- `badi-writing-lab`, behind the `writing-lab` feature, is the Prediction Lab's
+  worker; see below.
 
-Build all four without installing them:
+Build the default binaries without installing them:
 
 ```sh
 cargo build --workspace --bins
@@ -25,9 +22,9 @@ cargo build --workspace --bins
 
 ## Diagnostics and build identity
 
-`build.rs` embeds the Git commit of the Rust inputs (`broker/`, `evaluation/src`,
-`Cargo.toml`, `Cargo.lock`) and whether they differed from it. `badi-broker`,
-`badictl` and `badi-native-host` print it with `--version`, for example
+`build.rs` embeds the Git commit of the Rust inputs (`broker/`, `Cargo.toml`,
+`Cargo.lock`) and whether they differed from it. `badi-broker` and `badictl`
+print it with `--version`, for example
 `badictl 0.1.0 commit=<40 hex> dirty=false`. Without usable Git metadata, such as
 an exported source archive, both fields are `unknown`; packagers may set both
 `BADI_BUILD_COMMIT` and `BADI_BUILD_DIRTY`.
@@ -146,16 +143,14 @@ only, not a runtime that has idled. Lab launches do not warm up.
 Requests have two budgets. An automatic request (typing) gives the provider
 550 ms and the broker a 600 ms generation limit. An explicit request, a
 `suggest.request` with `explicit: true` (Fcitx manual Tab, Obsidian Tab, Bash
-Ctrl-X Tab, Chromium general-web Tab) or a session `control.request` of
+Ctrl-X Tab) or a session `control.request` of
 `request`, gives 1,200 ms and 1,250 ms, because the user asked and is waiting
 for one suggestion. Only time changes: policy, binding, cancellation and
 validation are identical, and the native reading lease is extended by the same
 difference so a late explicit suggestion keeps its full display window.
 Adapter deadlines already exceed the explicit limit: the shared editor client
-waits 2 s per RPC, the Bash builtin 3 s, the Chromium general-web build 2 s and
-its native messaging 3 s; the Fcitx addon has no suggestion deadline of its own.
-The Chromium fixture and Dillinger builds keep 600 ms and send only automatic
-requests.
+waits 2 s per RPC and the Bash builtin 3 s; the Fcitx addon has no suggestion
+deadline of its own.
 
 The desktop service keeps the idle runtime resident: `MemorySwapMax=0` stops
 its weights, most of which the pinned runtime repacks into about 760 MiB of
@@ -163,8 +158,7 @@ anonymous memory, from being swapped out, and `CPUWeight=1000` lets a short
 inference burst outrank ordinary applications when the CPU is oversubscribed.
 `MemoryLow=1200M` records the measured working set, but protects only when the
 parent slices also reserve memory. Four inference threads remain the default:
-six or eight were not clearly faster. The
-[writing evaluation](../evaluation/writing/README.md) has the measurements.
+six or eight were not clearly faster.
 
 The broker waits on a pidfd of its owned, unreaped model process, so no timer
 polls it. Unexpected exit ends the broker with
@@ -230,9 +224,9 @@ four-word display limit counts space-separated words, so a hyphenated compound
 such as `re-try` or `E-Mail` is never cut after its first part.
 
 When the text before the caret ends in ASCII spaces, prompts in a language listed
-in `TRAILING_SPACE_HEALING` in `src/writing.rs` (currently English and Persian;
-German failed its harm review) end at the preceding word instead: a prompt ending in a space tokenizes
-unlike the model's own ` word` tokens and produced junk or silence. The runtime
+in `TRAILING_SPACE_HEALING` in `src/writing.rs` (English and Persian) end at the
+preceding word instead: a prompt ending in a space tokenizes unlike the model's
+own ` word` tokens and produced junk or silence. The runtime
 grammar requires the exact removed spaces first, and the reader strips them
 before validation, so a mismatched or missing echo abstains and the shown text
 continues after the typed space. The eight-token budget, stops, seam, lexicon,
@@ -243,11 +237,9 @@ runtime request: the runtime answers an empty prompt with a malformed chunk.
 The Lab's `production_baseline` mode keeps the earlier unhealed behavior for
 comparison; `production_boundary` equals production. `TRAILING_SPACE_HEALING`
 is the per-language promotion and rollback switch: a language is listed only
-while the blinded harm review recorded in the
-[writing evaluation](../evaluation/writing/README.md) finds no increase in
-harmful suggestions for it; an unlisted language keeps the unhealed prompt.
-All three are enabled in source pending that review's final per-language
-verdict.
+while healing does not increase its harmful suggestions, and an unlisted
+language keeps the unhealed prompt. A blinded review cleared English and
+Persian; German failed it and stays unhealed.
 
 Continuations also pass a numeric fact fence and abstain as `output_rejected`
 when they contain a digit run that is not a whole digit run of the text before
@@ -266,13 +258,12 @@ prompts replace nonmatching state; cancellation, policy and document authority
 are still checked independently before a suggestion can be used. Cached
 generation can vary numerically even with a fixed seed, as documented in the
 [pinned llama.cpp HTTP contract](https://github.com/ggml-org/llama.cpp/blob/b10726/tools/server/README.md#post-completion-given-a-prompt-it-returns-the-predicted-completion).
-The historical evaluator
-keeps its original uncached English-only prompt and runtime contract.
 Writing launches also cap both prefill batch sizes at 16 so interrupted prompts
 yield sooner between runtime decode operations. A clean development comparison
 preserved all 24 outputs/abstentions without a measured short-text penalty;
 this does not guarantee immediate cancellation of an in-flight runtime batch.
-Historical evaluator batch defaults remain unchanged.
+Only the runtime test fixtures still use the original uncached, English-only
+request and launch contract with default batch sizes.
 
 The opt-in development probes exercise the installed model without opening an
 editor or reading a document:
@@ -292,40 +283,14 @@ without its own subject rule then resolves as a matched rule that may read
 context, display and suggest, but never learn or retain. An exact origin rule
 always wins, so `badi site https://bank.example off` still blocks that origin;
 native apps keep their exact app rules. Field denial, pause and every binding
-check are unchanged. The web extension's browser host permission remains a
-separate gate for the extension, but the extension-free IME-parity path resolves
-observed Chromium, Brave and Zen fields as the same browser origins (all three
-share the `chromium` adapter namespace) with no second gate: with the flag on,
-any http(s) origin there is allowed by policy alone, subject to observer and
-field checks, and private windows are not distinguished. Protocol v1 settings clients neither
-see nor erase the flag. While the memory store is unavailable, only a strict
+check are unchanged. The IME-parity path resolves observed Chromium, Brave and
+Zen fields as these browser origins (all three share the `chromium` adapter
+namespace) with no second site gate: with the flag on, any http(s) origin there
+is allowed by policy alone, subject to observer and field checks, and private
+windows are not distinguished. Protocol v1 settings clients neither see nor
+erase the flag. While the memory store is unavailable, only a strict
 authority reduction is accepted; clearing the flag counts as one, and setting
 it, or removing an exact origin block while it is set, is a grant.
-
-## Native-message boundary
-
-The development host accepts only this caller origin:
-
-```text
-chrome-extension://ckkiehcjbclcjckkkajohopoikeejkoa/
-```
-
-That ID is derived from the public development key in the Chromium manifest.
-The host and generated native manifest both pin it exactly; wildcards and
-caller-selected origins are rejected. A future production identity therefore
-requires rebuilding the host as well as changing the extension manifest.
-
-Chrome uses a native-endian unsigned 32-bit length followed by UTF-8 JSON.
-Chrome's transport permits larger messages, but this bridge applies Badi's
-65,536-byte encoded-envelope ceiling in both directions and rejects an
-oversized declared input before allocating its body. Every frame is decoded as
-a strict protocol envelope before relay. The bridge verifies the broker socket
-metadata and peer UID, writes no content to logs, and treats expected EOF or a
-closed Chrome output pipe as a clean disconnect.
-
-The host uses `$XDG_RUNTIME_DIR/badi/broker.sock` by default. An absolute
-`--socket` override exists for direct development tests; Chrome itself supplies
-only the caller origin.
 
 ## Broker shutdown and socket cleanup
 
@@ -364,33 +329,21 @@ and insufficient-grace faults above were reproduced separately; the trials
 do not claim an exact SIGABRT stack trace. Task-private follow-up crash probes
 set their own core limit to zero and retained stderr plus actual exit status.
 
-## Print-only manifest workflow
-
-The checked-in [example manifest](native-messaging/io.github.ahuray.badi.example.json)
-is reproducible with:
-
-```sh
-target/debug/badi-native-manifest \
-  --host-path /opt/badi/badi-native-host
-```
-
-The supplied path must be absolute UTF-8 without `.` or `..` components. The
-command prints JSON and makes no profile, user-configuration, or system change.
-The isolated live runner creates its own temporary HOME and writes the emitted
-manifest only below that disposable directory.
-
 ## Verify
 
 ```sh
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
 ```
 
 Release builds use fat LTO, one codegen unit and stripped symbols.
 
-Tests cover fragmented frames, empty/truncated input, a 65,537-byte declaration
-rejected from its header alone, strict caller-origin validation, deterministic
-manifest output, bidirectional socket relay, EOF, broken output pipes, and
-observed SIGINT/SIGTERM socket cleanup.
+Tests cover strict framing, including a 65,537-byte declaration rejected from
+its header alone, policy, revision and commit binding, observed SIGINT/SIGTERM
+socket cleanup, and the owned runtime's lifecycle. `tests/owned_runtime.rs`
+has no libtest harness: the runtime launches that test executable itself as a
+fake llama-server (`tests/support/fake_llama_server.rs`), which covers early
+exit, malformed health, startup timeout, a failed warm-up, token privacy,
+orphan cleanup and runtime death retiring the broker's sessions.

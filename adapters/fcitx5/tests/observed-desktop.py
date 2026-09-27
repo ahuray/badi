@@ -672,7 +672,7 @@ def session(root, report):
         checks.append('Same live input context recovers after broker restart with a fresh verified dispatch')
 
         # The replacement broker presents the same initial authority as this
-        # one, like the broker's idle close: the transport alone reconnects.
+        # one, like a restart with unchanged settings: the transport alone reconnects.
         stop(broker)
         broker = None
         broker = start_broker()
@@ -1077,7 +1077,7 @@ def main():
                  'target/debug/badi-broker', 'target/debug/badictl']:
         if not (ROOT / path).is_file():
             raise RuntimeError('Build required fixture artifact: ' + path)
-    reports = ROOT / 'output/native-trials'
+    reports = ROOT / 'output/observed-desktop'
     reports.mkdir(parents=True, exist_ok=True)
     report = Path(tempfile.mkdtemp(prefix='observed-dbus-', dir=reports))
     with tempfile.TemporaryDirectory(prefix='badi-observed-dbus-') as temporary:

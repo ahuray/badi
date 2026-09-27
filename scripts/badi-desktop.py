@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Control the persistent desktop broker or an explicitly selected native trial."""
+"""Control the persistent desktop broker, its settings and its diagnostics."""
 
 import hashlib
 import importlib.util
@@ -87,7 +87,7 @@ def cli_path():
 
 
 def control(arguments, endpoint=None):
-    endpoint = endpoint or registry_directory().parent / "broker.sock"
+    endpoint = endpoint or runtime_directory() / "broker.sock"
     result = subprocess.run([str(cli_path()), "--socket", str(endpoint), *arguments],
                             capture_output=True, text=True, timeout=8)
     if result.returncode:
@@ -155,7 +155,7 @@ def startup_problem():
                 continue
             if line.removeprefix("error_code=local_model:").strip() == "runtime_process_exited":
                 return {"code": "runtime_process_exited", "message": "The local inference process stopped unexpectedly.",
-                        "action": "The desktop service retries automatically. If retries stop, inspect badi logs and available memory, then run badi service restart."}
+                        "action": "The desktop service restarts it automatically with backoff. If it keeps stopping, inspect badi logs and available memory."}
             missing = re.search(r"not installed \(([A-Za-z0-9_.-]{1,100}\.gguf)\)", line)
             if missing:
                 return {"code": "model_not_installed",
@@ -212,7 +212,7 @@ def accessibility_state():
         service = observer_service_state()
         result.update(service)
         if service["active"] == "active" and service["process_id"] > 0:
-            endpoint = registry_directory().parent / "accessibility.sock"
+            endpoint = runtime_directory() / "accessibility.sock"
             result.update(observer_probe(endpoint, service["process_id"]))
             if observer_service_state() != service:
                 result.update(ready=False, error="service_changed")
@@ -353,7 +353,7 @@ def vscode_edit_context_note():
             raw = stream.read((1 << 20) + 1)
         if len(raw) > 1 << 20:
             raise ValueError("settings too large")
-        # Like VS Code and the installer: an optional BOM, and blank means {}.
+        # Like VS Code: an optional BOM, and blank means {}.
         text = raw.decode("utf-8-sig")
         settings = jsonc_object(text) if text.strip() else {}
         if not isinstance(settings, dict):
@@ -401,8 +401,8 @@ def health_report():
         problems.append({"code": "broker_unreachable", "message": report["error"],
                          "action": "Run badi service start, then badi doctor. Model startup takes a few seconds."})
     if report["service"]["active"] == "failed":
-        problems.append({"code": "service_failed", "message": "The Badi service stopped after a startup failure.",
-                         "action": "Resolve the startup problem, then run badi service restart to clear the restart limit."})
+        problems.append({"code": "service_failed", "message": "The Badi service stopped on a startup error that retrying cannot fix.",
+                         "action": "Resolve the startup problem, then run badi service restart."})
     if report.get("broker", {}).get("control_plane_degraded"):
         problems.append({"code": "settings_degraded", "message": "The broker cannot use its persistent settings safely.",
                          "action": "Inspect badi logs and restore valid private settings before enabling predictions."})
@@ -531,11 +531,11 @@ def identity_key(identity):
     return (1, identity["adapter"], identity["app_id"])
 
 
-def registry_directory():
+def runtime_directory():
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if not runtime or not Path(runtime).is_absolute():
         raise RuntimeError("Open Badi from your graphical desktop session")
-    return Path(runtime) / "badi/native-trials"
+    return Path(runtime) / "badi"
 
 
 def private_json(path, limit=8192):
@@ -548,7 +548,7 @@ def private_json(path, limit=8192):
 
 
 def debug_activity():
-    directory = registry_directory().parent
+    directory = runtime_directory()
     report = {"enabled": False, "reason": "debug_off", "counts": {}}
     try:
         control = private_json(directory / "debug-control.json", 512)
@@ -596,7 +596,7 @@ def debug_line(report):
 
 
 def debug_mode(mode):
-    directory = registry_directory().parent
+    directory = runtime_directory()
     if mode in ("on", "off"):
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         info = directory.lstat()
@@ -632,32 +632,16 @@ def debug_mode(mode):
         time.sleep(1)
 
 
-def sessions(directory):
-    available = []
-    for path in directory.glob("*.json"):
-        try:
-            info = path.lstat()
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 4096:
-                continue
-            entry = json.loads(path.read_text())
-            if entry["id"] != path.stem or entry["app"] not in APPS:
-                continue
-            socket = Path(entry["socket"])
-            metadata = socket.lstat()
-            if not socket.is_absolute() or not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
-                continue
-            available.append((info.st_mtime_ns, entry))
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-    entries = [entry for _, entry in sorted(available, key=lambda item: item[0], reverse=True)]
-    endpoint = directory.parent / "broker.sock"
+def desktop_socket():
+    """The persistent broker's private socket, or None while it is offline."""
+    endpoint = runtime_directory() / "broker.sock"
     try:
         metadata = endpoint.lstat()
-        if stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid == os.getuid() and not metadata.st_mode & 0o077:
-            entries.insert(0, {"id": "desktop", "app": "desktop", "label": "Desktop writing", "socket": str(endpoint)})
     except OSError:
-        pass
-    return entries
+        return None
+    if stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid == os.getuid() and not metadata.st_mode & 0o077:
+        return endpoint
+    return None
 
 
 def main(arguments):
@@ -739,22 +723,14 @@ def main(arguments):
     if not arguments or arguments[0] != "ctl":
         raise RuntimeError("Unknown command. Run: badi --help")
     arguments = arguments[1:]
-    trial_id = None
-    if arguments[:1] == ["--trial"] and len(arguments) >= 3:
-        trial_id, arguments = arguments[1], arguments[2:]
-    available = sessions(registry_directory())
-    entry = next((item for item in available if trial_id is None or item["id"] == trial_id), None)
-    if entry is None:
+    endpoint = desktop_socket()
+    if endpoint is None:
         raise RuntimeError("The Badi model is offline. Open a supported editor below to start the service.")
-    if arguments not in (["overview", "--json"], ["status"]) and trial_id is None:
-        raise RuntimeError("Refresh Badi settings before changing a writing session")
-    output = control(arguments, entry["socket"])
+    output = control(arguments, endpoint)
     if arguments == ["overview", "--json"]:
         overview = json.loads(output)
-        counters = json.loads(control(["status"], entry["socket"]))["metrics"]
+        counters = json.loads(control(["status"], endpoint))["metrics"]
         overview["desktop"] = {
-            "id": entry["id"], "app": entry["app"],
-            "sessions": [{"id": item["id"], "label": item.get("label", item["app"])} for item in available],
             "requests": counters["provider_calls"], "suggestions": counters["suggestions_shown"],
             "errors": counters["provider_errors"],
             "activity": debug_activity(),

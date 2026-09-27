@@ -242,7 +242,6 @@ struct Overview {
     broker: OverviewBroker,
     settings: SettingsV1,
     privacy: OverviewPrivacy,
-    support: OverviewSupport,
     models: OverviewModels,
 }
 
@@ -274,36 +273,7 @@ struct OverviewPrivacy {
     aggregate_semantics: &'static str,
     stored_metadata: &'static str,
     max_retention_days: Option<u16>,
-    memory_records: Option<u64>,
-    memory_bytes: Option<u64>,
-    memory_store_available: bool,
-    memory_command_available: bool,
-    memory_integrity: &'static str,
-    memory_write_failures: u64,
-    memory_dropped_signals: u64,
     learning_available: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct OverviewSupport {
-    scope: &'static str,
-    generalization: &'static str,
-    authorization: &'static str,
-    verified_cells: [OverviewSupportCell; 3],
-}
-
-#[derive(Debug, Serialize)]
-struct OverviewSupportCell {
-    id: &'static str,
-    adapter: &'static str,
-    application: &'static str,
-    application_version: Option<&'static str>,
-    toolkit: &'static str,
-    test_surface: &'static str,
-    required_policy_subject: &'static str,
-    required_activation: &'static str,
-    evidence_class: &'static str,
-    verified_trials: Option<u8>,
 }
 
 #[derive(Debug, Serialize)]
@@ -376,15 +346,6 @@ fn build_overview(
             subject.permissions.learn == PermissionDecision::Allow
                 && matches!(subject.permissions.retention, RetentionPermission::None)
         });
-    let recorder_integrity = if !status.personalization_store_available {
-        "unavailable"
-    } else if status.personalization_write_failures == 0
-        && status.personalization_dropped_signals == 0
-    {
-        "healthy"
-    } else {
-        "degraded_since_start"
-    };
     let writing = recommend_model(detect_hardware(), ModelUseCase::Writing);
     Ok(Overview {
         schema: "badi.overview.v2",
@@ -418,61 +379,7 @@ fn build_overview(
             aggregate_semantics: "broker_emitted_and_commit_requested_not_delivery_confirmed",
             stored_metadata: "origin_provider_utc_day_counts",
             max_retention_days,
-            memory_records: status
-                .personalization_store_available
-                .then_some(status.personalization_records),
-            memory_bytes: status
-                .personalization_store_available
-                .then_some(status.personalization_bytes),
-            memory_store_available: status.personalization_store_available,
-            memory_command_available: status.personalization_recorder_available,
-            memory_integrity: recorder_integrity,
-            memory_write_failures: status.personalization_write_failures,
-            memory_dropped_signals: status.personalization_dropped_signals,
             learning_available: false,
-        },
-        support: OverviewSupport {
-            scope: "verified_test_cells_only",
-            generalization: "none",
-            authorization: "not_granted_by_evidence",
-            verified_cells: [
-                OverviewSupportCell {
-                    id: "chromium_fixture",
-                    adapter: "chromium",
-                    application: "badi_fixture",
-                    application_version: None,
-                    toolkit: "web_platform",
-                    test_surface: "http://localhost:4173/chromium.html :: HTMLTextAreaElement#draft",
-                    required_policy_subject: "http://localhost:4173",
-                    required_activation: "always",
-                    evidence_class: "historical_not_current_tree_proof",
-                    verified_trials: None,
-                },
-                OverviewSupportCell {
-                    id: "omawrite_0_5_0_qt6",
-                    adapter: "fcitx",
-                    application: "Omawrite",
-                    application_version: Some("0.5.0"),
-                    toolkit: "qt6",
-                    test_surface: "markdown_editor",
-                    required_policy_subject: "omawrite",
-                    required_activation: "explicit_manual",
-                    evidence_class: "live_native_application_proof",
-                    verified_trials: Some(20),
-                },
-                OverviewSupportCell {
-                    id: "xournalpp_1_3_7_gtk3_text_tool",
-                    adapter: "fcitx",
-                    application: "Xournal++",
-                    application_version: Some("1.3.7"),
-                    toolkit: "gtk3",
-                    test_surface: "text_tool_canvas",
-                    required_policy_subject: "com.github.xournalpp.xournalpp",
-                    required_activation: "explicit_manual",
-                    evidence_class: "live_native_application_proof",
-                    verified_trials: Some(20),
-                },
-            ],
         },
         models: OverviewModels {
             writing: OverviewModel {
@@ -1128,44 +1035,12 @@ mod tests {
         if let Err(error) = validator.validate(&overview) {
             panic!("overview failed schema: {error}");
         }
-        assert_eq!(
-            overview.pointer("/support/scope"),
-            Some(&json!("verified_test_cells_only"))
-        );
-        assert_eq!(
-            overview.pointer("/support/generalization"),
-            Some(&json!("none"))
-        );
-        assert_eq!(
-            overview.pointer("/support/authorization"),
-            Some(&json!("not_granted_by_evidence"))
-        );
-        assert_eq!(
-            overview.pointer("/support/verified_cells/0/required_activation"),
-            Some(&json!("always"))
-        );
-        assert_eq!(
-            overview.pointer("/support/verified_cells/1/required_activation"),
-            Some(&json!("explicit_manual"))
-        );
-        assert_eq!(
-            overview.pointer("/support/verified_cells/1/required_policy_subject"),
-            Some(&json!("omawrite"))
-        );
-        assert_eq!(
-            overview.pointer("/support/verified_cells/2/required_policy_subject"),
-            Some(&json!("com.github.xournalpp.xournalpp"))
-        );
-
-        let mut generalized = overview.clone();
-        generalized["support"]["generalization"] = json!("all_fcitx5_apps");
-        assert!(!validator.is_valid(&generalized));
-        let mut self_authorizing = overview.clone();
-        self_authorizing["support"]["authorization"] = json!("granted_by_test_evidence");
-        assert!(!validator.is_valid(&self_authorizing));
-        let mut widened_cell = overview;
-        widened_cell["support"]["verified_cells"][1]["application_version"] = json!("any");
-        assert!(!validator.is_valid(&widened_cell));
+        let mut widened = overview.clone();
+        widened["privacy"]["network"] = json!(true);
+        assert!(!validator.is_valid(&widened));
+        let mut extended = overview;
+        extended["support"] = json!({});
+        assert!(!validator.is_valid(&extended));
     }
 
     #[test]

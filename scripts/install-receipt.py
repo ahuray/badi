@@ -100,6 +100,31 @@ def write_receipt(home, installer, source, files, now=None):
     receipt = {"schema": SCHEMA, "installer": installer, "installed_at": installed_at,
                "source": {"commit": source["commit"], "dirty": source["dirty"]},
                "files": dict(sorted(entries.items()))}
+    store(path, receipt)
+    return path
+
+
+def forget(home, installer, files):
+    """Drop the entries of removed files, keeping the receipt's other entries
+    and its own install time and source identity. A missing or invalid receipt
+    is left as it is."""
+    home = Path(home)
+    path = receipt_path(home, installer)
+    try:
+        receipt = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return
+    if not isinstance(receipt, dict) or receipt.get("schema") != SCHEMA or not isinstance(receipt.get("files"), dict):
+        return
+    removed = {str(Path(item).relative_to(home)) if Path(item).is_relative_to(home) else str(item) for item in files}
+    if removed.isdisjoint(receipt["files"]):
+        return
+    receipt["files"] = {key: entry for key, entry in receipt["files"].items() if key not in removed}
+    store(path, receipt)
+
+
+def store(path, receipt):
+    """Atomically write a private receipt."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as stream:
         staged = Path(stream.name)
@@ -110,4 +135,3 @@ def write_receipt(home, installer, source, files, now=None):
         staged.replace(path)
     finally:
         staged.unlink(missing_ok=True)
-    return path

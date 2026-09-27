@@ -199,8 +199,7 @@ Installed writing selection prefers a verified pinned artifact that is already
 present and still fits current resources, including when power changes advice.
 Dynamic discovery, downloads and qualification run through the explicit Lab
 workflow; catalog popularity or a new search result cannot silently replace the
-installed working model. Historical evaluator receipts remain separate and do
-not qualify the current writing path.
+installed working model.
 
 ## Verification
 

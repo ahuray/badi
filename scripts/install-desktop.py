@@ -2,6 +2,7 @@
 """Install the Badi broker and cooperative addon into this Omarchy user session."""
 
 import argparse
+import errno
 import hashlib
 import importlib.util
 import json
@@ -45,6 +46,14 @@ COMPAT_FILES = ("launch.py", "build-receipt.json", "addons/libwaylandim.so")
 # Retired frontends are removed only while no service command references them.
 OBSOLETE_COMPAT = ("5.1.21",)
 STOCK_FCITX_COMMAND = "/usr/bin/fcitx5 --disable notificationitem"
+# The removed Chromium extension and its native messaging host, which the
+# former install-editors.py --chromium installed.
+RETIRED_EXTENSION = Path(".local/lib/badi/chromium")
+RETIRED_HOSTS = (Path(".local/lib/badi/badi-native-host"), Path(".local/lib/badi/badi-native-manifest"))
+RETIRED_HOST_MANIFEST = "io.github.ahuray.badi.json"
+CHROMIUM_CONFIGS = ("chromium", "google-chrome", "google-chrome-beta", "google-chrome-unstable",
+                    "BraveSoftware/Brave-Browser", "BraveSoftware/Brave-Browser-Beta",
+                    "BraveSoftware/Brave-Browser-Nightly", "BraveSoftware/Brave-Origin")
 
 
 def run(command, **kwargs):
@@ -420,6 +429,48 @@ def verify_compat_build(directory, launcher):
     return directory
 
 
+def retired_browser_components(home, config_home):
+    """Files and folders the removed Chromium integration left installed.
+
+    A browser's native-messaging manifest counts only while it names Badi's
+    installed host, and the extension folder only while it holds nothing but
+    plain files and folders. Returns (files, folders deepest first, kept).
+    """
+    host = home / RETIRED_HOSTS[0]
+    files = [home / path for path in RETIRED_HOSTS if (home / path).is_file() and not (home / path).is_symlink()]
+    folders, kept = [], []
+    extension = home / RETIRED_EXTENSION
+    if extension.is_symlink() or (extension.exists() and not extension.is_dir()):
+        kept.append(extension)
+    elif extension.is_dir():
+        found, expected = [], True
+        for directory, subdirectories, names in os.walk(extension):
+            directory = Path(directory)
+            folders.append(directory)
+            for path in (directory / name for name in (*subdirectories, *names)):
+                if path.is_symlink() or not (path.is_file() or path.is_dir()):
+                    expected = False
+                elif path.is_file():
+                    found.append(path)
+        if expected:
+            files += found
+            folders.reverse()
+        else:
+            folders = []
+            kept.append(extension)
+    for browser in CHROMIUM_CONFIGS:
+        manifest = config_home / browser / "NativeMessagingHosts" / RETIRED_HOST_MANIFEST
+        if manifest.is_symlink() or not manifest.is_file() or not manifest.is_relative_to(home):
+            continue
+        try:
+            named = json.loads(manifest.read_text()).get("path")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(named, str) and Path(named).is_absolute() and Path(named).resolve() == host.resolve():
+            files.append(manifest)
+    return files, folders, kept
+
+
 def plan_wayland_compat(home, build=None):
     """Decide the pinned frontend action before building or changing any file.
 
@@ -557,7 +608,7 @@ def main():
         finally:
             staged.unlink(missing_ok=True)
 
-    def retire(directory, files):
+    def retire(files, folders):
         # Recorded like replaced files: restoring changed-files.json from the
         # backup recreates them, and they leave the install receipt's new set.
         for path in files:
@@ -567,11 +618,16 @@ def main():
             changes.append(str(path.relative_to(home)))
             (backup / "changed-files.json").write_text(json.dumps(changes, indent=2))
             path.unlink()
-        for folder in (directory / "addons", directory):
+        for folder in folders:
             try:
                 folder.rmdir()
-            except FileNotFoundError:
-                pass
+            except OSError as error:
+                if error.errno not in (errno.ENOENT, errno.ENOTEMPTY):
+                    raise
+
+    retired_files, retired_folders, retired_kept = retired_browser_components(home, config_home)
+    retire(retired_files, retired_folders)
+    receipts.forget(home, "editors", retired_files)
 
     for name in ("badi-broker", "badictl"):
         install(ROOT / "target/release" / name, home / ".local/lib/badi" / name)
@@ -613,7 +669,7 @@ def main():
                 staged.chmod(0o644)
                 install(staged, home / COMPAT_DROPIN)
             for directory, files in compat["obsolete"]:
-                retire(directory, files)
+                retire(files, (directory / "addons", directory))
     unit = home / ".config/systemd/user/badi-broker.service"
     install(ROOT / "packaging/systemd/badi-broker.service", unit)
     if not args.broker_only:
@@ -643,6 +699,11 @@ def main():
             staged.write_text(text)
             install(staged, target)
     (backup / "changed-files.json").write_text(json.dumps(changes, indent=2))
+    if retired_files:
+        print("Removed the retired Badi browser extension and native host; if the unpacked Badi extension "
+              "is still loaded, remove it in brave://extensions.", flush=True)
+    for path in retired_kept:
+        print(f"Kept {path}: it holds unexpected entries from the retired browser extension. Inspect and remove it.", flush=True)
     print(f"Rollback files and changed-file list: {backup}", flush=True)
     receipt = receipts.write_receipt(home, "desktop", checkout, installed)
     print(f"Install receipt: {receipt}", flush=True)

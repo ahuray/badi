@@ -14,7 +14,7 @@ The settings window has three views:
 - **Applications:** independent native app permissions. Blocking an app revokes
   context reading, suggestion generation, and display. Other subjects are preserved;
   learning stays blocked and retention stays `none`. Unsupported apps are listed
-  explicitly. The session selector appears only when multiple sessions exist.
+  explicitly.
 - **System:** login startup, model restart/stop/start, service status, and selectable
   terminal commands. Turning startup off takes effect at the next graphical login;
   stopping the process releases model memory now. Neither changes app permissions.
@@ -90,20 +90,19 @@ error. `badi doctor` includes actionable `problems` for missing model files,
 resource or integrity failures, unreachable broker, degraded settings, an
 unloaded addon, and a running broker that differs from the last install receipt.
 Its notes name the content-free classes of requests that showed no suggestion.
-Journal prose is not copied into these diagnostics. Starting or
-restarting a failed service clears its restart limit; service activation still
-precedes model readiness, which the broker health probe verifies separately.
+Journal prose is not copied into these diagnostics. The service restarts a
+failed broker with backoff; only a missing, unsupported or too-large model
+(exit 78) leaves it stopped until Start or Restart after the fix. Service
+activation still precedes model readiness, which the broker health probe
+verifies separately.
 
 `scripts/badi-desktop.py` is installed as `~/.local/bin/badi` and `badi-desktop`. It starts the
 persistent `badi-broker.service` and opens regular editors through transient user
 services, preserving Wayland/runtime values and selecting their Fcitx modules.
-The private desktop socket is listed first as **Desktop writing**. Separate
-`scripts/try-native.py` trials register private, content-free socket
-receipts under `$XDG_RUNTIME_DIR/badi/native-trials/` and remove their own receipt
-at shutdown. The desktop client discovers live owned sockets, obtains settings
-through `badictl`, and binds each mutation to the selected trial ID. It never
-silently switches a mutation to another trial. Closing a trial leaves its saved
-files and diagnostics under the repository's ignored `output/native-trials/`.
+The panel controls only the private desktop socket,
+`$XDG_RUNTIME_DIR/badi/broker.sock`, and only while it is an owned private socket;
+otherwise it reports the model offline. It obtains settings through `badictl`,
+and every settings write is compare-and-swap bound to the revision it read.
 
 ## Client contract
 

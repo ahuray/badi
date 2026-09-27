@@ -1,4 +1,4 @@
-"""Behavior checks for session discovery and exact-session desktop controls."""
+"""Behavior checks for the desktop controls, settings updates and diagnostics."""
 import contextlib
 import hashlib
 import importlib.util
@@ -26,8 +26,8 @@ class DesktopTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name) / 'native-trials'
-        self.directory.mkdir()
+        self.directory = Path(self.temporary.name) / 'badi'
+        self.directory.mkdir(mode=0o700)
         # Doctor tests must not depend on this machine's installed receipts or service.
         installed = patch.object(desktop, 'install_state', return_value={
             'desktop': {'installed_at': '2026-09-26T12:00:00Z', 'commit': 'unknown', 'dirty': None, 'broker_version': None},
@@ -39,50 +39,44 @@ class DesktopTests(unittest.TestCase):
         editors.start()
         self.addCleanup(editors.stop)
 
-    def register(self, name):
-        endpoint = self.directory / (name + '.sock')
+    def desktop_socket(self, mode=0o600):
+        endpoint = self.directory / 'broker.sock'
         listener = socket.socket(socket.AF_UNIX)
         listener.bind(str(endpoint))
-        endpoint.chmod(0o600)
+        endpoint.chmod(mode)
         self.addCleanup(listener.close)
-        entry = {'id': name, 'app': 'xournalpp', 'socket': str(endpoint)}
-        receipt = self.directory / (name + '.json')
-        receipt.write_text(json.dumps(entry))
-        receipt.chmod(0o600)
-        return entry, receipt
+        return endpoint
 
-    def test_discovery_excludes_stale_public_and_symlink_receipts(self):
-        live, _ = self.register('live')
-        _, public = self.register('public')
-        public.chmod(0o644)
-        stale, _ = self.register('stale')
-        Path(stale['socket']).unlink()
-        _, linked = self.register('linked')
-        saved = linked.with_suffix('.saved')
-        linked.rename(saved)
-        linked.symlink_to(saved)
-        (self.directory / 'broken.json').write_text('{')
-        self.assertEqual(desktop.sessions(self.directory), [live])
-
-    def test_mutations_need_an_explicit_live_session(self):
-        self.register('live')
-        with patch.object(desktop, 'registry_directory', return_value=self.directory):
-            with self.assertRaisesRegex(RuntimeError, 'Refresh'):
-                desktop.main(['ctl', 'pause', 'on'])
+    def test_ctl_reaches_only_the_private_desktop_socket(self):
+        with patch.object(desktop, 'runtime_directory', return_value=self.directory), \
+             patch.object(desktop.subprocess, 'run') as command:
             with self.assertRaisesRegex(RuntimeError, 'offline'):
-                desktop.main(['ctl', '--trial', 'closed', 'pause', 'on'])
-
-    def test_private_desktop_socket_is_preferred_and_needs_no_receipt(self):
-        trial, _ = self.register('trial')
-        endpoint = self.directory.parent / 'broker.sock'
-        with socket.socket(socket.AF_UNIX) as listener:
-            listener.bind(str(endpoint))
+                desktop.main(['ctl', 'pause', 'on'])
+            endpoint = self.desktop_socket(0o666)
+            with self.assertRaisesRegex(RuntimeError, 'offline'):
+                desktop.main(['ctl', 'pause', 'on'])
+            self.assertEqual(command.call_count, 0)
             endpoint.chmod(0o600)
-            entries = desktop.sessions(self.directory)
-            self.assertEqual([entry['id'] for entry in entries], ['desktop', 'trial'])
-            self.assertEqual(entries[0]['socket'], str(endpoint))
-            endpoint.chmod(0o666)
-            self.assertEqual(desktop.sessions(self.directory), [trial])
+            command.return_value.returncode = 0
+            command.return_value.stdout = '{}'
+            with contextlib.redirect_stdout(io.StringIO()):
+                desktop.main(['ctl', 'pause', 'on'])
+            self.assertEqual(command.call_args.args[0][1:], ['--socket', str(endpoint), 'pause', 'on'])
+
+    def test_overview_adds_desktop_counters_and_activity(self):
+        self.desktop_socket()
+        metrics = {'provider_calls': 4, 'suggestions_shown': 3, 'provider_errors': 1}
+        with patch.object(desktop, 'runtime_directory', return_value=self.directory), \
+             patch.object(desktop, 'control', side_effect=[json.dumps({'schema': 'badi.overview.v2'}),
+                                                           json.dumps({'metrics': metrics})]) as command, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['ctl', 'overview', '--json'])
+        self.assertEqual([call.args[1] for call in command.call_args_list], [self.directory / 'broker.sock'] * 2)
+        overview = json.loads(output.getvalue())
+        self.assertEqual(overview['schema'], 'badi.overview.v2')
+        self.assertEqual({key: overview['desktop'][key] for key in ('requests', 'suggestions', 'errors')},
+                         {'requests': 4, 'suggestions': 3, 'errors': 1})
+        self.assertFalse(overview['desktop']['activity']['enabled'])
 
     def test_launcher_uses_normal_desktop_service_and_toolkit_modules(self):
         with patch.object(desktop.subprocess, 'run') as command:
@@ -92,17 +86,6 @@ class DesktopTests(unittest.TestCase):
             launch = command.call_args_list[1].args[0]
             self.assertIn('--setenv=GTK_IM_MODULE=fcitx', launch)
             self.assertEqual(launch[-1], 'xournalpp')
-
-    def test_mutation_keeps_selected_session_when_a_newer_one_opens(self):
-        first, receipt = self.register('first')
-        os.utime(receipt, ns=(1, 1))
-        self.register('newer')
-        with patch.object(desktop, 'registry_directory', return_value=self.directory), \
-             patch.object(desktop.subprocess, 'run') as command, contextlib.redirect_stdout(io.StringIO()):
-            command.return_value.returncode = 0
-            command.return_value.stdout = '{}'
-            desktop.main(['ctl', '--trial', 'first', 'pause', 'on'])
-            self.assertEqual(command.call_args.args[0][1:], ['--socket', first['socket'], 'pause', 'on'])
 
     def test_pause_persists_with_compare_and_swap(self):
         settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'subjects': []}
@@ -415,14 +398,14 @@ class DesktopTests(unittest.TestCase):
             self.assertIn(expected, line)
 
     def test_debug_is_expiring_private_and_does_not_reuse_a_previous_run(self):
-        with patch.object(desktop, 'registry_directory', return_value=self.directory), \
+        with patch.object(desktop, 'runtime_directory', return_value=self.directory), \
              patch.object(desktop.time, 'time', return_value=1000), \
              contextlib.redirect_stdout(io.StringIO()):
             desktop.debug_mode('on')
-            first = desktop.private_json(self.directory.parent / 'debug-control.json')
+            first = desktop.private_json(self.directory / 'debug-control.json')
             self.assertEqual(first['expires_at'], 1900)
             self.assertEqual(desktop.debug_activity()['reason'], 'no_input_events')
-            native = self.directory.parent / 'debug-native.json'
+            native = self.directory / 'debug-native.json'
             native.write_text(json.dumps({'id': first['id'], 'schema': 'badi.native-activity.v1',
                                          'at': 999, 'reason': 'unsupported_app', 'counts': {'tab': 1}}))
             native.chmod(0o600)
@@ -434,8 +417,8 @@ class DesktopTests(unittest.TestCase):
             self.assertFalse(desktop.debug_activity()['enabled'])
 
     def test_debug_refuses_public_symlink_expired_and_malformed_data(self):
-        flag = self.directory.parent / 'debug-control.json'
-        with patch.object(desktop, 'registry_directory', return_value=self.directory), \
+        flag = self.directory / 'debug-control.json'
+        with patch.object(desktop, 'runtime_directory', return_value=self.directory), \
              patch.object(desktop.time, 'time', return_value=1000):
             flag.write_text('{')
             flag.chmod(0o600)
@@ -494,7 +477,7 @@ class DesktopTests(unittest.TestCase):
         line = desktop.debug_line({'enabled': True, 'native': {'reason': 'context_received', 'counts': {}},
                                    'model': {'provider': 'local_model', 'metrics': broker['metrics']}})
         self.assertIn('no_show=3(last=budget_prefill)', line)
-        with patch.object(desktop, 'registry_directory', return_value=self.directory), \
+        with patch.object(desktop, 'runtime_directory', return_value=self.directory), \
              patch.object(desktop, 'control', return_value=json.dumps({**broker, 'sessions': 0})), \
              contextlib.redirect_stdout(io.StringIO()) as output:
             desktop.debug_mode('status')

@@ -1,10 +1,10 @@
 //! Owned local-model runtime primitives, compiled with the `local-model`
-//! feature: artifact provenance, the contained llama.cpp process and its
-//! loopback client. The writing provider activates them; the historical
-//! evaluator candidate stays gated by its own qualification receipt.
+//! feature: the pinned runtime release, artifact provenance, the contained
+//! llama.cpp process and its loopback client. The writing provider activates
+//! them.
 
-pub mod candidate;
 pub mod client;
+pub mod pinned_runtime;
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub mod process;

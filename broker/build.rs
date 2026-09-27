@@ -7,7 +7,7 @@ use std::process::Command;
 // The dirty check and the rebuild triggers cover the same inputs, and the Git
 // watches below cover every HEAD movement, so a cached build cannot keep a
 // stale commit or clean/dirty flag for these paths.
-const INPUTS: [&str; 4] = ["broker", "evaluation/src", "Cargo.toml", "Cargo.lock"];
+const INPUTS: [&str; 3] = ["broker", "Cargo.toml", "Cargo.lock"];
 
 fn main() {
     let manifest = PathBuf::from(
