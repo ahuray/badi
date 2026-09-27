@@ -8,6 +8,25 @@ namespace badi::fcitx5 {
 
 using Json = nlohmann::json;
 
+Json inspectRequest(std::string_view appId) {
+    return Json{{"op", "inspect"}, {"app_id", appId}};
+}
+
+Json snapshotRequest(const Json &focus) {
+    return Json{{"op", "snapshot"}, {"binding", focus.value("binding", Json())},
+                {"policy_target", focus.value("target", Json())}};
+}
+
+Json previewRequest(const Json &focus, std::string_view text, std::uint64_t ttlMs) {
+    auto request = snapshotRequest(focus);
+    request["op"] = "preview";
+    request["text"] = text;
+    request["expected_caret"] = focus.value("caret", Json());
+    request["expected_total_chars"] = focus.value("total_chars", Json());
+    request["ttl_ms"] = ttlMs;
+    return request;
+}
+
 bool observerAnswered(const Json &reply) {
     return reply.value("ok", Json()) == true && reply.contains("focus");
 }
@@ -50,6 +69,20 @@ bool observerAgrees(const Json &observed, const ContextWindow &context) {
            observed.value("after", Json()) == observedAfter(context);
 }
 
+bool observerCorroborates(const Json &captured, const Json &observed, const ContextWindow &context) {
+    return matchesObservedFocus(captured, observed, true) && observerAgrees(observed, context);
+}
+
+std::optional<std::string_view> observedRequestBlocked(const Json &observed, const ContextWindow &context,
+                                                       bool foreignIme) {
+    if (!context.identityKnown) return "field_identity_unknown";
+    if (context.before.empty()) return "empty_prefix";
+    if (!context.after.empty()) return "caret_not_at_end";
+    if (foreignIme) return "foreign_ime_active";
+    if (!observerAgrees(observed, context)) return "observer_context_mismatch";
+    return std::nullopt;
+}
+
 bool observerDeniedField(const Json &error) {
     return error == "sensitive_field" || error == "unsupported_field" || error == "ineligible_field" ||
            error == "selection_present" || error == "invalid_caret";
@@ -59,6 +92,20 @@ std::string_view snapshotFailureReason(const Json &error) {
     if (error == "stale_binding") return "observer_stale_binding";
     if (error == "operation_timeout") return "observer_timeout";
     return "observer_snapshot_denied";
+}
+
+bool invalidates(const Json &event, std::string_view appId) {
+    const auto app = event.is_object() ? event.value("app_id", Json()) : Json();
+    if (!app.is_string()) return true;
+    const auto &named = app.get_ref<const std::string &>();
+    return named.empty() || named == appId;
+}
+
+bool InspectionSchedule::reinspectAfterInvalidation(bool fieldChanged) {
+    if (inputSerial_ != inspectedSerial_) return true;
+    if (fieldChanged || idleInvalidations_ == kMaxIdleReinspections) return false;
+    ++idleInvalidations_;
+    return true;
 }
 
 } // namespace badi::fcitx5

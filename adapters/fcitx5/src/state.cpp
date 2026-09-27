@@ -195,6 +195,55 @@ LocalAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
     return tabRequests ? LocalAction::Invoke : LocalAction::PassThrough;
 }
 
+PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeShown,
+                          bool suggestionVisible, const PanelObservation &panel) {
+    if (!editingAvailable || key.repeat) {
+        return key.modifier ? PreKeyAction::PassThrough : PreKeyAction::Cancel;
+    }
+    if (key.tab) return PreKeyAction::Tab;
+    if (key.escape && noticeShown && !suggestionVisible && !hasForeignImeUi(panel)) {
+        return PreKeyAction::CloseNotice;
+    }
+    const bool liveOwnedCandidate = suggestionVisible && panel.candidatesOwnedByBadi;
+    if (decideLocalAction(false, false, key.escape, liveOwnedCandidate, panel) == LocalAction::Dismiss) {
+        return PreKeyAction::Dismiss;
+    }
+    if (key.modifier || key.chord) return PreKeyAction::PassThrough;
+    return key.escape ? PreKeyAction::CancelDeclining : PreKeyAction::Cancel;
+}
+
+InvokeRoute routeInvoke(std::string_view appId, bool editingAvailable, bool fieldObserved) {
+    if (editingAvailable) return fieldObserved ? InvokeRoute::ObservedField : InvokeRoute::Manual;
+    return imeParityApp(appId) && !fieldObserved ? InvokeRoute::InspectField : InvokeRoute::Unavailable;
+}
+
+std::optional<std::string_view> manualRequestNotice(const RequestFacts &facts) {
+    if (!facts.connected) return notice::kReconnecting;
+    if (!facts.policyKnown) return notice::kCheckingPermission;
+    if (!facts.policyAllowed) return facts.paused ? notice::kPaused : notice::kDisabled;
+    if (!facts.fresh) return notice::kNeedsFreshContext;
+    return std::nullopt;
+}
+
+std::optional<std::string_view> inspectionNotice(const RequestFacts &facts) {
+    if (!facts.fresh) return notice::kNeedsFreshContext;
+    if (!facts.fieldAllowed) return notice::kFieldUnreadable;
+    return std::nullopt;
+}
+
+std::string_view tabDecisionReason(const RequestFacts &facts,
+                                   const std::optional<ContextWindow> &context) {
+    if (!facts.policyKnown) return "checking_app_policy";
+    if (!facts.policyAllowed) return "app_disabled";
+    if (facts.foreignIme) return "foreign_ime";
+    if (!facts.fieldAllowed) return "field_denied";
+    if (!facts.fresh) return "no_fresh_context";
+    if (!context) return "context_unavailable";
+    if (!context->after.empty()) return "caret_not_at_end";
+    if (!supportedWritingLanguage(context->language)) return "language_unsupported";
+    return tabEligibleContext(context) ? "eligible" : "empty_context";
+}
+
 bool tabEligibleContext(const std::optional<ContextWindow> &context) {
     return context && context->after.empty() &&
            supportedWritingLanguage(context->language) &&

@@ -608,6 +608,162 @@ void foreignImeAndManualKeysYieldCooperatively() {
           "dismissal must be revision-bound and clear local authority");
 }
 
+void preInputKeysConsumeOnlyBadiUi() {
+    const PanelObservation owned{.candidates = true, .candidatesOwnedByBadi = true};
+    const PanelObservation foreign{.preedit = true};
+    const PreKey letter{};
+    const PreKey modifier{.modifier = true};
+    const PreKey tab{.tab = true};
+    const PreKey escape{.escape = true};
+    const PreKey chord{.chord = true};
+    const auto decide = [](const PreKey &key, bool notice, bool visible, const PanelObservation &panel,
+                           bool editing = true) { return decidePreKey(key, editing, notice, visible, panel); };
+
+    check(decide(letter, false, false, {}, false) == PreKeyAction::Cancel &&
+              decide(tab, false, false, {}, false) == PreKeyAction::Cancel &&
+              decide(escape, true, false, {}, false) == PreKeyAction::Cancel &&
+              decide(modifier, false, false, {}, false) == PreKeyAction::PassThrough,
+          "without an edit path every key passes on and only cancels Badi's state");
+    check(decide({.repeat = true, .tab = true}, false, true, owned) == PreKeyAction::Cancel &&
+              decide({.repeat = true, .escape = true}, false, true, owned) == PreKeyAction::Cancel &&
+              decide({.modifier = true, .repeat = true}, false, false, {}) == PreKeyAction::PassThrough,
+          "auto-repeat never accepts, dismisses or declines");
+    check(decide(tab, false, true, owned) == PreKeyAction::Tab && decide(tab, false, false, foreign) == PreKeyAction::Tab,
+          "plain Tab is decided by decideTabAction");
+    check(decide(escape, true, false, {}) == PreKeyAction::CloseNotice,
+          "Escape closes Badi's own notice");
+    check(decide(escape, true, false, foreign) == PreKeyAction::CancelDeclining,
+          "a foreign input method keeps Escape even over Badi's notice");
+    check(decide(escape, true, true, owned) == PreKeyAction::Dismiss &&
+              decide(escape, false, true, owned) == PreKeyAction::Dismiss,
+          "Escape dismisses Badi's live candidate");
+    check(decide(escape, false, true, {}) == PreKeyAction::CancelDeclining &&
+              decide(escape, false, false, {}) == PreKeyAction::CancelDeclining,
+          "Escape without Badi's candidate declines the current context");
+    check(decide(letter, false, true, owned) == PreKeyAction::Cancel &&
+              decide(modifier, false, true, owned) == PreKeyAction::PassThrough &&
+              decide(chord, false, true, owned) == PreKeyAction::PassThrough,
+          "typing cancels, while modifiers and Badi's chords wait for the input method");
+}
+
+void invokeRoutesByEditPathAndExplainsWaits() {
+    check(routeInvoke("brave-origin", false, false) == InvokeRoute::InspectField &&
+              routeInvoke("code", false, false) == InvokeRoute::InspectField,
+          "an unobserved IME-parity app inspects its field on request");
+    check(routeInvoke("brave-origin", false, true) == InvokeRoute::Unavailable &&
+              routeInvoke("firefox", false, false) == InvokeRoute::Unavailable &&
+              routeInvoke("omawrite", false, false) == InvokeRoute::Unavailable,
+          "a mismatched observed field or unavailable app only explains");
+    check(routeInvoke("code", true, true) == InvokeRoute::ObservedField &&
+              routeInvoke("omawrite", true, true) == InvokeRoute::ObservedField,
+          "an observed field is re-inspected, never read unobserved");
+    check(routeInvoke("omawrite", true, false) == InvokeRoute::Manual,
+          "only a native exact app without an observed field takes the manual path");
+
+    const RequestFacts ready{.connected = true, .policyKnown = true, .policyAllowed = true, .fresh = true,
+                             .fieldAllowed = true};
+    check(!manualRequestNotice(ready), "a connected, permitted, fresh field is read at once");
+    auto facts = ready;
+    facts.connected = false;
+    facts.policyKnown = false;
+    check(manualRequestNotice(facts) == notice::kReconnecting, "reconnecting is explained first");
+    facts.connected = true;
+    check(manualRequestNotice(facts) == notice::kCheckingPermission, "an unanswered policy is explained");
+    facts.policyKnown = true;
+    facts.policyAllowed = false;
+    facts.fresh = false;
+    check(manualRequestNotice(facts) == notice::kDisabled, "a denied app is explained before stale text");
+    facts.paused = true;
+    check(manualRequestNotice(facts) == notice::kPaused, "a pause is named as a pause");
+    facts = ready;
+    facts.fresh = false;
+    check(manualRequestNotice(facts) == notice::kNeedsFreshContext, "stale surrounding text asks for typing");
+
+    check(!inspectionNotice(ready) && !inspectionNotice({.fresh = true, .fieldAllowed = true}),
+          "an IME-parity inspection needs no broker policy to start");
+    check(inspectionNotice({.fieldAllowed = true}) == notice::kNeedsFreshContext &&
+              inspectionNotice({.fresh = true}) == notice::kFieldUnreadable,
+          "a stale or denied field explains why nothing is inspected");
+    check(notice::kUnavailableApp == "Badi cannot safely insert suggestions in this app yet" &&
+              notice::kObserverUnavailable == "Badi cannot see this text field — check badi doctor" &&
+              notice::kFieldUnreadable == "Badi cannot read this text field — run badi debug status" &&
+              notice::kSuggestionKeys == "Badi · Tab to accept · Escape to dismiss",
+          "notices keep the wording the desktop lane and runbook name");
+}
+
+void tabReasonNamesTheFirstBlocker() {
+    const RequestFacts eligible{.policyKnown = true, .policyAllowed = true, .fresh = true, .fieldAllowed = true};
+    const auto end = captureContextWindow("thank you", 9, 9, true, "en");
+    check(tabDecisionReason(eligible, end) == "eligible", "an end-of-text prose caret is eligible");
+    const auto reason = [&](auto change, const std::optional<ContextWindow> &context) {
+        auto facts = eligible;
+        change(facts);
+        return tabDecisionReason(facts, context);
+    };
+    check(reason([](RequestFacts &facts) { facts.policyKnown = false; facts.policyAllowed = false; }, end) ==
+              "checking_app_policy" &&
+              reason([](RequestFacts &facts) { facts.policyAllowed = false; facts.foreignIme = true; }, end) ==
+              "app_disabled" &&
+              reason([](RequestFacts &facts) { facts.foreignIme = true; facts.fieldAllowed = false; }, end) ==
+              "foreign_ime" &&
+              reason([](RequestFacts &facts) { facts.fieldAllowed = false; facts.fresh = false; }, end) ==
+              "field_denied" &&
+              reason([](RequestFacts &facts) { facts.fresh = false; }, std::nullopt) == "no_fresh_context",
+          "policy, foreign IME, field purpose and freshness are named in that order");
+    check(tabDecisionReason(eligible, std::nullopt) == "context_unavailable" &&
+              tabDecisionReason(eligible, captureContextWindow("thank you all", 9, 9, true, "en")) ==
+                  "caret_not_at_end" &&
+              tabDecisionReason(eligible, captureContextWindow("thank you", 9, 9, true, "fr")) ==
+                  "language_unsupported" &&
+              tabDecisionReason(eligible, captureContextWindow(" \n", 2, 2, true, "en")) == "empty_context",
+          "the context names why Tab does not request");
+}
+
+void brokerSessionRetiresSessionAndPolicyTogether() {
+    auto state = focusedState();
+    const auto update = explicitContext(state);
+    BrokerSession broker;
+    check(!broker.opened && !broker.policyKnown && !broker.policyAllowed, "a binding starts without a session");
+    broker.answer(true);
+    broker.open(update.coordinates);
+    check(broker.opened && broker.policyKnown && broker.policyAllowed &&
+              broker.coordinates.sessionId == kSession && broker.coordinates.revision == 0 &&
+              broker.coordinates.fingerprint.empty(),
+          "a session opens at revision zero of its focus epoch");
+    broker.retire();
+    check(!broker.opened && !broker.policyKnown && !broker.policyAllowed &&
+              broker.coordinates.sessionId == kSession,
+          "retiring forgets the session and its policy, keeping the coordinates a close names");
+    broker.answer(false);
+    check(broker.policyKnown && !broker.policyAllowed, "a denial is a known answer");
+}
+
+void inspectionBacksOffWithoutInput() {
+    InspectionSchedule schedule;
+    check(schedule.delayUs(true) == 1 && schedule.delayUs(false) == 120'000,
+          "an explicit request inspects at once, typing after a pause");
+    schedule.input();
+    schedule.inspecting();
+    for (const std::uint64_t delay : {240'000, 480'000, 960'000}) {
+        check(schedule.reinspectAfterInvalidation(false) && schedule.delayUs(false) == delay,
+              "idle invalidations back off");
+    }
+    check(!schedule.reinspectAfterInvalidation(false), "after three idle retries an invalidation waits for input");
+    check(schedule.delayUs(true) == 1, "an explicit request is never delayed by the backoff");
+    schedule.input();
+    check(schedule.delayUs(false) == 120'000 && schedule.reinspectAfterInvalidation(true),
+          "input resets the backoff, and a changed field inspects after input");
+    schedule.inspecting();
+    check(!schedule.reinspectAfterInvalidation(true), "a changed field without input waits for input");
+
+    for (unsigned int attempt = 0; attempt < InspectionSchedule::kMaxBusyRetries; ++attempt) {
+        check(schedule.retryWhileBusy(), "a busy observer is retried");
+    }
+    check(!schedule.retryWhileBusy(), "busy retries are bounded");
+    schedule.resetBusyRetries();
+    check(schedule.retryWhileBusy(), "a new request renews the busy retries");
+}
+
 void shiftedLetterChordUsesFcitxNormalization() {
     const auto reported =
         ::fcitx::Key(FcitxKey_Y, ::fcitx::KeyState::Ctrl_Shift).normalize();
@@ -1049,6 +1205,52 @@ void observerRepliesFailClosed() {
           "snapshot failures keep their content-free reasons");
 }
 
+void observerRequestsNameTheBoundField() {
+    const auto field = observedField();
+    check(inspectRequest("code") == nlohmann::json{{"op", "inspect"}, {"app_id", "code"}},
+          "inspection names only the app");
+    check(snapshotRequest(field) == nlohmann::json{{"op", "snapshot"}, {"binding", field["binding"]},
+                                                   {"policy_target", field["target"]}},
+          "a snapshot re-reads the exact binding and target");
+    check(previewRequest(field, " for your time", 900) ==
+              nlohmann::json{{"op", "preview"}, {"binding", field["binding"]}, {"policy_target", field["target"]},
+                             {"text", " for your time"}, {"expected_caret", 9}, {"expected_total_chars", 9},
+                             {"ttl_ms", 900}},
+          "a preview carries the caret and length the observer must re-verify");
+
+    const auto context = captureContextWindow("thank you", 9, 9, true, "en");
+    auto observed = field;
+    observed["before"] = "thank you";
+    observed["after"] = "";
+    check(observerCorroborates(field, observed, *context), "the same field and text corroborate");
+    auto moved = observed;
+    moved["total_chars"] = 12;
+    auto edited = observed;
+    edited["before"] = "thank you!";
+    check(!observerCorroborates(field, moved, *context) && !observerCorroborates(field, edited, *context),
+          "another length or text never corroborates");
+
+    auto observedContext = *context;
+    observedContext.identityKnown = true;
+    check(!observedRequestBlocked(observed, observedContext, false), "an agreeing end-of-text snapshot requests");
+    check(observedRequestBlocked(observed, *context, false) == "field_identity_unknown" &&
+              observedRequestBlocked(observed, observedContext, true) == "foreign_ime_active" &&
+              observedRequestBlocked(edited, observedContext, false) == "observer_context_mismatch",
+          "identity, foreign composition and disagreement block the request");
+    auto empty = *captureContextWindow("thank you", 0, 0, true, "en");
+    empty.identityKnown = true;
+    auto middle = *captureContextWindow("thank you", 5, 5, true, "en");
+    middle.identityKnown = true;
+    check(observedRequestBlocked(observed, empty, false) == "empty_prefix" &&
+              observedRequestBlocked(observed, middle, false) == "caret_not_at_end",
+          "a request needs a prefix and an end-of-text caret");
+
+    check(invalidates({{"event", "invalidate"}}, "code") && invalidates({{"app_id", ""}}, "code") &&
+              invalidates({{"app_id", "code"}}, "code") && invalidates({{"app_id", 7}}, "code") &&
+              !invalidates({{"app_id", "cursor"}}, "code"),
+          "an invalidation concerns every app unless it names another");
+}
+
 void observedParagraphEndIsEndOfField() {
     // Chromium sends after == "\n\n" for the caret at the end of a <p>;
     // Codex's ProseMirror composer is such a <p>.
@@ -1132,6 +1334,12 @@ int main(int argc, char **argv) {
         {"IME parity requires an observed append-only field", imeParityRequiresObservedAppendOnlyField},
         {"unobserved IME parity and unavailable apps", unobservedParityAndUnavailableAppsCannotEdit},
         {"observer replies fail closed", observerRepliesFailClosed},
+        {"observer requests name the bound field", observerRequestsNameTheBoundField},
+        {"inspection backoff without input", inspectionBacksOffWithoutInput},
+        {"pre-input keys consume only Badi UI", preInputKeysConsumeOnlyBadiUi},
+        {"invoke routes and waiting notices", invokeRoutesByEditPathAndExplainsWaits},
+        {"Tab decision reasons", tabReasonNamesTheFirstBlocker},
+        {"broker session retirement", brokerSessionRetiresSessionAndPolicyTogether},
         {"observed paragraph end is end of field", observedParagraphEndIsEndOfField},
         {"observed fields are append-only", observedFieldsAreAppendOnly},
         {"state transitions and identity", stateTransitionsAndIdentity},

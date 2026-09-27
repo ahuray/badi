@@ -137,6 +137,96 @@ struct PanelObservation {
 
 enum class LocalAction { PassThrough, Invoke, Accept, Dismiss };
 
+// A key before the input method sees it.
+struct PreKey {
+    bool modifier = false;
+    bool repeat = false;
+    bool tab = false;    // plain Tab that no earlier handler took
+    bool escape = false;
+    bool chord = false;  // Badi's invoke or accept chord, handled after the input method
+};
+
+enum class PreKeyAction {
+    PassThrough,
+    Cancel,           // the key may edit the field: retire Badi's context and candidate
+    CancelDeclining,  // Escape without Badi's candidate: also never re-suggest this context
+    Tab,              // decideTabAction() owns plain Tab
+    CloseNotice,      // Escape closes Badi's notice
+    Dismiss,          // Escape dismisses Badi's candidate
+};
+
+// What Badi shows in Fcitx's auxiliary text.
+namespace notice {
+inline constexpr std::string_view kUnavailableApp = "Badi cannot safely insert suggestions in this app yet";
+inline constexpr std::string_view kFieldUnreadable = "Badi cannot read this text field — run badi debug status";
+inline constexpr std::string_view kObserverUnavailable = "Badi cannot see this text field — check badi doctor";
+inline constexpr std::string_view kNeedsFreshContext = "Badi needs fresh context — type, then invoke again";
+inline constexpr std::string_view kReconnecting = "Badi is reconnecting — check badi doctor if this persists";
+inline constexpr std::string_view kCheckingPermission = "Badi is checking this application's permission";
+inline constexpr std::string_view kPaused = "Badi paused — resume from the tray";
+inline constexpr std::string_view kDisabled = "Badi is disabled for this application";
+inline constexpr std::string_view kModelNotConnected = "Badi model is not connected";
+inline constexpr std::string_view kThinking = "Badi is thinking…";
+inline constexpr std::string_view kRequestFailed = "Badi request failed — check the tray status";
+inline constexpr std::string_view kSuggestionKeys = "Badi · Tab to accept · Escape to dismiss";
+} // namespace notice
+
+// How an explicit request (the invoke chord, or Tab on the manual path) proceeds.
+enum class InvokeRoute {
+    InspectField,   // IME-parity without an observed field: ask the observer first
+    Unavailable,    // no edit path: explain, read nothing
+    ObservedField,  // re-inspect the observed field, which then requests
+    Manual,         // the unknown-identity manual contract
+};
+
+InvokeRoute routeInvoke(std::string_view appId, bool editingAvailable, bool fieldObserved);
+
+// Fcitx and broker state of one focused field, as a request or Tab sees it.
+struct RequestFacts {
+    bool connected = false;
+    bool paused = false;
+    bool policyKnown = false;
+    bool policyAllowed = false;
+    bool fresh = false;         // surrounding text arrived since focus or changed authority
+    bool fieldAllowed = false;  // allowsNativeContext()
+    bool foreignIme = false;
+};
+
+// The notice for a manual request that has to wait; nullopt when the field may be read.
+std::optional<std::string_view> manualRequestNotice(const RequestFacts &facts);
+// The notice for an IME-parity inspection that cannot start; nullopt when it may.
+std::optional<std::string_view> inspectionNotice(const RequestFacts &facts);
+// Content-free debug reason for a Tab press. `context` is Fcitx's, absent
+// while a foreign input method owns the panel.
+std::string_view tabDecisionReason(const RequestFacts &facts,
+                                   const std::optional<ContextWindow> &context);
+
+// The broker's view of one binding: a session opened at `coordinates` and the
+// policy answer for its target. Focus, a new field, a new authority epoch and
+// a closed connection retire both.
+struct BrokerSession {
+    Coordinates coordinates;
+    bool opened = false;
+    bool policyKnown = false;
+    bool policyAllowed = false;
+
+    void open(const Coordinates &session) {
+        coordinates = session;
+        coordinates.revision = 0;
+        coordinates.fingerprint.clear();
+        opened = true;
+    }
+    void answer(bool allowed) {
+        policyKnown = true;
+        policyAllowed = allowed;
+    }
+    void retire() {
+        opened = false;
+        policyKnown = false;
+        policyAllowed = false;
+    }
+};
+
 class SurroundingFreshness {
 public:
     void focusIn() { fresh_ = false; }
@@ -170,6 +260,9 @@ LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
                               const PanelObservation &panel);
 LocalAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
                             const PanelObservation &panel, NativeEditPath path);
+// Only Tab and Escape on Badi's own UI are consumed before the input method.
+PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeShown,
+                          bool suggestionVisible, const PanelObservation &panel);
 bool tabEligibleContext(const std::optional<ContextWindow> &context);
 // The bounded window around a collapsed caret. The caller has already denied
 // sensitive, special-purpose and composing contexts.
