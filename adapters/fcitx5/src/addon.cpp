@@ -1,5 +1,6 @@
 #include "debug.h"
 #include "accessibility.h"
+#include "observation.h"
 #include "sanitizer.h"
 #include "state.h"
 #include "transport.h"
@@ -102,28 +103,6 @@ const ::fcitx::Key &acceptChord() {
 std::size_t surroundingDigest(const ::fcitx::SurroundingText &surrounding) {
     return std::hash<std::string_view>{}(surrounding.text()) ^
            (static_cast<std::size_t>(surrounding.cursor()) * 0x9e3779b97f4a7c15ULL) ^ surrounding.anchor();
-}
-
-bool matchesObservedFocus(const nlohmann::json &captured,
-                          const nlohmann::json &observed,
-                          bool requireLength = false) {
-    if (!captured.is_object() || !observed.is_object() ||
-        observed.value("binding", nlohmann::json()) != captured.value("binding", nlohmann::json()) ||
-        observed.value("target", nlohmann::json()) != captured.value("target", nlohmann::json()) ||
-        !captured.value("caret", nlohmann::json()).is_number_integer() ||
-        !observed.value("caret", nlohmann::json()).is_number_integer() ||
-        observed["caret"] < 0 || observed["caret"] != captured["caret"] ||
-        observed.value("purpose", nlohmann::json()) != "plain_text" ||
-        observed.value("selection_count", nlohmann::json()) != 0) return false;
-    // A cropped toolkit buffer can be identical at different absolute field
-    // positions. Missing accessibility events must not rebind pending work.
-    // Inspect exposes the caret; snapshots and previews also expose length.
-    if (requireLength) {
-        const auto total = observed.value("total_chars", nlohmann::json());
-        if (!total.is_number_integer() || total < observed["caret"] ||
-            (captured.contains("total_chars") && captured["total_chars"] != total)) return false;
-    }
-    return true;
 }
 
 } // namespace
@@ -480,8 +459,7 @@ private:
     // observer produced no field: the field's own purpose, or no observer.
     void observerUnavailable(Binding &binding, const nlohmann::json &error = nullptr) {
         if (!imeParityApp(binding.state.appId())) return;
-        const bool fieldDenied = error == "sensitive_field" || error == "unsupported_field" ||
-            error == "ineligible_field" || error == "selection_present" || error == "invalid_caret";
+        const bool fieldDenied = observerDeniedField(error);
         debug_.record("request_blocked", binding.state.appId(),
             fieldDenied ? "ime_parity_field_denied" : "ime_parity_observer_unavailable");
         if (binding.observationExplicit)
@@ -562,28 +540,13 @@ private:
             [this, session, generation](const nlohmann::json &response) {
                 auto *current = bindingFor(session);
                 if (!current || !current->inputContext->hasFocus() || current->observationGeneration != generation) return;
-                if (response.value("ok", nlohmann::json()) != true || !response.contains("focus")) {
+                if (!observerAnswered(response)) {
                     observerUnavailable(*current, response.value("error", nlohmann::json()));
                     return;
                 }
                 const auto &focus = response["focus"];
-                if (!focus.is_object() || !focus.contains("binding") || !focus.contains("target") ||
-                    !focus["binding"].is_object() || !focus["target"].is_object() ||
-                    focus["binding"].value("app_id", nlohmann::json()) != current->state.appId() ||
-                    focus.value("purpose", nlohmann::json()) != "plain_text" ||
-                    focus.value("selection_count", nlohmann::json()) != 0 ||
-                    !focus["target"].contains("target_id") || !focus["target"]["target_id"].is_string() ||
-                    !validOpaqueId(focus["target"]["target_id"].get<std::string>()) ||
-                    !matchesObservedFocus(focus, focus)) {
-                    denyEditing(*current);
-                    return;
-                }
-                const auto targetKind = focus["target"].value("kind", nlohmann::json());
-                const auto editTarget = targetKind == "browser" ? NativeEditTarget::BrowserOrigin :
-                    targetKind == "desktop_application" ? NativeEditTarget::DesktopApplication : NativeEditTarget::Unsupported;
-                if (editTarget == NativeEditTarget::Unsupported ||
-                    (editTarget == NativeEditTarget::DesktopApplication &&
-                     focus["target"].value("app_id", nlohmann::json()) != current->state.appId())) {
+                const auto editTarget = inspectedEditTarget(focus, current->state.appId());
+                if (!editTarget) {
                     denyEditing(*current);
                     return;
                 }
@@ -600,7 +563,7 @@ private:
                 current->policyAllowed = false;
                 const auto appId = current->state.appId();
                 if (!current->state.focusIn(*newSession, focus["target"]["target_id"].get<std::string>(), appId, *salt,
-                                            editTarget, NativeEditPath::Observed)) return;
+                                            *editTarget, NativeEditPath::Observed)) return;
                 current->observedFocus = focus;
                 if (!current->state.editingAvailable()) {
                     debug_.record("request_blocked", appId, editingUnavailableReason(*current));
@@ -632,11 +595,9 @@ private:
                     debug_.record("request_blocked", "unidentified", "observer_authority_changed");
                     return;
                 }
-                if (response.value("ok", nlohmann::json()) != true || !response.contains("focus")) {
-                    const auto reason = response.value("error", nlohmann::json());
+                if (!observerAnswered(response)) {
                     debug_.record("request_blocked", current->state.appId(),
-                        reason == "stale_binding" ? "observer_stale_binding" :
-                        reason == "operation_timeout" ? "observer_timeout" : "observer_snapshot_denied");
+                        snapshotFailureReason(response.value("error", nlohmann::json())));
                     return;
                 }
                 const auto &observed = response["focus"];
@@ -646,9 +607,7 @@ private:
                 }
                 const auto context = currentContext(*current);
                 if (!context || !context->identityKnown || !context->after.empty() || context->before.empty() ||
-                    observed.value("before", nlohmann::json()) != context->before ||
-                    observed.value("after", nlohmann::json()) != observedAfter(*context) ||
-                    hasForeignImeUi(observePanel(*current))) {
+                    !observerAgrees(observed, *context) || hasForeignImeUi(observePanel(*current))) {
                     debug_.record("request_blocked", current->state.appId(),
                         !context ? unavailableContextReason(*current) :
                         !context->identityKnown ? "field_identity_unknown" :
@@ -1062,17 +1021,14 @@ private:
                 auto *current = bindingFor(suggestion.coordinates.sessionId);
                 if (!current || !safeToObserve(*current) || current->observationGeneration != generation ||
                     current->state.coordinates() != suggestion.coordinates) return;
-                if (response.value("ok", nlohmann::json()) != true ||
-                    !response.contains("focus") || !response["focus"].is_object()) {
+                if (!observerAnswered(response) || !response["focus"].is_object()) {
                     debug_.record("suggestion_blocked", current->state.appId(), "observer_display_unavailable");
                     return;
                 }
                 const auto context = currentContext(*current);
                 const auto &observed = response["focus"];
                 if (!context || !matchesCapturedContext(current->state.lastContext(), context) ||
-                    !matchesObservedFocus(focus, observed, true) ||
-                    observed.value("before", nlohmann::json()) != context->before ||
-                    observed.value("after", nlohmann::json()) != observedAfter(*context)) {
+                    !matchesObservedFocus(focus, observed, true) || !observerAgrees(observed, *context)) {
                     debug_.record("suggestion_blocked", current->state.appId(), "observer_display_mismatch");
                     return;
                 }
@@ -1152,8 +1108,7 @@ private:
             {"expected_caret", focus["caret"]}, {"expected_total_chars", focus["total_chars"]},
             {"ttl_ms", suggestion.expiresAtMs - now}},
             [this, coordinates, suggestion, focus, generation](const nlohmann::json &response) {
-                const bool verified = response.value("ok", nlohmann::json()) == true &&
-                    response.contains("focus") && response["focus"].is_object();
+                const bool verified = observerAnswered(response) && response["focus"].is_object();
                 const bool rendered = verified && response["focus"].value("rendered", nlohmann::json()) == true;
                 if (!rendered) previewMayBeVisible_ = false;
                 auto *current = bindingFor(coordinates.sessionId);
@@ -1231,12 +1186,10 @@ private:
                 [this, prepare, focus, generation](const nlohmann::json &response) {
                     auto *current = bindingFor(prepare.coordinates.sessionId);
                     const auto context = current ? currentContext(*current) : std::nullopt;
-                    const bool answered = response.value("ok", nlohmann::json()) == true &&
-                        response.contains("focus") && response["focus"].is_object();
+                    const bool answered = observerAnswered(response) && response["focus"].is_object();
                     const bool valid = current && current->observationGeneration == generation && context &&
                         answered && matchesObservedFocus(focus, response["focus"], true) &&
-                        response["focus"].value("before", nlohmann::json()) == context->before &&
-                        response["focus"].value("after", nlohmann::json()) == observedAfter(*context);
+                        observerAgrees(response["focus"], *context);
                     if (valid) applyCommitPrepare(prepare);
                     else {
                         if (current) {

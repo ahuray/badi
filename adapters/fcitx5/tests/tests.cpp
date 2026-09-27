@@ -1,3 +1,4 @@
+#include "observation.h"
 #include "sanitizer.h"
 #include "state.h"
 #include "transport.h"
@@ -933,6 +934,86 @@ void unobservedParityAndUnavailableAppsCannotEdit() {
     check(!state.updateContext(allowed.context), "invalid target remains denied until fresh field binding");
 }
 
+nlohmann::json observedField(std::string_view kind = "desktop_application") {
+    nlohmann::json target{{"kind", kind}, {"target_id", "observed-target"}};
+    if (kind == "desktop_application") target["app_id"] = "code";
+    return {{"binding", {{"app_id", "code"}, {"field", 7}}}, {"target", target}, {"caret", 9},
+            {"purpose", "plain_text"}, {"selection_count", 0}, {"total_chars", 9}};
+}
+
+void observerRepliesFailClosed() {
+    const auto field = observedField();
+    check(observerAnswered({{"ok", true}, {"focus", field}}) && !observerAnswered({{"ok", true}}) &&
+              !observerAnswered({{"ok", false}, {"focus", field}}) &&
+              !observerAnswered({{"ok", "true"}, {"focus", field}}),
+          "only ok:true with a focus record is an answer");
+
+    check(matchesObservedFocus(field, field) && matchesObservedFocus(field, field, true),
+          "an unchanged field matches with and without its length");
+    for (const auto &[key, value] : {std::pair{"caret", nlohmann::json(10)}, {"caret", -1}, {"caret", "9"},
+                                    {"purpose", "password"}, {"selection_count", 1},
+                                    {"binding", {{"app_id", "code"}, {"field", 8}}},
+                                    {"target", observedField("browser")["target"]}}) {
+        auto changed = field;
+        changed[key] = value;
+        check(!matchesObservedFocus(field, changed), "a moved caret, other field, purpose or selection never matches");
+    }
+    auto cropped = field;
+    cropped["total_chars"] = 12;
+    check(matchesObservedFocus(field, cropped) && !matchesObservedFocus(field, cropped, true),
+          "the same caret in a longer field matches only when length is not required");
+    auto shorter = field;
+    shorter["total_chars"] = 8;
+    auto unknownLength = field;
+    unknownLength.erase("total_chars");
+    check(!matchesObservedFocus(unknownLength, shorter, true) && !matchesObservedFocus(field, unknownLength, true) &&
+              matchesObservedFocus(unknownLength, field, true),
+          "a snapshot needs a length at or beyond the caret that agrees with any captured length");
+
+    check(inspectedEditTarget(field, "code") == NativeEditTarget::DesktopApplication &&
+              inspectedEditTarget(observedField("browser"), "code") == NativeEditTarget::BrowserOrigin,
+          "an inspected plain-text field names its edit target");
+    auto otherApp = field;
+    otherApp["target"]["app_id"] = "cursor";
+    auto otherBinding = field;
+    otherBinding["binding"]["app_id"] = "cursor";
+    auto unknownKind = observedField("terminal");
+    auto missingId = field;
+    missingId["target"].erase("target_id");
+    auto invalidId = field;
+    invalidId["target"]["target_id"] = "not an id";
+    auto password = field;
+    password["purpose"] = "password";
+    auto noCaret = field;
+    noCaret.erase("caret");
+    for (const auto &focus : {otherApp, otherBinding, unknownKind, missingId, invalidId, password, noCaret,
+                              nlohmann::json("focus"), nlohmann::json::object()}) {
+        check(!inspectedEditTarget(focus, "code"), "malformed or foreign field metadata retires authority");
+    }
+
+    const auto context = captureContextWindow("thank you", 9, 9, true, "en");
+    check(context && observerAgrees({{"before", "thank you"}, {"after", ""}}, *context) &&
+              !observerAgrees({{"before", "thank you!"}, {"after", ""}}, *context) &&
+              !observerAgrees({{"before", "thank you"}}, *context) && !observerAgrees("thank you", *context),
+          "the observer must report exactly Fcitx's text around the caret");
+    auto paragraph = captureContextWindow("thank you\n\n", 9, 9, true, "en");
+    normalizeObservedParagraphEnd(*paragraph);
+    check(observerAgrees({{"before", "thank you"}, {"after", "\n\n"}}, *paragraph) &&
+              !observerAgrees({{"before", "thank you"}, {"after", ""}}, *paragraph),
+          "agreement compares the raw paragraph end, not the normalized context");
+
+    for (const auto error : {"sensitive_field", "unsupported_field", "ineligible_field", "selection_present",
+                             "invalid_caret"}) {
+        check(observerDeniedField(error), "the observer declined the field itself");
+    }
+    check(!observerDeniedField("observer_unavailable") && !observerDeniedField(nullptr),
+          "an absent observer is not a denied field");
+    check(snapshotFailureReason("stale_binding") == "observer_stale_binding" &&
+              snapshotFailureReason("operation_timeout") == "observer_timeout" &&
+              snapshotFailureReason(nullptr) == "observer_snapshot_denied",
+          "snapshot failures keep their content-free reasons");
+}
+
 void observedParagraphEndIsEndOfField() {
     // Chromium sends after == "\n\n" for the caret at the end of a <p>;
     // Codex's ProseMirror composer is such a <p>.
@@ -1014,6 +1095,7 @@ int main(int argc, char **argv) {
         {"canonical app ids", canonicalAppIdsFoldAsciiCase},
         {"IME parity requires an observed append-only field", imeParityRequiresObservedAppendOnlyField},
         {"unobserved IME parity and unavailable apps", unobservedParityAndUnavailableAppsCannotEdit},
+        {"observer replies fail closed", observerRepliesFailClosed},
         {"observed paragraph end is end of field", observedParagraphEndIsEndOfField},
         {"observed fields are append-only", observedFieldsAreAppendOnly},
         {"state transitions and identity", stateTransitionsAndIdentity},

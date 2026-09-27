@@ -9,6 +9,7 @@ find_package(nlohmann_json 3.11 REQUIRED)
 add_library(badi-fcitx5-core STATIC
     src/accessibility.cpp
     src/debug.cpp
+    src/observation.cpp
     src/sanitizer.cpp
     src/state.cpp
     src/transport.cpp
