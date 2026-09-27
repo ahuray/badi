@@ -1,5 +1,7 @@
-//! Linux containment for the private Lab runtime. No normal broker launch uses
-//! this helper, and its arguments never come from the JSON request protocol.
+//! Linux containment for an owned runtime: the calling executable re-executes
+//! itself as a single-threaded helper that arms a parent-death signal and then
+//! execs the verified runtime, so the runtime cannot outlive its owner. The
+//! helper's arguments never come from the JSON request protocol.
 
 use std::convert::Infallible;
 use std::ffi::OsString;
@@ -109,7 +111,7 @@ mod tests {
 
     use super::{arm_parent_death, exec_runtime_helper, require_no_file_capabilities};
 
-    const FIXTURE: &str = "writing_lab::process::tests::lifecycle_fixture";
+    const FIXTURE: &str = "semantic::process::tests::lifecycle_fixture";
     const DIRECTORY: &str = "BADI_LAB_LIFECYCLE_DIRECTORY";
     const ROLE: &str = "BADI_LAB_LIFECYCLE_ROLE";
     const STAGE: &str = "BADI_LAB_LIFECYCLE_STAGE";

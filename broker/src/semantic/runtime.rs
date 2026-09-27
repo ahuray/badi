@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+use std::os::fd::OwnedFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Mutex;
@@ -13,6 +14,8 @@ use rustix::process::{Pid, Signal, kill_process_group};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use tokio::io::Interest;
+use tokio::io::unix::AsyncFd;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -39,6 +42,7 @@ pub const WARM_UP_TIMEOUT: Duration = Duration::from_secs(2);
 const GRACEFUL_SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 const FORCE_SHUTDOWN_WAIT: Duration = Duration::from_secs(1);
 const FIXTURE_ARGUMENT: &str = "__fixture-backend";
+const EXIT_POLL_FALLBACK_INTERVAL: Duration = Duration::from_secs(1);
 pub const FIXTURE_TOKEN_CANARY: &str =
     "e7a36b6a81bc4d0eb1d73a86f79959c9f588143cb5044d35a187988428cfd32f";
 
@@ -62,6 +66,12 @@ impl FixtureBehavior {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Launcher {
+    Direct,
+    ParentDeathHelper,
+}
+
 #[derive(Clone, Debug)]
 pub struct LlamaCppLaunch {
     binary: VerifiedFile,
@@ -72,6 +82,7 @@ pub struct LlamaCppLaunch {
     threads: usize,
     fixture_behavior: Option<FixtureBehavior>,
     writing: bool,
+    launcher: Launcher,
     #[cfg(feature = "writing-lab")]
     writing_lab: bool,
     #[cfg(feature = "writing-lab")]
@@ -97,6 +108,7 @@ impl LlamaCppLaunch {
             threads,
             fixture_behavior: None,
             writing: false,
+            launcher: Launcher::Direct,
             #[cfg(feature = "writing-lab")]
             writing_lab: false,
             #[cfg(feature = "writing-lab")]
@@ -128,6 +140,7 @@ impl LlamaCppLaunch {
             threads: 1,
             fixture_behavior: Some(behavior),
             writing: false,
+            launcher: Launcher::Direct,
             #[cfg(feature = "writing-lab")]
             writing_lab: false,
             #[cfg(feature = "writing-lab")]
@@ -149,11 +162,21 @@ impl LlamaCppLaunch {
         self
     }
 
+    /// Launches through this executable's parent-death helper, so the runtime
+    /// cannot outlive it. The executable must dispatch the helper's flag
+    /// before it starts Tokio or any other thread. Linux only.
+    #[must_use]
+    pub const fn contained(mut self) -> Self {
+        self.launcher = Launcher::ParentDeathHelper;
+        self
+    }
+
     #[cfg(feature = "writing-lab")]
     #[must_use]
     pub const fn for_writing_lab(mut self) -> Self {
         self.writing = true;
         self.writing_lab = true;
+        self.launcher = Launcher::ParentDeathHelper;
         self
     }
 
@@ -173,6 +196,7 @@ impl LlamaCppLaunch {
         self
     }
 
+    #[cfg_attr(not(feature = "writing-lab"), allow(clippy::unused_self))]
     fn writing_batch_size(&self) -> u16 {
         #[cfg(feature = "writing-lab")]
         if self.writing_lab {
@@ -181,6 +205,7 @@ impl LlamaCppLaunch {
         WRITING_BATCH_SIZE
     }
 
+    #[cfg_attr(not(feature = "writing-lab"), allow(clippy::unused_self))]
     fn model_origin(&self) -> Option<&'static str> {
         #[cfg(feature = "writing-lab")]
         if self.explicit_lab_artifact {
@@ -189,6 +214,7 @@ impl LlamaCppLaunch {
         None
     }
 
+    #[cfg_attr(not(feature = "writing-lab"), allow(clippy::unused_self))]
     fn context_size(&self) -> u16 {
         #[cfg(feature = "writing-lab")]
         if self.writing_lab {
@@ -266,17 +292,27 @@ impl LlamaCppLaunch {
             )
             .process_group(0);
         self.configure_mode(&mut command);
-        self.reverify_artifacts()?;
+        self.confirm_artifacts_unchanged()?;
         let child = command.spawn().map_err(RuntimeError::Spawn)?;
+        // Only this handle reaps the child, so the PID still names it here.
+        #[cfg(target_os = "linux")]
+        let exit_notice = rustix::process::pidfd_open(
+            Pid::from_child(&child),
+            rustix::process::PidfdFlags::empty(),
+        )
+        .ok();
+        #[cfg(not(target_os = "linux"))]
+        let exit_notice = None;
         let mut runtime = OwnedRuntime {
             child: Mutex::new(Some(child)),
+            exit_notice,
             client,
             endpoint,
             token_credential: token,
             identity,
         };
         post_spawn_hook(runtime.process_id().ok_or(RuntimeError::MissingChild)?);
-        if let Err(error) = self.reverify_artifacts() {
+        if let Err(error) = self.confirm_artifacts_unchanged() {
             let _ = runtime.terminate();
             return Err(error.into());
         }
@@ -287,7 +323,7 @@ impl LlamaCppLaunch {
             let _ = runtime.terminate();
             return Err(error);
         }
-        if let Err(error) = self.reverify_artifacts() {
+        if let Err(error) = self.confirm_artifacts_unchanged() {
             let _ = runtime.terminate();
             return Err(error.into());
         }
@@ -295,13 +331,11 @@ impl LlamaCppLaunch {
     }
 
     fn runtime_command(&self) -> Result<Command, RuntimeError> {
-        #[cfg(feature = "writing-lab")]
-        if self.writing_lab {
+        if self.launcher == Launcher::ParentDeathHelper {
             #[cfg(target_os = "linux")]
-            return crate::writing_lab::process::launch_command(self.binary.path())
-                .map_err(RuntimeError::Spawn);
+            return super::process::launch_command(self.binary.path()).map_err(RuntimeError::Spawn);
             #[cfg(not(target_os = "linux"))]
-            return Err(RuntimeError::InvalidConfig("lab_parent_death_unavailable"));
+            return Err(RuntimeError::InvalidConfig("parent_death_unavailable"));
         }
         Ok(Command::new(self.binary.path()))
     }
@@ -365,18 +399,21 @@ impl LlamaCppLaunch {
         }
         match (&self.runtime_bundle, self.fixture_behavior) {
             (Some(bundle), None) if self.binary.path().parent() == Some(bundle.path()) => {}
-            (None, Some(_)) => {}
+            // The parent-death helper passes no fixture arguments.
+            (None, Some(_)) if self.launcher == Launcher::Direct => {}
             _ => return Err(RuntimeError::InvalidConfig("runtime_bundle")),
         }
         Ok(())
     }
 
-    fn reverify_artifacts(&self) -> Result<(), ProvenanceError> {
+    /// Checkpoints around spawn and readiness. The caller hashed every artifact
+    /// once; these confirm the same filesystem objects without re-reading them.
+    fn confirm_artifacts_unchanged(&self) -> Result<(), ProvenanceError> {
         if let Some(bundle) = &self.runtime_bundle {
-            bundle.reverify()?;
+            bundle.confirm_unchanged()?;
         }
-        self.binary.reverify()?;
-        self.model.reverify()
+        self.binary.confirm_unchanged()?;
+        self.model.confirm_unchanged()
     }
 }
 
@@ -401,6 +438,8 @@ pub struct StableRuntimeIdentity {
 
 pub struct OwnedRuntime {
     child: Mutex<Option<Child>>,
+    /// Pidfd of the owned child; it becomes readable once the child exits.
+    exit_notice: Option<OwnedFd>,
     client: SemanticClient,
     endpoint: SocketAddr,
     #[allow(dead_code)]
@@ -533,6 +572,23 @@ impl CompletionProvider for OwnedRuntime {
 
     fn is_alive(&self) -> bool {
         matches!(self.try_wait(), Ok(None))
+    }
+
+    async fn exited(&self) {
+        let notice = self
+            .exit_notice
+            .as_ref()
+            .and_then(|notice| notice.try_clone().ok())
+            .and_then(|notice| AsyncFd::with_interest(notice, Interest::READABLE).ok());
+        if let Some(notice) = notice {
+            if notice.readable().await.is_ok() {
+                return;
+            }
+        }
+        // Without a usable pidfd, observe the owned handle at a coarse interval.
+        while self.is_alive() {
+            tokio::time::sleep(EXIT_POLL_FALLBACK_INTERVAL).await;
+        }
     }
 
     async fn complete(
@@ -793,12 +849,13 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use rustix::process::{Pid, PidfdFlags, Signal};
     use sha2::{Digest, Sha256};
 
     use super::{
-        FixtureBehavior, LlamaCppLaunch, OwnedRuntime, ProvenanceError, RuntimeError, SecretToken,
-        SemanticClient, SemanticClientConfig, StableRuntimeIdentity, terminate_child,
-        terminate_owned_child_with,
+        CompletionProvider as _, FixtureBehavior, LlamaCppLaunch, OwnedRuntime, ProvenanceError,
+        RuntimeError, SecretToken, SemanticClient, SemanticClientConfig, StableRuntimeIdentity,
+        terminate_child, terminate_owned_child_with,
     };
     use crate::semantic::provenance::{
         DirectoryManifestExpectation, FileExpectation, VerifiedFile, directory_manifest_sha256,
@@ -954,6 +1011,45 @@ mod tests {
     }
 
     #[test]
+    fn contained_launch_execs_through_the_parent_death_helper() -> Result<(), Box<dyn Error>> {
+        let temporary = tempfile::tempdir()?;
+        let root = fs::canonicalize(temporary.path())?;
+        let bundle_path = root.join("runtime");
+        fs::create_dir(&bundle_path)?;
+        let binary_path = bundle_path.join("llama-server");
+        fs::write(&binary_path, b"fixture")?;
+        let model_path = root.join("model.gguf");
+        fs::write(&model_path, b"model")?;
+        let bundle = verify_directory_manifest(&DirectoryManifestExpectation::new(
+            &bundle_path,
+            directory_manifest_sha256(&bundle_path)?,
+        )?)?;
+        let binary = verify_observed_file(&binary_path)?;
+        let model = verify_observed_file(&model_path)?;
+
+        let direct = LlamaCppLaunch::new(binary.clone(), bundle, model.clone(), "fixture", 1)?;
+        assert_eq!(direct.runtime_command()?.get_program(), binary_path);
+        let command = direct.contained().runtime_command()?;
+        assert_eq!(command.get_program(), std::env::current_exe()?);
+        let arguments: Vec<_> = command.get_args().collect();
+        assert_eq!(
+            arguments,
+            [
+                std::ffi::OsStr::new(crate::semantic::process::EXEC_HELPER_FLAG),
+                std::ffi::OsStr::new(&std::process::id().to_string()),
+                binary_path.as_os_str(),
+            ]
+        );
+        // The helper passes no arguments, so a fixture cannot be contained.
+        let fixture = LlamaCppLaunch::for_fixture(binary, model, FixtureBehavior::Ready)?;
+        assert!(matches!(
+            fixture.contained().validate(),
+            Err(RuntimeError::InvalidConfig("runtime_bundle"))
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn shutdown_allows_a_busy_child_to_finish_its_term_cleanup() -> Result<(), Box<dyn Error>> {
         let mut child = Command::new("/bin/sh")
             .args([
@@ -1009,14 +1105,14 @@ mod tests {
         let result = launch
             .spawn_with_post_spawn_hook(move |spawned_process_id| {
                 observed_process_id.store(spawned_process_id, Ordering::SeqCst);
-                fs::write(&library_path, b"tampered").expect("test mutation must succeed");
+                let replacement = library_path.with_extension("tmp");
+                fs::write(&replacement, b"tampered").expect("test mutation must succeed");
+                fs::rename(&replacement, &library_path).expect("test mutation must succeed");
             })
             .await;
         assert!(matches!(
             result,
-            Err(RuntimeError::Provenance(
-                ProvenanceError::DirectoryManifestDigestMismatch
-            ))
+            Err(RuntimeError::Provenance(ProvenanceError::IdentityChanged))
         ));
         let process_id = process_id.load(Ordering::SeqCst);
         assert_ne!(process_id, 0);
@@ -1059,8 +1155,11 @@ mod tests {
             .stderr(Stdio::null())
             .process_group(0)
             .spawn()?;
+        let exit_notice =
+            rustix::process::pidfd_open(Pid::from_child(&child), PidfdFlags::empty()).ok();
         Ok(OwnedRuntime {
             child: Mutex::new(Some(child)),
+            exit_notice,
             client: SemanticClient::new(
                 SemanticClientConfig::new(endpoint, "fixture", "public-fixture-token")?
                     .for_writing(),
@@ -1082,6 +1181,29 @@ mod tests {
                 ubatch_size: Some(16),
             },
         })
+    }
+
+    #[tokio::test]
+    async fn exit_is_observed_by_event_and_by_the_polling_fallback() -> Result<(), Box<dyn Error>> {
+        let endpoint = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 9));
+        for event_driven in [true, false] {
+            let mut runtime = owned_runtime_at(endpoint)?;
+            assert!(runtime.exit_notice.is_some());
+            if !event_driven {
+                runtime.exit_notice = None;
+            }
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), runtime.exited())
+                    .await
+                    .is_err(),
+                "a live runtime must not report an exit"
+            );
+            let pid = Pid::from_raw(i32::try_from(runtime.process_id().unwrap())?).unwrap();
+            rustix::process::kill_process(pid, Signal::KILL)?;
+            tokio::time::timeout(Duration::from_secs(3), runtime.exited()).await?;
+            assert!(!runtime.is_alive());
+        }
+        Ok(())
     }
 
     #[tokio::test]

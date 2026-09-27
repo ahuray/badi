@@ -76,6 +76,12 @@ pub trait CompletionProvider: Send + Sync + 'static {
         true
     }
 
+    /// Completes once [`Self::is_alive`] turns false. Providers that own a
+    /// process override both; the default never completes.
+    async fn exited(&self) {
+        std::future::pending::<()>().await;
+    }
+
     async fn complete(
         &self,
         request: ProviderRequest,

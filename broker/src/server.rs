@@ -30,9 +30,12 @@ const MAX_SESSIONS_PER_CONNECTION: usize = 64;
 const WIRE_QUEUE_CAPACITY: usize = 64;
 const EVENT_QUEUE_CAPACITY: usize = 32;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(3);
+/// Closes quiet request/response clients. Policy subscribers (long-lived
+/// adapters) are exempt: silence is their normal state, and a peer that exits
+/// closes its socket.
 const CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const WRITER_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
-const PROVIDER_LIFETIME_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 pub async fn run(socket_path: &Path, broker: Broker) -> Result<(), ServerError> {
     // Register both handlers before binding. Once the socket is visible, either
@@ -44,18 +47,26 @@ pub async fn run(socket_path: &Path, broker: Broker) -> Result<(), ServerError> 
     let admissions = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let shutdown = CancellationToken::new();
     let mut connections = JoinSet::new();
-    let mut provider_lifetime = time::interval(PROVIDER_LIFETIME_POLL_INTERVAL);
-    provider_lifetime.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+    let provider_exited = broker.provider_exited();
+    tokio::pin!(provider_exited);
+    let mut accept_failing = false;
     let outcome = loop {
         tokio::select! {
-            _ = provider_lifetime.tick() => {
-                if !broker.provider_is_alive() {
-                    break Err(ServerError::ProviderExited);
-                }
-            }
+            () = &mut provider_exited => break Err(ServerError::ProviderExited),
             accepted = listener.accept() => {
-                let (stream, _) = match accepted {
-                    Ok(accepted) => accepted,
+                let stream = match accepted {
+                    Ok((stream, _)) => {
+                        accept_failing = false;
+                        stream
+                    }
+                    Err(error) if is_transient_accept_error(&error) => {
+                        if !accept_failing {
+                            eprintln!("badi-broker: accept failed, retrying: {error}");
+                        }
+                        accept_failing = true;
+                        time::sleep(ACCEPT_RETRY_DELAY).await;
+                        continue;
+                    }
                     Err(error) => break Err(ServerError::Io(error)),
                 };
                 let Ok(permit) = Arc::clone(&admissions).try_acquire_owned() else {
@@ -89,6 +100,25 @@ pub async fn run(socket_path: &Path, broker: Broker) -> Result<(), ServerError> 
     // final pass makes the server-level postcondition explicit.
     broker.shutdown().await;
     outcome
+}
+
+/// Failures of one accept call (descriptor or memory exhaustion, an aborted
+/// peer, an interrupted call) rather than of the listening socket.
+fn is_transient_accept_error(error: &io::Error) -> bool {
+    use rustix::io::Errno;
+
+    matches!(
+        Errno::from_io_error(error),
+        Some(
+            Errno::MFILE
+                | Errno::NFILE
+                | Errno::CONNABORTED
+                | Errno::INTR
+                | Errno::AGAIN
+                | Errno::NOBUFS
+                | Errno::NOMEM
+        )
+    )
 }
 
 pub fn bind_secure(path: &Path) -> Result<(UnixListener, SocketGuard), ServerError> {
@@ -302,7 +332,7 @@ async fn serve_connection_with_timeouts(
             () = shutdown.cancelled() => break Ok(()),
             () = connection_lifetime.cancelled() => break Ok(()),
             () = wire_tx.closed() => break Ok(()),
-            () = &mut idle_deadline => break Ok(()),
+            () = &mut idle_deadline, if !policy_enabled => break Ok(()),
             event = event_rx.recv() => {
                 let Some(event) = event else {
                     break Ok(());
@@ -828,6 +858,7 @@ const fn reason_for_broker(error: &BrokerError) -> ReasonCode {
         | BrokerError::Protocol(_)
         | BrokerError::ControlPlane(_)
         | BrokerError::ControlPlaneTask
+        | BrokerError::ControlPlaneTimeout
         | BrokerError::ControlPlaneUnavailable
         | BrokerError::OutcomeRecorderThread(_)
         | BrokerError::SettingsCommitUnknown(_)
@@ -1764,28 +1795,95 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn idle_deadline_closes_owned_sessions() {
-        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+    async fn idle_deadline_spares_policy_subscribers_and_closes_other_clients() {
         let broker = broker();
-        let task_broker = broker.clone();
-        let connection = tokio::spawn(async move {
-            serve_connection_with_timeouts(
-                server,
-                task_broker,
+        let spawn_connection = |stream, broker| {
+            tokio::spawn(serve_connection_with_timeouts(
+                stream,
+                broker,
                 CancellationToken::new(),
                 Duration::from_secs(1),
                 Duration::from_millis(50),
-            )
-            .await
-        });
-        open_test_session(&mut client, SessionId::new()).await;
+            ))
+        };
+        let (stream, mut subscriber) = UnixStream::pair().expect("Unix stream pair");
+        let mut subscription = spawn_connection(stream, broker.clone());
+        open_test_session(&mut subscriber, SessionId::new()).await;
         wait_for_sessions(&broker, 1).await;
 
-        connection
+        let (stream, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let quiet = spawn_connection(stream, broker.clone());
+        let hello = WireEnvelope::global(
+            MessageType::Hello,
+            0,
+            &HelloPayload {
+                min_v: PROTOCOL_VERSION,
+                max_v: PROTOCOL_VERSION,
+                adapter: AdapterDescriptor {
+                    kind: AdapterKind::Test,
+                    name: "quiet-client".to_owned(),
+                    version: "1".to_owned(),
+                },
+                capabilities: vec![Capability::Health],
+            },
+        )
+        .expect("hello");
+        write_envelope(&mut client, &hello)
             .await
+            .expect("write hello");
+        let acknowledgment = read_envelope(&mut client)
+            .await
+            .expect("read hello acknowledgment")
+            .expect("hello acknowledgment");
+        assert_eq!(acknowledgment.message_type, MessageType::HelloAck);
+        timeout(Duration::from_secs(1), quiet)
+            .await
+            .expect("idle client closed")
             .expect("connection task")
             .expect("idle shutdown");
+        assert!(read_envelope(&mut client).await.expect("EOF").is_none());
+
+        assert!(
+            timeout(Duration::from_millis(200), &mut subscription)
+                .await
+                .is_err(),
+            "a policy subscriber outlives the idle deadline"
+        );
+        assert_eq!(broker.session_count().await, 1);
+        drop(subscriber);
+        timeout(Duration::from_secs(1), subscription)
+            .await
+            .expect("subscriber closed")
+            .expect("connection task")
+            .expect("peer close");
         assert_eq!(broker.session_count().await, 0);
+    }
+
+    #[test]
+    fn only_per_call_accept_failures_are_retried() {
+        use std::io;
+
+        use rustix::io::Errno;
+
+        for errno in [
+            Errno::MFILE,
+            Errno::NFILE,
+            Errno::CONNABORTED,
+            Errno::INTR,
+            Errno::AGAIN,
+            Errno::NOBUFS,
+            Errno::NOMEM,
+        ] {
+            let error = io::Error::from_raw_os_error(errno.raw_os_error());
+            assert!(super::is_transient_accept_error(&error), "{errno:?}");
+        }
+        for errno in [Errno::BADF, Errno::INVAL, Errno::NOTSOCK] {
+            let error = io::Error::from_raw_os_error(errno.raw_os_error());
+            assert!(!super::is_transient_accept_error(&error), "{errno:?}");
+        }
+        assert!(!super::is_transient_accept_error(&io::Error::other(
+            "not an errno"
+        )));
     }
 
     #[tokio::test]

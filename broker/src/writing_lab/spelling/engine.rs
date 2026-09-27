@@ -295,12 +295,12 @@ pub fn exec_helper(args: &[OsString]) -> Result<Infallible, &'static str> {
         .filter(|p| *p > 1)
         .and_then(Pid::from_raw)
         .ok_or("spelling_helper_failed")?;
-    crate::writing_lab::process::arm_parent_death(parent).map_err(|_| "spelling_helper_failed")?;
+    crate::semantic::process::arm_parent_death(parent).map_err(|_| "spelling_helper_failed")?;
     let artifact = Artifact::read(
         std::path::Path::new(path),
         language.to_str().ok_or("spelling_helper_failed")?,
     )?;
-    crate::writing_lab::process::validate_unprivileged_executable(artifact.binary.path())
+    crate::semantic::process::validate_unprivileged_executable(artifact.binary.path())
         .map_err(|_| "spelling_helper_failed")?;
     let _ = Command::new(artifact.binary.path())
         .env_clear()

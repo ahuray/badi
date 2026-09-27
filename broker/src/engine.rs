@@ -40,6 +40,7 @@ const MIN_CONTEXT_AUTHORITY_LEASE_MS: u64 = 500;
 const MAX_CONTEXT_AUTHORITY_LEASE_MS: u64 = 10_000;
 const OUTCOME_QUEUE_CAPACITY: usize = 256;
 const OUTCOME_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
+const PERSONALIZATION_CLEAR_TIMEOUT: Duration = Duration::from_secs(5);
 const PERSONALIZATION_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 /// Default number of provider generations allowed across the entire broker.
 pub const DEFAULT_PROVIDER_CONCURRENCY: usize = 4;
@@ -309,6 +310,8 @@ pub struct OutcomeRecorderHealth {
     pub write_failures: u64,
 }
 
+type ClearResult = Result<(bool, ControlPlaneSnapshot), ControlPlaneError>;
+
 enum OutcomeCommand {
     Signal {
         expected_settings_revision: u64,
@@ -318,7 +321,7 @@ enum OutcomeCommand {
         signal: PersonalizationSignal,
     },
     Clear {
-        response: oneshot::Sender<Result<(bool, ControlPlaneSnapshot), ControlPlaneError>>,
+        response: oneshot::Sender<ClearResult>,
     },
     Snapshot {
         response: oneshot::Sender<Result<ControlPlaneSnapshot, ControlPlaneError>>,
@@ -441,17 +444,18 @@ impl OutcomeRecorder {
         }
     }
 
-    async fn clear(&self) -> Result<(bool, ControlPlaneSnapshot), BrokerError> {
+    /// Queues a clear behind every outcome already queued, without waiting
+    /// for queue space or for the disk.
+    fn begin_clear(&self) -> Result<oneshot::Receiver<ClearResult>, BrokerError> {
         let (response, receiver) = oneshot::channel();
-        let sender = self.sender.clone();
-        tokio::task::spawn_blocking(move || sender.send(OutcomeCommand::Clear { response }))
-            .await
-            .map_err(|_| BrokerError::ControlPlaneTask)?
-            .map_err(|_| BrokerError::ControlPlaneUnavailable)?;
-        receiver
-            .await
-            .map_err(|_| BrokerError::ControlPlaneTask)?
-            .map_err(BrokerError::from)
+        match self.sender.try_send(OutcomeCommand::Clear { response }) {
+            Ok(()) => Ok(receiver),
+            Err(std_mpsc::TrySendError::Full(_)) => Err(BrokerError::ControlPlaneUnavailable),
+            Err(std_mpsc::TrySendError::Disconnected(_)) => {
+                self.available.store(false, Ordering::Relaxed);
+                Err(BrokerError::ControlPlaneUnavailable)
+            }
+        }
     }
 
     async fn snapshot(&self) -> Result<ControlPlaneSnapshot, BrokerError> {
@@ -570,9 +574,9 @@ impl Broker {
         self.inner.provider_kind
     }
 
-    #[must_use]
-    pub fn provider_is_alive(&self) -> bool {
-        self.inner.provider.is_alive()
+    /// Completes once the provider can no longer serve requests.
+    pub async fn provider_exited(&self) {
+        self.inner.provider.exited().await;
     }
 
     #[must_use]
@@ -1832,17 +1836,25 @@ impl Broker {
             .outcome_recorder
             .clone()
             .ok_or(BrokerError::ControlPlaneUnavailable)?;
-        // Hold the broker state lock across the recorder's FIFO clear barrier.
-        // Every pre-clear outcome is therefore processed before the clear, no
-        // post-clear outcome can be queued early, and visible suggestions lose
-        // their link to a Shown aggregate that no longer exists.
-        let mut state = self.inner.state.lock().await;
-        for session in state.sessions.values_mut() {
-            if let Some(visible) = session.visible.as_mut() {
-                visible.aggregate_day = None;
+        // Outcomes are queued only under the broker state lock. Queueing the
+        // clear under it places the recorder's FIFO barrier after every
+        // pre-clear outcome and before every later one, and visible
+        // suggestions lose their link to a Shown aggregate about to vanish.
+        // The disk work then runs without blocking suggestion traffic.
+        let response = {
+            let mut state = self.inner.state.lock().await;
+            for session in state.sessions.values_mut() {
+                if let Some(visible) = session.visible.as_mut() {
+                    visible.aggregate_day = None;
+                }
             }
-        }
-        let result = recorder.clear().await?;
+            recorder.begin_clear()?
+        };
+        let result = time::timeout(PERSONALIZATION_CLEAR_TIMEOUT, response)
+            .await
+            .map_err(|_| BrokerError::ControlPlaneTimeout)?
+            .map_err(|_| BrokerError::ControlPlaneTask)??;
+        let mut state = self.inner.state.lock().await;
         let recovered = state.control_plane_condition == ControlPlaneCondition::Recoverable;
         if recovered {
             state.control_plane_condition = ControlPlaneCondition::Healthy;
@@ -2402,6 +2414,9 @@ pub enum BrokerError {
     ControlPlane(#[from] ControlPlaneError),
     #[error("control_plane_task")]
     ControlPlaneTask,
+    /// The operation is still queued or running; its outcome is unknown.
+    #[error("control_plane_timeout")]
+    ControlPlaneTimeout,
     #[error("control_plane_unavailable")]
     ControlPlaneUnavailable,
     #[error("denied:{0:?}")]
@@ -5525,6 +5540,58 @@ mod tests {
                 .revision,
             1
         );
+    }
+
+    fn broker_with_stalled_recorder(
+        capacity: usize,
+    ) -> (Broker, std::sync::mpsc::Receiver<super::OutcomeCommand>) {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(capacity);
+        let recorder = super::OutcomeRecorder {
+            sender,
+            available: std::sync::Arc::default(),
+            dropped_signals: std::sync::Arc::default(),
+            write_failures: std::sync::Arc::default(),
+        };
+        let broker = Broker::build(
+            std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+            BrokerConfig::default(),
+            None,
+            None,
+            Some(recorder),
+        );
+        (broker, receiver)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_memory_clear_is_bounded_and_never_blocks_suggestion_state() {
+        let (broker, commands) = broker_with_stalled_recorder(1);
+        let clearing = tokio::spawn({
+            let broker = broker.clone();
+            async move { broker.clear_personalization().await }
+        });
+        let queued = loop {
+            if let Ok(command) = commands.try_recv() {
+                break command;
+            }
+            tokio::task::yield_now().await;
+        };
+        assert!(matches!(queued, super::OutcomeCommand::Clear { .. }));
+        assert!(
+            timeout(Duration::from_millis(10), broker.is_paused())
+                .await
+                .is_ok(),
+            "the disk clear must run without the broker state lock"
+        );
+        assert!(matches!(
+            clearing.await.expect("clear task"),
+            Err(BrokerError::ControlPlaneTimeout)
+        ));
+
+        let (full, _commands) = broker_with_stalled_recorder(0);
+        assert!(matches!(
+            timeout(Duration::from_millis(10), full.clear_personalization()).await,
+            Ok(Err(BrokerError::ControlPlaneUnavailable))
+        ));
     }
 
     #[tokio::test]

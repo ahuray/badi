@@ -1,4 +1,6 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 
 use badi_broker::engine::{Broker, BrokerConfig};
@@ -6,51 +8,88 @@ use badi_broker::ipc::default_socket_path;
 use badi_broker::provider::{CompletionProvider, DeterministicPhraseProvider};
 use badi_broker::{ControlPlane, server};
 
-#[tokio::main]
-async fn main() {
-    let result = async {
-        let command = parse_arguments(std::env::args_os().skip(1))?;
-        let (socket_path, provider, model_directory) = match command {
-            BrokerCommand::Run {
-                socket_path,
-                provider,
-                model_directory,
-            } => (socket_path, provider, model_directory),
-            BrokerCommand::Help => {
-                print!("{BROKER_USAGE}");
-                return Ok(());
-            }
-            BrokerCommand::Version => {
-                println!("{}", badi_broker::build_info::version_line("badi-broker"));
-                return Ok(());
-            }
-        };
-        let control_plane =
-            Arc::new(ControlPlane::open_from_environment().map_err(|_| ExitError::ControlPlane)?);
-        let provider = start_provider(provider, model_directory).await?;
-        let broker = Broker::with_control_plane(provider, BrokerConfig::default(), control_plane)
-            .map_err(|_| ExitError::ControlPlane)?;
-        server::run(&socket_path, broker)
-            .await
-            .map_err(|error| match error {
-                server::ServerError::ProviderExited => {
-                    ExitError::Model("runtime_process_exited".to_owned())
-                }
-                _ => ExitError::Server,
-            })
-    }
-    .await;
+/// `EX_CONFIG`: retrying cannot help until the installation or host changes.
+/// The service unit lists it in `RestartPreventExitStatus=`.
+const EXIT_CONFIGURATION: u8 = 78;
 
-    if let Err(error) = result {
-        eprintln!("error_code={error}");
-        std::process::exit(1);
+fn main() -> ExitCode {
+    let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
+    #[cfg(all(feature = "local-model", target_os = "linux"))]
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == badi_broker::writing::EXEC_HELPER_FLAG)
+    {
+        match badi_broker::writing::exec_runtime_helper(&arguments[1..]) {
+            Ok(never) => match never {},
+            Err(code) => {
+                eprintln!("{code}");
+                return ExitCode::FAILURE;
+            }
+        }
     }
+    // Two workers keep a stray blocking call from stalling every connection;
+    // idle workers park without periodic wakeups.
+    let Ok(runtime) = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+    else {
+        eprintln!("error_code={}", ExitError::Server);
+        return ExitCode::FAILURE;
+    };
+    // Returning, rather than exiting, drops the broker and its owned runtime
+    // process before the process ends.
+    match runtime.block_on(run(arguments)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error_code={error}");
+            error.exit_code()
+        }
+    }
+}
+
+async fn run(arguments: Vec<OsString>) -> Result<(), ExitError> {
+    let (socket_path, provider, model_directory) = match parse_arguments(arguments)? {
+        BrokerCommand::Run {
+            socket_path,
+            provider,
+            model_directory,
+        } => (socket_path, provider, model_directory),
+        BrokerCommand::Help => {
+            print!("{BROKER_USAGE}");
+            return Ok(());
+        }
+        BrokerCommand::Version => {
+            println!("{}", badi_broker::build_info::version_line("badi-broker"));
+            return Ok(());
+        }
+    };
+    let control_plane =
+        Arc::new(ControlPlane::open_from_environment().map_err(|_| ExitError::ControlPlane)?);
+    // Awaited directly on main's block_on thread: the runtime's parent-death
+    // signal fires when the thread that spawned it exits.
+    let provider = start_provider(provider, model_directory).await?;
+    let broker = Broker::with_control_plane(provider, BrokerConfig::default(), control_plane)
+        .map_err(|_| ExitError::ControlPlane)?;
+    server::run(&socket_path, broker)
+        .await
+        .map_err(|error| match error {
+            server::ServerError::ProviderExited => ExitError::Model {
+                message: "runtime_process_exited".to_owned(),
+                configuration: false,
+            },
+            _ => ExitError::Server,
+        })
 }
 
 const BROKER_USAGE: &str = "Usage: badi-broker [--socket ABSOLUTE] [--provider local|phrase] [--model-directory ABSOLUTE]\n\
 Runs the local Unix-socket suggestion broker.\n\
 Options:\n  --provider local|phrase  Local LLM (default) or deterministic integration fixture\n  --model-directory ABSOLUTE  Override the Badi model/runtime data directory\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n  --version          Print the version and embedded source commit\n";
 
+#[cfg_attr(
+    not(all(feature = "local-model", target_os = "linux")),
+    allow(clippy::unused_async)
+)]
 async fn start_provider(
     kind: ProviderSelection,
     directory: Option<PathBuf>,
@@ -58,26 +97,31 @@ async fn start_provider(
     match kind {
         ProviderSelection::Phrase => Ok(Arc::new(DeterministicPhraseProvider::default())),
         ProviderSelection::Local => {
-            #[cfg(feature = "local-model")]
+            #[cfg(all(feature = "local-model", target_os = "linux"))]
             {
+                let model_error = |error: badi_broker::writing::WritingError| ExitError::Model {
+                    message: error.to_string(),
+                    configuration: error.is_configuration(),
+                };
                 let directory = directory
                     .map_or_else(badi_broker::writing::data_directory, Ok)
-                    .map_err(|error| ExitError::Model(error.to_string()))?;
-                let (runtime, model, warm_up) = badi_broker::writing::activate(directory)
+                    .map_err(model_error)?;
+                let (runtime, model, warm_up) = badi_broker::writing::activate_contained(directory)
                     .await
-                    .map_err(|error| ExitError::Model(error.to_string()))?;
+                    .map_err(model_error)?;
                 eprintln!(
                     "{}",
                     badi_broker::writing::activation_report(&model, warm_up)
                 );
                 Ok(Arc::new(runtime))
             }
-            #[cfg(not(feature = "local-model"))]
+            #[cfg(not(all(feature = "local-model", target_os = "linux")))]
             {
                 let _ = directory;
-                Err(ExitError::Model(
-                    "rebuild with the local-model feature".to_owned(),
-                ))
+                Err(ExitError::Model {
+                    message: "rebuild with the local-model feature on Linux".to_owned(),
+                    configuration: true,
+                })
             }
         }
     }
@@ -165,7 +209,22 @@ enum ExitError {
     ControlPlane,
     Server,
     SocketPath,
-    Model(String),
+    Model {
+        message: String,
+        configuration: bool,
+    },
+}
+
+impl ExitError {
+    fn exit_code(&self) -> ExitCode {
+        match self {
+            Self::Model {
+                configuration: true,
+                ..
+            } => ExitCode::from(EXIT_CONFIGURATION),
+            _ => ExitCode::FAILURE,
+        }
+    }
 }
 
 impl std::fmt::Display for ExitError {
@@ -175,7 +234,7 @@ impl std::fmt::Display for ExitError {
             Self::ControlPlane => formatter.write_str("control_plane"),
             Self::Server => formatter.write_str("server"),
             Self::SocketPath => formatter.write_str("socket_path"),
-            Self::Model(message) => write!(formatter, "local_model: {message}"),
+            Self::Model { message, .. } => write!(formatter, "local_model: {message}"),
         }
     }
 }

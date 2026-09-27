@@ -114,13 +114,23 @@ result remains `no_qualified_model` until every gate passes. Expected text never
 enters model requests, and model experiments do not establish adapter editing
 authority, native undo or application coverage.
 
-Normal startup selects an installed, pinned writing artifact that fits current
-available memory after the host reserve and runtime headroom. Hardware advice is
-a preference: a battery-state change does not require downloading a different
-model when the installed artifact still fits. The advised tier is preferred,
-then smaller installed artifacts, then the smallest fitting larger artifact.
-Missing or insufficient memory fails closed. Selection never bypasses the model
-and runtime size/hash checks, and a corrupt selected artifact is an error.
+Normal startup selects an installed, pinned writing artifact that fits total
+memory after the host reserve and runtime headroom; that is a hard floor, and
+unknown total memory fails closed. Hardware advice is a preference: a
+battery-state change does not require downloading a different model when the
+installed artifact still fits. The advised tier is preferred, then smaller
+installed artifacts, then the smallest fitting larger artifact. Before loading
+it, the broker waits while current available memory is too short for the same
+reserve and headroom, re-checking after 2 s and then up to every 30 s; the
+journal records one content-free `waiting for available memory` line and one
+`memory available after waiting` line. A transient dip therefore delays startup
+instead of failing it. The Lab still reports short memory immediately.
+
+Startup hashes the model, runtime bundle, runtime binary and runtime archive
+once, before first use; a size or hash mismatch is an error. The checkpoints
+before spawn, after spawn and after readiness confirm the same files by device,
+inode, size, and modification and change times instead of reading them again.
+Hardware detection on this path skips `nvidia-smi`, since inference is CPU-only.
 
 Once the owned runtime passes its health and authorization checks, startup
 sends one warm-up completion before the broker binds its socket: the fixed
@@ -156,11 +166,25 @@ parent slices also reserve memory. Four inference threads remain the default:
 six or eight were not clearly faster. The
 [writing evaluation](../evaluation/writing/README.md) has the measurements.
 
-The broker polls its owned model process every 200 ms. Unexpected exit ends the
-broker with `error_code=local_model: runtime_process_exited` after the normal
-session cancellation and socket cleanup. The desktop service's existing
-`Restart=on-failure` then starts a fresh broker; old requests and grants are
-never replayed. This checks the owned child handle, not a reused PID.
+The broker waits on a pidfd of its owned, unreaped model process, so no timer
+polls it. Unexpected exit ends the broker with
+`error_code=local_model: runtime_process_exited` after the normal session
+cancellation and socket cleanup, and an exit status of 1. The runtime is started
+through the broker binary's parent-death helper (the Lab's containment): it
+arms `PR_SET_PDEATHSIG`, checks that its parent is still the broker, and execs
+the verified runtime, so even a killed broker cannot leave it running. The
+signal follows the spawning thread, so activation runs on the main thread.
+
+The desktop service restarts a failed broker after 2 s, backing off to 60 s,
+and never stops retrying; old requests and grants are never replayed. A missing,
+unsupported or too-large model instead exits with status 78, which the unit
+excludes from restarts so `badi doctor` can report the failed service.
+
+Policy-capable connections, which every document adapter negotiates, stay open
+while idle; control and health clients such as `badictl` are closed after 300 s
+without a request. A transient
+`accept` failure such as descriptor exhaustion is logged once and retried after
+100 ms instead of stopping the broker.
 
 The current writing route accepts `en`, `de`, and `fa` language tags and their
 subtags. English/German output is limited to Latin script; Persian output uses
@@ -360,8 +384,11 @@ manifest only below that disposable directory.
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
 ```
+
+Release builds use fat LTO, one codegen unit and stripped symbols.
 
 Tests cover fragmented frames, empty/truncated input, a 65,537-byte declaration
 rejected from its header alone, strict caller-origin validation, deterministic

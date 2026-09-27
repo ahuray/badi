@@ -450,7 +450,7 @@ async fn owned_runtime_death_stops_broker_and_retires_sessions() -> Result<(), B
     })
     .await?;
     // This fixture cannot exit on its own. Its unreaped owned PID remains bound
-    // until the server's lifecycle poll observes this signal and reaps it.
+    // while the server observes the exit event.
     rustix::process::kill_process(pid, rustix::process::Signal::KILL)?;
     let outcome = timeout(Duration::from_secs(2), server).await??;
     assert!(matches!(

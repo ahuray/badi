@@ -8,7 +8,7 @@ pub mod paced_probe;
 pub mod prefill_probe;
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
-pub mod process;
+pub use crate::semantic::process;
 pub mod spelling;
 pub mod stop_token_probe;
 

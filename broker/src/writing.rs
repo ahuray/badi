@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -10,7 +11,8 @@ use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::model_selection::{
-    HardwareProfile, ModelArtifact, ModelUseCase, catalog, detect_hardware, recommend_model,
+    HardwareProfile, ModelArtifact, ModelUseCase, catalog, current_memory,
+    detect_cpu_inference_hardware, fits_available_memory, recommend_model,
     select_installed_writing_model,
 };
 use crate::provider::ProviderRequest;
@@ -18,6 +20,8 @@ use crate::semantic::candidate::{
     RUNTIME_ARCHIVE_BYTES, RUNTIME_ARCHIVE_FILENAME, RUNTIME_ARCHIVE_SHA256,
     RUNTIME_BUNDLE_MANIFEST_SHA256, RUNTIME_BYTES, RUNTIME_SHA256,
 };
+#[cfg(target_os = "linux")]
+pub use crate::semantic::process::{EXEC_HELPER_FLAG, exec_runtime_helper};
 use crate::semantic::provenance::{
     DirectoryManifestExpectation, FileExpectation, ProvenanceError, VerifiedFile,
     verify_directory_manifest, verify_file,
@@ -25,6 +29,8 @@ use crate::semantic::provenance::{
 use crate::semantic::runtime::{LlamaCppLaunch, OwnedRuntime, RuntimeError, WarmUpReport};
 
 pub const WRITING_CONTRACT: &str = "badi.writing.completion-and-spelling.en-de-fa.v2";
+const MEMORY_RETRY_INITIAL: Duration = Duration::from_secs(2);
+const MEMORY_RETRY_MAX: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WritingLanguage {
@@ -201,11 +207,40 @@ pub fn data_directory() -> Result<PathBuf, WritingError> {
     Ok(home.join(".local/share/badi"))
 }
 
+/// Starts the installed writing model, first waiting while available memory
+/// is temporarily too short for it.
 pub async fn activate(
     directory: PathBuf,
 ) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
-    let (launch, model) = prepare_launch(directory).await?;
-    let runtime = launch.for_writing().spawn().await?;
+    start(directory, false).await
+}
+
+/// [`activate`] for a binary that dispatches [`EXEC_HELPER_FLAG`] before it
+/// starts Tokio: the runtime then cannot outlive this process. The kernel
+/// signals the runtime when the spawning thread exits, so await this on a
+/// thread that lives as long as the process, such as `main`'s `block_on`.
+#[cfg(target_os = "linux")]
+pub async fn activate_contained(
+    directory: PathBuf,
+) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
+    start(directory, true).await
+}
+
+async fn start(
+    directory: PathBuf,
+    contained: bool,
+) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
+    let (model, threads) = installed_model(&directory)?;
+    wait_for_memory(model).await;
+    let launch = verify_launch(directory, model, threads)
+        .await?
+        .for_writing();
+    let launch = if contained {
+        launch.contained()
+    } else {
+        launch
+    };
+    let runtime = launch.spawn().await?;
     // Pay the first-inference cost before the broker binds its socket. No real
     // request can queue behind this bounded job, and a failure only leaves the
     // first request cold.
@@ -213,8 +248,50 @@ pub async fn activate(
     Ok((runtime, model, warm_up))
 }
 
+async fn wait_for_memory(model: ModelArtifact) {
+    let started = Instant::now();
+    let mut delay = None;
+    loop {
+        let available_mib = current_memory().available_mib;
+        let Some(next) = memory_retry_delay(model, available_mib, delay) else {
+            break;
+        };
+        if delay.is_none() {
+            eprintln!(
+                "badi-broker: waiting for available memory before starting the writing model available_mib={}",
+                available_mib.unwrap_or_default()
+            );
+        }
+        delay = Some(next);
+        tokio::time::sleep(next).await;
+    }
+    if delay.is_some() {
+        eprintln!(
+            "badi-broker: memory available after waiting elapsed_s={}",
+            started.elapsed().as_secs()
+        );
+    }
+}
+
+/// The pause before checking available memory again, or `None` once `model`
+/// can start. Unknown availability does not block: total memory already
+/// passed the hard floor during selection.
+fn memory_retry_delay(
+    model: ModelArtifact,
+    available_mib: Option<u64>,
+    previous: Option<Duration>,
+) -> Option<Duration> {
+    if available_mib.is_none_or(|available| fits_available_memory(model, available)) {
+        return None;
+    }
+    Some(previous.map_or(MEMORY_RETRY_INITIAL, |delay| {
+        delay.saturating_mul(2).min(MEMORY_RETRY_MAX)
+    }))
+}
+
 /// Content-free startup lines, provider line first: log readers such as the
-/// Fcitx broker smoke lane require the log to begin with it.
+/// Fcitx broker smoke lane require the log to begin with it. Only the memory
+/// wait lines can precede it, and only when startup had to wait.
 #[must_use]
 pub fn activation_report(model: &ModelArtifact, warm_up: WarmUpReport) -> String {
     format!(
@@ -223,10 +300,21 @@ pub fn activation_report(model: &ModelArtifact, warm_up: WarmUpReport) -> String
     )
 }
 
+/// The Lab's launch: it reports a host that is short of memory right now
+/// instead of waiting for it.
+#[cfg(feature = "writing-lab")]
 pub(crate) async fn prepare_launch(
     directory: PathBuf,
 ) -> Result<(LlamaCppLaunch, ModelArtifact), WritingError> {
-    let hardware = detect_hardware();
+    let (model, threads) = installed_model(&directory)?;
+    if memory_retry_delay(model, current_memory().available_mib, None).is_some() {
+        return Err(WritingError::NoFit);
+    }
+    Ok((verify_launch(directory, model, threads).await?, model))
+}
+
+fn installed_model(directory: &Path) -> Result<(ModelArtifact, usize), WritingError> {
+    let hardware = detect_cpu_inference_hardware();
     let threads = writing_threads(&hardware)?;
     let installed: Vec<_> = catalog(ModelUseCase::Writing)
         .iter()
@@ -242,10 +330,17 @@ pub(crate) async fn prepare_launch(
                     WritingError::NotInstalled(model.filename)
                 })
         })?;
-    let launch = tokio::task::spawn_blocking(move || verified_launch(&directory, model, threads))
+    Ok((model, threads))
+}
+
+async fn verify_launch(
+    directory: PathBuf,
+    model: ModelArtifact,
+    threads: usize,
+) -> Result<LlamaCppLaunch, WritingError> {
+    tokio::task::spawn_blocking(move || verified_launch(&directory, model, threads))
         .await
-        .map_err(|_| WritingError::VerificationTask)??;
-    Ok((launch, model))
+        .map_err(|_| WritingError::VerificationTask)?
 }
 
 fn writing_threads(hardware: &HardwareProfile) -> Result<usize, WritingError> {
@@ -262,7 +357,7 @@ pub(crate) async fn prepare_lab_artifact(
     directory: PathBuf,
     artifact: crate::writing_lab::artifact::ModelArtifactOverride,
 ) -> Result<LlamaCppLaunch, WritingError> {
-    let threads = writing_threads(&detect_hardware())?;
+    let threads = writing_threads(&detect_cpu_inference_hardware())?;
     tokio::task::spawn_blocking(move || {
         let weights = verify_file(&artifact.weights)?;
         verified_runtime_launch(&directory, weights, &artifact.alias, threads)
@@ -666,9 +761,36 @@ pub enum WritingError {
     VerificationTask,
 }
 
+impl WritingError {
+    /// Whether retrying cannot help until the installation or host changes.
+    #[must_use]
+    pub const fn is_configuration(&self) -> bool {
+        matches!(
+            self,
+            Self::UnsupportedRuntime | Self::DataDirectory | Self::NoFit | Self::NotInstalled(_)
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{complete_word_prefix, correction_word, valid_correction};
+    use super::{complete_word_prefix, correction_word, memory_retry_delay, valid_correction};
+
+    #[test]
+    fn short_memory_delays_start_with_bounded_backoff() {
+        let model =
+            crate::model_selection::catalog(crate::model_selection::ModelUseCase::Writing)[1];
+        assert_eq!(memory_retry_delay(model, Some(16_000), None), None);
+        assert_eq!(memory_retry_delay(model, None, None), None);
+        let mut delays = Vec::new();
+        let mut previous = None;
+        for _ in 0..7 {
+            previous = memory_retry_delay(model, Some(4_000), previous);
+            delays.push(previous.expect("short memory waits").as_secs());
+        }
+        assert_eq!(delays, [2, 4, 8, 16, 30, 30, 30]);
+        assert_eq!(memory_retry_delay(model, Some(8_000), previous), None);
+    }
 
     #[test]
     fn token_healing_binds_the_exact_typed_stem() {

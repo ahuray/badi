@@ -28,7 +28,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 const OVERVIEW_SNAPSHOT_ATTEMPTS: usize = 3;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     let result = run().await;
     if let Err(error) = result {

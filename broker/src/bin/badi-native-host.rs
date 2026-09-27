@@ -7,7 +7,7 @@ use badi_broker::native_host::{
 };
 
 fn main() {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("native host runtime");

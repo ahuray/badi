@@ -245,17 +245,33 @@ const CODE_MODELS: [ModelArtifact; 3] = [
 
 #[must_use]
 pub fn detect_hardware() -> HardwareProfile {
-    let memory = fs::read_to_string("/proc/meminfo")
-        .map_or_else(|_| MemoryProfile::default(), |value| parse_meminfo(&value));
+    detect_hardware_with(&SystemNvidiaMemoryProbe)
+}
+
+/// Like [`detect_hardware`] without running `nvidia-smi`. CPU inference never
+/// uses GPU capacity; DRM vendor detection alone still marks hybrid systems.
+#[cfg(feature = "local-model")]
+#[must_use]
+pub(crate) fn detect_cpu_inference_hardware() -> HardwareProfile {
+    detect_hardware_with(&NoNvidiaMemoryProbe)
+}
+
+fn detect_hardware_with(nvidia_probe: &dyn NvidiaMemoryProbe) -> HardwareProfile {
     HardwareProfile {
         schema: HARDWARE_SCHEMA,
         architecture: std::env::consts::ARCH.to_owned(),
         logical_cpus: std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
         cpu: detect_cpu_features(),
-        memory,
-        gpu: detect_gpus(Path::new("/sys/class/drm")),
+        memory: current_memory(),
+        gpu: detect_gpus_with(Path::new("/sys/class/drm"), nvidia_probe),
         on_battery: detect_on_battery(Path::new("/sys/class/power_supply")),
     }
+}
+
+#[must_use]
+pub fn current_memory() -> MemoryProfile {
+    fs::read_to_string("/proc/meminfo")
+        .map_or_else(|_| MemoryProfile::default(), |value| parse_meminfo(&value))
 }
 
 #[must_use]
@@ -308,12 +324,17 @@ pub fn recommend_model(hardware: HardwareProfile, use_case: ModelUseCase) -> Mod
 
 /// Download advice expresses a preference, not the identity of an installation.
 /// Power changes may alter that preference without making an installed artifact
-/// incompatible. Actual available memory and the host reserve remain hard gates.
+/// incompatible. Selection uses total memory, so a transient dip in available
+/// memory never changes or refuses the installed model; total memory minus the
+/// host reserve is the hard floor. [`fits_available_memory`] gates the start.
+#[cfg(feature = "local-model")]
 pub(crate) fn select_installed_writing_model(
     hardware: &HardwareProfile,
     installed_filenames: &[&str],
 ) -> Result<Option<ModelArtifact>, AdviceReason> {
-    let selection = select_model(hardware, ModelUseCase::Writing)?;
+    let mut capacity = hardware.clone();
+    capacity.memory.available_mib = hardware.memory.total_mib;
+    let selection = select_model(&capacity, ModelUseCase::Writing)?;
     let installed: Vec<_> = catalog(ModelUseCase::Writing)
         .iter()
         .copied()
@@ -336,6 +357,15 @@ pub(crate) fn select_installed_writing_model(
         .copied()
         .map(Some)
         .ok_or(AdviceReason::InsufficientUsableMemory)
+}
+
+/// Whether `model` can start now, with its runtime headroom, without eating
+/// into the host reserve.
+#[cfg(feature = "local-model")]
+#[must_use]
+pub(crate) fn fits_available_memory(model: ModelArtifact, available_mib: u64) -> bool {
+    let usable = available_mib.saturating_sub(HOST_RESERVE_MIB);
+    memory_fit(model, usable).required_host_memory_mib <= usable
 }
 
 #[must_use]
@@ -579,8 +609,14 @@ impl NvidiaMemoryProbe for SystemNvidiaMemoryProbe {
     }
 }
 
-fn detect_gpus(root: &Path) -> GpuProfile {
-    detect_gpus_with(root, &SystemNvidiaMemoryProbe)
+#[cfg(feature = "local-model")]
+struct NoNvidiaMemoryProbe;
+
+#[cfg(feature = "local-model")]
+impl NvidiaMemoryProbe for NoNvidiaMemoryProbe {
+    fn detected_total_memory_mib(&self) -> Option<u64> {
+        None
+    }
 }
 
 fn detect_gpus_with(root: &Path, nvidia_probe: &dyn NvidiaMemoryProbe) -> GpuProfile {
@@ -846,6 +882,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "local-model")]
     #[test]
     fn installed_writing_model_survives_power_advice_changes() {
         let mut hardware = profile(16_384, 8_192, 20);
@@ -863,6 +900,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "local-model")]
     #[test]
     fn installed_selection_prefers_advice_then_smaller_artifacts() {
         let mut hardware = profile(16_384, 8_192, 20);
@@ -884,32 +922,63 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "local-model")]
     #[test]
-    fn installed_selection_keeps_actual_memory_and_compatibility_gates() {
+    fn installed_selection_uses_total_memory_and_keeps_compatibility_gates() {
         let balanced = super::WRITING_MODELS[1];
-        let mut hardware = profile(8_192, 4_300, 8);
+        // A momentary dip in available memory must not refuse the installation.
+        let mut hardware = profile(15_663, 4_300, 20);
         assert_eq!(
             super::select_installed_writing_model(&hardware, &[balanced.filename]),
-            Err(AdviceReason::InsufficientUsableMemory)
+            Ok(Some(balanced))
         );
         hardware.memory.available_mib = None;
         assert_eq!(
             super::select_installed_writing_model(&hardware, &[balanced.filename]),
+            Ok(Some(balanced))
+        );
+        let floor = profile(4_096, 4_000, 8);
+        assert_eq!(
+            super::select_installed_writing_model(&floor, &[balanced.filename]),
+            Err(AdviceReason::InsufficientUsableMemory)
+        );
+        hardware.memory.total_mib = None;
+        assert_eq!(
+            super::select_installed_writing_model(&hardware, &[balanced.filename]),
             Err(AdviceReason::MemoryCapacityUnknown)
         );
-        hardware.memory.available_mib = Some(9_000);
+        hardware.memory.total_mib = Some(0);
         assert_eq!(
             super::select_installed_writing_model(&hardware, &[balanced.filename]),
             Err(AdviceReason::MemoryCapacityInvalid)
         );
-        hardware.memory.available_mib = Some(8_000);
-        hardware.logical_cpus = 2;
+        let mut hardware = profile(15_663, 8_000, 2);
         assert_eq!(
             super::select_installed_writing_model(&hardware, &[balanced.filename]),
             Err(AdviceReason::InsufficientCompute)
         );
+        hardware.architecture = "riscv64".to_owned();
+        hardware.logical_cpus = 20;
+        assert_eq!(
+            super::select_installed_writing_model(&hardware, &[balanced.filename]),
+            Err(AdviceReason::UnsupportedArchitecture)
+        );
     }
 
+    #[cfg(feature = "local-model")]
+    #[test]
+    fn start_waits_until_the_model_and_host_reserve_fit_available_memory() {
+        // 1224 MiB of weights, 768 + 306 MiB runtime headroom, 2048 MiB reserve.
+        let balanced = super::WRITING_MODELS[1];
+        assert!(super::fits_available_memory(balanced, 4_346));
+        assert!(!super::fits_available_memory(balanced, 4_345));
+        assert!(!super::fits_available_memory(balanced, 0));
+        let compact = super::WRITING_MODELS[0];
+        assert!(super::fits_available_memory(compact, 3_579));
+        assert!(!super::fits_available_memory(compact, 3_578));
+    }
+
+    #[cfg(feature = "local-model")]
     #[test]
     fn installed_selection_never_invents_a_model_or_accepts_an_unknown_artifact() {
         let hardware = profile(16_384, 8_192, 20);
