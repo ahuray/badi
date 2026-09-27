@@ -1,129 +1,71 @@
 # Badi vision
 
-> **Historical V1:** [Vision V2](VISION-V2.md) is the current product contract.
-> This file is retained for decision history; where scope, terminology, or
-> acceptance gates conflict, V2 supersedes it.
+Badi (`بعدی`, Persian for “next”) is local, capability-aware co-writing for
+Linux, starting with Omarchy. It helps you write your own next words inside the
+app you already use. A short continuation appears only when the current field
+can be understood and edited safely; you accept it, type through it, or ignore
+it without leaving your flow. The model is replaceable. The product is the
+interaction, the exact editing authority and the policy around them.
 
-> Historical naming note: an unrelated
-> [OmaType dictation project](https://github.com/Aayush9029/OmaType) already
-> serves the Linux/Omarchy community. The project has since adopted **Badi**;
-> see Vision V2 for the current naming and technical-namespace boundary.
+## Character: precise, light, native
 
-## The promise
+- One polished interaction before a second one. Features that miss latency,
+  safety or usefulness gates stay off.
+- Quietness is model quality: optimize retained useful text per interruption,
+  not text generated. Abstain when confidence or target state is weak; late,
+  overlapping or off-voice suggestions are product failures.
+- Shared contracts stay small; target-specific behavior stays in adapters.
+- The UI follows the Linux desktop and Omarchy's calm, direct style.
+- Inference is local on hardware-selected, pinned and verified models. A slow or
+  unavailable model degrades to silence, never to a hidden cloud call.
 
-Badi is the quiet co-writer Linux is missing: start a sentence in the app
-you already use, see a short continuation, accept exactly the useful words, and
-keep moving. It should feel like part of the desktop, not like a chatbot pasted
-on top of it.
+## Authorship and editing contract
 
-It will work toward broad coverage across browsers, Obsidian and other Electron
-apps, native editors, chat clients, and terminals. “Everywhere” is a direction,
-not a dishonest compatibility claim: Badi will show what each app can safely
-support and fall back gracefully when Linux cannot provide enough context.
+- Badi appends a short suffix. It never answers for you, rewrites several
+  places, executes commands or submits text; Enter stays your action.
+- Acceptance is explicit and one-shot. Spelling replacement is a separate,
+  narrow mode that requires negotiated replacement support, an exactly bound
+  range and explicit acceptance.
+- Adapters own document acquisition and mutation. The broker cannot edit an
+  app; it authorizes one commit bound to the exact target identity, revision,
+  fingerprint, caret, focus and expiry, and the adapter revalidates before one
+  target-API edit. Anything stale or ambiguous fails closed.
+- Native undo is preserved. A mutation the target cannot verify is reported as
+  dispatched, never as applied.
 
-## What makes it the real deal
+## Context firewall
 
-### 1. Native to Linux's shape
+- Context is the bounded text of the focused field, read only after the exact
+  app or site is allowed and the field passes its checks. Password and other
+  sensitive fields, foreign IME composition and unknown authority yield nothing.
+- Activation, context, inference, learning and retention are separate
+  decisions; deny wins. Prose is not retained, and typed text and credentials
+  stay out of diagnostics, which record content-free counts and reasons.
+- Raw keylogging, clipboard or screen scraping and blind synthetic typing are
+  never product integrations.
 
-Linux is not one desktop API. Badi uses an integration ladder: input-method
-support for broad text entry, accessibility where an app exposes reliable text
-and caret data, small first-party bridges for high-value apps, and explicit
-manual activation where ambient completion would be unsafe. Each adapter speaks
-one stable internal protocol, so the prediction engine is not coupled to one
-compositor or toolkit.
+## Integration order
 
-### 2. Quiet enough to trust
+1. **Editor-owned integrations** (Obsidian, Bash Readline) own context, display,
+   the edit and native undo.
+2. **Cooperative Fcitx5 addon** for native apps that expose surrounding text. It
+   yields to foreign preedit and candidates, and its commit is dispatched,
+   not verified.
+3. **IME-parity** for Chromium-based apps and Zen without an editor channel: the
+   focused accessibility observer plus Fcitx. Acceptance is one append-only
+   commit that behaves like typed text; every identity, binding and denial
+   guard still applies. There is no browser extension.
+4. **Unsupported** is the correct answer when identity, sensitivity, revision,
+   placement or insertion cannot be established.
 
-A missing suggestion is cheaper than a distracting or dangerous one. Badi
-will suppress low-confidence, late, badly spaced, duplicate, or contextually
-unsafe completions. It will optimize for useful accepted text and avoided
-keystrokes—not for how often it manages to display AI output.
+## Non-goals
 
-### 3. A context firewall, not a universal keylogger
+- Claiming support for every Linux app, toolkit, compositor or distribution.
+- Global input capture, virtual keyboards or synthetic typing as architecture.
+- Chat, arbitrary rewrite, agent actions or code execution while typing.
+- Remote inference, raw-history learning, accounts, sync or telemetry by default.
 
-Every app and website receives one of three policies:
+## North star
 
-- **Always** — ambient suggestions are allowed.
-- **Manual** — Badi responds only to an explicit request.
-- **Never** — no context collection, inference, learning, or UI.
-
-Password, PIN, hidden, and sensitive fields are always `Never` when the input
-stack identifies them. Unknown contexts fail toward `Manual`, and a global
-pause is always one shortcut away. The UI will explain which integration saw
-which context and whether anything left the machine.
-
-### 4. Local first, provider optional
-
-Short completions should run locally and offline by default. Users can choose a
-different local model or explicitly configure a remote provider, but remote
-traffic is visually distinct and governed by a separate policy. Personalization
-data remains local, inspectable, exportable, and deletable.
-
-### 5. Terminal-aware, not terminal-reckless
-
-Shell completion, indentation, and command safety outrank Badi. Ambient
-completion is off at ordinary shell prompts. Natural-language agent prompts can
-opt in through a terminal or agent bridge; otherwise the user invokes Badi
-manually. Accepting a suggestion must never execute it.
-
-## The interaction
-
-1. The user types normally.
-2. After a short, adaptive pause, Badi produces at most one short suggestion.
-3. The next accepted word is visually stronger than the remaining phrase.
-4. A configurable action accepts one word; a second action accepts the rest.
-5. Continuing to type narrows or replaces the suggestion without punishment.
-6. Escape dismisses it; the normal Tab key remains normal unless the current
-   app profile explicitly assigns it to Badi.
-
-Long-form generation and rewriting are useful later, but the defining loop is
-co-writing one small decision at a time.
-
-## Product ideas worth protecting
-
-- **Capability receipt:** the first time Badi appears in an app, it can show
-  a compact receipt: context source, insertion method, local/remote model, and
-  active policy. Trust should be observable.
-- **Quiet score:** measure late suggestions, immediate dismissals, overlap,
-  spacing errors, and false activations. The system must earn the right to
-  appear more often.
-- **Acceptance ledger:** keep local aggregate statistics for accepted words,
-  saved keystrokes, latency, and per-app usefulness without retaining raw prose.
-- **Voice without surveillance:** personalization can learn approved vocabulary
-  and phrases from accepted completions or explicitly imported writing. Raw
-  cross-app typing history is not the default training set.
-- **Adapter kit:** browser, Obsidian, editor, terminal, and future compositor
-  bridges share a versioned local protocol and a reusable compatibility suite.
-- **Two-speed prediction:** an instant deterministic guard/phrase layer may show
-  a safe completion while a small local language model prepares a better one;
-  stale generations are cancelled, never queued.
-
-## First proof, not first fantasy
-
-The initial proof targets this machine: Omarchy/Arch, Hyprland/Wayland, 16 GB
-RAM, Intel i7-12700H, and integrated graphics. It should demonstrate:
-
-- a short local suggestion in one browser text field, Obsidian, and Ghostty;
-- accept-one-word, accept-all, dismiss, pause, and manual activation;
-- `Always`, `Manual`, and `Never` app policies;
-- no activity in a controlled password-field test;
-- warm visible-suggestion latency measured rather than described as “instant”;
-- an honest compatibility report for every tested target.
-
-The proof is successful when the complete loop is reliable in three real apps.
-It is not successful merely because a model can produce text in a demo window.
-
-## Non-goals for the first two days
-
-- claiming every Linux distribution, compositor, toolkit, and sandbox works;
-- capturing raw input devices as the normal production architecture;
-- screen-wide OCR or periodic screenshots;
-- automatic completion of ordinary shell commands;
-- cross-device sync, accounts, billing, teams, or a plugin marketplace;
-- fine-tuning a model before a measured base-model bake-off;
-- a polished settings application before the core loop is trustworthy.
-
-## North-star sentence
-
-**Badi helps you write your own next words, everywhere Linux can support it,
-without making you surrender your flow or your trust.**
+**Help me write my own next words across the Linux apps that can support it,
+quietly, locally, and with an honest account of what Badi saw and did.**

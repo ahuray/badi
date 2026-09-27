@@ -5,6 +5,9 @@ from dataclasses import dataclass
 import math
 import unicodedata
 
+from contract import RIGHT_TO_LEFT
+from geometry import CALIBRATED
+
 
 def _number(value, minimum=-100000, maximum=100000):
     return type(value) in (int, float) and math.isfinite(value) and minimum <= value <= maximum
@@ -37,19 +40,23 @@ class CaretGeometry:
     x: float
     y: float
     line_height: float
+    field_right: float
+
+
+def ltr_text(text):
+    return not any(unicodedata.bidirectional(char) in RIGHT_TO_LEFT for char in text)
 
 
 def mapped_caret(focus):
-    """Normalize only the physically checked Chromium/Wayland convention."""
+    """Global logical caret for the observer's per-request calibrated geometry."""
     try:
         binding, geometry = focus["binding"], focus["geometry"]
-        window, monitor, raw = geometry["window"], geometry["monitor"], geometry["raw_character"]
+        window, monitor, local, field = geometry["window"], geometry["monitor"], geometry["caret"], geometry["field"]
         scale = geometry["scale"]
-        if (binding["app_id"] != "chromium" or type(binding["process_id"]) is not int or binding["process_id"] <= 0
+        if (type(binding["process_id"]) is not int or binding["process_id"] <= 0
                 or window["pid"] != binding["process_id"] or window["xwayland"] is not False
-                or geometry["coordinate_convention"] != "chromium151_wayland_window_physical"
+                or geometry["coordinate_convention"] != CALIBRATED
                 or geometry["caret_edge"] != "right"
-                or geometry["requested_space"] != "atspi_screen" or geometry["normalized"] is not False
                 or not _number(scale, .5, 4) or monitor["scale"] != scale or monitor["transform"] != 0
                 or not isinstance(monitor["name"], str) or not monitor["name"] or len(monitor["name"]) > 64
                 or type(focus["caret"]) is not int or focus["caret"] < 1
@@ -61,40 +68,44 @@ def mapped_caret(focus):
                 or not all(_number(v, 1, 32768) for v in size)
                 or not all(_number(monitor[key]) for key in ("x", "y"))
                 or not all(_number(monitor[key], 1, 32768) for key in ("width", "height"))
-                or not all(_number(raw[key], 0, 65536) for key in ("x", "y", "width", "height"))
-                or raw["height"] < 1 or raw["x"] + raw["width"] > size[0] * scale
-                or raw["y"] + raw["height"] > size[1] * scale):
+                or not all(_number(local[key]) for key in ("x", "y", "height"))
+                or not all(_number(field[key]) for key in ("x", "y", "width", "height"))
+                or not 4 <= local["height"] <= 128 or field["width"] < 0
+                or not 0 <= local["x"] <= size[0] or local["y"] < 0 or local["y"] + local["height"] > size[1]
+                or not field["x"] <= local["x"] <= field["x"] + field["width"] + 1):
             return None
         result = CaretGeometry(monitor["name"],
             (monitor["x"], monitor["y"], monitor["width"] / scale, monitor["height"] / scale),
             (at[0], at[1], size[0], size[1]),
-            at[0] + (raw["x"] + raw["width"]) / scale,
-            at[1] + raw["y"] / scale, raw["height"] / scale)
+            at[0] + local["x"], at[1] + local["y"], local["height"],
+            at[0] + min(field["x"] + field["width"], size[0]))
         mx, my, mw, mh = result.monitor
-        if not (mx <= result.x <= mx + mw and my <= result.y < my + mh and 4 <= result.line_height <= 128):
+        if not (mx <= result.x <= mx + mw and my <= result.y < my + mh):
             return None
         return result
     except (KeyError, TypeError, IndexError):
         return None
 
 
-def place_pill(caret, width, height):
-    """Return monitor-local coordinates without clipping or covering another app."""
-    if not _number(width, 1, 4096) or not _number(height, 1, 256):
+def font_pixels(caret):
+    """Match the application's text: its glyph box is about 1.16 em tall."""
+    return max(6, min(72, caret.line_height * .86))
+
+
+def place_inline(caret, width, height, baseline):
+    """Monitor-local origin for text right after the caret on its baseline.
+
+    The text must end inside the field, window and monitor; otherwise the
+    caller hides it and Fcitx shows its own candidate panel instead.
+    """
+    if not _number(width, 1, 4096) or not _number(height, 1, 256) or not _number(baseline, 1, height):
         return None
     mx, my, mw, mh = caret.monitor
     wx, wy, ww, wh = caret.window
-    left, top = max(mx, wx) + 2, max(my, wy) + 2
-    right, bottom = min(mx + mw, wx + ww) - 2, min(my + mh, wy + wh) - 2
-    if width > right - left or height > bottom - top:
-        return None
-    x, y = caret.x + 4, caret.y + (caret.line_height - height) / 2
-    if x + width > right:
-        x, y = max(left, min(caret.x, right - width)), caret.y + caret.line_height + 4
-    if y + height > bottom:
-        y = caret.y - height - 4
-    y = max(top, y)
-    if x < left or x + width > right or y + height > bottom:
+    x = caret.x + 1
+    y = caret.y + caret.line_height * baseline / height - baseline
+    if (x < max(mx, wx) or x + width > min(caret.field_right, wx + ww, mx + mw)
+            or y < max(my, wy) or y + height > min(my + mh, wy + wh)):
         return None
     return round(x - mx), round(y - my)
 
@@ -112,7 +123,7 @@ class Preview:
         gi.require_version("Gtk4LayerShell", "1.0")
         from gi.repository import Gdk, GLib, Gtk, Gtk4LayerShell, Pango
         Gtk.init()
-        if not Gtk4LayerShell.is_supported() or Gdk.Display.get_default() is None:
+        if Gdk.Display.get_default() is None or not Gtk4LayerShell.is_supported():
             raise RuntimeError("preview_wayland_unavailable")
         self.Gdk, self.GLib, self.Gtk, self.Layer = Gdk, GLib, Gtk, Gtk4LayerShell
         self.cairo, self.Pango = cairo, Pango
@@ -133,16 +144,19 @@ class Preview:
         self.label.set_xalign(0)
         self.window.set_child(self.label)
         self.css = Gtk.CssProvider()
+        # Inline ghost text: mid grey stays readable on light and dark fields.
         self.css.load_from_string("""
             window.badi-writing-preview {
-                background: rgba(39, 42, 48, 0.86);
-                border: 1px solid rgba(255, 255, 255, 0.30);
-                border-radius: 10px;
+                background: none;
+                background-color: transparent;
+                border: none;
                 box-shadow: none;
             }
             window.badi-writing-preview label {
-                color: rgba(234, 236, 240, 0.97);
-                padding: 5px 10px;
+                color: rgba(128, 128, 128, 0.85);
+                background: none;
+                padding: 0;
+                margin: 0;
                 font-weight: 400;
             }
         """)
@@ -162,6 +176,13 @@ class Preview:
         if surface is not None:
             surface.set_input_region(self.cairo.Region())
 
+    def warm(self):
+        """Load fonts and the layout path once, before any request's deadline."""
+        self.label.set_text("Badi")
+        self.window.measure(self.Gtk.Orientation.HORIZONTAL, -1)
+        self.label.get_layout().get_baseline()
+        self.label.set_text("")
+
     def hide(self):
         if self.timer is not None:
             self.GLib.source_remove(self.timer)
@@ -179,7 +200,7 @@ class Preview:
         if not valid_preview_text(text) or type(ttl_ms) is not int or not 1 <= ttl_ms <= 5000:
             return False
         caret = mapped_caret(focus)
-        if caret is None:
+        if caret is None or not ltr_text(text):
             return False
         monitors = self.Gdk.Display.get_default().get_monitors()
         matching = []
@@ -194,11 +215,12 @@ class Preview:
         self.Layer.set_monitor(self.window, matching[0])
         self.label.set_text(text)
         attributes = self.Pango.AttrList()
-        attributes.insert(self.Pango.attr_size_new_absolute(round(max(12, min(20, caret.line_height * .85)) * self.Pango.SCALE)))
+        attributes.insert(self.Pango.attr_size_new_absolute(round(font_pixels(caret) * self.Pango.SCALE)))
         self.label.set_attributes(attributes)
         width = self.window.measure(self.Gtk.Orientation.HORIZONTAL, -1).natural
         height = self.window.measure(self.Gtk.Orientation.VERTICAL, width).natural
-        position = place_pill(caret, width, height)
+        baseline = self.label.get_layout().get_baseline() / self.Pango.SCALE
+        position = place_inline(caret, width, height, baseline)
         if position is None:
             self.label.set_text("")
             return False

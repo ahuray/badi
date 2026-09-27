@@ -6,7 +6,6 @@ Scope {
   id: root
 
   property var cliPrefix: ["badictl"]
-  property var mutationPrefix: cliPrefix
 
   property var overview: ({})
   property string message: ""
@@ -30,13 +29,10 @@ Scope {
 
   readonly property var broker: objectValue(overview, "broker")
   readonly property var settings: objectValue(overview, "settings")
-  readonly property var privacy: objectValue(overview, "privacy")
 
   readonly property bool brokerReachable: boolValue(broker, "reachable", false)
   readonly property bool brokerPaused: boolValue(broker, "paused", true)
-  readonly property bool brokerPausedReported: hasBoolean(broker, "paused")
   readonly property double brokerSettingsRevision: integerValue(broker, "settings_revision", -1)
-  readonly property double authorityEpoch: integerValue(broker, "authority_epoch", -1)
   readonly property bool controlPlaneDegraded: boolValue(
     broker, "control_plane_degraded", true)
   readonly property bool controlPlaneDegradedReported: hasBoolean(
@@ -56,49 +52,6 @@ Scope {
     && settingsRevision >= 0
     && !mutating
 
-  readonly property bool memoryStoreAvailable: boolValue(
-    privacy, "memory_store_available", false)
-  readonly property bool memoryStoreAvailableReported: hasBoolean(
-    privacy, "memory_store_available")
-  readonly property string memoryIntegrity: stringValue(
-    privacy, "memory_integrity", "unknown")
-  readonly property bool memoryCommandAvailable: boolValue(
-    privacy, "memory_command_available", false)
-  readonly property bool memoryCommandAvailableReported: hasBoolean(
-    privacy, "memory_command_available")
-  readonly property double memoryRecords: integerValue(privacy, "memory_records", -1)
-  readonly property double memoryBytes: integerValue(privacy, "memory_bytes", -1)
-
-  // Aggregate corruption must never remove the primary revoke control. Grants
-  // stay gated on a healthy store because they can reinterpret retained state.
-  readonly property bool canRevokeSubjects: canMutateSettings
-  readonly property bool canGrantSubjects: canMutateSettings
-    && memoryStoreAvailableReported
-    && memoryStoreAvailable
-
-  readonly property int targetSubjectIndex: settingsDocumentValid
-    ? findTargetSubject(settings.subjects) : -1
-  readonly property var targetSubject: targetSubjectIndex >= 0
-    ? settings.subjects[targetSubjectIndex] : ({})
-  readonly property var targetPermissions: objectValue(targetSubject, "permissions")
-  readonly property bool targetBundleAllowed: targetSubjectIndex >= 0
-    && targetPermissions.context_read === "allow"
-    && targetPermissions.display === "allow"
-    && targetPermissions.suggest === "allow"
-  readonly property bool targetAnyAuthority: targetSubjectIndex >= 0
-    && (targetPermissions.context_read === "allow"
-      || targetPermissions.display === "allow"
-      || targetPermissions.suggest === "allow"
-      || targetPermissions.learn === "allow"
-      || isBoundedRetention(targetPermissions.retention))
-  readonly property bool targetCapacityReached: settingsDocumentValid
-    && targetSubjectIndex < 0
-    && settings.subjects.length >= 64
-  readonly property bool targetLearningAllowed: targetSubjectIndex >= 0
-    && targetPermissions.learn === "allow"
-
-  signal refreshed()
-
   function isObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value)
   }
@@ -113,11 +66,6 @@ Scope {
 
   function boolValue(parent, key, fallback) {
     return hasBoolean(parent, key) ? parent[key] : fallback
-  }
-
-  function stringValue(parent, key, fallback) {
-    return isObject(parent) && typeof parent[key] === "string" && parent[key].length > 0
-      ? parent[key] : fallback
   }
 
   function integerValue(parent, key, fallback) {
@@ -147,10 +95,6 @@ Scope {
       && Number.isSafeInteger(value.days)
       && value.days >= 1
       && value.days <= 90
-  }
-
-  function isBoundedRetention(value) {
-    return isRetention(value) && value.mode === "bounded"
   }
 
   function isBrowserIdentity(value) {
@@ -221,7 +165,13 @@ Scope {
   }
 
   function isSettingsDocument(value) {
-    if (!hasExactKeys(value, ["schema", "revision", "paused", "subjects"])
+    // `badi site all on` adds all_web_origins; producers omit it when false.
+    // Panel writes clone the document, so they carry it through unchanged.
+    var keys = ["schema", "revision", "paused", "subjects"]
+    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "all_web_origins"))
+      keys.push("all_web_origins")
+    if (!hasExactKeys(value, keys)
+        || (keys.length === 5 && typeof value.all_web_origins !== "boolean")
         || value.schema !== "badi.settings.v2"
         || !Number.isSafeInteger(value.revision)
         || value.revision < 0
@@ -235,22 +185,6 @@ Scope {
           value.subjects[index].identity) >= 0) return false
     }
     return true
-  }
-
-  function isTargetIdentity(identity) {
-    return isBrowserIdentity(identity)
-      && identity.scheme === "https"
-      && identity.host === "dillinger.io"
-      && identity.port === 443
-  }
-
-  function findTargetSubject(subjects) {
-    if (!Array.isArray(subjects)) return -1
-    for (var index = 0; index < subjects.length; index += 1) {
-      if (isSubject(subjects[index]) && isTargetIdentity(subjects[index].identity))
-        return index
-    }
-    return -1
   }
 
   function cloneSettings() {
@@ -322,87 +256,11 @@ Scope {
     message = ""
     mutationTimedOut = false
     mutationGeneration = lifecycleGeneration
-    mutationProcess.exec(mutationPrefix.concat([
+    mutationProcess.exec(cliPrefix.concat([
       "settings", "replace",
       "--if-revision", String(settingsRevision),
       "--json", JSON.stringify(document)
     ]))
-  }
-
-  function blockTarget() {
-    if (!canRevokeSubjects) {
-      messageTone = "danger"
-      message = "Refresh a coherent settings document before blocking Dillinger."
-      return
-    }
-    var document = cloneSettings()
-    var index = document === null ? -1 : findTargetSubject(document.subjects)
-    if (index < 0 || !targetAnyAuthority) return
-    document.subjects[index].permissions = {
-      "suggest": "block",
-      "display": "block",
-      "context_read": "block",
-      "learn": "block",
-      "retention": { "mode": "none" }
-    }
-    replaceSettings(document, "https://dillinger.io is durably blocked.")
-  }
-
-  function allowTarget() {
-    if (!canGrantSubjects) {
-      messageTone = "danger"
-      message = "Clear or repair Memory before granting Dillinger authority."
-      return
-    }
-    var document = cloneSettings()
-    if (document === null) return
-    var index = findTargetSubject(document.subjects)
-    if (index < 0) {
-      if (document.subjects.length >= 64) {
-        messageTone = "warning"
-        message = "The 64-subject settings limit is reached."
-        return
-      }
-      document.subjects.push({
-        "identity": {
-          "kind": "browser_origin",
-          "adapter": "chromium",
-          "scheme": "https",
-          "host": "dillinger.io",
-          "port": 443
-        },
-        "permissions": {
-          "suggest": "block",
-          "display": "block",
-          "context_read": "block",
-          "learn": "block",
-          "retention": { "mode": "none" }
-        }
-      })
-      document.subjects.sort(function(left, right) {
-        return compareIdentities(left.identity, right.identity)
-      })
-      index = findTargetSubject(document.subjects)
-    }
-    document.subjects[index].permissions.context_read = "allow"
-    document.subjects[index].permissions.display = "allow"
-    document.subjects[index].permissions.suggest = "allow"
-    replaceSettings(document, "The Dillinger suggestion bundle is allowed.")
-  }
-
-  function clearMemory() {
-    if (!active || disposed || mutating || !brokerReachable || !memoryCommandAvailableReported
-        || !memoryCommandAvailable) {
-      messageTone = "danger"
-      message = "The broker's explicit Memory clear command is unavailable."
-      return
-    }
-    invalidateOverview()
-    pendingSuccessMessage = "Text-free outcome aggregates were cleared."
-    message = ""
-    mutationTimedOut = false
-    mutationGeneration = lifecycleGeneration
-    mutationProcess.exec(mutationPrefix.concat(["memory", "clear"]))
   }
 
   function deactivate() {
@@ -526,7 +384,6 @@ Scope {
         root.messageTone = "danger"
         root.message = "Reading Badi status exceeded five seconds."
         root.preserveMessageOnRefresh = false
-        root.refreshed()
         root.scheduleQueuedRefresh()
         return
       }
@@ -537,7 +394,6 @@ Scope {
           overviewStderr.text,
           "Could not read Badi status. Is the broker running?")
         root.preserveMessageOnRefresh = false
-        root.refreshed()
         root.scheduleQueuedRefresh()
         return
       }
@@ -553,7 +409,6 @@ Scope {
         root.message = "badictl returned invalid badi.overview.v2 data."
       }
       root.preserveMessageOnRefresh = false
-      root.refreshed()
       root.scheduleQueuedRefresh()
     }
   }

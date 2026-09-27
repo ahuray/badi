@@ -43,27 +43,24 @@ class WritingView {
     // Obsidian prevents Escape before its bundled CodeMirror dispatches even
     // event observers. Observe this editor's DOM without consuming the event.
     view.contentDOM.addEventListener('keydown', this.observeEscape, { passive: true });
-    this.reconnect();
+    // An editor opened while the shared client is ready gets no 'ready' event.
+    owner.connect();
+    queueMicrotask(() => this.scheduleAutomatic());
   }
 
-  reconnect() {
-    if (this.client) { this.invalidate(); this.client.close(); }
-    this.client = new RecoveringBrokerClient('obsidian', { textReplacement: true });
-    this.client.on('state', state => {
-      if (this.view.hasFocus) this.owner.status.setText(`Badi · ${state.replaceAll('_', ' ')}`);
-      if (state === 'offline' || state === 'offline_retry') this.invalidate();
-      if (state === 'ready') queueMicrotask(() => {
-        if (this.eligible() && !this.pending && !this.text) {
-          clearTimeout(this.timer);
-          this.timer = setTimeout(() => void this.request(false), 250);
-        }
-      });
-    });
-    this.client.on('clear', () => this.clearPreview());
-    const client = this.client;
-    void client.connect().catch(() => {
-      if (!this.destroyed && this.client === client) this.owner.status.setText('Badi · offline · run badi doctor');
-    });
+  // Every editor shares the plugin's one broker connection.
+  get client() { return this.owner.client; }
+
+  clientState(state) {
+    if (state === 'offline' || state === 'offline_retry') this.invalidate();
+    if (state === 'ready') queueMicrotask(() => this.scheduleAutomatic());
+  }
+
+  scheduleAutomatic() {
+    if (this.eligible() && !this.pending && !this.text) {
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => void this.request(false), 250);
+    }
   }
 
   clearPreview() {
@@ -88,7 +85,9 @@ class WritingView {
     this.pending = false;
     this.snapshot = null;
     this.clearPreview();
-    this.client.cancel();
+    // The client holds one session at a time; only the editor that opened it
+    // may cancel it, so an edit elsewhere never withdraws this one's preview.
+    if (this.owner.session === this) this.client.cancel();
   }
 
   blockedReason() {
@@ -133,6 +132,7 @@ class WritingView {
     const before = [...snapshot.doc.sliceString(Math.max(0, end - 1024), end)].slice(-512).join('');
     if (!before.trim()) return;
     this.pending = true;
+    this.owner.session = this;
     const generation = this.generation;
     try {
       const language = writingLanguage(before, this.owner.language === 'auto' ? navigator.language : this.owner.language);
@@ -216,7 +216,7 @@ class WritingView {
     this.destroyed = true;
     this.view.contentDOM.removeEventListener('keydown', this.observeEscape);
     this.invalidate();
-    this.client.close();
+    if (this.owner.session === this) this.owner.session = null;
     this.owner.views.delete(this.view);
   }
 }
@@ -224,6 +224,37 @@ class WritingView {
 export default class BadiPlugin extends Plugin {
   views = new Map();
   language = 'auto';
+  client = null;
+  // The editor whose request opened the client's current session.
+  session = null;
+
+  createClient() {
+    const client = new RecoveringBrokerClient('obsidian', { textReplacement: true });
+    client.on('state', state => {
+      if (this.client !== client) return;
+      if ([...this.views.keys()].some(view => view.hasFocus)) this.status.setText(`Badi · ${state.replaceAll('_', ' ')}`);
+      for (const controller of this.views.values()) controller.clientState(state);
+    });
+    // A cancelled session withdraws whichever preview it produced.
+    client.on('clear', () => { if (this.client === client) for (const controller of this.views.values()) controller.clearPreview(); });
+    return client;
+  }
+
+  connect() {
+    const client = this.client;
+    void client.connect().catch(() => {
+      if (this.client === client && this.views.size) this.status.setText('Badi · offline · run badi doctor');
+    });
+  }
+
+  reconnect() {
+    for (const controller of this.views.values()) controller.invalidate();
+    this.client.close();
+    this.session = null;
+    this.client = this.createClient();
+    this.connect();
+  }
+
   async onload() {
     let saved;
     try { saved = await this.loadData(); }
@@ -231,6 +262,7 @@ export default class BadiPlugin extends Plugin {
     if (['auto', 'en', 'de', 'fa'].includes(saved?.language)) this.language = saved.language;
     this.status = this.addStatusBarItem();
     this.status.setText('Badi · starting');
+    this.client = this.createClient();
     const owner = this;
     this.registerEditorExtension(Prec.highest(ViewPlugin.fromClass(class extends WritingView {
       constructor(view) { super(view, owner); }
@@ -244,9 +276,7 @@ export default class BadiPlugin extends Plugin {
       if (!controller?.eligible()) { new Notice('Badi: enable Obsidian with badi app obsidian on, then place the caret at the end of the note.'); return; }
       if (controller.text) void controller.accept(); else void controller.request();
     } });
-    this.addCommand({ id: 'retry-connection', name: 'Reconnect local model', callback: () => {
-      for (const controller of this.views.values()) controller.reconnect();
-    } });
+    this.addCommand({ id: 'retry-connection', name: 'Reconnect local model', callback: () => this.reconnect() });
     for (const [language, label] of [['auto', 'the application language'], ['en', 'English'], ['de', 'German'], ['fa', 'Persian']]) {
       this.addCommand({ id: `language-${language}`, name: `Use ${label} for suggestions`, callback: async () => {
         try {
@@ -258,5 +288,8 @@ export default class BadiPlugin extends Plugin {
       } });
     }
   }
-  onunload() { for (const controller of this.views.values()) controller.destroy(); }
+  onunload() {
+    for (const controller of this.views.values()) controller.destroy();
+    this.client?.close();
+  }
 }

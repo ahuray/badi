@@ -36,26 +36,34 @@ bool privateOwned(int fd, bool directory) {
 
 void ActivityDebug::record(std::string_view event, std::string_view app,
                            std::string_view reason, std::size_t before) {
+    const auto checked = std::chrono::steady_clock::now();
+    if (checked < disabledUntil_) return;
+    if (!write(event, app, reason, before)) disabledUntil_ = checked + std::chrono::seconds(1);
+}
+
+// False when debugging is off; an enabled control is revalidated on every call.
+bool ActivityDebug::write(std::string_view event, std::string_view app,
+                          std::string_view reason, std::size_t before) {
     const auto *runtime = std::getenv("XDG_RUNTIME_DIR");
-    if (!runtime || runtime[0] != '/') return;
+    if (!runtime || runtime[0] != '/') return false;
     const Descriptor directory(::open((std::string(runtime) + "/badi").c_str(),
                                      O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
-    if (!privateOwned(directory.get(), true)) return;
+    if (!privateOwned(directory.get(), true)) return false;
     const Descriptor flag(::openat(directory.get(), "debug-control.json",
                                   O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
-    if (!privateOwned(flag.get(), false)) return;
+    if (!privateOwned(flag.get(), false)) return false;
     std::array<char, 513> buffer {};
     const auto size = ::read(flag.get(), buffer.data(), buffer.size());
-    if (size <= 0 || size > 512) return;
+    if (size <= 0 || size > 512) return false;
     const auto control = nlohmann::json::parse(buffer.data(), buffer.data() + size,
                                               nullptr, false);
     if (!control.is_object() || !control.contains("expires_at") ||
         !control["expires_at"].is_number_integer() || !control.contains("id") ||
-        !control["id"].is_string()) return;
+        !control["id"].is_string()) return false;
     const auto now = std::time(nullptr);
     const auto expiry = control["expires_at"].get<std::int64_t>();
     const auto id = control["id"].get<std::string>();
-    if (expiry <= now || expiry > now + 900 || !validSessionId(id)) return;
+    if (expiry <= now || expiry > now + 900 || !validSessionId(id)) return false;
     if (runId_ != id) {
         counts_.clear();
         reasons_.clear();
@@ -72,12 +80,13 @@ void ActivityDebug::record(std::string_view event, std::string_view app,
     const auto temporary = "debug-native." + std::to_string(::getpid()) + ".tmp";
     const Descriptor output(::openat(directory.get(), temporary.c_str(),
         O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
-    if (output.get() < 0) return;
+    if (output.get() < 0) return true;
     const auto written = ::write(output.get(), snapshot.data(), snapshot.size());
     if (written == static_cast<ssize_t>(snapshot.size())) {
         ::renameat(directory.get(), temporary.c_str(), directory.get(), "debug-native.json");
     }
     ::unlinkat(directory.get(), temporary.c_str(), 0);
+    return true;
 }
 
 } // namespace badi::fcitx5

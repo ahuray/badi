@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::protocol::{MAX_SAFE_COUNTER, ProviderKind};
 use crate::settings::{
-    PermissionDecision, PrivateStorageError, RetentionPermission, SettingsV1,
+    PermissionDecision, PrivateStorageError, RetentionPermission, SettingsV2,
     SettingsValidationError, StableIdentity, atomic_write_private, ensure_private_directory,
     read_private_limited, remove_private_file,
 };
@@ -166,7 +166,7 @@ impl PersonalizationV1 {
         Ok(())
     }
 
-    fn reconcile(&mut self, settings: &SettingsV1, today: u64) {
+    fn reconcile(&mut self, settings: &SettingsV2, today: u64) {
         self.records.retain(|record| {
             if record.day > today {
                 return false;
@@ -180,7 +180,7 @@ impl PersonalizationV1 {
         });
     }
 
-    fn durable_projection(&self, settings: &SettingsV1, today: u64, durable_revision: u64) -> Self {
+    fn durable_projection(&self, settings: &SettingsV2, today: u64, durable_revision: u64) -> Self {
         let mut projected = self.clone();
         projected.revision = durable_revision;
         projected
@@ -216,7 +216,7 @@ impl PersonalizationV1 {
         self.records[index].record(signal)
     }
 
-    fn enforce_record_limit(&mut self, settings: &SettingsV1, today: u64) {
+    fn enforce_record_limit(&mut self, settings: &SettingsV2, today: u64) {
         while self.records.len() > MAX_PERSONALIZATION_RECORDS {
             // Ephemeral records may consume only spare in-memory capacity. They
             // must never evict or rewrite another subject's durable history.
@@ -244,7 +244,7 @@ impl PersonalizationV1 {
     }
 }
 
-fn record_is_durable(record: &DailyAggregate, settings: &SettingsV1, today: u64) -> bool {
+fn record_is_durable(record: &DailyAggregate, settings: &SettingsV2, today: u64) -> bool {
     let resolution = settings.resolve_identity_validated(&record.identity);
     let RetentionPermission::Bounded { days } = resolution.permissions.retention else {
         return false;
@@ -282,7 +282,7 @@ struct PersonalizationStoreState {
 impl PersonalizationStore {
     pub(crate) fn open(
         path: impl Into<PathBuf>,
-        settings: &SettingsV1,
+        settings: &SettingsV2,
         today: u64,
     ) -> Result<Self, PersonalizationStoreError> {
         settings.validate()?;
@@ -331,7 +331,7 @@ impl PersonalizationStore {
     pub(crate) fn record(
         &self,
         expected_revision: u64,
-        settings: &SettingsV1,
+        settings: &SettingsV2,
         today: u64,
         event_day: u64,
         identity: StableIdentity,
@@ -402,7 +402,7 @@ impl PersonalizationStore {
     pub(crate) fn reconcile(
         &self,
         expected_revision: u64,
-        settings: &SettingsV1,
+        settings: &SettingsV2,
         today: u64,
     ) -> Result<PersonalizationMutation, PersonalizationStoreError> {
         settings.validate()?;
@@ -448,7 +448,7 @@ impl PersonalizationStore {
     pub(crate) fn clear(
         &self,
         expected_revision: u64,
-        settings: &SettingsV1,
+        settings: &SettingsV2,
         today: u64,
     ) -> Result<PersonalizationMutation, PersonalizationStoreError> {
         settings.validate()?;
@@ -538,7 +538,7 @@ fn encode_personalization(state: &PersonalizationV1) -> Result<Vec<u8>, Personal
 fn persist_or_remove(
     path: &Path,
     state: &PersonalizationV1,
-    settings: &SettingsV1,
+    settings: &SettingsV2,
     today: u64,
     durable_revision: u64,
 ) -> Result<(), PersonalizationStoreError> {
@@ -607,7 +607,7 @@ mod tests {
     use crate::protocol::MAX_SAFE_COUNTER;
     use crate::settings::{
         BrowserAdapter, LinuxAdapter, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA,
-        SettingsV1, StableIdentity, SubjectPermissions, SubjectRule, WebScheme,
+        SettingsV2, StableIdentity, SubjectPermissions, SubjectRule, WebScheme,
     };
 
     fn identity(host: &str) -> StableIdentity {
@@ -615,11 +615,12 @@ mod tests {
             .expect("identity")
     }
 
-    fn settings(retention: RetentionPermission) -> SettingsV1 {
-        SettingsV1 {
+    fn settings(retention: RetentionPermission) -> SettingsV2 {
+        SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 1,
             paused: false,
+            all_web_origins: false,
             subjects: vec![SubjectRule {
                 identity: identity("example.com"),
                 permissions: SubjectPermissions {
@@ -1010,11 +1011,11 @@ mod tests {
             },
         });
         subjects.sort_by(|left, right| left.identity.cmp(&right.identity));
-        let mixed = SettingsV1 {
-            schema: SETTINGS_SCHEMA.to_owned(),
+        let mixed = SettingsV2 {
             revision: 1,
             paused: false,
             subjects,
+            ..SettingsV2::deny_by_default()
         };
         mixed.validate().expect("mixed settings");
 

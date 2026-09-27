@@ -1,28 +1,29 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
 const repository = path.resolve(import.meta.dirname, "..");
-const skippedDirectories = new Set([
-  ".git",
-  "coverage",
-  "dist",
-  "node_modules",
-  "target",
-]);
 
-async function markdownFiles(directory) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const nested = await Promise.all(
-    entries.map(async (entry) => {
-      const absolute = path.join(directory, entry.name);
-      if (entry.isDirectory() && !skippedDirectories.has(entry.name)) {
-        return markdownFiles(absolute);
-      }
-      return entry.isFile() && entry.name.endsWith(".md") ? [absolute] : [];
-    }),
-  );
-  return nested.flat();
+// Check exactly what a clean checkout contains: tracked files plus untracked
+// files that are not ignored. Links into ignored paths pass locally but break CI.
+const checkoutFiles = new Set(
+  execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+    cwd: repository,
+    encoding: "utf8",
+  })
+    .split("\0")
+    .filter(Boolean)
+    .map((file) => path.join(repository, file))
+    .filter((file) => existsSync(file)),
+);
+const checkoutDirectories = new Set();
+for (const file of checkoutFiles) {
+  for (let directory = path.dirname(file); directory.startsWith(repository); directory = path.dirname(directory)) {
+    if (checkoutDirectories.has(directory)) break;
+    checkoutDirectories.add(directory);
+  }
 }
 
 function linkTargets(markdown) {
@@ -74,16 +75,8 @@ function localTarget(source, rawTarget) {
   };
 }
 
-async function exists(target) {
-  try {
-    await stat(target);
-    return true;
-  } catch (error) {
-    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
-      return false;
-    }
-    throw error;
-  }
+function exists(target) {
+  return checkoutFiles.has(target) || checkoutDirectories.has(target);
 }
 
 function lineCount(value) {
@@ -142,7 +135,7 @@ async function fragmentExists(target, fragment) {
 
 const failures = [];
 let checked = 0;
-for (const file of await markdownFiles(repository)) {
+for (const file of [...checkoutFiles].filter((file) => file.endsWith(".md"))) {
   const markdown = await readFile(file, "utf8");
   for (const rawTarget of linkTargets(markdown)) {
     const target = localTarget(file, rawTarget);
@@ -151,7 +144,7 @@ for (const file of await markdownFiles(repository)) {
     }
     checked += 1;
     if (
-      !(await exists(target.absolute)) ||
+      !exists(target.absolute) ||
       !(await fragmentExists(target.absolute, target.fragment))
     ) {
       failures.push(

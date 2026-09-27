@@ -9,6 +9,7 @@ find_package(nlohmann_json 3.11 REQUIRED)
 add_library(badi-fcitx5-core STATIC
     src/accessibility.cpp
     src/debug.cpp
+    src/observation.cpp
     src/sanitizer.cpp
     src/state.cpp
     src/transport.cpp
@@ -42,6 +43,11 @@ if(BUILD_TESTING)
     target_link_libraries(badi-fcitx5-accessibility-tests PRIVATE badi-fcitx5-core)
     target_compile_options(badi-fcitx5-accessibility-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME badi-fcitx5-accessibility-tests COMMAND badi-fcitx5-accessibility-tests)
+    add_executable(badi-fcitx5-policy-tests tests/policy.cpp)
+    target_compile_features(badi-fcitx5-policy-tests PRIVATE cxx_std_20)
+    target_link_libraries(badi-fcitx5-policy-tests PRIVATE badi-fcitx5-core)
+    target_compile_options(badi-fcitx5-policy-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME badi-fcitx5-policy-tests COMMAND badi-fcitx5-policy-tests)
     add_executable(badi-fcitx5-debug-tests tests/debug.cpp)
     target_compile_features(badi-fcitx5-debug-tests PRIVATE cxx_std_20)
     target_link_libraries(badi-fcitx5-debug-tests PRIVATE badi-fcitx5-core)
@@ -53,6 +59,10 @@ if(BUILD_TESTING)
     target_compile_options(badi-fcitx5-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME badi-fcitx5-tests COMMAND badi-fcitx5-tests
         "${CMAKE_CURRENT_SOURCE_DIR}/../../protocol/orthographic-joiner-fixtures.json")
+
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME badi-fcitx5-observer-identities
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/observer-identities.py")
 
     add_executable(badi-fcitx5-broker-smoke tests/broker-smoke.cpp)
     target_compile_features(badi-fcitx5-broker-smoke PRIVATE cxx_std_20)

@@ -1,0 +1,29 @@
+diff --git a/src/frontend/waylandim/waylandimserverv2.cpp b/src/frontend/waylandim/waylandimserverv2.cpp
+index ec95670c24062c39158ed54898b700a7b2e0842a..6db58abf5df996da41a3de3cf56d5312dadcd6f9 100644
+--- a/src/frontend/waylandim/waylandimserverv2.cpp
++++ b/src/frontend/waylandim/waylandimserverv2.cpp
+@@ -243,6 +243,24 @@ WaylandIMInputContextV2::WaylandIMInputContextV2(
+                 updateSurroundingTextWrapper();
+             }
+         }
++        // force some update in response to done.
++        // Some zwp_input_method_v2 implementation wants to synchronize the
++        // text_input_v3 commit/done with the zwp_input_method_v2 commit/done.
++        // So we need to do some no-op commit to trigger the done. This is a
++        // workaround for those implementation.
++        // Backport of upstream 1e00551899f9 (#1690, 5.1.23). The linked 5.1.22
++        // core lacks InputContext::updatePreedit(bool), so deliver the same
++        // unconditional UpdatePreeditEvent through public API.
++        if (realFocus()) {
++            if (auto *focusedIC = delegatedInputContext();
++                focusedIC &&
++                focusedIC->capabilityFlags().test(CapabilityFlag::Preedit)) {
++                UpdatePreeditEvent event(focusedIC);
++                if (!server_->instance()->postEvent(event)) {
++                    updatePreeditDelegate(focusedIC);
++                }
++            }
++        }
+     });
+     ic_->contentType().connect([this](uint32_t hint, uint32_t purpose) {
+         WAYLANDIM_DEBUG() << "contentTypeCallback:" << hint << purpose;

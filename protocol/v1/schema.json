@@ -323,7 +323,7 @@
       "additionalProperties": false,
       "required": ["scheme", "host"],
       "properties": {
-        "scheme": { "enum": ["http", "https", "chrome-extension", "moz-extension", "file"] },
+        "scheme": { "enum": ["http", "https", "file"] },
         "host": { "type": "string", "minLength": 1, "maxLength": 253 },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
       }

@@ -9,7 +9,7 @@ use crate::personalization::{
 };
 use crate::settings::{
     PermissionDecision, PrivateStorage, PrivateStorageError, RetentionPermission, SettingsStore,
-    SettingsStoreError, SettingsV1, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule,
+    SettingsStoreError, SettingsV2, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule,
     read_private_limited, remove_private_file, remove_private_temporary_files,
 };
 
@@ -17,7 +17,7 @@ const SECONDS_PER_DAY: u64 = 86_400;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ControlPlaneSnapshot {
-    pub settings: SettingsV1,
+    pub settings: SettingsV2,
     pub personalization: PersonalizationV1,
     pub persisted_personalization_bytes: usize,
     pub personalization_store_available: bool,
@@ -34,7 +34,7 @@ pub struct ControlPlane {
 #[derive(Debug)]
 struct ControlPlaneState {
     settings_store: SettingsStore,
-    settings: SettingsV1,
+    settings: SettingsV2,
     personalization: Option<PersonalizationStore>,
 }
 
@@ -128,8 +128,8 @@ impl ControlPlane {
     pub fn replace_settings(
         &self,
         expected_revision: u64,
-        next: SettingsV1,
-    ) -> Result<SettingsV1, ControlPlaneError> {
+        next: SettingsV2,
+    ) -> Result<SettingsV2, ControlPlaneError> {
         let today = unix_day_now()?;
         let mut state = self.lock_state()?;
 
@@ -356,7 +356,7 @@ impl ControlPlane {
     }
 }
 
-fn strictly_reduces_authority(current: &SettingsV1, next: &SettingsV1) -> bool {
+fn strictly_reduces_authority(current: &SettingsV2, next: &SettingsV2) -> bool {
     // `paused` participates in the durable order separately from subject
     // permissions. This rejects latent grants hidden underneath a pause and
     // rejects unpausing even when every currently listed subject is blocked.
@@ -364,37 +364,32 @@ fn strictly_reduces_authority(current: &SettingsV1, next: &SettingsV1) -> bool {
     if current.paused && !next.paused {
         return false;
     }
+    // The all-web default is authority over every unlisted http(s) origin.
+    match (current.all_web_origins, next.all_web_origins) {
+        (false, true) => return false,
+        (true, false) => reduced = true,
+        _ => {}
+    }
 
-    for current_rule in &current.subjects {
-        let next_permissions = next
-            .subjects
-            .binary_search_by(|rule| rule.identity.cmp(&current_rule.identity))
-            .ok()
-            .map_or_else(SubjectPermissions::deny_all, |index| {
-                next.subjects[index].permissions
-            });
-        let Some(rule_reduced) =
-            permissions_do_not_increase(current_rule.permissions, next_permissions)
-        else {
+    // Compare effective permissions: an unlisted identity has its document's
+    // default, deny or the all-web default for an origin. Removing an explicit
+    // origin block under the all-web default is therefore a grant. An explicit
+    // tombstone equal to the default is authority-equivalent; any increase
+    // invalidates the complete transition, even if another subject is revoked
+    // in the same document.
+    for identity in current
+        .subjects
+        .iter()
+        .chain(&next.subjects)
+        .map(|rule| &rule.identity)
+    {
+        let Some(rule_reduced) = permissions_do_not_increase(
+            current.resolve_identity_validated(identity).permissions,
+            next.resolve_identity_validated(identity).permissions,
+        ) else {
             return false;
         };
         reduced |= rule_reduced;
-    }
-
-    // A newly listed subject starts from the effective deny-by-default rule.
-    // An explicit all-deny tombstone is authority-equivalent; any allowed bit
-    // or bounded retention would be an increase and invalidates the complete
-    // transition, even if another subject is revoked in the same document.
-    for next_rule in &next.subjects {
-        if current
-            .subjects
-            .binary_search_by(|rule| rule.identity.cmp(&next_rule.identity))
-            .is_err()
-            && permissions_do_not_increase(SubjectPermissions::deny_all(), next_rule.permissions)
-                .is_none()
-        {
-            return false;
-        }
     }
 
     reduced
@@ -435,7 +430,7 @@ fn permissions_do_not_increase(
     Some(reduced || retention_reduced)
 }
 
-fn personalization_privacy_floor(current: &SettingsV1, next: &SettingsV1) -> SettingsV1 {
+fn personalization_privacy_floor(current: &SettingsV2, next: &SettingsV2) -> SettingsV2 {
     let mut subjects = Vec::new();
     for current_rule in &current.subjects {
         let Ok(index) = next
@@ -479,10 +474,11 @@ fn personalization_privacy_floor(current: &SettingsV1, next: &SettingsV1) -> Set
             },
         });
     }
-    SettingsV1 {
+    SettingsV2 {
         schema: crate::settings::SETTINGS_SCHEMA.to_owned(),
         revision: current.revision,
         paused: current.paused || next.paused,
+        all_web_origins: false,
         subjects,
     }
 }
@@ -565,8 +561,8 @@ mod tests {
     use super::{ControlPlane, ControlPlaneError, strictly_reduces_authority, unix_day};
     use crate::personalization::{PersonalizationProvider, PersonalizationSignal};
     use crate::settings::{
-        BrowserAdapter, PermissionDecision, PrivateStorage, PrivateStorageError,
-        RetentionPermission, SETTINGS_SCHEMA, SettingsStoreError, SettingsV1,
+        ALL_WEB_ORIGINS_PERMISSIONS, BrowserAdapter, PermissionDecision, PrivateStorage,
+        PrivateStorageError, RetentionPermission, SETTINGS_SCHEMA, SettingsStoreError, SettingsV2,
         SettingsValidationError, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule,
         WebScheme,
     };
@@ -595,11 +591,12 @@ mod tests {
         .expect("other identity")
     }
 
-    fn learning_settings(revision: u64, retention: RetentionPermission) -> SettingsV1 {
-        SettingsV1 {
+    fn learning_settings(revision: u64, retention: RetentionPermission) -> SettingsV2 {
+        SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision,
             paused: false,
+            all_web_origins: false,
             subjects: vec![SubjectRule {
                 identity: identity(),
                 permissions: SubjectPermissions {
@@ -613,7 +610,7 @@ mod tests {
         }
     }
 
-    fn granted_settings(revision: u64) -> SettingsV1 {
+    fn granted_settings(revision: u64) -> SettingsV2 {
         learning_settings(revision, RetentionPermission::Bounded { days: 30 })
     }
 
@@ -678,6 +675,55 @@ mod tests {
             },
         });
         assert!(!strictly_reduces_authority(&current, &mixed));
+
+        // `badi site all off` stays possible while the memory store is
+        // unavailable; turning the all-web default on never is, not even
+        // together with a pause or a revoke.
+        let mut all_web = current.clone();
+        all_web.all_web_origins = true;
+        let mut all_web_off = all_web.clone();
+        all_web_off.revision = 8;
+        all_web_off.all_web_origins = false;
+        assert!(strictly_reduces_authority(&all_web, &all_web_off));
+        for mut grant in [paused.clone(), blocked.clone(), no_op.clone()] {
+            grant.all_web_origins = true;
+            assert!(!strictly_reduces_authority(&current, &grant));
+        }
+
+        // Under the all-web default an unlisted origin is allowed, so an
+        // explicit origin block is a reduction, removing it is a grant, and a
+        // tombstone equal to the default is a no-op.
+        let block_other = SubjectRule {
+            identity: other_identity(),
+            permissions: SubjectPermissions::deny_all(),
+        };
+        let mut blocked_other = all_web.clone();
+        blocked_other.revision = 8;
+        blocked_other.subjects.push(block_other);
+        assert!(strictly_reduces_authority(&all_web, &blocked_other));
+        let mut unblocked_other = blocked_other.clone();
+        unblocked_other.revision = 9;
+        unblocked_other.subjects.pop();
+        assert!(!strictly_reduces_authority(
+            &blocked_other,
+            &unblocked_other
+        ));
+        let mut revoke_and_unblock = unblocked_other.clone();
+        revoke_and_unblock.subjects[0].permissions = SubjectPermissions::deny_all();
+        assert!(!strictly_reduces_authority(
+            &blocked_other,
+            &revoke_and_unblock
+        ));
+        let mut default_tombstone = all_web.clone();
+        default_tombstone.revision = 8;
+        default_tombstone.subjects.push(SubjectRule {
+            identity: other_identity(),
+            permissions: ALL_WEB_ORIGINS_PERMISSIONS,
+        });
+        assert!(!strictly_reduces_authority(&all_web, &default_tombstone));
+        let mut learning_other = default_tombstone.clone();
+        learning_other.subjects[1].permissions.learn = PermissionDecision::Allow;
+        assert!(!strictly_reduces_authority(&all_web, &learning_other));
     }
 
     #[test]
@@ -686,7 +732,7 @@ mod tests {
         let storage_paths = paths(temporary.path());
         let control = ControlPlane::open(storage_paths.clone()).expect("control plane");
         let snapshot = control.snapshot().expect("snapshot");
-        assert_eq!(snapshot.settings, SettingsV1::deny_by_default());
+        assert_eq!(snapshot.settings, SettingsV2::deny_by_default());
         assert!(snapshot.personalization.records.is_empty());
         assert_eq!(snapshot.persisted_personalization_bytes, 0);
         assert!(matches!(
@@ -718,10 +764,11 @@ mod tests {
                 > 0
         );
 
-        let denied = SettingsV1 {
+        let denied = SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 2,
             paused: false,
+            all_web_origins: false,
             subjects: Vec::new(),
         };
         control
@@ -802,10 +849,11 @@ mod tests {
         let before = control.snapshot().expect("snapshot before stale CAS");
         let persisted_before =
             fs::read(storage_paths.personalization_path()).expect("persisted personalization");
-        let stale_replacement = SettingsV1 {
+        let stale_replacement = SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 100,
             paused: true,
+            all_web_origins: false,
             subjects: Vec::new(),
         };
         assert!(matches!(
@@ -869,10 +917,11 @@ mod tests {
                 }
             })
             .collect();
-        let over_capacity = SettingsV1 {
+        let over_capacity = SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 2,
             paused: true,
+            all_web_origins: false,
             subjects,
         };
         assert!(matches!(
@@ -1156,10 +1205,11 @@ mod tests {
             Err(ControlPlaneError::PersonalizationUnavailable)
         ));
 
-        let denied = SettingsV1 {
+        let denied = SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 2,
             paused: false,
+            all_web_origins: false,
             subjects: vec![SubjectRule {
                 identity: identity(),
                 permissions: SubjectPermissions::deny_all(),
@@ -1173,7 +1223,7 @@ mod tests {
         // Returning from replace_settings is the acknowledgement boundary:
         // the complete deny document and its directory entry are durable by
         // this point, while corrupt aggregate evidence remains untouched.
-        let persisted_settings: SettingsV1 = serde_json::from_slice(
+        let persisted_settings: SettingsV2 = serde_json::from_slice(
             &fs::read(storage_paths.settings_path()).expect("persisted deny settings"),
         )
         .expect("valid persisted settings");

@@ -104,6 +104,8 @@ pub struct VerifiedFile {
     path: PathBuf,
     sha256: String,
     identity: FileIdentity,
+    #[serde(skip)]
+    hashed: FilesystemIdentity,
 }
 
 impl VerifiedFile {
@@ -129,6 +131,18 @@ impl VerifiedFile {
             size: self.identity.size,
         })?;
         if current.identity != self.identity {
+            return Err(ProvenanceError::IdentityChanged);
+        }
+        Ok(())
+    }
+
+    /// Confirms the path still names the exact object whose bytes were hashed,
+    /// without reading them again. Replacement changes the inode and a write
+    /// changes the modification and change times.
+    pub fn confirm_unchanged(&self) -> Result<(), ProvenanceError> {
+        let current = metadata(&self.path, "unchanged-file metadata")?;
+        validate_regular_leaf(&current)?;
+        if filesystem_identity(&current) != self.hashed {
             return Err(ProvenanceError::IdentityChanged);
         }
         Ok(())
@@ -162,6 +176,26 @@ impl VerifiedDirectoryManifest {
         if current.directory_identity != self.directory_identity || current.entries != self.entries
         {
             return Err(ProvenanceError::IdentityChanged);
+        }
+        Ok(())
+    }
+
+    /// Like [`VerifiedFile::confirm_unchanged`] for the directory and every
+    /// entry. An added or removed entry changes the directory's own times.
+    pub fn confirm_unchanged(&self) -> Result<(), ProvenanceError> {
+        let directory = metadata(&self.path, "unchanged runtime bundle metadata")?;
+        validate_directory_leaf(&directory)?;
+        let names = directory_entry_names(&self.path)?;
+        if filesystem_identity(&directory) != self.directory_identity
+            || names.len() != self.entries.len()
+        {
+            return Err(ProvenanceError::IdentityChanged);
+        }
+        for (name, entry) in names.iter().zip(&self.entries) {
+            let current = metadata(&self.path.join(name), "unchanged runtime bundle entry")?;
+            if *name != entry.name || filesystem_identity(&current) != entry.identity {
+                return Err(ProvenanceError::IdentityChanged);
+            }
         }
         Ok(())
     }
@@ -255,6 +289,7 @@ pub fn verify_file(expectation: &FileExpectation) -> Result<VerifiedFile, Proven
         path: canonical,
         sha256: digest,
         identity: initial_identity,
+        hashed: filesystem_identity(&initial),
     })
 }
 
@@ -607,7 +642,7 @@ fn is_lower_hex(value: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {
+pub(crate) fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {
     use std::fmt::Write as _;
 
     let bytes = bytes.as_ref();
@@ -622,15 +657,17 @@ fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {
 mod tests {
     use std::error::Error;
     use std::fs;
+    use std::io::Write as _;
     use std::os::unix::fs::symlink;
     use std::path::PathBuf;
 
     use rustix::fs::{CWD, Mode, mkfifoat};
+    use sha2::Digest as _;
     use tempfile::TempDir;
 
     use super::{
-        DirectoryManifestExpectation, ProvenanceError, directory_manifest_sha256,
-        verify_directory_manifest,
+        DirectoryManifestExpectation, FileExpectation, ProvenanceError, directory_manifest_sha256,
+        verify_directory_manifest, verify_file,
     };
 
     struct TestDirectory {
@@ -766,5 +803,74 @@ mod tests {
             Err(ProvenanceError::IdentityChanged)
         ));
         Ok(())
+    }
+
+    #[test]
+    fn unchanged_confirmation_detects_replacement_growth_and_links_without_rehashing()
+    -> Result<(), Box<dyn Error>> {
+        let directory = TestDirectory::new()?;
+        let path = directory.path.join("model.gguf");
+        fs::write(&path, b"weights")?;
+        let expectation = FileExpectation::new(&path, sha256_of(b"weights"), 7)?;
+        let verified = verify_file(&expectation)?;
+        verified.confirm_unchanged()?;
+
+        let replacement = directory.path.join("replacement.gguf");
+        fs::write(&replacement, b"weights")?;
+        fs::rename(&replacement, &path)?;
+        assert!(matches!(
+            verified.confirm_unchanged(),
+            Err(ProvenanceError::IdentityChanged)
+        ));
+
+        let verified = verify_file(&expectation)?;
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)?
+            .write_all(b"!")?;
+        assert!(matches!(
+            verified.confirm_unchanged(),
+            Err(ProvenanceError::IdentityChanged)
+        ));
+
+        fs::write(&path, b"weights")?;
+        let verified = verify_file(&expectation)?;
+        let target = directory.path.join("target.gguf");
+        fs::rename(&path, &target)?;
+        symlink(&target, &path)?;
+        assert!(matches!(
+            verified.confirm_unchanged(),
+            Err(ProvenanceError::Symlink)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn unchanged_bundle_confirmation_detects_entry_replacement_and_additions()
+    -> Result<(), Box<dyn Error>> {
+        for mutation in ["replaced", "extra"] {
+            let directory = TestDirectory::new()?;
+            let artifact = directory.path.join("artifact.so");
+            fs::write(&artifact, b"reviewed")?;
+            symlink("artifact.so", directory.path.join("link.so"))?;
+            let verified = verify_directory_manifest(&directory.expectation()?)?;
+            verified.confirm_unchanged()?;
+            if mutation == "replaced" {
+                let replacement = directory.path.join("replacement.tmp");
+                fs::write(&replacement, b"reviewed")?;
+                fs::rename(&replacement, &artifact)?;
+            } else {
+                fs::write(directory.path.join("extra.so"), b"extra")?;
+            }
+            assert!(matches!(
+                verified.confirm_unchanged(),
+                Err(ProvenanceError::IdentityChanged)
+            ));
+        }
+        Ok(())
+    }
+
+    fn sha256_of(bytes: &[u8]) -> String {
+        super::encode_lower_hex(sha2::Sha256::digest(bytes))
     }
 }

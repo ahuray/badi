@@ -3,7 +3,7 @@
 set -euo pipefail
 
 artifact_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-qml_files=("$artifact_dir/BadiClient.qml" "$artifact_dir/Panel.qml" "$artifact_dir/BarWidget.qml" "$artifact_dir/BadiMark.qml" "$artifact_dir/DesktopPanel.qml")
+qml_files=("$artifact_dir/BadiClient.qml" "$artifact_dir/BarWidget.qml" "$artifact_dir/BadiMark.qml" "$artifact_dir/DesktopPanel.qml")
 compatibility="$artifact_dir/compatibility.json"
 omarchy_root=${BADI_OMARCHY_ROOT:-/usr/share/omarchy}
 require_host_checks=${BADI_OMARCHY_REQUIRE_HOST_CHECKS:-0}
@@ -15,8 +15,8 @@ require_host_checks=${BADI_OMARCHY_REQUIRE_HOST_CHECKS:-0}
 jq -e '
   .schemaVersion == 1
   and .id == "io.github.ahuray.badi"
-  and .kinds == ["panel", "bar-widget"]
-  and .entryPoints == {"panel": "Panel.qml", "barWidget": "BarWidget.qml"}
+  and .kinds == ["bar-widget"]
+  and .entryPoints == {"barWidget": "BarWidget.qml"}
 ' "$artifact_dir/manifest.json" >/dev/null
 
 jq -e '
@@ -43,7 +43,7 @@ if grep -En 'Qt\.callLater' "$artifact_dir/BadiClient.qml"; then
 fi
 
 if grep -En 'localhost|4173|fixture' "${qml_files[@]}"; then
-  echo "plugin source gate: development target leaked into the Dillinger product panel" >&2
+  echo "plugin source gate: development target leaked into the installed plugin" >&2
   exit 1
 fi
 
@@ -54,8 +54,6 @@ process_count=$(grep -Ec '^[[:space:]]*Process[[:space:]]*\{' "$artifact_dir/Bad
 }
 
 grep -F 'overviewProcess.exec(cliPrefix.concat(["overview", "--json"]))' \
-  "$artifact_dir/BadiClient.qml" >/dev/null
-grep -F 'mutationProcess.exec(mutationPrefix.concat(["memory", "clear"]))' \
   "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F '"settings", "replace",' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'overviewProcess.signal(15)' "$artifact_dir/BadiClient.qml" >/dev/null
@@ -75,27 +73,13 @@ generation_guard_count=$(grep -Ec 'exitedGeneration !== root\.lifecycleGeneratio
 }
 grep -F 'if (disposed || !active) return' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'Component.onDestruction: root.dispose()' "$artifact_dir/BadiClient.qml" >/dev/null
-grep -F 'Component.onDestruction: client.dispose()' "$artifact_dir/Panel.qml" >/dev/null
-grep -F 'client.deactivate()' "$artifact_dir/Panel.qml" >/dev/null
-grep -F 'client.activate()' "$artifact_dir/Panel.qml" >/dev/null
-grep -F 'root.shell.hide(root.pluginId)' "$artifact_dir/Panel.qml" >/dev/null
-grep -F 'readonly property bool canRevokeSubjects: canMutateSettings' \
-  "$artifact_dir/BadiClient.qml" >/dev/null
-grep -F 'readonly property bool canGrantSubjects: canMutateSettings' \
-  "$artifact_dir/BadiClient.qml" >/dev/null
-grep -F 'enabled: client.canRevokeSubjects && client.targetAnyAuthority' \
-  "$artifact_dir/Panel.qml" >/dev/null
-grep -F 'enabled: client.canGrantSubjects' "$artifact_dir/Panel.qml" >/dev/null
-grep -F 'identity.scheme === "https"' "$artifact_dir/BadiClient.qml" >/dev/null
-grep -F 'identity.host === "dillinger.io"' "$artifact_dir/BadiClient.qml" >/dev/null
-grep -F 'identity.port === 443' "$artifact_dir/BadiClient.qml" >/dev/null
+grep -F 'client.activate()' "$artifact_dir/DesktopPanel.qml" >/dev/null
+grep -F 'client.dispose()' "$artifact_dir/DesktopPanel.qml" >/dev/null
 grep -F 'value.schema !== "badi.settings.v2"' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'parsed.schema !== "badi.overview.v2"' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'value.kind === "linux_app"' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'value.adapter === "fcitx"' "$artifact_dir/BadiClient.qml" >/dev/null
-grep -F 'return isBrowserIdentity(identity)' "$artifact_dir/BadiClient.qml" >/dev/null
-grep -F 'text: "https://dillinger.io/"' "$artifact_dir/Panel.qml" >/dev/null
-grep -F 'term-ignoring-mutation)' "$artifact_dir/tests/fake-bin/badictl" >/dev/null
+grep -F 'return isBrowserIdentity(value) || isLinuxIdentity(value)' "$artifact_dir/BadiClient.qml" >/dev/null
 
 validator="$omarchy_root/bin/omarchy-plugin-validate"
 if [[ -x $validator ]]; then

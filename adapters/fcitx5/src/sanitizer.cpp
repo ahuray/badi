@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <limits>
+#include <utility>
 
 namespace badi::fcitx5 {
 namespace {
@@ -47,45 +48,75 @@ bool unicodeWhitespace(std::uint32_t value) {
            value == 0x205fU || value == 0x3000U;
 }
 
+// The scalar value starting at byte `index` and its width in bytes, or
+// nullopt for an invalid, overlong, surrogate or truncated sequence.
+std::optional<std::pair<std::uint32_t, std::size_t>> scalarAt(std::string_view value,
+                                                              std::size_t index) {
+    const auto first = static_cast<unsigned char>(value[index]);
+    std::uint32_t scalar = 0;
+    std::size_t width = 0;
+    if (first <= 0x7fU) {
+        return std::pair<std::uint32_t, std::size_t>{first, 1};
+    } else if (first >= 0xc2U && first <= 0xdfU) {
+        scalar = first & 0x1fU;
+        width = 2;
+    } else if (first >= 0xe0U && first <= 0xefU) {
+        scalar = first & 0x0fU;
+        width = 3;
+    } else if (first >= 0xf0U && first <= 0xf4U) {
+        scalar = first & 0x07U;
+        width = 4;
+    } else {
+        return std::nullopt;
+    }
+    if (index + width > value.size()) return std::nullopt;
+    for (std::size_t offset = 1; offset < width; ++offset) {
+        const auto byte = static_cast<unsigned char>(value[index + offset]);
+        if (!continuation(byte)) return std::nullopt;
+        scalar = (scalar << 6U) | (byte & 0x3fU);
+    }
+    if ((width == 3 && scalar < 0x800U) || (width == 4 && scalar < 0x10000U) ||
+        (scalar >= 0xd800U && scalar <= 0xdfffU) || scalar > 0x10ffffU) {
+        return std::nullopt;
+    }
+    return std::pair{scalar, width};
+}
+
 } // namespace
 
 std::optional<std::vector<std::uint32_t>> decodeUtf8(std::string_view value) {
     std::vector<std::uint32_t> result;
     result.reserve(value.size());
     for (std::size_t index = 0; index < value.size();) {
-        const auto first = static_cast<unsigned char>(value[index]);
-        std::uint32_t scalar = 0;
-        std::size_t width = 0;
-        if (first <= 0x7fU) {
-            scalar = first;
-            width = 1;
-        } else if (first >= 0xc2U && first <= 0xdfU) {
-            scalar = first & 0x1fU;
-            width = 2;
-        } else if (first >= 0xe0U && first <= 0xefU) {
-            scalar = first & 0x0fU;
-            width = 3;
-        } else if (first >= 0xf0U && first <= 0xf4U) {
-            scalar = first & 0x07U;
-            width = 4;
-        } else {
-            return std::nullopt;
-        }
-        if (index + width > value.size()) return std::nullopt;
-        for (std::size_t offset = 1; offset < width; ++offset) {
-            const auto byte = static_cast<unsigned char>(value[index + offset]);
-            if (!continuation(byte)) return std::nullopt;
-            scalar = (scalar << 6U) | (byte & 0x3fU);
-        }
-        if ((width == 3 && scalar < 0x800U) ||
-            (width == 4 && scalar < 0x10000U) ||
-            (scalar >= 0xd800U && scalar <= 0xdfffU) || scalar > 0x10ffffU) {
-            return std::nullopt;
-        }
-        result.push_back(scalar);
-        index += width;
+        const auto scalar = scalarAt(value, index);
+        if (!scalar) return std::nullopt;
+        result.push_back(scalar->first);
+        index += scalar->second;
     }
     return result;
+}
+
+std::optional<ScalarWindow> scalarWindow(std::string_view value, std::size_t caret,
+                                         std::size_t beforeCount, std::size_t afterCount) {
+    const auto first = caret > beforeCount ? caret - beforeCount : 0;
+    const auto last = caret + std::min(afterCount, std::numeric_limits<std::size_t>::max() - caret);
+    std::size_t firstByte = value.size();
+    std::size_t caretByte = value.size();
+    std::size_t lastByte = value.size();
+    std::size_t scalars = 0;
+    for (std::size_t index = 0; index < value.size(); ++scalars) {
+        if (scalars == first) firstByte = index;
+        if (scalars == caret) caretByte = index;
+        if (scalars == last) lastByte = index;
+        const auto scalar = scalarAt(value, index);
+        if (!scalar) return std::nullopt;
+        index += scalar->second;
+    }
+    if (caret > scalars) return std::nullopt;
+    return ScalarWindow{
+        .before = value.substr(firstByte, caretByte - firstByte),
+        .after = value.substr(caretByte, lastByte - caretByte),
+    };
 }
 
 std::optional<std::string> sanitizeSuggestion(std::string_view value) {
@@ -132,31 +163,6 @@ bool validContextText(std::string_view value) {
     return true;
 }
 
-std::optional<std::string> scalarSlice(std::string_view value,
-                                       std::size_t first,
-                                       std::size_t count) {
-    const auto scalars = decodeUtf8(value);
-    if (!scalars || first > scalars->size()) return std::nullopt;
-    const auto last = std::min(scalars->size(), first + count);
-    std::size_t scalarIndex = 0;
-    std::size_t byteIndex = 0;
-    std::size_t firstByte = value.size();
-    std::size_t lastByte = value.size();
-    while (byteIndex < value.size()) {
-        if (scalarIndex == first) firstByte = byteIndex;
-        if (scalarIndex == last) {
-            lastByte = byteIndex;
-            break;
-        }
-        const auto byte = static_cast<unsigned char>(value[byteIndex]);
-        byteIndex += byte <= 0x7fU ? 1 : byte <= 0xdfU ? 2 : byte <= 0xefU ? 3 : 4;
-        ++scalarIndex;
-    }
-    if (first == scalars->size()) firstByte = value.size();
-    if (last == scalars->size()) lastByte = value.size();
-    return std::string(value.substr(firstByte, lastByte - firstByte));
-}
-
 bool validLinuxAppId(std::string_view value) {
     if (value.empty() || value.size() > 128) {
         return false;
@@ -175,6 +181,32 @@ bool validLinuxAppId(std::string_view value) {
         segmentStart = index + 1;
     }
     return true;
+}
+
+std::optional<std::string> canonicalAppId(std::string_view program) {
+    // Toolkits report reverse-DNS or window-class names with capitals, e.g.
+    // Qt's "Telegram". Only an ASCII identifier shape is folded; titles and
+    // other display strings never become a policy identity.
+    if (program.empty() || program.size() > 128) return std::nullopt;
+    std::string result;
+    result.reserve(program.size());
+    bool segmentStart = true;
+    for (const auto character : program) {
+        const auto byte = static_cast<unsigned char>(character);
+        const bool letter = (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z');
+        if (byte == '.') {
+            if (segmentStart) return std::nullopt;
+            segmentStart = true;
+        } else if (segmentStart ? !letter
+                                : !(letter || (byte >= '0' && byte <= '9') || byte == '_' || byte == '-')) {
+            return std::nullopt;
+        } else {
+            segmentStart = false;
+        }
+        result.push_back(static_cast<char>(byte >= 'A' && byte <= 'Z' ? byte - 'A' + 'a' : byte));
+    }
+    if (segmentStart) return std::nullopt;
+    return result;
 }
 
 bool validLanguageTag(std::string_view value) {

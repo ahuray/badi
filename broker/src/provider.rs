@@ -1,8 +1,45 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+use crate::metrics::NoSuggestionReason;
 use crate::protocol::{MAX_BEFORE_CHARS, ProviderKind};
+
+/// Provider writing budget for a suggestion requested by typing, in ms.
+pub const AUTOMATIC_WRITING_BUDGET_MS: u64 = 550;
+/// Provider writing budget for an explicit request (Tab or a control
+/// request): the user asked and waits for one suggestion.
+pub const EXPLICIT_WRITING_BUDGET_MS: u64 = 1_200;
+
+/// What asked for a suggestion. Only the time budget differs; policy,
+/// binding and validation are the same for both.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RequestTrigger {
+    #[default]
+    Automatic,
+    Explicit,
+}
+
+impl RequestTrigger {
+    #[must_use]
+    pub const fn from_explicit(explicit: bool) -> Self {
+        if explicit {
+            Self::Explicit
+        } else {
+            Self::Automatic
+        }
+    }
+
+    #[must_use]
+    pub const fn writing_budget(self) -> Duration {
+        Duration::from_millis(match self {
+            Self::Automatic => AUTOMATIC_WRITING_BUDGET_MS,
+            Self::Explicit => EXPLICIT_WRITING_BUDGET_MS,
+        })
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderRequest {
@@ -39,6 +76,12 @@ pub trait CompletionProvider: Send + Sync + 'static {
         true
     }
 
+    /// Completes once [`Self::is_alive`] turns false. Providers that own a
+    /// process override both; the default never completes.
+    async fn exited(&self) {
+        std::future::pending::<()>().await;
+    }
+
     async fn complete(
         &self,
         request: ProviderRequest,
@@ -58,6 +101,26 @@ pub trait CompletionProvider: Send + Sync + 'static {
             })
         })
     }
+
+    /// Like `propose`, and names the content-free class of a missing proposal.
+    /// Providers that cannot distinguish request and model abstention report
+    /// the model class. A provider with a time budget sizes it by `trigger`.
+    async fn propose_outcome(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        allow_replacement: bool,
+        _trigger: RequestTrigger,
+    ) -> Result<ProviderOutcome, ProviderError> {
+        self.propose(request, cancellation, allow_replacement)
+            .await
+            .map(|proposal| {
+                proposal.map_or(
+                    ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained),
+                    ProviderOutcome::Proposal,
+                )
+            })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,6 +128,22 @@ pub struct WritingProposal {
     pub text: String,
     /// Exact suffix of the guarded context to replace; absent for insertions.
     pub replace_before: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProviderOutcome {
+    Proposal(WritingProposal),
+    NoSuggestion(NoSuggestionReason),
+}
+
+impl ProviderOutcome {
+    #[must_use]
+    pub fn into_proposal(self) -> Option<WritingProposal> {
+        match self {
+            Self::Proposal(proposal) => Some(proposal),
+            Self::NoSuggestion(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -122,10 +201,35 @@ impl CompletionProvider for DeterministicPhraseProvider {
         if cancellation.is_cancelled() {
             return Err(ProviderError::Cancelled);
         }
+        Ok(self.phrase(&request).ok())
+    }
+
+    async fn propose_outcome(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        _allow_replacement: bool,
+        _trigger: RequestTrigger,
+    ) -> Result<ProviderOutcome, ProviderError> {
+        if cancellation.is_cancelled() {
+            return Err(ProviderError::Cancelled);
+        }
+        Ok(match self.phrase(&request) {
+            Ok(text) => ProviderOutcome::Proposal(WritingProposal {
+                text,
+                replace_before: None,
+            }),
+            Err(reason) => ProviderOutcome::NoSuggestion(reason),
+        })
+    }
+}
+
+impl DeterministicPhraseProvider {
+    fn phrase(&self, request: &ProviderRequest) -> Result<String, NoSuggestionReason> {
         // Exact English triggers keep this deterministic integration provider
         // separate from model-backed writing inference.
         let Some(language) = request.language.as_deref() else {
-            return Ok(None);
+            return Err(NoSuggestionReason::RequestAbstained);
         };
         if !request.after.is_empty()
             || (request.before.chars().count() == MAX_BEFORE_CHARS
@@ -135,7 +239,7 @@ impl CompletionProvider for DeterministicPhraseProvider {
                 .next()
                 .is_some_and(|primary| primary.eq_ignore_ascii_case("en"))
         {
-            return Ok(None);
+            return Err(NoSuggestionReason::RequestAbstained);
         }
         let before = request
             .before
@@ -143,12 +247,11 @@ impl CompletionProvider for DeterministicPhraseProvider {
             .next()
             .unwrap_or_default()
             .trim_start();
-        let completion = self
-            .rules
+        self.rules
             .iter()
             .find(|rule| before.eq_ignore_ascii_case(&rule.trigger))
-            .map(|rule| rule.completion.clone());
-        Ok(completion)
+            .map(|rule| rule.completion.clone())
+            .ok_or(NoSuggestionReason::ModelAbstained)
     }
 }
 
@@ -260,5 +363,102 @@ mod tests {
             .expect("provider result");
 
         assert_eq!(result.as_deref(), Some(" to hearing from you"));
+    }
+
+    #[test]
+    fn explicit_requests_have_the_longer_writing_budget() {
+        use super::RequestTrigger;
+        use std::time::Duration;
+
+        assert_eq!(RequestTrigger::default(), RequestTrigger::Automatic);
+        assert_eq!(
+            RequestTrigger::from_explicit(false).writing_budget(),
+            Duration::from_millis(550)
+        );
+        assert_eq!(
+            RequestTrigger::from_explicit(true).writing_budget(),
+            Duration::from_millis(1_200)
+        );
+    }
+
+    #[tokio::test]
+    async fn phrase_outcomes_separate_request_and_model_abstention() {
+        use super::{ProviderOutcome, RequestTrigger};
+        use crate::metrics::NoSuggestionReason;
+
+        let provider = DeterministicPhraseProvider::default();
+        for (before, after, language, expected) in [
+            ("thank you", "", None, NoSuggestionReason::RequestAbstained),
+            (
+                "thank you",
+                "",
+                Some("de"),
+                NoSuggestionReason::RequestAbstained,
+            ),
+            (
+                "thank you",
+                " tail",
+                Some("en"),
+                NoSuggestionReason::RequestAbstained,
+            ),
+            (
+                "unmatched",
+                "",
+                Some("en"),
+                NoSuggestionReason::ModelAbstained,
+            ),
+        ] {
+            let outcome = provider
+                .propose_outcome(
+                    ProviderRequest {
+                        before: before.to_owned(),
+                        after: after.to_owned(),
+                        language: language.map(str::to_owned),
+                    },
+                    CancellationToken::new(),
+                    false,
+                    RequestTrigger::Automatic,
+                )
+                .await
+                .expect("provider outcome");
+            assert_eq!(outcome, ProviderOutcome::NoSuggestion(expected));
+        }
+        let outcome = provider
+            .propose_outcome(
+                ProviderRequest {
+                    before: "Thank you".to_owned(),
+                    after: String::new(),
+                    language: Some("en".to_owned()),
+                },
+                CancellationToken::new(),
+                false,
+                RequestTrigger::Explicit,
+            )
+            .await
+            .expect("provider outcome");
+        assert_eq!(
+            outcome
+                .into_proposal()
+                .map(|proposal| proposal.text)
+                .as_deref(),
+            Some(" for your time")
+        );
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert!(matches!(
+            provider
+                .propose_outcome(
+                    ProviderRequest {
+                        before: "Thank you".to_owned(),
+                        after: String::new(),
+                        language: Some("en".to_owned()),
+                    },
+                    cancelled,
+                    false,
+                    RequestTrigger::Automatic,
+                )
+                .await,
+            Err(super::ProviderError::Cancelled)
+        ));
     }
 }

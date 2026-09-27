@@ -12,10 +12,8 @@ namespace badi::fcitx5 {
 namespace {
 
 constexpr std::uint64_t kMaxSafeCounter = (std::uint64_t{1} << 53U) - 1U;
-
-bool sameAddress(const Coordinates &left, const Coordinates &right) {
-    return left == right;
-}
+// Chromium's text-input serialization of a <p> block end (see state.h).
+constexpr std::string_view kParagraphEnd = "\n\n";
 
 std::uint64_t mix(std::string_view value, std::uint64_t seed) {
     auto hash = seed;
@@ -24,6 +22,53 @@ std::uint64_t mix(std::string_view value, std::uint64_t seed) {
         hash *= 0x100000001b3ULL;
     }
     return hash;
+}
+
+// IME-parity apps are exactly the accessibility observer's web-app rules
+// (adapters/accessibility/daemon.py APPS); tests/observer-identities.py keeps
+// the lists equal, because an id without a rule could never be observed.
+constexpr std::array<std::string_view, 4> kImeParityBrowsers{
+    "chromium", "chromium-browser", "brave-origin", "zen"};
+constexpr std::array<std::string_view, 4> kImeParityDesktopApps{"chatgpt", "code", "cursor", "discord"};
+
+// Chromium-family identities without an observer rule: other Chromium
+// browsers, channels and Flatpak ids, installed web-app windows (Wayland
+// chrome-<id>-<profile>, X11 crx_<id>), shared Electron runtimes and other
+// builds of the IME-parity apps. Their commitString is equally retargetable,
+// and nothing can corroborate their fields, so none may use the manual path.
+bool unobservedChromiumFamily(std::string_view appId) {
+    constexpr std::array<std::string_view, 20> exact{
+        "chrome", "brave", "opera", "vivaldi", "msedge", "helium", "helium-browser", "thorium",
+        "thorium-browser", "cromite", "ungoogled-chromium", "code-oss", "code-insiders", "codium",
+        "vscodium", "discordcanary", "discordptb", "vesktop", "legcord", "webcord"};
+    constexpr std::array<std::string_view, 23> prefixes{
+        "chrome-", "crx_", "chromium-", "google-chrome", "brave-", "microsoft-edge", "msedge-",
+        "vivaldi-", "opera-", "yandex-browser", "electron", "discord-", "com.google.chrome",
+        "org.chromium.", "com.brave.", "com.microsoft.edge", "com.vivaldi.", "com.opera.",
+        "io.github.ungoogled_software.", "com.visualstudio.code", "com.vscodium.", "com.discordapp.",
+        "dev.vencord."};
+    return std::find(exact.begin(), exact.end(), appId) != exact.end() ||
+           std::any_of(prefixes.begin(), prefixes.end(),
+                       [appId](std::string_view prefix) { return appId.starts_with(prefix); });
+}
+
+// Gecko-family browser identities other than the observed "zen": Firefox and
+// its channels, Flatpak ids and PWAsForFirefox web-app windows (FFPWA-<id>),
+// other Zen builds (Twilight, Flatpak), and Firefox forks. Their commitString
+// is as retargetable as Zen's, their urlbar need not carry a Url purpose, and
+// no observer rule corroborates their fields, so none may use the manual path.
+// Gecko mail clients (Thunderbird) are not browsers and keep the native contract.
+bool unobservedGeckoFamily(std::string_view appId) {
+    constexpr std::array<std::string_view, 6> exact{
+        "iceweasel", "icecat", "palemoon", "seamonkey", "basilisk", "torbrowser"};
+    constexpr std::array<std::string_view, 17> prefixes{
+        "firefox", "org.mozilla.firefox", "ffpwa-", "zen-", "app.zen_browser.",
+        "io.github.zen_browser.", "librewolf", "io.gitlab.librewolf", "floorp", "one.ablaze.",
+        "waterfox", "net.waterfox.", "mullvadbrowser", "mullvad-browser", "net.mullvad.",
+        "tor-browser", "org.torproject."};
+    return std::find(exact.begin(), exact.end(), appId) != exact.end() ||
+           std::any_of(prefixes.begin(), prefixes.end(),
+                       [appId](std::string_view prefix) { return appId.starts_with(prefix); });
 }
 
 } // namespace
@@ -58,18 +103,67 @@ bool allowsNativeContext(::fcitx::CapabilityFlags capabilities) {
                         });
 }
 
-bool supportedAppId(std::string_view appId) {
-    return validLinuxAppId(appId);
+NativeAppClass classifyNativeApp(std::string_view appId) {
+    // Browser/Electron commitString behaves like a typed keystroke: page script
+    // can retarget it during beforeinput and undo may coalesce it with typing.
+    // These apps therefore accept only through an observed field, append-only.
+    // Zen is the one Gecko identity with an observer rule; its urlbar shares
+    // the page's input context without a Url purpose, so the observer, not
+    // allowsNativeContext(), keeps browser UI out.
+    // Obsidian's editor plugin owns its fields, so a second integration would
+    // double-suggest.
+    constexpr std::array<std::string_view, 2> unavailable{"obsidian", "md.obsidian.obsidian"};
+    const auto listed = [appId](const auto &ids) {
+        return std::find(ids.begin(), ids.end(), appId) != ids.end();
+    };
+    if (!validLinuxAppId(appId) || listed(unavailable) || unobservedGeckoFamily(appId))
+        return NativeAppClass::Unavailable;
+    if (listed(kImeParityBrowsers)) return NativeAppClass::ImeParityBrowser;
+    if (listed(kImeParityDesktopApps)) return NativeAppClass::ImeParityDesktop;
+    if (unobservedChromiumFamily(appId)) return NativeAppClass::Unavailable;
+    return NativeAppClass::NativeExact;
 }
 
-bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target) {
-    // Browser/Electron commitString can retarget during beforeinput. Policy
-    // and an external field snapshot cannot supply an editor transaction.
-    constexpr std::array<std::string_view, 9> unavailable{
-        "chromium", "chromium-browser", "chrome", "google-chrome", "brave",
-        "brave-origin", "brave-browser", "firefox", "chatgpt"};
-    return target == NativeEditTarget::DesktopApplication && supportedAppId(appId) &&
-           std::find(unavailable.begin(), unavailable.end(), appId) == unavailable.end();
+bool imeParityApp(std::string_view appId) {
+    const auto kind = classifyNativeApp(appId);
+    return kind == NativeAppClass::ImeParityBrowser || kind == NativeAppClass::ImeParityDesktop;
+}
+
+bool nativeObservationAvailable(std::string_view appId) {
+    return classifyNativeApp(appId) != NativeAppClass::Unavailable;
+}
+
+bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target,
+                            NativeEditPath path) {
+    switch (classifyNativeApp(appId)) {
+    case NativeAppClass::NativeExact:
+        return target == NativeEditTarget::DesktopApplication;
+    case NativeAppClass::ImeParityBrowser:
+        return path == NativeEditPath::Observed && target == NativeEditTarget::BrowserOrigin;
+    case NativeAppClass::ImeParityDesktop:
+        return path == NativeEditPath::Observed && target == NativeEditTarget::DesktopApplication;
+    case NativeAppClass::Unavailable:
+        return false;
+    }
+    return false;
+}
+
+std::string_view focusReason(std::string_view appId) {
+    if (appId.empty()) return "unidentified_app";
+    if (!nativeObservationAvailable(appId)) return "editor_transaction_unavailable";
+    return imeParityApp(appId) ? "awaiting_observed_field" : "checking_app_policy";
+}
+
+std::string_view editingUnavailableReason(std::string_view appId, bool fieldObserved) {
+    if (!imeParityApp(appId)) return "editor_transaction_unavailable";
+    return fieldObserved ? "ime_parity_target_mismatch" : "ime_parity_unobserved";
+}
+
+std::optional<std::string_view> clearNoticeText(std::string_view reason) {
+    if (reason == "no_suggestion") return "Badi has no continuation — try a longer phrase";
+    if (reason == "provider_timeout" || reason == "provider_error")
+        return "Badi could not finish — press Tab to retry";
+    return std::nullopt;
 }
 
 bool matchesCapturedContext(
@@ -92,10 +186,68 @@ LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
 }
 
 LocalAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
-                            const PanelObservation &panel) {
+                            const PanelObservation &panel, NativeEditPath path) {
     if (hasForeignImeUi(panel)) return LocalAction::PassThrough;
     if (hasLiveOwnedCandidate && hasOwnedCandidate(panel)) return LocalAction::Accept;
-    return eligibleContext ? LocalAction::Invoke : LocalAction::PassThrough;
+    // Observed fields suggest on their own, so Tab without a suggestion keeps
+    // its meaning (next field, indent); requesting there takes the chord.
+    const bool tabRequests = eligibleContext && path == NativeEditPath::Manual;
+    return tabRequests ? LocalAction::Invoke : LocalAction::PassThrough;
+}
+
+PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeShown,
+                          bool suggestionVisible, const PanelObservation &panel) {
+    if (!editingAvailable || key.repeat) {
+        return key.modifier ? PreKeyAction::PassThrough : PreKeyAction::Cancel;
+    }
+    if (key.tab) return PreKeyAction::Tab;
+    if (key.escape && noticeShown && !suggestionVisible && !hasForeignImeUi(panel)) {
+        return PreKeyAction::CloseNotice;
+    }
+    const bool liveOwnedCandidate = suggestionVisible && panel.candidatesOwnedByBadi;
+    if (decideLocalAction(false, false, key.escape, liveOwnedCandidate, panel) == LocalAction::Dismiss) {
+        return PreKeyAction::Dismiss;
+    }
+    if (key.modifier || key.chord) return PreKeyAction::PassThrough;
+    return key.escape ? PreKeyAction::CancelDeclining : PreKeyAction::Cancel;
+}
+
+InvokeRoute routeInvoke(std::string_view appId, bool editingAvailable, bool fieldObserved) {
+    if (editingAvailable) return fieldObserved ? InvokeRoute::ObservedField : InvokeRoute::Manual;
+    return imeParityApp(appId) && !fieldObserved ? InvokeRoute::InspectField : InvokeRoute::Unavailable;
+}
+
+std::optional<std::string_view> manualRequestNotice(const RequestFacts &facts) {
+    if (!facts.connected) return notice::kReconnecting;
+    if (!facts.policyKnown) return notice::kCheckingPermission;
+    if (!facts.policyAllowed) return facts.paused ? notice::kPaused : notice::kDisabled;
+    if (!facts.fresh) return notice::kNeedsFreshContext;
+    return std::nullopt;
+}
+
+std::optional<std::string_view> inspectionNotice(const RequestFacts &facts) {
+    if (!facts.fresh) return notice::kNeedsFreshContext;
+    if (!facts.fieldAllowed) return notice::kFieldUnreadable;
+    return std::nullopt;
+}
+
+std::string_view tabDecisionReason(const RequestFacts &facts,
+                                   const std::optional<ContextWindow> &context) {
+    if (!facts.policyKnown) return "checking_app_policy";
+    if (!facts.policyAllowed) return "app_disabled";
+    if (facts.foreignIme) return "foreign_ime";
+    if (!facts.fieldAllowed) return "field_denied";
+    if (!facts.fresh) return "no_fresh_context";
+    if (!context) return "context_unavailable";
+    if (!context->after.empty()) return "caret_not_at_end";
+    if (!supportedWritingLanguage(context->language)) return "language_unsupported";
+    return tabEligibleContext(context) ? "eligible" : "empty_context";
+}
+
+bool tabEligibleContext(const std::optional<ContextWindow> &context) {
+    return context && context->after.empty() &&
+           supportedWritingLanguage(context->language) &&
+           context->before.find_first_not_of(" \t\r\n") != std::string::npos;
 }
 
 bool supportedWritingLanguage(std::string_view language) {
@@ -106,46 +258,38 @@ bool supportedWritingLanguage(std::string_view language) {
 std::optional<ContextWindow> captureContextWindow(std::string_view text,
                                                   std::size_t cursor,
                                                   std::size_t anchor,
-                                                  bool sensitive,
                                                   bool multiline,
-                                                  bool composing,
                                                   std::string language) {
     // Do not inspect or copy text that policy cannot serialize.
-    if (sensitive || composing || cursor != anchor ||
-        text.size() > kMaxContextSourceBytes ||
-        !validLanguageTag(language)) {
+    if (cursor != anchor || text.size() > kMaxContextSourceBytes || !validLanguageTag(language)) {
         return std::nullopt;
     }
-    const auto scalars = decodeUtf8(text);
-    if (!scalars || cursor > scalars->size() || anchor > scalars->size()) {
-        return std::nullopt;
-    }
+    const auto window = scalarWindow(text, cursor, kMaxBeforeScalars, kMaxAfterScalars);
+    if (!window || !validContextText(window->before) || !validContextText(window->after)) return std::nullopt;
     ContextWindow result;
-    result.language = std::move(language);
-    result.multiline = multiline;
-
-    const auto selectionStart = std::min(cursor, anchor);
-    const auto selectionEnd = std::max(cursor, anchor);
-    const auto beforeStart = selectionStart > kMaxBeforeScalars
-                                 ? selectionStart - kMaxBeforeScalars
-                                 : 0;
-    const auto afterCount = std::min(kMaxAfterScalars,
-                                     scalars->size() - selectionEnd);
-    auto before = scalarSlice(text, beforeStart, selectionStart - beforeStart);
-    auto after = scalarSlice(text, selectionEnd, afterCount);
-    if (!before || !after || !validContextText(*before) || !validContextText(*after)) return std::nullopt;
-    result.before = std::move(*before);
-    result.after = std::move(*after);
+    result.before = std::string(window->before);
+    result.after = std::string(window->after);
     result.anchor = anchor;
     result.head = cursor;
+    result.language = std::move(language);
+    result.multiline = multiline;
     return result;
+}
+
+void normalizeObservedParagraphEnd(ContextWindow &context) {
+    if (context.paragraphEndAfter || context.after != kParagraphEnd) return;
+    context.after.clear();
+    context.paragraphEndAfter = true;
+}
+
+std::string observedAfter(const ContextWindow &context) {
+    return context.paragraphEndAfter ? std::string(kParagraphEnd) : context.after;
 }
 
 bool SessionState::focusIn(std::string sessionId, std::string targetId,
                            std::string appId, std::string fingerprintSalt,
-                           NativeEditTarget target) {
-    if (!validOpaqueId(targetId) || !validLinuxAppId(appId) ||
-        !supportedAppId(appId) || !validSessionId(sessionId) ||
+                           NativeEditTarget target, NativeEditPath path) {
+    if (!validOpaqueId(targetId) || !validLinuxAppId(appId) || !validSessionId(sessionId) ||
         fingerprintSalt.size() < 16 || !validOpaqueId(fingerprintSalt)) {
         focusOut();
         return false;
@@ -155,12 +299,12 @@ bool SessionState::focusIn(std::string sessionId, std::string targetId,
     appId_ = std::move(appId);
     fingerprintSalt_ = std::move(fingerprintSalt);
     editTarget_ = target;
+    editPath_ = path;
     coordinates_.focusEpoch =
         coordinates_.focusEpoch >= kMaxSafeCounter ? 1 : coordinates_.focusEpoch + 1;
     coordinates_.revision = 0;
     coordinates_.fingerprint.clear();
     focused_ = true;
-    sensitive_ = false;
     lastContext_.reset();
     clearSuggestion();
     return true;
@@ -168,7 +312,6 @@ bool SessionState::focusIn(std::string sessionId, std::string targetId,
 
 void SessionState::focusOut() {
     focused_ = false;
-    sensitive_ = false;
     lastContext_.reset();
     clearSuggestion();
     coordinates_ = {};
@@ -176,10 +319,16 @@ void SessionState::focusOut() {
     targetId_.clear();
     fingerprintSalt_.clear();
     editTarget_ = NativeEditTarget::Unsupported;
+    editPath_ = NativeEditPath::Manual;
 }
 
 void SessionState::denyEditing() {
     editTarget_ = NativeEditTarget::Unsupported;
+    invalidateContext();
+}
+
+void SessionState::retireObservation() {
+    editPath_ = NativeEditPath::Manual;
     invalidateContext();
 }
 
@@ -196,7 +345,13 @@ void SessionState::invalidateContext() {
 std::optional<ContextUpdate>
 SessionState::updateContext(ContextWindow context) {
     if (!focused_ || !editingAvailable()) return std::nullopt;
-    if (context.sensitive || context.composing || context.anchor != context.head ||
+    // IME-parity context is always corroborated by the observer; the unknown
+    // identity manual contract is limited to native exact apps.
+    // The paragraph-end normalization is the observed IME-parity rule.
+    if ((imeParityApp(appId_) && !context.identityKnown) ||
+        (context.paragraphEndAfter && (!imeParityApp(appId_) || !context.identityKnown ||
+                                    editPath_ != NativeEditPath::Observed || !context.after.empty())) ||
+        context.anchor != context.head ||
         !validLanguageTag(context.language) || !validContextText(context.before) || !validContextText(context.after)) {
         invalidateContext();
         return std::nullopt;
@@ -205,7 +360,6 @@ SessionState::updateContext(ContextWindow context) {
                                 ? 1
                                 : coordinates_.revision + 1;
     coordinates_.fingerprint = nextFingerprint(context);
-    sensitive_ = context.sensitive;
     clearSuggestion();
     ContextUpdate update{
         .coordinates = coordinates_,
@@ -218,18 +372,16 @@ SessionState::updateContext(ContextWindow context) {
 }
 
 bool SessionState::showSuggestion(Suggestion suggestion, std::uint64_t nowMs) {
-    // Generic Fcitx deletion and insertion cannot form one exact-field edit:
-    // an application input handler can change focus between those operations.
-    if (!editingAvailable() || !suggestion.replaceBefore.empty()) {
+    if (!editingAvailable()) {
         clearSuggestion();
         return false;
     }
     const auto clean = sanitizeSuggestion(suggestion.text);
-    if (!focused_ || sensitive_ || !clean || suggestion.expiresAtMs <= nowMs ||
+    if (!focused_ || !clean || suggestion.expiresAtMs <= nowMs ||
         suggestion.expiresAtMs > kMaxSafeCounter ||
         !validOpaqueId(suggestion.requestId) ||
         !validOpaqueId(suggestion.suggestionId) ||
-        !sameAddress(suggestion.coordinates, coordinates_)) {
+        suggestion.coordinates != coordinates_) {
         return false;
     }
     suggestion.text = *clean;
@@ -245,9 +397,9 @@ SessionState::requestAcceptance(std::uint64_t nowMs,
         clearSuggestion();
         return std::nullopt;
     }
-    if (!focused_ || sensitive_ || hasForeignImeUi(panel) ||
+    if (!focused_ || hasForeignImeUi(panel) ||
         pendingAcceptance_ || !visible_ || visible_->expiresAtMs <= nowMs ||
-        !sameAddress(visible_->coordinates, coordinates_)) {
+        visible_->coordinates != coordinates_) {
         if (visible_ && visible_->expiresAtMs <= nowMs) clearSuggestion();
         return std::nullopt;
     }
@@ -258,7 +410,6 @@ SessionState::requestAcceptance(std::uint64_t nowMs,
                      std::to_string(visible_->coordinates.revision),
         .suggestionId = visible_->suggestionId,
         .expectedText = visible_->text,
-        .replaceBefore = visible_->replaceBefore,
     };
     pendingAcceptance_ = request;
     return request;
@@ -271,9 +422,9 @@ SessionState::requestDismissal(std::uint64_t nowMs,
         clearSuggestion();
         return std::nullopt;
     }
-    if (!focused_ || sensitive_ || hasForeignImeUi(panel) || !visible_ ||
+    if (!focused_ || hasForeignImeUi(panel) || !visible_ ||
         visible_->expiresAtMs <= nowMs ||
-        !sameAddress(visible_->coordinates, coordinates_)) {
+        visible_->coordinates != coordinates_) {
         if (visible_ && visible_->expiresAtMs <= nowMs) clearSuggestion();
         return std::nullopt;
     }
@@ -292,18 +443,17 @@ std::optional<CommitDispatch>
 SessionState::authorizeCommit(const CommitPrepare &prepare,
                               std::uint64_t nowMs,
                               const PanelObservation &panel) {
-    if (!editingAvailable() || !prepare.replaceBefore.empty() || !hasOwnedCandidate(panel)) {
+    if (!editingAvailable() || !hasOwnedCandidate(panel)) {
         clearSuggestion();
         return std::nullopt;
     }
     if (!focused_ || !visible_ || !pendingAcceptance_ ||
         visible_->expiresAtMs <= nowMs ||
-        !sameAddress(prepare.coordinates, coordinates_) ||
-        !sameAddress(prepare.coordinates, pendingAcceptance_->coordinates) ||
+        prepare.coordinates != coordinates_ ||
+        prepare.coordinates != pendingAcceptance_->coordinates ||
         prepare.controlId != pendingAcceptance_->controlId ||
         prepare.suggestionId != pendingAcceptance_->suggestionId ||
         prepare.text != pendingAcceptance_->expectedText ||
-        prepare.replaceBefore != pendingAcceptance_->replaceBefore ||
         prepare.acceptance != "all") {
         return std::nullopt;
     }
@@ -312,7 +462,6 @@ SessionState::authorizeCommit(const CommitPrepare &prepare,
         .controlId = prepare.controlId,
         .suggestionId = prepare.suggestionId,
         .text = prepare.text,
-        .replaceBefore = prepare.replaceBefore,
     };
     clearSuggestion();
     return dispatch;
@@ -321,7 +470,7 @@ SessionState::authorizeCommit(const CommitPrepare &prepare,
 bool SessionState::clearSuggestionIf(
     const Coordinates &coordinates,
     const std::optional<std::string> &suggestionId) {
-    if (!visible_ || !sameAddress(coordinates, visible_->coordinates) ||
+    if (!visible_ || coordinates != visible_->coordinates ||
         (suggestionId && *suggestionId != visible_->suggestionId)) {
         return false;
     }
@@ -337,7 +486,7 @@ void SessionState::clearSuggestion() {
 std::string SessionState::nextFingerprint(const ContextWindow &context) const {
     const auto material = fingerprintSalt_ + "\x1f" + coordinates_.sessionId +
                           "\x1f" + appId_ + "\x1f" + targetId_ + "\x1f" +
-                          context.before + "\x1f" + context.after + "\x1f" +
+                          context.before + "\x1f" + observedAfter(context) + "\x1f" +
                           context.language + "\x1f" +
                           std::to_string(context.anchor) + ":" +
                           std::to_string(context.head) + ":" +

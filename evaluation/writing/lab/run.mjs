@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { open, readFile, mkdir, lstat, realpath } from 'node:fs/promises';
+import { open, readFile, readdir, mkdir, lstat, realpath } from 'node:fs/promises';
 import { resolve, relative, join, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -12,29 +12,29 @@ import { modelArtifactPath, readModelArtifact, modelArtifactProvenance, modelArt
 export const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 export const OUTPUT_ROOT = resolve(ROOT, 'output/writing');
 export const WORKER_BINARY = resolve(ROOT, 'target/release/badi-writing-lab');
-const SOURCE_PATHS = ['evaluation/writing/lab/run.mjs', 'evaluation/writing/lab/paced.mjs', 'evaluation/writing/lab/server.mjs',
+// Run provenance: the Lab's own scripts, every file of the Lab worker crate
+// (expanded and sorted, so a new module cannot escape the record) and the
+// broker sources that crate builds on.
+const LAB_SCRIPTS = ['evaluation/writing/lab/run.mjs', 'evaluation/writing/lab/paced.mjs', 'evaluation/writing/lab/server.mjs',
   'evaluation/writing/lab/worker.mjs', 'evaluation/writing/lab/cases.mjs', 'evaluation/writing/lab/model-artifact.mjs',
   'evaluation/writing/lab/device-qualification.mjs', 'evaluation/writing/lab/gguf.mjs',
   'evaluation/writing/lab/discovery.mjs', 'evaluation/writing/lab/discovery-server.mjs',
   'evaluation/writing/lab/qualification-evidence.mjs', 'evaluation/writing/lab/qualification-diagnostics.mjs',
   'evaluation/writing/lab/qualification-server.mjs',
-  'evaluation/writing/lab/public/confidence.mjs',
-  'broker/src/model_selection/qualification.rs', 'broker/src/model_selection/qualification/device.rs',
-  'broker/src/bin/badi-writing-lab.rs', 'broker/src/writing_lab.rs', 'broker/src/writing_lab/process.rs',
-  'broker/src/writing_lab/prefill_probe.rs', 'broker/src/writing_lab/paced_probe.rs', 'broker/src/writing_lab/artifact.rs',
-  'broker/src/writing_lab/attestation.rs',
-  'broker/src/writing_lab/paced_probe/scheduler.rs', 'broker/src/writing.rs', 'broker/src/semantic/client.rs',
-  'broker/src/semantic/client/writing_lab.rs', 'broker/src/semantic/client/prefill_probe.rs', 'broker/src/semantic/runtime.rs',
-  'Cargo.toml', 'Cargo.lock', 'broker/Cargo.toml', 'broker/src/lib.rs', 'broker/src/provider.rs',
-  'broker/src/segment.rs', 'broker/src/protocol.rs', 'broker/src/model_selection.rs',
-  'broker/src/semantic/candidate.rs', 'broker/src/semantic/provenance.rs', 'broker/data/writing-lexicon/en.txt'];
+  'evaluation/writing/lab/public/confidence.mjs'];
+export const LAB_CRATE = 'evaluation/writing/lab-worker';
+const BROKER_SOURCES = ['broker/src/writing.rs', 'broker/src/semantic/mod.rs', 'broker/src/semantic/client.rs',
+  'broker/src/semantic/wire.rs', 'broker/src/semantic/runtime.rs', 'broker/src/semantic/process.rs',
+  'broker/src/semantic/provenance.rs', 'broker/src/semantic/pinned_runtime.rs', 'broker/src/provider.rs',
+  'broker/src/segment.rs', 'broker/src/protocol.rs', 'broker/src/model_selection.rs', 'broker/src/lib.rs',
+  'broker/Cargo.toml', 'Cargo.toml', 'Cargo.lock', 'broker/data/writing-lexicon/en.txt'];
 const hash = value => createHash('sha256').update(value).digest('hex');
 const jsonBytes = value => JSON.stringify(value, null, 2) + '\n';
 
 export function parseOptions(args, cwd = process.cwd()) {
   const { values } = parseArgs({ args, strict: true, options: {
     suite: { type: 'string' }, output: { type: 'string' },
-    modes: { type: 'string', default: 'production_baseline,context' },
+    modes: { type: 'string', default: 'production_boundary,context' },
     'budget-ms': { type: 'string', default: '550' }, 'max-tokens': { type: 'string', default: '8' },
     seed: { type: 'string', default: '42' }, 'cache-prompt': { type: 'string', default: 'true' },
     'model-artifact': { type: 'string' }, 'prefill-batch': { type: 'string' },
@@ -51,7 +51,7 @@ export function parseOptions(args, cwd = process.cwd()) {
   if (!['true', 'false'].includes(values['cache-prompt'])) throw new Error('--cache-prompt must be true or false.');
   if (values['prefill-batch'] !== undefined && !['16', '64'].includes(values['prefill-batch'])) throw new Error('Use --prefill-batch 16 or 64.');
   const configs = validateConfigs(values.modes.split(',').map(mode => {
-    const fixed = ['production_baseline', 'production_boundary'].includes(mode);
+    const fixed = mode === 'production_boundary';
     return { id: mode, mode, budget_ms: fixed ? 550 : budget, max_tokens: fixed ? 8 : tokens,
       cache_prompt: fixed || values['cache-prompt'] === 'true', temperature: 0, seed: 42 };
   }));
@@ -103,7 +103,23 @@ export async function fileIdentity(path, cache = new Map()) {
   } finally { await handle.close(); }
 }
 
-export async function sourceHashes(paths = SOURCE_PATHS, root = ROOT) {
+/** The Lab worker crate's manifest and every file under its `src`, sorted. */
+export async function labCrateSources(root = ROOT) {
+  const files = [];
+  const visit = async directory => {
+    for (const entry of await readdir(resolve(root, directory), { withFileTypes: true })) {
+      const path = `${directory}/${entry.name}`;
+      if (entry.isDirectory()) await visit(path);
+      else if (entry.isFile()) files.push(path);
+      else throw new Error(`Lab worker sources must be regular files: ${path}`);
+    }
+  };
+  await visit(`${LAB_CRATE}/src`);
+  return [`${LAB_CRATE}/Cargo.toml`, ...files.sort()];
+}
+
+export async function sourceHashes(paths, root = ROOT) {
+  paths ??= [...LAB_SCRIPTS, ...await labCrateSources(root), ...BROKER_SOURCES];
   return Object.fromEntries(await Promise.all(paths.map(async path => [path, hash(await readFile(resolve(root, path)))])));
 }
 

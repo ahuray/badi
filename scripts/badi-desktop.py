@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Control the persistent desktop broker or an explicitly selected native trial."""
+"""Control the persistent desktop broker, its settings and its diagnostics."""
 
 import importlib.util
 import json
 import os
 import re
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 from urllib.parse import urlsplit
+
+# Installed beside this CLI (~/.local/lib/badi); in the checkout, beside it in scripts/.
+import badi_install
 
 ROOT = Path(__file__).resolve().parents[1]
 APPS = ("xournalpp", "omawrite")
@@ -29,23 +32,50 @@ HELP = """Badi — local writing controls
   badi app APP_ID on|off
                                Allow or block predictions in one app
   badi site ORIGIN on|off       Allow or block one exact browser origin
+  badi site all on|off          Allow every http(s) site unless its exact rule
+                               blocks it (off by default). Covers
+                               Chromium/Brave/Zen fields, which have no second
+                               site gate
   badi service start|stop|restart|status
                                Manage the local model process
   badi autostart on|off         Start with the graphical session (next login)
-  badi doctor                  Inspect service and model health as JSON
+  badi doctor                  Inspect service, model, install identity and
+                               no-suggestion reasons as JSON
   badi debug on|off|status|watch
                                Trace activity for 15 minutes, without typed text
   badi logs                    Print the last 60 service log entries
   badi launch omawrite|xournalpp
                                Open a supported editor
 
-Native manual fields: Tab requests words; Tab again accepts.
-Observed fields: automatic suggestions after exact field and app/site checks.
-Web extension/Obsidian: Tab accepts a word, Ctrl/Command+Right all.
-Bash: Ctrl-X then Tab requests/accepts. Escape dismisses (Bash: Ctrl-X then Escape).
-Native tested applications: Omawrite and Xournal++ text cells.
-For advanced protocol commands: badictl --help
+Keys: Tab accepts a visible suggestion and otherwise stays Tab; Escape
+dismisses; Ctrl+Shift+Space requests. Suggestions appear on their own in
+Omawrite, Telegram and the IME-parity apps (Chromium, Brave, Zen, Codex,
+VS Code, Cursor, Discord), each with an app or site grant; one site grant
+covers all three browsers. IME-parity accepts once, append-only, like typing:
+undo may merge it with earlier typing.
+Xournal++ text cells: Tab requests, Tab again accepts.
+Obsidian: Tab accepts a word, Ctrl/Command+Right all.
+Bash: Ctrl-X then Tab requests/accepts, Ctrl-X then Escape dismisses.
+For protocol commands: badictl --help
 """
+VSCODE_SETTINGS = Path(".config/Code/User/settings.json")
+CLOSING = re.compile(r"\s*[}\]]")
+ALL_SITES_NOTE = ("Every http(s) site is allowed for predictions unless its exact site rule blocks it "
+                  "(badi site all off to return to listed sites). This includes "
+                  "Chromium/Brave/Zen fields, which have no second site gate and cannot exclude private "
+                  "windows. Sensitive fields stay denied.")
+INSTALLED_BROKER = ".local/lib/badi/badi-broker"
+# Broker no-suggestion classes; counters never include typed text.
+NO_SUGGESTION = {
+    "request_abstained": "the field language is missing or unsupported, text follows the caret, nothing but spaces (or one unfinished English word) precedes it, or a Persian joiner is not yet between two letters",
+    "budget_prefill": "the writing budget (550 ms while typing, 1.2 s after Tab) ended before the model started answering (prompt prefill)",
+    "budget_stream": "the writing budget (550 ms while typing, 1.2 s after Tab) ended before a complete word arrived",
+    "model_abstained": "the model finished without a complete word",
+    "output_rejected": "the output failed language, dictionary, number, shape or safety checks",
+    "stale": "the text, focus or pause state changed before display",
+    "timeout": "the broker deadline (600 ms while typing, 1.25 s after Tab) expired",
+    "provider_error": "the local model runtime failed or answered malformed",
+}
 
 
 def cli_path():
@@ -54,7 +84,7 @@ def cli_path():
 
 
 def control(arguments, endpoint=None):
-    endpoint = endpoint or registry_directory().parent / "broker.sock"
+    endpoint = endpoint or runtime_directory() / "broker.sock"
     result = subprocess.run([str(cli_path()), "--socket", str(endpoint), *arguments],
                             capture_output=True, text=True, timeout=8)
     if result.returncode:
@@ -63,13 +93,7 @@ def control(arguments, endpoint=None):
 
 
 def service_state():
-    result = subprocess.run([
-        "systemctl", "--user", "show", SERVICE,
-        "--property=LoadState,ActiveState,SubState,UnitFileState",
-    ], capture_output=True, text=True, timeout=4)
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or "Cannot reach the user service manager")
-    fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    fields = badi_install.unit_properties(SERVICE, "LoadState", "ActiveState", "SubState", "UnitFileState", timeout=4)
     return {"loaded": fields.get("LoadState") == "loaded",
             "active": fields.get("ActiveState", "unknown"),
             "state": fields.get("SubState", "unknown"),
@@ -77,12 +101,7 @@ def service_state():
 
 
 def native_state():
-    result = subprocess.run([
-        "systemctl", "--user", "show", "omarchy-fcitx5.service", "--property=ActiveState,MainPID",
-    ], capture_output=True, text=True, timeout=4)
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or "Cannot inspect the native input service")
-    fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    fields = badi_install.unit_properties("omarchy-fcitx5.service", "ActiveState", "MainPID", timeout=4)
     pid = fields.get("MainPID", "0")
     loaded = False
     update_pending = False
@@ -103,11 +122,8 @@ def native_state():
 def startup_problem():
     """Classify this service invocation's startup error without returning logs."""
     try:
-        invocation = subprocess.run([
-            "systemctl", "--user", "show", SERVICE, "--property=InvocationID", "--value",
-        ], capture_output=True, text=True, timeout=3)
-        identifier = invocation.stdout.strip()
-        if invocation.returncode or not re.fullmatch(r"[a-f0-9]{32}", identifier):
+        identifier = badi_install.unit_value(SERVICE, "InvocationID")
+        if not re.fullmatch(r"[a-f0-9]{32}", identifier):
             return None
         journal = subprocess.run([
             "journalctl", "--user", f"_SYSTEMD_INVOCATION_ID={identifier}",
@@ -122,7 +138,7 @@ def startup_problem():
                 continue
             if line.removeprefix("error_code=local_model:").strip() == "runtime_process_exited":
                 return {"code": "runtime_process_exited", "message": "The local inference process stopped unexpectedly.",
-                        "action": "The desktop service retries automatically. If retries stop, inspect badi logs and available memory, then run badi service restart."}
+                        "action": "The desktop service restarts it automatically with backoff. If it keeps stopping, inspect badi logs and available memory."}
             missing = re.search(r"not installed \(([A-Za-z0-9_.-]{1,100}\.gguf)\)", line)
             if missing:
                 return {"code": "model_not_installed",
@@ -139,19 +155,13 @@ def startup_problem():
                         "action": "Run badictl hardware and check the runtime requirements in the Badi runbook."}
             return {"code": "model_startup_failed", "message": "The local inference runtime failed to start.",
                     "action": "Run badi logs to inspect the local startup error, then badi service restart."}
-    except (OSError, subprocess.SubprocessError):
+    except (RuntimeError, OSError, subprocess.SubprocessError):
         pass
     return None
 
 
 def observer_service_state():
-    result = subprocess.run([
-        "systemctl", "--user", "show", ACCESSIBILITY_SERVICE,
-        "--property=LoadState,ActiveState,MainPID",
-    ], capture_output=True, text=True, timeout=3)
-    if result.returncode:
-        raise RuntimeError("observer_service_uninspectable")
-    fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    fields = badi_install.unit_properties(ACCESSIBILITY_SERVICE, "LoadState", "ActiveState", "MainPID")
     pid = fields.get("MainPID", "0")
     return {"loaded": fields.get("LoadState") == "loaded",
             "active": fields.get("ActiveState", "unknown"),
@@ -179,7 +189,7 @@ def accessibility_state():
         service = observer_service_state()
         result.update(service)
         if service["active"] == "active" and service["process_id"] > 0:
-            endpoint = registry_directory().parent / "accessibility.sock"
+            endpoint = runtime_directory() / "accessibility.sock"
             result.update(observer_probe(endpoint, service["process_id"]))
             if observer_service_state() != service:
                 result.update(ready=False, error="service_changed")
@@ -194,23 +204,163 @@ def accessibility_state():
     return result
 
 
+def no_suggestion_summary(metrics):
+    """Summarize content-free no-suggestion classes; None for older brokers."""
+    breakdown = metrics.get("no_suggestion") if isinstance(metrics, dict) else None
+    if not isinstance(breakdown, dict):
+        return None
+    counts = {reason: breakdown[reason] for reason in NO_SUGGESTION
+              if isinstance(breakdown.get(reason), int) and breakdown[reason] > 0}
+    last = breakdown.get("last") if breakdown.get("last") in NO_SUGGESTION else None
+    return {"total": sum(counts.values()), "counts": counts, "last": last}
+
+
+def receipt(name):
+    """Read one private install receipt; None when that installer never ran."""
+    try:
+        document = private_json(badi_install.receipt_path(Path.home(), name), 1 << 20)
+    except FileNotFoundError:
+        return None
+    except (RuntimeError, ValueError, OSError):
+        return {"error": "receipt_unreadable"}
+    if not isinstance(document, dict) or document.get("schema") != badi_install.SCHEMA \
+            or not isinstance(document.get("source"), dict) or not isinstance(document.get("files"), dict):
+        return {"error": "receipt_invalid"}
+    return document
+
+
+def running_broker_identity():
+    """Hash and version the exact executable image of the running service."""
+    def main_pid():
+        try:
+            value = badi_install.unit_value(SERVICE, "MainPID")
+        except RuntimeError:
+            return 0
+        return int(value) if value.isdigit() else 0
+
+    pid = main_pid()
+    if pid <= 0:
+        return None
+    process = Path(f"/proc/{pid}")
+    try:
+        if process.stat().st_uid != os.getuid():
+            return {"error": "running_broker_uninspectable"}
+        digest = badi_install.file_sha256(process / "exe")
+        # /proc/PID/exe runs the image in memory even after an update replaced
+        # the installed file, so this is the running build, not the file on disk.
+        version = subprocess.run([str(process / "exe"), "--version"], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return {"error": "running_broker_uninspectable"}
+    if main_pid() != pid:
+        return {"error": "service_changed"}
+    line = version.stdout.strip() if version.returncode == 0 else ""
+    return {"version": line if badi_install.VERSION_LINE.fullmatch(line) else None, "sha256": digest}
+
+
+def install_state():
+    state = {}
+    expected = None
+    for name in ("desktop", "editors"):
+        document = receipt(name)
+        if document is None or "error" in document:
+            state[name] = document
+            continue
+        state[name] = {"installed_at": document.get("installed_at"), **document["source"]}
+        if name == "desktop":
+            expected = document["files"].get(INSTALLED_BROKER)
+            state[name]["broker_version"] = expected.get("version") if isinstance(expected, dict) else None
+    try:
+        running = running_broker_identity()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        running = {"error": "running_broker_uninspectable"}
+    if running and "error" not in running and isinstance(expected, dict):
+        running["version_matches_receipt"] = running["version"] is not None and running["version"] == expected.get("version")
+        running["sha256_matches_receipt"] = running["sha256"] == expected.get("sha256")
+    state["running_broker"] = running
+    return state
+
+
+def jsonc_object(text):
+    """Decode JSON with comments and trailing commas, as VS Code settings allow."""
+    def scan(source, skipped):
+        kept, index, quoted = [], 0, False
+        while index < len(source):
+            character = source[index]
+            if quoted or character == '"':
+                kept.append(character)
+                if quoted and character == "\\":
+                    kept.append(source[index + 1:index + 2])
+                    index += 2
+                    continue
+                quoted = character != '"' if quoted else True
+                index += 1
+                continue
+            length = skipped(source, index)
+            kept.append(" " if length else character)
+            index += length or 1
+        return "".join(kept)
+
+    def comment(source, index):
+        if source.startswith("//", index):
+            end = source.find("\n", index)
+            return (len(source) if end < 0 else end) - index
+        if source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            if end < 0:
+                raise ValueError("unterminated comment")
+            return end + 2 - index
+        return 0
+
+    def trailing_comma(source, index):
+        return int(source[index] == "," and CLOSING.match(source, index + 1) is not None)
+
+    return json.loads(scan(scan(text, comment), trailing_comma))
+
+
+def vscode_edit_context_note():
+    """Read-only check of VS Code's EditContext switch; never returns file text."""
+    path = Path.home() / VSCODE_SETTINGS
+    if not (shutil.which("code") or path.parents[1].is_dir()):
+        return None
+    fix = 'add "editor.editContext": false to ~/.config/Code/User/settings.json and reload VS Code'
+    try:
+        with open(path, "rb") as stream:
+            raw = stream.read((1 << 20) + 1)
+        if len(raw) > 1 << 20:
+            raise ValueError("settings too large")
+        # Like VS Code: an optional BOM, and blank means {}.
+        text = raw.decode("utf-8-sig")
+        settings = jsonc_object(text) if text.strip() else {}
+        if not isinstance(settings, dict):
+            raise ValueError("settings are not an object")
+    except FileNotFoundError:
+        settings = {}
+    except (OSError, ValueError, UnicodeDecodeError):
+        return ("VS Code is installed, but Badi could not read its user settings to check EditContext. "
+                f"If Badi misreads text in VS Code, {fix}.")
+    if settings.get("editor.editContext") is False:
+        return None
+    return ("VS Code is installed with EditContext on (its default). EditContext sends Fcitx corrupted "
+            f"surrounding text, so Badi cannot read the text before the caret there; {fix}.")
+
+
 def health_report():
     report = {"schema": "badi.desktop-health.v1", "service": service_state(),
               "native_apps": list(APPS), "problems": [], "notes": []}
-    report["notes"].append("Native browser/Codex writing is disabled: the external input path cannot guarantee the intended field and caret. App/site permissions and model readiness cannot enable this unsupported path.")
+    report["notes"].append("Chromium, Brave, Zen, Codex, VS Code, Cursor and Discord fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it. Source and nested-session evidence only.")
     problems = report["problems"]
     observer = report["accessibility"] = accessibility_state()
     if observer.get("loaded"):
         if not observer["ready"]:
             problems.append({"code": "accessibility_unavailable",
-                             "message": "The extension-free field observer is unavailable.",
+                             "message": "The accessibility field observer is unavailable.",
                              "action": "Inspect systemctl --user status badi-accessibility.service and the accessibility runbook."})
         elif observer.get("bus_enabled") is False:
             problems.append({"code": "accessibility_disabled",
                              "message": "Desktop accessibility is disabled, so applications may expose no fields.",
                              "action": "Complete the accessibility setup and relaunch the target application with its supported accessibility/input-method flags."})
     else:
-        report["notes"].append("Extension-free browser/Codex observation is not installed or could not be inspected. Model readiness alone does not establish those integrations.")
+        report["notes"].append("The accessibility field observer is not installed or could not be inspected, so IME-parity apps and observed fields get no suggestions. Model readiness alone does not establish those integrations.")
     try:
         report["native"] = native_state()
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
@@ -226,8 +376,8 @@ def health_report():
         problems.append({"code": "broker_unreachable", "message": report["error"],
                          "action": "Run badi service start, then badi doctor. Model startup takes a few seconds."})
     if report["service"]["active"] == "failed":
-        problems.append({"code": "service_failed", "message": "The Badi service stopped after a startup failure.",
-                         "action": "Resolve the startup problem, then run badi service restart to clear the restart limit."})
+        problems.append({"code": "service_failed", "message": "The Badi service stopped on a startup error that retrying cannot fix.",
+                         "action": "Resolve the startup problem, then run badi service restart."})
     if report.get("broker", {}).get("control_plane_degraded"):
         problems.append({"code": "settings_degraded", "message": "The broker cannot use its persistent settings safely.",
                          "action": "Inspect badi logs and restore valid private settings before enabling predictions."})
@@ -236,7 +386,16 @@ def health_report():
                          "action": "Inspect the Fcitx user service from the graphical session. Browser and editor broker health is reported separately."})
     elif report["native"]["addon_loaded"] is False:
         problems.append({"code": "native_addon_unavailable", "message": "The running Fcitx service has not loaded Badi.",
-                         "action": "Check the native installation in the Badi runbook. Browser/Codex native writing remains unavailable independently of addon or observer health."})
+                         "action": "Check the native installation in the Badi runbook. Native manual, observed and IME-parity fields all need the loaded addon."})
+    install = report["install"] = install_state()
+    running = install.get("running_broker") or {}
+    if install.get("desktop") is None:
+        report["notes"].append("No desktop install receipt exists, so the installed files cannot be matched to a source commit. The next scripts/install-desktop.py run records one.")
+    elif "error" in install["desktop"]:
+        report["notes"].append("The desktop install receipt is unreadable or not private; installed files cannot be matched to a source commit.")
+    elif running.get("sha256_matches_receipt") is False or running.get("version_matches_receipt") is False:
+        problems.append({"code": "broker_build_mismatch", "message": "The running broker is not the build recorded by the last desktop installation.",
+                         "action": "Run badi service restart after an installation; otherwise reinstall with scripts/install-desktop.py."})
     broker = report.get("broker", {})
     if report["native"].get("addon_update_pending"):
         report["notes"].append("Fcitx is still using the previous addon build. Apply the native update after normal desktop unlock.")
@@ -244,7 +403,49 @@ def health_report():
         report["notes"].append("Predictions are paused. Run badi resume when you want suggestions again.")
     elif broker and broker.get("metrics", {}).get("provider_calls") == 0:
         report["notes"].append("The model is ready but has received no prediction requests since startup. Run badi debug on and badi debug watch, then type in a supported field. Native manual fields require Tab; observed fields need matching accessibility and Fcitx context.")
+    if broker and web_settings().get("all_web_origins") is True:
+        report["notes"].append(ALL_SITES_NOTE)
+    editor = vscode_edit_context_note()
+    if editor:
+        report["notes"].append(editor)
+    if broker:
+        summary = no_suggestion_summary(broker.get("metrics", {}))
+        if summary is None:
+            report["notes"].append("The running broker predates no-suggestion reason counters. Install and restart the current build to see why suggestions are missing.")
+        elif summary["total"]:
+            detail = "; ".join(f"{reason}={count}: {NO_SUGGESTION[reason]}"
+                               for reason, count in sorted(summary["counts"].items(), key=lambda item: -item[1]))
+            report["notes"].append(f"{summary['total']} model request(s) since broker start showed no suggestion. {detail}. Last: {summary['last']}.")
     return report
+
+
+def web_settings():
+    """The current settings document, or {} when it cannot be read."""
+    try:
+        document = json.loads(control(["settings", "show", "--json"]))
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        return {}
+    return document if isinstance(document, dict) else {}
+
+
+def status_text(health, settings=None):
+    state = "Paused" if health["paused"] else "Model ready"
+    counters = health["metrics"]
+    summary = no_suggestion_summary(counters)
+    if summary is None:
+        misses = "No-suggestion reasons: not reported by this broker"
+    elif summary["total"]:
+        misses = f"No suggestion: {summary['total']} (last: {summary['last']})"
+    else:
+        misses = "No suggestion: 0"
+    return (f"Badi: {state} · {health['provider']}\n"
+            f"Requests: {counters['provider_calls']} · Suggestions: {counters['suggestions_shown']} · Errors: {counters['provider_errors']} · {misses}\n"
+            "Native Fcitx: automatic in Omawrite; Tab request/accept in the Xournal++ Text tool\n"
+            "Editors: Obsidian automatic/Tab · Bash Ctrl-X then Tab\n"
+            "Observed fields: automatic for Omawrite, Telegram and IME-parity apps (Chromium, Brave, Zen, Codex, VS Code, Cursor, Discord); Tab accepts a visible suggestion, otherwise stays Tab; Ctrl+Shift+Space requests\n"
+            + ("Web sites: every http(s) site unless blocked (badi site all off)\n"
+               if (settings or {}).get("all_web_origins") is True else "")
+            + "Escape: dismiss · Why nothing appeared: badi doctor; badi debug on; badi debug watch")
 
 
 def update_settings(change):
@@ -266,10 +467,16 @@ def set_app(document, app, enabled):
     if subject is None:
         subject = {"identity": identity}
         document["subjects"].append(subject)
-    decision = "allow" if enabled else "block"
-    subject["permissions"] = {"context_read": decision, "display": decision, "suggest": decision,
-                              "learn": "block", "retention": {"mode": "none"}}
+    subject["permissions"] = badi_install.grant("allow" if enabled else "block")
     document["subjects"].sort(key=lambda item: identity_key(item["identity"]))
+
+
+def set_all_sites(document, enabled):
+    # Absent is the canonical off state; exact site rules are left untouched.
+    if enabled:
+        document["all_web_origins"] = True
+    else:
+        document.pop("all_web_origins", None)
 
 
 def set_site(document, value, enabled):
@@ -285,9 +492,7 @@ def set_site(document, value, enabled):
     if subject is None:
         subject = {"identity": identity}
         document["subjects"].append(subject)
-    decision = "allow" if enabled else "block"
-    subject["permissions"] = {"context_read": decision, "display": decision, "suggest": decision,
-                              "learn": "block", "retention": {"mode": "none"}}
+    subject["permissions"] = badi_install.grant("allow" if enabled else "block")
     document["subjects"].sort(key=lambda item: identity_key(item["identity"]))
 
 
@@ -297,11 +502,11 @@ def identity_key(identity):
     return (1, identity["adapter"], identity["app_id"])
 
 
-def registry_directory():
+def runtime_directory():
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if not runtime or not Path(runtime).is_absolute():
         raise RuntimeError("Open Badi from your graphical desktop session")
-    return Path(runtime) / "badi/native-trials"
+    return Path(runtime) / "badi"
 
 
 def private_json(path, limit=8192):
@@ -314,7 +519,7 @@ def private_json(path, limit=8192):
 
 
 def debug_activity():
-    directory = registry_directory().parent
+    directory = runtime_directory()
     report = {"enabled": False, "reason": "debug_off", "counts": {}}
     try:
         control = private_json(directory / "debug-control.json", 512)
@@ -351,6 +556,9 @@ def debug_line(report):
     for name, activity in report.get("editors", {}).items():
         reads = activity.get("reason_counts", {}).get("sent context.changed", 0)
         adapters.append(f"{name}={activity.get('reason', 'unknown')}({reads} contexts)")
+    summary = no_suggestion_summary(metrics)
+    if summary and summary["total"]:
+        adapters.insert(0, f"no_show={summary['total']}(last={summary['last']})")
     return (f"{time.strftime('%H:%M:%S')}  {'debug' if report['enabled'] else 'debug off'}  "
             f"model={model.get('provider', 'offline')}  "
             f"input={native.get('counts', {}).get('input', 0)}  "
@@ -359,7 +567,7 @@ def debug_line(report):
 
 
 def debug_mode(mode):
-    directory = registry_directory().parent
+    directory = runtime_directory()
     if mode in ("on", "off"):
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         info = directory.lstat()
@@ -371,10 +579,8 @@ def debug_mode(mode):
             for adapter in ("obsidian", "terminal"):
                 (directory / f"debug-{adapter}.json").unlink(missing_ok=True)
         else:
-            with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as stream:
-                temporary = Path(stream.name)
-                json.dump({"id": str(uuid.uuid4()), "expires_at": int(time.time()) + 900}, stream)
-            temporary.replace(directory / "debug-control.json")
+            marker = {"id": str(uuid.uuid4()), "expires_at": int(time.time()) + 900}
+            badi_install.atomic_write(directory / "debug-control.json", json.dumps(marker).encode())
         print("Activity debug enabled for 15 minutes; no typed text is stored."
               if mode == "on" else "Activity debug disabled and its snapshot removed.")
         return
@@ -383,6 +589,10 @@ def debug_mode(mode):
         try:
             health = json.loads(control(["status"]))
             report["model"] = {key: health[key] for key in ("provider", "paused", "sessions", "metrics")}
+            summary = no_suggestion_summary(health["metrics"])
+            if summary and summary["last"]:
+                summary["last_meaning"] = NO_SUGGESTION[summary["last"]]
+            report["model"]["no_suggestion"] = summary
         except RuntimeError as error:
             report["model_error"] = str(error)
         print(json.dumps(report, indent=2) if mode == "status" else debug_line(report), flush=True)
@@ -391,32 +601,16 @@ def debug_mode(mode):
         time.sleep(1)
 
 
-def sessions(directory):
-    available = []
-    for path in directory.glob("*.json"):
-        try:
-            info = path.lstat()
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 4096:
-                continue
-            entry = json.loads(path.read_text())
-            if entry["id"] != path.stem or entry["app"] not in APPS:
-                continue
-            socket = Path(entry["socket"])
-            metadata = socket.lstat()
-            if not socket.is_absolute() or not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
-                continue
-            available.append((info.st_mtime_ns, entry))
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-    entries = [entry for _, entry in sorted(available, key=lambda item: item[0], reverse=True)]
-    endpoint = directory.parent / "broker.sock"
+def desktop_socket():
+    """The persistent broker's private socket, or None while it is offline."""
+    endpoint = runtime_directory() / "broker.sock"
     try:
         metadata = endpoint.lstat()
-        if stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid == os.getuid() and not metadata.st_mode & 0o077:
-            entries.insert(0, {"id": "desktop", "app": "desktop", "label": "Desktop writing", "socket": str(endpoint)})
     except OSError:
-        pass
-    return entries
+        return None
+    if stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid == os.getuid() and not metadata.st_mode & 0o077:
+        return endpoint
+    return None
 
 
 def main(arguments):
@@ -437,14 +631,7 @@ def main(arguments):
         if arguments[-1] == "--json":
             print(json.dumps(health))
         else:
-            state = "Paused" if health["paused"] else "Model ready"
-            counters = health["metrics"]
-            print(f"Badi: {state} · {health['provider']}\n"
-                  f"Requests: {counters['provider_calls']} · Suggestions: {counters['suggestions_shown']} · Errors: {counters['provider_errors']}\n"
-                  "Adapters: Fcitx + optional field observer · Obsidian · Bash · optional web extension\n"
-                  "Observed fields: automatic · Native manual: Tab request/accept · Editor plugins: Tab next word\n"
-                  "Escape: dismiss · Bash: Ctrl-X then Tab\n"
-                  "Input diagnostics: badi debug on; badi debug watch")
+            print(status_text(health, web_settings()))
         return
     if arguments in (["pause"], ["resume"]):
         paused = arguments == ["pause"]
@@ -454,6 +641,11 @@ def main(arguments):
     if len(arguments) == 3 and arguments[0] == "app" and arguments[2] in ("on", "off"):
         update_settings(lambda document: set_app(document, arguments[1], arguments[2] == "on"))
         print(f"{arguments[1]} predictions {arguments[2]}.")
+        return
+    if arguments[:2] == ["site", "all"] and len(arguments) == 3 and arguments[2] in ("on", "off"):
+        update_settings(lambda document: set_all_sites(document, arguments[2] == "on"))
+        print(ALL_SITES_NOTE if arguments[2] == "on" else
+              "Predictions are limited to sites with their own allow rule again.")
         return
     if len(arguments) == 3 and arguments[0] == "site" and arguments[2] in ("on", "off"):
         update_settings(lambda document: set_site(document, arguments[1], arguments[2] == "on"))
@@ -500,22 +692,14 @@ def main(arguments):
     if not arguments or arguments[0] != "ctl":
         raise RuntimeError("Unknown command. Run: badi --help")
     arguments = arguments[1:]
-    trial_id = None
-    if arguments[:1] == ["--trial"] and len(arguments) >= 3:
-        trial_id, arguments = arguments[1], arguments[2:]
-    available = sessions(registry_directory())
-    entry = next((item for item in available if trial_id is None or item["id"] == trial_id), None)
-    if entry is None:
+    endpoint = desktop_socket()
+    if endpoint is None:
         raise RuntimeError("The Badi model is offline. Open a supported editor below to start the service.")
-    if arguments not in (["overview", "--json"], ["status"]) and trial_id is None:
-        raise RuntimeError("Refresh Badi settings before changing a writing session")
-    output = control(arguments, entry["socket"])
+    output = control(arguments, endpoint)
     if arguments == ["overview", "--json"]:
         overview = json.loads(output)
-        counters = json.loads(control(["status"], entry["socket"]))["metrics"]
+        counters = json.loads(control(["status"], endpoint))["metrics"]
         overview["desktop"] = {
-            "id": entry["id"], "app": entry["app"],
-            "sessions": [{"id": item["id"], "label": item.get("label", item["app"])} for item in available],
             "requests": counters["provider_calls"], "suggestions": counters["suggestions_shown"],
             "errors": counters["provider_errors"],
             "activity": debug_activity(),

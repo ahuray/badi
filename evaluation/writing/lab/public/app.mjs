@@ -4,8 +4,8 @@ import { confidenceCoverage } from './confidence.mjs';
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="badi-lab-token"]').content;
 const headers = { 'Content-Type': 'application/json', 'X-Badi-Lab-Token': token };
-const names = { production_baseline: 'Current Badi logic', production_boundary: 'Isolated boundary fix', context: 'Full context', context_confidence: 'Full context + token confidence', instructed: 'Context + style', healed: 'Word-boundary experiment', instructed_healed: 'Instructions + word boundary', instructed_word: 'One complete word', healed_attested: 'Complete words from context', native_instructed: 'Selected model instructions' };
-const fixedProductionMode = mode => mode === 'production_baseline' || mode === 'production_boundary';
+const names = { production_boundary: 'Current Badi logic', context: 'Full context', context_confidence: 'Full context + token confidence', instructed: 'Context + style', healed: 'Word-boundary experiment', instructed_healed: 'Instructions + word boundary', instructed_word: 'One complete word', healed_attested: 'Complete words from context', native_instructed: 'Selected model instructions' };
+const fixedProductionMode = mode => mode === 'production_boundary';
 const reasonLabels = {
   constrained_complete_word: 'The model finished one word with a separator and a completion response. Its decoding was constrained to this shape.',
   word_terminal_missing: 'The model did not confirm completion before the deadline.',
@@ -267,7 +267,7 @@ $('baseline-model')?.addEventListener('click', async () => {
   try {
     const response = await fetch('/api/model/baseline', { method: 'POST', headers, body: '{}' });
     if (!response.ok) throw new Error((await response.json()).error);
-    for (const input of document.querySelectorAll('input[name="mode"]')) input.checked = input.value === 'production_baseline';
+    for (const input of document.querySelectorAll('input[name="mode"]')) input.checked = input.value === 'production_boundary';
     discoveryUI?.setSelection(null);
     qualificationUI?.clear();
     setStatus('Installed model selected for the baseline comparison. Its desktop service is unchanged.');

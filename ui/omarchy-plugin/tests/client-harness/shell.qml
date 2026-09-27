@@ -22,12 +22,12 @@ ShellRoot {
 
     function refresh(): void { client.refresh(true) }
 
-    function clearMemory(): void {
-      client.clearMemory()
-    }
-
-    function blockTarget(): void {
-      client.blockTarget()
+    // The same compare-and-swap settings write the desktop panel's pause and
+    // app toggles perform.
+    function setPaused(paused: bool): void {
+      var document = client.cloneSettings()
+      if (document !== null) document.paused = paused
+      client.replaceSettings(document, paused ? "Predictions paused." : "Predictions resumed.")
     }
 
     function deactivate(): void {
@@ -52,24 +52,9 @@ ShellRoot {
         lifecycleGeneration: client.lifecycleGeneration,
         refreshQueued: client.refreshQueued,
         overviewSchema: client.overview.schema || "",
-        supportScope: client.overview.support ? client.overview.support.scope || "" : "",
-        supportGeneralization: client.overview.support
-          ? client.overview.support.generalization || "" : "",
-        supportAuthorization: client.overview.support
-          ? client.overview.support.authorization || "" : "",
-        verifiedSupportCells: client.overview.support
-          && client.overview.support.verified_cells
-          ? client.overview.support.verified_cells.length : -1,
-        browserSupportActivation: client.overview.support
-          && client.overview.support.verified_cells
-          ? client.overview.support.verified_cells[0].required_activation || "" : "",
-        nativeSupportActivation: client.overview.support
-          && client.overview.support.verified_cells
-          ? client.overview.support.verified_cells[1].required_activation || "" : "",
         settingsSchema: client.settings.schema || "",
         settingsDocumentValid: client.settingsDocumentValid,
-        subjectCount: client.settings.subjects ? client.settings.subjects.length : -1,
-        targetSubjectIndex: client.targetSubjectIndex
+        subjectCount: client.settings.subjects ? client.settings.subjects.length : -1
       })
     }
   }

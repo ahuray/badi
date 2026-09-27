@@ -62,7 +62,7 @@ test('device inspection cannot overlap a measured prediction comparison', async 
   const inspection = lab.inspect(); await entered.promise;
   const body = { suite: { schema: 'badi.prediction-suite.v1', name: 'fixture', cases: [
     { id: 'sample', language: 'en', prefix: 'Please review the docum', expected: ['ent'], context: '', style: '' }] },
-  configs: [{ id: 'baseline', mode: 'production_baseline', budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 }], seed: 42 };
+  configs: [{ id: 'baseline', mode: 'production_boundary', budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 }], seed: 42 };
   try {
     const response = await fetch(`${lab.origin}/api/run`, { method: 'POST', headers: lab.headers, body: JSON.stringify(body) });
     await response.arrayBuffer();

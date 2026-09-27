@@ -5,12 +5,14 @@ use badi_broker::protocol::{
     AuthorityAckPayload, AuthorityChangedPayload, CommitPreparePayload, CommitResultPayload,
     ContextChangedPayload, ControlAction, ControlResultPayload, EmptyPayload, ErrorPayload,
     GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
-    MemoryStatusPayload, MessageType, PolicyQueryPayload, PolicyStatusPayload, SessionClosePayload,
-    SessionControlRequestPayload, SessionOpenPayload, SettingsReplacePayload,
-    SettingsStatusPayload, SuggestCancelPayload, SuggestRequestPayload, SuggestionClearPayload,
-    SuggestionShowPayload, WireEnvelope, valid_opaque_id, validate_fingerprint,
+    MemoryStatusPayload, MessageType, PolicyQueryPayload, PolicyStatusPayload, ProbeRequestPayload,
+    ProbeResultPayload, ProviderKind, SessionClosePayload, SessionControlRequestPayload,
+    SessionOpenPayload, SettingsReplacePayload, SettingsStatusPayload, SuggestCancelPayload,
+    SuggestRequestPayload, SuggestionClearPayload, SuggestionShowPayload, WireEnvelope,
+    valid_opaque_id, validate_fingerprint,
 };
 use badi_broker::segment::{accept_word, sanitize_suggestion};
+use badi_broker::{Metrics, NoSuggestionReason};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -225,6 +227,12 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         MessageType::MemoryStatus => decode::<MemoryStatusPayload>(envelope)
             .validate()
             .expect("valid memory status"),
+        MessageType::ProbeRequest => decode::<ProbeRequestPayload>(envelope)
+            .validate()
+            .expect("valid probe request"),
+        MessageType::ProbeResult => decode::<ProbeResultPayload>(envelope)
+            .validate()
+            .expect("valid probe result"),
         MessageType::Error => {
             let _: ErrorPayload = decode(envelope);
         }
@@ -470,4 +478,137 @@ fn normative_ecma_schema_declares_lone_surrogates_forbidden() {
             .as_str()
             .is_some_and(|pattern| pattern.contains(r"\ud800-\udfff"))
     );
+}
+
+#[test]
+fn diagnostics_are_v2_only_and_match_broker_payloads() {
+    let v1_schema = rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(protocol_root().join("schema.json")).expect("v1 schema file"),
+        )
+        .expect("v1 schema JSON"),
+    );
+    let v2_schema = rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("v2 schema file"),
+        )
+        .expect("v2 schema JSON"),
+    );
+    let v1 = jsonschema::validator_for(&v1_schema).expect("v1 schema compiles");
+    let v2 = jsonschema::validator_for(&v2_schema).expect("v2 schema compiles");
+
+    for name in [
+        "health_status_no_suggestion.json",
+        "probe_request.json",
+        "probe_request_explicit.json",
+    ] {
+        let mut fixture: Value = serde_json::from_str(
+            &fs::read_to_string(protocol_v2_root().join("examples/valid").join(name))
+                .expect("fixture"),
+        )
+        .expect("fixture JSON");
+        assert!(v2.is_valid(&fixture), "{name}");
+        fixture["v"] = 1.into();
+        assert!(!v1.is_valid(&fixture), "{name} must stay outside v1");
+    }
+
+    let metrics = Metrics::default();
+    for reason in [
+        NoSuggestionReason::RequestAbstained,
+        NoSuggestionReason::BudgetPrefill,
+        NoSuggestionReason::BudgetStream,
+        NoSuggestionReason::ModelAbstained,
+        NoSuggestionReason::OutputRejected,
+        NoSuggestionReason::Stale,
+        NoSuggestionReason::Timeout,
+        NoSuggestionReason::ProviderError,
+    ] {
+        metrics.record_no_suggestion(reason);
+        let snapshot = metrics.snapshot();
+        let v2_metrics = jsonschema::validator_for(&serde_json::json!({
+            "$ref": "#/$defs/metrics", "$defs": v2_schema["$defs"].clone()
+        }))
+        .expect("v2 metrics schema");
+        assert!(v2_metrics.is_valid(&serde_json::to_value(snapshot).expect("v2 metrics")));
+        let v1_metrics = jsonschema::validator_for(&serde_json::json!({
+            "$ref": "#/$defs/metrics", "$defs": v1_schema["$defs"].clone()
+        }))
+        .expect("v1 metrics schema");
+        assert!(!v1_metrics.is_valid(&serde_json::to_value(snapshot).expect("full metrics")));
+        assert!(v1_metrics.is_valid(
+            &serde_json::to_value(snapshot.without_no_suggestion()).expect("v1 metrics")
+        ));
+    }
+
+    for result in [
+        ProbeResultPayload::suggested(
+            ProviderKind::LocalModel,
+            " for your time".to_owned(),
+            None,
+            12,
+        ),
+        ProbeResultPayload::suggested(
+            ProviderKind::LocalModel,
+            "address ".to_owned(),
+            Some("adress ".to_owned()),
+            1,
+        ),
+        ProbeResultPayload::no_suggestion(
+            ProviderKind::PhraseV1,
+            NoSuggestionReason::RequestAbstained,
+            0,
+        ),
+        ProbeResultPayload::paused(ProviderKind::LocalModel),
+    ] {
+        result.validate().expect("broker probe result");
+        let mut envelope = WireEnvelope::global(MessageType::ProbeResult, 1, &result)
+            .expect("probe envelope")
+            .at_version(2)
+            .expect("v2 envelope");
+        envelope.id = Some("ctl:probe".to_owned());
+        let value = serde_json::to_value(&envelope).expect("probe JSON");
+        assert!(v2.is_valid(&value), "{value}");
+    }
+    let unsafe_text =
+        ProbeResultPayload::suggested(ProviderKind::LocalModel, " line\nbreak".to_owned(), None, 1);
+    assert!(unsafe_text.validate().is_err());
+    let oversized = ProbeRequestPayload {
+        before: "a".repeat(513),
+        after: String::new(),
+        language: Some("en".to_owned()),
+        allow_replacement: false,
+        explicit: false,
+    };
+    assert!(oversized.validate().is_err());
+}
+
+#[test]
+fn only_an_explicit_probe_names_its_budget() {
+    let v2 = jsonschema::validator_for(&rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("v2 schema file"),
+        )
+        .expect("v2 schema JSON"),
+    ))
+    .expect("v2 schema compiles");
+    // The automatic probe keeps its original encoding.
+    for explicit in [false, true] {
+        let probe = ProbeRequestPayload {
+            before: "Vielen Dank für Ihre ".to_owned(),
+            after: String::new(),
+            language: Some("de".to_owned()),
+            allow_replacement: false,
+            explicit,
+        };
+        let mut envelope = WireEnvelope::global(MessageType::ProbeRequest, 0, &probe)
+            .expect("probe request")
+            .at_version(2)
+            .expect("v2 probe request");
+        envelope.id = Some("ctl:probe".to_owned());
+        let value = serde_json::to_value(&envelope).expect("probe request JSON");
+        assert!(v2.is_valid(&value), "{value}");
+        assert_eq!(value["payload"].get("explicit").is_some(), explicit);
+        let decoded: ProbeRequestPayload = envelope.decode_payload().expect("decoded probe");
+        assert_eq!(decoded, probe);
+    }
 }

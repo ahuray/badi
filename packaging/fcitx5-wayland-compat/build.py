@@ -17,8 +17,9 @@ import urllib.request
 from launch import RUNTIME_FILES
 
 HERE = Path(__file__).resolve().parent
-VERSION = "5.1.21"
-SOURCE_COMMIT = "1319952f284eae17a36cba9e800843ca61a163c1"
+VERSION = "5.1.22"
+SOURCE_COMMIT = "c7ecdb931d8b378ccdcd87382a3ef7ff0bd10def"
+PATCH = "done-preedit-refresh.patch"
 
 
 def digest(path: Path) -> str:
@@ -71,9 +72,10 @@ def build(args: argparse.Namespace) -> Path:
     if sys.version_info < (3, 12):
         raise RuntimeError("Python 3.12 or newer is required for bounded archive extraction")
     manifest = json.loads((HERE / "manifest.json").read_text())
-    if manifest["upstream_version"] != VERSION or manifest["upstream_commit"] != SOURCE_COMMIT:
+    if (manifest["upstream_version"] != VERSION or manifest["upstream_commit"] != SOURCE_COMMIT or
+            manifest["patch"] != PATCH):
         raise RuntimeError("Unexpected source manifest version")
-    verify_file(HERE / "idle-done-ack.patch", manifest["patch_sha256"])
+    verify_file(HERE / PATCH, manifest["patch_sha256"])
     if any(os.environ.get(key) for key in ("LD_LIBRARY_PATH", "LD_PRELOAD", "LD_AUDIT", "CMAKE_PREFIX_PATH", "PKG_CONFIG_PATH", "PKG_CONFIG_LIBDIR")):
         raise RuntimeError("Build from the standard system libraries without loader or package-path overrides")
     for executable in ("cmake", "ninja", "pkg-config", "patch", "wayland-scanner", "c++"):
@@ -85,7 +87,7 @@ def build(args: argparse.Namespace) -> Path:
                 raise RuntimeError(f"Required protocol-test command is missing: {executable}")
     versions = installed_versions()
     if subprocess.check_output(["/usr/bin/fcitx5", "--version"], text=True).strip() != VERSION:
-        raise RuntimeError("The system Fcitx executable must be exactly 5.1.21")
+        raise RuntimeError(f"The system Fcitx executable must be exactly {VERSION}")
     runtime_hashes = {path: digest(Path(path)) for path in RUNTIME_FILES}
     root = args.work_dir.expanduser().resolve()
     if root.exists():
@@ -117,14 +119,13 @@ def build(args: argparse.Namespace) -> Path:
         execute(compile_command)
         shutil.copyfile(build_dir / "libwaylandim.so", root / "libwaylandim-baseline.so")
     execute(["patch", "--batch", "--forward", "--fuzz=0", "-p1"],
-            cwd=source, data=(HERE / "idle-done-ack.patch").read_bytes())
+            cwd=source, data=(HERE / PATCH).read_bytes())
     execute(compile_command)
     artifact = root / "libwaylandim.so"
     shutil.copyfile(build_dir / "libwaylandim.so", artifact)
     if args.check:
         test = [sys.executable, str(HERE / "tests/run-protocol.py"), "--work-dir", str(root)]
         execute([*test, "--baseline"])
-        execute([*test, "--disabled"])
         execute(test)
     if installed_versions() != versions or any(digest(Path(path)) != expected for path, expected in runtime_hashes.items()):
         raise RuntimeError("System Fcitx changed during the build; no installable receipt was produced")
@@ -148,7 +149,7 @@ def main() -> None:
     parser.add_argument("--work-dir", type=Path, required=True, help="new disposable source/build directory")
     parser.add_argument("--archive", type=Path, help="offline copy of the exact pinned source archive")
     parser.add_argument("--jobs", type=int, choices=range(1, 5), default=2)
-    parser.add_argument("--check", action="store_true", help="prove baseline, opt-out and guarded protocol behavior")
+    parser.add_argument("--check", action="store_true", help="prove baseline and backported protocol behavior")
     args = parser.parse_args()
     try:
         artifact = build(args)

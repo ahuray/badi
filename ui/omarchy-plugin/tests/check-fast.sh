@@ -11,9 +11,7 @@ scripts=(
   "$tests_dir/check-term-ignoring.sh"
   "$tests_dir/process-group.sh"
   "$tests_dir/run-client-lifecycle.sh"
-  "$tests_dir/run-isolated.sh"
   "$tests_dir/fake-bin/badictl"
-  "$tests_dir/fake-bin/badi-desktop"
   "$tests_dir/fake-bin/term-ignoring-group"
 )
 

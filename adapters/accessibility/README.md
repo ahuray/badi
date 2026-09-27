@@ -4,73 +4,194 @@ This helper supplies **field identity and bounded context**, and an optional
 caret preview, to the cooperative Fcitx addon. It never inserts, deletes, selects,
 or types text and never changes accessibility settings or application policy.
 
-The supported identity mappings are exact executable/class pairs inspected on
-this workstation: Chromium (`/usr/lib/chromium/chromium`, class `chromium`),
-ChatGPT/Codex (`/usr/lib/chatgpt/ChatGPT`, class `chatgpt`), and Omawrite
-(`/usr/bin/omawrite`, class `omawrite`). A mapping is an acquisition eligibility
-check, not a claim that the application's complete editing flow works. Brave
-Origin 152 was also found and launched in an isolated profile: its actual
-ELF is `/opt/brave-origin-bin/brave`, with class `brave-origin`. Its Fcitx program
-was physically observed as `brave-origin` and now has an exact helper mapping.
-Its complete prediction/editing flow and caret geometry remain unverified; it
-does not inherit Chromium 151 preview coordinates.
+## Application rules
+
+Each supported Fcitx app id maps to one identity rule. The active Hyprland
+window's process must belong to this user, match the executable rule and report
+the listed window class. A matching rule is an acquisition eligibility check,
+not a claim that an application's complete editing flow works; the
+[coverage summary](../../README.md) lists what was tested live.
+
+| App id | Executable rule | Window class | Broker target |
+| --- | --- | --- | --- |
+| `chromium` | `/usr/lib/chromium/chromium` | `chromium` | browser origin |
+| `chromium-browser` | `/usr/lib/chromium/chromium` started without `/usr/bin/chromium`'s `CHROME_DESKTOP` | `chromium-browser` | browser origin |
+| `brave-origin` | `/opt/brave-origin-bin/brave` (its Bash wrapper is only the parent) | `brave-origin` | browser origin |
+| `zen` (Gecko) | `/opt/zen-browser-bin/zen-bin` (`/usr/bin/zen-browser` only `exec`s it) | `zen` | browser origin |
+| `chatgpt` (Codex desktop) | `/usr/lib/chatgpt/ChatGPT` | `chatgpt` | desktop app |
+| `code` (VS Code) | `/usr/share/code/code` | `code` | desktop app |
+| `cursor` | `/usr/lib/electron42/electron`, whose first non-switch argument is exactly `/usr/share/cursor/resources/app/cursor.mjs` | `cursor` | desktop app |
+| `discord` | `$XDG_CONFIG_HOME/discord/app-<version>/Discord` | `discord` | desktop app |
+| `telegram` | `/usr/bin/Telegram` | `org.telegram.desktop` | desktop app |
+| `omawrite` | `/usr/bin/omawrite` | `omawrite` | desktop app |
+
+Executables come from `/proc/PID/exe` without further symlink resolution; a
+deleted or replaced binary does not match.
+
+- **Cursor** shares the Electron runtime, so its `/proc/PID/cmdline` (read up
+  to 64 KiB) must name Cursor's entry the way Chromium parses switches.
+  Electron `default_app` options before that entry that load other code
+  (`--app=`, `-r`/`--require`) or run no app (`-i`/`--interactive`/`-repl`,
+  `-v`/`--version`, `-a`/`--abi`) make the process unrecognized. A same-user
+  process can rewrite its own command line; the rule separates apps and does not
+  defend against same-user malware.
+- **Discord** updates itself inside the user's configuration. The kernel path
+  must be exactly `<realpath(config)>/discord/app-<digits and dots>/Discord`;
+  `discord`, the version directory and the binary must be a real directory,
+  directory and regular file owned by this user without group/other write
+  permission, and the file must be the inode the process runs. Symlinked
+  components, other owners, traversal spellings and `(deleted)` fail.
+
+Browser targets use the broker's single browser-origin identity (adapter
+`chromium`), so one `badi site ... on` grant covers Chromium, Brave and Zen
+alike; the binding keeps the exact app id. Other apps are `desktop_application`
+targets granted with `badi app APP_ID on`. Electron apps render web content, so
+the HTML purpose gates (tag and input type) apply to them as to browsers. A
+missing tag or input type is ineligible, never guessed.
 
 ## Authority boundary
 
-`inspect` verifies the unlocked Omarchy session, current Hyprland window PID,
-owned process executable, and exactly one focused editable accessibility object.
-Only that process is queried. Chromium browser chrome/internal pages and
-ambiguous focused nodes are excluded before collecting a field. Browser nodes
-must supply a valid HTTP(S) Document `URI`; cross-origin frames retain their own
-URI. The helper reads no field prose during inspection.
+`inspect` verifies the unlocked Omarchy session, the current Hyprland window
+PID, the identity rule above and exactly one focused editable accessibility
+object, queries only that process, and reads no field prose. Every binding comes
+from an `inspect`; `snapshot` and `preview` require its unchanged epoch and do
+not query the lock again.
 
-`snapshot` requires the exact prior object bus name/path, process, application,
-URI, epoch and broker-policy target. Its trusted Fcitx caller must already hold a
-current broker context-read grant for that target. Password/sensitive,
-noneditable, invisible, selected, unsupported field purposes and stale bindings
-fail before `Text.GetText`. Reads are at most 512 Unicode characters before the
-caret and 128 after it; metadata and the bounded text are reread to detect
-changes. Neither the accessible object nor this helper provides an atomic edit
-transaction. Fcitx must still compare its exact live surrounding text, caret,
-focus epoch and one-shot commit authority before dispatch.
+Hyprland's active window and monitors come from its IPC socket
+(`$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket.sock`). The lock
+check is the Quickshell IPC call behind `omarchy-shell lock status`, made
+directly (`qs ipc -n -p $OMARCHY_PATH/shell call -- lock status`) as a child
+process that runs while the field is read. `inspect` answers only after joining
+it, at most 150 ms after the field read and within the operation budget; a late
+child is killed, and every child is reaped. Unless all five lock flags are
+explicitly false, the lock denial replaces any field result or error. A missing
+`OMARCHY_PATH`, an IPC error reply, a timeout or an unparsable answer fails
+closed, and no lock state is kept between operations.
 
-Relevant accessibility events and compositor focus/window changes invalidate the
-current epoch and clear the preview. Global listeners receive only metadata events. Text-change notifications are
-subscribed on a separate D-Bus connection only after an approved snapshot, with
-a match restricted to the exact unique sender and field object path.
-Invalidation/disconnect removes that match; event prose is never unpacked.
-Notifications do not retain event text, document labels, or URIs. Browser origin policy stays centralized in the broker;
-this helper does not grant blanket browser access.
+### Browser fields
 
-Libatspi also emits local, sender-null `defunct` events when its temporary proxy
-objects are disposed. The helper ignores that exact disposal signal only for a
-positively identified different bus/object path. Disposal of the tracked object,
-unknown proxy identity, and genuine remote events retain invalidation. This
-prevents inspection itself from repeatedly invalidating a stable Chromium field;
-snapshot identity and text rereads remain unchanged.
+Browser fields need an HTTP(S) address: Chromium's Document `URI`, Gecko's
+`DocURL`. Cross-origin frames keep their own.
+
+Chromium 152 reports `FOCUSED` on several fields at once: the page field and the
+omnibox popup's WebUI combo box (`chrome://omnibox-popup.top-chrome/`) while the
+page has the keyboard, the page field and the omnibox entry while the omnibox
+has it. Browsers therefore ignore browser UI (nodes with no document ancestor,
+like the omnibox, and `chrome://*.top-chrome` WebUI documents), and exactly one
+field with an HTTP(S) origin must remain. Any other document counts as page
+content, including DevTools, `chrome://` and extension pages, `about:blank` and
+unreadable URIs; two such fields, or none, fail closed. The stale page field
+chosen while the omnibox has the keyboard never receives text: the omnibox's
+Fcitx context carries the `Url` purpose, which the addon's
+`allowsNativeContext()` denies before any inspection, and every display and
+dispatch requires the snapshot around the caret to equal Fcitx's live
+surrounding text.
+
+Gecko (Zen 1.22.3b, Gecko 156) exposes web content without a flag. Its
+Documents carry `DocURL` and an empty `URI`; the browser window (role `frame`)
+is itself a Document, `chrome://browser/content/browser.xhtml`, and every node
+reports the window's process. Exactly one node is focused and editable: the
+urlbar (role `combo box`, no `document web` ancestor) while it has the keyboard,
+otherwise the page field. The urlbar shares the page's Fcitx context without a
+`Url` purpose, so the observer, not the addon, denies it: the one focused
+editable node's nearest Document must be a `document web` with an HTTP(S)
+`DocURL`. The urlbar and other browser UI, and `about:`, `moz-extension:`,
+`resource:`, `file:` or empty addresses, fail as `unsupported_field` before any
+text read; a second focused field fails as `focus_unavailable`. Only the nearest
+Document counts, so an `about:blank` or loading frame never borrows its parent
+page's origin.
+
+Zen page fields are role `entry` with tag `textarea`, `input` plus
+`text-input-type=text`, or `div` for a `role=textbox` contenteditable. Gecko
+sets `text-input-type` only from an explicit `type` attribute, so an `<input>`
+without one is ineligible, and a new document's first attribute query can lack
+`tag` until the next input re-inspects it. Gecko's IME surrounding text is only
+the caret's paragraph (`IMContextWrapper::GetCurrentParagraph`), while a
+snapshot spans up to 512 characters across lines. Once a newline precedes the
+caret, or the caret ends a paragraph with more text after it, the Fcitx
+agreement check fails closed as `observer_context_mismatch`.
+
+### Rich editors
+
+Codex desktop's ProseMirror composer is one focused `entry` (tag `div`,
+`xml-roles=textbox`) whose text is one U+FFFC embedded object per paragraph and
+whose caret is the offset of the paragraph holding the caret. Each `paragraph`
+child holds its text; the one with the caret reports it, the others -1. An empty
+composer's paragraph is `"\n"` plus a U+FFFC placeholder, so it fails closed
+until text is typed.
+
+For Chromium and Electron web content (never Gecko or native toolkits), such a
+root is flattened the way Chromium 152 serializes text-input surrounding text:
+each paragraph's text followed by `"\n\n"`, margins or not, the last paragraph
+included. `caret`, `total_chars` and `character_offset` are in those flattened
+coordinates. Geometry and direction come from the caret paragraph's glyph; a
+caret at a paragraph's start has none, so the addon uses the Fcitx panel.
+`inspect` reads only link offsets, roles, lengths, caret offsets and selection
+counts. `snapshot` reads, and rereads for the stale check, only the paragraphs
+overlapping its 512/128-character window.
+
+Anything unresolvable fails closed before prose:
+
+- `unsupported_field`: text directly in the root, more than 64 blocks, a
+  non-`paragraph` or foreign-parent block, or a paragraph with its own embedded
+  objects (placeholder, image, mention, link, code span).
+- `invalid_caret`: an ambiguous or out-of-range caret.
+- `selection_present`: a selection in any paragraph.
+
+`snapshot` also fails as `unsupported_field` on a U+FFFC read as text, and on a
+paragraph ending in a line break (an empty ProseMirror paragraph or a trailing
+hard break) whose end is in the window: Chromium adds only one `"\n"` after it,
+which these lengths cannot express without reading prose at inspection. An
+isolated Chromium 152 fixture of the same `<div role=textbox><p>` shape
+displayed, accepted and dismissed suggestions; the multi-paragraph rules come
+from the recorded serialization and fakes.
+
+## Snapshots and field events
+
+`snapshot` requires the exact prior bus name, object path, process, application,
+URI, epoch and broker-policy target, and its trusted Fcitx caller must already
+hold a current context-read grant for that target. Password or sensitive,
+noneditable, invisible, selected and unsupported fields and stale bindings fail
+before `Text.GetText`. Reads are at most 512 Unicode characters before the caret
+and 128 after it; the field's caret, length, selections and bounded text are
+reread to detect changes. Neither the accessible object nor this helper provides
+an atomic edit transaction, so Fcitx still compares its exact live surrounding
+text, caret, focus epoch and one-shot commit authority before dispatch.
+
+Accessibility events and compositor focus or window changes invalidate the
+current epoch and clear the preview. The only global listener is for focus
+changes, which invalidate without querying their source. After an approved
+snapshot, the field's own events (text, caret, selection, editable, showing,
+defunct and role changes) are subscribed on a separate D-Bus connection, matched
+to the exact unique sender and object path, so other fields' events never
+arrive. Any of them invalidates, and invalidation or disconnect removes the
+match; payloads, including typed text, are never unpacked. The application is
+asked to produce these events (`RegisterEvent` for its bus name) after the first
+grant in it, until the active window or armed application changes or the helper
+exits. Notifications carry no event text, document labels or URIs. Browser
+origin policy stays in the broker; this helper grants no blanket browser access.
 
 ## Socket contract
 
-Run with the system Python that supplies PyGObject and the Atspi typelib:
+Run it with the system Python that supplies PyGObject and the Atspi typelib:
+`python3 adapters/accessibility/daemon.py`.
 
-```sh
-python3 adapters/accessibility/daemon.py
-npm run accessibility:check
-npm run accessibility:integration
-```
-
-The default endpoint is `$XDG_RUNTIME_DIR/badi/accessibility.sock`, with socket
-mode `0600` and directory mode `0700`. A same-user peer check, exclusive instance
-lock, bounded frames, and fixed error codes apply. Stale owned sockets are
-recovered only after the exclusive lock and a refused connection verify there
-is no live observer. No typed text is written to logs or disk. Coalesced frames and partial tails are supported, with at most 64 KiB buffered
-per connection and 16 KiB per frame including the newline. One operation runs per
-GLib dispatch so authority events can invalidate between queued requests.
-Each operation has a 350 ms overall budget and AT-SPI calls have 50 ms timeouts.
-Only one connection owns acquisition and preview authority. A second acquisition
-client receives `observer_busy`; its disconnect cannot alter the owner's state.
-Queued callbacks bind to a connection object, preventing reuse of a file
-descriptor from inheriting an earlier connection's work.
+- The endpoint is `$XDG_RUNTIME_DIR/badi/accessibility.sock` (socket `0600`,
+  directory `0700`), for same-user peers only, with one instance under an
+  exclusive lock. A stale socket is removed only after the lock and a refused
+  connection prove that no observer is running.
+- Frames are newline-terminated JSON lines of at most 16 KiB, with 64 KiB
+  buffered per connection; coalesced frames and partial tails are supported.
+  One operation runs per GLib dispatch, so authority events can invalidate
+  between queued requests.
+- Each operation has a 350 ms budget. AT-SPI calls time out after 50 ms,
+  Hyprland IPC calls after at most 150 ms, and the lock query at most 150 ms
+  after the field read.
+- One connection owns acquisition and preview. A second acquisition client
+  receives `observer_busy`, and its disconnect cannot alter the owner's state.
+  Queued callbacks bind to a connection object, so a reused file descriptor
+  inherits no earlier connection's work.
+- No typed text is written to logs or disk.
 
 Every line is a JSON object with `schema: "badi.accessibility.v1"`. Requests have
 an ASCII `id` of 1–64 letters/digits/underscore/dot/hyphen:
@@ -79,109 +200,211 @@ an ASCII `id` of 1–64 letters/digits/underscore/dot/hyphen:
 {"schema":"badi.accessibility.v1","id":"a1","op":"inspect","app_id":"chromium"}
 ```
 
-Success returns `{schema,id,ok:true,focus}`. The `focus` object contains:
+Success returns `{schema,id,ok:true,focus}`, where `focus` contains:
 
 - `binding`: exactly `{epoch,bus,path,process_id,app_id,uri}`.
 - `target`: the broker target descriptor, including the canonical origin for a
-  browser. Browser targets use `app_id: "chromium"`; binding identity retains the
-  exact verified incoming native program. `target_id` hashes bus/path/epoch.
-- `purpose: "plain_text"`, `caret`, `selection_count`, and optional `geometry`.
+  browser. Browser targets use `app_id: "chromium"`, while the binding keeps the
+  exact verified app id. `target_id` hashes bus/path/epoch.
+- `purpose: "plain_text"`, `caret`, `selection_count`, and `geometry`.
 
-`snapshot` requests repeat `binding` and `policy_target` verbatim. Successful
-responses add `before`, `after`, and `total_chars` **inside `focus`**.
+`snapshot` requests repeat `binding` and `policy_target` verbatim; replies add
+`before`, `after` and `total_chars` **inside `focus`**.
 
-`preview` requests repeat `binding` and `policy_target`, adding the last verified
-snapshot's `expected_caret` and `expected_total_chars`, plus `text` (1–160
-characters) and `ttl_ms` (1–5000). Both position fields are required integers,
-with `0 <= expected_caret <= expected_total_chars <= 2147483647`; there is no
-unbound preview request. The helper compares current eligible metadata with both
-snapshot values **before calling the renderer**, without acquiring prose. A
-missed event or repeated bounded text cannot hide a changed caret or document
-length. Success includes `focus.total_chars` and `focus.rendered`; the latter
-reports whether the optional GTK preview rendered. Fcitx verifies the reply's
-identity, caret and document length before making acceptance available.
-Unsupported coordinate conventions or unavailable GTK4LayerShell return false.
-`hide` requires only schema/id/op and returns `{schema,id,ok:true,hidden:true,epoch}`.
-Invalidation, client disconnect and expiry clear the preview. Display uses plain
-text and never accepts pointer/keyboard input.
+`preview` requests repeat `binding` and `policy_target` and add the last
+verified snapshot's `expected_caret` and `expected_total_chars` (required
+integers, `0 <= expected_caret <= expected_total_chars <= 2147483647`), `text`
+(1–160 characters) and `ttl_ms` (1–5000). The helper compares the current
+eligible metadata with both positions **before calling the renderer**, without
+acquiring prose, so a missed event or repeated bounded text cannot hide a
+changed caret or document length. Replies add `focus.total_chars` and
+`focus.rendered`, whether the GTK preview drew. Fcitx verifies the reply's
+identity, caret and length before making acceptance available.
 
-`status` takes only schema/id/op and returns
-`{schema,id,ok:true,status:{ready:true,process_id,protocol_version:1}}`. It acquires
-no application metadata or text, receives no field events, and does not hide or
-disarm another connection's preview when the diagnostic client disconnects.
-The stdlib-only `health.py` probe verifies the private socket, exact service
-PID/UID, bounded reply and unchanged socket identity. The installer and
-`badi doctor` separately check stable systemd service identity. Readiness does
-not prove that accessibility is enabled or that any app exposes an eligible field.
+`hide` takes only schema/id/op and returns
+`{schema,id,ok:true,hidden:true,epoch}`. `status` takes the same and returns
+`{schema,id,ok:true,status:{ready:true,process_id,protocol_version:1}}`; it
+acquires nothing, receives no field events, and its client's disconnect does not
+hide or disarm the owner's preview. The stdlib-only `health.py` probe verifies
+the private socket, exact service PID/UID, bounded reply and unchanged socket
+identity; the installer and `badi doctor` also check systemd service identity.
+Readiness does not prove that accessibility is enabled or that any app exposes
+an eligible field.
 
-Failures return `{schema,id,ok:false,error,epoch}` with fixed metadata-only error
-codes. Unsolicited messages are
-`{schema,event:"invalidate",epoch,reason,app_id}`; `app_id` identifies the previous
-tracked application. A client must clear any candidate and obtain fresh
-inspection/policy after invalidation or transport loss.
+Failures return `{schema,id,ok:false,error,epoch}` with a fixed metadata-only
+code. A malformed request or `observer_busy` leaves field state unchanged;
+every other failure clears the preview and the field's event match.
 
-## Verified evidence and limits
+| Error | Cause |
+| --- | --- |
+| `invalid_request`, `invalid_preview` | Malformed envelope, app id, binding, or preview text, lifetime or position |
+| `unsupported_app` | No identity rule for the app id |
+| `app_mismatch` | The active window is not a mapped, visible window of this user's exact app |
+| `desktop_unavailable` | Hyprland IPC or the lock query failed, timed out or answered unexpectedly |
+| `desktop_locked` | A lock flag is not explicitly false |
+| `focus_unavailable` | No active window, or not exactly one focused editable page field in its process |
+| `origin_unavailable`, `unsupported_origin` | No readable document address, or not an HTTP(S) origin |
+| `sensitive_field` | A password role or password `text-input-type`, before any caret, extent or text call |
+| `ineligible_field` | Not focused, editable, showing, visible and enabled |
+| `unsupported_field` | No Text interface, another role or HTML purpose, Gecko browser UI, or an unresolvable rich editor |
+| `selection_present`, `invalid_caret` | A selection, or an out-of-range or ambiguous caret |
+| `tree_limit` | A search without the Collection interface passed 192 nodes |
+| `stale_binding`, `target_mismatch` | The field, epoch, position or text changed, or another policy target |
+| `invalid_text` | Control characters other than tab and line breaks in the bounded text |
+| `operation_timeout` | The 350 ms operation budget ran out |
+| `observer_busy` | Another connection owns acquisition and preview |
+| `accessibility_unavailable` | AT-SPI or the field event connection failed |
 
-The 2026-09-07 isolated Chromium 151.0.7922.173 native Wayland fixture loaded **no
-extensions**. AT-SPI exposed a textarea, contenteditable, password role and
-cross-origin iframe field. Two fields with exactly identical text had different
-object paths. The password's `GetText` was never called. Fcitx metadata recorded
-native input/context events and app identity `chromium`; no app policy was added
-and no suggestions or editing were claimed by that acquisition probe.
-Artifacts: `output/extensionless/chromium-probe/report.json` (ignored local
-receipts). Initial viewport-emulation evidence is retained separately and does
-not establish physical visibility of offscreen fields.
+Unsolicited `{schema,event:"invalidate",epoch,reason,app_id}` messages name the
+previously tracked application. `reason` is `focus_changed`, `field_changed`,
+`window_changed`, `client_disconnected`, `operation_timeout`,
+`field_unavailable`, `accessibility_unavailable` or `desktop_unavailable` (the
+Hyprland event stream ended and the helper exits). A client must clear any
+candidate and inspect afresh after invalidation or transport loss.
 
-On this Chromium 151/Wayland/scale-2 cell, glyph `SCREEN` extents are **window-local
-physical pixels**, while the top-level frame gives window-local logical bounds.
-Hyprland supplies the actual global logical origin. The helper returns raw
-extents and the active window metadata; it marks the tested convention only for
-the verified Chromium major version, native Wayland, and an untransformed monitor.
-A successful snapshot adds `caret_edge: "right"` only when its approved context
-and text-run metadata establish LTR direction. RTL/mixed/unknown runs remain
-unrenderable. The preview independently validates this edge, scale, monitor and
-window bounds before mapping coordinates. Other applications retain unnormalized geometry.
+## Caret geometry and inline preview
 
-The source-level observer/IPC tests cover privacy gates, malformed frames,
-identity and epoch changes, stale snapshots, bounded Unicode reads and preview
-lifecycle. Private socket and actual-addon cases also prove that missed caret
-and length changes cannot reach the renderer, even with identical bounded text.
-The explicit session-bus lane uses task-created emitters to prove that
-unrelated senders and fields cannot deliver typed events, and that invalidation
-unsubscribes the authorized field. Its runner creates private D-Bus and XDG
-environments and never connects to the normal desktop's accessibility bus.
-A 2026-09-07 live Chromium 151 native Wayland trial now verifies the complete
-private-socket snapshot and a visibly aligned grey caret pill using fixed
-presentation text. Broker origin authorization preceded the text read; the
-focused Chromium window remained unchanged. Evidence is retained in
-`output/extensionless/installed-browser-01/preview-result.json` and `preview.png`.
-Later sandbox-enabled Chromium trials show real local-model text in the same grey
-pill and accept it through Fcitx, but undo also removes the preceding typed prefix.
-Native correction failed when an `input` handler moved focus after deletion.
-Even a single native append failed: a `beforeinput` focus change redirected it to
-another field, and a caret change placed it before the original prefix. Cancelling
-that event prevented mutation, while a focus change after insertion preserved
-the correct result. Evidence is in `output/extensionless/installed-browser-03/`
-and `installed-browser-04/`; an earlier sandbox-disabled append trial remains
-separately recorded in `installed-browser-02/`.
+Only `preview` calibrates, so `inspect` and `snapshot` return `geometry: null`.
+Each `preview` calibrates again; nothing is cached across requests or tied to a
+Chromium version. The helper reads the outermost `frame` F, the field's nearest
+`document web` D, the field E and the glyph G before the caret in `SCREEN`
+coordinates. Any inconsistency yields no geometry, and the addon uses the Fcitx
+panel.
 
-Native replacement is disabled in negotiation, parsing, authorization and
-dispatch. The native browser/Codex path is quarantined; matching observation does
-not grant an atomic editor operation. Editor-owned correction is separate.
-AT-SPI cannot supply the missing operation because Chromium does not expose
-`EditableText`; identical caret/selection calls also return without closing the
-typing group. The [research findings](../../docs/research/linux-architecture.md)
-describe the missing transaction authority and the distinction between renderer
-hardening and an end-to-end protocol. Codex and Brave editing remain unverified.
+Chromium and Electron report D, E and G in physical pixels offset by F's origin
+times the scale, while F is logical; Electron's arbitrary frame origin cancels.
+Chromium's `WINDOW` coordinates are relative to the web viewport and are not
+used. `D.width / F.width` must equal the Hyprland monitor scale s within 0.01.
+The window-local logical caret is then `x = (G.x + G.width - F.x*s)/s`,
+`y = (G.y - F.y*s)/s`, with line height `G.height/s`. G outside E, E outside D,
+a caret outside the window, XWayland, a transformed or ambiguous monitor and
+zero extents are rejected. This matched each app's own caret within 0.5 logical
+pixels for Chromium at scales 1 and 2 and for Brave and VS Code at scale 2;
+fractional scales, iframes and other Electron apps are untested.
 
-Full desktop installation copies the helper/service, preserves an existing
-autostart choice, and waits for an exact-process health reply before restarting
-Fcitx. `--broker-only` leaves this helper untouched. Current fixture startup used
-`--ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=3
---force-renderer-accessibility=complete`. These are measured fixture flags, not
-proof that all are needed in every Chromium/Electron version. On this workstation
-the Codex wrapper reads `~/.config/codex-flags.conf`; an already running process
-does not acquire new flags. The system accessibility bus also needs to be
-enabled. Enabling its `IsEnabled` property can persist the corresponding GNOME
-toolkit-accessibility setting; treat this as a desktop setting with a recorded
-prior value, not a process-local toggle.
+Gecko's `D.width / F.width` is not the scale (671/687 at scale 2), so it has its
+own rule. In Zen, `SCREEN` and `WINDOW` extents are identical and relative to
+the window. F sits at (0, 0), and F, D and E are logical pixels (Gecko divides
+component extents by the window's scale factor, not the page zoom), while G
+stays in device pixels. The helper requires F at the origin and as wide as the
+Hyprland window, D inside F, E inside D, and G/s inside E; the caret is then
+`x = (G.x + G.width)/s`, `y = G.y/s`, with line height `G.height/s`. Gecko's
+surface can be taller than the tile Hyprland shows, so the caret must fit
+Hyprland's window size, never F's height. At scale 2 the prediction was within
+0.3 logical pixels of the page's own caret; scale 1 is the identity, and other
+scales use the Fcitx panel.
+
+Preview geometry carries `caret_edge: "right"` only when the last approved
+snapshot's caret run is left-to-right and its line before the caret holds
+left-to-right text and no right-to-left characters. The run direction is the
+`direction` text attribute or, where the toolkit exposes none (Gecko), the order
+of the two glyphs before the caret on one line.
+
+The GTK4 layer-shell overlay then draws the suggestion as translucent grey text
+right after the caret, with no background, its font size derived from the glyph
+height and its baseline aligned with the glyph box. It renders only
+left-to-right suggestions of at most 64 characters that end inside the field,
+window and monitor; otherwise it returns `rendered: false` and the addon uses
+the Fcitx panel. Qt fields, including Omawrite and Telegram, report zero
+character extents and always use the panel. The surface uses the overlay layer,
+no keyboard interactivity, an empty input region and no focus. Any invalidation,
+new render or expiry hides it.
+
+The helper sets `GSK_RENDERER=cairo`, `GDK_DISABLE=gl,vulkan` and
+`GTK_IM_MODULE=gtk-im-context-simple` before GTK loads, so the label loads no GPU
+driver and the helper never connects to an input method. It builds the preview
+and lays out sample text once from an idle callback after startup, so font setup
+does not count against the first preview's deadline. If the preview cannot be
+built (no layer-shell support), it returns `rendered: false` until restart.
+
+## Limits
+
+Observation never grants an atomic editor operation, and AT-SPI cannot supply
+one (Chromium exposes no `EditableText`), so native replacement stays disabled
+and correction stays editor-owned. The observed apps accept through one
+append-only Fcitx `commitString` that behaves like typed text, without exact
+undo or verified field authority
+([IME-parity decision](../../docs/decisions/0003-ime-parity-append-only.md)).
+This helper's share is exact identity, snapshot/caret agreement before display
+and dispatch, and fail-closed purpose and sensitivity gates.
+
+## Installation
+
+Full desktop installation copies the helper and its service, preserves an
+existing autostart choice, and waits for an exact-process health reply before
+restarting Fcitx. On Fcitx 5.1.22 it also selects the pinned
+[compatibility frontend](../../packaging/fcitx5-wayland-compat/README.md), without
+which Chromium-based text-input-v3 clients stop publishing surrounding text.
+`--broker-only` leaves this helper and the frontend untouched. VS Code publishes
+its editor's surrounding text only with `"editor.editContext": false` in its user
+settings; `badi doctor` names this fix while the setting is missing (a blank file
+counts as `{}`, as in VS Code).
+
+The system accessibility bus must be enabled. Enabling its `IsEnabled` property
+can persist the GNOME toolkit-accessibility setting, so treat it as a desktop
+setting with a recorded prior value, not a process-local toggle.
+
+### Renderer accessibility flag
+
+Chromium exposes no web content over AT-SPI unless it starts with
+`--force-renderer-accessibility`, even with `org.a11y.Status` `IsEnabled` and
+GNOME toolkit accessibility both true. Gecko needs no flag. Measured on Chromium
+152.0.7977.82 with a local textarea:
+
+| Mode | Observer result |
+| --- | --- |
+| no flag | no web nodes; `focus_unavailable` |
+| `=basic`, `=form-controls` | URI, caret and text are available, but the HTML `tag` is empty and there are no character extents, so the purpose gate rejects the field and there is no calibrated caret |
+| bare switch, `=complete` | tag, URI, caret, bounded text and calibrated geometry; inspection took 32–43 ms of the 350 ms budget |
+
+The lightest working mode is therefore `complete` (the bare switch is the same
+mode). It builds the full accessibility tree for every page, which costs some
+browser CPU and memory, most visibly on large pages, while the app runs.
+Chromium already gives Fcitx a native Wayland text-input context with
+surrounding text, so no input-method flag is needed.
+
+`install-desktop.py --observed-app APP` (repeatable) appends only
+`--force-renderer-accessibility=complete`, with a comment, to that launcher's
+user flags file under `$XDG_CONFIG_HOME`, parsed the way its wrapper reads it:
+
+| App | File | Wrapper parsing |
+| --- | --- | --- |
+| `chromium` | `chromium-flags.conf` | `/usr/bin/chromium`: GLib shell quoting, `#` comments |
+| `brave-origin` | `brave-origin-flags.conf` | `/usr/bin/brave-origin`: each non-comment line is one argument |
+| `chatgpt` | `codex-flags.conf` | `/usr/bin/chatgpt`: text after `#` removed, split on whitespace |
+| `code` | `code-flags.conf` | `/usr/bin/code`: text after `#` removed, split on whitespace |
+| `cursor` | `cursor-flags.conf` | `/usr/share/cursor/cursor`: each non-comment line is one argument, after Cursor's entry |
+
+A file that already has the bare or `=complete` switch is left untouched. Any
+other value, or `--disable-renderer-accessibility`, stops the installer before
+it builds or changes anything, because a reduced mode is the user's choice.
+Changed files keep their mode (new files are `0600`), are backed up, listed in
+the desktop backup's `changes.json` and recorded in the install receipt.
+Running app windows keep their old flags until relaunched.
+
+Discord has no supported mechanism: its updater drops command-line flags and
+environment, `/usr/bin/discord` reads no flags file and forwards only its own
+arguments, and its desktop entry passes `--url -- %u`.
+Discord's `settings.json` `chromiumSwitches` is an undocumented internal list:
+its allowlist check accepts unlisted names only because `0 !== undefined`, and
+it appends names without values. Whether it applies before Chromium reads the
+accessibility mode is untested, and the installer does not write it.
+
+## Tests
+
+```sh
+npm run accessibility:check
+npm run accessibility:integration
+```
+
+`accessibility:check` runs the source tests without a desktop: privacy gates,
+malformed frames, identity rules, epoch changes, stale snapshots, bounded
+Unicode reads, rich-editor flattening, calibration against recorded live
+extents, the preview lifecycle, and the lock query's child lifecycle against a
+task-owned `qs`. `accessibility:integration` creates private D-Bus and XDG
+environments, never connects to the desktop's accessibility bus, and uses
+task-created emitters to prove that unrelated senders and fields cannot deliver
+events and that invalidation unsubscribes the authorized field. The
+[Fcitx addon's](../fcitx5/README.md) private-socket and actual-addon cases
+prove that missed caret and length changes cannot reach the renderer, even with
+identical bounded text.

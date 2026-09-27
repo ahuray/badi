@@ -57,10 +57,12 @@ runtime_env=(
   "XDG_STATE_HOME=$test_root/state"
   "XDG_RUNTIME_DIR=$runtime_dir"
   "PATH=$tests_dir/fake-bin:$PATH"
-  "BADI_FAKE_SCENARIO=term-ignoring-mutation"
+  # `badi site all on` state: the panel must accept and preserve it.
+  "BADI_FAKE_ALL_WEB_ORIGINS=1"
   "BADI_FAKE_CALL_LOG=$call_log"
   "BADI_FAKE_PID_LOG=$pid_log"
   "BADI_FAKE_HOLD_OVERVIEW=$test_root/hold-overview"
+  "BADI_FAKE_HOLD_MUTATION=$test_root/hold-mutation"
   "QT_QPA_PLATFORM=offscreen"
   "NO_COLOR=1"
 )
@@ -125,23 +127,15 @@ wait_for_pid_exit() {
   return 1
 }
 
-# Closed mutation: its stale exit must not refresh the inactive client.
 ipc activate >/dev/null
 wait_for_call_count 1
 wait_until_idle
 state=$(ipc state)
 jq -e '
   .overviewSchema == "badi.overview.v2"
-  and .supportScope == "verified_test_cells_only"
-  and .supportGeneralization == "none"
-  and .supportAuthorization == "not_granted_by_evidence"
-  and .verifiedSupportCells == 3
-  and .browserSupportActivation == "always"
-  and .nativeSupportActivation == "explicit_manual"
   and .settingsSchema == "badi.settings.v2"
   and .settingsDocumentValid == true
   and .subjectCount == 2
-  and .targetSubjectIndex == 0
 ' <<<"$state" >/dev/null
 legacy_settings='{"schema":"badi.settings.v1","revision":0,"paused":true,"subjects":[]}'
 [[ $(ipc validateSettings "$legacy_settings") == false ]]
@@ -171,34 +165,58 @@ linux_learning_settings=$(jq -cn '{
   }]
 }')
 [[ $(ipc validateSettings "$linux_learning_settings") == false ]]
+for all_web_origins in true false; do
+  document=$(jq -cn --argjson value "$all_web_origins" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, all_web_origins: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == true ]]
+done
+for all_web_origins in '"true"' null 1; do
+  document=$(jq -cn --argjson value "$all_web_origins" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, all_web_origins: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == false ]]
+done
 
-# A browser-policy mutation must preserve the native Fcitx rule that the same
-# settings v2 document carries through the control center.
-ipc blockTarget >/dev/null
+# A settings write changes only its own field at the next revision and carries
+# every subject and the `badi site all on` flag through unchanged.
+ipc setPaused true >/dev/null
 wait_for_call_count 3
 wait_until_idle
+[[ $(sed -n '2p' "$call_log" | cut -d' ' -f1-5) == 'settings replace --if-revision 7 --json' ]]
 replacement=$(sed -n '2p' "$call_log" | cut -d' ' -f6-)
 jq -e '
   .schema == "badi.settings.v2"
+  and .revision == 8
+  and .paused == true
+  and .all_web_origins == true
   and any(.subjects[];
     .identity == {kind: "linux_app", adapter: "fcitx", app_id: "omawrite"})
+  and any(.subjects[];
+    .identity == {kind: "browser_origin", adapter: "chromium", scheme: "https",
+      host: "example.com", port: 443})
 ' <<<"$replacement" >/dev/null
+[[ $(jq -r '.message' <<<"$(ipc state)") == 'Predictions paused.' ]]
 
-ipc clearMemory >/dev/null
+# Closed mutation: its stale exit must not refresh the inactive client, and a
+# TERM-ignoring child is escalated to SIGKILL.
+touch "$test_root/hold-mutation"
+ipc setPaused false >/dev/null
 wait_for_call_count 4
 first_pid=$(head -n 1 "$pid_log")
 ipc deactivate >/dev/null
 sleep 0.7
 wait_for_pid_exit "$first_pid"
 wait_for_call_count 4
-[[ $(jq -r '.active' <<<"$(ipc state)") == false ]]
+state=$(ipc state)
+[[ $(jq -r '.active' <<<"$state") == false ]]
+# The killed child's exit belongs to the closed lifecycle and reports nothing.
+[[ $(jq -r '.message' <<<"$state") == '' ]]
 
 # Reopen while the second TERM-ignoring mutation is still tearing down. The
 # stale mutation result is discarded and exactly one fresh overview is queued.
 ipc activate >/dev/null
 wait_for_call_count 5
 wait_until_idle
-ipc clearMemory >/dev/null
+ipc setPaused false >/dev/null
 wait_for_call_count 6
 second_pid=$(tail -n 1 "$pid_log")
 ipc deactivate >/dev/null
@@ -212,17 +230,22 @@ state=$(ipc state)
 [[ $(jq -r '.active' <<<"$state") == true ]]
 [[ $(jq -r '.refreshQueued' <<<"$state") == false ]]
 
+# A write invalidates the overview read that began before it, then reports
+# its own result over exactly one fresh overview.
+rm -- "$test_root/hold-mutation"
 touch "$test_root/hold-overview"
 ipc refresh >/dev/null
 wait_for_call_count 8
 state=$(ipc state)
 jq -e '.loading and .canMutateSettings and .settingsDocumentValid' <<<"$state" >/dev/null
 rm -- "$test_root/hold-overview"
-ipc blockTarget >/dev/null
+ipc setPaused true >/dev/null
 wait_for_call_count 10
 wait_until_idle
+sleep 0.2
+wait_for_call_count 10
 state=$(ipc state)
-jq -e '.canMutateSettings and (.message | contains("durably blocked"))' <<<"$state" >/dev/null
+jq -e '.canMutateSettings and .message == "Predictions paused."' <<<"$state" >/dev/null
 
 ipc deactivate >/dev/null
 

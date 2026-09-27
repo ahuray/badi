@@ -2,24 +2,63 @@
 """Install the Badi broker and cooperative addon into this Omarchy user session."""
 
 import argparse
+from dataclasses import dataclass
+import errno
 import hashlib
 import importlib.util
 import json
 import mmap
 import os
 from pathlib import Path
+import re
 import shutil
 import shlex
 import socket
+import stat
 import struct
 import subprocess
-import tempfile
+import sys
 import time
 
+import badi_install
+
 ROOT = Path(__file__).resolve().parents[1]
-OBSERVED_APP_FLAGS = {"chromium": "chromium-flags.conf", "chatgpt": "codex-flags.conf"}
-OBSERVED_FLAGS = ("--ozone-platform=wayland", "--enable-wayland-ime",
-                  "--wayland-text-input-version=3", "--force-renderer-accessibility=complete")
+# Each launcher's user flags file and how that wrapper turns it into arguments:
+# "glib" is /usr/bin/chromium's GLib shell parsing, "words" strips # comments
+# and splits on whitespace without quote handling (Codex: read -a; VS Code:
+# sed plus unquoted expansion), and "line" passes every non-comment line as one
+# argument (mapfile). Discord has no such file; see the accessibility runbook.
+OBSERVED_APP_FLAGS = {
+    "chromium": ("chromium-flags.conf", "glib"),
+    "brave-origin": ("brave-origin-flags.conf", "line"),
+    "chatgpt": ("codex-flags.conf", "words"),
+    "code": ("code-flags.conf", "words"),
+    "cursor": ("cursor-flags.conf", "line"),
+}
+# Measured on Chromium 152: "basic" and "form-controls" omit the HTML tag the
+# observer's purpose gate needs and the character extents its caret geometry
+# needs. The bare switch also selects the complete mode. Native Wayland
+# text-input-v3 is the Chromium 152 / Electron 42 default, so no input flags.
+OBSERVED_FLAG = "--force-renderer-accessibility=complete"
+ACCESSIBILITY_SWITCH = "--force-renderer-accessibility"
+COMPLETE_ACCESSIBILITY = (ACCESSIBILITY_SWITCH, OBSERVED_FLAG)
+# Every module the installed observer imports, beside its daemon.
+OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geometry.py", "preview.py", "health.py")
+COMPAT_LIBRARY = Path(".local/lib/badi/compat")
+COMPAT_DROPIN = Path(".config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf")
+COMPAT_MODULE = "addons/libwaylandim.so"
+COMPAT_FILES = ("launch.py", "build-receipt.json", COMPAT_MODULE)
+# Retired frontends are removed only while no service command references them.
+OBSOLETE_COMPAT = ("5.1.21",)
+STOCK_FCITX_COMMAND = "/usr/bin/fcitx5 --disable notificationitem"
+# The removed Chromium extension and its native messaging host, which the
+# former install-editors.py --chromium installed.
+RETIRED_EXTENSION = Path(".local/lib/badi/chromium")
+RETIRED_HOSTS = (Path(".local/lib/badi/badi-native-host"), Path(".local/lib/badi/badi-native-manifest"))
+RETIRED_HOST_MANIFEST = "io.github.ahuray.badi.json"
+CHROMIUM_CONFIGS = ("chromium", "google-chrome", "google-chrome-beta", "google-chrome-unstable",
+                    "BraveSoftware/Brave-Browser", "BraveSoftware/Brave-Browser-Beta",
+                    "BraveSoftware/Brave-Browser-Nightly", "BraveSoftware/Brave-Origin")
 
 
 def run(command, **kwargs):
@@ -49,31 +88,37 @@ def chromium_line_tokens(line):
     return shlex.split(line, comments=False, posix=True)
 
 
-def observed_flags(text, app="chromium"):
-    """Preserve comments and unrelated options in the installed line-based wrappers."""
-    if app == "chromium":
+def observed_tokens(text, parser):
+    """The arguments a launcher's flags file supplies, as that wrapper parses it."""
+    if parser == "glib":
         try:
-            current = [token for line in text.splitlines() for token in chromium_line_tokens(line)]
+            return [token for line in text.splitlines() for token in chromium_line_tokens(line)]
         except ValueError:
             raise RuntimeError("Inspect unbalanced quoting in Chromium startup flags before changing them.") from None
-    elif app == "chatgpt":
-        # This wrapper uses Bash read -a after stripping comments, without
-        # evaluating shell quotes; Chromium's launcher uses GLib shell parsing.
-        current = [token for line in text.splitlines() for token in line.split("#", 1)[0].split()]
-    else:
-        raise RuntimeError("Unknown observed application startup parser")
-    missing = []
-    for flag in OBSERVED_FLAGS:
-        key = flag.split("=", 1)[0]
-        matches = [token for token in current if token.split("=", 1)[0] == key]
-        if matches and any(token != flag for token in matches):
-            raise RuntimeError(f"Existing {key} conflicts with the measured Wayland input/accessibility recipe; startup flags were not changed.")
-        if not matches:
-            missing.append(flag)
-    if not missing:
-        return text
+    # Bash reads lines at \n and splits words at the default IFS only.
+    if parser == "words":
+        return [token for line in text.split("\n") for token in re.split(r"[ \t]+", line.split("#", 1)[0]) if token]
+    if parser == "line":
+        return [line for line in text.split("\n") if line.strip(" \t") and not line.lstrip(" \t").startswith("#")]
+    raise RuntimeError("Unknown observed application startup parser")
+
+
+def observed_flags(text, app="chromium"):
+    """Add only the renderer accessibility switch; None when it is already effective.
+
+    Comments and every other option stay byte-identical. A reduced or disabled
+    accessibility choice is the user's and is reported instead of overridden.
+    """
+    tokens = observed_tokens(text, OBSERVED_APP_FLAGS[app][1])
+    if any(token.split("=", 1)[0] == "--disable-renderer-accessibility" for token in tokens):
+        raise RuntimeError(f"Existing --disable-renderer-accessibility in {OBSERVED_APP_FLAGS[app][0]} conflicts with the observer's accessibility requirement; startup flags were not changed.")
+    current = [token for token in tokens if token.split("=", 1)[0] == ACCESSIBILITY_SWITCH]
+    if any(token not in COMPLETE_ACCESSIBILITY for token in current):
+        raise RuntimeError(f"Existing {ACCESSIBILITY_SWITCH} value in {OBSERVED_APP_FLAGS[app][0]} conflicts with the measured complete accessibility mode; startup flags were not changed.")
+    if current:
+        return None
     return text + ("\n" if text and not text.endswith("\n") else "") + \
-        "# Badi: cooperative Wayland input and focused accessibility\n" + "\n".join(missing) + "\n"
+        "# Badi: renderer accessibility for the focused-field observer\n" + OBSERVED_FLAG + "\n"
 
 
 def observed_config_target(home, config_home, filename):
@@ -94,7 +139,7 @@ def observed_config_target(home, config_home, filename):
     return target
 
 
-def enable_accessibility(backup):
+def enable_accessibility(installation):
     def status():
         value = run(["busctl", "--user", "--timeout=2s", "get-property", "org.a11y.Bus",
                      "/org/a11y/bus", "org.a11y.Status", "IsEnabled"],
@@ -109,10 +154,9 @@ def enable_accessibility(backup):
                   capture_output=True, text=True, timeout=3).stdout.strip()
     if toolkit not in ("true", "false"):
         raise RuntimeError("Cannot determine the prior toolkit accessibility state; it was not changed.")
-    receipt = backup / "accessibility-setting.json"
-    with receipt.open("x") as stream:
-        os.chmod(receipt, 0o600)
-        json.dump({"bus_enabled": previous, "toolkit_accessibility": toolkit == "true"}, stream)
+    receipt = installation.note("accessibility-setting.json",
+                                {"bus_enabled": previous, "toolkit_accessibility": toolkit == "true"})
+    print(f"Prior accessibility settings recorded in {receipt}", flush=True)
     if not previous:
         require_unlocked()
         run(["busctl", "--user", "--timeout=2s", "set-property", "org.a11y.Bus", "/org/a11y/bus",
@@ -122,9 +166,7 @@ def enable_accessibility(backup):
 
 
 def require_unlocked():
-    result = run(["omarchy-shell", "lock", "status"], capture_output=True, text=True, timeout=4)
-    state = json.loads(result.stdout)
-    if not isinstance(state, dict) or not all(state.get(key) is False for key in ("locked", "secure", "requested", "pending", "sessionLocked")):
+    if not badi_install.explicitly_unlocked(badi_install.lock_state()):
         raise RuntimeError("Unlock the desktop before updating the native input addon. --broker-only can update the model and controls while locked.")
 
 
@@ -139,16 +181,12 @@ def session_runtime():
 
 
 def service_installed(unit="badi-broker.service"):
-    result = run(["systemctl", "--user", "show", unit, "--property=LoadState", "--value"],
-                 capture_output=True, text=True, timeout=4)
-    return result.stdout.strip() != "not-found"
+    return badi_install.unit_value(unit, "LoadState", timeout=4) != "not-found"
 
 
 def probe_model(cli, endpoint):
     def service_pid():
-        result = run(["systemctl", "--user", "show", "badi-broker.service", "--property=MainPID", "--value"],
-                     capture_output=True, text=True, timeout=3)
-        return int(result.stdout.strip())
+        return int(badi_install.unit_value("badi-broker.service", "MainPID"))
 
     pid = service_pid()
     if pid <= 0:
@@ -169,6 +207,14 @@ def probe_model(cli, endpoint):
     if probe.returncode or service_pid() != pid:
         return None
     return json.loads(probe.stdout)
+
+
+def wait_model(cli, endpoint):
+    probe = badi_install.poll(lambda: probe_model(cli, endpoint), 60)
+    if probe is None:
+        raise RuntimeError("Model startup failed: inspect journalctl --user -u badi-broker.service")
+    require_model_health(probe)
+    return probe
 
 
 def require_model_health(probe):
@@ -205,9 +251,7 @@ def mapped_file_device(target, metadata):
 def native_addon_loaded(addon):
     """Check the current service process maps the exact newly installed file."""
     def state():
-        result = run(["systemctl", "--user", "show", "omarchy-fcitx5.service", "--property=ActiveState,MainPID"],
-                     capture_output=True, text=True, timeout=3)
-        return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        return badi_install.unit_properties("omarchy-fcitx5.service", "ActiveState", "MainPID")
 
     initial = state()
     pid = initial.get("MainPID", "0")
@@ -242,11 +286,8 @@ def native_addon_loaded(addon):
 
 
 def wait_native_addon(addon):
-    deadline = time.monotonic() + 10
-    while not native_addon_loaded(addon):
-        if time.monotonic() >= deadline:
-            raise RuntimeError("The running Fcitx service did not load the installed Badi addon. Inspect badi doctor and the Fcitx user-service journal.")
-        time.sleep(.2)
+    if not badi_install.poll(lambda: native_addon_loaded(addon), 10):
+        raise RuntimeError("The running Fcitx service did not load the installed Badi addon. Inspect badi doctor and the Fcitx user-service journal.")
 
 
 def require_accessibility_runtime():
@@ -277,9 +318,7 @@ def accessibility_health_module():
 def probe_accessibility(helper, endpoint):
     """Verify the exact service process and private metadata-only endpoint."""
     def state():
-        result = run(["systemctl", "--user", "show", "badi-accessibility.service", "--property=ActiveState,MainPID"],
-                     capture_output=True, text=True, timeout=3)
-        return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        return badi_install.unit_properties("badi-accessibility.service", "ActiveState", "MainPID")
 
     initial = state()
     pid = initial.get("MainPID", "0")
@@ -308,74 +347,339 @@ def probe_accessibility(helper, endpoint):
 
 
 def wait_accessibility(helper, endpoint):
-    deadline = time.monotonic() + 10
-    while probe_accessibility(helper, endpoint) is None:
-        if time.monotonic() >= deadline:
-            raise RuntimeError("The accessibility helper did not become ready. Inspect badi doctor and journalctl --user -u badi-accessibility.service; Fcitx was not restarted.")
-        time.sleep(.2)
+    if badi_install.poll(lambda: probe_accessibility(helper, endpoint), 10) is None:
+        raise RuntimeError("The accessibility helper did not become ready. Inspect badi doctor and journalctl --user -u badi-accessibility.service; Fcitx was not restarted.")
 
 
-def main():
+def compat_launcher():
+    """The pinned frontend selector; its constants define the supported Fcitx cell."""
+    spec = importlib.util.spec_from_file_location("badi_fcitx_compat_launch", ROOT / "packaging/fcitx5-wayland-compat/launch.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def compat_command(home, version):
+    return f"/usr/bin/python3 -B {home}/{COMPAT_LIBRARY}/fcitx5-{version}/launch.py --disable notificationitem"
+
+
+def compat_dropin(version):
+    return ("[Service]\n# Badi: pinned Fcitx Wayland frontend; launch.py falls back to /usr/bin/fcitx5.\n"
+            f"ExecStart=\nExecStart=/usr/bin/python3 -B %h/{COMPAT_LIBRARY}/fcitx5-{version}/launch.py --disable notificationitem\n")
+
+
+def fcitx_command():
+    """The effective argv of the Fcitx service's single ExecStart, verbatim."""
+    value = badi_install.unit_value("omarchy-fcitx5.service", "ExecStart")
+    commands = re.findall(r"argv\[\]=(.*?) ; ignore_errors=", value)
+    return commands[0] if len(commands) == 1 else None
+
+
+def retirable_compat(home, directory):
+    """The exact files of a retired frontend; None when anything unexpected is present."""
+    for path in (directory, *directory.parents):
+        if path == home:
+            break
+        if path.is_symlink():
+            raise RuntimeError(f"Inspect existing symlink before replacing {directory}")
+    if not directory.exists():
+        return []
+    expected = {directory / name for name in COMPAT_FILES}
+    files, folders = set(), set()
+    for path in directory.rglob("*"):
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            return None
+        (folders if path.is_dir() else files).add(path)
+    if not directory.is_dir() or files - expected or folders - {directory / "addons"}:
+        return None
+    return sorted(files)
+
+
+def verify_compat_build(directory, launcher, module="libwaylandim.so"):
+    """Accept only a checked build of the pinned source for today's exact runtime.
+
+    `module` is where the directory keeps the artifact: at the top of a build's
+    work directory, or under addons/ in an installed frontend.
+    """
+    directory = Path(directory).expanduser().resolve()
+    module = directory / module
+    try:
+        receipt = json.loads((directory / "build-receipt.json").read_text())
+        manifest = json.loads((ROOT / "packaging/fcitx5-wayland-compat/manifest.json").read_text())
+        runtime = receipt["runtime_files_sha256"]
+        valid = (receipt["schema"] == "badi.fcitx-wayland-compat-build.v1" and receipt["source"] == manifest
+                 and receipt["protocol_checks_passed"] is True
+                 and receipt["installed_build_versions"] == {name: launcher.VERSION for name in ("Fcitx5Core", "Fcitx5Config", "Fcitx5Utils")}
+                 and set(runtime) == set(launcher.RUNTIME_FILES)
+                 and all(launcher.digest(Path(path)) == runtime[path] for path in launcher.RUNTIME_FILES)
+                 and not module.is_symlink() and module.is_file()
+                 and launcher.digest(module) == receipt["artifact_sha256"])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        valid = False
+    if not valid:
+        raise RuntimeError("The Wayland compatibility build is not a checked build of the pinned source for this system's Fcitx runtime. Rebuild it, or rerun with --no-wayland-compat.")
+    return directory
+
+
+def retired_browser_components(home, config_home):
+    """Files and folders the removed Chromium integration left installed.
+
+    A browser's native-messaging manifest counts only while it names Badi's
+    installed host, and the extension folder only while it holds nothing but
+    plain files and folders. Returns (files, folders deepest first, kept).
+    """
+    host = home / RETIRED_HOSTS[0]
+    files = [home / path for path in RETIRED_HOSTS if (home / path).is_file() and not (home / path).is_symlink()]
+    folders, kept = [], []
+    extension = home / RETIRED_EXTENSION
+    if extension.is_symlink() or (extension.exists() and not extension.is_dir()):
+        kept.append(extension)
+    elif extension.is_dir():
+        found, expected = [], True
+        for directory, subdirectories, names in os.walk(extension):
+            directory = Path(directory)
+            folders.append(directory)
+            for path in (directory / name for name in (*subdirectories, *names)):
+                if path.is_symlink() or not (path.is_file() or path.is_dir()):
+                    expected = False
+                elif path.is_file():
+                    found.append(path)
+        if expected:
+            files += found
+            folders.reverse()
+        else:
+            folders = []
+            kept.append(extension)
+    for browser in CHROMIUM_CONFIGS:
+        manifest = config_home / browser / "NativeMessagingHosts" / RETIRED_HOST_MANIFEST
+        if manifest.is_symlink() or not manifest.is_file() or not manifest.is_relative_to(home):
+            continue
+        try:
+            named = json.loads(manifest.read_text()).get("path")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(named, str) and Path(named).is_absolute() and Path(named).resolve() == host.resolve():
+            files.append(manifest)
+    return files, folders, kept
+
+
+def plan_wayland_compat(home, build=None):
+    """Decide the pinned frontend action before building or changing any file.
+
+    Another Fcitx version gets no frontend: 5.1.23 contains the upstream
+    refresh, and launch.py already falls back to the system frontend.
+    """
+    launcher = compat_launcher()
+    try:
+        version = run(["/usr/bin/fcitx5", "--version"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        raise RuntimeError("Cannot determine the system Fcitx version. Rerun with --no-wayland-compat to leave its frontend unchanged.") from None
+    if version != launcher.VERSION:
+        if build is not None:
+            raise RuntimeError(f"The system Fcitx is {version or 'unknown'}, not the pinned {launcher.VERSION}; the supplied compatibility build was not installed.")
+        return {"install": False, "version": version, "pinned": launcher.VERSION}
+    homes = dict.fromkeys((str(Path.home()), str(home)))
+    command = fcitx_command()
+    active = {old for old in OBSOLETE_COMPAT if command in {compat_command(item, old) for item in homes}}
+    managed = {compat_command(item, old) for item in homes for old in (version, *OBSOLETE_COMPAT)}
+    if command != STOCK_FCITX_COMMAND and (command not in managed or not (home / COMPAT_DROPIN).is_file()):
+        raise RuntimeError("omarchy-fcitx5.service runs an unrecognized command. Inspect its overrides, or rerun with --no-wayland-compat.")
+    root = home / COMPAT_LIBRARY / f"fcitx5-{version}"
+    if retirable_compat(home, root) is None:
+        raise RuntimeError(f"Inspect unexpected files in {root} before installing the compatibility frontend.")
+    obsolete, kept = [], []
+    for old in OBSOLETE_COMPAT:
+        directory = home / COMPAT_LIBRARY / f"fcitx5-{old}"
+        files = retirable_compat(home, directory)
+        if files is None or (files and old in active):
+            kept.append(directory)
+        elif files:
+            obsolete.append((directory, files))
+    # "build" holds the verified build receipt and "module" its artifact;
+    # "work" is a directory this run builds in and removes once installed.
+    plan = {"install": True, "version": version, "pinned": launcher.VERSION, "root": root, "launcher": launcher,
+            "homes": tuple(homes), "build": None, "module": None, "work": None, "reused": False,
+            "obsolete": obsolete, "kept": kept}
+    if build is not None:
+        directory = verify_compat_build(build, launcher)
+        plan.update(build=directory, module=directory / "libwaylandim.so")
+        return plan
+    try:
+        # The frontend already installed for this exact runtime and pinned
+        # source needs no download or compile; its receipt is checked the same way.
+        directory = verify_compat_build(root, launcher, COMPAT_MODULE)
+    except RuntimeError:
+        return plan
+    plan.update(build=directory, module=directory / COMPAT_MODULE, reused=True)
+    return plan
+
+
+def build_wayland_compat(plan):
+    """Build and verify the frontend unless the plan already holds a verified build."""
+    if plan["reused"]:
+        print(f"Reusing the verified Fcitx {plan['version']} compatibility frontend already installed; "
+              "nothing to download or compile.", flush=True)
+    if plan["build"] is None:
+        work = ROOT / "output/extensionless" / f"fcitx-wayland-compat-{plan['version']}-{time.time_ns()}"
+        run([sys.executable, "-B", str(ROOT / "packaging/fcitx5-wayland-compat/build.py"),
+             "--work-dir", str(work), "--jobs", "2", "--check"], cwd=ROOT)
+        directory = verify_compat_build(work, plan["launcher"])
+        plan.update(build=directory, module=directory / "libwaylandim.so", work=directory)
+
+
+def wait_compat_frontend(module):
+    """Report whether launch.py selected the installed frontend; bounded."""
+    return bool(badi_install.poll(lambda: native_addon_loaded(module), 3))
+
+
+@dataclass
+class Plan:
+    """What one installer run will change, decided before anything is built."""
+    args: argparse.Namespace
+    home: Path
+    config_home: Path
+    runtime: Path
+    # Observed-app flags files to change: target -> (original text or None, new text).
+    flag_updates: dict
+    flags_present: list
+    broker_updating: bool
+    accessibility_updating: bool
+    compat: dict | None
+    checkout: dict | None = None
+
+    @property
+    def native(self):
+        return not self.args.broker_only
+
+    @property
+    def installs_compat(self):
+        return bool(self.compat and self.compat["install"])
+
+
+def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--broker-only", action="store_true",
                         help="Update only the broker, commands and service; leave the native input method running")
     parser.add_argument("--observed-app", action="append", choices=tuple(OBSERVED_APP_FLAGS), default=[],
-                        help="Prepare diagnostic accessibility/input observation on next launch; native browser/Codex editing is disabled")
+                        help=f"Add {OBSERVED_FLAG} to this app's user flags file for its next launch (backed up)")
+    parser.add_argument("--no-wayland-compat", action="store_true",
+                        help="Leave omarchy-fcitx5.service on its current frontend (skip the pinned Fcitx 5.1.22 compatibility frontend)")
+    parser.add_argument("--wayland-compat-build", type=Path, metavar="DIR",
+                        help="Install this existing checked compatibility build instead of building one")
     args = parser.parse_args()
     if args.broker_only and args.observed_app:
         parser.error("--observed-app requires the complete unlocked native installation")
+    if args.broker_only and args.wayland_compat_build:
+        parser.error("--wayland-compat-build requires the complete unlocked native installation")
+    if args.no_wayland_compat and args.wayland_compat_build:
+        parser.error("--no-wayland-compat and --wayland-compat-build are exclusive")
+    return args
+
+
+def preflight(args):
+    """Check the session and decide every change before building or touching a file."""
     home = Path.home().resolve()
     if not os.environ.get("WAYLAND_DISPLAY") or not os.environ.get("XDG_RUNTIME_DIR"):
         raise RuntimeError("Run the installer from your graphical session")
     if not args.broker_only:
         require_unlocked()
         require_accessibility_runtime()
-    flag_updates = {}
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    config_home = badi_install.config_home(home)
+    flag_updates, flags_present = {}, []
     for app in dict.fromkeys(args.observed_app):
-        target = observed_config_target(home, config_home, OBSERVED_APP_FLAGS[app])
+        target = observed_config_target(home, config_home, OBSERVED_APP_FLAGS[app][0])
         original = target.read_text() if target.exists() else None
-        flag_updates[target] = (original, observed_flags(original or "", app))
+        text = observed_flags(original or "", app)
+        if text is None:
+            flags_present.append(app)
+        else:
+            flag_updates[target] = (original, text)
     runtime = session_runtime()
-    updating = service_installed()
-    accessibility_updating = False
+    broker_updating = service_installed()
+    accessibility_updating, compat = False, None
     if not args.broker_only:
         accessibility_updating = service_installed("badi-accessibility.service")
         run(["systemctl", "--user", "is-active", "omarchy-fcitx5.service"], capture_output=True)
-    run(["cargo", "build", "--release", "--locked", "--workspace", "--bins"], cwd=ROOT)
-    if not args.broker_only:
+        if not args.no_wayland_compat:
+            compat = plan_wayland_compat(home, args.wayland_compat_build)
+    return Plan(args, home, config_home, runtime, flag_updates, flags_present,
+                broker_updating, accessibility_updating, compat)
+
+
+def build(plan):
+    # Record the checkout state that is about to be built and copied.
+    plan.checkout = badi_install.source_identity(ROOT)
+    # Build only the shipped package: installs never compile the Prediction Lab.
+    run(["cargo", "build", "--release", "--locked", "-p", "badi-broker", "--bins"], cwd=ROOT)
+    if plan.native:
         run(["npm", "run", "fcitx5:check"], cwd=ROOT)
+        if plan.installs_compat:
+            build_wayland_compat(plan.compat)
         require_unlocked()
-    backup = home / ".local/state/badi/install-backups" / str(time.time_ns())
-    backup.mkdir(parents=True, mode=0o700)
-    changes = []
 
-    def install(source, target):
-        target.parent.mkdir(parents=True, exist_ok=True)
-        managed_link = target == home / ".local/bin/badi-desktop" and target.resolve() == ROOT / "scripts/badi-desktop.py"
-        if target.is_symlink() and not managed_link:
-            raise RuntimeError(f"Inspect existing symlink before replacing {target}")
-        if target.exists():
-            saved = backup / target.relative_to(home)
-            saved.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(target, saved, follow_symlinks=False)
-        changes.append(str(target.relative_to(home)))
-        # Keep recovery discoverable even if a later target or startup fails.
-        (backup / "changed-files.json").write_text(json.dumps(changes, indent=2))
-        # Never truncate a library or executable that another process may map.
-        with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as stream:
-            staged = Path(stream.name)
-        try:
-            shutil.copy2(source, staged)
-            staged.replace(target)
-        finally:
-            staged.unlink(missing_ok=True)
 
+def default_settings():
+    """The first settings document: predictions allowed in the natively tested editors."""
+    subjects = [{"identity": {"kind": "linux_app", "adapter": "fcitx", "app_id": app},
+                 "permissions": badi_install.grant("allow")}
+                for app in ("com.github.xournalpp.xournalpp", "omawrite")]
+    return {"schema": "badi.settings.v2", "revision": 1, "paused": False, "subjects": subjects}
+
+
+def xournal_launcher(home):
+    """Xournal++'s launcher with GTK_IM_MODULE=fcitx on every Exec line, or None.
+
+    Only Xournal++ needs its GTK toolkit path selected explicitly on Wayland;
+    the upstream launcher's MIME types and action entries are preserved.
+    """
+    desktop = Path("/usr/share/applications/com.github.xournalpp.xournalpp.desktop")
+    if not desktop.exists():
+        return None
+    target = home / ".local/share/applications" / desktop.name
+    text = target.read_text() if target.exists() else desktop.read_text()
+    return target, "\n".join("Exec=env GTK_IM_MODULE=fcitx " + line[5:]
+                             if line.startswith("Exec=") and "GTK_IM_MODULE=fcitx" not in line else line
+                             for line in text.splitlines()) + "\n"
+
+
+def install_files(plan):
+    """Install every file this run owns; returns the Installation with its backup and current files."""
+    home, native = plan.home, plan.native
+    installation = badi_install.Installation(home, "desktop")
+    install = installation.copy
+
+    def retire(files, folders):
+        # Backed up like replaced files, so a restore recreates them, and they
+        # leave the install receipt's new set.
+        for path in files:
+            installation.remove(path)
+        for folder in folders:
+            try:
+                folder.rmdir()
+            except OSError as error:
+                if error.errno not in (errno.ENOENT, errno.ENOTEMPTY):
+                    raise
+
+    retired_files, retired_folders, retired_kept = retired_browser_components(home, plan.config_home)
+    retire(retired_files, retired_folders)
+    badi_install.forget(home, "editors", retired_files)
+
+    library = home / ".local/lib/badi"
     for name in ("badi-broker", "badictl"):
-        install(ROOT / "target/release" / name, home / ".local/lib/badi" / name)
-    install(ROOT / "scripts/badi-desktop.py", home / ".local/bin/badi")
-    install(ROOT / "scripts/badi-desktop.py", home / ".local/bin/badi-desktop")
-    install(ROOT / "target/release/badictl", home / ".local/bin/badictl")
+        install(ROOT / "target/release" / name, library / name)
+    # One copy of each command: the CLI imports its helper module from its own
+    # directory, and the PATH names are links (the Omarchy panel runs badi-desktop).
+    install(ROOT / "scripts/badi-desktop.py", library / "badi-desktop.py")
+    install(ROOT / "scripts/badi_install.py", library / "badi_install.py")
+    commands = {"badi": "../lib/badi/badi-desktop.py", "badi-desktop": "../lib/badi/badi-desktop.py",
+                "badictl": "../lib/badi/badictl"}
+    for name, destination in commands.items():
+        target = home / ".local/bin" / name
+        # A command link replaces an earlier copy, or the development link to
+        # this checkout's script; any other symlink is the user's.
+        installation.link(target, destination,
+                          replace_link=target.is_symlink() and target.resolve() == ROOT / "scripts/badi-desktop.py")
+    badi_install.forget(home, "desktop", [home / ".local/bin" / name for name in commands])
     install(ROOT / "packaging/io.github.ahuray.badi.desktop",
             home / ".local/share/applications/io.github.ahuray.badi.desktop")
     install(ROOT / "packaging/io.github.ahuray.badi.svg",
@@ -385,81 +689,80 @@ def main():
     for name in ("LICENSE", "README.md"):
         install(ROOT / "broker/data/writing-lexicon" / name,
                 home / ".local/share/badi/licenses/writing-lexicon" / name)
-    if not args.broker_only:
+    if native:
         install(ROOT / "adapters/fcitx5/build/libbadi-fcitx5.so", home / ".local/lib/fcitx5/libbadi-fcitx5.so")
         install(ROOT / "adapters/fcitx5/build/badi.conf", home / ".local/share/fcitx5/addon/badi.conf")
-        for name in ("daemon.py", "contract.py", "preview.py", "health.py"):
-            install(ROOT / "adapters/accessibility" / name, home / ".local/lib/badi/accessibility" / name)
+        for name in OBSERVER_MODULES:
+            install(ROOT / "adapters/accessibility" / name, library / "accessibility" / name)
         install(ROOT / "packaging/systemd/badi-accessibility.service",
                 home / ".config/systemd/user/badi-accessibility.service")
-        for target, (original, text) in flag_updates.items():
+        for target, (original, text) in plan.flag_updates.items():
             if target.parent.resolve() != target.parent or target.is_symlink() or (target.read_text() if target.exists() else None) != original:
                 raise RuntimeError("App startup configuration changed during the build; newer user settings were preserved.")
-            with tempfile.TemporaryDirectory() as directory:
-                staged = Path(directory) / target.name
-                staged.write_text(text)
-                staged.chmod(0o600)
-                install(staged, target)
-    unit = home / ".config/systemd/user/badi-broker.service"
-    install(ROOT / "packaging/systemd/badi-broker.service", unit)
-    if not args.broker_only:
+            installation.write(target, text.encode(), stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600)
+        if plan.installs_compat:
+            root = plan.compat["root"]
+            install(plan.compat["module"], root / COMPAT_MODULE)
+            install(plan.compat["build"] / "build-receipt.json", root / "build-receipt.json")
+            install(ROOT / "packaging/fcitx5-wayland-compat/launch.py", root / "launch.py")
+            installation.write(home / COMPAT_DROPIN, compat_dropin(plan.compat["version"]).encode(), 0o644)
+            for directory, files in plan.compat["obsolete"]:
+                retire(files, (directory / "addons", directory))
+            if plan.compat["work"]:
+                # The installed copy and its receipt replace the ~40 MB build tree.
+                shutil.rmtree(plan.compat["work"])
+    install(ROOT / "packaging/systemd/badi-broker.service", home / ".config/systemd/user/badi-broker.service")
+    if native:
         install(ROOT / "packaging/systemd/fcitx-badi.conf",
                 home / ".config/systemd/user/omarchy-fcitx5.service.d/50-badi.conf")
-    config = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config") / "badi/settings.json"
-    if not config.exists():
-        config.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        subjects = [{"identity": {"kind": "linux_app", "adapter": "fcitx", "app_id": app},
-                     "permissions": {"context_read": "allow", "display": "allow", "suggest": "allow",
-                                     "learn": "block", "retention": {"mode": "none"}}}
-                    for app in ("com.github.xournalpp.xournalpp", "omawrite")]
-        with config.open("x") as stream:
-            os.chmod(config, 0o600)
-            json.dump({"schema": "badi.settings.v2", "revision": 1, "paused": False, "subjects": subjects}, stream)
-    # Preserve the upstream launcher, including its MIME types and action entries.
-    # Only Xournal++ needs its GTK toolkit path selected explicitly on Wayland.
-    desktop = Path("/usr/share/applications/com.github.xournalpp.xournalpp.desktop")
-    if not args.broker_only and desktop.exists():
-        target = home / ".local/share/applications" / desktop.name
-        text = target.read_text() if target.exists() else desktop.read_text()
-        text = "\n".join("Exec=env GTK_IM_MODULE=fcitx " + line[5:]
-                         if line.startswith("Exec=") and "GTK_IM_MODULE=fcitx" not in line else line
-                         for line in text.splitlines()) + "\n"
-        with tempfile.TemporaryDirectory() as directory:
-            staged = Path(directory) / desktop.name
-            staged.write_text(text)
-            install(staged, target)
-    (backup / "changed-files.json").write_text(json.dumps(changes, indent=2))
-    print(f"Rollback files and changed-file list: {backup}", flush=True)
-    run(["systemd-analyze", "--user", "verify", str(unit)])
-    if not args.broker_only:
-        run(["systemd-analyze", "--user", "verify", str(home / ".config/systemd/user/badi-accessibility.service")])
+    settings = plan.config_home / "badi/settings.json"
+    if not settings.exists():
+        settings.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with settings.open("x") as stream:
+            os.chmod(settings, 0o600)
+            json.dump(default_settings(), stream)
+    launcher = xournal_launcher(home) if native else None
+    if launcher:
+        installation.write(launcher[0], launcher[1].encode(), 0o644)
+    if retired_files:
+        print("Removed the retired Badi browser extension and native host; if the unpacked Badi extension "
+              "is still loaded, remove it in brave://extensions.", flush=True)
+    for path in retired_kept:
+        print(f"Kept {path}: it holds unexpected entries from the retired browser extension. Inspect and remove it.", flush=True)
+    installation.finish()
+    receipt = badi_install.write_receipt(home, "desktop", plan.checkout, installation.current)
+    print(f"Install receipt: {receipt}", flush=True)
+    return installation
+
+
+def restart(plan, installation):
+    """Apply the installed files to the running services; returns the model's health."""
+    home, runtime = plan.home, plan.runtime
+    units = home / ".config/systemd/user"
+    run(["systemd-analyze", "--user", "verify", str(units / "badi-broker.service")])
+    if plan.native:
+        run(["systemd-analyze", "--user", "verify", str(units / "badi-accessibility.service")])
+    if plan.installs_compat:
+        run(["systemd-analyze", "--user", "verify", "omarchy-fcitx5.service"])
     run(["systemctl", "--user", "daemon-reload"])
-    if not updating:
+    if not plan.broker_updating:
         run(["systemctl", "--user", "enable", "badi-broker.service"])
     run(["systemctl", "--user", "reset-failed", "badi-broker.service"])
     run(["systemctl", "--user", "restart", "badi-broker.service"])
-    cli = home / ".local/lib/badi/badictl"
-    deadline = time.monotonic() + 60
-    while True:
-        probe = probe_model(cli, runtime / "badi/broker.sock")
-        if probe is not None:
-            require_model_health(probe)
-            break
-        if time.monotonic() >= deadline:
-            raise RuntimeError("Model startup failed: inspect journalctl --user -u badi-broker.service")
-        time.sleep(.2)
-    pause_note = " Predictions remain paused; use badi resume when wanted." if probe["paused"] else ""
-    if args.broker_only:
-        print("Local model ready. Broker and controls updated; native input addon was not restarted." + pause_note)
-        return
+    probe = wait_model(home / ".local/lib/badi/badictl", runtime / "badi/broker.sock")
+    if not plan.native:
+        return probe
     require_unlocked()
-    if not accessibility_updating:
+    if not plan.accessibility_updating:
         run(["systemctl", "--user", "enable", "badi-accessibility.service"])
     run(["systemctl", "--user", "reset-failed", "badi-accessibility.service"])
     run(["systemctl", "--user", "restart", "badi-accessibility.service"])
     wait_accessibility(home / ".local/lib/badi/accessibility/daemon.py", runtime / "badi/accessibility.sock")
-    if args.observed_app:
-        enable_accessibility(backup)
+    if plan.args.observed_app:
+        enable_accessibility(installation)
+    if plan.installs_compat and fcitx_command() not in {compat_command(item, plan.compat["version"]) for item in plan.compat["homes"]}:
+        raise RuntimeError("Another omarchy-fcitx5.service override replaces the compatibility command, so Fcitx was not restarted. "
+                           "Inspect its drop-ins, restore the newest backup in ~/.local/state/badi/install-backups, or rerun with --no-wayland-compat.")
     require_unlocked()
     profile = home / ".config/fcitx5/profile"
     previous = hashlib.sha256(profile.read_bytes()).digest()
@@ -467,10 +770,41 @@ def main():
     wait_native_addon(home / ".local/lib/fcitx5/libbadi-fcitx5.so")
     if hashlib.sha256(profile.read_bytes()).digest() != previous:
         raise RuntimeError("Fcitx rewrote the keyboard profile; inspect it before continuing")
+    return probe
+
+
+def report(plan, probe):
+    pause_note = " Predictions remain paused; use badi resume when wanted." if probe["paused"] else ""
+    if not plan.native:
+        print("Local model ready. Broker and controls updated; native input addon was not restarted." + pause_note)
+        return
     print("Local model and accessibility helper ready. Desktop addon loaded by the normal Fcitx service. Keyboard profile preserved. Application accessibility and exact target policy determine coverage; use badi doctor to inspect setup." + pause_note)
-    if args.observed_app:
-        print("Diagnostic startup flags prepared for " + ", ".join(dict.fromkeys(args.observed_app)) +
-              ". Native browser/Codex writing is disabled because the external input path lacks safe editor transaction authority. Relaunch normally only for diagnostic observation. Existing windows were not closed; app/site policy is unchanged.")
+    compat = plan.compat
+    if compat is None:
+        print("Fcitx Wayland frontend left unchanged (--no-wayland-compat).")
+    elif not compat["install"]:
+        print(f"System Fcitx {compat['version'] or 'unknown'} is not the pinned {compat['pinned']}, so the Wayland compatibility frontend was not installed; Fcitx 5.1.23 and later include the upstream refresh.")
+    elif wait_compat_frontend(compat["root"] / "addons/libwaylandim.so"):
+        print(f"Pinned Fcitx {compat['version']} Wayland compatibility frontend verified in the running service.")
+    else:
+        print("The Wayland compatibility frontend is installed, but launch.py selected the system frontend for this runtime. Inspect journalctl --user -u omarchy-fcitx5.service; input continues with stock Fcitx.")
+    for directory in compat["kept"] if plan.installs_compat else ():
+        print(f"Kept {directory}: it is still referenced or holds unexpected files. Rerun the installer after inspecting it.")
+    if plan.args.observed_app:
+        prepared = [app for app in dict.fromkeys(plan.args.observed_app) if app not in plan.flags_present]
+        if prepared:
+            print(f"{OBSERVED_FLAG} added for " + ", ".join(prepared) +
+                  ". Relaunch the app to apply it; existing windows were not closed and app/site policy is unchanged."
+                  " Complete renderer accessibility costs some browser CPU and memory on every page.")
+        if plan.flags_present:
+            print("Renderer accessibility was already enabled for " + ", ".join(plan.flags_present) + "; its flags file was not changed.")
+
+
+def main():
+    plan = preflight(parse_arguments())
+    build(plan)
+    installation = install_files(plan)
+    report(plan, restart(plan, installation))
 
 
 if __name__ == "__main__":

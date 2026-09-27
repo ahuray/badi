@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, writeFile, readFile, stat, rm, mkdir, symlink, copyFile, chmod } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, readdir, stat, rm, mkdir, symlink, copyFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { parseOptions, validateOutputPath, prepareOutput, fileIdentity, sourceHashes, validateCleanup, decodeEvents, runSuite, ObservedWorker } from './run.mjs';
+import { parseOptions, validateOutputPath, prepareOutput, fileIdentity, sourceHashes, labCrateSources, validateCleanup, decodeEvents, runSuite, ObservedWorker } from './run.mjs';
 import { createLabServer } from './server.mjs';
 import { readModelArtifact } from './model-artifact.mjs';
 
@@ -48,7 +49,7 @@ class FakeWorker {
 }
 
 test('CLI parsing keeps generation seed fixed and baseline settings independent of experiment settings', () => {
-  const parsed = parseOptions(['--suite', 'input.json', '--output', 'output/writing/new', '--modes', 'production_baseline,healed',
+  const parsed = parseOptions(['--suite', 'input.json', '--output', 'output/writing/new', '--modes', 'production_boundary,healed',
     '--budget-ms', '2500', '--max-tokens', '32', '--seed', '19', '--cache-prompt', 'false'], '/work/badi');
   assert.equal(parsed.suitePath, '/work/badi/input.json');
   assert.equal(parsed.outputPath, '/work/badi/output/writing/new');
@@ -67,20 +68,18 @@ test('CLI parsing keeps generation seed fixed and baseline settings independent 
   assert.throws(() => parseOptions([]));
 });
 
-test('CLI production-boundary mode is explicit and keeps production settings despite experiment overrides', () => {
+test('CLI production mode keeps production settings despite experiment overrides', () => {
   const base = ['--suite', 'suite.json', '--output', 'output/writing/new'];
-  const defaults = parseOptions(base);
-  assert.equal(defaults.configs.some(value => value.mode === 'production_boundary'), false);
-  const parsed = parseOptions([...base, '--modes', 'production_baseline,production_boundary,context,instructed,healed',
+  const parsed = parseOptions([...base, '--modes', 'production_boundary,context,instructed,healed',
     '--budget-ms', '5000', '--max-tokens', '64', '--cache-prompt', 'false', '--seed', '123']);
-  assert.equal(parsed.configs.length, 5);
-  for (const mode of ['production_baseline', 'production_boundary']) {
-    assert.deepEqual(parsed.configs.find(value => value.mode === mode), { id: mode, mode,
-      budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 });
-  }
+  assert.equal(parsed.configs.length, 4);
+  assert.deepEqual(parsed.configs.find(value => value.mode === 'production_boundary'), { id: 'production_boundary',
+    mode: 'production_boundary', budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 });
   assert.equal(parsed.seed, 123);
   assert.equal(parsed.configs.find(value => value.mode === 'context').budget_ms, 5000);
   assert.throws(() => parseOptions([...base, '--modes', 'production_boundary_unknown']));
+  // The historical unhealed baseline is retired; production is the only baseline.
+  assert.throws(() => parseOptions([...base, '--modes', 'production_baseline']));
 });
 
 test('artifact CLI option is explicit and cannot pass arbitrary runtime flags', () => {
@@ -107,7 +106,7 @@ test('prefill batch is an explicit bounded launch choice, separate from generati
 
 test('instructed healing is an explicit CLI experiment with unchanged defaults and bounds', () => {
   const base = ['--suite', 'suite.json', '--output', 'output/writing/new'];
-  assert.deepEqual(parseOptions(base).configs.map(config => config.mode), ['production_baseline', 'context']);
+  assert.deepEqual(parseOptions(base).configs.map(config => config.mode), ['production_boundary', 'context']);
   const selected = parseOptions([...base, '--modes', 'instructed_healed', '--budget-ms', '1500',
     '--max-tokens', '16', '--cache-prompt', 'false', '--seed', '73']);
   assert.deepEqual(selected.configs, [{ id: 'instructed_healed', mode: 'instructed_healed',
@@ -122,7 +121,7 @@ test('instructed healing is an explicit CLI experiment with unchanged defaults a
 
 test('context-attested recovery is opt-in with ordinary experimental settings and strict bounds', () => {
   const base = ['--suite', 'suite.json', '--output', 'output/writing/new'];
-  assert.deepEqual(parseOptions(base).configs.map(config => config.mode), ['production_baseline', 'context']);
+  assert.deepEqual(parseOptions(base).configs.map(config => config.mode), ['production_boundary', 'context']);
   const selected = parseOptions([...base, '--modes', 'healed,healed_attested', '--budget-ms', '5000',
     '--max-tokens', '32', '--cache-prompt', 'false', '--seed', '71']);
   assert.deepEqual(selected.configs, ['healed', 'healed_attested'].map(mode => ({ id: mode, mode,
@@ -162,15 +161,28 @@ test('file/source provenance hashes exact bytes and cached hashing notices conte
   assert.notEqual(changed.sha256, first.sha256);
   assert.deepEqual(await sourceHashes(['suite.json'], f.directory), { 'suite.json': changed.sha256 });
   const sources = await sourceHashes();
-  for (const path of ['broker/src/semantic/client/writing_lab.rs', 'Cargo.lock', 'broker/src/provider.rs',
-    'broker/src/writing_lab/process.rs', 'broker/src/writing_lab/prefill_probe.rs',
-    'evaluation/writing/lab/paced.mjs', 'broker/src/writing_lab/paced_probe.rs',
-    'broker/src/writing_lab/paced_probe/scheduler.rs', 'broker/src/writing_lab/artifact.rs', 'broker/src/writing_lab/attestation.rs',
-    'evaluation/writing/lab/model-artifact.mjs',
-    'broker/src/semantic/client/prefill_probe.rs', 'broker/src/segment.rs',
+  for (const path of ['evaluation/writing/lab-worker/src/transport.rs', 'Cargo.lock', 'broker/src/provider.rs',
+    'broker/src/semantic/process.rs', 'evaluation/writing/lab-worker/src/prefill_probe.rs',
+    'evaluation/writing/lab/paced.mjs', 'evaluation/writing/lab-worker/src/paced_probe.rs',
+    'evaluation/writing/lab-worker/src/paced_probe/scheduler.rs', 'evaluation/writing/lab-worker/src/main.rs',
+    'evaluation/writing/lab-worker/src/qualification/device.rs', 'evaluation/writing/lab-worker/Cargo.toml',
+    'evaluation/writing/lab/model-artifact.mjs', 'broker/src/semantic/wire.rs', 'broker/src/segment.rs',
     'broker/data/writing-lexicon/en.txt']) assert.match(sources[path], /^[a-f0-9]{64}$/u);
-  assert.equal(sources['broker/src/writing_lab/attestation.rs'],
-    hash(await readFile(new URL('../../../broker/src/writing_lab/attestation.rs', import.meta.url))));
+  assert.equal(sources['evaluation/writing/lab-worker/src/attestation.rs'],
+    hash(await readFile(new URL('../lab-worker/src/attestation.rs', import.meta.url))));
+});
+
+test('run provenance hashes every Lab worker source file in a stable order', async () => {
+  const crate = new URL('../lab-worker/', import.meta.url);
+  const onDisk = (await readdir(new URL('src/', crate), { recursive: true, withFileTypes: true }))
+    .filter(entry => entry.isFile())
+    .map(entry => relative(fileURLToPath(new URL('../../../', import.meta.url)), join(entry.parentPath, entry.name)));
+  assert.ok(onDisk.includes('evaluation/writing/lab-worker/src/lib.rs') && onDisk.length > 20);
+  const listed = await labCrateSources();
+  assert.deepEqual(listed, ['evaluation/writing/lab-worker/Cargo.toml', ...[...onDisk].sort()]);
+  const sources = await sourceHashes();
+  for (const path of listed) assert.match(sources[path], /^[a-f0-9]{64}$/u, path);
+  assert.equal(Object.keys(sources).some(path => path.startsWith('broker/src/writing_lab')), false);
 });
 
 test('cleanup receipts preserve runtime identity and reject malformed lifecycle observations', () => {

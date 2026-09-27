@@ -13,6 +13,9 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 PREFIX = os.environ.get("BADI_TEST_PREFIX", "thank you")
 SUFFIX = os.environ.get("BADI_TEST_SUFFIX", " for your time")
+# preview.c renders neutral grey: 24-bit when COLORTERM says so, which this
+# test pins; the 256-colour and basic-terminal styles are covered by test-preview.py.
+GREY = "\x1b[38;2;128;128;128m"
 
 
 def main():
@@ -29,7 +32,7 @@ def main():
             os.chdir(root)
             os.execvpe("bash", ["bash", "--noprofile", "--rcfile", str(rc), "-i"],
                        {**os.environ, "BADI_EDITOR_DIR": str(ROOT / "adapters"),
-                        "TERM": "xterm-256color", "INPUTRC": "/dev/null"})
+                        "TERM": "xterm-256color", "COLORTERM": "truecolor", "INPUTRC": "/dev/null"})
         transcript = bytearray()
 
         def expect(text, timeout=4):
@@ -55,7 +58,7 @@ def main():
         try:
             expect("BADI-TEST> ")
             send(PREFIX + "\x18\t")
-            expect("\x1b[90m" + SUFFIX)
+            expect(GREY + SUFFIX)
             send("\x18\t\x18\x02")
             expect("BUFFER:" + PREFIX + SUFFIX)
             send("\x1f\x18\x02")
@@ -63,7 +66,7 @@ def main():
             send("\x15cat badi-completion-\t\x18\x02")
             expect("BUFFER:cat badi-completion-proof ")
             send("\x15" + PREFIX + "\x18\t")
-            expect("\x1b[90m" + SUFFIX)
+            expect(GREY + SUFFIX)
             send("\x18\x1b\x18\x02")
             expect("BUFFER:" + PREFIX + "\r\n")
             previous = control('status')['metrics']['context_updates']
@@ -75,7 +78,7 @@ def main():
             finally:
                 control('pause', 'off')
             send("\x15" + PREFIX + "\x18\t")
-            expect("\x1b[90m" + SUFFIX)
+            expect(GREY + SUFFIX)
             assert b"command not found" not in transcript
             print("Bash: request, accept, undo, dismissal, permission preflight, resume and ordinary Tab completion passed; no line was submitted.")
         finally:

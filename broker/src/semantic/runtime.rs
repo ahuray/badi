@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+use std::os::fd::OwnedFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Mutex;
@@ -8,32 +9,44 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use reqwest::StatusCode;
 use rustix::process::{Pid, Signal, kill_process_group};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use tokio::io::Interest;
+use tokio::io::unix::AsyncFd;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::protocol::ProviderKind;
-use crate::provider::{CompletionProvider, ProviderError, ProviderRequest, WritingProposal};
+use crate::provider::{
+    CompletionProvider, ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger,
+    WritingProposal,
+};
 
 use super::client::{ClientError, HealthStatus, SemanticClient, SemanticClientConfig};
-use super::provenance::{ProvenanceError, VerifiedDirectoryManifest, VerifiedFile};
+use super::provenance::{
+    ProvenanceError, VerifiedDirectoryManifest, VerifiedFile, encode_lower_hex,
+};
+use super::wire::StatusCode;
 
-pub const LLAMA_CPP_LAUNCH_CONTRACT_ID: &str = "badi.llama-cpp-owned-eval.v1";
 pub const CONTEXT_SIZE: u16 = 512;
 pub const GPU_LAYERS: u16 = 0;
-const WRITING_BATCH_SIZE: u16 = 16;
+const MAX_WRITING_CONTEXT_SIZE: u16 = 8_192;
+const MAX_CONTEXT_CHECKPOINTS: u16 = 64;
+const MAX_LAUNCH_CONTRACT_BYTES: usize = 128;
+const MAX_MODEL_ORIGIN_BYTES: usize = 64;
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// Bound for the single warm-up completion after readiness.
+pub const WARM_UP_TIMEOUT: Duration = Duration::from_secs(2);
 // A cancelled cold prefill may still be unwinding inside the runtime. Allow
 // that work and its HTTP readers to stop before the process-group kill fallback.
 const GRACEFUL_SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 const FORCE_SHUTDOWN_WAIT: Duration = Duration::from_secs(1);
 const FIXTURE_ARGUMENT: &str = "__fixture-backend";
+const EXIT_POLL_FALLBACK_INTERVAL: Duration = Duration::from_secs(1);
 pub const FIXTURE_TOKEN_CANARY: &str =
     "e7a36b6a81bc4d0eb1d73a86f79959c9f588143cb5044d35a187988428cfd32f";
 
@@ -57,6 +70,73 @@ impl FixtureBehavior {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Launcher {
+    Direct,
+    ParentDeathHelper,
+}
+
+/// The settings of a writing launch. The runtime identity records every field
+/// except the checkpoint limit, so a profile that differs from production in
+/// any way must name its own launch contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WritingProfile {
+    /// Names the whole launch contract in the runtime identity.
+    pub launch_contract_id: &'static str,
+    /// Context window in tokens.
+    pub context_size: u16,
+    /// Prompt-processing batch and micro-batch in tokens. The runtime
+    /// observes cancellation only between batches.
+    pub batch_size: u16,
+    /// Limit on the runtime's context checkpoints; `None` keeps its default.
+    pub context_checkpoints: Option<u16>,
+    /// Where the model came from when it is not the installed catalog model.
+    pub model_origin: Option<&'static str>,
+}
+
+impl WritingProfile {
+    /// The installed writing provider's launch.
+    pub const PRODUCTION: Self = Self {
+        launch_contract_id: crate::writing::WRITING_CONTRACT,
+        context_size: CONTEXT_SIZE,
+        batch_size: 16,
+        context_checkpoints: None,
+        model_origin: None,
+    };
+
+    fn validate(&self) -> Result<(), RuntimeError> {
+        let contract = self.launch_contract_id;
+        if contract.is_empty()
+            || contract.len() > MAX_LAUNCH_CONTRACT_BYTES
+            || !contract.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(RuntimeError::InvalidConfig("launch_contract_id"));
+        }
+        if self.context_size == 0 || self.context_size > MAX_WRITING_CONTEXT_SIZE {
+            return Err(RuntimeError::InvalidConfig("context_size"));
+        }
+        if self.batch_size == 0 || self.batch_size > self.context_size {
+            return Err(RuntimeError::InvalidConfig("batch_size"));
+        }
+        if self
+            .context_checkpoints
+            .is_some_and(|checkpoints| checkpoints > MAX_CONTEXT_CHECKPOINTS)
+        {
+            return Err(RuntimeError::InvalidConfig("context_checkpoints"));
+        }
+        if self.model_origin.is_some_and(|origin| {
+            origin.is_empty()
+                || origin.len() > MAX_MODEL_ORIGIN_BYTES
+                || !origin
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        }) {
+            return Err(RuntimeError::InvalidConfig("model_origin"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LlamaCppLaunch {
     binary: VerifiedFile,
@@ -66,13 +146,8 @@ pub struct LlamaCppLaunch {
     startup_timeout: Duration,
     threads: usize,
     fixture_behavior: Option<FixtureBehavior>,
-    writing: bool,
-    #[cfg(feature = "writing-lab")]
-    writing_lab: bool,
-    #[cfg(feature = "writing-lab")]
-    explicit_lab_artifact: bool,
-    #[cfg(feature = "writing-lab")]
-    lab_prefill_batch: crate::writing_lab::PrefillBatch,
+    profile: WritingProfile,
+    launcher: Launcher,
 }
 
 impl LlamaCppLaunch {
@@ -91,13 +166,8 @@ impl LlamaCppLaunch {
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             threads,
             fixture_behavior: None,
-            writing: false,
-            #[cfg(feature = "writing-lab")]
-            writing_lab: false,
-            #[cfg(feature = "writing-lab")]
-            explicit_lab_artifact: false,
-            #[cfg(feature = "writing-lab")]
-            lab_prefill_batch: crate::writing_lab::PrefillBatch::Tokens16,
+            profile: WritingProfile::PRODUCTION,
+            launcher: Launcher::Direct,
         };
         launch.validate()?;
         Ok(launch)
@@ -122,13 +192,8 @@ impl LlamaCppLaunch {
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             threads: 1,
             fixture_behavior: Some(behavior),
-            writing: false,
-            #[cfg(feature = "writing-lab")]
-            writing_lab: false,
-            #[cfg(feature = "writing-lab")]
-            explicit_lab_artifact: false,
-            #[cfg(feature = "writing-lab")]
-            lab_prefill_batch: crate::writing_lab::PrefillBatch::Tokens16,
+            profile: WritingProfile::PRODUCTION,
+            launcher: Launcher::Direct,
         };
         launch.validate()?;
         Ok(launch)
@@ -138,70 +203,20 @@ impl LlamaCppLaunch {
         self.spawn_with_post_spawn_hook(|_| {}).await
     }
 
+    /// Launches with `profile` instead of [`WritingProfile::PRODUCTION`].
+    pub fn with_writing_profile(mut self, profile: WritingProfile) -> Result<Self, RuntimeError> {
+        self.profile = profile;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Launches through this executable's parent-death helper, so the runtime
+    /// cannot outlive it. The executable must dispatch the helper's flag
+    /// before it starts Tokio or any other thread. Linux only.
     #[must_use]
-    pub const fn for_writing(mut self) -> Self {
-        self.writing = true;
+    pub const fn contained(mut self) -> Self {
+        self.launcher = Launcher::ParentDeathHelper;
         self
-    }
-
-    #[cfg(feature = "writing-lab")]
-    #[must_use]
-    pub const fn for_writing_lab(mut self) -> Self {
-        self.writing = true;
-        self.writing_lab = true;
-        self
-    }
-
-    #[cfg(feature = "writing-lab")]
-    pub(crate) const fn for_writing_lab_artifact(mut self) -> Self {
-        self = self.for_writing_lab();
-        self.explicit_lab_artifact = true;
-        self
-    }
-
-    #[cfg(feature = "writing-lab")]
-    pub(crate) const fn with_lab_prefill_batch(
-        mut self,
-        batch: crate::writing_lab::PrefillBatch,
-    ) -> Self {
-        self.lab_prefill_batch = batch;
-        self
-    }
-
-    fn writing_batch_size(&self) -> u16 {
-        #[cfg(feature = "writing-lab")]
-        if self.writing_lab {
-            return self.lab_prefill_batch.tokens();
-        }
-        WRITING_BATCH_SIZE
-    }
-
-    fn model_origin(&self) -> Option<&'static str> {
-        #[cfg(feature = "writing-lab")]
-        if self.explicit_lab_artifact {
-            return Some("explicit_lab_artifact");
-        }
-        None
-    }
-
-    fn context_size(&self) -> u16 {
-        #[cfg(feature = "writing-lab")]
-        if self.writing_lab {
-            return crate::writing_lab::CONTEXT_TOKENS;
-        }
-        CONTEXT_SIZE
-    }
-
-    fn launch_contract(&self) -> &'static str {
-        #[cfg(feature = "writing-lab")]
-        if self.writing_lab {
-            return crate::writing_lab::LAUNCH_CONTRACT;
-        }
-        if self.writing {
-            crate::writing::WRITING_CONTRACT
-        } else {
-            LLAMA_CPP_LAUNCH_CONTRACT_ID
-        }
     }
 
     async fn spawn_with_post_spawn_hook(
@@ -217,17 +232,15 @@ impl LlamaCppLaunch {
             SecretToken::new()
         };
         let negative_token = SecretToken::new();
-        let config = SemanticClientConfig::new(endpoint, &self.model_alias, token.expose())?;
-        let config = if self.writing {
-            config.for_writing()
-        } else {
-            config
-        };
-        let client = SemanticClient::new(config)?;
+        let client = SemanticClient::new(SemanticClientConfig::new(
+            endpoint,
+            &self.model_alias,
+            token.expose(),
+        )?)?;
         let negative_config =
             SemanticClientConfig::new(endpoint, &self.model_alias, negative_token.expose())?;
         let negative_client = SemanticClient::new(negative_config)?;
-        let identity = self.runtime_identity();
+        let identity = self.identity();
         let mut command = self.runtime_command()?;
         if self.fixture_behavior.is_some() {
             command.arg(FIXTURE_ARGUMENT);
@@ -241,14 +254,12 @@ impl LlamaCppLaunch {
             .env("LLAMA_ARG_MODEL", self.model.path())
             .env("LLAMA_ARG_ALIAS", &self.model_alias)
             .env("LLAMA_API_KEY", token.expose())
-            .env("LLAMA_ARG_CTX_SIZE", self.context_size().to_string())
             .env("LLAMA_ARG_N_PARALLEL", "1")
             .env("LLAMA_ARG_THREADS", self.threads.to_string())
             .env("LLAMA_ARG_THREADS_BATCH", self.threads.to_string())
             .env("LLAMA_ARG_N_GPU_LAYERS", GPU_LAYERS.to_string())
             .env("LLAMA_ARG_UI", "0")
             .env("LLAMA_ARG_OFFLINE", "1")
-            .env("LLAMA_ARG_CACHE_PROMPT", "0")
             .env("LLAMA_ARG_LOG_DISABLE", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -261,17 +272,27 @@ impl LlamaCppLaunch {
             )
             .process_group(0);
         self.configure_mode(&mut command);
-        self.reverify_artifacts()?;
+        self.confirm_artifacts_unchanged()?;
         let child = command.spawn().map_err(RuntimeError::Spawn)?;
+        // Only this handle reaps the child, so the PID still names it here.
+        #[cfg(target_os = "linux")]
+        let exit_notice = rustix::process::pidfd_open(
+            Pid::from_child(&child),
+            rustix::process::PidfdFlags::empty(),
+        )
+        .ok();
+        #[cfg(not(target_os = "linux"))]
+        let exit_notice = None;
         let mut runtime = OwnedRuntime {
             child: Mutex::new(Some(child)),
+            exit_notice,
             client,
             endpoint,
             token_credential: token,
             identity,
         };
         post_spawn_hook(runtime.process_id().ok_or(RuntimeError::MissingChild)?);
-        if let Err(error) = self.reverify_artifacts() {
+        if let Err(error) = self.confirm_artifacts_unchanged() {
             let _ = runtime.terminate();
             return Err(error.into());
         }
@@ -282,7 +303,7 @@ impl LlamaCppLaunch {
             let _ = runtime.terminate();
             return Err(error);
         }
-        if let Err(error) = self.reverify_artifacts() {
+        if let Err(error) = self.confirm_artifacts_unchanged() {
             let _ = runtime.terminate();
             return Err(error.into());
         }
@@ -290,20 +311,21 @@ impl LlamaCppLaunch {
     }
 
     fn runtime_command(&self) -> Result<Command, RuntimeError> {
-        #[cfg(feature = "writing-lab")]
-        if self.writing_lab {
+        if self.launcher == Launcher::ParentDeathHelper {
             #[cfg(target_os = "linux")]
-            return crate::writing_lab::process::launch_command(self.binary.path())
-                .map_err(RuntimeError::Spawn);
+            return super::process::launch_command(self.binary.path()).map_err(RuntimeError::Spawn);
             #[cfg(not(target_os = "linux"))]
-            return Err(RuntimeError::InvalidConfig("lab_parent_death_unavailable"));
+            return Err(RuntimeError::InvalidConfig("parent_death_unavailable"));
         }
         Ok(Command::new(self.binary.path()))
     }
 
-    fn runtime_identity(&self) -> StableRuntimeIdentity {
+    /// The identity this launch's runtime will report.
+    #[must_use]
+    pub fn identity(&self) -> StableRuntimeIdentity {
+        let profile = self.profile;
         StableRuntimeIdentity {
-            launch_contract_id: self.launch_contract(),
+            launch_contract_id: profile.launch_contract_id,
             binary_sha256: self.binary.sha256().to_owned(),
             runtime_bundle_manifest_sha256: self
                 .runtime_bundle
@@ -312,36 +334,32 @@ impl LlamaCppLaunch {
             model_sha256: self.model.sha256().to_owned(),
             model_size: self.model.identity().size,
             model_alias: self.model_alias.clone(),
-            model_origin: self.model_origin(),
+            model_origin: profile.model_origin,
             threads: self.threads,
-            context_size: self.context_size(),
+            context_size: profile.context_size,
             gpu_layers: GPU_LAYERS,
-            batch_size: self.writing.then_some(self.writing_batch_size()),
-            ubatch_size: self.writing.then_some(self.writing_batch_size()),
+            batch_size: Some(profile.batch_size),
+            ubatch_size: Some(profile.batch_size),
         }
     }
 
     fn configure_mode(&self, command: &mut Command) {
-        #[cfg(feature = "writing-lab")]
-        if self.writing_lab {
-            // Bounded model comparisons own one active slot. Recurrent model
-            // checkpoint copies must not inherit the runtime's default of 32.
-            command.env("LLAMA_ARG_CTX_CHECKPOINTS", "0");
-        }
         if let Some(behavior) = self.fixture_behavior {
             command.env("BADI_FIXTURE_BEHAVIOR", behavior.environment_value());
         }
-        if self.writing {
-            // Reuse only the active slot's bounded KV state. Disable the
-            // separate RAM archive; no slot-save path or disk cache is enabled.
-            command
-                .env("LLAMA_ARG_CACHE_PROMPT", "1")
-                .env("LLAMA_ARG_CACHE_RAM", "0")
-                // The runtime observes cancellation between prefill batches.
-                // Production stays at 16. Only an explicit Lab launch can test
-                // a larger chunk, whose cancellation cost is measured separately.
-                .env("LLAMA_ARG_BATCH", self.writing_batch_size().to_string())
-                .env("LLAMA_ARG_UBATCH", self.writing_batch_size().to_string());
+        let profile = self.profile;
+        // Reuse only the active slot's bounded KV state. Disable the separate
+        // RAM archive; no slot-save path or disk cache is enabled.
+        command
+            .env("LLAMA_ARG_CTX_SIZE", profile.context_size.to_string())
+            .env("LLAMA_ARG_CACHE_PROMPT", "1")
+            .env("LLAMA_ARG_CACHE_RAM", "0")
+            // The runtime observes cancellation between prefill batches, so
+            // the batch bounds the cost of a cancelled request.
+            .env("LLAMA_ARG_BATCH", profile.batch_size.to_string())
+            .env("LLAMA_ARG_UBATCH", profile.batch_size.to_string());
+        if let Some(checkpoints) = profile.context_checkpoints {
+            command.env("LLAMA_ARG_CTX_CHECKPOINTS", checkpoints.to_string());
         }
     }
 
@@ -358,20 +376,24 @@ impl LlamaCppLaunch {
         if self.startup_timeout.is_zero() || self.startup_timeout > MAX_STARTUP_TIMEOUT {
             return Err(RuntimeError::InvalidConfig("startup_timeout"));
         }
+        self.profile.validate()?;
         match (&self.runtime_bundle, self.fixture_behavior) {
             (Some(bundle), None) if self.binary.path().parent() == Some(bundle.path()) => {}
-            (None, Some(_)) => {}
+            // The parent-death helper passes no fixture arguments.
+            (None, Some(_)) if self.launcher == Launcher::Direct => {}
             _ => return Err(RuntimeError::InvalidConfig("runtime_bundle")),
         }
         Ok(())
     }
 
-    fn reverify_artifacts(&self) -> Result<(), ProvenanceError> {
+    /// Checkpoints around spawn and readiness. The caller hashed every artifact
+    /// once; these confirm the same filesystem objects without re-reading them.
+    fn confirm_artifacts_unchanged(&self) -> Result<(), ProvenanceError> {
         if let Some(bundle) = &self.runtime_bundle {
-            bundle.reverify()?;
+            bundle.confirm_unchanged()?;
         }
-        self.binary.reverify()?;
-        self.model.reverify()
+        self.binary.confirm_unchanged()?;
+        self.model.confirm_unchanged()
     }
 }
 
@@ -396,6 +418,8 @@ pub struct StableRuntimeIdentity {
 
 pub struct OwnedRuntime {
     child: Mutex<Option<Child>>,
+    /// Pidfd of the owned child; it becomes readable once the child exits.
+    exit_notice: Option<OwnedFd>,
     client: SemanticClient,
     endpoint: SocketAddr,
     #[allow(dead_code)]
@@ -433,6 +457,23 @@ impl OwnedRuntime {
             .as_mut()
             .ok_or_else(|| io::Error::other("owned child missing"))?
             .try_wait()
+    }
+
+    /// Send one bounded warm-up completion. A failure is reported, never
+    /// raised: the runtime stays usable and only its first request is cold.
+    pub async fn warm_up(&self) -> WarmUpReport {
+        self.warm_up_within(WARM_UP_TIMEOUT).await
+    }
+
+    async fn warm_up_within(&self, timeout: Duration) -> WarmUpReport {
+        let started = Instant::now();
+        let failure = self
+            .client
+            .warm_up(timeout, CancellationToken::new())
+            .await
+            .err()
+            .map(|error| error.class());
+        WarmUpReport::new(started.elapsed(), failure)
     }
 
     pub fn shutdown(mut self) -> Result<RuntimeLifecycleObservation, RuntimeError> {
@@ -513,6 +554,23 @@ impl CompletionProvider for OwnedRuntime {
         matches!(self.try_wait(), Ok(None))
     }
 
+    async fn exited(&self) {
+        let notice = self
+            .exit_notice
+            .as_ref()
+            .and_then(|notice| notice.try_clone().ok())
+            .and_then(|notice| AsyncFd::with_interest(notice, Interest::READABLE).ok());
+        if let Some(notice) = notice {
+            if notice.readable().await.is_ok() {
+                return;
+            }
+        }
+        // Without a usable pidfd, observe the owned handle at a coarse interval.
+        while self.is_alive() {
+            tokio::time::sleep(EXIT_POLL_FALLBACK_INTERVAL).await;
+        }
+    }
+
     async fn complete(
         &self,
         request: ProviderRequest,
@@ -531,6 +589,18 @@ impl CompletionProvider for OwnedRuntime {
             .propose(request, cancellation, allow_replacement)
             .await
     }
+
+    async fn propose_outcome(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        allow_replacement: bool,
+        trigger: RequestTrigger,
+    ) -> Result<ProviderOutcome, ProviderError> {
+        self.client
+            .propose_outcome(request, cancellation, allow_replacement, trigger)
+            .await
+    }
 }
 
 impl StableRuntimeIdentity {
@@ -538,6 +608,40 @@ impl StableRuntimeIdentity {
     pub fn sha256(&self) -> String {
         let canonical = serde_json::to_vec(self).expect("runtime identity is serializable");
         encode_lower_hex(Sha256::digest(canonical))
+    }
+}
+
+/// Content-free result of [`OwnedRuntime::warm_up`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WarmUpReport {
+    elapsed: Duration,
+    failure: Option<&'static str>,
+}
+
+impl WarmUpReport {
+    pub(crate) const fn new(elapsed: Duration, failure: Option<&'static str>) -> Self {
+        Self { elapsed, failure }
+    }
+
+    #[must_use]
+    pub const fn elapsed(&self) -> Duration {
+        self.elapsed
+    }
+
+    /// The failure class, or `None` when the completion finished.
+    #[must_use]
+    pub const fn failure(&self) -> Option<&'static str> {
+        self.failure
+    }
+}
+
+impl fmt::Display for WarmUpReport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.failure {
+            None => formatter.write_str("completed")?,
+            Some(class) => write!(formatter, "failed class={class}")?,
+        }
+        write!(formatter, " elapsed_ms={}", self.elapsed.as_millis())
     }
 }
 
@@ -700,19 +804,9 @@ fn wait_bounded(child: &mut Child, timeout: Duration) -> io::Result<Option<ExitS
     }
 }
 
-fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {
-    use std::fmt::Write as _;
-
-    let bytes = bytes.as_ref();
-    let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
-        write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    encoded
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::error::Error;
     use std::fs;
     use std::io;
@@ -721,165 +815,231 @@ mod tests {
     use std::os::unix::process::CommandExt;
     use std::path::Path;
     use std::process::{Command, Stdio};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
+    use rustix::process::{Pid, PidfdFlags, Signal};
     use sha2::{Digest, Sha256};
 
     use super::{
-        FixtureBehavior, LlamaCppLaunch, ProvenanceError, RuntimeError, terminate_child,
-        terminate_owned_child_with,
+        CompletionProvider as _, FixtureBehavior, LlamaCppLaunch, OwnedRuntime, ProvenanceError,
+        RuntimeError, SecretToken, SemanticClient, SemanticClientConfig, StableRuntimeIdentity,
+        WritingProfile, terminate_child, terminate_owned_child_with,
     };
     use crate::semantic::provenance::{
         DirectoryManifestExpectation, FileExpectation, VerifiedFile, directory_manifest_sha256,
         verify_directory_manifest, verify_file,
     };
 
-    #[test]
-    fn writing_bounds_batches_without_changing_evaluation_defaults() -> Result<(), Box<dyn Error>> {
-        let temporary = tempfile::tempdir()?;
-        let binary_path = temporary.path().join("fixture");
-        let model_path = temporary.path().join("model");
-        fs::write(&binary_path, b"fixture")?;
-        fs::write(&model_path, b"model")?;
-        let launch = LlamaCppLaunch::for_fixture(
-            verify_observed_file(&binary_path)?,
-            verify_observed_file(&model_path)?,
-            FixtureBehavior::Ready,
-        )?;
-        let baseline_identity = launch.runtime_identity();
-        for (launch, writing) in [(launch.clone(), false), (launch.for_writing(), true)] {
-            let mut command = Command::new(&binary_path);
-            command.env_clear().env("LLAMA_ARG_CACHE_PROMPT", "0");
-            launch.configure_mode(&mut command);
-            let identity = launch.runtime_identity();
-            let serialized_identity = serde_json::to_value(&identity)?;
-            for name in ["batch_size", "ubatch_size"] {
-                assert_eq!(
-                    serialized_identity.get(name),
-                    writing.then_some(&serde_json::json!(16))
-                );
-            }
-            assert_eq!(identity.sha256() == baseline_identity.sha256(), !writing);
-            if writing {
-                let mut previous_writing_identity = identity.clone();
-                previous_writing_identity.batch_size = None;
-                previous_writing_identity.ubatch_size = None;
-                assert_ne!(identity.sha256(), previous_writing_identity.sha256());
-            }
-            let environment: std::collections::BTreeMap<_, _> = command
-                .get_envs()
-                .map(|(key, value)| (key.to_str().unwrap(), value.unwrap().to_str().unwrap()))
-                .collect();
-            assert_eq!(
-                environment["LLAMA_ARG_CACHE_PROMPT"],
-                if writing { "1" } else { "0" }
-            );
-            for name in ["LLAMA_ARG_BATCH", "LLAMA_ARG_UBATCH"] {
-                assert_eq!(environment.get(name).copied(), writing.then_some("16"));
-            }
-            assert_eq!(
-                environment.get("LLAMA_ARG_CACHE_RAM").copied(),
-                writing.then_some("0")
-            );
-        }
-        Ok(())
-    }
+    const TEST_PROFILE: WritingProfile = WritingProfile {
+        launch_contract_id: "badi.test.writing-profile.v1",
+        context_size: 1_024,
+        batch_size: 64,
+        context_checkpoints: Some(0),
+        model_origin: Some("test_artifact"),
+    };
 
-    #[cfg(feature = "writing-lab")]
-    #[test]
-    fn lab_prefill_batches_bind_launch_and_identity_without_changing_other_defaults()
-    -> Result<(), Box<dyn Error>> {
-        use crate::writing_lab::PrefillBatch;
-
-        let temporary = tempfile::tempdir()?;
-        let binary = temporary.path().join("fixture");
-        let model = temporary.path().join("weights");
-        fs::write(&binary, b"fixture")?;
-        fs::write(&model, b"disposable model")?;
-        let launch = LlamaCppLaunch::for_fixture(
+    fn fixture_launch(directory: &Path) -> Result<LlamaCppLaunch, Box<dyn Error>> {
+        let binary = directory.join("runtime");
+        let model = directory.join("model");
+        fs::write(&binary, b"fixture runtime")?;
+        fs::write(&model, b"fixture model")?;
+        Ok(LlamaCppLaunch::for_fixture(
             verify_observed_file(&binary)?,
             verify_observed_file(&model)?,
             FixtureBehavior::Ready,
-        )?;
-        for unchanged in [launch.clone(), launch.clone().for_writing()] {
-            let selected = unchanged
-                .clone()
-                .with_lab_prefill_batch(PrefillBatch::Tokens64);
-            assert_eq!(
-                serde_json::to_vec(&selected.runtime_identity())?,
-                serde_json::to_vec(&unchanged.runtime_identity())?
-            );
-            assert_eq!(selected.writing_batch_size(), super::WRITING_BATCH_SIZE);
-        }
-        let baseline = launch.for_writing_lab();
-        let explicit_default = baseline
-            .clone()
-            .with_lab_prefill_batch(PrefillBatch::Tokens16);
+        )?)
+    }
+
+    fn launch_environment(launch: &LlamaCppLaunch) -> BTreeMap<String, String> {
+        let mut command = Command::new("/bin/true");
+        launch.configure_mode(&mut command);
+        command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                Some((key.to_str()?.to_owned(), value?.to_str()?.to_owned()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_writing_profile_binds_its_launch_and_identity() -> Result<(), Box<dyn Error>> {
+        let temporary = tempfile::tempdir()?;
+        let launch = fixture_launch(temporary.path())?;
+        let production = launch.clone();
         assert_eq!(
-            serde_json::to_vec(&baseline.runtime_identity())?,
-            serde_json::to_vec(&explicit_default.runtime_identity())?
+            launch
+                .clone()
+                .with_writing_profile(WritingProfile::PRODUCTION)?
+                .identity(),
+            production.identity()
         );
-        let candidate = baseline
-            .clone()
-            .with_lab_prefill_batch(PrefillBatch::Tokens64);
-        let mut candidate_identity = candidate.runtime_identity();
-        assert_eq!(candidate_identity.batch_size, Some(64));
-        assert_eq!(candidate_identity.ubatch_size, Some(64));
-        assert_ne!(
-            candidate_identity.sha256(),
-            baseline.runtime_identity().sha256()
+        let profiled = launch.clone().with_writing_profile(TEST_PROFILE)?;
+        let identity = profiled.identity();
+        assert_eq!(identity.launch_contract_id, "badi.test.writing-profile.v1");
+        assert_eq!(identity.context_size, 1_024);
+        assert_eq!(
+            (identity.batch_size, identity.ubatch_size),
+            (Some(64), Some(64))
         );
-        candidate_identity.batch_size = Some(16);
-        candidate_identity.ubatch_size = Some(16);
-        assert_eq!(candidate_identity, baseline.runtime_identity());
-        for (selected, expected) in [(baseline, "16"), (candidate, "64")] {
-            let mut command = Command::new(&binary);
-            selected.configure_mode(&mut command);
-            let environment: std::collections::BTreeMap<_, _> = command
-                .get_envs()
-                .map(|(key, value)| (key.to_str().unwrap(), value.unwrap().to_str().unwrap()))
-                .collect();
-            assert_eq!(environment["LLAMA_ARG_BATCH"], expected);
-            assert_eq!(environment["LLAMA_ARG_UBATCH"], expected);
+        assert_eq!(identity.model_origin, Some("test_artifact"));
+        // Only the profile's own fields differ from the production identity.
+        let mut as_production = identity.clone();
+        as_production.launch_contract_id = WritingProfile::PRODUCTION.launch_contract_id;
+        as_production.context_size = super::CONTEXT_SIZE;
+        as_production.batch_size = Some(16);
+        as_production.ubatch_size = Some(16);
+        as_production.model_origin = None;
+        assert_eq!(as_production, production.identity());
+        // An absent origin is omitted from the digest input, not serialized.
+        let without_origin = launch
+            .with_writing_profile(WritingProfile {
+                model_origin: None,
+                ..TEST_PROFILE
+            })?
+            .identity();
+        assert!(
+            serde_json::to_value(&without_origin)?
+                .get("model_origin")
+                .is_none()
+        );
+        assert_ne!(without_origin.sha256(), identity.sha256());
+
+        for (selected, batch, checkpoints) in
+            [(production, "16", None), (profiled, "64", Some("0"))]
+        {
+            let environment = launch_environment(&selected);
+            assert_eq!(environment["LLAMA_ARG_BATCH"], batch);
+            assert_eq!(environment["LLAMA_ARG_UBATCH"], batch);
             assert_eq!(environment["LLAMA_ARG_CACHE_PROMPT"], "1");
             assert_eq!(environment["LLAMA_ARG_CACHE_RAM"], "0");
+            assert_eq!(
+                environment
+                    .get("LLAMA_ARG_CTX_CHECKPOINTS")
+                    .map(String::as_str),
+                checkpoints
+            );
         }
         Ok(())
     }
 
-    #[cfg(feature = "writing-lab")]
     #[test]
-    fn explicit_lab_artifact_identity_is_bound_without_changing_default_serialization()
-    -> Result<(), Box<dyn Error>> {
+    fn writing_profiles_outside_their_bounds_are_rejected() -> Result<(), Box<dyn Error>> {
         let temporary = tempfile::tempdir()?;
-        let binary = temporary.path().join("fixture");
-        let model = temporary.path().join("weights");
-        fs::write(&binary, b"fixture")?;
-        fs::write(&model, b"disposable model")?;
-        let launch = LlamaCppLaunch::for_fixture(
-            verify_observed_file(&binary)?,
-            verify_observed_file(&model)?,
-            FixtureBehavior::Ready,
-        )?;
-        for default in [
-            launch.clone(),
-            launch.clone().for_writing(),
-            launch.clone().for_writing_lab(),
+        let launch = fixture_launch(temporary.path())?;
+        let long_contract: &'static str = "c".repeat(129).leak();
+        let long_origin: &'static str = "o".repeat(65).leak();
+        let contract = |launch_contract_id| WritingProfile {
+            launch_contract_id,
+            ..TEST_PROFILE
+        };
+        let context = |context_size| WritingProfile {
+            context_size,
+            ..TEST_PROFILE
+        };
+        let batch = |batch_size| WritingProfile {
+            batch_size,
+            ..TEST_PROFILE
+        };
+        let checkpoints = |context_checkpoints| WritingProfile {
+            context_checkpoints,
+            ..TEST_PROFILE
+        };
+        let origin = |model_origin| WritingProfile {
+            model_origin,
+            ..TEST_PROFILE
+        };
+        for (profile, field) in [
+            (contract(""), "launch_contract_id"),
+            (contract("two words"), "launch_contract_id"),
+            (contract("badi.v1\n"), "launch_contract_id"),
+            (contract(long_contract), "launch_contract_id"),
+            (context(0), "context_size"),
+            (context(8_193), "context_size"),
+            (batch(0), "batch_size"),
+            (batch(1_025), "batch_size"),
+            (checkpoints(Some(65)), "context_checkpoints"),
+            (origin(Some("")), "model_origin"),
+            (origin(Some("Origin")), "model_origin"),
+            (origin(Some("test-artifact")), "model_origin"),
+            (origin(Some(long_origin)), "model_origin"),
         ] {
             assert!(
-                serde_json::to_value(default.runtime_identity())?
-                    .get("model_origin")
-                    .is_none()
+                matches!(
+                    launch.clone().with_writing_profile(profile),
+                    Err(RuntimeError::InvalidConfig(name)) if name == field
+                ),
+                "{profile:?}"
             );
         }
-        let ordinary = launch.clone().for_writing_lab().runtime_identity();
-        let explicit = launch.for_writing_lab_artifact().runtime_identity();
-        assert_eq!(explicit.model_origin, Some("explicit_lab_artifact"));
-        assert_ne!(explicit.sha256(), ordinary.sha256());
-        let mut without_marker = explicit;
-        without_marker.model_origin = None;
-        assert_eq!(ordinary, without_marker);
+        let boundary = WritingProfile {
+            launch_contract_id: &long_contract[1..],
+            context_size: 8_192,
+            batch_size: 8_192,
+            context_checkpoints: Some(64),
+            model_origin: Some(&long_origin[1..]),
+        };
+        assert!(launch.with_writing_profile(boundary).is_ok());
+        Ok(())
+    }
+
+    /// Installed runtimes and run provenance compare the identity digest, so
+    /// the production launch keeps its exact serialized identity.
+    #[test]
+    fn production_identity_serialization_is_pinned() -> Result<(), Box<dyn Error>> {
+        let temporary = tempfile::tempdir()?;
+        let launch = fixture_launch(temporary.path())?;
+        assert_eq!(
+            serde_json::to_string(&launch.identity())?,
+            concat!(
+                "{\"launch_contract_id\":\"badi.writing.completion-and-spelling.en-de-fa.v2\"",
+                ",\"binary_sha256\":\"7c63829baa2f5451c23789c5085b4de0627e5208b6c4bb2483217998f8cc38f0\"",
+                ",\"runtime_bundle_manifest_sha256\":null",
+                ",\"model_sha256\":\"c7a3a8c7435ef8e4cf1ca2d261f7e09ca85de6cdb70f7c689a836680523a180c\"",
+                ",\"model_size\":13,\"model_alias\":\"fixture-en-v1\",\"threads\":1",
+                ",\"context_size\":512,\"gpu_layers\":0,\"batch_size\":16,\"ubatch_size\":16}",
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn contained_launch_execs_through_the_parent_death_helper() -> Result<(), Box<dyn Error>> {
+        let temporary = tempfile::tempdir()?;
+        let root = fs::canonicalize(temporary.path())?;
+        let bundle_path = root.join("runtime");
+        fs::create_dir(&bundle_path)?;
+        let binary_path = bundle_path.join("llama-server");
+        fs::write(&binary_path, b"fixture")?;
+        let model_path = root.join("model.gguf");
+        fs::write(&model_path, b"model")?;
+        let bundle = verify_directory_manifest(&DirectoryManifestExpectation::new(
+            &bundle_path,
+            directory_manifest_sha256(&bundle_path)?,
+        )?)?;
+        let binary = verify_observed_file(&binary_path)?;
+        let model = verify_observed_file(&model_path)?;
+
+        let direct = LlamaCppLaunch::new(binary.clone(), bundle, model.clone(), "fixture", 1)?;
+        assert_eq!(direct.runtime_command()?.get_program(), binary_path);
+        let command = direct.contained().runtime_command()?;
+        assert_eq!(command.get_program(), std::env::current_exe()?);
+        let arguments: Vec<_> = command.get_args().collect();
+        assert_eq!(
+            arguments,
+            [
+                std::ffi::OsStr::new(crate::semantic::process::EXEC_HELPER_FLAG),
+                std::ffi::OsStr::new(&std::process::id().to_string()),
+                binary_path.as_os_str(),
+            ]
+        );
+        // The helper passes no arguments, so a fixture cannot be contained.
+        let fixture = LlamaCppLaunch::for_fixture(binary, model, FixtureBehavior::Ready)?;
+        assert!(matches!(
+            fixture.contained().validate(),
+            Err(RuntimeError::InvalidConfig("runtime_bundle"))
+        ));
         Ok(())
     }
 
@@ -939,14 +1099,14 @@ mod tests {
         let result = launch
             .spawn_with_post_spawn_hook(move |spawned_process_id| {
                 observed_process_id.store(spawned_process_id, Ordering::SeqCst);
-                fs::write(&library_path, b"tampered").expect("test mutation must succeed");
+                let replacement = library_path.with_extension("tmp");
+                fs::write(&replacement, b"tampered").expect("test mutation must succeed");
+                fs::rename(&replacement, &library_path).expect("test mutation must succeed");
             })
             .await;
         assert!(matches!(
             result,
-            Err(RuntimeError::Provenance(
-                ProvenanceError::DirectoryManifestDigestMismatch
-            ))
+            Err(RuntimeError::Provenance(ProvenanceError::IdentityChanged))
         ));
         let process_id = process_id.load(Ordering::SeqCst);
         assert_ne!(process_id, 0);
@@ -977,6 +1137,123 @@ mod tests {
 
         terminate_owned_child_with(&mut child, terminate_child)?;
         assert!(child.is_none());
+        assert!(!Path::new(&format!("/proc/{process_id}")).exists());
+        Ok(())
+    }
+
+    fn owned_runtime_at(endpoint: std::net::SocketAddr) -> Result<OwnedRuntime, Box<dyn Error>> {
+        let child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()?;
+        let exit_notice =
+            rustix::process::pidfd_open(Pid::from_child(&child), PidfdFlags::empty()).ok();
+        Ok(OwnedRuntime {
+            child: Mutex::new(Some(child)),
+            exit_notice,
+            client: SemanticClient::new(SemanticClientConfig::new(
+                endpoint,
+                "fixture",
+                "public-fixture-token",
+            )?)?,
+            endpoint,
+            token_credential: SecretToken::fixture(),
+            identity: StableRuntimeIdentity {
+                launch_contract_id: crate::writing::WRITING_CONTRACT,
+                binary_sha256: "0".repeat(64),
+                runtime_bundle_manifest_sha256: None,
+                model_sha256: "0".repeat(64),
+                model_size: 1,
+                model_alias: "fixture".to_owned(),
+                model_origin: None,
+                threads: 1,
+                context_size: super::CONTEXT_SIZE,
+                gpu_layers: super::GPU_LAYERS,
+                batch_size: Some(16),
+                ubatch_size: Some(16),
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn exit_is_observed_by_event_and_by_the_polling_fallback() -> Result<(), Box<dyn Error>> {
+        let endpoint = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 9));
+        for event_driven in [true, false] {
+            let mut runtime = owned_runtime_at(endpoint)?;
+            assert!(runtime.exit_notice.is_some());
+            if !event_driven {
+                runtime.exit_notice = None;
+            }
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), runtime.exited())
+                    .await
+                    .is_err(),
+                "a live runtime must not report an exit"
+            );
+            let pid = Pid::from_raw(i32::try_from(runtime.process_id().unwrap())?).unwrap();
+            rustix::process::kill_process(pid, Signal::KILL)?;
+            tokio::time::timeout(Duration::from_secs(3), runtime.exited()).await?;
+            assert!(!runtime.is_alive());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn warm_up_reports_completion_and_failure_without_failing_the_runtime()
+    -> Result<(), Box<dyn Error>> {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let runtime = owned_runtime_at(listener.local_addr()?)?;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("warm-up connection");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let read = socket.read(&mut buffer).await.expect("warm-up request");
+                assert_ne!(read, 0);
+                request.extend_from_slice(&buffer[..read]);
+                let text = String::from_utf8_lossy(&request);
+                let Some((headers, body)) = text.split_once("\r\n\r\n") else {
+                    continue;
+                };
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .expect("content length")
+                    .parse()
+                    .expect("length");
+                if body.len() >= length {
+                    break;
+                }
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await
+                .expect("warm-up reply");
+            let (_stalled, _) = listener.accept().await.expect("stalled connection");
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+        let completed = runtime.warm_up().await;
+        assert_eq!(completed.failure(), None);
+        let rendered = completed.to_string();
+        assert!(rendered.starts_with("completed elapsed_ms="), "{rendered}");
+
+        let failed = runtime.warm_up_within(Duration::from_millis(100)).await;
+        assert_eq!(failed.failure(), Some("timeout"));
+        assert!(failed.elapsed() < Duration::from_millis(500));
+        let rendered = failed.to_string();
+        assert!(
+            rendered.starts_with("failed class=timeout elapsed_ms="),
+            "{rendered}"
+        );
+        assert!(crate::provider::CompletionProvider::is_alive(&runtime));
+        server.abort();
+        let process_id = runtime.process_id().expect("owned child");
+        drop(runtime);
         assert!(!Path::new(&format!("/proc/{process_id}")).exists());
         Ok(())
     }

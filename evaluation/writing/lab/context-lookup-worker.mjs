@@ -98,15 +98,16 @@ export function validateContextLookupResult(value, request) {
 }
 
 const fileKey = info => ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].map(key => String(info[key])).join(':');
-async function executableIdentity(path, noFollow = false) {
+const MAX_WORKER_BYTES = 64 * 1024 * 1024;
+async function executableIdentity(path, noFollow = false, maxBytes = MAX_WORKER_BYTES) {
   const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | (noFollow ? constants.O_NOFOLLOW : 0));
   try {
     const before = await file.stat({ bigint: true });
-    requireValue(before.isFile() && before.size > 0 && before.size <= 64n * 1024n * 1024n, 'context_lookup_worker_unavailable');
+    requireValue(before.isFile() && before.size > 0 && before.size <= BigInt(maxBytes), 'context_lookup_worker_unavailable');
     const hash = createHash('sha256'); let bytes = 0;
     for await (const chunk of file.createReadStream({ autoClose: false })) {
       bytes += chunk.length;
-      requireValue(bytes <= 64 * 1024 * 1024, 'context_lookup_worker_unavailable');
+      requireValue(bytes <= maxBytes, 'context_lookup_worker_unavailable');
       hash.update(chunk);
     }
     requireValue(BigInt(bytes) === before.size && fileKey(before) === fileKey(await file.stat({ bigint: true })), 'context_lookup_worker_changed');
@@ -117,13 +118,15 @@ async function executableIdentity(path, noFollow = false) {
 // A request owns one direct child. Only --context-lookup is dispatched, and the
 // verified executable receives the bounded frame only after ownership checks.
 export class ContextLookupWorker {
-  constructor({ executable = BINARY, expectedWorker, timeoutMs = 3000, killMs = 1000, spawnProcess = spawn } = {}) {
+  constructor({ executable = BINARY, expectedWorker, timeoutMs = 3000, killMs = 1000, spawnProcess = spawn,
+    maxExecutableBytes = MAX_WORKER_BYTES } = {}) {
     requireValue(Number.isInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 10000
       && Number.isInteger(killMs) && killMs > 0 && killMs <= 4000, 'context_lookup_invalid_configuration');
     if (expectedWorker) requireValue(keys(expectedWorker, ['sha256', 'bytes']) && HASH.test(expectedWorker.sha256)
       && Number.isInteger(expectedWorker.bytes) && expectedWorker.bytes > 0, 'context_lookup_invalid_configuration');
     this.executable = resolve(executable); this.expectedWorker = expectedWorker; this.timeoutMs = timeoutMs;
-    this.killMs = killMs; this.spawnProcess = spawnProcess; this.active = null; this.lastCleanup = null; this.cleanupError = null;
+    this.killMs = killMs; this.spawnProcess = spawnProcess; this.maxExecutableBytes = maxExecutableBytes;
+    this.active = null; this.lastCleanup = null; this.cleanupError = null;
   }
 
   async check(value, signal) {
@@ -147,7 +150,7 @@ export class ContextLookupWorker {
     let result; let worker; let failure;
     try {
       const path = await realpath(this.executable);
-      worker = await executableIdentity(path, true);
+      worker = await executableIdentity(path, true, this.maxExecutableBytes);
       if (this.expectedWorker) requireValue(isDeepStrictEqual(worker, this.expectedWorker), 'context_lookup_worker_changed');
       fresh();
       const child = this.spawnProcess(path, ['--context-lookup'], { stdio: ['pipe', 'pipe', 'ignore'] });
@@ -170,7 +173,7 @@ export class ContextLookupWorker {
       await spawned; fresh();
       const owned = await processIdentity(child.pid);
       requireValue(owned && owned.parent === process.pid && owned.executable === path, 'context_lookup_invalid_identity');
-      const executed = await executableIdentity(`/proc/${child.pid}/exe`);
+      const executed = await executableIdentity(`/proc/${child.pid}/exe`, false, this.maxExecutableBytes);
       requireValue(isDeepStrictEqual(worker, executed) && isDeepStrictEqual(owned, await processIdentity(child.pid)), 'context_lookup_invalid_identity');
       fresh();
       operation.written = true;

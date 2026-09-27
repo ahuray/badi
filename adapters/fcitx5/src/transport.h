@@ -27,10 +27,13 @@ bool strictBoundedJsonObject(std::string_view body);
 bool strictSessionControlResult(std::string_view body);
 bool strictSuggestionClear(std::string_view body);
 bool strictPolicyStatus(std::string_view body);
+// The broker target of a manual field: the canonical app id and the opaque
+// Fcitx context id. An observed field uses the observer's inspect target.
+std::optional<nlohmann::json> desktopApplicationTarget(std::string_view appId,
+                                                       std::string_view targetId);
 std::optional<std::string>
 serializeSessionOpenEnvelope(const Coordinates &coordinates,
-                             std::string_view appId,
-                             std::string_view targetId,
+                             const nlohmann::json &target,
                              std::uint64_t monoMs);
 std::optional<std::string> serializeContextEnvelope(const ContextUpdate &update,
                                                     std::uint64_t monoMs);
@@ -59,8 +62,21 @@ bool dispatchSuggestionClear(
 
 struct AuthoritySnapshot {
     std::uint64_t authorityEpoch = 0;
+    std::uint64_t settingsRevision = 0;
     bool paused = true;
     bool initial = false;
+};
+
+// Each connection starts with an initial snapshot. Returns true when a
+// snapshot carries authority the adapter has not observed: every later epoch
+// on a connection, or a reconnect whose initial authority differs from the
+// last one observed on an earlier connection.
+class AuthorityContinuity {
+public:
+    bool observe(const AuthoritySnapshot &snapshot);
+
+private:
+    std::optional<AuthoritySnapshot> observed_;
 };
 
 struct WireCallbacks {
@@ -86,12 +102,8 @@ public:
     [[nodiscard]] bool ready() const;
     [[nodiscard]] std::uint64_t nowMs() const;
 
-    bool openSession(const Coordinates &coordinates, std::string_view appId,
-                     std::string_view targetId);
-    bool queryPolicy(const Coordinates &coordinates, std::string_view appId,
-                     std::string_view targetId);
-    bool queryTargetPolicy(const Coordinates &coordinates, const nlohmann::json &target);
-    bool openTargetSession(const Coordinates &coordinates, const nlohmann::json &target);
+    bool queryPolicy(const Coordinates &coordinates, const nlohmann::json &target);
+    bool openSession(const Coordinates &coordinates, const nlohmann::json &target);
     bool closeSession(const Coordinates &coordinates);
     bool publishContext(const ContextUpdate &update);
     bool requestAcceptance(const AcceptRequest &request);

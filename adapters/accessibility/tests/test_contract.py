@@ -12,17 +12,26 @@ class FakeBackend:
     def __init__(self):
         self.content = "Same text"
         self.reads = []
+        self.geometry_requests = []
+        self.lock_checks = []
+        self.positions = 0
         self.change = None
         self.meta = {"bus": ":1.25", "path": "/org/a11y/atspi/accessible/2", "process_id": 42,
-                     "app_id": "chromium", "uri": "https://example.test/writing", "browser": True,
+                     "app_id": "chromium", "uri": "https://example.test/writing", "browser": True, "web": True,
                      "role": "entry", "tag": "textarea", "input_type": "textarea", "focused": True,
                      "editable": True, "showing": True, "visible": True, "enabled": True,
-                     "sensitive": False, "caret": 9, "total_chars": 9, "selection_count": 0}
+                     "caret": 9, "total_chars": 9, "selection_count": 0}
 
-    def metadata(self, app_id):
+    def metadata(self, app_id, geometry=False, check_lock=False):
+        self.geometry_requests.append(geometry)
+        self.lock_checks.append(check_lock)
         if app_id != self.meta["app_id"]:
             raise Denied("app_mismatch")
         return copy.deepcopy(self.meta)
+
+    def position(self, metadata):
+        self.positions += 1
+        return {**metadata, **{key: self.meta[key] for key in ("caret", "total_chars", "selection_count")}}
 
     def text(self, metadata, start, end):
         self.reads.append((start, end))
@@ -74,7 +83,7 @@ class ContractTests(unittest.TestCase):
 
     def test_sensitive_selected_and_unknown_fields_deny_before_read(self):
         focus = self.inspect()["focus"]
-        for change in ({"role": "password text"}, {"sensitive": True}, {"selection_count": 1},
+        for change in ({"role": "password text"}, {"selection_count": 1},
                        {"editable": False}, {"focused": False}, {"showing": False}, {"enabled": False},
                        {"tag": "input", "input_type": "email"}, {"tag": "unknown"}):
             before = copy.deepcopy(self.backend.meta)
@@ -82,6 +91,56 @@ class ContractTests(unittest.TestCase):
             self.assertFalse(self.snapshot(focus)["ok"], change)
             self.assertEqual(self.backend.reads, [], change)
             self.backend.meta = before
+
+    def test_electron_web_content_keeps_html_purpose_gates(self):
+        self.backend.meta.update(app_id="code", browser=False, web=True, uri="")
+        for change in ({"tag": "input", "input_type": "email"}, {"tag": "input", "input_type": "search"},
+                       {"tag": "unknown"}, {"role": "password text"}):
+            with self.subTest(change=change):
+                before = copy.deepcopy(self.backend.meta)
+                self.backend.meta.update(change)
+                result = self.observer.request({"schema": SCHEMA, "id": "1", "op": "inspect", "app_id": "code"})
+                self.assertIn(result["error"], ("unsupported_field", "sensitive_field"))
+                self.backend.meta = before
+        focus = self.observer.request({"schema": SCHEMA, "id": "1", "op": "inspect", "app_id": "code"})["focus"]
+        self.assertEqual(focus["target"], {"kind": "desktop_application", "app_id": "code",
+                                           "target_id": focus["target"]["target_id"]})
+        # Native toolkits (Telegram, Omawrite) expose no HTML tag or input type.
+        self.backend.meta.update(app_id="telegram", web=False, tag="", input_type="")
+        self.assertTrue(self.observer.request({"schema": SCHEMA, "id": "1", "op": "inspect", "app_id": "telegram"})["ok"])
+
+    def test_brave_shares_chromium_site_policy_but_keeps_its_binding(self):
+        self.backend.meta.update(app_id="brave-origin")
+        focus = self.observer.request({"schema": SCHEMA, "id": "1", "op": "inspect", "app_id": "brave-origin"})["focus"]
+        self.assertEqual((focus["target"]["kind"], focus["target"]["app_id"]), ("browser", "chromium"))
+        self.assertEqual(focus["target"]["origin"], {"scheme": "https", "host": "example.test"})
+        self.assertEqual(focus["binding"]["app_id"], "brave-origin")
+
+    def test_only_inspect_checks_the_session_lock_and_later_reads_keep_its_epoch(self):
+        focus = self.inspect()["focus"]
+        focus = self.snapshot(focus)["focus"]
+        self.observer.render = lambda *_args: True
+        self.assertTrue(self.observer.request(self.preview_request(focus))["ok"])
+        self.assertEqual(self.backend.lock_checks, [True, False, False])
+
+        def locked(*_args):
+            raise Denied("desktop_locked")
+        self.backend.metadata = locked
+        self.assertEqual(self.inspect()["error"], "desktop_locked")
+        self.backend.metadata = FakeBackend.metadata.__get__(self.backend)
+        self.observer.invalidate("focus_changed")
+        self.assertEqual(self.snapshot(focus)["error"], "stale_binding", "a binding never outlives its epoch")
+
+    def test_snapshot_rechecks_only_the_same_fields_position(self):
+        focus = self.inspect()["focus"]
+        self.backend.lock_checks.clear()
+        self.assertTrue(self.snapshot(focus)["ok"])
+        self.assertEqual((self.backend.lock_checks, self.backend.positions), ([False], 1))
+
+    def test_invalidation_during_the_read_rejects(self):
+        focus = self.inspect()["focus"]
+        self.backend.change = lambda _backend: self.observer.invalidate("field_changed")
+        self.assertEqual(self.snapshot(focus)["error"], "stale_binding")
 
     def test_exact_same_text_different_field_rejects(self):
         focus = self.inspect()["focus"]
@@ -145,6 +204,7 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(result["focus"]["total_chars"], focus["total_chars"])
         self.assertEqual(self.backend.reads, reads)
         self.assertEqual(len(renders), 1)
+        self.assertEqual(self.backend.geometry_requests, [False, False, True], "only preview calibrates")
         self.backend.meta["path"] = "/other"
         self.assertFalse(self.observer.request(request)["ok"])
         self.assertEqual(len(renders), 1)

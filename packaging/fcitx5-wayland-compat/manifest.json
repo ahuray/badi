@@ -1,14 +1,18 @@
 {
-  "schema": "badi.fcitx-wayland-compat.v1",
-  "upstream_version": "5.1.21",
-  "upstream_commit": "1319952f284eae17a36cba9e800843ca61a163c1",
-  "source_url": "https://codeload.github.com/fcitx/fcitx5/tar.gz/1319952f284eae17a36cba9e800843ca61a163c1",
-  "source_bytes": 7781394,
-  "source_sha256": "6f02e91bcb996d81e46b85bebf30a089272dc021ec8f35dbc31ae2461c28a861",
-  "patch_sha256": "2544481886066772cfa461716e32a30627e546ff5b322b4eca3596daca6f8598",
+  "schema": "badi.fcitx-wayland-compat.v2",
+  "upstream_version": "5.1.22",
+  "upstream_commit": "c7ecdb931d8b378ccdcd87382a3ef7ff0bd10def",
+  "source_url": "https://codeload.github.com/fcitx/fcitx5/tar.gz/c7ecdb931d8b378ccdcd87382a3ef7ff0bd10def",
+  "source_bytes": 7833569,
+  "source_sha256": "3743c26ee354823c3f808afd6e17af32ed5e6460edc562854e95d5b0f4d8cd4d",
+  "patch": "done-preedit-refresh.patch",
+  "patch_sha256": "d6be2639ede491461731e2f1fb678185ed8ba4be3cc43bd01e7016e64402f328",
+  "backport": {
+    "upstream_pr": "https://github.com/fcitx/fcitx5/pull/1690",
+    "upstream_commit": "1e00551899f9d0fa5418d899f468b6e421401adf",
+    "fixed_in": "5.1.23"
+  },
   "license": "LGPL-2.1-or-later; bundled protocol notices retained in full source archive",
-  "option": "IdleDoneAcknowledgement",
-  "default_enabled": false,
   "targeted_compositor": "Hyprland 0.56.2",
   "targeted_clients": [
     "Chromium 151",

@@ -11,7 +11,7 @@ from daemon import Daemon
 
 @unittest.skipUnless(os.environ.get("BADI_A11Y_REQUIRE_SESSION_BUS") == "1", "requires explicit real session-bus integration lane")
 class SignalScopeTests(unittest.TestCase):
-    def test_text_events_are_sender_and_field_scoped(self):
+    def test_field_events_are_sender_and_field_scoped(self):
         import gi
         gi.require_version("Atspi", "2.0")
         from gi.repository import Atspi, Gio, GLib
@@ -32,30 +32,38 @@ class SignalScopeTests(unittest.TestCase):
                 while GLib.MainContext.default().pending():
                     GLib.MainContext.default().iteration(False)
                 time.sleep(.005)
-        def emit(sender, path):
-            sender.emit_signal(None, path, "org.a11y.atspi.Event.Object", "TextChanged", GLib.Variant("(s)", ("disposable synthetic text",)))
+        def emit(sender, path, member="TextChanged"):
+            sender.emit_signal(None, path, "org.a11y.atspi.Event.Object", member, GLib.Variant("(s)", ("disposable synthetic text",)))
             sender.flush_sync(None)
             pump()
         try:
             observer.observer.tracked = binding
-            observer.connect_text_bus()
-            observer.arm_text_events(binding)
-            observer.text_bus.flush_sync(None)
+            observer.connect_event_bus()
+            observer.arm_field_events(binding)
+            observer.event_bus.flush_sync(None)
             pump()
             emit(emitters[0], "/badi/fixture/two")
+            emit(emitters[0], "/badi/fixture/two", "ChildrenChanged")
             emit(emitters[1], "/badi/fixture/one")
             self.assertEqual(events, [])
-            emit(emitters[0], "/badi/fixture/one")
+            emit(emitters[0], "/badi/fixture/one", "TextCaretMoved")
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0]["reason"], "field_changed")
-            self.assertNotIn("disposable", str(events[0]))
-            self.assertIsNone(observer.text_subscription)
+            self.assertIsNone(observer.field_subscription)
+            observer.observer.tracked = binding = {**binding, "epoch": observer.observer.epoch}
+            observer.arm_field_events(binding)
+            observer.event_bus.flush_sync(None)
+            pump()
             emit(emitters[0], "/badi/fixture/one")
-            self.assertEqual(len(events), 1)
+            self.assertEqual(len(events), 2)
+            self.assertNotIn("disposable", str(events))
+            emit(emitters[0], "/badi/fixture/one")
+            self.assertEqual(len(events), 2)
         finally:
-            observer.disarm_text_events()
-            if observer.text_bus:
-                observer.text_bus.close_sync(None)
+            observer.disarm_field_events()
+            if observer.event_bus:
+                observer.withdraw_producer()
+                observer.event_bus.close_sync(None)
             for emitter in emitters:
                 emitter.close_sync(None)
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawn } from 'node:child_process';
+import { statSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ContextLookupWorker, validateContextLookupRequest, validateContextLookupResult } from './context-lookup-worker.mjs';
 import { processIdentity } from './worker.mjs';
@@ -35,7 +36,10 @@ if(mode==='exit-failure')process.exitCode=1;
 
 function setup(t, mode = 'normal', options = {}) {
   const calls = [];
-  const worker = new ContextLookupWorker({ executable: '/usr/bin/node', timeoutMs: 3000, killMs: 100,
+  // The fixture runs this Node binary: it can exceed the real worker's size cap,
+  // and hashing it under parallel test load needs a generous normal deadline.
+  const worker = new ContextLookupWorker({ executable: process.execPath, timeoutMs: 10000, killMs: 100,
+    maxExecutableBytes: statSync(process.execPath).size,
     spawnProcess: (path, args, opts) => {
       const child = mode === 'wrong-executable' ? spawn('/usr/bin/sleep', ['60'], opts)
         : spawn(path, ['-e', fixture, mode], opts);

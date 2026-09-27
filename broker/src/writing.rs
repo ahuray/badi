@@ -2,7 +2,7 @@
 //! as a release qualification; startup verifies the bytes actually executed.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -10,32 +10,39 @@ use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::model_selection::{
-    HardwareProfile, ModelArtifact, ModelUseCase, catalog, detect_hardware, recommend_model,
+    HardwareProfile, ModelArtifact, ModelUseCase, catalog, current_memory,
+    detect_cpu_inference_hardware, fits_available_memory, recommend_model,
     select_installed_writing_model,
 };
 use crate::provider::ProviderRequest;
-use crate::semantic::candidate::{
+use crate::semantic::pinned_runtime::{
     RUNTIME_ARCHIVE_BYTES, RUNTIME_ARCHIVE_FILENAME, RUNTIME_ARCHIVE_SHA256,
     RUNTIME_BUNDLE_MANIFEST_SHA256, RUNTIME_BYTES, RUNTIME_SHA256,
 };
+#[cfg(target_os = "linux")]
+pub use crate::semantic::process::{EXEC_HELPER_FLAG, exec_runtime_helper};
 use crate::semantic::provenance::{
     DirectoryManifestExpectation, FileExpectation, ProvenanceError, VerifiedFile,
     verify_directory_manifest, verify_file,
 };
-use crate::semantic::runtime::{LlamaCppLaunch, OwnedRuntime, RuntimeError};
+use crate::semantic::runtime::{LlamaCppLaunch, OwnedRuntime, RuntimeError, WarmUpReport};
 
 pub const WRITING_CONTRACT: &str = "badi.writing.completion-and-spelling.en-de-fa.v2";
-pub(crate) const STREAM_BUDGET_MS: u64 = 550;
+const MEMORY_RETRY_INITIAL: Duration = Duration::from_secs(2);
+const MEMORY_RETRY_MAX: Duration = Duration::from_secs(30);
 
+/// A language the writing provider completes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WritingLanguage {
+pub enum WritingLanguage {
     English,
     German,
     Persian,
 }
 
 impl WritingLanguage {
-    pub(crate) fn from_tag(tag: &str) -> Option<Self> {
+    /// The writing language of a BCP 47 `tag`, by its primary subtag.
+    #[must_use]
+    pub fn from_tag(tag: &str) -> Option<Self> {
         match tag.split('-').next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::English),
             "de" => Some(Self::German),
@@ -44,9 +51,11 @@ impl WritingLanguage {
         }
     }
 
-    pub(crate) fn accepts_output(self, value: &str) -> bool {
+    /// Whether `value` uses only this language's scripts and punctuation.
+    #[must_use]
+    pub fn accepts_output(self, value: &str) -> bool {
         if self != Self::Persian {
-            return crate::semantic::client::valid_english_output(value);
+            return valid_english_output(value);
         }
         if !crate::segment::valid_orthographic_joiners(value) {
             return false;
@@ -60,7 +69,7 @@ impl WritingLanguage {
             } else if arabic_base && matches!(character, '\u{064b}'..='\u{065f}' | '\u{0670}') {
                 // Arabic combining vowel marks require an actual preceding base.
             } else if character == '\u{200c}'
-                || crate::semantic::client::allowed_common_scalar(character)
+                || allowed_common_scalar(character)
                 || matches!(
                     character,
                     '\u{060c}' | '\u{061b}' | '\u{061f}' | '\u{06f0}'..='\u{06f9}'
@@ -75,7 +84,62 @@ impl WritingLanguage {
     }
 }
 
-pub(crate) fn validate_suggestion_shape(
+/// Whether `value` is Latin-script text with only the shared punctuation,
+/// digits and combining accents on a Latin base: the English and German
+/// output rule.
+fn valid_english_output(value: &str) -> bool {
+    if value.is_empty() || value.ends_with(char::is_whitespace) {
+        return false;
+    }
+    let mut saw_latin = false;
+    let mut mark_has_latin_base = false;
+    for character in value.chars() {
+        match character.script() {
+            Script::Latin => {
+                saw_latin = true;
+                mark_has_latin_base = true;
+            }
+            Script::Inherited
+                if mark_has_latin_base && ('\u{0300}'..='\u{036f}').contains(&character) => {}
+            Script::Common if allowed_common_scalar(character) => {
+                mark_has_latin_base = false;
+            }
+            _ => return false,
+        }
+    }
+    saw_latin
+}
+
+/// Space, digits and the punctuation every writing language may use.
+const fn allowed_common_scalar(character: char) -> bool {
+    matches!(
+        character,
+        ' ' | '0'
+            ..='9'
+                | '.'
+                | ','
+                | ';'
+                | ':'
+                | '!'
+                | '?'
+                | '\''
+                | '\u{2019}'
+                | '-'
+                | '\u{2013}'
+                | '\u{2014}'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '/'
+                | '%'
+                | '\u{2026}'
+    )
+}
+
+/// Checks a completion's spacing, overlap and boundaries against the text
+/// around the caret.
+pub fn validate_suggestion_shape(
     before: &str,
     after: &str,
     suggestion: &str,
@@ -97,7 +161,9 @@ pub(crate) fn validate_suggestion_shape(
     crate::segment::validate_completion_shape(before, after, suggestion, suffix)
 }
 
-pub(crate) fn validate_proposal(
+/// [`validate_suggestion_shape`], plus: a completion that continues a word
+/// must be English and form a known English word.
+pub fn validate_proposal(
     before: &str,
     after: &str,
     suggestion: &str,
@@ -119,28 +185,93 @@ pub(crate) fn validate_proposal(
     Ok(())
 }
 
-fn english_words() -> &'static [&'static str] {
-    static WORDS: OnceLock<Vec<&'static str>> = OnceLock::new();
-    WORDS.get_or_init(|| {
-        include_str!("../data/writing-lexicon/en.txt")
-            .lines()
-            .collect()
-    })
+/// Normalize ASCII, Arabic-Indic and Persian digits to ASCII.
+#[must_use]
+pub fn ascii_digit(character: char) -> Option<char> {
+    let value = match character {
+        '0'..='9' => character as u32 - '0' as u32,
+        '\u{0660}'..='\u{0669}' => character as u32 - '\u{0660}' as u32,
+        '\u{06f0}'..='\u{06f9}' => character as u32 - '\u{06f0}' as u32,
+        _ => return None,
+    };
+    char::from_u32('0' as u32 + value)
+}
+
+fn digit_runs(text: &str) -> std::collections::BTreeSet<String> {
+    let mut runs = std::collections::BTreeSet::new();
+    let mut run = String::new();
+    for character in text.chars() {
+        if let Some(digit) = ascii_digit(character) {
+            run.push(digit);
+        } else if !run.is_empty() {
+            runs.insert(std::mem::take(&mut run));
+        }
+    }
+    if !run.is_empty() {
+        runs.insert(run);
+    }
+    runs
+}
+
+/// A small model readily invents dates, times, amounts and ordinals. Reject a
+/// proposal unless each of its digit runs already occurs in the typed context,
+/// and reject a number ending at the `.` stop word, which may be an ordinal or
+/// a cut decimal.
+pub(crate) fn introduces_unsupported_fact(context: &str, proposal: &str) -> bool {
+    if proposal
+        .strip_suffix('.')
+        .and_then(|value| value.chars().next_back())
+        .is_some_and(|character| ascii_digit(character).is_some())
+    {
+        return true;
+    }
+    let proposed = digit_runs(proposal);
+    !proposed.is_empty() && !proposed.is_subset(&digit_runs(context))
+}
+
+/// The pinned English lexicon: lowercase ASCII words, one per line, each
+/// ending in a newline, in byte order.
+const ENGLISH_LEXICON: &str = include_str!("../data/writing-lexicon/en.txt");
+
+/// The first lexicon word not less than `target` in byte order, found by
+/// bisecting the embedded text in place: lookups need no index or heap.
+fn first_english_word_from(target: &str) -> Option<&'static str> {
+    let text = ENGLISH_LEXICON.as_bytes();
+    // Every word starting before `low` is less than `target`; every word
+    // starting at or after `high` is not. Both are always line starts.
+    let (mut low, mut high) = (0, text.len());
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let start = text[low..middle]
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map_or(low, |newline| low + newline + 1);
+        let end = start + line_length(&text[start..]);
+        if &text[start..end] < target.as_bytes() {
+            low = end + 1;
+        } else {
+            high = start;
+        }
+    }
+    (low < text.len()).then(|| &ENGLISH_LEXICON[low..low + line_length(&text[low..])])
+}
+
+fn line_length(text: &[u8]) -> usize {
+    text.iter()
+        .position(|&byte| byte == b'\n')
+        .unwrap_or(text.len())
 }
 
 fn known_english_word(word: &str) -> bool {
-    word.bytes().all(|byte| byte.is_ascii_alphabetic())
-        && english_words()
-            .binary_search(&word.to_ascii_lowercase().as_str())
-            .is_ok()
+    if !word.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        return false;
+    }
+    let word = word.to_ascii_lowercase();
+    first_english_word_from(&word) == Some(word.as_str())
 }
 
 fn english_word_prefix(word: &str) -> bool {
-    let words = english_words();
-    let index = words.partition_point(|candidate| *candidate < word);
-    words
-        .get(index)
-        .is_some_and(|candidate| candidate.starts_with(word))
+    first_english_word_from(word).is_some_and(|candidate| candidate.starts_with(word))
 }
 
 pub fn data_directory() -> Result<PathBuf, WritingError> {
@@ -159,16 +290,109 @@ pub fn data_directory() -> Result<PathBuf, WritingError> {
     Ok(home.join(".local/share/badi"))
 }
 
-pub async fn activate(directory: PathBuf) -> Result<(OwnedRuntime, ModelArtifact), WritingError> {
-    let (launch, model) = prepare_launch(directory).await?;
-    Ok((launch.for_writing().spawn().await?, model))
+/// Starts the installed writing model, first waiting while available memory
+/// is temporarily too short for it.
+pub async fn activate(
+    directory: PathBuf,
+) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
+    start(directory, false).await
 }
 
-pub(crate) async fn prepare_launch(
+/// [`activate`] for a binary that dispatches [`EXEC_HELPER_FLAG`] before it
+/// starts Tokio: the runtime then cannot outlive this process. The kernel
+/// signals the runtime when the spawning thread exits, so await this on a
+/// thread that lives as long as the process, such as `main`'s `block_on`.
+#[cfg(target_os = "linux")]
+pub async fn activate_contained(
     directory: PathBuf,
-) -> Result<(LlamaCppLaunch, ModelArtifact), WritingError> {
-    let hardware = detect_hardware();
-    let threads = writing_threads(&hardware)?;
+) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
+    start(directory, true).await
+}
+
+async fn start(
+    directory: PathBuf,
+    contained: bool,
+) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
+    let (model, threads) = installed_model(&directory)?;
+    wait_for_memory(model).await;
+    let launch = verify_launch(directory, model, threads).await?;
+    let launch = if contained {
+        launch.contained()
+    } else {
+        launch
+    };
+    let runtime = launch.spawn().await?;
+    // Pay the first-inference cost before the broker binds its socket. No real
+    // request can queue behind this bounded job, and a failure only leaves the
+    // first request cold.
+    let warm_up = runtime.warm_up().await;
+    Ok((runtime, model, warm_up))
+}
+
+async fn wait_for_memory(model: ModelArtifact) {
+    let started = Instant::now();
+    let mut delay = None;
+    loop {
+        let available_mib = current_memory().available_mib;
+        let Some(next) = memory_retry_delay(model, available_mib, delay) else {
+            break;
+        };
+        if delay.is_none() {
+            eprintln!(
+                "badi-broker: waiting for available memory before starting the writing model available_mib={}",
+                available_mib.unwrap_or_default()
+            );
+        }
+        delay = Some(next);
+        tokio::time::sleep(next).await;
+    }
+    if delay.is_some() {
+        eprintln!(
+            "badi-broker: memory available after waiting elapsed_s={}",
+            started.elapsed().as_secs()
+        );
+    }
+}
+
+/// Whether `model` can start with `available_mib` of available memory.
+/// Unknown availability does not block: total memory already passed the hard
+/// floor during selection.
+#[must_use]
+pub fn memory_fits(model: ModelArtifact, available_mib: Option<u64>) -> bool {
+    available_mib.is_none_or(|available| fits_available_memory(model, available))
+}
+
+/// The pause before checking available memory again, or `None` once `model`
+/// can start.
+fn memory_retry_delay(
+    model: ModelArtifact,
+    available_mib: Option<u64>,
+    previous: Option<Duration>,
+) -> Option<Duration> {
+    if memory_fits(model, available_mib) {
+        return None;
+    }
+    Some(previous.map_or(MEMORY_RETRY_INITIAL, |delay| {
+        delay.saturating_mul(2).min(MEMORY_RETRY_MAX)
+    }))
+}
+
+/// Content-free startup lines, provider line first: log readers such as the
+/// Fcitx broker smoke lane require the log to begin with it. Only the memory
+/// wait lines can precede it, and only when startup had to wait.
+#[must_use]
+pub fn activation_report(model: &ModelArtifact, warm_up: WarmUpReport) -> String {
+    format!(
+        "provider=local_model model={} quantization={}\nbadi-broker: writing runtime warm-up {warm_up}",
+        model.filename, model.quantization
+    )
+}
+
+/// The installed catalog model that fits this host, with the inference
+/// thread count, from the models under `directory`.
+pub fn installed_model(directory: &Path) -> Result<(ModelArtifact, usize), WritingError> {
+    let hardware = detect_cpu_inference_hardware();
+    let threads = threads_for(&hardware)?;
     let installed: Vec<_> = catalog(ModelUseCase::Writing)
         .iter()
         .filter(|model| directory.join("models").join(model.filename).is_file())
@@ -183,33 +407,33 @@ pub(crate) async fn prepare_launch(
                     WritingError::NotInstalled(model.filename)
                 })
         })?;
-    let launch = tokio::task::spawn_blocking(move || verified_launch(&directory, model, threads))
-        .await
-        .map_err(|_| WritingError::VerificationTask)??;
-    Ok((launch, model))
+    Ok((model, threads))
 }
 
-fn writing_threads(hardware: &HardwareProfile) -> Result<usize, WritingError> {
+/// Verifies the installed `model` and the pinned runtime under `directory`
+/// off the async executor, and returns their launch.
+pub async fn verify_launch(
+    directory: PathBuf,
+    model: ModelArtifact,
+    threads: usize,
+) -> Result<LlamaCppLaunch, WritingError> {
+    tokio::task::spawn_blocking(move || verified_launch(&directory, model, threads))
+        .await
+        .map_err(|_| WritingError::VerificationTask)?
+}
+
+/// The inference thread count for this host's CPU.
+pub fn writing_threads() -> Result<usize, WritingError> {
+    threads_for(&detect_cpu_inference_hardware())
+}
+
+fn threads_for(hardware: &HardwareProfile) -> Result<usize, WritingError> {
     if std::env::consts::OS != "linux" || hardware.architecture != "x86_64" || !hardware.cpu.avx2 {
         return Err(WritingError::UnsupportedRuntime);
     }
     // Small quantized models are bandwidth-bound on the tested hybrid CPU.
     // Leave capacity for the editor; twelve threads had worse tail latency.
     Ok((hardware.logical_cpus / 2).clamp(1, 4))
-}
-
-#[cfg(feature = "writing-lab")]
-pub(crate) async fn prepare_lab_artifact(
-    directory: PathBuf,
-    artifact: crate::writing_lab::artifact::ModelArtifactOverride,
-) -> Result<LlamaCppLaunch, WritingError> {
-    let threads = writing_threads(&detect_hardware())?;
-    tokio::task::spawn_blocking(move || {
-        let weights = verify_file(&artifact.weights)?;
-        verified_runtime_launch(&directory, weights, &artifact.alias, threads)
-    })
-    .await
-    .map_err(|_| WritingError::VerificationTask)?
 }
 
 fn verified_launch(
@@ -227,10 +451,12 @@ fn verified_launch(
         model.sha256,
         model.download_bytes,
     )?)?;
-    verified_runtime_launch(directory, weights, model.filename, threads)
+    pinned_runtime_launch(directory, weights, model.filename, threads)
 }
 
-fn verified_runtime_launch(
+/// Verifies the pinned runtime release under `directory` and returns its
+/// launch of the already verified `weights`. Blocking: it hashes the runtime.
+pub fn pinned_runtime_launch(
     directory: &Path,
     weights: VerifiedFile,
     alias: &str,
@@ -264,22 +490,43 @@ pub(crate) struct CompletionPlan<'a> {
     pub(crate) max_tokens: u16,
 }
 
-pub(crate) fn completion_plan(
-    request: &ProviderRequest,
-    heal_trailing_ascii_space: bool,
-) -> CompletionPlan<'_> {
+/// Languages whose trailing ASCII space is healed in production. A language is
+/// listed only while blinded per-language review finds no increase in harmful
+/// suggestions over the unhealed prompt; an unlisted language keeps that
+/// prompt, trailing space included. Removing a language is its rollback.
+/// German is unlisted: the sealed 2026-09-10 set rose from 1 to 9 harmful.
+/// English was kept by user decision at +1 harmful for +19 useful in 40.
+pub(crate) const TRAILING_SPACE_HEALING: &[WritingLanguage] =
+    &[WritingLanguage::English, WritingLanguage::Persian];
+
+/// Whether production heals a trailing ASCII space for this language tag.
+#[must_use]
+pub fn heals_trailing_space(language: &str) -> bool {
+    WritingLanguage::from_tag(language)
+        .is_some_and(|language| TRAILING_SPACE_HEALING.contains(&language))
+}
+
+/// Production passes [`TRAILING_SPACE_HEALING`]; tests pass other sets to
+/// check each language's promotion and rollback on its own.
+pub(crate) fn completion_plan<'a>(
+    request: &'a ProviderRequest,
+    healed_languages: &[WritingLanguage],
+) -> CompletionPlan<'a> {
     let context = inference_context(&request.before);
     let language = request
         .language
         .as_deref()
         .and_then(WritingLanguage::from_tag);
-    if heal_trailing_ascii_space && language.is_some() && context.ends_with(' ') {
+    if language.is_some_and(|language| healed_languages.contains(&language))
+        && context.ends_with(' ')
+    {
+        // A prompt ending in a space tokenizes unlike the model's own
+        // " word" tokens. Generate at the earlier boundary and require the
+        // exact spaces back; the echo keeps the ordinary eight-token budget.
         let prompt = context.trim_end_matches(' ');
         return CompletionPlan {
             prompt,
             echo: Some(&context[prompt.len()..]),
-            // Boundary echo is the only experiment. Do not silently expand
-            // the ordinary eight-token allowance because an echo now exists.
             max_tokens: 8,
         };
     }
@@ -309,7 +556,20 @@ impl CompletionPlan<'_> {
 
 #[cfg(test)]
 pub(crate) fn completion_payload(request: &ProviderRequest) -> Value {
-    completion_plan(request, false).payload()
+    completion_plan(request, TRAILING_SPACE_HEALING).payload()
+}
+
+/// A sentence start with fewer words than this also keeps the sentence(s)
+/// before it, within the same 160-scalar window.
+const MIN_SENTENCE_CONTEXT_WORDS: usize = 4;
+
+/// Words for the sentence-context rule: whitespace-separated runs containing a
+/// letter or digit. ZWNJ is not whitespace, so `می‌شود` is one word, and a
+/// lone dash is not a word.
+fn context_words(text: &str) -> usize {
+    text.split_whitespace()
+        .filter(|run| run.chars().any(char::is_alphanumeric))
+        .count()
 }
 
 /// Limit cold prefill cost without changing the context used for edit authority.
@@ -329,22 +589,32 @@ pub(crate) fn inference_context(before: &str) -> &str {
         }
     }
     // Cold prefill of the full window can exhaust the writing deadline before
-    // the first token. Keep the current sentence; edit authority still binds
-    // the unchanged full request.
+    // the first token, so keep the current sentence. At a sentence start that
+    // leaves the model almost nothing (`Please`), so extend back one sentence
+    // at a time until the prompt has four words; when the text is typed in
+    // order, the previous request's prompt is then a cached prefix. A sentence
+    // end is `.`, `!`, `?` or `؟` before whitespace, or a newline, so
+    // abbreviations such as `z. B.` and `e.g.` also end one. Edit authority
+    // still binds the unchanged full request.
     for (index, character) in window.char_indices().rev() {
         if matches!(character, '.' | '!' | '?' | '\u{061f}' | '\n') {
             let after = &window[index + character.len_utf8()..];
             if (character == '\n' || after.starts_with(char::is_whitespace))
-                && !after.trim_start().is_empty()
+                && context_words(after) >= MIN_SENTENCE_CONTEXT_WORDS
             {
                 return after.trim_start();
             }
         }
     }
+    // Too few words after every sentence start in the window: keep the whole
+    // window, which still begins at a whitespace boundary.
     window
 }
 
-pub(crate) fn healing_prefix(before: &str) -> Option<&str> {
+/// The trailing word of `before` that token healing regenerates: two to 24
+/// letters that are not a known English word.
+#[must_use]
+pub fn healing_prefix(before: &str) -> Option<&str> {
     let word = before.split_whitespace().next_back()?;
     (before.ends_with(word)
         && (2..=24).contains(&word.chars().count())
@@ -365,9 +635,8 @@ pub(crate) fn strip_healed_prefix<'a>(raw: &'a str, echo: Option<&str>) -> Optio
 
 pub(crate) fn available_complete_words(raw: &str) -> Option<String> {
     let separator = raw.rfind(' ').unwrap_or(0);
-    let count = raw
-        .unicode_word_indices()
-        .filter(|(start, word)| start + word.len() <= separator)
+    let count = spaced_words(raw)
+        .filter(|(run_end, _)| *run_end <= separator)
         .count()
         .min(4);
     (count > 0)
@@ -423,8 +692,8 @@ pub(crate) fn unambiguous_correction(word: &str) -> Option<String> {
             candidates.insert(candidate);
         }
     };
-    // The first character stays unchanged, matching the existing spelling
-    // contract. At most 1,298 short candidates are checked for a 24-byte word.
+    // The first character stays unchanged, as `valid_correction` requires.
+    // At most 1,298 short candidates are checked for a 24-byte word.
     for index in 1..word.len() {
         consider(format!("{}{}", &word[..index], &word[index + 1..]));
         for replacement in b'a'..=b'z' {
@@ -498,27 +767,42 @@ pub(crate) fn valid_correction(original: &str, corrected: &str) -> bool {
     }
 }
 
+/// Visible words for the suggestion limit: runs between ASCII spaces, the only
+/// word separator a suggestion may contain. UAX #29 splits `re-try`, `E-Mail`
+/// and `state-of-the-art`, so its segments cannot decide where a displayed word
+/// ends. Each item is (end of the run, end of the run's last UAX #29 word); the
+/// latter drops trailing punctuation such as a comma. A run without a word,
+/// such as a dash, is not counted.
+fn spaced_words(raw: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let mut next = 0;
+    raw.split(' ').filter_map(move |run| {
+        let start = next;
+        next += run.len() + 1;
+        let (offset, word) = run.unicode_word_indices().next_back()?;
+        Some((start + run.len(), start + offset + word.len()))
+    })
+}
+
 /// A streaming token is not necessarily a complete word. Wait for a following
 /// separator (or a terminal model stop) before returning a bounded continuation.
-pub(crate) fn complete_word_prefix(raw: &str, limit: usize, finished: bool) -> Option<String> {
+#[must_use]
+pub fn complete_word_prefix(raw: &str, limit: usize, finished: bool) -> Option<String> {
     if raw.is_empty()
         || raw.contains(['\n', '\r', '<', '>', '`'])
         || raw.chars().any(char::is_control)
     {
         return None;
     }
-    let words: Vec<_> = raw.unicode_word_indices().collect();
     let separator = raw.rfind(' ').unwrap_or(0);
-    let complete: Vec<_> = words
-        .into_iter()
-        .filter(|(start, word)| finished || start + word.len() <= separator)
+    let complete: Vec<_> = spaced_words(raw)
+        .filter(|(run_end, _)| finished || *run_end <= separator)
+        .map(|(_, word_end)| word_end)
         .collect();
     if complete.is_empty() || (!finished && complete.len() < limit) {
         return None;
     }
     let count = complete.len().min(limit);
-    let (start, word) = complete[count - 1];
-    let mut end = start + word.len();
+    let mut end = complete[count - 1];
     if finished && count == complete.len() {
         end = raw.trim_end().len();
     }
@@ -553,9 +837,78 @@ pub enum WritingError {
     VerificationTask,
 }
 
+impl WritingError {
+    /// Whether retrying cannot help until the installation or host changes.
+    #[must_use]
+    pub const fn is_configuration(&self) -> bool {
+        matches!(
+            self,
+            Self::UnsupportedRuntime | Self::DataDirectory | Self::NoFit | Self::NotInstalled(_)
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{complete_word_prefix, correction_word, valid_correction};
+    use super::{
+        ENGLISH_LEXICON, complete_word_prefix, correction_word, english_word_prefix,
+        known_english_word, memory_retry_delay, valid_correction,
+    };
+
+    #[test]
+    fn in_place_lexicon_lookups_match_a_sorted_word_list() {
+        let words: Vec<&str> = ENGLISH_LEXICON.lines().collect();
+        assert_eq!(words.len(), 77_928);
+        assert!(words.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(ENGLISH_LEXICON.ends_with('\n') && !ENGLISH_LEXICON.contains('\r'));
+        let known = |word: &str| {
+            word.bytes().all(|byte| byte.is_ascii_alphabetic())
+                && words
+                    .binary_search(&word.to_ascii_lowercase().as_str())
+                    .is_ok()
+        };
+        let prefix = |word: &str| {
+            let index = words.partition_point(|candidate| *candidate < word);
+            words
+                .get(index)
+                .is_some_and(|candidate| candidate.starts_with(word))
+        };
+        let mut probes: Vec<String> = [
+            "", "A", "Zzz", "zzzzzz", "{", "0", "`", "a b", "\u{200c}", "naïve", "é", "Teh",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        for word in &words {
+            // Each word in both cases, its shorter prefix, and probes just
+            // after it, among its extensions and past them.
+            probes.push((*word).to_owned());
+            probes.push(word.to_ascii_uppercase());
+            probes.push(word[..word.len() - 1].to_owned());
+            probes.push(format!("{word}\0"));
+            probes.push(format!("{word}q"));
+            probes.push(format!("{word}{{"));
+        }
+        for probe in &probes {
+            assert_eq!(known_english_word(probe), known(probe), "{probe:?}");
+            assert_eq!(english_word_prefix(probe), prefix(probe), "{probe:?}");
+        }
+    }
+
+    #[test]
+    fn short_memory_delays_start_with_bounded_backoff() {
+        let model =
+            crate::model_selection::catalog(crate::model_selection::ModelUseCase::Writing)[1];
+        assert_eq!(memory_retry_delay(model, Some(16_000), None), None);
+        assert_eq!(memory_retry_delay(model, None, None), None);
+        let mut delays = Vec::new();
+        let mut previous = None;
+        for _ in 0..7 {
+            previous = memory_retry_delay(model, Some(4_000), previous);
+            delays.push(previous.expect("short memory waits").as_secs());
+        }
+        assert_eq!(delays, [2, 4, 8, 16, 30, 30, 30]);
+        assert_eq!(memory_retry_delay(model, Some(8_000), previous), None);
+    }
 
     #[test]
     fn token_healing_binds_the_exact_typed_stem() {
@@ -608,12 +961,20 @@ mod tests {
             "We use version 2.5 in production"
         );
         for (context, expected) in [
-            ("Thanks for sharing the draft. I will", "I will"),
-            ("Vielen Dank für Ihre Nachricht. Ich werde", "Ich werde"),
-            ("از پیام شما ممنونم. من فردا", "من فردا"),
-            ("آماده هستید؟ من فردا", "من فردا"),
-            ("The user chose blue.\nMake the heading", "Make the heading"),
-            ("Previous line\nNext line", "Next line"),
+            (
+                "Thanks for sharing the draft. I will read it",
+                "I will read it",
+            ),
+            (
+                "Vielen Dank für Ihre Nachricht. Ich werde sie morgen",
+                "Ich werde sie morgen",
+            ),
+            ("از پیام شما ممنونم. من فردا گزارش را", "من فردا گزارش را"),
+            ("آماده هستید؟ من فردا گزارش را", "من فردا گزارش را"),
+            (
+                "The user chose blue.\nMake the heading bold",
+                "Make the heading bold",
+            ),
             ("A complete sentence. ", "A complete sentence. "),
             (
                 "domain.example remains intact",
@@ -628,11 +989,129 @@ mod tests {
             language: Some("de".to_owned()),
         };
         assert_eq!(super::completion_payload(&german)["prompt"], german.before);
-        assert!(super::completion_plan(&german, false).echo.is_none());
+        assert!(super::completion_plan(&german, &[]).echo.is_none());
     }
 
     #[test]
-    fn opt_in_space_boundary_preserves_exact_bytes_and_the_eight_token_budget() {
+    fn a_short_sentence_start_keeps_the_previous_sentences_in_the_window() {
+        for context in [
+            // Fewer than four words after the last sentence end.
+            "Thanks for sharing the draft. I will",
+            "Thanks for sharing the draft. I will send",
+            "Vielen Dank für Ihre Nachricht. Ich werde",
+            "Aus dem Protokoll ist der Grund nicht ersichtlich. Deshalb ",
+            "از پیام شما ممنونم. من فردا",
+            "آماده هستید؟ من فردا",
+            "Great news! We",
+            "The user chose blue.\nMake the heading",
+            "Previous line\nNext line",
+            "Hi Anna,\n\nThanks",
+            "Hi. Thanks. See you",
+            "First sentence. Second one. ",
+            // ZWNJ joins one word: three words, not four.
+            "پیام شما رسید. من می\u{200c}خواهم فردا",
+            // A lone dash is not a word: three words, not four.
+            "Thanks for the draft. Yes – I will",
+            // Abbreviations end a sentence; each piece is still short.
+            "Wir brauchen Obst, z. B. Äpfel",
+        ] {
+            assert_eq!(super::inference_context(context), context, "{context:?}");
+        }
+        for (context, expected) in [
+            // Extension stops once the kept sentences have four words.
+            (
+                "I read your notes. The draft looks good to me. Thanks. Please",
+                "The draft looks good to me. Thanks. Please",
+            ),
+            (
+                "Thanks for sharing the draft. I will send it",
+                "I will send it",
+            ),
+            (
+                "پیام شما رسید. من می\u{200c}خواهم فردا صبح",
+                "من می\u{200c}خواهم فردا صبح",
+            ),
+            // `z. B.` is treated as a sentence end (documented limitation).
+            (
+                "Ich brauche Zutaten, z. B. Mehl, Zucker, Eier und Butter",
+                "Mehl, Zucker, Eier und Butter",
+            ),
+        ] {
+            assert_eq!(super::inference_context(context), expected, "{context:?}");
+        }
+        // The 160-scalar window and its whitespace cut still bound the prompt,
+        // even when the previous sentence begins before the window.
+        for (sentence, start) in [
+            ("word ".repeat(40), "Please"),
+            ("Wort ".repeat(40), "Bitte"),
+            ("کلمه ".repeat(40), "لطفا"),
+        ] {
+            let before = format!("{}. {start} ", sentence.trim_end());
+            let context = super::inference_context(&before);
+            assert!(context.chars().count() <= 160, "{context:?}");
+            assert!(context.ends_with(&format!(". {start} ")), "{context:?}");
+            assert!(before[..before.len() - context.len()].ends_with(' '));
+            assert!(context.starts_with(sentence.split(' ').next().expect("word")));
+        }
+        // Typed in order, the previous request's prompt is a prefix of the
+        // prompt at the next sentence start, so the runtime reuses its cache.
+        let previous = super::inference_context("Thanks for sharing the draft");
+        let next = super::inference_context("Thanks for sharing the draft. I");
+        assert_eq!(next, "Thanks for sharing the draft. I");
+        assert!(next.starts_with(previous));
+        let request = crate::provider::ProviderRequest {
+            before: "Previous notes are here. Thanks for sharing the draft. Please ".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+        };
+        let plan = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
+        assert_eq!(plan.prompt, "Thanks for sharing the draft. Please");
+        assert_eq!(plan.echo, Some(" "));
+    }
+
+    #[test]
+    fn trailing_space_healing_is_promoted_per_language() {
+        use super::WritingLanguage::{English, German, Persian};
+        // A reviewed per-language promotion: a blinded review cleared English
+        // and Persian, and German failed it. Change it only after a new review.
+        assert_eq!(super::TRAILING_SPACE_HEALING, [English, Persian]);
+        for (tag, language, before) in [
+            ("en-US", English, "Please review the "),
+            ("de", German, "Bitte lies das "),
+            ("fa-IR", Persian, "لطفا این گزارش را "),
+        ] {
+            let request = crate::provider::ProviderRequest {
+                before: before.to_owned(),
+                after: String::new(),
+                language: Some(tag.to_owned()),
+            };
+            let legacy = super::completion_plan(&request, &[]).payload();
+            assert_eq!(legacy["prompt"], before);
+            assert!(legacy.get("grammar").is_none());
+            let promoted = super::completion_plan(&request, &[language]);
+            assert_eq!(promoted.prompt, before.trim_end_matches(' '));
+            assert_eq!(promoted.echo, Some(" "));
+            // Promoting the other languages leaves this one unhealed.
+            let others: Vec<_> = [English, German, Persian]
+                .into_iter()
+                .filter(|other| *other != language)
+                .collect();
+            assert_eq!(super::completion_plan(&request, &others).payload(), legacy);
+            let production = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
+            assert_eq!(
+                production.echo.is_some(),
+                super::TRAILING_SPACE_HEALING.contains(&language)
+            );
+            assert_eq!(
+                super::heals_trailing_space(tag),
+                super::TRAILING_SPACE_HEALING.contains(&language)
+            );
+        }
+        assert!(!super::heals_trailing_space("ar"));
+    }
+
+    #[test]
+    fn trailing_space_boundary_preserves_exact_bytes_and_the_eight_token_budget() {
         for (language, before) in [
             ("en-US", "Please review the "),
             ("de-DE", "Bitte lies das "),
@@ -644,7 +1123,13 @@ mod tests {
                 after: String::new(),
                 language: Some(language.to_owned()),
             };
-            let plan = super::completion_plan(&request, true);
+            // The mechanism, independent of which languages production promotes.
+            let all = [
+                super::WritingLanguage::English,
+                super::WritingLanguage::German,
+                super::WritingLanguage::Persian,
+            ];
+            let plan = super::completion_plan(&request, &all);
             let original = super::inference_context(before);
             assert_eq!(
                 format!("{}{}", plan.prompt, plan.echo.expect("ASCII echo")),
@@ -660,7 +1145,7 @@ mod tests {
             assert_eq!(payload["seed"], 42);
             assert_eq!(payload["cache_prompt"], true);
             assert_eq!(request.before, before, "editing context must not change");
-            let legacy = super::completion_plan(&request, false);
+            let legacy = super::completion_plan(&request, &[]);
             assert_eq!(legacy.prompt, original);
             assert_eq!(legacy.echo, None);
             assert_eq!(legacy.max_tokens, 8);
@@ -684,8 +1169,8 @@ mod tests {
                 after: String::new(),
                 language: Some(language.to_owned()),
             };
-            let legacy = super::completion_plan(&request, false);
-            let candidate = super::completion_plan(&request, true);
+            let legacy = super::completion_plan(&request, &[]);
+            let candidate = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
             assert_eq!(legacy.payload(), candidate.payload());
             assert_eq!(candidate.max_tokens, tokens);
             assert_eq!(
@@ -703,8 +1188,9 @@ mod tests {
             after: String::new(),
             language: Some("en".to_owned()),
         };
-        let plan = super::completion_plan(&request, true);
-        assert_eq!(plan.prompt, "Please review the");
+        let plan = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
+        // Three words keep the previous sentence, but not the whole window.
+        assert_eq!(plan.prompt, "Earlier sentence. Please review the");
         assert_eq!(plan.echo, Some("  "));
         assert_eq!(request.before, before);
     }
@@ -757,6 +1243,72 @@ mod tests {
         ] {
             assert!(super::validate_proposal(before, "", suggestion, Some(language)).is_ok());
         }
+    }
+
+    #[test]
+    fn fact_fence_rejects_invented_numbers_and_stop_word_ordinals() {
+        use super::introduces_unsupported_fact as rejects;
+        for (context, proposal) in [
+            ("Ich freue mich auf", " die Teilnahme am 1."),
+            ("Ich freue mich auf", " die Teilnahme am 1"),
+            ("The survey ran in ", "2024, but"),
+            ("This essay is ", "100% original and"),
+            ("Our office is open from ", "10:00 AM to"),
+            ("Meet me at room 42, then room", " 4"),
+            ("Meet me at room 42, then room", " 420"),
+            ("Meet me at room 42, then room", " 42 or 43"),
+            ("We use version 2.5 in production and", " 2.6 later"),
+            // The number is known, but a stop-word period may be an ordinal
+            // or a decimal cut at the stop word.
+            ("Die Frist ist der 1. Mai. Wir treffen uns am", " 1."),
+            ("Meet me at room 42, then room", " 42."),
+            ("جلسه در اتاق ۴۲ است. بعد به اتاق", " ۴۳ برویم"),
+            ("جلسه در اتاق ۴۲ است. بعد به اتاق", " ۴۲."),
+            ("پیام شما رسید. من فردا", " ساعت ۱۰ می‌آیم"),
+            ("پیام شما رسید. من فردا", " ساعت \u{0661}\u{0660} می‌آیم"),
+        ] {
+            assert!(rejects(context, proposal), "{context:?} + {proposal:?}");
+        }
+        for (context, proposal) in [
+            ("Meet me at room 42, then room", " 42"),
+            ("Meet me at room 42, then room", " 42 again"),
+            ("We use version 2.5 in production and", " 2.5 remains"),
+            ("جلسه در اتاق ۴۲ است. بعد به اتاق", " ۴۲ برویم"),
+            // Digit scripts normalize before comparison.
+            ("جلسه در اتاق ۴۲ است. بعد به اتاق", " 42 برویم"),
+            ("Meet me at room 42, then room", " \u{0664}\u{0662}"),
+            ("Ich freue mich auf", " die Teilnahme."),
+            ("Thank you", " for your time."),
+            ("Please find attached the", " latest version of the"),
+        ] {
+            assert!(!rejects(context, proposal), "{context:?} + {proposal:?}");
+        }
+    }
+
+    #[test]
+    fn activation_report_begins_with_the_provider_line() {
+        use crate::model_selection::{ModelUseCase, catalog};
+        use crate::semantic::runtime::WarmUpReport;
+        use std::time::Duration;
+
+        let model = catalog(ModelUseCase::Writing)[0];
+        let provider = format!(
+            "provider=local_model model={} quantization={}",
+            model.filename, model.quantization
+        );
+        assert_eq!(
+            super::activation_report(&model, WarmUpReport::new(Duration::from_millis(412), None)),
+            format!("{provider}\nbadi-broker: writing runtime warm-up completed elapsed_ms=412")
+        );
+        assert_eq!(
+            super::activation_report(
+                &model,
+                WarmUpReport::new(Duration::from_millis(2000), Some("timeout"))
+            ),
+            format!(
+                "{provider}\nbadi-broker: writing runtime warm-up failed class=timeout elapsed_ms=2000"
+            )
+        );
     }
 
     #[test]
@@ -940,5 +1492,77 @@ mod tests {
             complete_word_prefix("<think>private reasoning", 4, true),
             None
         );
+    }
+
+    /// UAX #29 splits `re-try` into two words, so a limit counting its words
+    /// would cut ` be able to re-try the request` to `be able to re`. The
+    /// limit counts space-separated words.
+    #[test]
+    fn the_word_limit_never_cuts_inside_a_joined_word() {
+        for (raw, finished, expected) in [
+            ("be able to re-try the", false, Some("be able to re-try")),
+            (" be able to re-try the", false, Some(" be able to re-try")),
+            (
+                "be able to re-try the request",
+                true,
+                Some("be able to re-try"),
+            ),
+            ("be able to re-try", false, None),
+            (" a state-of-the-art tool is", false, None),
+            (
+                " a state-of-the-art tool is here",
+                false,
+                Some(" a state-of-the-art tool is"),
+            ),
+            (" die E-Mail an Herrn", false, None),
+            (
+                " die E-Mail an Herrn Meyer",
+                false,
+                Some(" die E-Mail an Herrn"),
+            ),
+            (" را به‌روز کنیم و", false, None),
+            (" را به‌روز کنیم و بعد", false, Some(" را به‌روز کنیم و")),
+            // Trailing punctuation of an intermediate word is still dropped.
+            (
+                " we agreed, then left it",
+                false,
+                Some(" we agreed, then left"),
+            ),
+            (
+                " one two three four, five",
+                false,
+                Some(" one two three four"),
+            ),
+            (
+                " one - two three four five",
+                false,
+                Some(" one - two three four"),
+            ),
+            (" don't re-send it now", false, None),
+            (
+                " don't re-send it now ",
+                false,
+                Some(" don't re-send it now"),
+            ),
+        ] {
+            assert_eq!(
+                complete_word_prefix(raw, 4, finished).as_deref(),
+                expected,
+                "{raw:?}"
+            );
+        }
+        // Deadline salvage counts the same words.
+        for (raw, expected) in [
+            ("be able to re-try the", Some("be able to re-try")),
+            (" a b c re-try d", Some(" a b c re-try")),
+            (" re-", None),
+            (" able to re-", Some(" able to")),
+        ] {
+            assert_eq!(
+                super::available_complete_words(raw).as_deref(),
+                expected,
+                "{raw:?}"
+            );
+        }
     }
 }

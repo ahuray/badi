@@ -13,7 +13,7 @@ const envelope = request => ({ result: { schema: 'badi.context-lookup.result.v1'
 cleanup: { process_id: 12345, reaped: true, exit_code: 0, forced: false } });
 const predictionBody = { suite: { schema: 'badi.prediction-suite.v1', name: 'fixture', cases: [
   { id: 'sample', language: 'en', prefix: 'Please review the docum', expected: ['ent'], context: '', style: '' }] },
-configs: [{ id: 'baseline', mode: 'production_baseline', budget_ms: 550, max_tokens: 8, cache_prompt: true,
+configs: [{ id: 'baseline', mode: 'production_boundary', budget_ms: 550, max_tokens: 8, cache_prompt: true,
   temperature: 0, seed: 42 }], seed: 42 };
 
 async function setup(t, behavior = {}) {

@@ -116,9 +116,7 @@ impl StableIdentity {
                 let scheme = match origin.scheme {
                     OriginScheme::Http => WebScheme::Http,
                     OriginScheme::Https => WebScheme::Https,
-                    OriginScheme::ChromeExtension
-                    | OriginScheme::MozExtension
-                    | OriginScheme::File => return Err(IdentityError::UnsupportedScheme),
+                    OriginScheme::File => return Err(IdentityError::UnsupportedScheme),
                 };
                 Self::browser_origin(BrowserAdapter::Chromium, scheme, &origin.host, origin.port)
             }
@@ -243,6 +241,16 @@ impl Default for SubjectPermissions {
     }
 }
 
+/// Permissions of an http(s) origin that has no exact rule while
+/// `all_web_origins` is on: prediction only, never learning or retention.
+pub const ALL_WEB_ORIGINS_PERMISSIONS: SubjectPermissions = SubjectPermissions {
+    suggest: PermissionDecision::Allow,
+    display: PermissionDecision::Allow,
+    context_read: PermissionDecision::Allow,
+    learn: PermissionDecision::Block,
+    retention: RetentionPermission::None,
+};
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubjectRule {
@@ -250,12 +258,19 @@ pub struct SubjectRule {
     pub permissions: SubjectPermissions,
 }
 
+/// Settings v1 documents deserialize into this type, but it is always
+/// canonical settings v2 in memory and on disk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsV2 {
     pub schema: String,
     pub revision: u64,
     pub paused: bool,
+    /// Opt-in browser default: an http(s) origin without an exact rule gets
+    /// [`ALL_WEB_ORIGINS_PERMISSIONS`]. Exact rules win and field denial still
+    /// applies. Omitted when off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all_web_origins: bool,
     pub subjects: Vec<SubjectRule>,
 }
 
@@ -265,6 +280,8 @@ struct SettingsDocument {
     schema: String,
     revision: u64,
     paused: bool,
+    #[serde(default)]
+    all_web_origins: Option<bool>,
     subjects: Vec<SubjectRule>,
 }
 
@@ -285,10 +302,16 @@ impl<'de> Deserialize<'de> for SettingsV2 {
         {
             return Err(serde::de::Error::custom("linux_app_requires_settings_v2"));
         }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.all_web_origins.is_some() {
+            return Err(serde::de::Error::custom(
+                "all_web_origins_requires_settings_v2",
+            ));
+        }
         Ok(Self {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: decoded.revision,
             paused: decoded.paused,
+            all_web_origins: decoded.all_web_origins.unwrap_or(false),
             subjects: decoded.subjects,
         })
     }
@@ -301,6 +324,7 @@ impl SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 0,
             paused: true,
+            all_web_origins: false,
             subjects: Vec::new(),
         }
     }
@@ -360,6 +384,18 @@ impl SettingsV2 {
                 configured: true,
                 permissions: self.subjects[index].permissions,
             },
+            Err(_)
+                if self.all_web_origins
+                    && matches!(identity, StableIdentity::BrowserOrigin { .. }) =>
+            {
+                PolicyResolution {
+                    settings_revision: self.revision,
+                    paused: self.paused,
+                    identity_known: true,
+                    configured: true,
+                    permissions: ALL_WEB_ORIGINS_PERMISSIONS,
+                }
+            }
             Err(_) => PolicyResolution {
                 settings_revision: self.revision,
                 paused: self.paused,
@@ -407,10 +443,12 @@ impl SettingsV2 {
         }
     }
 
-    /// A legacy settings client can still manage its browser-origin slice, but
-    /// cannot erase native policy that its schema is unable to represent.
+    /// A protocol v1 settings client can still manage its browser-origin
+    /// slice, but cannot erase native rules or the all-web default that its
+    /// schema is unable to represent.
     #[must_use]
-    pub fn preserving_linux_rules_from(mut self, current: &Self) -> Self {
+    pub fn preserving_v2_policy_from(mut self, current: &Self) -> Self {
+        self.all_web_origins = current.all_web_origins;
         self.subjects.extend(
             current
                 .subjects
@@ -429,11 +467,6 @@ impl Default for SettingsV2 {
         Self::deny_by_default()
     }
 }
-
-/// Compatibility name for existing broker and Chromium control-plane code.
-/// Values deserialize legacy v1 documents but are always canonical settings v2
-/// in memory and on disk.
-pub type SettingsV1 = SettingsV2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PolicyResolution {
@@ -667,7 +700,7 @@ impl SettingsStore {
         &self.path
     }
 
-    pub(crate) fn load_or_initialize(&self) -> Result<SettingsV1, SettingsStoreError> {
+    pub(crate) fn load_or_initialize(&self) -> Result<SettingsV2, SettingsStoreError> {
         let _guard = self
             .mutation
             .lock()
@@ -682,14 +715,14 @@ impl SettingsStore {
             }
             Ok(settings)
         } else {
-            let settings = SettingsV1::deny_by_default();
+            let settings = SettingsV2::deny_by_default();
             write_settings(&self.path, &settings)?;
             Ok(settings)
         }
     }
 
     #[cfg(test)]
-    fn load(&self) -> Result<Option<SettingsV1>, SettingsStoreError> {
+    fn load(&self) -> Result<Option<SettingsV2>, SettingsStoreError> {
         read_private_limited(&self.path, MAX_SETTINGS_BYTES)?
             .map(|bytes| decode_settings(&bytes))
             .transpose()
@@ -698,8 +731,8 @@ impl SettingsStore {
     pub(crate) fn compare_and_replace(
         &self,
         expected_revision: u64,
-        next: SettingsV1,
-    ) -> Result<SettingsV1, SettingsStoreError> {
+        next: SettingsV2,
+    ) -> Result<SettingsV2, SettingsStoreError> {
         self.compare_and_replace_with_writer(expected_revision, &next, write_settings)?;
         Ok(next)
     }
@@ -707,11 +740,11 @@ impl SettingsStore {
     fn compare_and_replace_with_writer<F>(
         &self,
         expected_revision: u64,
-        next: &SettingsV1,
+        next: &SettingsV2,
         writer: F,
-    ) -> Result<SettingsV1, SettingsStoreError>
+    ) -> Result<SettingsV2, SettingsStoreError>
     where
-        F: FnOnce(&Path, &SettingsV1) -> Result<(), SettingsStoreError>,
+        F: FnOnce(&Path, &SettingsV2) -> Result<(), SettingsStoreError>,
     {
         next.validate()?;
         let required_revision = expected_revision
@@ -731,7 +764,7 @@ impl SettingsStore {
             .map_err(|_| SettingsStoreError::LockPoisoned)?;
         let current = match read_private_limited(&self.path, MAX_SETTINGS_BYTES)? {
             Some(bytes) => decode_settings(&bytes)?,
-            None => SettingsV1::deny_by_default(),
+            None => SettingsV2::deny_by_default(),
         };
         if current.revision != expected_revision {
             return Err(SettingsStoreError::RevisionConflict {
@@ -760,42 +793,42 @@ impl SettingsStore {
                 match observed {
                     Ok(Some(document)) if document == *next => Ok(next.clone()),
                     Ok(Some(document)) if document == current => Err(write_error),
-                    Ok(None) if current == SettingsV1::deny_by_default() => Err(write_error),
+                    Ok(None) if current == SettingsV2::deny_by_default() => Err(write_error),
                     _ => Err(SettingsStoreError::CommitStateUnknown),
                 }
             }
         }
     }
 
-    pub(crate) fn preflight_replace(next: &SettingsV1) -> Result<(), SettingsStoreError> {
+    pub(crate) fn preflight_replace(next: &SettingsV2) -> Result<(), SettingsStoreError> {
         let _ = encode_settings(next)?;
         Ok(())
     }
 }
 
-fn decode_settings(bytes: &[u8]) -> Result<SettingsV1, SettingsStoreError> {
+fn decode_settings(bytes: &[u8]) -> Result<SettingsV2, SettingsStoreError> {
     decode_settings_with_source(bytes).map(|(settings, _)| settings)
 }
 
-fn decode_settings_with_source(bytes: &[u8]) -> Result<(SettingsV1, bool), SettingsStoreError> {
+fn decode_settings_with_source(bytes: &[u8]) -> Result<(SettingsV2, bool), SettingsStoreError> {
     #[derive(Deserialize)]
     struct SchemaProbe {
         schema: String,
     }
 
     let source = serde_json::from_slice::<SchemaProbe>(bytes)?;
-    let settings: SettingsV1 = serde_json::from_slice(bytes)?;
+    let settings: SettingsV2 = serde_json::from_slice(bytes)?;
     settings.validate()?;
     Ok((settings, source.schema == SETTINGS_SCHEMA_V1))
 }
 
-fn write_settings(path: &Path, settings: &SettingsV1) -> Result<(), SettingsStoreError> {
+fn write_settings(path: &Path, settings: &SettingsV2) -> Result<(), SettingsStoreError> {
     let bytes = encode_settings(settings)?;
     atomic_write_private(path, &bytes)?;
     Ok(())
 }
 
-fn encode_settings(settings: &SettingsV1) -> Result<Vec<u8>, SettingsStoreError> {
+fn encode_settings(settings: &SettingsV2) -> Result<Vec<u8>, SettingsStoreError> {
     settings.validate()?;
     let mut bytes = serde_json::to_vec_pretty(settings)?;
     bytes.push(b'\n');
@@ -1212,7 +1245,7 @@ mod tests {
     use super::{
         BrowserAdapter, LinuxAdapter, MAX_SETTINGS_BYTES, MAX_SUBJECTS, PRIVATE_FILE_MODE,
         PermissionDecision, PrivateStorage, PrivateStorageError, RetentionPermission,
-        SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV1, StableIdentity,
+        SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2, StableIdentity,
         StoragePaths, SubjectPermissions, SubjectRule, WebScheme, remove_private_file_with_sync,
         write_settings,
     };
@@ -1237,18 +1270,19 @@ mod tests {
             .expect("identity")
     }
 
-    fn settings_with(rule: SubjectRule) -> SettingsV1 {
-        SettingsV1 {
+    fn settings_with(rule: SubjectRule) -> SettingsV2 {
+        SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 1,
             paused: false,
+            all_web_origins: false,
             subjects: vec![rule],
         }
     }
 
     #[test]
     fn missing_settings_are_paused_and_deny_everything() {
-        let settings = SettingsV1::deny_by_default();
+        let settings = SettingsV2::deny_by_default();
         settings.validate().expect("safe settings");
         let resolution = settings.resolve_identity(&identity("example.com"));
         assert!(resolution.identity_known);
@@ -1257,6 +1291,80 @@ mod tests {
         assert!(!resolution.allows_suggestion());
         assert!(!resolution.allows_display());
         assert!(!resolution.allows_learning());
+    }
+
+    #[test]
+    fn all_web_origins_allows_unlisted_web_origins_but_exact_rules_win() {
+        let blocked = SubjectRule {
+            identity: identity("bank.example"),
+            permissions: SubjectPermissions::deny_all(),
+        };
+        let mut settings = settings_with(blocked);
+        settings.subjects.push(SubjectRule {
+            identity: StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite").expect("app"),
+            permissions: SubjectPermissions::deny_all(),
+        });
+        settings.validate().expect("valid settings");
+        let http = StableIdentity::browser_origin(
+            BrowserAdapter::Chromium,
+            WebScheme::Http,
+            "localhost",
+            Some(8080),
+        )
+        .expect("http origin");
+        let unlisted_app =
+            StableIdentity::linux_app(LinuxAdapter::Fcitx, "brave-browser").expect("app");
+        for all_web_origins in [false, true] {
+            settings.all_web_origins = all_web_origins;
+            for origin in [identity("mail.example"), http.clone()] {
+                let resolution = settings.resolve_identity(&origin);
+                assert_eq!(resolution.configured, all_web_origins);
+                assert_eq!(resolution.allows_context_read(), all_web_origins);
+                assert_eq!(resolution.allows_display(), all_web_origins);
+                assert_eq!(resolution.allows_suggestion(), all_web_origins);
+                assert!(!resolution.allows_learning(), "never learns by default");
+                assert_eq!(resolution.permissions.retention, RetentionPermission::None);
+            }
+            // An exact block and every native app keep their own resolution.
+            assert!(
+                !settings
+                    .resolve_identity(&identity("bank.example"))
+                    .allows_context_read()
+            );
+            for app in [
+                StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite").expect("app"),
+                unlisted_app.clone(),
+            ] {
+                assert!(!settings.resolve_identity(&app).allows_context_read());
+            }
+        }
+        settings.paused = true;
+        assert!(
+            !settings
+                .resolve_identity(&identity("mail.example"))
+                .allows_context_read()
+        );
+    }
+
+    #[test]
+    fn legacy_browser_clients_neither_see_nor_erase_the_all_web_default() {
+        let mut current = settings_with(SubjectRule {
+            identity: StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite").expect("app"),
+            permissions: super::ALL_WEB_ORIGINS_PERMISSIONS,
+        });
+        current.all_web_origins = true;
+        let legacy = current.wire_document(1).expect("v1 wire document");
+        assert!(legacy.get("all_web_origins").is_none());
+        assert_eq!(legacy["subjects"], serde_json::json!([]));
+        let next: SettingsV2 = serde_json::from_value(legacy).expect("legacy replacement");
+        assert!(!next.all_web_origins);
+        let merged = next.preserving_v2_policy_from(&current);
+        assert!(merged.all_web_origins);
+        assert_eq!(merged.subjects, current.subjects);
+        assert_eq!(
+            current.wire_document(2).expect("v2 wire document")["all_web_origins"],
+            true
+        );
     }
 
     #[test]
@@ -1427,10 +1535,11 @@ mod tests {
             identity: identity("b.example"),
             permissions: allowed(None),
         };
-        let valid = SettingsV1 {
+        let valid = SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: 1,
             paused: false,
+            all_web_origins: false,
             subjects: vec![first.clone(), second.clone()],
         };
         valid.validate().expect("canonical settings");
@@ -1460,10 +1569,11 @@ mod tests {
                 }
             })
             .collect();
-        let settings = SettingsV1 {
+        let settings = SettingsV2 {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: crate::protocol::MAX_SAFE_COUNTER,
             paused: true,
+            all_web_origins: false,
             subjects,
         };
         settings.validate().expect("maximum-shape settings");
@@ -1492,7 +1602,7 @@ mod tests {
           "schema":"badi.settings.v1","revision":0,"paused":true,"subjects":[],
           "cloud":"allow"
         }"#;
-        assert!(serde_json::from_slice::<SettingsV1>(unknown).is_err());
+        assert!(serde_json::from_slice::<SettingsV2>(unknown).is_err());
 
         let invalid = br#"{
           "schema":"badi.settings.v1","revision":1,"paused":false,
@@ -1501,7 +1611,7 @@ mod tests {
           "suggest":"allow","display":"block","context_read":"allow","learn":"block",
           "retention":{"mode":"none"}}}]
         }"#;
-        let decoded: SettingsV1 = serde_json::from_slice(invalid).expect("structurally valid");
+        let decoded: SettingsV2 = serde_json::from_slice(invalid).expect("structurally valid");
         assert!(decoded.validate().is_err());
     }
 
@@ -1677,7 +1787,7 @@ mod tests {
             PrivateStorage::open(StoragePaths::new(config, data).expect("paths")).expect("storage");
         let store = storage.settings_store().expect("settings store");
         let initial = store.load_or_initialize().expect("initial settings");
-        assert_eq!(initial, SettingsV1::deny_by_default());
+        assert_eq!(initial, SettingsV2::deny_by_default());
         let metadata = fs::metadata(store.path()).expect("settings metadata");
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
 

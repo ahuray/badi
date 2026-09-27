@@ -1,9 +1,11 @@
 #![cfg(feature = "local-model")]
 
 use std::error::Error;
+use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
-use badi_broker::provider::{CompletionProvider, ProviderRequest};
+use badi_broker::NoSuggestionReason;
+use badi_broker::provider::{CompletionProvider, ProviderOutcome, ProviderRequest, RequestTrigger};
 use badi_broker::semantic::client::{
     ClientError, CompletionDisposition, SemanticClient, SemanticClientConfig,
 };
@@ -79,7 +81,7 @@ async fn writing_header_budget_and_cancellation_allow_next_persistent_request()
 -> Result<(), Box<dyn Error>> {
     for cancel_pending in [false, true] {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-        let client = SemanticClient::new(config(&listener)?.for_writing())?;
+        let client = SemanticClient::new(config(&listener)?)?;
         let cancellation = CancellationToken::new();
         let cancel = cancellation.clone();
         let server = tokio::spawn(async move {
@@ -103,6 +105,10 @@ async fn writing_header_budget_and_cancellation_allow_next_persistent_request()
                 observed.disposition(),
                 CompletionDisposition::ModelAbstained
             );
+            assert_eq!(
+                observed.no_suggestion_reason(),
+                Some(NoSuggestionReason::BudgetPrefill)
+            );
             assert_eq!(observed.output(), None);
             assert_eq!(observed.ttft(), None);
             assert!(observed.request_body_bytes() > 0);
@@ -124,7 +130,7 @@ async fn writing_header_budget_and_cancellation_allow_next_persistent_request()
 async fn exhausted_spelling_header_budget_does_not_submit_a_continuation()
 -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(config(&listener)?.for_writing())?;
+    let client = SemanticClient::new(config(&listener)?)?;
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("correction connection");
         let payload = read_request(&mut socket).await;
@@ -139,11 +145,16 @@ async fn exhausted_spelling_header_budget_does_not_submit_a_continuation()
     });
     let mut typo = request();
     typo.before = "This is teh".to_owned();
-    assert!(
+    assert_eq!(
         client
-            .propose(typo, CancellationToken::new(), true)
-            .await?
-            .is_none()
+            .propose_outcome(
+                typo,
+                CancellationToken::new(),
+                true,
+                RequestTrigger::Automatic
+            )
+            .await?,
+        ProviderOutcome::NoSuggestion(NoSuggestionReason::BudgetPrefill)
     );
     server.await?;
     Ok(())
@@ -170,7 +181,7 @@ async fn writing_header_deadline_preserves_actual_http_errors() -> Result<(), Bo
         ),
     ] {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-        let client = SemanticClient::new(config(&listener)?.for_writing())?;
+        let client = SemanticClient::new(config(&listener)?)?;
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("connection");
             read_request(&mut socket).await;
@@ -192,7 +203,7 @@ async fn writing_header_deadline_preserves_actual_http_errors() -> Result<(), Bo
         server.await?;
     }
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(config(&listener)?.for_writing())?;
+    let client = SemanticClient::new(config(&listener)?)?;
     drop(listener);
     assert!(matches!(
         client
@@ -203,23 +214,11 @@ async fn writing_header_deadline_preserves_actual_http_errors() -> Result<(), Bo
     Ok(())
 }
 
+/// Runtime requests without a writing budget, such as the authorization
+/// challenge, end at the configured request timeout.
 #[tokio::test]
-async fn historical_semantic_header_wait_keeps_its_configured_deadline()
--> Result<(), Box<dyn Error>> {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(config(&listener)?)?;
-    let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("connection");
-        read_request(&mut socket).await;
-        tokio::time::sleep(Duration::from_millis(600)).await;
-        write_completion(&mut socket).await;
-    });
-    let observed = client
-        .complete_observed(request(), CancellationToken::new())
-        .await?;
-    assert_eq!(observed.disposition(), CompletionDisposition::Suggested);
-    server.await?;
-
+async fn configured_request_timeout_bounds_requests_without_a_budget() -> Result<(), Box<dyn Error>>
+{
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let client = SemanticClient::new(
         config(&listener)?.with_timeouts(Duration::from_millis(50), Duration::from_millis(100))?,
@@ -232,11 +231,174 @@ async fn historical_semantic_header_wait_keeps_its_configured_deadline()
     let started = Instant::now();
     assert!(matches!(
         client
-            .complete_observed(request(), CancellationToken::new())
+            .probe_authorization_challenge(CancellationToken::new())
             .await,
         Err(ClientError::Timeout)
     ));
-    assert!(started.elapsed() < Duration::from_millis(500));
+    let elapsed = started.elapsed();
+    assert!(elapsed >= Duration::from_millis(100) && elapsed < Duration::from_millis(500));
+    server.await?;
+    Ok(())
+}
+
+/// Withholds headers for `header_delay`, then streams `pieces` and, unless
+/// `stall`, a terminal event. Writes after the client left are ignored.
+async fn serve_delayed(
+    listener: TcpListener,
+    header_delay: Duration,
+    pieces: &'static [&'static str],
+    stall: bool,
+) {
+    let (mut socket, _) = listener.accept().await.expect("connection");
+    read_request(&mut socket).await;
+    tokio::time::sleep(header_delay).await;
+    let mut response =
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
+            .to_owned();
+    for piece in pieces {
+        let value = serde_json::json!({"index":0,"content":piece,"stop":false});
+        write!(response, "data: {value}\n\n").expect("event");
+    }
+    if !stall {
+        response.push_str(
+            "data: {\"index\":0,\"content\":\"\",\"stop\":true,\"stop_type\":\"eos\"}\n\n",
+        );
+    }
+    let _ = socket.write_all(response.as_bytes()).await;
+    if stall {
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+    }
+}
+
+#[tokio::test]
+async fn explicit_requests_have_their_own_budget_and_deadline_classes() -> Result<(), Box<dyn Error>>
+{
+    // (trigger, header delay, pieces, stall, expected output or class, elapsed window)
+    for (trigger, delay, pieces, stall, expected, window) in [
+        (
+            RequestTrigger::Automatic,
+            800,
+            &[" review it"][..],
+            false,
+            Err(NoSuggestionReason::BudgetPrefill),
+            (550, 700),
+        ),
+        (
+            RequestTrigger::Explicit,
+            800,
+            &[" review it"][..],
+            false,
+            Ok(" review it"),
+            (800, 1_200),
+        ),
+        (
+            RequestTrigger::Explicit,
+            1_500,
+            &[" review it"][..],
+            false,
+            Err(NoSuggestionReason::BudgetPrefill),
+            (1_200, 1_350),
+        ),
+        (
+            RequestTrigger::Explicit,
+            900,
+            &[" review the draft", " tomor"][..],
+            true,
+            Ok(" review the draft"),
+            (1_200, 1_350),
+        ),
+        (
+            RequestTrigger::Explicit,
+            900,
+            &[" reviewi"][..],
+            true,
+            Err(NoSuggestionReason::BudgetStream),
+            (1_200, 1_350),
+        ),
+    ] {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let client = SemanticClient::new(config(&listener)?)?;
+        let server = tokio::spawn(serve_delayed(
+            listener,
+            Duration::from_millis(delay),
+            pieces,
+            stall,
+        ));
+        let started = Instant::now();
+        let observed = client
+            .complete_observed_within(request(), CancellationToken::new(), trigger)
+            .await?;
+        let elapsed = started.elapsed();
+        match expected {
+            Ok(text) => {
+                assert_eq!(observed.disposition(), CompletionDisposition::Suggested);
+                assert_eq!(observed.output(), Some(text), "{trigger:?} {delay}");
+            }
+            Err(reason) => {
+                assert_eq!(observed.output(), None, "{trigger:?} {delay}");
+                assert_eq!(observed.no_suggestion_reason(), Some(reason));
+            }
+        }
+        assert!(
+            elapsed >= Duration::from_millis(window.0) && elapsed < Duration::from_millis(window.1),
+            "{trigger:?} {delay}: {elapsed:?}"
+        );
+        server.abort();
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_spelling_and_continuation_share_the_explicit_budget() -> Result<(), Box<dyn Error>>
+{
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let client = SemanticClient::new(config(&listener)?)?;
+    let server = tokio::spawn(async move {
+        // The ambiguous typo spends 700 ms of the explicit budget without an
+        // answer; the continuation must still arrive before 1,200 ms.
+        let (mut correction, _) = listener.accept().await.expect("correction connection");
+        read_request(&mut correction).await;
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let _ = correction
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n\
+                data: {\"index\":0,\"content\":\"teh\",\"stop\":false}\n\n\
+                data: {\"index\":0,\"content\":\"\",\"stop\":true,\"stop_type\":\"eos\"}\n\n",
+            )
+            .await;
+        let (mut next, _) = listener.accept().await.expect("continuation connection");
+        let payload = read_request(&mut next).await;
+        // The unknown word is healed: the model must reproduce it first.
+        assert_eq!(payload["prompt"], "This is ");
+        next.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n\
+            data: {\"index\":0,\"content\":\"teh review it\",\"stop\":false}\n\n\
+            data: {\"index\":0,\"content\":\"\",\"stop\":true,\"stop_type\":\"eos\"}\n\n",
+        )
+        .await
+        .expect("continuation");
+    });
+    let mut typo = request();
+    typo.before = "This is teh".to_owned();
+    let started = Instant::now();
+    let automatic_budget = RequestTrigger::Automatic.writing_budget();
+    let outcome = client
+        .propose_outcome(
+            typo,
+            CancellationToken::new(),
+            true,
+            RequestTrigger::Explicit,
+        )
+        .await?;
+    assert!(started.elapsed() > automatic_budget);
+    assert!(started.elapsed() < RequestTrigger::Explicit.writing_budget());
+    assert_eq!(
+        outcome
+            .into_proposal()
+            .map(|proposal| proposal.text)
+            .as_deref(),
+        Some(" review it")
+    );
     server.await?;
     Ok(())
 }

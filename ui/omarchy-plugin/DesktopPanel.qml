@@ -17,7 +17,6 @@ Item {
     : client.controlPlaneDegraded ? "Settings need attention" : paused ? "Predictions paused"
     : !anyAppEnabled ? "Applications disabled" : "Model ready"
   readonly property var activity: client.overview.desktop ? client.overview.desktop.activity || ({}) : ({})
-  property string selectedTrial: ""
   property int page: 0
   property var serviceState: ({})
   property string serviceError: ""
@@ -25,7 +24,6 @@ Item {
   property string actionSuccess: ""
   property bool actionFailed: false
   property bool actionTimedOut: false
-  readonly property bool desktopSelected: !selectedTrial || selectedTrial === "desktop"
   readonly property bool controlsBusy: action.running || client.mutating
   readonly property string modelName: client.broker.provider === "local_model"
     ? "Local writing model · CPU" : "Provider: " + (client.broker.provider || "offline")
@@ -107,8 +105,7 @@ Item {
 
   BadiClient {
     id: client
-    cliPrefix: root.selectedTrial ? [root.helper, "ctl", "--trial", root.selectedTrial] : [root.helper, "ctl"]
-    mutationPrefix: [root.helper, "ctl", "--trial", overview.desktop ? overview.desktop.id : ""]
+    cliPrefix: [root.helper, "ctl"]
   }
 
   Timer {
@@ -232,9 +229,9 @@ Item {
               Caption { text: "Pause keeps the model loaded. Your choice persists after restart." }
               PanelSeparator { Layout.fillWidth: true; foreground: Color.popups.text }
               SectionTitle { text: "Try a continuation" }
-              BodyText { text: "In Omawrite or a Xournal++ text cell, press Tab at the end of a phrase to request words; press Tab again to insert them. Web and Obsidian integrations suggest automatically: Tab takes one word, Ctrl/Command+Right takes all." }
+              BodyText { text: "Suggestions appear on their own in supported apps: Tab inserts a visible suggestion, Escape dismisses, Ctrl+Shift+Space asks explicitly. In a Xournal++ text cell, press Tab to request words and Tab again to insert them. Obsidian: Tab takes one word, Ctrl/Command+Right takes all." }
               RowLayout {
-                ActionButton { text: "Open Omawrite"; bordered: true; focusable: true; enabled: !root.controlsBusy; onClicked: root.runAction(["launch", "omawrite"], "Opening Omawrite…", "Omawrite opened. Type a phrase and press Tab.") }
+                ActionButton { text: "Open Omawrite"; bordered: true; focusable: true; enabled: !root.controlsBusy; onClicked: root.runAction(["launch", "omawrite"], "Opening Omawrite…", "Omawrite opened. Type a phrase; press Tab to insert the suggestion.") }
                 ActionButton { text: "Open Xournal++"; bordered: true; focusable: true; enabled: !root.controlsBusy; onClicked: root.runAction(["launch", "xournalpp"], "Opening Xournal++…", "Xournal++ opened. Select the Text tool and click the page.") }
               }
               Caption { text: "Example: Please find attached the\nEscape dismisses. Suggestions last five seconds and clear when text or focus changes." }
@@ -273,22 +270,8 @@ Item {
               }
               PanelSeparator { Layout.fillWidth: true; foreground: Color.popups.text }
               SectionTitle { text: "Connect your editors" }
-              BodyText { text: "Obsidian needs the Badi vault plugin. Bash needs the shell hook. Browser text fields need the Badi extension and permission for each site." }
+              BodyText { text: "Obsidian needs the Badi vault plugin. Bash needs the shell hook. Chromium-based apps and Zen need the field observer and an app grant (badi app) or, for web pages, a site grant (badi site)." }
               Caption { text: "Run badi doctor or badi debug watch to check activity. Rich website editors and native spelling replacement are still in development." }
-              Controls.ComboBox {
-                Layout.fillWidth: true
-                visible: !!client.overview.desktop && client.overview.desktop.sessions.length > 1
-                model: client.overview.desktop ? client.overview.desktop.sessions : []
-                textRole: "label"
-                currentIndex: {
-                  if (!client.overview.desktop) return -1
-                  for (var i = 0; i < model.length; i++) if (model[i].id === client.overview.desktop.id) return i
-                  return -1
-                }
-                onActivated: (index) => { root.selectedTrial = model[index].id; root.actionMessage = ""; client.refresh() }
-                Accessible.name: "Writing session controlled by this panel"
-              }
-              Caption { visible: !root.desktopSelected; text: "These prediction controls apply to the selected trial. System controls always manage the desktop model." }
             }
             ColumnLayout {
               visible: root.page === 2

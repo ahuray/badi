@@ -55,6 +55,9 @@ int main() {
         debug.record("input", "omawrite", "input_received");
         check(!fs::exists(output));
         flag(std::time(nullptr) + 900);
+        debug.record("input", "omawrite", "input_received");
+        check(!fs::exists(output)); // A disabled control is not reread within a second.
+        debug.refresh();
         debug.record("tab", "not an app id or typed text", "unsupported_app");
         nlohmann::json snapshot;
         std::ifstream(output) >> snapshot;
@@ -65,22 +68,30 @@ int main() {
         check(::stat(output.c_str(), &info) == 0 && (info.st_mode & 0777) == 0600);
         fs::remove(output);
         flag(std::time(nullptr) - 1);
-        debug.record("input", "omawrite", "input_received");
+        debug.record("input", "omawrite", "input_received"); // An enabled control is rechecked every time.
         check(!fs::exists(output));
         flag(std::time(nullptr) + 900);
         fs::permissions(control, fs::perms::others_read, fs::perm_options::add);
+        debug.refresh();
         debug.record("input", "omawrite", "input_received");
         check(!fs::exists(output));
         fs::rename(control, control.string() + ".saved");
         fs::create_symlink(control.string() + ".saved", control);
+        debug.refresh();
         debug.record("input", "omawrite", "input_received");
         check(!fs::exists(output));
         fs::remove(control);
         std::ofstream(control) << "{invalid";
         fs::permissions(control, fs::perms::owner_read | fs::perms::owner_write);
+        debug.refresh();
         debug.record("input", "omawrite", "input_received");
         check(!fs::exists(output));
-        std::cout << "Activity debug: disabled, redacted, private, expired, symlink and malformed checks passed\n";
+        fs::remove(control);
+        flag(std::time(nullptr) + 900);
+        debug.refresh();
+        debug.record("input", "omawrite", "input_received");
+        check(fs::exists(output)); // The same recorder resumes once the control is valid.
+        std::cout << "Activity debug: disabled, cached, redacted, private, expired, symlink and malformed checks passed\n";
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';
         return 1;
