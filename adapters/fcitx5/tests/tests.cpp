@@ -449,22 +449,39 @@ void contextWireIsExplicitManualV2() {
 
 void sessionWireSeparatesPolicyFromExplicitRequest() {
     auto state = focusedState();
-    const auto body = serializeSessionOpenEnvelope(
-        state.coordinates(), state.appId(), state.targetId(), 41);
+    const auto target = desktopApplicationTarget(state.appId(), state.targetId());
+    check(target.has_value(), "a canonical app id and context id name a desktop target");
+    const auto body = serializeSessionOpenEnvelope(state.coordinates(), *target, 41);
     check(body.has_value(), "valid desktop session should serialize");
     const auto value = nlohmann::json::parse(*body);
     check(value["v"] == 2 && value["type"] == "session.open" &&
               value["revision"] == 0,
           "desktop session wire must be canonical v2 revision zero");
+    check(value["id"] == std::string("fcitx.open.") + kSession,
+          "every session open is named by its session");
     check(value["payload"]["activation"] == "always",
           "session must match installed always policy");
     check(value["payload"]["target"]["kind"] == "desktop_application" &&
               value["payload"]["target"]["app_id"] == "omawrite" &&
+              value["payload"]["target"]["target_id"] == "input-context-1" &&
               !value["payload"]["target"].contains("origin"),
           "session target must retain exact Linux identity");
-    check(!serializeSessionOpenEnvelope(state.coordinates(), "Omawrite",
-                                        state.targetId(), 41),
+    check(!desktopApplicationTarget("Omawrite", state.targetId()),
           "non-canonical Linux identity must not serialize");
+    check(!desktopApplicationTarget("omawrite", "not an id"), "an invalid context id names no target");
+
+    const nlohmann::json browser{{"kind", "browser"}, {"origin", "https://allowed.example.test"},
+                                 {"target_id", "observed-target"}};
+    const auto observed = serializeSessionOpenEnvelope(state.coordinates(), browser, 41);
+    check(observed && nlohmann::json::parse(*observed)["payload"]["target"] == browser,
+          "an observed field's inspect target opens verbatim");
+    check(!serializeSessionOpenEnvelope(state.coordinates(), "browser", 41) &&
+              !serializeSessionOpenEnvelope(state.coordinates(),
+                                            {{"kind", "browser"}, {"origin", std::string(4096, 'x')}}, 41),
+          "a target must be a bounded object");
+    auto unopened = state.coordinates();
+    unopened.sessionId = "session-1";
+    check(!serializeSessionOpenEnvelope(unopened, *target, 41), "a session needs its UUID");
 }
 
 void staleAndDuplicateCommitsCannotDispatch() {

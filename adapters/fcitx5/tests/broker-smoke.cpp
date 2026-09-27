@@ -3,6 +3,7 @@
 
 #include <fcitx-utils/event.h>
 #include <fcitx-utils/eventloopinterface.h>
+#include <nlohmann/json.hpp>
 
 #include <cstdint>
 #include <iostream>
@@ -16,6 +17,12 @@ constexpr PanelObservation kPanel{.candidates = true, .candidatesOwnedByBadi = t
 
 void require(bool condition) {
     if (!condition) throw std::runtime_error("native broker transport contract failed");
+}
+
+nlohmann::json targetOf(const SessionState &state) {
+    const auto target = desktopApplicationTarget(state.appId(), state.targetId());
+    require(target.has_value());
+    return *target;
 }
 
 // Exercise the shipped transport and session state against a real Rust broker.
@@ -43,7 +50,7 @@ void run(const std::string &socket, const std::string &appId,
     };
     Transport transport(loop, WireCallbacks{
         .onReady = [&] {
-            require(wire->openSession(state.coordinates(), state.appId(), state.targetId()));
+            require(wire->openSession(state.coordinates(), targetOf(state)));
             publish();
         },
         .onAuthority = [&](const AuthoritySnapshot &authority) {
@@ -113,7 +120,7 @@ void runReconnect(const std::string &socket, const std::string &appId) {
                 ? "550e8400-e29b-41d4-a716-446655440001"
                 : "550e8400-e29b-41d4-a716-446655440002",
                 "recovery-context", appId, "0123456789abcdef0123456789abcdef"));
-            require(wire->queryPolicy(state.coordinates(), appId, state.targetId()));
+            require(wire->queryPolicy(state.coordinates(), targetOf(state)));
         },
         .onAuthority = [](const AuthoritySnapshot &authority) { require(authority.initial && !authority.paused); },
         .onSuggestion = [&](Suggestion suggestion) {
@@ -132,7 +139,7 @@ void runReconnect(const std::string &socket, const std::string &appId) {
         },
         .onPolicy = [&](std::string_view session, bool allowed) {
             require(allowed && session == state.coordinates().sessionId);
-            require(wire->openSession(state.coordinates(), appId, state.targetId()));
+            require(wire->openSession(state.coordinates(), targetOf(state)));
             const auto update = state.updateContext(ContextWindow{
                 .before = "thank you", .after = "", .anchor = 9, .head = 9,
                 .language = "en", .multiline = true,

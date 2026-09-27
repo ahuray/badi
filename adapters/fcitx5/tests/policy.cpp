@@ -36,6 +36,8 @@ Coordinates session(const char *id) {
     return coordinates;
 }
 
+Json field(const char *id) { return *desktopApplicationTarget("omawrite", id); }
+
 struct Runtime {
     std::filesystem::path path;
     Runtime() {
@@ -152,7 +154,7 @@ private:
             slow_ = loop_.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
                 [this, value](::fcitx::EventSourceTime *, std::uint64_t) {
                     // Still owed after the deadline: asking again sends nothing new.
-                    require(client_.queryPolicy(session(kSlow), "omawrite", "field-1"),
+                    require(client_.queryPolicy(session(kSlow), field("field-1")),
                             "an owed query was refused");
                     send(status(value));
                     return true;
@@ -165,8 +167,8 @@ private:
     }
 
     void onReady() {
-        require(client_.queryPolicy(session(kSlow), "omawrite", "field-1") &&
-                    client_.queryPolicy(session(kPrompt), "omawrite", "field-2"),
+        require(client_.queryPolicy(session(kSlow), field("field-1")) &&
+                    client_.queryPolicy(session(kPrompt), field("field-2")),
                 "policy queries refused");
     }
 

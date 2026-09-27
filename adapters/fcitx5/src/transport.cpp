@@ -32,6 +32,7 @@ constexpr std::size_t kMaxQueuedFrames = 32;
 constexpr std::size_t kMaxQueuedBytes = 1U << 20U;
 constexpr std::size_t kMaxDecodedFrames = 32;
 constexpr std::size_t kMaxPendingPolicies = 64;
+constexpr std::size_t kMaxTargetBytes = 4096;
 constexpr std::uint64_t kPolicyReplyMs = 2'000;
 constexpr std::uint64_t kMaxSafeCounter = (std::uint64_t{1} << 53U) - 1U;
 constexpr std::array<std::string_view, 5> kRequiredCapabilities{
@@ -241,6 +242,23 @@ std::optional<Json> parseStrictObject(std::string_view body) {
     return value;
 }
 
+std::optional<std::string> serialized(const Json &message) {
+    try {
+        auto body = message.dump();
+        if (body.empty() || body.size() > kMaxFrameBytes) return std::nullopt;
+        return body;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+// The broker validates a session target in full; the adapter bounds its size.
+bool boundedTarget(const Json &target) {
+    if (!target.is_object()) return false;
+    const auto body = serialized(target);
+    return body && body->size() <= kMaxTargetBytes;
+}
+
 std::optional<Json> contextEnvelope(const ContextUpdate &update,
                                     std::uint64_t monoMs) {
     const auto &coordinates = update.coordinates;
@@ -326,44 +344,26 @@ bool dispatchSuggestionClear(
 std::optional<std::string> serializeContextEnvelope(const ContextUpdate &update,
                                                     std::uint64_t monoMs) {
     const auto message = contextEnvelope(update, monoMs);
-    if (!message) return std::nullopt;
-    try {
-        const auto body = message->dump();
-        if (body.empty() || body.size() > kMaxFrameBytes) return std::nullopt;
-        return body;
-    } catch (...) {
-        return std::nullopt;
-    }
+    return message ? serialized(*message) : std::nullopt;
+}
+
+std::optional<Json> desktopApplicationTarget(std::string_view appId, std::string_view targetId) {
+    if (!validLinuxAppId(appId) || !validOpaqueId(targetId)) return std::nullopt;
+    return Json{{"kind", "desktop_application"}, {"app_id", appId}, {"target_id", targetId}};
 }
 
 std::optional<std::string>
 serializeSessionOpenEnvelope(const Coordinates &coordinates,
-                             std::string_view appId,
-                             std::string_view targetId,
+                             const Json &target,
                              std::uint64_t monoMs) {
     if (!validSessionId(coordinates.sessionId) ||
-        coordinates.focusEpoch > kMaxSafeCounter || !validLinuxAppId(appId) ||
-        !validOpaqueId(targetId)) {
+        coordinates.focusEpoch > kMaxSafeCounter || !boundedTarget(target)) {
         return std::nullopt;
     }
     auto opening = coordinates;
     opening.revision = 0;
-    opening.fingerprint.clear();
-    const auto message = envelope(
-        "session.open",
-        "fcitx.open." + std::to_string(coordinates.focusEpoch), monoMs,
-        Json{{"target", Json{{"kind", "desktop_application"},
-                               {"app_id", appId},
-                               {"target_id", targetId}}},
-             {"activation", "always"}},
-        &opening);
-    try {
-        const auto body = message.dump();
-        if (body.empty() || body.size() > kMaxFrameBytes) return std::nullopt;
-        return body;
-    } catch (...) {
-        return std::nullopt;
-    }
+    return serialized(envelope("session.open", "fcitx.open." + coordinates.sessionId, monoMs,
+                               Json{{"target", target}, {"activation", "always"}}, &opening));
 }
 
 std::optional<std::vector<std::uint8_t>> encodeFrame(std::string_view body) {
@@ -540,17 +540,8 @@ public:
 
     [[nodiscard]] bool ready() const { return ready_ && fd_ >= 0; }
 
-    bool queryPolicy(const Coordinates &coordinates, std::string_view appId,
-                     std::string_view targetId) {
-        if (!ready() || !validSessionId(coordinates.sessionId) ||
-            !validLinuxAppId(appId) || !validOpaqueId(targetId)) return false;
-        return queryTargetPolicy(coordinates, Json{{"kind", "desktop_application"},
-            {"app_id", appId}, {"target_id", targetId}});
-    }
-
-    bool queryTargetPolicy(const Coordinates &coordinates, const Json &target) {
-        if (!ready() || !validSessionId(coordinates.sessionId) ||
-            !target.is_object() || target.dump().size() > 4096) return false;
+    bool queryPolicy(const Coordinates &coordinates, const Json &target) {
+        if (!ready() || !validSessionId(coordinates.sessionId) || !boundedTarget(target)) return false;
         const auto id = "fcitx.policy." + coordinates.sessionId;
         // One query per session: an overdue reply is still owed and delivered.
         if (pendingPolicies_.contains(id)) return true;
@@ -562,22 +553,10 @@ public:
         return true;
     }
 
-    bool openSession(const Coordinates &coordinates, std::string_view appId,
-                     std::string_view targetId) {
-        if (!ready() || !validLinuxAppId(appId) || !validOpaqueId(targetId)) return false;
-        const auto body =
-            serializeSessionOpenEnvelope(coordinates, appId, targetId, nowMs());
+    bool openSession(const Coordinates &coordinates, const Json &target) {
+        if (!ready()) return false;
+        const auto body = serializeSessionOpenEnvelope(coordinates, target, nowMs());
         return body && queueBody(*body);
-    }
-
-    bool openTargetSession(const Coordinates &coordinates, const Json &target) {
-        if (!ready() || !validSessionId(coordinates.sessionId) ||
-            !target.is_object() || target.dump().size() > 4096) return false;
-        auto opening = coordinates;
-        opening.revision = 0;
-        opening.fingerprint.clear();
-        return queue(envelope("session.open", "fcitx.open." + coordinates.sessionId,
-            nowMs(), Json{{"target", target}, {"activation", "always"}}, &opening));
     }
 
     bool closeSession(const Coordinates &coordinates) {
@@ -1023,19 +1002,11 @@ bool Transport::connect() { return impl_->connect(); }
 void Transport::disconnect() { impl_->disconnect(); }
 bool Transport::ready() const { return impl_->ready(); }
 std::uint64_t Transport::nowMs() const { return impl_->nowMs(); }
-bool Transport::queryPolicy(const Coordinates &coordinates, std::string_view appId,
-                            std::string_view targetId) {
-    return impl_->queryPolicy(coordinates, appId, targetId);
+bool Transport::queryPolicy(const Coordinates &coordinates, const nlohmann::json &target) {
+    return impl_->queryPolicy(coordinates, target);
 }
-bool Transport::openSession(const Coordinates &coordinates, std::string_view appId,
-                            std::string_view targetId) {
-    return impl_->openSession(coordinates, appId, targetId);
-}
-bool Transport::queryTargetPolicy(const Coordinates &coordinates, const nlohmann::json &target) {
-    return impl_->queryTargetPolicy(coordinates, target);
-}
-bool Transport::openTargetSession(const Coordinates &coordinates, const nlohmann::json &target) {
-    return impl_->openTargetSession(coordinates, target);
+bool Transport::openSession(const Coordinates &coordinates, const nlohmann::json &target) {
+    return impl_->openSession(coordinates, target);
 }
 bool Transport::closeSession(const Coordinates &coordinates) {
     return impl_->closeSession(coordinates);

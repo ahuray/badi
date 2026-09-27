@@ -27,10 +27,13 @@ bool strictBoundedJsonObject(std::string_view body);
 bool strictSessionControlResult(std::string_view body);
 bool strictSuggestionClear(std::string_view body);
 bool strictPolicyStatus(std::string_view body);
+// The broker target of a manual field: the canonical app id and the opaque
+// Fcitx context id. An observed field uses the observer's inspect target.
+std::optional<nlohmann::json> desktopApplicationTarget(std::string_view appId,
+                                                       std::string_view targetId);
 std::optional<std::string>
 serializeSessionOpenEnvelope(const Coordinates &coordinates,
-                             std::string_view appId,
-                             std::string_view targetId,
+                             const nlohmann::json &target,
                              std::uint64_t monoMs);
 std::optional<std::string> serializeContextEnvelope(const ContextUpdate &update,
                                                     std::uint64_t monoMs);
@@ -99,12 +102,8 @@ public:
     [[nodiscard]] bool ready() const;
     [[nodiscard]] std::uint64_t nowMs() const;
 
-    bool openSession(const Coordinates &coordinates, std::string_view appId,
-                     std::string_view targetId);
-    bool queryPolicy(const Coordinates &coordinates, std::string_view appId,
-                     std::string_view targetId);
-    bool queryTargetPolicy(const Coordinates &coordinates, const nlohmann::json &target);
-    bool openTargetSession(const Coordinates &coordinates, const nlohmann::json &target);
+    bool queryPolicy(const Coordinates &coordinates, const nlohmann::json &target);
+    bool openSession(const Coordinates &coordinates, const nlohmann::json &target);
     bool closeSession(const Coordinates &coordinates);
     bool publishContext(const ContextUpdate &update);
     bool requestAcceptance(const AcceptRequest &request);

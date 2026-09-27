@@ -935,13 +935,9 @@ private:
     bool open(Binding &binding) {
         if (!binding.state.editingAvailable()) return false;
         if (binding.opened) return true;
-        if (!binding.policyAllowed || authorityPaused_ || !transport_.ready()) return false;
-        const bool opened = binding.observedFocus.is_null()
-            ? transport_.openSession(binding.state.coordinates(), binding.state.appId(), binding.state.targetId())
-            : transport_.openTargetSession(binding.state.coordinates(), binding.observedFocus["target"]);
-        if (!opened) {
-            return false;
-        }
+        if (!binding.policyAllowed || authorityPaused_) return false;
+        const auto target = brokerTarget(binding);
+        if (!target || !transport_.openSession(binding.state.coordinates(), *target)) return false;
         binding.brokerCoordinates = binding.state.coordinates();
         binding.brokerCoordinates.revision = 0;
         binding.brokerCoordinates.fingerprint.clear();
@@ -956,12 +952,14 @@ private:
     }
 
     void queryPolicy(Binding &binding) {
-        if (binding.state.editingAvailable() && !binding.policyKnown && transport_.ready()) {
-            if (!binding.observedFocus.is_null())
-                transport_.queryTargetPolicy(binding.state.coordinates(), binding.observedFocus["target"]);
-            else
-                transport_.queryPolicy(binding.state.coordinates(), binding.state.appId(), binding.state.targetId());
-        }
+        if (!binding.state.editingAvailable() || binding.policyKnown) return;
+        if (const auto target = brokerTarget(binding)) transport_.queryPolicy(binding.state.coordinates(), *target);
+    }
+
+    // The observed field's inspect target, or the manual path's app and context.
+    std::optional<nlohmann::json> brokerTarget(const Binding &binding) const {
+        if (!binding.observedFocus.is_null()) return binding.observedFocus.value("target", nlohmann::json());
+        return desktopApplicationTarget(binding.state.appId(), binding.state.targetId());
     }
 
     void onPolicy(std::string_view session, bool allowed) {
