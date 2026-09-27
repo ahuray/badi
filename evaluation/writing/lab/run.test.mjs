@@ -163,7 +163,7 @@ test('file/source provenance hashes exact bytes and cached hashing notices conte
   assert.deepEqual(await sourceHashes(['suite.json'], f.directory), { 'suite.json': changed.sha256 });
   const sources = await sourceHashes();
   for (const path of ['broker/src/semantic/client/writing_lab.rs', 'Cargo.lock', 'broker/src/provider.rs',
-    'broker/src/writing_lab/process.rs', 'broker/src/writing_lab/prefill_probe.rs',
+    'broker/src/semantic/process.rs', 'broker/src/writing_lab/prefill_probe.rs',
     'evaluation/writing/lab/paced.mjs', 'broker/src/writing_lab/paced_probe.rs',
     'broker/src/writing_lab/paced_probe/scheduler.rs', 'broker/src/writing_lab/artifact.rs', 'broker/src/writing_lab/attestation.rs',
     'evaluation/writing/lab/model-artifact.mjs',
