@@ -212,7 +212,7 @@ class DesktopTests(unittest.TestCase):
         self.assertIn('private windows', desktop.ALL_SITES_NOTE)
         self.assertIn('Covers\n', desktop.HELP)
         self.assertIn('Chromium/Brave/Zen fields', desktop.HELP)
-        self.assertIn('one site grant covers all three\nbrowsers', desktop.HELP)
+        self.assertIn('one site grant covers all three browsers', ' '.join(desktop.HELP.split()))
 
     def test_vscode_edit_context_check_is_read_only_jsonc_and_content_free(self):
         home = Path(self.temporary.name) / 'home'
@@ -440,7 +440,7 @@ class DesktopTests(unittest.TestCase):
         self.assertIn('No suggestion: 3 (last: budget_prefill)', text)
         self.assertIn('Observed fields: automatic for Omawrite, Telegram and IME-parity apps', text)
         self.assertIn('Tab accepts a visible suggestion, otherwise stays Tab', text)
-        self.assertIn('IME-parity accepts once, append-only, like\ntyping', desktop.HELP)
+        self.assertIn('IME-parity accepts once, append-only, like typing', ' '.join(desktop.HELP.split()))
         for stale in ('native browser/Codex writing is disabled', 'automatic only for Omawrite'):
             self.assertNotIn(stale, text)
             self.assertNotIn(stale, desktop.HELP)

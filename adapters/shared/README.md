@@ -16,7 +16,7 @@ quality remains an experimental boundary evaluated separately from editing safet
 Password/sensitive fields, foreign composition, noncollapsed selections and stale
 context are excluded. Obsidian currently requires the caret at the note end. Bash
 hooks do not inspect terminal output, password prompts or other programs. Browser
-fields use the extension-free [IME-parity path](../../README.md#browsers-and-chromium-based-apps-ime-parity)
+fields use the extension-free [IME-parity path](../../README.md#chromium-based-apps-and-zen-ime-parity)
 instead; no universal Linux compatibility is claimed.
 
 ## Install

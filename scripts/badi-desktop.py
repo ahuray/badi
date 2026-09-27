@@ -47,17 +47,16 @@ HELP = """Badi — local writing controls
   badi launch omawrite|xournalpp
                                Open a supported editor
 
-Native manual fields: Tab requests words; Tab again accepts.
-Observed fields: suggestions appear on their own; Tab accepts a visible one and
-otherwise stays Tab; Ctrl+Shift+Space requests. Automatic for Omawrite,
-Telegram and IME-parity apps (Chromium, Brave, Zen, Codex, VS Code, Cursor,
-Discord), each with an app or site grant; one site grant covers all three
-browsers. IME-parity accepts once, append-only, like
-typing: undo may merge it with earlier typing. Not verified cells yet.
+Keys: Tab accepts a visible suggestion and otherwise stays Tab; Escape
+dismisses; Ctrl+Shift+Space requests. Suggestions appear on their own in
+Omawrite, Telegram and the IME-parity apps (Chromium, Brave, Zen, Codex,
+VS Code, Cursor, Discord), each with an app or site grant; one site grant
+covers all three browsers. IME-parity accepts once, append-only, like typing:
+undo may merge it with earlier typing.
+Xournal++ text cells: Tab requests, Tab again accepts.
 Obsidian: Tab accepts a word, Ctrl/Command+Right all.
-Bash: Ctrl-X then Tab requests/accepts. Escape dismisses (Bash: Ctrl-X then Escape).
-Native tested applications: Omawrite and Xournal++ text cells.
-For advanced protocol commands: badictl --help
+Bash: Ctrl-X then Tab requests/accepts, Ctrl-X then Escape dismisses.
+For protocol commands: badictl --help
 """
 VSCODE_SETTINGS = Path(".config/Code/User/settings.json")
 CLOSING = re.compile(r"\s*[}\]]")

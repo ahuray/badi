@@ -1,239 +1,120 @@
 # Badi
 
 Badi (`بعدی`, “next”) is a local writing assistant for Linux, starting with
-Omarchy/Hyprland. It uses a verified local LLM to suggest up to four words,
-with guarded, explicit acceptance. This is pre-release software.
+Omarchy/Hyprland. A verified local LLM suggests up to four words and you accept
+them explicitly; predictions run on this machine. This is pre-release software.
 
-## Current coverage
+## Coverage
 
-| Surface | Implemented behavior | Remaining boundary |
+Tested on the development workstation with disposable text. A listed version is
+not a general Linux claim.
+
+| Surface | How it works | Tested boundary |
 | --- | --- | --- |
-| Omawrite / Xournal++ Text tool | Omawrite suggests automatically through the observer (Tab accepts); Xournal++ uses Tab request/accept; Escape dismisses | Omawrite automatic suggestion and chained Tab acceptance passed live 2026-09-27; English continuation |
-| Obsidian desktop | CodeMirror inline words, automatic/Tab request, Tab accepts a word, Ctrl/Command+Right accepts all | Caret at note end; reload the installed vault plugin after an update |
-| Bash in a terminal | Grey inline Readline preview; continuation and narrow English spelling correction; Ctrl-X then Tab accepts; native undo | Installed Ghostty 1.3.1 / Bash 5.3.15 physical preview, correction, acceptance and undo passed; explicit shortcut |
-| Chromium, VS Code, Cursor (IME-parity) | Accessibility observer and Fcitx: automatic suggestion, grey inline preview when it fits the field (else the Fcitx panel at the caret), Tab accepts once like typed text, Escape dismisses | Live 2026-09-27 with disposable text: Chromium 152 textarea/input/contenteditable, VS Code 1.138 (`editor.editContext: false`) and Cursor 3.21 each showed a suggestion in 0.5–0.8 s and appended exactly once; password fields sent no request. Needs `--force-renderer-accessibility=complete` (`install-desktop.py --observed-app`); undo may merge with prior typing; no correction |
-| Brave Origin (IME-parity) | Same Chromium path and per-site policy | Page-field selection verified live on a Brave page; no full acceptance trial yet |
-| Zen browser (Gecko, IME-parity) | Same observer/Fcitx path; grey inline preview from glyph-order direction (Gecko has no `direction` attribute) | Live 2026-09-27 in the user's running Zen: inline preview, one exact append, Escape and password denial passed in textarea, input and contenteditable; undo untested; its urlbar has no Url purpose, so the observer alone denies it; Gecko's surrounding text stops at the caret's paragraph; other Gecko builds are unavailable |
-| Telegram desktop | Native Fcitx path (`telegram`); suggestion in the Fcitx panel | Live 2026-09-27 in Saved Messages: suggestion, one exact append, draft cleared; Qt reports no caret geometry for an inline preview |
-| Codex desktop (`chatgpt`) | IME-parity identity and flag are installed | Its rich composer (U+FFFC root, trailing line break) is not yet supported: no suggestion |
-| Discord | IME-parity identity | Its updater drops accessibility flags and environment, so the observer sees no fields and Badi stays silent |
-| Other editors / rich websites / shells | Cooperative integration backlog | Contenteditable, canvas editors, TUIs, Fish/Zsh, Firefox and other Gecko builds remain unverified |
+| Omawrite | Automatic suggestion through the observer; Tab accepts | Live 2026-09-27, including chained Tab acceptance |
+| Xournal++ Text tool | Tab requests, Tab again accepts | Live, with exact native undo |
+| Obsidian | Vault plugin: inline words, Tab accepts a word, Ctrl/Command+Right all | Caret at note end; reload the plugin after an update |
+| Bash | Grey Readline preview, narrow English correction; Ctrl-X then Tab requests/accepts | Ghostty 1.3.1 / Bash 5.3.15: preview, correction, acceptance and undo |
+| Chromium, VS Code, Cursor | IME-parity: automatic, grey inline preview (else the Fcitx panel), Tab accepts once | Live 2026-09-27: Chromium 152, VS Code 1.138, Cursor 3.21; password fields denied |
+| Zen | IME-parity for the exact `zen` identity (Gecko) | Live 2026-09-27: preview, acceptance, Escape, password denial; undo untested |
+| Brave Origin | IME-parity with a per-site grant | Field selection live; full acceptance trial pending |
+| Telegram | Observed native Fcitx path; suggestion in the Fcitx panel | Live 2026-09-27; Qt reports no caret geometry for an inline preview |
+| Codex desktop (`chatgpt`) | IME-parity with rich-composer flattening | Passed on an equivalent Chromium fixture; live Codex acceptance pending |
+| Discord | IME-parity identity | Unsupported: its updater drops the accessibility flag, so no field is visible |
 
-The desktop broker currently uses Qwen3-1.7B Q4_K_M on this workstation. Startup
-selects among installed pinned models that fit current resources and verifies
-their bytes; a changed hardware recommendation does not require an absent model.
-“Model ready” confirms inference startup; it does not prove input is arriving.
+Other browsers and Gecko builds, canvas editors, TUIs and Fish/Zsh are
+unavailable or unverified; see [future plans](<future plans.md>).
 
-English prediction includes guarded partial-word completion. German and Persian
-whole-word continuations are experimental; application language controls and
-Persian half-spaces are described in the adapter runbooks. Unknown word endings
-can abstain. These are defined language paths, not a general multilingual claim.
-The [writing evaluation](evaluation/writing/README.md) separates useful suggestions,
-abstentions, errors and latency. Cotypist parity has not been measured.
+## Install
 
-The [Prediction Lab](evaluation/writing/README.md#discover-assess-and-compare-a-model)
-can inspect this device, search public Hugging Face models, explain conservative
-memory fit, verify pinned downloads, and select an isolated comparison model.
-Qualification requires reviewed full additions and measured runtime behavior;
-metadata or fast generation alone cannot recommend a replacement. Explicitly
-saved receipts retain counts and identities without drafts. The installed model
-changes only through a separate authorized installation.
-A three-candidate development screen (2026-09-10) found lower memory use but no
-model meeting the English/German/Persian quality gates at 550 ms, so the
-installed baseline remains unchanged.
-
-To test prediction quality directly, run `npm run writing:lab` from this checkout.
-The local [Prediction Lab](evaluation/writing/README.md#prediction-lab) lets you
-enter drafts and expected continuations, compare context/style experiments,
-inspect actual model prompts, and explicitly export results in its own test
-editor. The Word completion tab can reuse a uniquely matching
-word from supplied context without loading a model. A separate Spelling tab previews conservative German
-and Persian corrections when started with the local dictionary configuration
-documented in that runbook. It does not enable unsupported editing in other apps
-or change installed prediction defaults.
-
-## Desktop use
-
-```sh
-badi status
-badi settings
-badi launch omawrite
-badi pause                 # persisted across restart
-badi resume
-badi app xournalpp on
-badi service restart
-badi autostart on
-```
-
-Where suggestions appear automatically (Omawrite and the IME-parity apps),
-**Tab** accepts a visible suggestion and is otherwise the normal Tab; **Escape**
-dismisses and **Ctrl+Shift+Space** requests explicitly. In a Xournal++ text cell,
-type a phrase such as `Please find attached the`, press **Tab** to request and
-**Tab again** to accept. Candidates last five seconds and disappear when focus or
-text changes.
-Chromium-based apps and Zen use the IME-parity path below; each needs its own
-app or site grant.
-
-The new Omarchy speech-bubble **b** mark opens settings; right-click pauses/resumes. The panel also
-controls app permissions, model service, login startup and activity diagnostics.
-
-## Obsidian and terminal setup
-
-```sh
-python3 scripts/install-editors.py --vault /path/to/vault --bash
-badi app obsidian on
-badi app bash on
-```
-
-Reload the Obsidian plugin and open a new Bash shell. In Bash, **Ctrl-X then Tab**
-requests/accepts and **Ctrl-X then Escape** dismisses; ordinary Tab stays shell
-completion. Predictions only edit the buffer; Enter remains your action.
-See [editor integrations](adapters/shared/README.md) for verification and
-installation boundaries.
-
-## Browsers and Chromium-based apps (IME-parity)
-
-```sh
-python3 scripts/install-desktop.py                            # includes the Fcitx 5.1.22 frontend
-python3 scripts/install-desktop.py --observed-app chromium --observed-app code  # renderer accessibility flag
-badi app chatgpt on       # Codex desktop; likewise code, cursor, discord, telegram
-badi site https://example.com on    # Chromium, Brave and Zen, per exact origin
-```
-
-This path uses the [focused accessibility observer](adapters/accessibility/README.md)
-and the Fcitx addon; Badi has no browser extension. `badi site all on` allows
-every Chromium/Brave/Zen origin with no second host gate, private windows
-included. VS Code also needs `"editor.editContext": false` in its user
-settings; `badi doctor` reports when it is missing. Other Chromium-family
-browsers, web-app windows and builds without an observer rule (Edge, Vivaldi,
-Code-OSS, …) are unavailable, as are Gecko browsers other than Zen (Firefox and
-its web-app windows, LibreWolf, Zen Twilight, Flatpak Zen, …). Each app must run
-natively on Wayland with its input method, and the desktop accessibility bus
-must be on. Each Chromium-based IME-parity app must also start with
-`--force-renderer-accessibility=complete` (Zen needs no flag). Without it
-Chromium exposes no page content to the observer, and lighter modes lack the
-field details it checks. This costs some browser CPU and memory on every
-page. `--observed-app chromium|brave-origin|chatgpt|code|cursor` (repeatable)
-adds only that flag to the app's own flags file, with a backup, on the app's next
-launch. Discord has no supported flags file; see the
-[observer runbook](adapters/accessibility/README.md#renderer-accessibility-flag).
-
-On Fcitx 5.1.22, the full desktop install builds and selects the pinned
-[compatibility frontend](packaging/fcitx5-wayland-compat/README.md) by default. It
-backports upstream Fcitx 5.1.23's refresh so Chromium-based text-input-v3 clients
-keep publishing surrounding text. The backport is protocol-tested only; the
-earlier 5.1.21 variant resolved the measured stall physically.
-`--no-wayland-compat` skips it, the packaging runbook documents rollback, and
-other Fcitx versions get no frontend.
-
-Under the [IME-parity decision](docs/decisions/0003-ime-parity-append-only.md) (2026-09-26), Chromium,
-Brave, Codex, VS Code, Cursor, Discord and (by user request) Zen accept a
-suggestion through one append-only Fcitx commit that behaves like typed text. Undo can merge it with the
-preceding typing, and a page that moves focus or caret during `beforeinput` can
-redirect it like a keystroke; earlier physical Chromium trials showed both
-effects.
-Exact observer identity, snapshot/caret agreement, revision and expiry binding,
-one-shot acceptance, sensitive-field denial and foreign-IME yield still apply.
-Replacement stays editor-owned. The grey preview is calibrated against the
-app's own frame on every request and appears as inline text after the caret.
-LTR text that fits in the field uses it; everything else, including Qt apps
-such as Telegram, uses Fcitx's candidate panel. These apps have source and
-private nested-session evidence only until live trials. Zen's observer rules
-come from a live probe with disposable text; its acceptance and undo are
-untested. Gecko exposes no text `direction` attribute, so Zen suggestions use
-the Fcitx panel, and its surrounding text covers only the caret's paragraph, so
-a field with a newline before the caret fails the snapshot agreement closed.
-
-## Debug missing suggestions
-
-```sh
-badi doctor
-badi service restart      # restarts a service stopped on a startup error
-badi debug on
-badi debug watch           # type in another app; Ctrl+C stops watching
-badi debug status
-badi debug off
-badictl probe -            # type a disposable phrase, Enter, Ctrl+D; JSON result
-```
-
-`badi status` counts model requests that showed nothing; `badi doctor` and
-`badi debug` name their content-free classes: `request_abstained` (language
-missing or unsupported, text after the caret, an empty or spaces-only prefix, a
-lone unfinished English word, or a Persian joiner not yet between two letters),
-`budget_prefill` / `budget_stream` (the writing budget, 550 ms while typing and
-1.2 s after an explicit request, ended before the model answered, or before a
-complete word), `model_abstained`, `output_rejected` (language, dictionary,
-number, shape or safety checks), `stale`, `timeout` and `provider_error`.
-`badictl probe [--language TAG] [--after TEXT] [--replace] [--explicit] TEXT|-`
-sends one request through the running broker's provider and display checks and
-prints the suggestion or class with latency; `--explicit` uses the 1.2 s budget. It needs no app grant, opens no
-session, cannot commit, reports `paused` while paused and changes no counters;
-the broker neither logs nor stores the text. Argument text stays in shell
-history and the process list, so `-` reads TEXT from standard input instead
-(one trailing newline removed).
-
-Both installers write `~/.local/state/badi/receipts/{desktop,editors}.json` with
-the checkout HEAD, dirty flag and each installed file's SHA-256; a tree that is
-not itself a Git checkout records `unknown`. The broker and `badictl` print
-their embedded commit with `--version`, and their receipt entries record that
-embedded identity, which can predate the installing checkout.
-`badi doctor` shows the receipt identity and reports `broker_build_mismatch`
-when the running broker's version or bytes differ from the recorded install.
-
-Debug mode expires after 15 minutes. It records counts and reasons for focus,
-input, context, Tab decisions, model requests, display and commit dispatch.
-It stores no typed prose or individual key values. `app_disabled` means no app
-grant exists; `unidentified_app` means Fcitx supplied no canonical app identity.
-`no_input_events` means no instrumented adapter has reported during this debug run.
-Obsidian and Bash appear under `editors`. Other reasons distinguish
-field denial, missing fresh context, caret position and model abstention.
-Snapshots live in the private runtime directory and are removed by `debug off`.
-A Fcitx commit dispatch cannot itself prove that the application inserted text.
-Doctor reports startup failures, missing native integration and degraded settings
-without copying arbitrary logs or writing into its output. A paused broker stays
-paused across service restart; use `badi resume` to enable predictions.
-If the inference process exits, the broker clears sessions and exits too, letting
-the desktop service restart it, with backoff, fresh model verification and editor
-authority. A missing, unsupported or too-large model exits with status 78 instead
-and stays stopped for `badi doctor` to report.
-Additional cooperative native apps can be granted with `badi app APP_ID on`;
-policy is checked before reading. Use the exact debug identity. This cannot add
-context support to an application that does not expose it through Fcitx.
-
-## Development
-
-Read [AGENTS.md](AGENTS.md) for architecture and exact checks. Use the root npm
-lockfile and Rust 1.85+. On a provisioned Omarchy development device:
+On Omarchy with Fcitx 5, from this checkout:
 
 ```sh
 npm ci
-python3 scripts/install-desktop.py
-python3 scripts/install-omarchy-ui.py
+python3 scripts/install-desktop.py      # broker, model service, Fcitx addon, observer, badi
+python3 scripts/install-omarchy-ui.py   # bar mark and settings panel
+python3 scripts/install-editors.py --vault /path/to/vault --bash   # optional
+```
+
+The installers build user-local binaries, back up every replaced file (the
+newest three backups per installer are kept; `python3 scripts/badi_install.py
+restore DIR` rolls one back) and restart the Badi and Fcitx user services. The
+desktop install needs an unlocked desktop; `--broker-only` updates the broker
+and controls while locked and leaves the input method running. On Fcitx 5.1.22
+it also installs the pinned [compatibility frontend](packaging/fcitx5-wayland-compat/README.md)
+so Chromium-based apps keep publishing surrounding text (`--no-wayland-compat`
+skips it). Model assets must already be present.
+
+## Use
+
+**Tab** accepts a visible suggestion and is otherwise the normal Tab, **Escape**
+dismisses and **Ctrl+Shift+Space** requests. In Xournal++, Tab requests and Tab
+again accepts. A suggestion lasts five seconds and disappears when focus or text
+changes. The **b** mark in the Omarchy bar opens settings; right-click pauses.
+
+```sh
+badi status
+badi pause                          # persists across restarts; badi resume
+badi app chatgpt on                 # likewise code, cursor, telegram, obsidian, bash
+badi site https://example.com on    # one browser origin, shared by Chromium, Brave and Zen
+badi autostart on
+```
+
+### Chromium-based apps and Zen (IME-parity)
+
+These apps have no editor-owned channel, so Badi reads the focused field through
+the [accessibility observer](adapters/accessibility/README.md) and accepts with
+one append-only Fcitx commit that behaves like typed text. Undo may merge it
+with your preceding typing, and a page that moves focus during input can
+redirect it like a keystroke ([decision](docs/decisions/0003-ime-parity-append-only.md)).
+Field identity, caret agreement, expiry, one-shot acceptance, password denial
+and foreign-IME yield still apply; corrections stay editor-owned.
+
+Each Chromium-based app must start with `--force-renderer-accessibility=complete`:
+`install-desktop.py --observed-app chromium|brave-origin|chatgpt|code|cursor`
+adds it to that app's flags file (Zen needs none). VS Code also needs
+`"editor.editContext": false`. `badi site all on` allows every browser origin,
+private windows included.
+
+## Troubleshooting
+
+```sh
+badi doctor                  # setup, build identity and startup problems
+badi debug on                # then: badi debug watch, and type in another app
+badictl probe -              # run a disposable phrase through the live model
+badi service restart
+```
+
+`badi status` and `badi debug` name why nothing was shown without recording
+typed text: `request_abstained` (unsupported language, text after the caret, a
+lone unfinished word), `budget_prefill` / `budget_stream` (the 550 ms typing
+budget, or 1.2 s after an explicit request, ran out), `model_abstained`,
+`output_rejected` (language, dictionary, number or safety checks), `stale`,
+`timeout` and `provider_error`; `app_disabled` means the app has no grant.
+Debug mode expires after 15 minutes. If the model process exits, the broker
+exits and its service restarts it with backoff; a missing or oversized model
+exits with status 78 and stays stopped for `badi doctor` to report.
+
+## Model and languages
+
+The broker runs the installed pinned model that fits current resources
+(Qwen3-1.7B Q4_K_M here) and verifies its bytes at startup. English includes
+guarded partial-word completion; German and Persian whole-word continuation is
+experimental. The [Prediction Lab](evaluation/writing/README.md)
+(`npm run writing:lab`) compares models, prompts and spelling on your own test
+drafts without changing the installed model.
+
+## Development
+
+Read [AGENTS.md](AGENTS.md) for architecture, invariants and checks. The
+[vision](VISION.md) is the product contract, [decisions](docs/decisions/) record
+durable choices and [future plans](<future plans.md>) is the only backlog.
+
+```sh
+npm ci
 npm run check
-npm run fcitx5:integration
 cargo test --workspace --all-features --locked
 ```
 
-The desktop installer builds user-local binaries and restarts the Badi/Fcitx
-user services in an unlocked session, preserving the keyboard profile, existing
-autostart preference and settings, and backing up replaced files. On Fcitx
-5.1.22 the full install also builds the Wayland compatibility frontend from its
-pinned source download and runs its protocol checks. Use
-`python3 scripts/install-desktop.py --broker-only` for a model/controller update
-that leaves the input method running, including while the desktop is locked.
-Model assets must already exist. The UI updater requires an unlocked desktop
-and an existing Badi plugin installation. See [native setup and rollback](adapters/fcitx5/README.md)
-and [Omarchy controls](ui/omarchy-plugin/README.md).
-
-Adapters own text acquisition and edits. The broker enforces per-target policy,
-focus/revision binding, cancellation and one-shot acceptance. Password fields,
-foreign IME composition and stale requests must fail closed. Raw keylogging,
-clipboard replacement and blind synthetic typing are not product integrations.
-
-Only [future plans](<future plans.md>) is the active backlog. Read [the
-vision](VISION.md) for the product contract and [docs/decisions](docs/decisions/)
-for durable architecture decisions; Git history keeps earlier notes.
-
 Badi's source and documentation are MIT-licensed ([LICENSE](LICENSE)); model
-weights, tokenizers and other third-party artifacts keep their own licenses and
-are not relicensed.
+weights and other third-party artifacts keep their own licenses.
