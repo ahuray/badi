@@ -18,15 +18,34 @@ _badi_renderer() {
 
 _badi_stop() {
   _badi_clear_preview
-  [[ -z ${BADI_READER_FD:-} ]] || exec {BADI_READER_FD}<&-
-  [[ -z ${BADI_WRITER_FD:-} ]] || exec {BADI_WRITER_FD}>&-
+  # Close the bridge descriptors only while Bash still tracks the coprocess.
+  # After reaping an exited bridge Bash closes them itself, and their numbers
+  # may since belong to something else.
+  if [[ -n ${BADI_WORKER_PID:-} ]]; then
+    [[ -z ${BADI_READER_FD:-} ]] || exec {BADI_READER_FD}<&-
+    [[ -z ${BADI_WRITER_FD:-} ]] || exec {BADI_WRITER_FD}>&-
+  fi
   unset BADI_READER_FD BADI_WRITER_FD BADI_CONNECTION
+}
+
+_badi_alive() {
+  # The bridge exits after ten idle minutes. Until Bash reaps it, its closed
+  # output reads as end of file; afterwards Bash has dropped the coprocess.
+  [[ -n ${BADI_READER_FD:-} && -n ${BADI_WORKER_PID:-} ]] && ! read -t 0 -u "$BADI_READER_FD" 2>/dev/null
 }
 
 _badi_exchange() {
   BADI_REPLY_STATUS=ERROR
   BADI_REPLY_VALUE=connection_closed
-  if ! printf '%s\n' "$1" >&"${BADI_WRITER_FD}" ||
+  # A bridge exiting at this instant must not end this shell with SIGPIPE:
+  # ignore it for the one write, then restore whatever trap the user has.
+  local badi_pipe_trap badi_sent
+  badi_pipe_trap=$(trap -p PIPE)
+  trap '' PIPE
+  printf '%s\n' "$1" >&"${BADI_WRITER_FD}" 2>/dev/null
+  badi_sent=$?
+  if [[ -n $badi_pipe_trap ]]; then eval "$badi_pipe_trap"; else trap - PIPE; fi
+  if (( badi_sent )) ||
       ! IFS=' ' read -r -t 3 -u "$BADI_READER_FD" BADI_REPLY_STATUS BADI_REPLY_VALUE BADI_REPLY_REPLACE; then
     _badi_stop
     printf '\nBadi: bridge connection closed. Press Ctrl-X Tab to reconnect.\n'
@@ -35,7 +54,8 @@ _badi_exchange() {
 }
 
 _badi_start() {
-  [[ -z ${BADI_READER_FD:-} ]] || return 0
+  _badi_alive && return 0
+  _badi_stop
   local badi_bridge=${BADI_EDITOR_DIR:-$HOME/.local/lib/badi/editors}/shell/bridge.mjs
   if [[ ! -f $badi_bridge ]]; then
     printf '\nBadi: editor bridge is missing; run the desktop installer.\n'
@@ -121,7 +141,7 @@ _badi_words() {
 }
 
 _badi_dismiss() {
-  if [[ -n ${BADI_READER_FD:-} ]]; then _badi_exchange '{"operation":"cancel"}' || true; fi
+  if _badi_alive; then _badi_exchange '{"operation":"cancel"}' || true; fi
   _badi_clear_preview
 }
 

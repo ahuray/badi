@@ -141,6 +141,21 @@ test('editor identities, native reading lease, revocation and one-shot commits a
     bridge.stdin.end();
     await once(bridge, 'exit');
     assert.equal(bridge.exitCode, 0, logs);
+
+    // An idle bridge exits on its own: this test never ends its input.
+    const idle = spawn(process.execPath, [join(ROOT, 'adapters/shell/bridge.mjs')], {
+      env: { ...environment, BADI_BRIDGE_IDLE_MS: '300' }, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const idleExit = once(idle, 'exit');
+    assert.equal((await createInterface({ input: idle.stdout })[Symbol.asyncIterator]().next()).value, 'READY 1');
+    const ready = performance.now();
+    let timer;
+    const [code] = await Promise.race([idleExit, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Idle shell bridge did not exit')), 5000);
+    })]).finally(() => clearTimeout(timer));
+    assert.equal(code, 0, logs);
+    assert.ok(performance.now() - ready >= 250, 'The bridge waits for its idle period');
+    idle.stdin.destroy();
   } finally {
     if (bridge?.exitCode === null) { bridge.stdin.destroy(); bridge.kill('SIGTERM'); }
     clients.forEach(client => client.close());

@@ -4,11 +4,22 @@ import { BrokerClient } from '../shared/broker-client.mjs';
 import { recordActivity } from '../shared/activity.mjs';
 import { writingLanguage } from '../shared/writing-language.mjs';
 
+// Exit after this long without a request so a quiet shell does not keep a Node
+// process (~45 MB); badi.bash starts a new bridge on the next Ctrl-X Tab.
+const IDLE_MS = /^[1-9][0-9]{0,8}$/.test(process.env.BADI_BRIDGE_IDLE_MS ?? '')
+  ? Number(process.env.BADI_BRIDGE_IDLE_MS) : 10 * 60 * 1000;
+
 let client = new BrokerClient('terminal', { textReplacement: true });
 let connectionGeneration = 0;
 let grant = null;
 const respond = (status, value = '') => process.stdout.write(`${status} ${value}\n`);
 const lines = createInterface({ input: process.stdin, terminal: false });
+let idle = null;
+const armIdleExit = () => {
+  clearTimeout(idle);
+  idle = setTimeout(() => { lines.close(); process.stdin.destroy(); }, IDLE_MS);
+  idle.unref();
+};
 async function connect() {
   if (client.connected) return;
   client.close();
@@ -20,9 +31,11 @@ async function connect() {
 try {
   await connect();
   respond('READY', String(connectionGeneration));
+  armIdleExit();
   for await (const line of lines) {
-    if (line.length > 16384) { respond('ERROR', 'input_too_large'); continue; }
+    clearTimeout(idle);
     try {
+      if (line.length > 16384) { respond('ERROR', 'input_too_large'); continue; }
       const command = JSON.parse(line);
       if (command.operation === 'status') {
         await connect();
@@ -61,11 +74,14 @@ try {
       client.cancel();
       respond('ERROR', !client.connected ? 'model_offline_run_badi_doctor'
         : client.allowed ? 'expired_or_unavailable' : 'app_disabled_or_model_paused');
+    } finally {
+      armIdleExit();
     }
   }
 } catch {
   respond('ERROR', 'model_offline_run_badi_doctor');
 } finally {
+  clearTimeout(idle);
   client.close();
   lines.close();
 }

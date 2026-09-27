@@ -4,7 +4,8 @@ All clients check exact app/site policy before acquiring text. The local model
 suggests up to four words. Each acceptance is bound to its document, caret,
 revision, fingerprint and expiring one-shot broker grant. Typed text is not
 retained by these adapters; `badi debug on` enables private metadata snapshots
-for 15 minutes. English, German and Persian routing is implemented; language
+for 15 minutes. While debugging is off, an editor looks for the debug switch at
+most once a second, so recording costs no file access per keystroke or frame. English, German and Persian routing is implemented; language
 quality remains an experimental boundary evaluated separately from editing safety.
 
 | Integration | Input and acceptance | Verification |
@@ -38,8 +39,10 @@ it restores replaced files, deletes newly created ones and leaves any path edite
 since. It does not change Obsidian restricted
 mode or edit any note. Reload Obsidian normally. The command palette includes
 **Badi: Request or accept words** and **Badi: Reconnect local model**.
-Open notes reconnect automatically after a broker restart with bounded backoff;
-the adapter obtains fresh policy and never replays an earlier document or grant.
+All open notes share the plugin's one broker connection; only the editor whose
+request opened the current suggestion session can cancel it. The connection
+reconnects automatically after a broker restart with bounded backoff; the
+adapter obtains fresh policy and never replays an earlier document or grant.
 After ten unsuccessful attempts, typing, focus or the reconnect command retries.
 Language commands select the application locale, English, German or Persian.
 Each accepted word gets a separate undo transaction and a fresh model request.
@@ -49,6 +52,8 @@ Open a new interactive Bash shell, or source
 The Readline hook only changes `READLINE_LINE`; no generated text is evaluated.
 Set `BADI_LANGUAGE=de` or `BADI_LANGUAGE=fa` in the environment before starting
 the bridge to override its locale. The shell shortcut continues to accept all.
+The Node bridge exits after ten minutes without a request (`BADI_BRIDGE_IDLE_MS`
+overrides that for tests); the next Ctrl-X Tab starts a new one without a notice.
 
 ## Check
 

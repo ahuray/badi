@@ -27,12 +27,18 @@ PROBE = '\x18\x02'
 
 BRIDGE = r'''
 import { createInterface } from 'node:readline';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 let text = '', replace = '';
 const send = (status, value = '') => process.stdout.write(`${status} ${value}\n`);
 const encode = value => Buffer.from(value).toString('base64');
+// Like the real bridge's idle exit, the first bridge optionally stops after this many requests.
+const first = !readFileSync(process.env.BADI_TEST_EVENTS, 'utf8').includes('"start"');
+let remaining = first && process.env.BADI_TEST_EXIT_AFTER ? Number(process.env.BADI_TEST_EXIT_AFTER) : Infinity;
+appendFileSync(process.env.BADI_TEST_EVENTS, JSON.stringify({operation:'start'})+'\n');
 send('READY', '1');
-for await (const line of createInterface({input: process.stdin, terminal: false})) {
+const requests = createInterface({input: process.stdin, terminal: false});
+for await (const line of requests) {
+  if (--remaining < 0) break;
   const command = JSON.parse(line);
   appendFileSync(process.env.BADI_TEST_EVENTS, JSON.stringify({operation:command.operation, applied:command.applied})+'\n');
   if (command.operation === 'status') send('READY', '1');
@@ -46,12 +52,14 @@ for await (const line of createInterface({input: process.stdin, terminal: false}
   } else if (command.operation === 'accept') {
     send('INSERT', encode(text) + (replace ? ' '+encode(process.env.BADI_TEST_BAD_GRANT ? 'other' : replace) : ''));
   } else send('DONE');
+  if (remaining === 0) { requests.close(); process.stdin.destroy(); }
 }
 '''
 
 
 class ShellSession:
-    def __init__(self, *, bad_grant=False, multiline=False, module=None, terminal='xterm-256color', colorterm='truecolor'):
+    def __init__(self, *, bad_grant=False, multiline=False, module=None, terminal='xterm-256color', colorterm='truecolor',
+                 exit_after=None):
         self.temporary = tempfile.TemporaryDirectory(prefix='badi-preview-test-')
         self.root = Path(self.temporary.name)
         self.events = self.root / 'events.jsonl'
@@ -76,6 +84,7 @@ class ShellSession:
                 **os.environ, 'BADI_EDITOR_DIR': str(editor), 'INPUTRC': '/dev/null',
                 'TERM': terminal, 'COLORTERM': colorterm, 'LC_ALL': 'C.UTF-8',
                 'BADI_TEST_EVENTS': str(self.events), 'BADI_TEST_BAD_GRANT': '1' if bad_grant else '',
+                'BADI_TEST_EXIT_AFTER': '' if exit_after is None else str(exit_after),
             })
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 100, 0, 0))
         try:
@@ -227,6 +236,26 @@ class PreviewTests(unittest.TestCase):
         shell.read_for()
         shell.send('\x15cat badi-completion-\t')
         shell.buffer('cat badi-completion-proof ')
+
+    def test_an_exited_bridge_restarts_transparently_on_the_next_request(self):
+        for pause in (0, .5):
+            with self.subTest(pause=pause):
+                # status and suggest, then the bridge exits as it does when idle.
+                shell = self.shell(exit_after=2)
+                shell.request('hello')
+                time.sleep(pause)
+                shell.send('\x18\x1b')  # Dismissing with no bridge needs none.
+                output = shell.read_for(.3)
+                shell.request('hello')
+                output += shell.read_for()
+                self.assertNotIn(b'connection closed', output)
+                self.assertNotIn(b'unavailable', output)
+                operations = [x['operation'] for x in shell.operations()]
+                self.assertEqual(operations, ['start', 'status', 'suggest', 'start', 'status', 'suggest'])
+                shell.buffer('hello')
+                shell.send(REQUEST)
+                shell.buffer('hello ghost words')
+                self.assertIn({'operation': 'result', 'applied': True}, shell.operations())
 
     def test_never_evaluates_accepted_shell_syntax(self):
         shell = self.shell()

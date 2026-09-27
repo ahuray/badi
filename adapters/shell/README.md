@@ -68,6 +68,12 @@ The 2026-09-07 checks used Bash 5.3.15 and Readline 8.3 in actual disposable PTY
 - Ctrl-C restores the normal prompt and SIGHUP exits without being swallowed by
   the timed display hook; its callback preserves Bash's deferred signal checks.
 
+Each shell starts its Node bridge (about 60 MB resident, ~16 MB of it private)
+on the first Ctrl-X Tab. The bridge exits after ten minutes without a request,
+and the next Ctrl-X Tab starts a new one transparently: the hook notices the
+exited coprocess before writing, and ignores SIGPIPE for that one write so a
+bridge exiting at the same instant cannot end the shell.
+
 `npm run shell:check` builds the native module and runs these PTY tests with a
 controlled bridge. `npm run editors:integration` additionally exercises the hook
 with a disposable Rust phrase broker, policy pause/resume and reconnects. These

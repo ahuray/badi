@@ -13,7 +13,9 @@ const settle = async () => { for (let turn = 0; turn < 12; turn++) await Promise
 
 async function harness(context) {
   context.mock.timers.enable({ apis: ['setTimeout'] });
+  const clients = [];
   class Client extends EventEmitter {
+    constructor() { super(); clients.push(this); }
     connected = true;
     allowed = true;
     automaticAllowed = true;
@@ -59,28 +61,33 @@ async function harness(context) {
     selection: { ranges: [{}], main: { head, empty: true }, eq(other) { return other.main.head === head; } },
     readOnly: false,
   });
-  let controller;
-  const domListeners = new Map();
-  const view = { hasFocus: true, composing: false, state: state('thank you'), transactions: [],
-    dom: { ownerDocument: { hasFocus: () => view.hasFocus } },
-    contentDOM: {
-      addEventListener(type, listener, options) { assert.equal(options.passive, true); domListeners.set(type, listener); },
-      removeEventListener(type, listener) { if (domListeners.get(type) === listener) domListeners.delete(type); },
-    },
-    dispatch(transaction) {
-      if (!transaction.changes) return;
-      this.transactions.push(transaction);
-      const before = this.state;
-      this.state = state(before.doc.sliceString(0, transaction.changes.from) + transaction.changes.insert,
-        transaction.selection.anchor);
-      controller.update({ docChanged: true, state: this.state, startState: before });
-    },
+  const editor = (text, hasFocus = true) => {
+    let controller;
+    const domListeners = new Map();
+    const view = { hasFocus, composing: false, state: state(text), transactions: [],
+      dom: { ownerDocument: { hasFocus: () => view.hasFocus } },
+      contentDOM: {
+        addEventListener(type, listener, options) { assert.equal(options.passive, true); domListeners.set(type, listener); },
+        removeEventListener(type, listener) { if (domListeners.get(type) === listener) domListeners.delete(type); },
+      },
+      dispatch(transaction) {
+        if (!transaction.changes) return;
+        this.transactions.push(transaction);
+        const before = this.state;
+        this.state = state(before.doc.sliceString(0, transaction.changes.from) + transaction.changes.insert,
+          transaction.selection.anchor);
+        controller.update({ docChanged: true, state: this.state, startState: before });
+      },
+    };
+    controller = new plugin.extension(view);
+    context.after(() => controller.destroy());
+    return { controller, view, domListeners };
   };
-  controller = new plugin.extension(view);
+  const { controller, view, domListeners } = editor('thank you');
   const tick = async ms => { context.mock.timers.tick(ms); await settle(); };
   await settle();
-  context.after(() => { controller.destroy(); context.mock.timers.reset(); });
-  return { plugin, controller, view, client: controller.client, tick, state, domListeners };
+  context.after(() => context.mock.timers.reset());
+  return { plugin, controller, view, client: controller.client, clients, editor, tick, state, domListeners };
 }
 
 test('Obsidian automatically requests, accepts one word or all, and isolates each undo transaction', async context => {
@@ -211,4 +218,24 @@ test('Obsidian Escape cancels an in-flight suggestion and ignores foreign input 
   await request;
   assert.equal(controller.text, null, 'A dismissed response cannot restore the preview');
   assert.equal(view.transactions.length, 0);
+});
+
+test('Obsidian editors share one broker client and only the requesting editor cancels its session', async context => {
+  const { plugin, controller, client, clients, editor, tick } = await harness(context);
+  await tick(250);
+  assert.equal(controller.text, ' for your time');
+  const second = editor('another note', false);
+  await settle();
+  assert.equal(second.controller.client, client);
+  assert.equal(clients.length, 1, 'Opening an editor adds no broker connection');
+  let cancels = 0;
+  client.cancel = () => { cancels++; client.emit('clear'); };
+  second.controller.invalidate();
+  assert.equal(cancels, 0, 'Another editor cannot withdraw the session it did not open');
+  assert.equal(controller.text, ' for your time');
+  controller.invalidate();
+  assert.equal(cancels, 1);
+  plugin.commands.find(command => command.id === 'retry-connection').callback();
+  assert.equal(clients.length, 2, 'Reconnecting replaces the one shared client');
+  assert.equal(second.controller.client, clients[1]);
 });
