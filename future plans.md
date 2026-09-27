@@ -37,10 +37,17 @@ Chromium, Zen, Telegram, VS Code, Cursor, Omawrite, Obsidian and Bash.
 - [x] Installers: shared helpers, one backup layout keeping three per installer
       (about 300 → 17 MB), compatibility-build reuse (67 s → instant).
 - [x] Editors: one Obsidian connection; idle Bash bridges exit.
-- [ ] Readability: split `engine.rs`, per-message server handlers, a testable
-      Fcitx addon core with one transport session path, an observer
-      desktop/field split, and one app-identity list checked across addon and
-      observer.
+- [x] Readability: `engine.rs` split into modules (longest function 242 → 82
+      lines), one server handler per message kind, observer replies decided
+      in the tested Fcitx core, the observer split into desktop, field and
+      geometry sides with a contract dispatch table, and one app-identity list
+      checked across addon and observer in CI.
+- [ ] Remaining readability: a shared `badictl` request helper; one hex
+      encoder and one language-tag validator in the broker; one Fcitx transport
+      session-open path; the rest of `addon.cpp`'s decisions (invoke routing,
+      pre-key handling, Tab reasons) in the tested core.
+- [ ] The Lab's paced subprocess test misses its cleanup window under heavy
+      parallel builds (load above 7); make it deterministic.
 
 ## Prediction quality
 
