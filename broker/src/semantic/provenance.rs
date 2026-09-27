@@ -642,7 +642,7 @@ fn is_lower_hex(value: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {
+pub(crate) fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {
     use std::fmt::Write as _;
 
     let bytes = bytes.as_ref();

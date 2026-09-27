@@ -25,7 +25,9 @@ use crate::provider::{
 };
 
 use super::client::{ClientError, HealthStatus, SemanticClient, SemanticClientConfig};
-use super::provenance::{ProvenanceError, VerifiedDirectoryManifest, VerifiedFile};
+use super::provenance::{
+    ProvenanceError, VerifiedDirectoryManifest, VerifiedFile, encode_lower_hex,
+};
 use super::wire::StatusCode;
 
 pub const CONTEXT_SIZE: u16 = 512;
@@ -800,17 +802,6 @@ fn wait_bounded(child: &mut Child, timeout: Duration) -> io::Result<Option<ExitS
         }
         thread::sleep(Duration::from_millis(5));
     }
-}
-
-fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {
-    use std::fmt::Write as _;
-
-    let bytes = bytes.as_ref();
-    let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
-        write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    encoded
 }
 
 #[cfg(test)]

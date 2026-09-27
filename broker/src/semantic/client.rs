@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use crate::metrics::NoSuggestionReason;
 use crate::protocol::{
     MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_SUGGESTION_CHARS, MAX_SUGGESTION_WORDS, ProviderKind,
+    valid_language_tag,
 };
 use crate::provider::{
     CompletionProvider, ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger,
@@ -769,13 +770,6 @@ fn validate_request(request: &ProviderRequest) -> Result<InputEligibility, Clien
     } else {
         Ok(InputEligibility::Eligible)
     }
-}
-
-fn valid_language_tag(value: &str) -> bool {
-    (2..=35).contains(&value.chars().count())
-        && value.split('-').all(|subtag| {
-            !subtag.is_empty() && subtag.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        })
 }
 
 #[derive(Debug, Deserialize)]
