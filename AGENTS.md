@@ -27,6 +27,7 @@ Omarchy first. Preserve exact editing authority and prove the affected user flow
 | `broker/` | Rust workspace member: strict Unix-socket protocol, per-target policy, revision-bound suggestion/commit authority, private settings, local writing model, and CLI tools. Start with the affected module and tests. |
 | `protocol/`, `broker/schemas/` | Wire and control schemas. Keep validators, producers, consumers, and regression tests consistent when contracts change. |
 | `adapters/fcitx5/` | Cooperative C++20 module. Read [native contract, trials, installation, and rollback](adapters/fcitx5/README.md). |
+| `adapters/accessibility/` | Python AT-SPI focused-field observer for Omawrite, Telegram and the IME-parity apps: desktop identity and lock state, field acquisition, caret calibration and the grey preview. Read the [observer runbook](adapters/accessibility/README.md). |
 | `adapters/obsidian/`, `adapters/shell/`, `adapters/shared/` | V2 editor clients, editor-owned acquisition/mutation, and native undo. Read [editor integrations](adapters/shared/README.md). |
 | `ui/omarchy-plugin/` | Omarchy settings panel and native writing bar. Read [controls and lifecycle checks](ui/omarchy-plugin/README.md). |
 | `scripts/badi-desktop.py`, `scripts/install-*.py`, `packaging/` | Persistent desktop broker controls, user-local installers, service units, and launcher integration. Check the affected script and its existing tests. |
@@ -90,6 +91,7 @@ every integration for every edit.
 | Documentation/instructions | `npm run docs:check`, verify documented commands/paths, and inspect the scoped diff for whitespace. |
 | Rust broker/model/policy | Targeted regression tests, then the Rust checks below. Run affected real-broker adapter integrations for changed wire/authority behavior. |
 | Fcitx5 | `npm run fcitx5:check`; `npm run fcitx5:integration` for transport or broker changes. Native UI claims additionally need real application trials. |
+| Accessibility observer | `npm run accessibility:check`; `npm run accessibility:integration` for bus or event changes; `python3 adapters/fcitx5/tests/observed-desktop.py` for the observer and addon together. Native UI claims need real application trials. |
 | Obsidian/Bash/shared clients | `npm run editors:check` and `npm run editors:integration`; real editor checks for acceptance, focus, rendering, or undo changes. |
 | Desktop controller/installers | `npm run desktop:check`; include Omarchy/editor checks when those boundaries change. |
 | Prediction Lab | `npm run writing:check` and `cargo test --locked -p badi-writing-lab`; a real-model `run.mjs` comparison when inference behavior changes. |
@@ -117,6 +119,8 @@ Additional integration lanes; read their runbooks before use:
 
 ```sh
 npm run fcitx5:integration
+npm run accessibility:integration
+PYTHONDONTWRITEBYTECODE=1 python3 adapters/fcitx5/tests/observed-desktop.py
 npm run editors:integration
 node adapters/obsidian/live.mjs --headless --local
 BADI_OMARCHY_REQUIRE_HOST_CHECKS=1 bash ui/omarchy-plugin/tests/check-source.sh
