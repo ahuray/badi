@@ -19,7 +19,6 @@ from contract import Denied, MAX_FRAME, Observer, SCHEMA
 from desktop import App, WindowEvents, hyprland_directory
 from field import FieldBackend
 
-# These executable/class rules were inspected on the supported workstation.
 # An unrecognized executable never inherits another application's permission.
 APPS = {
     "chromium": App(frozenset({"/usr/lib/chromium/chromium"}), frozenset({"chromium"}), browser=True, web=True),
@@ -367,7 +366,7 @@ class Daemon:
                 "error": error, "epoch": self.observer.epoch}
 
     def focus_event(self, _event, *_args):
-        # Focus moved somewhere: the tracked field may no longer have the keyboard.
+        # The only global listener: any focus change invalidates, without querying its source.
         if self.observer.tracked is not None:
             self.observer.invalidate("focus_changed")
 

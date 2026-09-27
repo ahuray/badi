@@ -1156,7 +1156,7 @@ class GeckoCalibrationTests(unittest.TestCase):
         self.assertEqual(result["field"], self.FIELD)
 
     def test_each_convention_rejects_the_other(self):
-        # Chromium's document/frame width ratio (671/687) is not the scale.
+        # Zen's document/frame width ratio (671/687) is not the scale the Chromium rule needs.
         self.assertIsNone(calibrated_geometry(self.FRAME, self.DOCUMENT, self.FIELD, self.GLYPH, dict(self.WINDOW),
                                               [self.MONITOR], 24))
         chromium = CalibrationTests()
