@@ -59,6 +59,10 @@ if(BUILD_TESTING)
     add_test(NAME badi-fcitx5-tests COMMAND badi-fcitx5-tests
         "${CMAKE_CURRENT_SOURCE_DIR}/../../protocol/orthographic-joiner-fixtures.json")
 
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME badi-fcitx5-observer-identities
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/observer-identities.py")
+
     add_executable(badi-fcitx5-broker-smoke tests/broker-smoke.cpp)
     target_compile_features(badi-fcitx5-broker-smoke PRIVATE cxx_std_20)
     target_link_libraries(badi-fcitx5-broker-smoke PRIVATE badi-fcitx5-core)

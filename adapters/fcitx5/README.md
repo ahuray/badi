@@ -51,9 +51,9 @@ decides every native path:
 | Class | App ids | Edit path |
 | --- | --- | --- |
 | Native exact | any other granted id, e.g. `omawrite`, `com.github.xournalpp.xournalpp`, `telegram` | Manual unknown-identity contract or an observed desktop field; unchanged |
-| IME-parity browser | `chromium`, `chromium-browser`, `chrome`, `google-chrome`, `brave`, `brave-origin`, `brave-browser`, `zen` (Gecko) | Observed browser-origin field only, origin policy (exact rule, else `badi site all on`), append-only |
+| IME-parity browser | `chromium`, `chromium-browser`, `brave-origin`, `zen` (Gecko) | Observed browser-origin field only, origin policy (exact rule, else `badi site all on`), append-only |
 | IME-parity desktop | `chatgpt` (Codex), `code`, `cursor`, `discord` | Observed desktop field of the same app id only, app policy, append-only |
-| Unavailable | Gecko-family browsers other than `zen`: Firefox and its channels (`firefox*`, `org.mozilla.firefox*`), PWAsForFirefox windows (`ffpwa-*`), other Zen builds (`zen-*`, `app.zen_browser.*`, `io.github.zen_browser.*`) and forks (LibreWolf, Floorp, Waterfox, Mullvad and Tor Browser, IceCat, …); `obsidian`; Chromium-family ids without an observer rule: web-app windows (`chrome-*`, `crx_*`, `brave-*`, `msedge-*`), Flatpak ids (`com.google.chrome`, `org.chromium.*`, `com.brave.*`, …), other Chromium browsers and channels (Edge, Vivaldi, Opera, Helium, `google-chrome-*`, …), `electron*`, and other VS Code/Discord builds (`code-oss`, `vscodium`, `discord-canary`, `vesktop`, …) | None; Obsidian's editor plugin owns its fields |
+| Unavailable | Gecko-family browsers other than `zen`: Firefox and its channels (`firefox*`, `org.mozilla.firefox*`), PWAsForFirefox windows (`ffpwa-*`), other Zen builds (`zen-*`, `app.zen_browser.*`, `io.github.zen_browser.*`) and forks (LibreWolf, Floorp, Waterfox, Mullvad and Tor Browser, IceCat, …); `obsidian`; Chromium-family ids without an observer rule: Google Chrome and Brave (`chrome`, `google-chrome*`, `brave`, `brave-browser*`), web-app windows (`chrome-*`, `crx_*`, `brave-*`, `msedge-*`), Flatpak ids (`com.google.chrome`, `org.chromium.*`, `com.brave.*`, …), other Chromium browsers and channels (Edge, Vivaldi, Opera, Helium, …), `electron*`, and other VS Code/Discord builds (`code-oss`, `vscodium`, `discord-canary`, `vesktop`, …) | None; Obsidian's editor plugin owns its fields |
 
 Case folding admits mixed-case window classes such as `Vivaldi-stable` or
 `chrome-app.hey.com__-Default`; the Chromium- and Gecko-family rules keep them
@@ -586,7 +586,8 @@ HOME/XDG/runtime data. Do not remove or rewrite the user's existing Fcitx
 configuration.
 
 The deterministic tests cover state transitions, app classes and canonical
-app ids, observed-only append-only IME parity, fingerprint salting/binding,
+app ids, IME-parity ids equal to the observer's web-app rules
+(`tests/observer-identities.py`), observed-only append-only IME parity, fingerprint salting/binding,
 UTF-8 and output sanitization, bounded framing, unchanged-toolkit republish
 handling, stale focus/revision rejection, sensitive
 zero-context behavior, manual key decisions, foreign-IME yielding, duplicate

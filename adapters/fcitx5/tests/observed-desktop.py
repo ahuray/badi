@@ -25,14 +25,15 @@ PREFIX, SUFFIX = 'thank you', ' for your time'
 FIXTURE_APP = 'badi-native-fixture'
 UNAVAILABLE_APPS = ('firefox', 'zen-browser', 'app.zen_browser.zen', 'librewolf', 'obsidian')
 # Mixed-case Chromium- and Gecko-family programs fold to granted ids without an observer rule.
-UNOBSERVED_FAMILY_PROGRAMS = {'chrome-app.hey.com__-Default': 'chrome-app.hey.com__-default',
+UNOBSERVED_FAMILY_PROGRAMS = {'chrome': 'chrome', 'Google-chrome': 'google-chrome',
+                              'brave': 'brave', 'Brave-browser': 'brave-browser',
+                              'chrome-app.hey.com__-Default': 'chrome-app.hey.com__-default',
                               'com.google.Chrome': 'com.google.chrome',
                               'Vivaldi-stable': 'vivaldi-stable', 'code-oss': 'code-oss',
                               # Gecko: Zen Twilight and a PWAsForFirefox window.
                               'Zen-Twilight': 'zen-twilight',
                               'FFPWA-01HVY3F0GDT6DCG5V6TTRHK4BT': 'ffpwa-01hvy3f0gdt6dcg5v6ttrhk4bt'}
-IME_PARITY_APPS = ('chromium', 'chromium-browser', 'chrome', 'google-chrome', 'brave',
-                   'brave-origin', 'brave-browser', 'zen', 'chatgpt', 'code', 'cursor', 'discord')
+IME_PARITY_APPS = ('chromium', 'chromium-browser', 'brave-origin', 'zen', 'chatgpt', 'code', 'cursor', 'discord')
 UNAVAILABLE_NOTICE = 'Badi cannot safely insert suggestions in this app yet'
 OBSERVER_UNAVAILABLE_NOTICE = 'Badi cannot see this text field — check badi doctor'
 FIELD_DENIED_NOTICE = 'Badi cannot read this text field — run badi debug status'
@@ -419,8 +420,8 @@ def session(root, report):
         assert not {*UNAVAILABLE_APPS, *UNOBSERVED_FAMILY_PROGRAMS, *UNOBSERVED_FAMILY_PROGRAMS.values()} & \
             set(backend.requested), 'Unavailable apps are never inspected'
         checks.append('Allowed non-Zen Gecko/Obsidian identities acquire no prose, publish no context and preserve Tab/navigation')
-        checks.append('Granted Chromium web-app, Flatpak, Vivaldi and Code-OSS identities, Zen Twilight and a '
-                      'PWAsForFirefox window without an observer rule never take the manual path')
+        checks.append('Granted Chrome and Brave aliases, Chromium web-app, Flatpak, Vivaldi and Code-OSS identities, '
+                      'Zen Twilight and a PWAsForFirefox window without an observer rule never take the manual path')
         checks.append('Current unavailable notice survives repeated surrounding publication and clears on original keys')
 
         context = desktop.InputContext('firefox')

@@ -652,8 +652,7 @@ void observedFieldsAreAppendOnly() {
     check(!state.authorizeCommit(prepare, 4, kOwnedPanel), "append grants remain one shot");
 }
 
-constexpr std::array kImeParityBrowsers{"chromium", "chromium-browser", "chrome", "google-chrome",
-                                         "brave", "brave-origin", "brave-browser", "zen"};
+constexpr std::array kImeParityBrowsers{"chromium", "chromium-browser", "brave-origin", "zen"};
 constexpr std::array kImeParityDesktop{"chatgpt", "code", "cursor", "discord"};
 // Only Zen's live-verified program() is IME-parity; other Gecko ids, including
 // other Zen builds and Flatpak ids, have no observer rule.
@@ -672,7 +671,7 @@ constexpr std::array kUnobservedGeckoFamily{
     "seamonkey", "basilisk", "iceweasel"};
 // Chromium-family ids with no observer rule never reach the manual path.
 constexpr std::array kUnobservedChromiumFamily{
-    "chrome-app.hey.com__-default", "chrome-nngceckbapebfimnlniiiahkandclblb-default",
+    "chrome", "google-chrome", "brave", "brave-browser", "chrome-app.hey.com__-default", "chrome-nngceckbapebfimnlniiiahkandclblb-default",
     "crx_nngceckbapebfimnlniiiahkandclblb", "brave-nngceckbapebfimnlniiiahkandclblb-default",
     "msedge-_nngceckbapebfimnlniiiahkandclblb-default", "com.google.chrome", "com.google.chromedev",
     "org.chromium.chromium", "com.brave.browser", "com.microsoft.edge", "com.vivaldi.vivaldi",
@@ -748,6 +747,23 @@ void nativeAppClassesAreExplicit() {
             for (const auto app : kUnobservedGeckoFamily) {
                 check(!nativeEditingAvailable(app, target, path),
                       "unobserved Gecko-family browsers never edit, even with a linux_app grant");
+            }
+        }
+    }
+}
+
+void chromeAndBraveAliasesWithoutObserverRuleAreUnavailable() {
+    for (const auto program : {"chrome", "Google-chrome", "brave", "Brave-browser"}) {
+        const auto app = canonicalAppId(program);
+        check(app && classifyNativeApp(*app) == NativeAppClass::Unavailable && !imeParityApp(*app) &&
+                  !nativeObservationAvailable(*app),
+              "Chrome and Brave aliases without an observer rule are unavailable, never native exact");
+        for (const auto target : {NativeEditTarget::DesktopApplication, NativeEditTarget::BrowserOrigin}) {
+            for (const auto path : {NativeEditPath::Manual, NativeEditPath::Observed}) {
+                SessionState state;
+                check(state.focusIn(kSession, "input-context-1", *app, kSalt, target, path) &&
+                          !state.editingAvailable(),
+                      "a granted Chrome or Brave alias cannot edit on any path");
             }
         }
     }
@@ -993,6 +1009,8 @@ void observedParagraphEndIsEndOfField() {
 int main(int argc, char **argv) {
     const std::vector<std::pair<const char *, void (*)()>> tests{
         {"native app classes", nativeAppClassesAreExplicit},
+        {"Chrome and Brave aliases without an observer rule",
+         chromeAndBraveAliasesWithoutObserverRuleAreUnavailable},
         {"canonical app ids", canonicalAppIdsFoldAsciiCase},
         {"IME parity requires an observed append-only field", imeParityRequiresObservedAppendOnlyField},
         {"unobserved IME parity and unavailable apps", unobservedParityAndUnavailableAppsCannotEdit},

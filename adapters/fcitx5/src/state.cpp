@@ -24,16 +24,23 @@ std::uint64_t mix(std::string_view value, std::uint64_t seed) {
     return hash;
 }
 
+// IME-parity apps are exactly the accessibility observer's web-app rules
+// (adapters/accessibility/daemon.py APPS); tests/observer-identities.py keeps
+// the lists equal, because an id without a rule could never be observed.
+constexpr std::array<std::string_view, 4> kImeParityBrowsers{
+    "chromium", "chromium-browser", "brave-origin", "zen"};
+constexpr std::array<std::string_view, 4> kImeParityDesktopApps{"chatgpt", "code", "cursor", "discord"};
+
 // Chromium-family identities without an observer rule: other Chromium
 // browsers, channels and Flatpak ids, installed web-app windows (Wayland
 // chrome-<id>-<profile>, X11 crx_<id>), shared Electron runtimes and other
 // builds of the IME-parity apps. Their commitString is equally retargetable,
 // and nothing can corroborate their fields, so none may use the manual path.
 bool unobservedChromiumFamily(std::string_view appId) {
-    constexpr std::array<std::string_view, 18> exact{
-        "opera", "vivaldi", "msedge", "helium", "helium-browser", "thorium", "thorium-browser",
-        "cromite", "ungoogled-chromium", "code-oss", "code-insiders", "codium", "vscodium",
-        "discordcanary", "discordptb", "vesktop", "legcord", "webcord"};
+    constexpr std::array<std::string_view, 20> exact{
+        "chrome", "brave", "opera", "vivaldi", "msedge", "helium", "helium-browser", "thorium",
+        "thorium-browser", "cromite", "ungoogled-chromium", "code-oss", "code-insiders", "codium",
+        "vscodium", "discordcanary", "discordptb", "vesktop", "legcord", "webcord"};
     constexpr std::array<std::string_view, 23> prefixes{
         "chrome-", "crx_", "chromium-", "google-chrome", "brave-", "microsoft-edge", "msedge-",
         "vivaldi-", "opera-", "yandex-browser", "electron", "discord-", "com.google.chrome",
@@ -103,20 +110,16 @@ NativeAppClass classifyNativeApp(std::string_view appId) {
     // Zen is the one Gecko identity with an observer rule; its urlbar shares
     // the page's input context without a Url purpose, so the observer, not
     // allowsNativeContext(), keeps browser UI out.
-    constexpr std::array<std::string_view, 8> browsers{
-        "chromium", "chromium-browser", "chrome", "google-chrome", "brave",
-        "brave-origin", "brave-browser", "zen"};
-    constexpr std::array<std::string_view, 4> desktop{"chatgpt", "code", "cursor", "discord"};
-    // Other Gecko builds have no tested observer or input-method path; Obsidian's
-    // editor plugin owns its fields, so a second integration would double-suggest.
+    // Obsidian's editor plugin owns its fields, so a second integration would
+    // double-suggest.
     constexpr std::array<std::string_view, 2> unavailable{"obsidian", "md.obsidian.obsidian"};
     const auto listed = [appId](const auto &ids) {
         return std::find(ids.begin(), ids.end(), appId) != ids.end();
     };
     if (!validLinuxAppId(appId) || listed(unavailable) || unobservedGeckoFamily(appId))
         return NativeAppClass::Unavailable;
-    if (listed(browsers)) return NativeAppClass::ImeParityBrowser;
-    if (listed(desktop)) return NativeAppClass::ImeParityDesktop;
+    if (listed(kImeParityBrowsers)) return NativeAppClass::ImeParityBrowser;
+    if (listed(kImeParityDesktopApps)) return NativeAppClass::ImeParityDesktop;
     if (unobservedChromiumFamily(appId)) return NativeAppClass::Unavailable;
     return NativeAppClass::NativeExact;
 }
