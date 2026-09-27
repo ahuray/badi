@@ -20,9 +20,9 @@ Chromium, Zen, Telegram, VS Code, Cursor, Omawrite, Obsidian and Bash.
       accessibility has no supported launcher.
 - [ ] Confirm the Fcitx 5.1.22 compatibility frontend across a fresh login; its
       login-order fix has not been through a reboot.
-- [ ] Observer lock check: each `inspect` spends 20–100 ms on the Quickshell
-      lock query under load, inside a 350 ms budget; an event-driven lock state
-      would remove it.
+- [x] Observer lock check: the Quickshell lock query now runs while the field
+      is read (80 ms query: inspect 123 → 83 ms). The shell's `lock` IPC target
+      has no signals, so an event-driven lock state would need a new source.
 
 ## Code quality: fast, light, reliable (2026-09-27)
 
@@ -42,12 +42,12 @@ Chromium, Zen, Telegram, VS Code, Cursor, Omawrite, Obsidian and Bash.
       in the tested Fcitx core, the observer split into desktop, field and
       geometry sides with a contract dispatch table, and one app-identity list
       checked across addon and observer in CI.
-- [ ] Remaining readability: a shared `badictl` request helper; one hex
-      encoder and one language-tag validator in the broker; one Fcitx transport
-      session-open path; the rest of `addon.cpp`'s decisions (invoke routing,
-      pre-key handling, Tab reasons) in the tested core.
-- [ ] The Lab's paced subprocess test misses its cleanup window under heavy
-      parallel builds (load above 7); make it deterministic.
+- [x] `badictl` behind one request exchange (`run` 100 → 20 lines, output
+      pinned byte for byte); one hex encoder and one language-tag check; one
+      Fcitx session-open path; `addon.cpp` as event, decision and action glue
+      (longest function 80 → 44 lines); runbooks trimmed to current facts.
+- [x] The Lab's paced subprocess test orders its steps by events, not
+      wall-clock margins; 10/10 passes at load ~50.
 
 ## Prediction quality
 
