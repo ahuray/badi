@@ -1,6 +1,8 @@
 """A missing or partial lock status must never authorize a shell reload."""
 
+import contextlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -45,7 +47,8 @@ class UpdateTests(unittest.TestCase):
             with patch.object(installer.Path, 'home', return_value=home), \
                  patch.object(installer, 'ipc', side_effect=lambda *call: answers[call]), \
                  patch.object(installer.subprocess, 'run') as run, \
-                 patch('sys.argv', ['install-omarchy-ui.py']):
+                 patch('sys.argv', ['install-omarchy-ui.py']), \
+                 contextlib.redirect_stdout(io.StringIO()):
                 installer.main()
             # Only the source gate and the supported shell restart run; no real shell is touched.
             self.assertEqual([call.args[0][:2] for call in run.call_args_list],

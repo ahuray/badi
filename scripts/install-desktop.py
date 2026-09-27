@@ -152,8 +152,9 @@ def enable_accessibility(installation):
                   capture_output=True, text=True, timeout=3).stdout.strip()
     if toolkit not in ("true", "false"):
         raise RuntimeError("Cannot determine the prior toolkit accessibility state; it was not changed.")
-    installation.note("accessibility-setting.json",
-                      {"bus_enabled": previous, "toolkit_accessibility": toolkit == "true"})
+    receipt = installation.note("accessibility-setting.json",
+                                {"bus_enabled": previous, "toolkit_accessibility": toolkit == "true"})
+    print(f"Prior accessibility settings recorded in {receipt}", flush=True)
     if not previous:
         require_unlocked()
         run(["busctl", "--user", "--timeout=2s", "set-property", "org.a11y.Bus", "/org/a11y/bus",
@@ -640,7 +641,7 @@ def xournal_launcher(home):
 
 
 def install_files(plan):
-    """Install every file this run owns; returns the installation and its backup."""
+    """Install every file this run owns; returns the Installation with its backup and current files."""
     home, native = plan.home, plan.native
     installation = badi_install.Installation(home, "desktop")
     install = installation.copy

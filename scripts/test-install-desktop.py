@@ -292,8 +292,10 @@ class DesktopInstallTests(unittest.TestCase):
                  subprocess.CompletedProcess([], 0, 'b true\n', ''),
              ]) as command:
             installation = receipts.Installation(Path(temporary), 'desktop')
-            installer.enable_accessibility(installation)
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                installer.enable_accessibility(installation)
             receipt = installation.directory / 'accessibility-setting.json'
+            self.assertIn(str(receipt), output.getvalue(), 'The receipt location is reported')
             self.assertEqual(json.loads(receipt.read_text()), {'bus_enabled': False, 'toolkit_accessibility': False})
             self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
         self.assertIn('set-property', command.call_args_list[2].args[0])
