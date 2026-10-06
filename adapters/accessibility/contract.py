@@ -61,7 +61,10 @@ def eligible(metadata):
         raise Denied("ineligible_field")
     if metadata["selection_count"] != 0:
         raise Denied("selection_present")
-    if metadata["role"] not in ("entry", "text", "paragraph"):
+    # A web contenteditable root without role=textbox is a section: a div (Lexical,
+    # Quill) or an editing iframe's body (TinyMCE).
+    web_root = metadata["web"] and metadata["role"] == "section" and metadata.get("tag") in ("div", "body")
+    if metadata["role"] not in ("entry", "text", "paragraph") and not web_root:
         raise Denied("unsupported_field")
     tag = metadata.get("tag", "")
     input_type = metadata.get("input_type", "")
@@ -71,7 +74,7 @@ def eligible(metadata):
     if metadata["web"]:
         if tag == "input" and input_type != "text":
             raise Denied("unsupported_field")
-        if tag not in ("input", "textarea", "div", "p"):
+        if tag not in ("input", "textarea", "div", "p", "body"):
             raise Denied("unsupported_field")
         if input_type not in ("", "text", "textarea"):
             raise Denied("unsupported_field")
@@ -138,10 +141,21 @@ class Observer:
         metadata, focus = self.bound_focus(request)
         self.authorize(focus["binding"])
         caret = metadata["caret"]
-        start = max(0, caret - MAX_BEFORE, metadata.get("sentence_start", 0))
-        end = min(metadata["total_chars"], caret + MAX_AFTER)
+        # Chromium may send a rich editor's text one line break shorter per block.
+        margin = len(metadata.get("blocks") or ())
+        start = max(0, caret - MAX_BEFORE - margin, metadata.get("sentence_start", 0))
+        end = min(metadata["total_chars"], caret + MAX_AFTER + margin)
+        scope = "field"
+        if margin:
+            start, end, scope = self.backend.rich_window(metadata, start, end)
         text = self.stable_text(metadata, focus["binding"]["epoch"], start, end)
         before, after = text[:caret - start], text[caret - start:]
+        if margin:
+            before, after = self.backend.serialized(metadata, start, before, after)
+        before, after = before[-MAX_BEFORE:], after[:MAX_AFTER]
+        if scope == "block":
+            # Only the caret's block serializes exactly: Fcitx's text must end with it.
+            focus["scope"] = "block"
         self.caret_edge = "right" if ltr_caret_line(metadata.get("direction"), before) else None
         if focus["geometry"] and self.caret_edge:
             focus["geometry"]["caret_edge"] = self.caret_edge

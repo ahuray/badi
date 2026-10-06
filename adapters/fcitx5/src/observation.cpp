@@ -64,9 +64,27 @@ std::optional<NativeEditTarget> inspectedEditTarget(const Json &focus, std::stri
     return std::nullopt;
 }
 
+// Exactly Fcitx's text before the caret; or, when the observer could serialize
+// only the caret's own block (a list, quote or table precedes it), that block's
+// text ending Fcitx's text at a line start.
+bool beforeAgrees(const Json &observed, const std::string &before) {
+    const auto text = observed.value("before", Json());
+    const auto scope = observed.value("scope", Json());
+    if (!text.is_string() || !(scope.is_null() || scope == "block")) return false;
+    const auto &block = text.get_ref<const std::string &>();
+    if (block == before) return true;
+    return scope == "block" && before.size() > block.size() && before.ends_with(block) &&
+           before[before.size() - block.size() - 1] == '\n';
+}
+
 bool observerAgrees(const Json &observed, const ContextWindow &context) {
-    return observed.is_object() && observed.value("before", Json()) == context.before &&
-           observed.value("after", Json()) == observedAfter(context);
+    if (!observed.is_object() || !beforeAgrees(observed, context.before)) return false;
+    const auto after = observed.value("after", Json());
+    if (after == observedAfter(context)) return true;
+    // Both name the end of the field when Fcitx has nothing after the caret and
+    // the observer only its last block's end: an EditContext editor (CodeMirror)
+    // sends its own text, and an editor last on its page gets no block end.
+    return context.after.empty() && context.paragraphEnd.empty() && (after == "\n" || after == "\n\n");
 }
 
 bool observerCorroborates(const Json &captured, const Json &observed, const ContextWindow &context) {

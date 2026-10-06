@@ -62,7 +62,11 @@ int main() {
         nlohmann::json snapshot;
         std::ifstream(output) >> snapshot;
         check(snapshot["app_id"] == "unidentified" && snapshot["counts"]["tab"] == 1);
-        check(snapshot.size() == 10 && !snapshot.contains("text"));
+        check(snapshot.size() == 11 && !snapshot.contains("text") && snapshot["before_bytes"] == 0 &&
+              snapshot["after_bytes"] == 0);
+        debug.record("request_blocked", "chromium", "observer_context_mismatch", 24, 2);
+        std::ifstream(output) >> snapshot;
+        check(snapshot["before_bytes"] == 24 && snapshot["after_bytes"] == 2);  // Lengths only, never text.
         check(snapshot["reason_counts"]["unsupported_app"] == 1);
         struct stat info {};
         check(::stat(output.c_str(), &info) == 0 && (info.st_mode & 0777) == 0600);

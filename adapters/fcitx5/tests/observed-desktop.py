@@ -929,7 +929,7 @@ def session(root, report):
         checks.append('IME-parity desktop (chatgpt): a paragraph end "\\n\\n" agreed by the observer is end of '
                       'field; the suggestion displays and Tab dispatches one exact append')
         for observed_after, fcitx_after, reason in (('', '\n\n', 'observer_context_mismatch'),
-                                                    ('\n', '\n', 'caret_not_at_end'),
+                                                    ('\n', '\n\n', 'observer_context_mismatch'),
                                                     ('\n\n\n', '\n\n\n', 'caret_not_at_end'),
                                                     ('\n\nmore', '\n\nmore', 'caret_not_at_end')):
             unchanged, count = updates(), reason_count(reason)
@@ -940,8 +940,17 @@ def session(root, report):
             assert not context.key(desktop.TAB), repr((observed_after, fcitx_after))
             quiet(.3)
             assert updates() == unchanged and context.candidate() is None and context.commits() == [SUFFIX]
-        checks.append('IME-parity desktop (chatgpt): observer disagreement about the paragraph end, one or three '
-                      'line breaks and text after it fail closed and keep the application Tab')
+        checks.append('IME-parity desktop (chatgpt): observer disagreement about the paragraph end, three line '
+                      'breaks and text after it fail closed and keep the application Tab')
+        # A <div> line ends with one break; an EditContext editor sends none while the DOM shows one.
+        for observed_after, fcitx_after in (('\n', '\n'), ('\n', '')):
+            paragraph_end(observed_after, fcitx_after, new_field=True)
+            wait(lambda: context.candidate() == SUFFIX, 'chatgpt suggestion for ' + repr((observed_after, fcitx_after)))
+            assert context.key(desktop.ESCAPE)
+            quiet(.3)
+            assert context.candidate() is None and context.commits() == [SUFFIX]
+        checks.append('IME-parity desktop (chatgpt): a <div> line end "\\n", and an empty Fcitx end against an '
+                      'observed block end, are end of field')
 
         open_context('Telegram')
         requested = len(backend.requested)

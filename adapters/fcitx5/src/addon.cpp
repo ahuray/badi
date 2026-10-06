@@ -670,7 +670,8 @@ private:
         const auto context = currentContext(binding);
         if (!context) return debug_.record("request_blocked", app, unavailableContextReason(binding));
         if (const auto blocked = observedRequestBlocked(observed, *context, hasForeignImeUi(observePanel(binding)))) {
-            return debug_.record("request_blocked", app, *blocked, context->before.size());
+            return debug_.record("request_blocked", app, *blocked, context->before.size(),
+                                 observedAfter(*context).size());
         }
         binding.observedFocus = observed;
         if (binding.dismissedContext == *context) return;
@@ -678,7 +679,7 @@ private:
         const auto update = binding.state.updateContext(*context);
         if (update && open(binding) && transport_.publishContext(*update)) {
             binding.broker.coordinates = update->coordinates;
-            debug_.record("request", app, context->paragraphEndAfter ?
+            debug_.record("request", app, !context->paragraphEnd.empty() ?
                 "observed_field_request_paragraph_end" : "observed_field_request", context->before.size());
         }
     }
