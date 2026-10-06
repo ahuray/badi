@@ -375,12 +375,16 @@ class FieldBackend:
             return None
         rects = {name: {"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}
                  for name, rect in extents.items()}
-        calibrate = gecko_calibrated_geometry if gecko else calibrated_geometry
-        return calibrate(rects["frame"], rects["document"], rects["field"], rects["glyph"],
-                         window, monitors, caret if reported is None else reported)
+        offset = caret if reported is None else reported
+        if gecko:
+            return gecko_calibrated_geometry(rects["frame"], rects["document"], rects["field"], rects["glyph"],
+                                             window, monitors, offset)
+        return calibrated_geometry(rects["frame"], rects["document"], rects["field"], rects["glyph"],
+                                   window, monitors, offset, rects.get("container"))
 
     def screen_extents(self, node, text, caret):
-        """SCREEN extents of the outermost frame, nearest web document, field and glyph before the caret."""
+        """SCREEN extents of the outermost frame, nearest web document, field, glyph before the
+        caret and, when it has a component, the field's parent (a caret-wide field's editor)."""
         frame, document = self.frame_and_document(node)
         if frame is None or document is None:
             return None
@@ -392,6 +396,10 @@ class FieldBackend:
             extents[name] = item.get_component_iface().get_extents(self.atspi.CoordType.SCREEN)
         self.budget()
         extents["glyph"] = text.get_character_extents(caret - 1, self.atspi.CoordType.SCREEN)
+        parent = node.get_parent()
+        if parent is not None and "Component" in parent.get_interfaces():
+            self.budget()
+            extents["container"] = parent.get_component_iface().get_extents(self.atspi.CoordType.SCREEN)
         return extents
 
     def frame_and_document(self, node):

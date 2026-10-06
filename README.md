@@ -29,7 +29,7 @@ Linux in general.
 | --- | --- | --- |
 | Chromium and Brave Origin, including Omarchy's web apps (HEY, X, Basecamp, Zoom) | Any website you allow, including rich editors (ProseMirror, Lexical, Slate, Draft.js, Quill, CKEditor 5, TinyMCE, CodeMirror), iframes and shadow roots | Chromium 152, Brave Origin 1.96 |
 | Zen | Grey preview; Ctrl+Z undoes an acceptance alone | Zen 1.23b |
-| VS Code, Cursor | Needs `"editor.editContext": false` in VS Code; VS Code 1.140 shows the suggestion in the Fcitx panel | VS Code 1.140, Cursor 3.21 |
+| VS Code, Cursor | Needs `"editor.editContext": false` in VS Code | VS Code 1.140, Cursor 3.21 |
 | Codex desktop | Composer | 26.930 |
 | LibreOffice Writer | Document paragraphs; Fcitx panel; Calc gets nothing | 26.8 |
 | Telegram | Fcitx panel | Telegram desktop (Qt) |

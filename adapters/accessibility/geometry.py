@@ -15,15 +15,23 @@ EDGE_TOLERANCE = 1
 GECKO_SCALES = (1, 2)
 RECT_KEYS = ("x", "y", "width", "height")
 MAX_COORDINATE = 10**7
+# Logical width at most of an input field that only marks the caret.
+CARET_MARK_WIDTH = 2
 
 
-def calibrated_geometry(frame, document, field, glyph, window, monitors, caret):
+def calibrated_geometry(frame, document, field, glyph, window, monitors, caret, container=None):
     """Window-local logical caret geometry for this request, or None.
 
     Chromium and Electron report document, field and glyph SCREEN extents in
     physical pixels offset by the frame's SCREEN origin times the scale; the
     frame itself is logical and Electron's origin is arbitrary. The document
     to frame width ratio must equal the monitor scale for this convention.
+
+    The glyph must lie inside the field, which bounds the drawing. An editor
+    that keeps its input field only as wide as the caret (VS Code with
+    `editor.editContext` off) places that field right after the glyph
+    instead; then `container`, the field's parent (the editor widget), must
+    hold both and bounds the drawing.
     """
     try:
         output = _output(frame, document, field, glyph, window, monitors, caret)
@@ -32,8 +40,14 @@ def calibrated_geometry(frame, document, field, glyph, window, monitors, caret):
         scale = output[1]
         if abs(document["width"] / frame["width"] - scale) > SCALE_TOLERANCE:
             return None
-        if not _inside(glyph, field) or not _inside(field, document):
+        if not _inside(field, document):
             return None
+        bound = field
+        if not _inside(glyph, field):
+            if not (_marks_caret(field, glyph, scale) and _is_rect(container) and _inside(field, container)
+                    and _inside(glyph, container) and _inside(container, document)):
+                return None
+            bound = container
         left, top = frame["x"] * scale, frame["y"] * scale
 
         def local(value, origin):
@@ -41,11 +55,19 @@ def calibrated_geometry(frame, document, field, glyph, window, monitors, caret):
 
         return _reply(output, caret, local(glyph["x"] + glyph["width"], left), local(glyph["y"], top),
                       round(glyph["height"] / scale, 2),
-                      {"x": local(field["x"], left), "y": local(field["y"], top),
-                       "width": round(field["width"] / scale, 2), "height": round(field["height"] / scale, 2)},
+                      {"x": local(bound["x"], left), "y": local(bound["y"], top),
+                       "width": round(bound["width"] / scale, 2), "height": round(bound["height"] / scale, 2)},
                       window)
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return None
+
+
+def _marks_caret(field, glyph, scale):
+    """The field is caret-wide and starts where the glyph ends, on its line."""
+    return (field["width"] <= CARET_MARK_WIDTH * scale
+            and abs(glyph["x"] + glyph["width"] - field["x"]) <= scale
+            and glyph["y"] >= field["y"] - EDGE_TOLERANCE
+            and glyph["y"] + glyph["height"] <= field["y"] + field["height"] + EDGE_TOLERANCE)
 
 
 def gecko_calibrated_geometry(frame, document, field, glyph, window, monitors, caret):

@@ -185,6 +185,11 @@ inconsistency yields no geometry, and the addon uses the Fcitx panel.
   origin times the scale s, where `D.width / F.width` must equal the monitor
   scale within 0.01. The logical caret is `x = (G.x + G.width - F.x*s)/s`,
   `y = (G.y - F.y*s)/s`, with line height `G.height/s`.
+- **Caret-wide fields.** VS Code (with `editor.editContext` off) keeps its
+  input textarea only as wide as the caret and places it right after G. A
+  field at most two logical pixels wide whose left edge meets G's right edge
+  on G's line marks the caret; its parent, the editor widget, must contain
+  both and bounds the drawing.
 - **Gecko** reports F, D and E in logical pixels and G in device pixels, with F
   at the window origin. The caret is `x = (G.x + G.width)/s`, `y = G.y/s`. A tile
   narrower than Zen's minimum content width fails and uses the panel.

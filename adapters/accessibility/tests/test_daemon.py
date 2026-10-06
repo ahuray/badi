@@ -1118,6 +1118,30 @@ class CalibrationTests(unittest.TestCase):
         # A sidebar narrows the web view (Brave): the ratio no longer proves the convention.
         self.assertIsNone(self.calibrate(rect(0, 0, 900, 650), rect(100, 170, 1700, 1130), field, glyph))
 
+    # VS Code 1.140 with "editor.editContext": false on eDP-1 at scale 2, live
+    # 2026-10-06: its hidden textarea is 2 physical pixels wide and starts
+    # right after the glyph; the parent is the editor's overflow guard.
+    VSCODE = dict(frame=rect(0, 0, 701, 418), document=rect(0, 0, 1402, 836), field=rect(650, 220, 2, 38),
+                  glyph=rect(632, 220, 17, 37), container=rect(106, 182, 1286, 588))
+    VSCODE_WINDOW = {"pid": 7, "address": "0x3", "at": [727, 470], "size": [701, 418], "monitor": 0, "xwayland": False}
+
+    def test_a_caret_wide_field_is_bounded_by_its_editor(self):
+        result = calibrated_geometry(**self.VSCODE, window=dict(self.VSCODE_WINDOW), monitors=[self.MONITOR], caret=54)
+        self.assertEqual(result["caret"], {"x": 324.5, "y": 110, "height": 18.5})
+        self.assertEqual(result["field"], {"x": 53, "y": 91, "width": 643, "height": 294})
+        cases = {
+            "no parent": dict(container=None),
+            "a wider field": dict(field=rect(650, 220, 6, 38)),
+            "a gap after the glyph": dict(field=rect(656, 220, 2, 38)),
+            "the glyph on another line": dict(glyph=rect(632, 262, 17, 37)),
+            "a parent without the glyph": dict(container=rect(640, 182, 752, 588)),
+            "a parent outside the document": dict(container=rect(106, 182, 1400, 588)),
+        }
+        for name, change in cases.items():
+            values = {**self.VSCODE, **change}
+            self.assertIsNone(calibrated_geometry(**values, window=dict(self.VSCODE_WINDOW), monitors=[self.MONITOR],
+                                                  caret=54), name)
+
     def test_rejections_fail_closed(self):
         frame, document, field, glyph = rect(0, 0, 900, 650), rect(0, 170, 1800, 1130), rect(100, 200, 1200, 80), rect(400, 220, 20, 40)
         cases = {

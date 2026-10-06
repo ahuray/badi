@@ -131,7 +131,7 @@ toolkit-wide claims.
 | Omawrite 0.5.0 (Qt 6) | `QT_IM_MODULE=fcitx` | 20/20 trials; one native undo restores the exact prefix |
 | Xournal++ 1.3.7 (GTK 3 text tool) | `GTK_IM_MODULE=fcitx` launcher override | 20/20 trials; after Escape leaves text editing, one document undo restores the prefix |
 | Chromium 152, Brave Origin, Electron apps | text-input-v3 (`wayland_v2`), Wayland app id | Page fields carry no purpose hints, so the observer's checks deny passwords. The omnibox sends the `Url` purpose and is denied before any observer request. Surrounding text is exact only with the frontend backport. |
-| VS Code 1.140 | as above | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. Its caret-wide hidden textarea moves the suggestion to the Fcitx panel. |
+| VS Code 1.140 | as above | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. Its caret-wide hidden textarea gets the inline preview bounded by the editor widget. |
 | Zen 1.23b (Gecko 157) | `wayland_v2`, `zen` | Fields and the urlbar share one context with no `Url` hint, so the observer denies the urlbar. Gecko sends only the caret's paragraph. One Ctrl+Z undoes an acceptance alone. |
 | Telegram (Qt) | `dbus`, `Telegram` | Canonicalized to `telegram` |
 

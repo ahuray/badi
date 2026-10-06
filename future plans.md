@@ -55,8 +55,7 @@ Standing user decisions:
       changes).
 - [ ] An inline preview where caret geometry is missing (Qt, LibreOffice,
       iframes): anchor ghost text to the field's extents instead of the Fcitx
-      panel. VS Code 1.140's caret-wide hidden textarea needs a drawing bound
-      with recorded-extent tests. Match the host's font size.
+      panel. Match the host's font size.
 
 ## Speed and footprint
 
