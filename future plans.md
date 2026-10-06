@@ -14,7 +14,8 @@ now true in the [README](README.md) or the affected runbook.
 - **Interaction:** type-through, Ctrl+→ next-word acceptance and search-box
   quieting work, and a typed-through remainder returns within about 50 ms with
   no model call ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md)).
-  VS Code and iframe fields get the inline preview.
+  The inline preview reaches VS Code, iframe editors, Qt apps (Telegram,
+  Omawrite) and LibreOffice Writer.
 - **Speed:** a new suggestion is visible 0.35–0.39 s after the last key in
   Chromium. That breaks down as:
   - the 120 ms typing pause;
@@ -58,6 +59,13 @@ Standing user decisions:
 - [ ] No automatic suggestions in file dialogs or very narrow fields, and a
       setting for how long Escape keeps a field quiet (today: until the text
       changes).
+- [ ] Match the host's font in the inline preview. It draws its own sans font
+      sized from the caret height, so it sits about 2 px high next to
+      Omawrite's monospace text.
+- [ ] The headless Obsidian live lane (`adapters/obsidian/live.mjs
+      --headless`) leaves Electron SIGTRAP core dumps when it signals the
+      process group at teardown, and each dump makes Omarchy open a
+      crash-diagnosis agent. Close Electron cleanly first.
 
 ## Speed and footprint
 
