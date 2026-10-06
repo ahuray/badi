@@ -86,7 +86,16 @@ qualification.
 - [ ] Validate the installed flow as a matrix: service restart, native undo,
       pause, composition and stale focus, with zero wrong-field or stale edits.
 - [ ] Native coverage beyond Omawrite/Xournal++/Telegram through measured
-      toolkit integrations.
+      toolkit integrations. LibreOffice Writer 26.8 (GTK 3, native Wayland)
+      exposes the focused paragraph with `EditableText`, and Fcitx receives its
+      keys under the program id `libreoffice-startcenter` (2026-10-06 probe).
+- [ ] VS Code 1.140 inline preview: its hidden textarea is caret-wide, so
+      calibration rejects the glyph and the Fcitx panel is shown; a new
+      drawing bound needs recorded-extent tests.
+- [ ] Other Chromium-based apps found on this machine, each needing the
+      IME-parity decision extended: Grok Bot (Electron, reads
+      `grok-bot-flags.conf`) and Omarchy web apps (HEY, X, Basecamp, Zoom),
+      which open as Brave `--app` windows with `brave-<host>` ids.
 - [ ] Browser rich editors beyond single-paragraph composers, frames/shadow
       roots and Firefox, keeping exact field binding and per-site consent.
 - [ ] Fish/Zsh and terminal editors through their own buffers; never accept by

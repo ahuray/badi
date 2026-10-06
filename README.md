@@ -15,7 +15,7 @@ not a general Linux claim.
 | Xournal++ Text tool | Tab requests, Tab again accepts | Live, with exact native undo |
 | Obsidian | Vault plugin: inline words, Tab accepts a word, Ctrl/Command+Right all | Caret at note end; reload the plugin after an update |
 | Bash | Grey Readline preview, narrow English correction; Ctrl-X then Tab requests/accepts | Ghostty 1.3.1 / Bash 5.3.15: preview, correction, acceptance and undo |
-| Chromium, VS Code, Cursor | IME-parity: automatic, grey inline preview (else the Fcitx panel), Tab accepts once | Live 2026-09-27: Chromium 152, VS Code 1.138, Cursor 3.21; password fields denied |
+| Chromium, VS Code, Cursor | IME-parity: automatic, grey inline preview (else the Fcitx panel), Tab accepts once | Live 2026-09-27: Chromium 152, VS Code 1.138, Cursor 3.21; password fields denied. 2026-10-06: Chromium 152 again, VS Code 1.140 (Fcitx panel) |
 | Zen | IME-parity for the exact `zen` identity (Gecko) | Live 2026-10-06, Zen 1.23b: preview, acceptance, Escape, password denial; Ctrl+Z undoes the acceptance alone |
 | Brave Origin | IME-parity with a per-site grant | Live 2026-10-06 in the user's profile, Brave Origin 1.96: preview, acceptance, Escape, password denial |
 | Telegram | Observed native Fcitx path; suggestion in the Fcitx panel | Live 2026-09-27; Qt reports no caret geometry for an inline preview |
