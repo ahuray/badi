@@ -326,15 +326,15 @@ Item {
                 ActionButton {
                   Layout.fillWidth: true
                   text: "Only allowed apps"; selected: !root.appsBlocklist; bordered: true; focusable: true
-                  enabled: client.canMutateSettings && !action.running && root.appsBlocklist
-                  onClicked: root.setMode("all_linux_apps", false)
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (root.appsBlocklist) root.setMode("all_linux_apps", false)
                   Accessible.name: "Applications allowlist: only allowed apps"
                 }
                 ActionButton {
                   Layout.fillWidth: true
                   text: "All except blocked"; selected: root.appsBlocklist; bordered: true; focusable: true
-                  enabled: client.canMutateSettings && !action.running && !root.appsBlocklist
-                  onClicked: root.setMode("all_linux_apps", true)
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (!root.appsBlocklist) root.setMode("all_linux_apps", true)
                   Accessible.name: "Applications blocklist: every supported app except blocked ones"
                 }
               }
@@ -366,15 +366,15 @@ Item {
                 ActionButton {
                   Layout.fillWidth: true
                   text: "Only allowed sites"; selected: !root.sitesBlocklist; bordered: true; focusable: true
-                  enabled: client.canMutateSettings && !action.running && root.sitesBlocklist
-                  onClicked: root.setMode("all_web_origins", false)
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (root.sitesBlocklist) root.setMode("all_web_origins", false)
                   Accessible.name: "Websites allowlist: only allowed sites"
                 }
                 ActionButton {
                   Layout.fillWidth: true
                   text: "All except blocked"; selected: root.sitesBlocklist; bordered: true; focusable: true
-                  enabled: client.canMutateSettings && !action.running && !root.sitesBlocklist
-                  onClicked: root.setMode("all_web_origins", true)
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (!root.sitesBlocklist) root.setMode("all_web_origins", true)
                   Accessible.name: "Websites blocklist: every site except blocked ones"
                 }
               }
