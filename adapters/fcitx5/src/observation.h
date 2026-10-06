@@ -65,9 +65,11 @@ public:
     // lets the field's own accessibility events arrive first.
     static constexpr std::uint64_t kTypeThroughPauseUs = 30'000;
     static constexpr unsigned int kMaxIdleReinspections = 3;
-    // A previous field's reply can still be pending after a rapid focus
-    // switch; the new field retries within the observer's reply deadline.
-    static constexpr unsigned int kMaxBusyRetries = 5;
+    // The previous keystroke's snapshot or preview reply can still be pending
+    // when typing pauses, or a previous field's after a focus switch. Its reply
+    // takes milliseconds, so retry soon, within the observer's 500 ms deadline.
+    static constexpr std::uint64_t kBusyRetryUs = 20'000;
+    static constexpr unsigned int kMaxBusyRetries = 25;
 
     void input() {
         ++inputSerial_;
@@ -75,8 +77,9 @@ public:
     }
     void inspecting() { inspectedSerial_ = inputSerial_; }
     [[nodiscard]] bool reinspectAfterInvalidation(bool fieldChanged);
-    [[nodiscard]] std::uint64_t delayUs(bool immediate, bool typedThrough = false) const {
+    [[nodiscard]] std::uint64_t delayUs(bool immediate, bool typedThrough = false, bool busyRetry = false) const {
         if (immediate) return 1;
+        if (busyRetry) return kBusyRetryUs;
         return typedThrough ? kTypeThroughPauseUs : kTypingPauseUs << idleInvalidations_;
     }
     void resetBusyRetries() { busyRetries_ = 0; }

@@ -802,6 +802,8 @@ void inspectionBacksOffWithoutInput() {
           "an explicit request inspects at once, typing after a pause");
     check(schedule.delayUs(false, true) == 30'000 && schedule.delayUs(true, true) == 1,
           "typing through a suggestion inspects after a short pause");
+    check(schedule.delayUs(false, false, true) == 20'000 && schedule.delayUs(false, true, true) == 20'000,
+          "a busy observer is retried soon, not after another typing pause");
     schedule.input();
     schedule.inspecting();
     for (const std::uint64_t delay : {240'000, 480'000, 960'000}) {

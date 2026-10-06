@@ -106,7 +106,10 @@ Chromium's surrounding text current. Neither provides an editor transaction.
   `rendered:false` (no calibrated geometry), Badi shows its Fcitx panel, which
   Hyprland places at the app's text-input caret rectangle.
 - **Inspection.** It runs 120 ms after input pauses, or 30 ms after a
-  typed-through key.
+  typed-through key; a busy observer is retried every 20 ms. Badi's timers ask
+  for 1 ms accuracy, because Fcitx's sd-event loop otherwise allows 250 ms of
+  slack. With debug on, `inspect_sent` and `inspect_answered` time each
+  inspection.
 - **Invalidations.** One without input re-inspects after 240, 480 and 960 ms
   and then waits for input (`observer_awaiting_input`); a change of the field
   itself always waits.

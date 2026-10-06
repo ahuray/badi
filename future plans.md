@@ -12,11 +12,16 @@ now true in the [README](README.md) or the affected runbook.
   Obsidian and Bash. The closest Omarchy alternative, Oma Tab, replaces the
   input method and ships a 4.8 GB model.
 - **Interaction:** type-through, Ctrl+→ next-word acceptance and search-box
-  quieting work. A typed-through remainder returns in 0.05–0.36 s with no model
-  call ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md)).
-- **Speed:** a new suggestion takes 0.39–0.68 s. That is a 120 ms typing pause,
-  then the observer, then about 33–50 ms per generated token on 4 CPU threads.
-  The KV cache is already reused between keystrokes.
+  quieting work, and a typed-through remainder returns within about 50 ms with
+  no model call ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md)).
+  VS Code and iframe fields get the inline preview.
+- **Speed:** a new suggestion is visible 0.35–0.39 s after the last key in
+  Chromium. That breaks down as:
+  - the 120 ms typing pause;
+  - about 25 ms for inspection and policy;
+  - about 210 ms for the model and display.
+  The KV cache is already reused between keystrokes. Before the timer
+  accuracy fix (2026-10-06), Fcitx's 250 ms timer slack made it 0.40–0.62 s.
 - **GPU:** Vulkan on the Iris Xe is slower per keystroke (13–20 against 19–30
   tokens/s for generation) and faster only for long cold prompts, so Badi stays
   on the CPU.

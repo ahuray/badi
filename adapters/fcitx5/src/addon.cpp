@@ -43,6 +43,9 @@ namespace {
 using Json = nlohmann::json;
 
 constexpr std::uint64_t kNoticeLifetimeUs = 5'000'000;
+// Fcitx's sd-event loop treats a timer accuracy of 0 as its 250 ms default
+// slack, which delayed the 120 ms typing pause by up to 250 ms.
+constexpr std::uint64_t kTimerAccuracyUs = 1'000;
 
 std::string uuidString(const ::fcitx::ICUUID &uuid) {
     static constexpr std::array<std::size_t, 4> dashes{4, 6, 8, 10};
@@ -554,7 +557,7 @@ private:
         binding.observationExplicit = explicitRequest;
         if (explicitRequest) binding.dismissedContext.reset();
         if (!binding.observeTimer) {
-            binding.observeTimer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, 0,
+            binding.observeTimer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
                 [this, contextId = uuidString(binding.inputContext->uuid())](::fcitx::EventSourceTime *, std::uint64_t) {
                     const auto found = bindings_.find(contextId);
                     if (found != bindings_.end() && found->second.inputContext->hasFocus()) inspectField(found->second);
@@ -562,7 +565,7 @@ private:
                 });
         }
         binding.observeTimer->setNextInterval(
-            binding.inspection.delayUs(explicitRequest && !retry, binding.typedThrough));
+            binding.inspection.delayUs(explicitRequest && !retry, binding.typedThrough, retry));
         binding.observeTimer->setOneShot();
     }
 
@@ -572,7 +575,10 @@ private:
             !binding.surroundingFreshness.fresh()) return;
         if (accessibility_->pending()) {
             // Bounded, so an absent service or a denied field never loops the timer.
-            if (binding.inspection.retryWhileBusy()) observeLater(binding, binding.observationExplicit, true);
+            if (binding.inspection.retryWhileBusy()) {
+                debug_.record("observer", binding.state.appId(), "observer_busy_retry");
+                observeLater(binding, binding.observationExplicit, true);
+            }
             else observerUnavailable(binding);
             return;
         }
@@ -582,6 +588,7 @@ private:
         }
         binding.waitingForForeignUi = false;
         binding.inspection.inspecting();
+        debug_.record("observer", binding.state.appId(), "inspect_sent");
         const auto session = binding.state.coordinates().sessionId;
         const auto generation = binding.observationGeneration;
         const bool sent = accessibility_->request(inspectRequest(binding.state.appId()),
@@ -594,6 +601,7 @@ private:
     }
 
     void inspected(Binding &binding, const Json &reply) {
+        debug_.record("observer", binding.state.appId(), "inspect_answered");
         if (!observerAnswered(reply)) return observerUnavailable(binding, reply.value("error", Json()));
         const auto &focus = reply["focus"];
         const auto editTarget = inspectedEditTarget(focus, binding.state.appId());
@@ -1159,7 +1167,7 @@ private:
     }
 
     std::unique_ptr<::fcitx::EventSourceTime> oneShot(std::uint64_t delayUs, std::function<void()> action) {
-        auto timer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, 0,
+        auto timer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
             [action = std::move(action)](::fcitx::EventSourceTime *, std::uint64_t) {
                 action();
                 return true;
