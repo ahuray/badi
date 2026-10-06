@@ -169,7 +169,7 @@ def session(root, report):
             if time.monotonic() >= self.deadline:
                 raise Denied('operation_timeout')
 
-        def metadata(self, app, _calibrate=False, _check_lock=False):
+        def metadata(self, app, _calibrate=False, _check_lock=False, _caret_rect=None):
             self.budget()
             self.inspections += 1
             self.requested.append(app)

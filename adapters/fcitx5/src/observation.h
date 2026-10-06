@@ -16,8 +16,20 @@ namespace badi::fcitx5 {
 nlohmann::json inspectRequest(std::string_view appId);
 // Re-reads the exact field an earlier reply bound (`focus`).
 nlohmann::json snapshotRequest(const nlohmann::json &focus);
+// The caret rectangle an app gave its input method, relative to its window
+// in physical pixels (Qt's Fcitx module declares RelativeRect).
+struct CaretRect {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+    double scale = 1;
+};
+
 // Asks the observer to draw `text` at the caret it last verified for `focus`.
-nlohmann::json previewRequest(const nlohmann::json &focus, std::string_view text, std::uint64_t ttlMs);
+// `caret` is the observer's fallback where the field reports no glyph extents.
+nlohmann::json previewRequest(const nlohmann::json &focus, std::string_view text, std::uint64_t ttlMs,
+                              const std::optional<CaretRect> &caret = std::nullopt);
 
 bool observerAnswered(const nlohmann::json &reply);
 

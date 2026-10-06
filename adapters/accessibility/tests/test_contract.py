@@ -13,6 +13,7 @@ class FakeBackend:
         self.content = "Same text"
         self.reads = []
         self.geometry_requests = []
+        self.caret_rects = []
         self.lock_checks = []
         self.positions = 0
         self.change = None
@@ -22,7 +23,8 @@ class FakeBackend:
                      "editable": True, "showing": True, "visible": True, "enabled": True,
                      "caret": 9, "total_chars": 9, "selection_count": 0}
 
-    def metadata(self, app_id, geometry=False, check_lock=False):
+    def metadata(self, app_id, geometry=False, check_lock=False, caret_rect=None):
+        self.caret_rects.append(caret_rect)
         self.geometry_requests.append(geometry)
         self.lock_checks.append(check_lock)
         if app_id != self.meta["app_id"]:
@@ -245,6 +247,18 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(self.observer.epoch, focus["binding"]["epoch"])
                 self.assertEqual(self.events, [])
 
+    def test_preview_passes_a_valid_input_method_caret_rectangle_to_calibration(self):
+        request = self.preview_request(self.snapshot(self.inspect()["focus"])["focus"])
+        rect = {"x": 1496, "y": 1636, "width": 2, "height": 36, "scale": 2.0}
+        self.assertTrue(self.observer.request({**request, "caret_rect": rect})["ok"])
+        self.assertEqual(self.backend.caret_rects[-1], rect)
+        self.assertTrue(self.observer.request(request)["ok"])
+        self.assertIsNone(self.backend.caret_rects[-1], "without one, calibration gets none")
+        for bad in ({**rect, "scale": 9}, {**rect, "x": -1}, {**rect, "y": 1.5}, {**rect, "extra": 1},
+                    {key: value for key, value in rect.items() if key != "scale"}, [1, 2, 3, 4], None):
+            self.assertEqual(self.observer.request({**request, "caret_rect": bad})["error"], "invalid_preview", bad)
+        self.assertEqual(self.observer.request({**request, "caret": rect})["error"], "invalid_request")
+
     def test_preview_requires_both_snapshot_position_fields(self):
         request = self.preview_request(self.snapshot(self.inspect()["focus"])["focus"])
         def forbidden(*_args):
@@ -269,11 +283,16 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(len(hidden), 2)
 
     def test_snapshot_marks_only_verified_ltr_caret_edges(self):
-        for text, direction, expected in [("Hello world", "lr", "right"), ("متن فارسی", "rl", None),
-                                           ("Hello فارسی", "lr", None), ("Hello", "", None)]:
+        for text, direction, web, expected in [
+                ("Hello world", "lr", True, "right"), ("متن فارسی", "rl", True, None),
+                ("Hello فارسی", "lr", True, None), ("Hello", "", True, None),
+                # Qt reports no direction: its paragraph follows the first strong letter.
+                ("Hello", "", False, "right"), ("2026", "", False, None), ("Hello فارسی", "", False, None),
+                ("Hello", "rl", False, None)]:
             self.setUp()
             self.backend.content = text
-            self.backend.meta.update(caret=len(text), total_chars=len(text), direction=direction, geometry={"test": True})
+            self.backend.meta.update(caret=len(text), total_chars=len(text), direction=direction, web=web,
+                                     geometry={"test": True})
             focus = self.snapshot(self.inspect()["focus"])["focus"]
             self.assertEqual(focus["geometry"].get("caret_edge"), expected)
 

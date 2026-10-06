@@ -39,7 +39,6 @@ editing works ([coverage](../../README.md#where-it-works)).
 - **LibreOffice** reports one program id for every module, so only Writer's
   `paragraph` fields qualify. Writer gives Fcitx only the caret's sentence, so
   the snapshot starts at the AT-SPI `SENTENCE` boundary and must still equal it.
-  The suggestion shows in the Fcitx panel.
 
 Browser targets share one browser-origin identity (adapter `chromium`), so one
 `badi site ... on` grant covers Chromium, Brave and Zen; the binding keeps the
@@ -149,7 +148,7 @@ Requests carry `schema: "badi.accessibility.v1"`, an ASCII `id` and an `op`:
 | --- | --- | --- |
 | `inspect` | `app_id` | `binding` `{epoch,bus,path,process_id,app_id,uri}`, `target` (browser targets use `app_id: "chromium"` and an origin; `target_id` hashes bus, path and epoch), `purpose`, `caret`, `selection_count`, `geometry: null` |
 | `snapshot` | `binding`, `policy_target` | `before`, `after`, `total_chars`, optional `scope: "block"` |
-| `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–160 characters), `ttl_ms` (1–5000) | `total_chars`, `rendered` |
+| `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–160 characters), `ttl_ms` (1–5000), optional `caret_rect` `{x,y,width,height,scale}` | `total_chars`, `rendered` |
 
 `preview` compares the current caret and length with the expected ones before
 drawing. `hide` returns `hidden:true`; `status` returns readiness without
@@ -179,7 +178,9 @@ previous app; a client must drop its candidate and inspect afresh.
 
 Only `preview` calibrates, again each time, from the window frame F, the
 nearest web document D, the field E and the glyph G before the caret. Any
-inconsistency yields no geometry, and the addon uses the Fcitx panel.
+inconsistency yields no geometry, and the addon uses the Fcitx panel. Every
+rule yields the window-local logical caret, the field bounds, the window and
+its monitor.
 
 - **Chromium and Electron** report D, E and G in physical pixels offset by F's
   origin times the scale s, where `D.width / F.width` must equal the monitor
@@ -194,13 +195,29 @@ inconsistency yields no geometry, and the addon uses the Fcitx panel.
 - **Gecko** reports F, D and E in logical pixels and G in device pixels, with F
   at the window origin. The caret is `x = (G.x + G.width)/s`, `y = G.y/s`. A tile
   narrower than Zen's minimum content width fails and uses the panel.
+- **Native windows (LibreOffice).** AT-SPI `WINDOW` coordinates are logical
+  pixels relative to the toplevel, so F must be exactly `(0, 0)` and the
+  window's size. E must contain G and F must contain E; the caret is
+  `x = G.x + G.width`, `y = G.y`. LibreOffice's `SCREEN` coordinates are offset
+  by its toolbars and are never used.
+- **Input-method rectangle (Qt).** Qt fields (Telegram, Omawrite) report zero
+  glyph boxes. When no rule above applies, the addon's optional `caret_rect`
+  places the caret: Qt's Fcitx module declares `RelativeRect` and reports the
+  caret relative to its window in physical pixels, so the caret is
+  `x = rect.x/s`, `y = rect.y/s` with line height `rect.height/s`, and
+  `rect.scale` must equal the monitor scale. The field bounds are unknown, so
+  the window bounds the drawing; a rectangle outside the visible window (a
+  clipped tile) yields nothing.
 
-Geometry is offered only for left-to-right text. The GTK4 layer-shell overlay
+Geometry is offered only for left-to-right text: the caret's line must hold
+no right-to-left character and the field must report the `lr` direction or
+glyphs ordered left to right. Qt reports neither; a native field without a
+direction needs a strong left-to-right letter on the caret's line, because Qt
+takes a paragraph's direction from its first strong character. The GTK4 layer-shell overlay
 draws the suggestion as translucent grey text right after the caret, with no
 background, at a size derived from the glyph height. It draws only suggestions
 of at most 64 characters that fit inside the field, window and monitor;
-otherwise it returns `rendered: false`. Qt fields (Omawrite, Telegram) report
-no character extents and always use the panel. The surface takes no input or
+otherwise it returns `rendered: false`. The surface takes no input or
 focus, and any invalidation, new render or expiry hides it. The helper forces
 software rendering and the simple GTK input module, so it never loads a GPU
 driver or connects to an input method.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import unicodedata
@@ -20,6 +21,9 @@ REQUEST_FIELDS = {"inspect": {"schema", "id", "op", "app_id"},
                               "expected_caret", "expected_total_chars"},
                   "status": {"schema", "id", "op"},
                   "hide": {"schema", "id", "op"}}
+# A preview may add the caret rectangle the app gave its input method.
+OPTIONAL_FIELDS = {"preview": {"caret_rect"}}
+CARET_RECT_FIELDS = frozenset({"x", "y", "width", "height", "scale"})
 IDENTITY = ("bus", "path", "process_id", "app_id", "uri")
 BINDING_FIELDS = frozenset({"epoch", *IDENTITY})
 POSITION = ("caret", "total_chars", "selection_count")
@@ -160,7 +164,8 @@ class Observer:
         if scope == "block":
             # Only the caret's block serializes exactly: Fcitx's text must end with it.
             focus["scope"] = "block"
-        self.caret_edge = "right" if ltr_caret_line(metadata.get("direction"), before) else None
+        native = not metadata.get("web")
+        self.caret_edge = "right" if ltr_caret_line(metadata.get("direction"), before, native) else None
         if focus["geometry"] and self.caret_edge:
             focus["geometry"]["caret_edge"] = self.caret_edge
         focus.update(before=before, after=after, total_chars=metadata["total_chars"])
@@ -169,7 +174,7 @@ class Observer:
     def preview(self, request):
         if not well_formed_preview(request):
             raise Denied("invalid_preview")
-        metadata, focus = self.bound_focus(request, calibrate=True)
+        metadata, focus = self.bound_focus(request, calibrate=True, caret_rect=request.get("caret_rect"))
         # Field events are advisory: repeated bounded text can conceal an
         # absolute caret/length change without an epoch change. Reject before
         # rendering, rather than clearing a stale flash only after the caller
@@ -183,14 +188,14 @@ class Observer:
             raise Denied("stale_binding")
         return {"focus": focus}
 
-    def bound_focus(self, request, calibrate=False):
+    def bound_focus(self, request, calibrate=False, caret_rect=None):
         """The field as it is now, which must still be the request's binding and policy target."""
         binding = request["binding"]
         if not isinstance(binding, dict) or set(binding) != BINDING_FIELDS:
             raise Denied("invalid_request")
         if type(binding["epoch"]) is not int or binding["epoch"] != self.epoch:
             raise Denied("stale_binding")
-        metadata, focus = self.describe(checked_app_id(binding["app_id"]), calibrate=calibrate)
+        metadata, focus = self.describe(checked_app_id(binding["app_id"]), calibrate=calibrate, caret_rect=caret_rect)
         if request["binding"] != focus["binding"]:
             raise Denied("stale_binding")
         if request["policy_target"] != focus["target"]:
@@ -212,11 +217,11 @@ class Observer:
             raise Denied("invalid_text")
         return text
 
-    def describe(self, app_id, calibrate=False, check_lock=False):
+    def describe(self, app_id, calibrate=False, check_lock=False, caret_rect=None):
         # Only a preview draws, so only it pays for per-request calibration.
         # Only inspect issues a binding, so only it checks the session lock;
         # snapshot and preview require that binding's unchanged epoch.
-        metadata = self.backend.metadata(app_id, calibrate, check_lock)
+        metadata = self.backend.metadata(app_id, calibrate, check_lock, caret_rect)
         eligible(metadata)
         key = {name: metadata[name] for name in IDENTITY}
         if self.tracked is not None and self.tracked != key:
@@ -252,7 +257,8 @@ def operation_name(request):
     if request.get("schema") != SCHEMA:
         raise Denied("invalid_request")
     op = request.get("op")
-    if not isinstance(op, str) or op not in REQUEST_FIELDS or set(request) != REQUEST_FIELDS[op]:
+    if (not isinstance(op, str) or op not in REQUEST_FIELDS
+            or not REQUEST_FIELDS[op] <= set(request) <= REQUEST_FIELDS[op] | OPTIONAL_FIELDS.get(op, set())):
         raise Denied("invalid_request")
     return op
 
@@ -267,7 +273,18 @@ def well_formed_preview(request):
     """Valid suggestion text, lifetime and last-snapshot position."""
     ttl, caret, total = request["ttl_ms"], request["expected_caret"], request["expected_total_chars"]
     return (suggestion_text(request["text"]) and type(ttl) is int and 1 <= ttl <= 5000
-            and type(caret) is int and type(total) is int and 0 <= caret <= total <= MAX_POSITION)
+            and type(caret) is int and type(total) is int and 0 <= caret <= total <= MAX_POSITION
+            and ("caret_rect" not in request or caret_rectangle(request["caret_rect"])))
+
+
+def caret_rectangle(value):
+    """Window-relative physical pixels and the app's device pixel ratio."""
+    if not isinstance(value, dict) or set(value) != CARET_RECT_FIELDS:
+        return False
+    if not all(type(value[key]) is int and 0 <= value[key] <= 65536 for key in ("x", "y", "width", "height")):
+        return False
+    scale = value["scale"]
+    return type(scale) in (int, float) and math.isfinite(scale) and .5 <= scale <= 4
 
 
 def suggestion_text(text):
@@ -284,8 +301,17 @@ def joins_letters(text, index):
             and text[index - 1].isalpha() and text[index + 1].isalpha())
 
 
-def ltr_caret_line(direction, before):
-    """Whether the caret's line up to the caret is verified left-to-right text."""
+def ltr_caret_line(direction, before, native=False):
+    """Whether the caret's line up to the caret is verified left-to-right text.
+
+    Qt reports neither a direction attribute nor glyph boxes. Its paragraphs
+    take their direction from their first strong character (Unicode rule P2),
+    so a native field without a direction needs a strong left-to-right letter.
+    """
     line = before.rsplit("\n", 1)[-1]
     classes = {unicodedata.bidirectional(char) for char in line}
-    return direction in ("lr", "ltr") and bool(line) and bool(classes & {"L", "EN"}) and not classes & RIGHT_TO_LEFT
+    if not line or classes & RIGHT_TO_LEFT:
+        return False
+    if direction in ("lr", "ltr"):
+        return bool(classes & {"L", "EN"})
+    return native and direction == "" and "L" in classes

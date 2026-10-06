@@ -817,7 +817,8 @@ private:
         const auto now = transport_.nowMs();
         if (!safeToObserve(binding) || suggestion.expiresAtMs <= now) return;
         const auto &focus = binding.observedFocus;
-        const bool sent = accessibility_->request(previewRequest(focus, suggestion.text, suggestion.expiresAtMs - now),
+        const bool sent = accessibility_->request(
+            previewRequest(focus, suggestion.text, suggestion.expiresAtMs - now, caretRect(*binding.inputContext)),
             [this, suggestion, focus, generation = binding.observationGeneration](const Json &reply) {
                 const bool verified = observerAnswered(reply) && reply["focus"].is_object();
                 const bool rendered = verified && reply["focus"].value("rendered", Json()) == true;
@@ -1146,6 +1147,16 @@ private:
         binding.ownedCandidates.reset();
         binding.ownedAuxiliary.clear();
         binding.state.clearSuggestion();
+    }
+
+    // Qt's Fcitx module reports the caret relative to its window (RelativeRect);
+    // other frontends report none (wayland_v2 sends 0,0,0,0).
+    static std::optional<CaretRect> caretRect(const ::fcitx::InputContext &input) {
+        const auto &rect = input.cursorRect();
+        if (!input.capabilityFlags().test(::fcitx::CapabilityFlag::RelativeRect) || rect.height() <= 0 ||
+            rect.left() < 0 || rect.top() < 0 || rect.width() < 0) return std::nullopt;
+        return CaretRect{.x = rect.left(), .y = rect.top(), .width = rect.width(), .height = rect.height(),
+                         .scale = input.scaleFactor()};
     }
 
     // One observer preview exists. It may be on screen from its request until

@@ -102,9 +102,12 @@ and corroboration. On Fcitx 5.1.22 the
 [frontend backport](../../packaging/fcitx5-wayland-compat/README.md) keeps
 Chromium's surrounding text current. Neither provides an editor transaction.
 
-- **Display.** When the observer verifies the field but reports
-  `rendered:false` (no calibrated geometry), Badi shows its Fcitx panel, which
-  Hyprland places at the app's text-input caret rectangle.
+- **Display.** A preview request carries the input context's `caret_rect`
+  when the frontend declares `RelativeRect` (Qt's Fcitx module); the observer
+  uses it only where AT-SPI has no glyph geometry. When the observer verifies
+  the field but reports `rendered:false` (no calibrated geometry), Badi shows
+  its Fcitx panel, which Hyprland places at the app's text-input caret
+  rectangle.
 - **Inspection.** It runs 120 ms after input pauses, or 30 ms after a
   typed-through key; a busy observer is retried every 20 ms. Badi's timers ask
   for 1 ms accuracy, because Fcitx's sd-event loop otherwise allows 250 ms of

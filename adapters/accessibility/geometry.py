@@ -103,6 +103,57 @@ def gecko_calibrated_geometry(frame, document, field, glyph, window, monitors, c
         return None
 
 
+def native_calibrated_geometry(frame, field, glyph, window, monitors, caret):
+    """Window-local logical caret geometry for a native toolkit field, or None.
+
+    LibreOffice (VCL on Wayland) reports WINDOW extents in logical pixels
+    relative to its toplevel frame; its SCREEN extents carry a toolbar offset.
+    The frame must sit at the origin and span the Hyprland window (a frame
+    with drop shadows does not), the field must lie inside the frame and the
+    glyph inside the field. Qt reports no glyph extents and fails here.
+    """
+    try:
+        output = _output(frame, frame, field, glyph, window, monitors, caret)
+        if output is None:
+            return None
+        _monitor, _scale, width, height = output
+        if (frame["x"] != 0 or frame["y"] != 0 or abs(frame["width"] - width) > EDGE_TOLERANCE
+                or abs(frame["height"] - height) > EDGE_TOLERANCE):
+            return None
+        if not _inside(field, frame) or not _inside(glyph, field):
+            return None
+        return _reply(output, caret, round(glyph["x"] + glyph["width"], 2), round(glyph["y"], 2),
+                      round(glyph["height"], 2), {key: round(field[key], 2) for key in RECT_KEYS}, window)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def input_method_geometry(rect, window, monitors, caret):
+    """Window-local logical caret geometry from the caret rectangle an app gave
+    its input method, or None.
+
+    Qt's Fcitx module (the RelativeRect capability) reports the caret relative
+    to its window in physical pixels, with its device pixel ratio as `scale`,
+    which must equal the monitor's. The field's extent is unknown, so the
+    window bounds the drawing.
+    """
+    try:
+        if not isinstance(rect, dict) or set(rect) != {*RECT_KEYS, "scale"}:
+            return None
+        box = {key: rect[key] for key in RECT_KEYS}
+        output = _output(box, box, box, box, window, monitors, caret)
+        if output is None:
+            return None
+        _monitor, scale, width, _height = output
+        if type(rect["scale"]) not in (int, float) or abs(rect["scale"] - scale) > SCALE_TOLERANCE:
+            return None
+        y, line = round(box["y"] / scale, 2), round(box["height"] / scale, 2)
+        return _reply(output, caret, round(box["x"] / scale, 2), y, line,
+                      {"x": 0, "y": y, "width": width, "height": line}, window)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
 def visual_direction(previous, last):
     """Run direction from the two glyphs before the caret, or "".
 

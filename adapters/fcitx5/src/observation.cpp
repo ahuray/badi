@@ -17,13 +17,18 @@ Json snapshotRequest(const Json &focus) {
                 {"policy_target", focus.value("target", Json())}};
 }
 
-Json previewRequest(const Json &focus, std::string_view text, std::uint64_t ttlMs) {
+Json previewRequest(const Json &focus, std::string_view text, std::uint64_t ttlMs,
+                    const std::optional<CaretRect> &caret) {
     auto request = snapshotRequest(focus);
     request["op"] = "preview";
     request["text"] = text;
     request["expected_caret"] = focus.value("caret", Json());
     request["expected_total_chars"] = focus.value("total_chars", Json());
     request["ttl_ms"] = ttlMs;
+    if (caret) {
+        request["caret_rect"] = Json{{"x", caret->x}, {"y", caret->y}, {"width", caret->width},
+                                     {"height", caret->height}, {"scale", caret->scale}};
+    }
     return request;
 }
 

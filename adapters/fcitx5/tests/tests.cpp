@@ -1326,6 +1326,9 @@ void observerRequestsNameTheBoundField() {
                              {"text", " for your time"}, {"expected_caret", 9}, {"expected_total_chars", 9},
                              {"ttl_ms", 900}},
           "a preview carries the caret and length the observer must re-verify");
+    check(previewRequest(field, " for", 900, CaretRect{.x = 1496, .y = 1636, .width = 2, .height = 36, .scale = 2})
+              ["caret_rect"] == nlohmann::json{{"x", 1496}, {"y", 1636}, {"width", 2}, {"height", 36}, {"scale", 2.0}},
+          "a preview may carry the app's window-relative caret rectangle");
 
     const auto context = captureContextWindow("thank you", 9, 9, true, "en");
     auto observed = field;

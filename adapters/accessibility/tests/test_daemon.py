@@ -19,7 +19,8 @@ import desktop as observer_desktop
 from daemon import APPS, Daemon, unique_object
 from desktop import WindowEvents, application_entry, per_user_executable, verify_process
 from field import MAX_RICH_BLOCKS, FieldBackend, browser_interface, chromium_text, rich_text
-from geometry import CALIBRATED, calibrated_geometry, gecko_calibrated_geometry, visual_direction
+from geometry import (CALIBRATED, calibrated_geometry, gecko_calibrated_geometry, input_method_geometry,
+                      native_calibrated_geometry, visual_direction)
 from test_contract import FakeBackend
 
 
@@ -660,7 +661,7 @@ class LockReplyTests(unittest.TestCase):
     def test_only_inspect_checks_the_session_lock(self):
         backend = FieldBackend(None, APPS)
         backend.deadline = time.monotonic() + 1
-        backend.field_metadata = lambda app_id, app, calibrate: {"app_id": app_id}
+        backend.field_metadata = lambda app_id, app, calibrate, _caret_rect=None: {"app_id": app_id}
         queries = []
         backend.desktop.lock_query = lambda: queries.append(True) or contextlib.nullcontext()
         backend.metadata("telegram")
@@ -716,7 +717,7 @@ class LockQueryProcessTests(unittest.TestCase):
         go = self.bin / "go"
         self.answer(f"until [ -e '{go}' ]; do sleep .01; done\nprintf '%s' '{json.dumps(UNLOCKED)}'")
 
-        def read_field(app_id, _app, _calibrate):
+        def read_field(app_id, _app, _calibrate, _caret_rect=None):
             self.assertIsNone(self.queries[-1].process.poll(), "the query is still running")
             go.touch()
             return {"app_id": app_id}
@@ -733,7 +734,7 @@ class LockQueryProcessTests(unittest.TestCase):
         events = []
         observer.notify = events.append
         fields = []
-        self.backend.field_metadata = lambda app_id, _app, _calibrate: fields.append(app_id) or dict(self.FIELD)
+        self.backend.field_metadata = lambda app_id, _app, _calibrate, _caret_rect=None: fields.append(app_id) or dict(self.FIELD)
         inspect = {"schema": SCHEMA, "id": "locked", "op": "inspect", "app_id": "telegram"}
         self.reply({**UNLOCKED, "locked": True})
         reply = observer.request(inspect)
@@ -750,12 +751,12 @@ class LockQueryProcessTests(unittest.TestCase):
         self.assertEqual(observer.request(inspect)["error"], "desktop_locked", "the lock verdict comes first")
         self.assert_reaped(0)
 
-        self.backend.field_metadata = lambda app_id, _app, _calibrate: dict(self.FIELD)
+        self.backend.field_metadata = lambda app_id, _app, _calibrate, _caret_rect=None: dict(self.FIELD)
         self.reply(UNLOCKED)
         self.assertEqual(observer.request(inspect)["focus"]["binding"]["app_id"], "telegram")
 
     def test_a_late_query_is_killed_and_reaped(self):
-        self.backend.field_metadata = lambda app_id, _app, _calibrate: dict(self.FIELD)
+        self.backend.field_metadata = lambda app_id, _app, _calibrate, _caret_rect=None: dict(self.FIELD)
         with self.never_answer(), self.assertRaisesRegex(Denied, "desktop_unavailable"):
             self.backend.metadata("telegram", check_lock=True)
         self.assert_reaped(-signal.SIGKILL)
@@ -1186,6 +1187,53 @@ class CalibrationTests(unittest.TestCase):
         self.assertIsNone(self.calibrate(frame, document, field, glyph, monitors=[{**self.MONITOR, "transform": 1}]))
         self.assertIsNone(self.calibrate(frame, document, field, glyph, monitors=[{**self.MONITOR, "scale": "2"}]))
         self.assertIsNone(self.calibrate(frame, document, field, glyph, monitors=["not a monitor"]))
+
+
+class NativeCalibrationTests(unittest.TestCase):
+    # Both live 2026-10-06 on eDP-1 at scale 2 in a maximized 1416x850 window.
+    WINDOW = {"pid": 9, "address": "0x4", "at": [12, 38], "size": [1416, 850], "monitor": 0, "xwayland": False}
+    MONITOR = CalibrationTests.MONITOR
+    # LibreOffice Writer 26.8: the paragraph's WINDOW extents put the glyph on
+    # the text; its SCREEN extents sit 27 pixels higher, under the toolbar.
+    FRAME, PARAGRAPH, GLYPH = rect(0, 0, 1416, 850), rect(263, 226, 816, 18), rect(483, 226, 8, 18)
+    # Telegram (Qt 6, the Fcitx D-Bus module with RelativeRect): the caret
+    # rectangle at the end of the typed phrase.
+    CARET_RECT = {"x": 1496, "y": 1636, "width": 2, "height": 36, "scale": 2.0}
+
+    def native(self, frame=FRAME, field=PARAGRAPH, glyph=GLYPH, window=None, caret=24):
+        return native_calibrated_geometry(frame, field, glyph, window or dict(self.WINDOW), [self.MONITOR], caret)
+
+    def input_method(self, rect=None, window=None, scale=2):
+        return input_method_geometry(dict(self.CARET_RECT) if rect is None else rect, window or dict(self.WINDOW),
+                                     [{**self.MONITOR, "scale": scale}], 24)
+
+    def test_libreoffice_window_extents_place_the_caret(self):
+        result = self.native()
+        self.assertEqual(result["caret"], {"x": 491, "y": 226, "height": 18})
+        self.assertEqual(result["field"], self.PARAGRAPH)
+        self.assertEqual((result["coordinate_convention"], result["character_offset"]), (CALIBRATED, 23))
+        cases = {
+            "a frame offset by the toolbar": dict(frame=rect(0, 27, 1416, 823)),
+            "a frame with drop shadows": dict(frame=rect(0, 0, 1450, 884)),
+            "no glyph extents (Qt)": dict(glyph=rect(0, 0, 0, 0)),
+            "a glyph outside the paragraph": dict(glyph=rect(1200, 226, 8, 18)),
+            "a paragraph outside the frame": dict(field=rect(263, 900, 816, 18), glyph=rect(483, 900, 8, 18)),
+        }
+        for name, change in cases.items():
+            self.assertIsNone(self.native(**change), name)
+
+    def test_qt_input_method_caret_rectangle_places_the_caret(self):
+        result = self.input_method()
+        self.assertEqual(result["caret"], {"x": 748, "y": 818, "height": 18})
+        self.assertEqual(result["field"], {"x": 0, "y": 818, "width": 1416, "height": 18})
+        self.assertEqual(result["character_offset"], 23)
+        # Hyprland clipped Telegram's taller surface to a 701x418 tile: the
+        # same rectangle lies below the visible window and draws nothing.
+        self.assertIsNone(self.input_method(window={**self.WINDOW, "size": [701, 418]}))
+        self.assertIsNone(self.input_method(scale=1), "the app's pixel ratio must match the monitor")
+        for bad in ({**self.CARET_RECT, "height": 0}, {**self.CARET_RECT, "x": float("nan")},
+                    {key: value for key, value in self.CARET_RECT.items() if key != "scale"}, "rect"):
+            self.assertIsNone(self.input_method(bad), bad)
 
 
 class GeckoCalibrationTests(unittest.TestCase):

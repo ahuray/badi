@@ -58,10 +58,6 @@ Standing user decisions:
 - [ ] No automatic suggestions in file dialogs or very narrow fields, and a
       setting for how long Escape keeps a field quiet (today: until the text
       changes).
-- [ ] An inline preview where caret geometry is missing: Qt (Telegram,
-      Omawrite) and LibreOffice report no character extents, and Chromium
-      reports none in an iframe editor body (TinyMCE). Anchor ghost text to the
-      field's extents instead of the Fcitx panel, at the host's font size.
 
 ## Speed and footprint
 

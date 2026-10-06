@@ -31,8 +31,8 @@ Linux in general.
 | Zen | Grey preview; Ctrl+Z undoes an acceptance alone | Zen 1.23b |
 | VS Code, Cursor | Needs `"editor.editContext": false` in VS Code | VS Code 1.140, Cursor 3.21 |
 | Codex desktop | Composer | 26.930 |
-| LibreOffice Writer | Document paragraphs; Fcitx panel; Calc gets nothing | 26.8 |
-| Telegram | Fcitx panel | Telegram desktop (Qt) |
+| LibreOffice Writer | Document paragraphs; Calc gets nothing | 26.8 |
+| Telegram | | Telegram desktop (Qt) |
 | Omawrite | | 0.5.0 |
 | Xournal++ text tool | Tab requests, exact native undo | 1.3.7 |
 | Obsidian | Badi plugin; caret at the end of a note | 1.13.7 |

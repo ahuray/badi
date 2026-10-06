@@ -10,7 +10,8 @@ from urllib.parse import urlsplit
 
 from contract import Denied, canonical_origin
 from desktop import Desktop
-from geometry import calibrated_geometry, gecko_calibrated_geometry, visual_direction
+from geometry import (calibrated_geometry, gecko_calibrated_geometry, input_method_geometry,
+                      native_calibrated_geometry, visual_direction)
 
 MAX_APPLICATIONS = 64
 MAX_MATCHES = 8
@@ -75,18 +76,20 @@ class FieldBackend:
         self.budget()
         return min(limit, max(.001, self.deadline - time.monotonic()))
 
-    def metadata(self, app_id, calibrate=False, check_lock=False):
+    def metadata(self, app_id, calibrate=False, check_lock=False, caret_rect=None):
         """The focused field's identity, purpose, state and caret; never its text.
 
         With `check_lock`, the session lock query runs while the field is
-        read, and its denial replaces the field's result.
+        read, and its denial replaces the field's result. `caret_rect` is the
+        caret rectangle the app gave its input method, a fallback for
+        calibration when the field reports no glyph extents.
         """
         self.budget()
         app = self.desktop.app(app_id)
         with self.desktop.lock_query() if check_lock else contextlib.nullcontext():
-            return self.field_metadata(app_id, app, calibrate)
+            return self.field_metadata(app_id, app, calibrate, caret_rect)
 
-    def field_metadata(self, app_id, app, calibrate):
+    def field_metadata(self, app_id, app, calibrate, caret_rect=None):
         window = self.desktop.window(app)
         node = self.focused(window["pid"], app.browser, app.gecko)
         node.clear_cache()
@@ -105,7 +108,12 @@ class FieldBackend:
         geometry = None
         if (calibrate and 1 <= local.caret <= local.length and flags.contains(self.atspi.StateType.SHOWING) and
                 window.get("xwayland") is False):
-            geometry = self.geometry(node, local.text, local.caret, window, app.gecko, caret)
+            if app.web:
+                geometry = self.geometry(node, local.text, local.caret, window, app.gecko, caret)
+            else:
+                geometry = self.native_geometry(node, local.text, local.caret, window, caret)
+            if geometry is None and caret_rect is not None:
+                geometry = self.input_method_geometry(caret_rect, window, caret)
         return {"direction": self.direction(local), "bus": node.app.bus_name, "path": node.path,
                 "process_id": window["pid"], "app_id": app_id, "uri": uri, "browser": app.browser, "web": app.web,
                 "role": role, "tag": attributes.get("tag", ""), "input_type": attributes.get("text-input-type", ""),
@@ -381,6 +389,44 @@ class FieldBackend:
                                              window, monitors, offset)
         return calibrated_geometry(rects["frame"], rects["document"], rects["field"], rects["glyph"],
                                    window, monitors, offset, rects.get("container"), rects.get("page"))
+
+    def native_geometry(self, node, text, caret, window, reported):
+        """Calibrate a native toolkit field from WINDOW extents; None lets Fcitx show its panel."""
+        try:
+            frame = self.frame_documents(node)[0]
+            if frame is None:
+                return None
+            window_coordinates = self.atspi.CoordType.WINDOW
+            extents = {}
+            for name, item in (("frame", frame), ("field", node)):
+                if "Component" not in item.get_interfaces():
+                    return None
+                self.budget()
+                extents[name] = item.get_component_iface().get_extents(window_coordinates)
+            self.budget()
+            extents["glyph"] = text.get_character_extents(caret - 1, window_coordinates)
+            monitors = self.desktop.monitors()
+        except Denied as error:
+            if error.timed_out:
+                raise
+            return None
+        except Exception:
+            return None
+        rects = {name: {"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}
+                 for name, rect in extents.items()}
+        return native_calibrated_geometry(rects["frame"], rects["field"], rects["glyph"], window, monitors, reported)
+
+    def input_method_geometry(self, rect, window, reported):
+        """Calibrate from the app's input-method caret rectangle; None lets Fcitx show its panel."""
+        try:
+            monitors = self.desktop.monitors()
+        except Denied as error:
+            if error.timed_out:
+                raise
+            return None
+        except Exception:
+            return None
+        return input_method_geometry(rect, window, monitors, reported)
 
     def screen_extents(self, node, text, caret):
         """SCREEN extents of the outermost frame, nearest web document, field, glyph before the
