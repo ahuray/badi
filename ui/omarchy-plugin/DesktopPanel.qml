@@ -9,7 +9,24 @@ import qs.Commons
 Item {
   id: root
   readonly property string helper: Quickshell.env("HOME") + "/.local/bin/badi-desktop"
-  readonly property bool anyAppEnabled: appEnabled("omawrite") || appEnabled("com.github.xournalpp.xournalpp") || appEnabled("obsidian") || appEnabled("bash")
+  // Supported apps; `manual` apps (Tab requests) need an exact rule even in blocklist mode.
+  readonly property var supportedApps: [
+    {name: "Omawrite", appId: "omawrite", detail: "Markdown editor · automatic"},
+    {name: "Xournal++", appId: "com.github.xournalpp.xournalpp", detail: "Text tool · Tab requests, Tab again accepts", manual: true},
+    {name: "Obsidian", appId: "obsidian", detail: "Badi plugin · Tab accepts a word · Ctrl/Command+Right accepts all"},
+    {name: "Bash", appId: "bash", detail: "Ctrl-X Tab requests / accepts"},
+    {name: "Telegram", appId: "telegram", detail: "Message fields · Fcitx panel"},
+    {name: "LibreOffice Writer", appId: "libreoffice", detail: "Document paragraphs · Fcitx panel"},
+    {name: "Codex", appId: "chatgpt", detail: "Composer"},
+    {name: "VS Code", appId: "code", detail: "Editor · needs \"editor.editContext\": false"},
+    {name: "Cursor", appId: "cursor", detail: "Editor"},
+    {name: "Grok Bot", appId: "grok-bot", detail: "Chat composer"},
+    {name: "Discord", appId: "discord", detail: "Needs renderer accessibility, which Discord resets"}]
+  readonly property bool appsBlocklist: client.settings.all_linux_apps === true
+  readonly property bool sitesBlocklist: client.settings.all_web_origins === true
+  readonly property bool anyAppEnabled: appsBlocklist || sitesBlocklist
+    || supportedApps.some(function(app) { return appEnabled(app.appId) })
+    || siteRules().some(function(rule) { return rule.allowed })
   readonly property bool ready: client.brokerReachable && !client.brokerPaused && !client.controlPlaneDegraded && anyAppEnabled
   readonly property bool paused: client.brokerReachable && client.brokerPaused
   readonly property string statusLabel: !client.brokerReachable
@@ -57,14 +74,83 @@ Item {
     client.replaceSettings(document, document.paused ? "Predictions paused. This persists after restart." : "Predictions resumed.")
   }
 
-  function appEnabled(appId) {
+  function appRule(appId) {
     var subjects = client.settings.subjects || []
     for (var i = 0; i < subjects.length; i++) {
       var entry = subjects[i]
       if (entry.identity.kind === "linux_app" && entry.identity.adapter === appAdapter(appId) && entry.identity.app_id === appId)
-        return entry.permissions.context_read === "allow" && entry.permissions.suggest === "allow" && entry.permissions.display === "allow"
+        return entry
     }
-    return false
+    return null
+  }
+
+  function allows(permissions) {
+    return permissions.context_read === "allow" && permissions.suggest === "allow" && permissions.display === "allow"
+  }
+
+  // The effective state: an exact rule, else the list mode (never for manual apps).
+  function appEnabled(appId) {
+    var rule = appRule(appId)
+    if (rule) return allows(rule.permissions)
+    var app = supportedApps.find(function(item) { return item.appId === appId })
+    return appsBlocklist && !(app && app.manual)
+  }
+
+  function siteRules() {
+    var subjects = client.settings.subjects || []
+    var rules = []
+    for (var i = 0; i < subjects.length; i++) {
+      var identity = subjects[i].identity
+      if (identity.kind !== "browser_origin") continue
+      var standard = identity.scheme === "https" ? 443 : 80
+      rules.push({identity: identity, allowed: allows(subjects[i].permissions),
+        origin: identity.scheme + "://" + identity.host + (identity.port === standard ? "" : ":" + identity.port)})
+    }
+    return rules
+  }
+
+  function setMode(key, blocklist) {
+    if (!client.canMutateSettings || action.running) return
+    actionMessage = ""
+    var document = client.cloneSettings()
+    if (blocklist) document[key] = true
+    else delete document[key]
+    var apps = key === "all_linux_apps"
+    client.replaceSettings(document, blocklist
+      ? (apps ? "Apps: every supported app except blocked ones." : "Websites: every site except blocked ones. Sensitive fields stay denied.")
+      : (apps ? "Apps: only allowed apps." : "Websites: only allowed sites."))
+  }
+
+  function writeRule(identity, decision) {
+    var document = client.cloneSettings()
+    document.subjects = document.subjects.filter(function(item) { return client.compareIdentities(item.identity, identity) !== 0 })
+    if (decision !== null)
+      document.subjects.push({identity: identity, permissions: {context_read: decision, display: decision,
+        suggest: decision, learn: "block", retention: {mode: "none"}}})
+    document.subjects.sort(function(a, b) { return client.compareIdentities(a.identity, b.identity) })
+    return document
+  }
+
+  // An exact http(s) origin, as `badi site` accepts it (ASCII hosts only here).
+  function siteIdentity(text) {
+    var match = /^(https?):\/\/([a-z0-9.-]+)(?::([0-9]{1,5}))?\/?$/.exec(text.trim().toLowerCase())
+    if (!match) return null
+    var port = match[3] ? Number(match[3]) : (match[1] === "https" ? 443 : 80)
+    if (port < 1 || port > 65535 || match[2].length > 253) return null
+    return {kind: "browser_origin", adapter: "chromium", scheme: match[1], host: match[2], port: port}
+  }
+
+  function setSite(text, decision) {
+    if (!client.canMutateSettings || action.running) return
+    var identity = siteIdentity(text)
+    if (!identity) {
+      actionMessage = "Enter an exact site such as https://mail.example.com"
+      actionFailed = true
+      return
+    }
+    actionMessage = ""
+    client.replaceSettings(writeRule(identity, decision), decision === null ? "Site rule removed; it follows the website mode."
+      : decision === "allow" ? "Site allowed." : "Site blocked. Context reading and predictions are disabled there.")
   }
 
   function appAdapter(appId) {
@@ -75,20 +161,9 @@ Item {
     if (!client.canMutateSettings || action.running) return
     actionMessage = ""
     var enabled = !appEnabled(appId)
-    var document = client.cloneSettings()
     var identity = {kind: "linux_app", adapter: appAdapter(appId), app_id: appId}
-    var index = -1
-    for (var i = 0; i < document.subjects.length; i++) {
-      var item = document.subjects[i].identity
-      if (item.kind === "linux_app" && item.adapter === appAdapter(appId) && item.app_id === appId) index = i
-    }
-    var decision = enabled ? "allow" : "block"
-    var subject = {identity: identity, permissions: {context_read: decision, display: decision,
-      suggest: decision, learn: "block", retention: {mode: "none"}}}
-    if (index < 0) document.subjects.push(subject)
-    else document.subjects[index] = subject
-    document.subjects.sort(function(a, b) { return client.compareIdentities(a.identity, b.identity) })
-    client.replaceSettings(document, enabled ? "App enabled. Predictions are available in supported text fields." : "App blocked. Context reading and predictions are disabled.")
+    client.replaceSettings(writeRule(identity, enabled ? "allow" : "block"),
+      enabled ? "App enabled. Predictions are available in supported text fields." : "App blocked. Context reading and predictions are disabled.")
   }
 
   function runAction(arguments, progress, success) {
@@ -245,13 +320,29 @@ Item {
               visible: root.page === 1
               Layout.fillWidth: true
               spacing: Style.space(16)
-              SectionTitle { text: "Where Badi can write" }
-              BodyText { text: "Allow an app to use its connected writing integration. Blocking it disables context reading and predictions." }
+              SectionTitle { text: "Applications" }
+              RowLayout {
+                Layout.fillWidth: true
+                ActionButton {
+                  Layout.fillWidth: true
+                  text: "Only allowed apps"; selected: !root.appsBlocklist; bordered: true; focusable: true
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (root.appsBlocklist) root.setMode("all_linux_apps", false)
+                  Accessible.name: "Applications allowlist: only allowed apps"
+                }
+                ActionButton {
+                  Layout.fillWidth: true
+                  text: "All except blocked"; selected: root.appsBlocklist; bordered: true; focusable: true
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (!root.appsBlocklist) root.setMode("all_linux_apps", true)
+                  Accessible.name: "Applications blocklist: every supported app except blocked ones"
+                }
+              }
+              Caption { text: root.appsBlocklist
+                ? "Every supported app works unless you block it. Badi then opens only fields it can verify, so Xournal++'s Tab requests still need Allow."
+                : "Badi works only in the apps you allow." }
               Repeater {
-                model: [{name: "Omawrite", appId: "omawrite", detail: "Markdown editor · Qt 6"},
-                  {name: "Xournal++", appId: "com.github.xournalpp.xournalpp", detail: "Text tool · GTK 3"},
-                  {name: "Obsidian", appId: "obsidian", detail: "Badi plugin · Tab accepts a word · Ctrl/Command+Right accepts all"},
-                  {name: "Bash", appId: "bash", detail: "Ctrl-X Tab requests / accepts · Tab completes commands"}]
+                model: root.supportedApps
                 ColumnLayout {
                   required property var modelData
                   Layout.fillWidth: true
@@ -259,19 +350,66 @@ Item {
                     Layout.fillWidth: true
                     BodyText { text: modelData.name; font.bold: true }
                     ActionButton {
-                      text: !client.brokerReachable ? "Unavailable" : root.appEnabled(modelData.appId) ? "Enabled · Block" : "Blocked · Enable"
+                      text: !client.brokerReachable ? "Unavailable" : root.appEnabled(modelData.appId) ? "Allowed · Block" : "Blocked · Allow"
                       bordered: true; focusable: true; enabled: client.canMutateSettings && !action.running
                       onClicked: root.toggleApp(modelData.appId)
-                      Accessible.name: modelData.name + " predictions: " + (root.appEnabled(modelData.appId) ? "enabled; activate to block" : "blocked; activate to enable")
+                      Accessible.name: modelData.name + " predictions: " + (root.appEnabled(modelData.appId) ? "allowed; activate to block" : "blocked; activate to allow")
                     }
                   }
-                  Caption { text: modelData.detail }
+                  Caption { text: modelData.detail + (root.appRule(modelData.appId) ? "" : " · follows the list mode") }
                 }
               }
               PanelSeparator { Layout.fillWidth: true; foreground: Color.popups.text }
-              SectionTitle { text: "Connect your editors" }
-              BodyText { text: "Obsidian needs the Badi vault plugin. Bash needs the shell hook. Chromium-based apps and Zen need the field observer and an app grant (badi app) or, for web pages, a site grant (badi site)." }
-              Caption { text: "Run badi doctor or badi debug watch to check activity. Rich website editors and native spelling replacement are still in development." }
+              SectionTitle { text: "Websites" }
+              RowLayout {
+                Layout.fillWidth: true
+                ActionButton {
+                  Layout.fillWidth: true
+                  text: "Only allowed sites"; selected: !root.sitesBlocklist; bordered: true; focusable: true
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (root.sitesBlocklist) root.setMode("all_web_origins", false)
+                  Accessible.name: "Websites allowlist: only allowed sites"
+                }
+                ActionButton {
+                  Layout.fillWidth: true
+                  text: "All except blocked"; selected: root.sitesBlocklist; bordered: true; focusable: true
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (!root.sitesBlocklist) root.setMode("all_web_origins", true)
+                  Accessible.name: "Websites blocklist: every site except blocked ones"
+                }
+              }
+              Caption { text: "Applies to Chromium, Brave (and its web apps) and Zen, private windows included. Password and sensitive fields are always refused." }
+              Repeater {
+                model: root.siteRules()
+                RowLayout {
+                  required property var modelData
+                  Layout.fillWidth: true
+                  BodyText { text: modelData.origin + (modelData.allowed ? " · allowed" : " · blocked") }
+                  ActionButton {
+                    text: "Remove"; bordered: true; focusable: true; enabled: client.canMutateSettings && !action.running
+                    onClicked: root.setSite(modelData.origin, null)
+                    Accessible.name: "Remove the rule for " + modelData.origin
+                  }
+                }
+              }
+              RowLayout {
+                Layout.fillWidth: true
+                TextField {
+                  id: siteField
+                  Layout.fillWidth: true
+                  placeholderText: "https://mail.example.com"
+                  Accessible.name: "Website to allow or block"
+                }
+                ActionButton {
+                  text: "Allow"; bordered: true; focusable: true; enabled: client.canMutateSettings && !action.running && siteField.text.length > 0
+                  onClicked: { root.setSite(siteField.text, "allow"); siteField.text = "" }
+                }
+                ActionButton {
+                  text: "Block"; bordered: true; focusable: true; enabled: client.canMutateSettings && !action.running && siteField.text.length > 0
+                  onClicked: { root.setSite(siteField.text, "block"); siteField.text = "" }
+                }
+              }
+              Caption { text: "Terminal: badi app list, badi site list, badi apps|sites allowlist|blocklist, badi app|site NAME on|off|reset." }
             }
             ColumnLayout {
               visible: root.page === 2
@@ -313,7 +451,7 @@ Item {
               Controls.TextArea {
                 Layout.fillWidth: true
                 readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap
-                text: "badi status\nbadi pause\nbadi resume\nbadi app omawrite off\nbadi autostart off\nbadi service stop\nbadi doctor\nbadi logs\nbadi settings --json"
+                text: "badi status\nbadi pause\nbadi resume\nbadi app list\nbadi apps blocklist\nbadi site https://example.com off\nbadi autostart off\nbadi doctor\nbadi settings --json"
                 color: Color.accent; font.family: Style.font.family; font.pixelSize: Style.font.body
                 background: Rectangle { color: Color.popups.background }
                 Accessible.name: "Badi terminal command reference"

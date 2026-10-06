@@ -14,12 +14,12 @@ public:
     // missing or invalid control is rechecked at most once a second, or at
     // the next record after refresh().
     void record(std::string_view event, std::string_view app,
-                std::string_view reason, std::size_t before = 0);
+                std::string_view reason, std::size_t before = 0, std::size_t after = 0);
     void refresh() { disabledUntil_ = {}; }
 
 private:
     bool write(std::string_view event, std::string_view app,
-               std::string_view reason, std::size_t before);
+               std::string_view reason, std::size_t before, std::size_t after);
 
     std::chrono::steady_clock::time_point disabledUntil_{};
     std::string runId_;

@@ -86,7 +86,9 @@ struct WireCallbacks {
     std::function<void(const ClearNotice &)> onClear;
     std::function<void(const CommitPrepare &)> onCommitPrepare;
     std::function<void()> onDisconnected;
-    std::function<void(std::string_view, bool)> onPolicy;
+    // (session, allowed, byDefault): byDefault marks an allowance from the app
+    // list mode (matched_default), not from an exact rule.
+    std::function<void(std::string_view, bool, bool)> onPolicy;
 };
 
 class Transport {

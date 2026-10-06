@@ -181,8 +181,8 @@ private:
                 addon->onCommitPrepare(prepare);
             },
             .onDisconnected = [addon] { addon->onDisconnected(); },
-            .onPolicy = [addon](std::string_view session, bool allowed) {
-                addon->onPolicy(session, allowed);
+            .onPolicy = [addon](std::string_view session, bool allowed, bool byDefault) {
+                addon->onPolicy(session, allowed, byDefault);
             },
         };
     }
@@ -670,7 +670,8 @@ private:
         const auto context = currentContext(binding);
         if (!context) return debug_.record("request_blocked", app, unavailableContextReason(binding));
         if (const auto blocked = observedRequestBlocked(observed, *context, hasForeignImeUi(observePanel(binding)))) {
-            return debug_.record("request_blocked", app, *blocked, context->before.size());
+            return debug_.record("request_blocked", app, *blocked, context->before.size(),
+                                 observedAfter(*context).size());
         }
         binding.observedFocus = observed;
         if (binding.dismissedContext == *context) return;
@@ -678,7 +679,7 @@ private:
         const auto update = binding.state.updateContext(*context);
         if (update && open(binding) && transport_.publishContext(*update)) {
             binding.broker.coordinates = update->coordinates;
-            debug_.record("request", app, context->paragraphEndAfter ?
+            debug_.record("request", app, !context->paragraphEnd.empty() ?
                 "observed_field_request_paragraph_end" : "observed_field_request", context->before.size());
         }
     }
@@ -712,9 +713,16 @@ private:
         if (!authorityPaused_) queryFocusedPolicies();
     }
 
-    void onPolicy(std::string_view session, bool allowed) {
+    void onPolicy(std::string_view session, bool allowed, bool byDefault) {
         auto *binding = bindingFor(session);
         if (!binding || !binding->state.focused() || !binding->state.editingAvailable()) return;
+        // The app list mode opens only fields the observer corroborates; the
+        // manual unknown-identity path (Tab requests) needs an exact app rule.
+        if (allowed && byDefault && !binding->observed()) {
+            binding->broker.answer(false);
+            debug_.record("policy", binding->state.appId(), "app_rule_required");
+            return;
+        }
         binding->broker.answer(allowed);
         debug_.record("policy", binding->state.appId(), allowed ? "app_allowed" : "app_disabled");
         if (!allowed) return;

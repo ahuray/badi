@@ -102,6 +102,11 @@ authority there. Every other guard stays:
 - A browser field needs an origin allow: its exact `browser_origin` rule, or
   `badi site all on` for every origin without one. The observer cannot tell
   private windows apart, so site-all covers them too.
+- An app allowed only by the app blocklist mode (policy reason
+  `matched_default`) opens only an observed field; on the manual
+  unknown-identity path the addon treats it as denied (`app_rule_required`), so
+  an app outside Badi's integrations keeps its own Tab until it gets an exact
+  rule.
 - Before context publication, display and `commitString`, a fresh observer
   snapshot must agree with Fcitx's live surrounding text, absolute caret and
   document length. Disagreement or an unanswered RPC fails closed with a
@@ -145,19 +150,27 @@ wait for input (`observer_awaiting_input`), so a busy page cannot drive an
 inspection loop. With `badi debug on`, a missing or invalid debug control is
 rechecked at most once a second and at every focus-in.
 
-Chromium's text-input surrounding text ends every `<p>` with `"\n\n"` when
-anything is rendered after the editor, so a caret at the end of a ProseMirror
-composer's last paragraph reports that suffix. For an observed IME-parity field
-only, `normalizeObservedParagraphEnd()` treats after-caret text of exactly
-`"\n\n"` as end of field: Tab eligibility and the broker context use
-`after: ""` at the unchanged caret, while the fingerprint and every observer
-agreement check use the raw text (`observedAfter()`), which the observer
-reproduces from the paragraphs
+Chromium's text-input surrounding text ends every `<p>` with `"\n\n"` and
+every `<div>` line with `"\n"` when anything is rendered after the editor, so a
+caret at the end of a rich editor's last block reports that suffix. For an
+observed IME-parity field only, `normalizeObservedParagraphEnd()` treats
+after-caret text of exactly `"\n\n"` or `"\n"` as end of field: Tab
+eligibility and the broker context use `after: ""` at the unchanged caret,
+while the fingerprint and every observer agreement check use the raw text
+(`observedAfter()`), which the observer reproduces from the blocks
 ([rich editors](../accessibility/README.md#rich-editors)). Such a request
-records `observed_field_request_paragraph_end`. Any other suffix (one or three
-line breaks, text after them) stays `caret_not_at_end`, `"\r\n"` is never
-context, and observer disagreement fails as `observer_context_mismatch`. Native
-exact apps and unobserved contexts keep the unnormalized contract.
+records `observed_field_request_paragraph_end`. Any other suffix (three line
+breaks, text after them) stays `caret_not_at_end`, `"\r\n"` is never context,
+and observer disagreement fails as `observer_context_mismatch`, recording the
+content-free `before_bytes` and `after_bytes`.
+
+Agreement is exact with two narrow equivalences. An empty Fcitx `after` agrees
+with an observed block end alone, because both name the end of the field (an
+EditContext editor sends its own text, and an editor last on its page gets no
+block end). A snapshot with `scope: "block"`, the caret's block only because an
+opaque list, quote or table lies in the window, agrees when Fcitx's `before`
+equals it or ends with it right after a line break. Native exact apps and
+unobserved contexts keep the unnormalized contract.
 
 ## Tested versions and boundaries
 

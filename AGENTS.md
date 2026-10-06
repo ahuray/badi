@@ -64,7 +64,8 @@ Omarchy first. Preserve exact editing authority and prove the affected user flow
   during `beforeinput` may redirect it like a keystroke. Document that; never
   claim exact undo or verified field authority there. Every other guard stays:
   sensitive/purpose denial, foreign composition yield, exact observer identity
-  with snapshot/caret agreement before display and dispatch,
+  with snapshot/caret agreement before display and dispatch (whole window, or
+  the caret's own block when an opaque list/quote/table precedes it),
   revision/fingerprint/expiry binding, one-shot acceptance, no retries or
   synthetic keys. Replacement stays editor-owned.
 - Spelling replacement requires negotiated `text_replacement`, an exactly bound

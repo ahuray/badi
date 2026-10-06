@@ -1217,6 +1217,23 @@ void observerRepliesFailClosed() {
               !observerAgrees({{"before", "thank you!"}, {"after", ""}}, *context) &&
               !observerAgrees({{"before", "thank you"}}, *context) && !observerAgrees("thank you", *context),
           "the observer must report exactly Fcitx's text around the caret");
+    check(observerAgrees({{"before", "thank you"}, {"after", "\n"}}, *context) &&
+              observerAgrees({{"before", "thank you"}, {"after", "\n\n"}}, *context) &&
+              !observerAgrees({{"before", "thank you"}, {"after", "\n\n\n"}}, *context) &&
+              !observerAgrees({{"before", "thank you"}, {"after", " \n"}}, *context) &&
+              !observerAgrees({{"before", "thank you"}, {"after", "\nmore"}}, *context),
+          "an observed block end and an empty Fcitx after both name the end of the field, and nothing else does");
+    const auto quoted = captureContextWindow("Quoted list\n\nThanks for the", 27, 27, true, "en");
+    check(quoted && observerAgrees({{"before", "Thanks for the"}, {"after", ""}, {"scope", "block"}}, *quoted) &&
+              observerAgrees({{"before", ""}, {"after", ""}, {"scope", "block"}}, *captureContextWindow("Above\n", 6, 6, true, "en")) &&
+              !observerAgrees({{"before", "Thanks for the"}, {"after", ""}}, *quoted) &&
+              !observerAgrees({{"before", "for the"}, {"after", ""}, {"scope", "block"}}, *quoted) &&
+              !observerAgrees({{"before", "Thanks for the"}, {"after", ""}, {"scope", "field"}}, *quoted) &&
+              !observerAgrees({{"before", "Thanks for th"}, {"after", ""}, {"scope", "block"}}, *quoted),
+          "a block-scoped snapshot must be Fcitx's text from a line start to the caret; whole-field scope stays exact");
+    const auto midText = captureContextWindow("thank you all", 9, 9, true, "en");
+    check(midText && !observerAgrees({{"before", "thank you"}, {"after", "\n"}}, *midText),
+          "a block end never stands for text Fcitx still has after the caret");
     auto paragraph = captureContextWindow("thank you\n\n", 9, 9, true, "en");
     normalizeObservedParagraphEnd(*paragraph);
     check(observerAgrees({{"before", "thank you"}, {"after", "\n\n"}}, *paragraph) &&
@@ -1295,7 +1312,7 @@ void observedParagraphEndIsEndOfField() {
     check(raw.after == "\n\n" && !tabEligibleContext(raw), "an unnormalized paragraph end is mid-text");
     auto normalized = raw;
     normalizeObservedParagraphEnd(normalized);
-    check(normalized.after.empty() && normalized.paragraphEndAfter && observedAfter(normalized) == "\n\n" &&
+    check(normalized.after.empty() && normalized.paragraphEnd == "\n\n" && observedAfter(normalized) == "\n\n" &&
               normalized.before == raw.before && normalized.head == 9 && tabEligibleContext(normalized),
           "the paragraph end is end of field, and observer agreement still sees it");
     auto twice = normalized;
@@ -1303,13 +1320,18 @@ void observedParagraphEndIsEndOfField() {
     check(twice == normalized, "normalization is idempotent");
     check(normalized != capture("thank you", 9) && observedAfter(capture("thank you", 9)).empty(),
           "a field that ends at the caret is a different field state");
-    for (const auto text : {std::string_view("thank you\n"), std::string_view("thank you\n\n\n"),
-                            std::string_view("thank you \n\n"), std::string_view("thank you\n\nmore"),
+    auto line = capture("thank you\n", 9);
+    normalizeObservedParagraphEnd(line);
+    check(line.after.empty() && line.paragraphEnd == "\n" && observedAfter(line) == "\n" && tabEligibleContext(line) &&
+              line != normalized,
+          "a <div> line's single break is end of field too, and a different field state from a <p> end");
+    for (const auto text : {std::string_view("thank you\n\n\n"), std::string_view("thank you \n\n"),
+                            std::string_view("thank you\n\nmore"), std::string_view("thank you\nmore"),
                             std::string_view("thank you all")}) {
         auto other = capture(text, 9);
         const auto copy = other;
         normalizeObservedParagraphEnd(other);
-        check(other == copy && !other.paragraphEndAfter && !tabEligibleContext(other),
+        check(other == copy && other.paragraphEnd.empty() && !tabEligibleContext(other),
               "every other after-caret text stays mid-text and fails closed");
     }
     check(!captureContextWindow("thank you\r\n\r\n", 9, 9, true, "en"),
@@ -1319,7 +1341,7 @@ void observedParagraphEndIsEndOfField() {
     check(state.focusIn(kSession, "observed-target", "chatgpt", kSalt, NativeEditTarget::DesktopApplication,
                         NativeEditPath::Observed), "observed Codex composer");
     const auto update = state.updateContext(normalized);
-    check(update && update->context.after.empty() && update->context.paragraphEndAfter,
+    check(update && update->context.after.empty() && update->context.paragraphEnd == "\n\n",
           "the observed IME-parity context is accepted as end of field");
     const auto wire = nlohmann::json::parse(*serializeContextEnvelope(*update, 0))["payload"];
     check(wire["after"] == "" && wire["before"] == "thank you" && wire["selection"]["head"] == 9,

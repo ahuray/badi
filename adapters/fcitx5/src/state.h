@@ -60,26 +60,27 @@ struct ContextWindow {
     bool multiline = false;
     bool identityKnown = false;
     bool explicitRequest = true;
-    // Fcitx reported exactly Chromium's paragraph end after the caret,
-    // normalized away from `after` (see normalizeObservedParagraphEnd).
-    bool paragraphEndAfter = false;
+    // Fcitx reported exactly Chromium's block end after the caret ("\n\n" for a
+    // <p>, "\n" for a <div> line), normalized away from `after` (see
+    // normalizeObservedParagraphEnd); empty otherwise.
+    std::string paragraphEnd = {};
 
     bool operator==(const ContextWindow &other) const {
         // Invocation mode is request metadata, not an edit to the field.
         return before == other.before && after == other.after && anchor == other.anchor &&
             head == other.head && language == other.language && multiline == other.multiline &&
-            identityKnown == other.identityKnown && paragraphEndAfter == other.paragraphEndAfter;
+            identityKnown == other.identityKnown && paragraphEnd == other.paragraphEnd;
     }
 };
 
-// Chromium's text-input surrounding text ends every <p> with "\n\n" when
-// anything is rendered after the editor, so the caret at the end of a
-// ProseMirror composer's last paragraph reports after == "\n\n". For an
-// observed IME-parity field that exact suffix counts as end of field: `after`
-// becomes empty for eligibility and the broker, and `paragraphEndAfter` keeps
-// the raw text. The caller normalizes only observed IME-parity contexts; each
-// observer agreement check compares observedAfter(). Any other suffix, a
-// single "\n" included, is unchanged.
+// Chromium's text-input surrounding text ends every <p> with "\n\n" and every
+// <div> line with "\n" when anything is rendered after the editor, so the
+// caret at the end of a rich editor's last block reports after == "\n\n" or
+// "\n". For an observed IME-parity field that exact suffix counts as end of
+// field: `after` becomes empty for eligibility and the broker, and
+// `paragraphEnd` keeps the raw text. The caller normalizes only observed
+// IME-parity contexts; each observer agreement check compares observedAfter(),
+// so the observer must report the same end. Any other suffix is unchanged.
 void normalizeObservedParagraphEnd(ContextWindow &context);
 // The after-caret text exactly as Fcitx reported it.
 std::string observedAfter(const ContextWindow &context);

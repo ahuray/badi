@@ -929,7 +929,7 @@ def session(root, report):
         checks.append('IME-parity desktop (chatgpt): a paragraph end "\\n\\n" agreed by the observer is end of '
                       'field; the suggestion displays and Tab dispatches one exact append')
         for observed_after, fcitx_after, reason in (('', '\n\n', 'observer_context_mismatch'),
-                                                    ('\n', '\n', 'caret_not_at_end'),
+                                                    ('\n', '\n\n', 'observer_context_mismatch'),
                                                     ('\n\n\n', '\n\n\n', 'caret_not_at_end'),
                                                     ('\n\nmore', '\n\nmore', 'caret_not_at_end')):
             unchanged, count = updates(), reason_count(reason)
@@ -940,8 +940,17 @@ def session(root, report):
             assert not context.key(desktop.TAB), repr((observed_after, fcitx_after))
             quiet(.3)
             assert updates() == unchanged and context.candidate() is None and context.commits() == [SUFFIX]
-        checks.append('IME-parity desktop (chatgpt): observer disagreement about the paragraph end, one or three '
-                      'line breaks and text after it fail closed and keep the application Tab')
+        checks.append('IME-parity desktop (chatgpt): observer disagreement about the paragraph end, three line '
+                      'breaks and text after it fail closed and keep the application Tab')
+        # A <div> line ends with one break; an EditContext editor sends none while the DOM shows one.
+        for observed_after, fcitx_after in (('\n', '\n'), ('\n', '')):
+            paragraph_end(observed_after, fcitx_after, new_field=True)
+            wait(lambda: context.candidate() == SUFFIX, 'chatgpt suggestion for ' + repr((observed_after, fcitx_after)))
+            assert context.key(desktop.ESCAPE)
+            quiet(.3)
+            assert context.candidate() is None and context.commits() == [SUFFIX]
+        checks.append('IME-parity desktop (chatgpt): a <div> line end "\\n", and an empty Fcitx end against an '
+                      'observed block end, are end of field')
 
         open_context('Telegram')
         requested = len(backend.requested)
@@ -960,6 +969,37 @@ def session(root, report):
         assert context.candidate() is None and auxiliary() == ''
         assert 'A window title' not in backend.requested
         checks.append('A non-identifier program never becomes an app identity')
+
+        # App blocklist mode: an app without a rule is allowed by default, which
+        # opens only a field the observer corroborates; the manual path still
+        # needs an exact rule, so Tab stays the application's.
+        listed = control('settings', 'show', '--json')
+        default_mode = {**listed, 'revision': listed['revision'] + 1, 'all_linux_apps': True,
+                        'subjects': [rule for rule in listed['subjects']
+                                     if rule['identity'].get('app_id') not in ('cursor', FIXTURE_APP)]}
+        control('settings', 'replace', '--if-revision', str(listed['revision']), '--json', json.dumps(default_mode))
+        required = reason_count('app_rule_required')
+        open_context(FIXTURE_APP)
+        context.text(PREFIX)
+        wait(lambda: reason_count('app_rule_required') > required, 'default-allowed manual app needs a rule')
+        assert not context.key(desktop.TAB), 'the manual path keeps Tab without an exact app rule'
+        quiet(.3)
+        assert context.candidate() is None and context.commits() == []
+        backend.browser, backend.uri, backend.role = False, ALLOWED_URI, 'text'
+        backend.apps.add('cursor')
+        backend.value, backend.caret = PREFIX, len(PREFIX)
+        backend.field += 1
+        daemon.observer.invalidate('fixture_field_changed')
+        open_context('cursor')
+        context.text(PREFIX, len(PREFIX))
+        wait(lambda: context.candidate() == SUFFIX, 'default-allowed observed app suggestion')
+        assert context.key(desktop.ESCAPE)
+        quiet(.2)
+        restored = control('settings', 'show', '--json')
+        control('settings', 'replace', '--if-revision', str(restored['revision']), '--json',
+                json.dumps({**listed, 'revision': restored['revision'] + 1}))
+        checks.append('App blocklist mode opens an unlisted IME-parity app through its observed field and leaves an '
+                      'unlisted manual-path app with its own Tab')
 
         # Replacement is not negotiated. A peer that injects one anyway, on an
         # otherwise valid IME-parity observed session, loses the connection.

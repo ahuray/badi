@@ -35,15 +35,15 @@ bool privateOwned(int fd, bool directory) {
 } // namespace
 
 void ActivityDebug::record(std::string_view event, std::string_view app,
-                           std::string_view reason, std::size_t before) {
+                           std::string_view reason, std::size_t before, std::size_t after) {
     const auto checked = std::chrono::steady_clock::now();
     if (checked < disabledUntil_) return;
-    if (!write(event, app, reason, before)) disabledUntil_ = checked + std::chrono::seconds(1);
+    if (!write(event, app, reason, before, after)) disabledUntil_ = checked + std::chrono::seconds(1);
 }
 
 // False when debugging is off; an enabled control is revalidated on every call.
 bool ActivityDebug::write(std::string_view event, std::string_view app,
-                          std::string_view reason, std::size_t before) {
+                          std::string_view reason, std::size_t before, std::size_t after) {
     const auto *runtime = std::getenv("XDG_RUNTIME_DIR");
     if (!runtime || runtime[0] != '/') return false;
     const Descriptor directory(::open((std::string(runtime) + "/badi").c_str(),
@@ -75,7 +75,7 @@ bool ActivityDebug::write(std::string_view event, std::string_view app,
         {"schema", "badi.native-activity.v1"}, {"id", id}, {"at", now},
         {"pid", ::getpid()}, {"event", event}, {"reason", reason},
         {"app_id", validLinuxAppId(app) ? std::string(app) : "unidentified"},
-        {"before_bytes", before}, {"counts", counts_}, {"reason_counts", reasons_},
+        {"before_bytes", before}, {"after_bytes", after}, {"counts", counts_}, {"reason_counts", reasons_},
     }.dump();
     const auto temporary = "debug-native." + std::to_string(::getpid()) + ".tmp";
     const Descriptor output(::openat(directory.get(), temporary.c_str(),

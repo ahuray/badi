@@ -45,6 +45,16 @@ module reports one Fcitx program id, so a manual path would claim Tab in Calc
 cells; it therefore takes this same observed, append-only contract, limited by
 the observer to Writer's document paragraphs.
 
+## Agreement on any website (2026-10-06)
+
+With every site allowed (`badi site all on`), the observer serializes rich
+editors as Chromium does: `<p>` and heading blocks, `<div>` lines, inline marks
+and links, iframe and shadow-root fields. Agreement stays exact with two narrow
+equivalences: an empty Fcitx `after` and an observed block end both mean end of
+field, and when a list, quote or table lies in the window the observer
+corroborates only the caret's own block, which Fcitx's text must end with from a
+line start. Identity, caret-at-end, expiry and one-shot rules are unchanged.
+
 ## Consequences
 
 Chromium-based apps and Zen get continuations without a browser extension.

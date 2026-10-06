@@ -156,10 +156,10 @@ class DesktopTests(unittest.TestCase):
         document = {'schema': 'badi.settings.v2', 'revision': 3, 'paused': False, 'subjects': []}
         desktop.set_site(document, 'https://bank.example', False)
         exact = [dict(item) for item in document['subjects']]
-        desktop.set_all_sites(document, True)
+        desktop.set_mode(document, 'all_web_origins', True)
         self.assertIs(document['all_web_origins'], True)
         self.assertEqual(document['subjects'], exact)
-        desktop.set_all_sites(document, False)
+        desktop.set_mode(document, 'all_web_origins', False)
         self.assertNotIn('all_web_origins', document)
         self.assertEqual(document['subjects'], exact)
 
@@ -181,17 +181,66 @@ class DesktopTests(unittest.TestCase):
                 desktop.main(invalid)
             command.assert_not_called()
 
+    def test_list_modes_listing_and_reset(self):
+        settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'subjects': []}
+        desktop.set_app(settings, 'discord', False)
+        desktop.set_app(settings, 'omawrite', True)
+        desktop.set_site(settings, 'https://bank.example', False)
+        desktop.set_site(settings, 'http://localhost:8080', True)
+        exact = [dict(item) for item in settings['subjects']]
+        for arguments, key, expected in ((['apps', 'blocklist'], 'all_linux_apps', True),
+                                         (['apps', 'allowlist'], 'all_linux_apps', None),
+                                         (['app', 'all', 'on'], 'all_linux_apps', True),
+                                         (['sites', 'blocklist'], 'all_web_origins', True),
+                                         (['site', 'all', 'off'], 'all_web_origins', None)):
+            with self.subTest(arguments=arguments), \
+                 patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}']) as command, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                desktop.main(arguments)
+            sent = json.loads(command.call_args.args[0][5])
+            self.assertEqual(sent.get(key), expected)
+            self.assertEqual(sent['subjects'], exact, 'a mode change keeps every exact rule')
+        listing = {**settings, 'all_linux_apps': True}
+        with patch.object(desktop, 'control', return_value=json.dumps(listing)), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['app', 'list'])
+        self.assertEqual(output.getvalue().splitlines(),
+                         ['Apps: blocklist: every supported app except blocked ones',
+                          '  blocked  discord', '  allowed  omawrite'])
+        with patch.object(desktop, 'control', return_value=json.dumps(settings)), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['site', 'list'])
+        self.assertEqual(output.getvalue().splitlines(),
+                         ['Sites: allowlist: only allowed sites', '  allowed  http://localhost:8080',
+                          '  blocked  https://bank.example'])
+        for arguments, removed in ((['app', 'discord', 'reset'], 'discord'), (['site', 'https://bank.example', 'reset'], 'bank.example')):
+            with self.subTest(arguments=arguments), \
+                 patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}']) as command, \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                desktop.main(arguments)
+            sent = json.loads(command.call_args.args[0][5])
+            remaining = [item['identity'].get('app_id') or item['identity'].get('host') for item in sent['subjects']]
+            self.assertNotIn(removed, remaining)
+            self.assertEqual(len(remaining), len(exact) - 1)
+            self.assertIn('follows the', output.getvalue())
+        for invalid in (['apps', 'maybe'], ['app', 'list', 'extra']):
+            with patch.object(desktop, 'control') as command, self.assertRaises(RuntimeError):
+                desktop.main(invalid)
+            command.assert_not_called()
+
     def test_status_and_doctor_state_the_all_sites_default(self):
         health = {'paused': False, 'provider': 'local_model',
                   'metrics': {'provider_calls': 1, 'suggestions_shown': 1, 'provider_errors': 0, 'no_suggestion': BREAKDOWN}}
         settings = {'schema': 'badi.settings.v2', 'revision': 2, 'paused': False,
                     'all_web_origins': True, 'subjects': []}
-        self.assertIn('Web sites: every http(s) site unless blocked', desktop.status_text(health, settings))
-        self.assertNotIn('Web sites:', desktop.status_text(health, {**settings, 'all_web_origins': False}))
+        self.assertIn('Web sites: blocklist: every http(s) site except blocked ones', desktop.status_text(health, settings))
+        self.assertIn('Web sites: allowlist: only allowed sites',
+                      desktop.status_text(health, {**settings, 'all_web_origins': False}))
+        self.assertIn('Apps: allowlist: only allowed apps', desktop.status_text(health, settings))
         with patch.object(desktop, 'control', side_effect=[json.dumps(health), json.dumps(settings)]), \
              contextlib.redirect_stdout(io.StringIO()) as output:
             desktop.main(['status'])
-        self.assertIn('Web sites: every http(s) site', output.getvalue())
+        self.assertIn('Web sites: blocklist: every http(s) site', output.getvalue())
         service = {'loaded': True, 'active': 'active', 'state': 'running', 'autostart': True}
         for document, noted in ((settings, True), ({**settings, 'all_web_origins': False}, False)):
             def control(arguments, endpoint=None):
@@ -202,6 +251,7 @@ class DesktopTests(unittest.TestCase):
                  patch.object(desktop, 'control', side_effect=control):
                 report = desktop.health_report()
             self.assertEqual(desktop.ALL_SITES_NOTE in report['notes'], noted)
+            self.assertNotIn(desktop.ALL_APPS_NOTE, report['notes'])
             self.assertEqual(report['problems'], [])
             self.assertTrue(any('use IME-parity' in note for note in report['notes']))
             self.assertFalse(any('writing is disabled' in note for note in report['notes']))
@@ -210,7 +260,6 @@ class DesktopTests(unittest.TestCase):
         # Zen shares the Chromium browser-origin grants, so the disclosure names it.
         self.assertIn('Chromium/Brave/Zen fields, which have no second site gate', desktop.ALL_SITES_NOTE)
         self.assertIn('private windows', desktop.ALL_SITES_NOTE)
-        self.assertIn('Covers\n', desktop.HELP)
         self.assertIn('Chromium/Brave/Zen fields', desktop.HELP)
         self.assertIn('one site grant covers all three browsers', ' '.join(desktop.HELP.split()))
 

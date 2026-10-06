@@ -18,7 +18,7 @@ import daemon as observer_daemon
 import desktop as observer_desktop
 from daemon import APPS, Daemon, unique_object
 from desktop import WindowEvents, application_entry, per_user_executable, verify_process
-from field import MAX_RICH_BLOCKS, FieldBackend, browser_interface, rich_text
+from field import MAX_RICH_BLOCKS, FieldBackend, browser_interface, chromium_text, rich_text
 from geometry import CALIBRATED, calibrated_geometry, gecko_calibrated_geometry, visual_direction
 from test_contract import FakeBackend
 
@@ -1561,16 +1561,63 @@ class RichEditorTests(unittest.TestCase):
         self.assertEqual((snapshot["before"], snapshot["after"], snapshot["total_chars"]),
                          ("Hello\n\nwor", "ld\n\n", 14))
 
-    def test_paragraphs_ending_in_a_line_break_fail_closed(self):
+    def test_paragraphs_ending_in_a_line_break_get_one_break_fewer(self):
         # Chromium adds one break, not two, after "\n": blank lines and trailing hard breaks.
-        for paragraphs, carets in ((["Hello\n", "world"], [-1, 3]), (["Hello", "\n"], [-1, 0]),
-                                   (["Hello", ""], [-1, 0])):
+        for paragraphs, carets, before, after in ((["Hello\n", "world"], [-1, 3], "Hello\n\nwor", "ld\n\n"),
+                                                  (["Hello", "\n"], [-1, 0], "Hello\n\n", "\n\n"),
+                                                  (["Hello", ""], [-1, 0], "Hello\n\n", "\n\n")):
             with self.subTest(paragraphs=paragraphs):
                 self.composer(paragraphs, 1, carets)
-                self.assertEqual(self.snapshot(self.inspect()["focus"])["error"], "unsupported_field")
+                focus = self.inspect()["focus"]
+                self.assertEqual(self.prose_reads(), [], "inspect still reads no prose")
+                snapshot = self.snapshot(focus)["focus"]
+                self.assertEqual((snapshot["before"], snapshot["after"]), (before, after))
+                self.reads.clear()
         self.composer(["Hello\n"] + ["x" * 600], 1, [-1, 600])
-        self.assertEqual(self.snapshot(self.inspect()["focus"])["focus"]["after"], "\n\n",
-                         "a line-break paragraph outside the window does not matter")
+        snapshot = self.snapshot(self.inspect()["focus"])["focus"]
+        self.assertEqual((snapshot["before"], snapshot["after"]), ("x" * 512, "\n\n"),
+                         "the window keeps 512 characters after a dropped break")
+
+    def test_div_lines_and_section_roots_end_with_one_break(self):
+        # Gmail-style <div> lines, Draft.js, Slate and CodeMirror blocks are sections.
+        root = self.composer(["Alpha one.", "", "Beta two. x"], 2, [-1, -1, 11])
+        for child in root.children:
+            child.role = "section"
+        root.children[1].text.value = "\n"
+        snapshot = self.snapshot(self.inspect()["focus"])["focus"]
+        self.assertEqual((snapshot["before"], snapshot["after"]), ("Alpha one.\n\nBeta two. x", "\n"))
+        # Lexical and Quill roots carry no role=textbox: a web section div.
+        root = self.composer(["Hello", "world"], 1, [-1, 5])
+        root.role = "section"
+        self.assertEqual(self.snapshot(self.inspect()["focus"])["focus"]["before"], "Hello\n\nworld")
+        root.attributes = {"tag": "body"}
+        self.assertTrue(self.inspect()["ok"], "an editing iframe's body (TinyMCE) is an editor section")
+        root.attributes = {"tag": "span"}
+        self.assertEqual(self.inspect()["error"], "unsupported_field", "only a div or body root is an editor section")
+
+    def test_headings_inline_marks_and_block_scope(self):
+        # A heading ends like a paragraph.
+        root = self.composer(["Title", "Body"], 1, [-1, 4])
+        root.children[0].role = "heading"
+        self.assertEqual(self.snapshot(self.inspect()["focus"])["focus"]["before"], "Title\n\nBody")
+        # Bold, code and links are inline objects whose text Chromium writes in place.
+        root = self.composer(["Read \ufffc now"], 0, [10])
+        paragraph = root.children[0]
+        bold = paragraph.embed(RichNode(self.reads, "this", role="static", parent=paragraph, path="/bold"), start=5)
+        self.reads.clear()
+        focus = self.inspect()["focus"]
+        self.assertEqual(self.prose_reads(), [], "inline structure is read without prose")
+        snapshot = self.snapshot(focus)["focus"]
+        self.assertEqual((snapshot["before"], snapshot["after"], snapshot.get("scope")), ("Read this now", "\n\n", None))
+        bold.role = "image"
+        self.assertEqual(self.inspect()["error"], "unsupported_field", "an image in the caret's block is opaque")
+        # A list above the caret cannot be serialized exactly: only the caret's block is corroborated.
+        root = self.composer(["\ufffc", "Thanks for the"], 1, [-1, 14])
+        root.children[0].role = "list"
+        self.reads.clear()
+        snapshot = self.snapshot(self.inspect()["focus"])["focus"]
+        self.assertEqual((snapshot["before"], snapshot["after"], snapshot["scope"]), ("Thanks for the", "\n\n", "block"))
+        self.assertNotIn("/paragraph/0", {read[0] for read in self.prose_reads()}, "the opaque block is never read")
 
     def test_reads_stay_bounded_to_the_blocks_around_the_caret(self):
         self.composer(["a" * 600, "b" * 600, "tail"], 2, [-1, -1, 4])
@@ -1594,8 +1641,8 @@ class RichEditorTests(unittest.TestCase):
         def text_in_root():
             self.composer([self.PHRASE], 0, [24]).text.value = "\ufffcx"
 
-        def section():
-            self.composer([self.PHRASE], 0, [24]).children[0].role = "section"
+        def caret_in_list():
+            self.composer([self.PHRASE], 0, [24]).children[0].role = "list"
 
         def foreign_parent():
             self.composer([self.PHRASE], 0, [24]).children[0].parent = RichNode(self.reads, "", path="/other")
@@ -1609,7 +1656,7 @@ class RichEditorTests(unittest.TestCase):
         def too_many():
             self.composer(["x"] * (MAX_RICH_BLOCKS + 1), 0, [1] + [-1] * MAX_RICH_BLOCKS)
 
-        cases = {"unsupported_field": (placeholder, text_in_root, section, foreign_parent, shifted_link, two_anchors,
+        cases = {"unsupported_field": (placeholder, text_in_root, caret_in_list, foreign_parent, shifted_link, two_anchors,
                                        too_many),
                  "invalid_caret": (lambda: self.composer([self.PHRASE], 1, [24]),
                                    lambda: self.composer([self.PHRASE], 0, [-1]),
@@ -1679,7 +1726,8 @@ class RichEditorTests(unittest.TestCase):
 
 
 class RichTextTests(unittest.TestCase):
-    BLOCKS = [{"start": 0, "length": 5, "value": "Hello"}, {"start": 7, "length": 5, "value": "world"}]
+    BLOCKS = [{"start": 0, "length": 5, "value": "Hello", "end": "\n\n", "kind": "plain", "inline": ()},
+              {"start": 7, "length": 5, "value": "world", "end": "\n\n", "kind": "plain", "inline": ()}]
 
     def setUp(self):
         self.reads = []
@@ -1693,16 +1741,37 @@ class RichTextTests(unittest.TestCase):
                                        (6, 7): "\n", (12, 14): "\n\n", (7, 12): "world", (4, 4): ""}.items():
             self.assertEqual(rich_text(self.BLOCKS, start, end, self.read), expected, (start, end))
 
-    def test_a_window_starting_at_a_break_still_checks_its_paragraph_end(self):
-        self.assertEqual(rich_text(self.BLOCKS, 6, 9, self.read), "\nwo")
-        self.assertIn((0, 4, 5), self.reads, "the last character decides the break count")
+    def test_a_window_starting_at_a_break_still_checks_its_block_end(self):
+        blocks = [{"start": 0, "length": 5, "value": "Hell\n", "end": "\n", "kind": "plain", "inline": ()},
+                  {"start": 6, "length": 5, "value": "world", "end": "\n", "kind": "plain", "inline": ()}]
+        text = rich_text(blocks, 5, 9, self.read)
+        self.assertEqual(text, "\nwor")
+        self.assertEqual(chromium_text(blocks, 5, text, 8, self.read, None), ("wo", "r"))
+        self.assertIn((0, 4, 5), self.reads, "the block's last character decides the break count")
 
-    def test_embedded_objects_line_break_endings_and_invalid_reads_are_unsupported(self):
-        for value in ("Hel\ufffco", "Hell\n", None):
+    def test_line_breaks_drop_one_end_break_and_empty_blocks_keep_theirs(self):
+        blocks = [{"start": 0, "length": 1, "value": "\n", "end": "\n\n", "kind": "plain", "inline": ()},
+                  {"start": 3, "length": 0, "value": "", "end": "\n\n", "kind": "plain", "inline": ()},
+                  {"start": 5, "length": 2, "value": "ok", "end": "\n", "kind": "plain", "inline": ()}]
+        text = rich_text(blocks, 0, 8, self.read)
+        self.assertEqual(text, "\n\n\n\n\nok\n")
+        self.assertEqual(chromium_text(blocks, 0, text, 7, self.read, None), ("\n\n\n\nok", "\n"))
+
+    def test_inline_objects_serialize_as_their_text(self):
+        link = {"offset": 6, "node": None, "inline": ()}
+        blocks = [{"start": 0, "length": 8, "value": "Visit \ufffc.", "end": "\n\n", "kind": "inline", "inline": (link,)}]
+        text = rich_text(blocks, 0, 8, self.read)
+        self.assertEqual(text, "Visit \ufffc.")
+        self.assertEqual(chromium_text(blocks, 0, text, 8, self.read, lambda entry: "the docs"), ("Visit the docs.", ""))
+        with self.assertRaisesRegex(Denied, "unsupported_field"):
+            rich_text([{**blocks[0], "value": "Visit \ufffc\ufffc", "inline": (link,)}], 0, 8, self.read)
+        with self.assertRaisesRegex(Denied, "unsupported_field"):
+            rich_text([{**blocks[0], "kind": "opaque", "inline": ()}], 0, 8, self.read)
+
+    def test_embedded_objects_and_invalid_reads_are_unsupported(self):  # Not one of the block's inline objects.
+        for value in ("Hel\ufffco", None):
             with self.assertRaisesRegex(Denied, "unsupported_field"):
                 rich_text(self.BLOCKS, 0, 14, lambda block, first, last: value)
-        with self.assertRaisesRegex(Denied, "unsupported_field"):
-            rich_text([{"start": 0, "length": 0, "value": ""}], 0, 2, self.read)
 
 
 if __name__ == "__main__":

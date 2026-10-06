@@ -1384,6 +1384,7 @@ mod tests {
                     revision: 1,
                     paused: false,
                     all_web_origins: false,
+                    all_linux_apps: false,
                     subjects: vec![
                         SubjectRule {
                             identity: StableIdentity::browser_origin(

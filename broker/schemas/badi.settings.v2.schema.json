@@ -18,6 +18,10 @@
       "type": "boolean",
       "description": "Opt-in browser default. When true, an http(s) origin without an exact subject rule may read context, display and suggest, never learn or retain. Exact origin rules win. Producers omit the property when false."
     },
+    "all_linux_apps": {
+      "type": "boolean",
+      "description": "Opt-in app default (blocklist mode). When true, a Linux app without an exact subject rule may read context, display and suggest, never learn or retain; the policy reply says matched_default, so adapters open only fields they can corroborate. Exact app rules win. Producers omit the property when false."
+    },
     "subjects": {
       "type": "array",
       "maxItems": 64,

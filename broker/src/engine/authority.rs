@@ -6,7 +6,7 @@ use super::{Broker, BrokerError, BrokerState};
 use crate::metrics::Metrics;
 use crate::protocol::{
     Activation, AuthorityChangedPayload, PolicyResolutionReason, PolicyStatusPayload, ReasonCode,
-    TargetDescriptor,
+    TargetDescriptor, TargetKind,
 };
 use crate::settings::{PolicyResolution, SettingsV2};
 
@@ -34,7 +34,9 @@ impl Broker {
     }
 
     /// Publishes a changed epoch and, while paused, fences queued outcome
-    /// writes before the pause is acknowledged.
+    /// writes before the pause is acknowledged. Returns the pause state this
+    /// transition established under the lock; a fresh read after the fence
+    /// could report a concurrent toggle's state instead.
     async fn finish_pause_transition(
         &self,
         state: MutexGuard<'_, BrokerState>,
@@ -49,7 +51,7 @@ impl Broker {
         if effective_paused {
             self.flush_outcomes_before_pause_ack().await;
         }
-        self.is_paused().await
+        effective_paused
     }
 
     pub async fn is_paused(&self) -> bool {
@@ -154,7 +156,7 @@ pub(super) fn settings_allow_data(
 ) -> bool {
     let resolution = settings.resolve_target_validated(target);
     !runtime_paused
-        && resolution.configured
+        && resolution.configured()
         && resolution.allows_context_read()
         && resolution.allows_display()
         && resolution.allows_suggestion()
@@ -187,14 +189,19 @@ pub(super) fn policy_status(
         display_allowed: true,
         suggestions_allowed: true,
         learning_allowed: resolution.allows_learning(),
-        reason: PolicyResolutionReason::MatchedRule,
+        // Browser defaults keep matched_rule, which protocol v1 clients know.
+        reason: if resolution.by_default() && target.kind != TargetKind::Browser {
+            PolicyResolutionReason::MatchedDefault
+        } else {
+            PolicyResolutionReason::MatchedRule
+        },
     }
 }
 
 fn denial_reason(resolution: PolicyResolution) -> Option<PolicyResolutionReason> {
     if !resolution.identity_known {
         Some(PolicyResolutionReason::UnknownIdentity)
-    } else if !resolution.configured {
+    } else if !resolution.configured() {
         Some(PolicyResolutionReason::DefaultPolicy)
     } else if !resolution.allows_context_read() {
         Some(PolicyResolutionReason::ContextDisabled)

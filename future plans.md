@@ -1,116 +1,219 @@
 # Future plans
 
-The only active backlog. Goal: dependable local prediction and spelling
-assistance throughout Linux, Omarchy first, that stays fast, light and reliable.
-Tested coverage is in the [README](README.md). Git history keeps completed work
-and the earlier experiment logs.
+The only active backlog. Goal: the best local replacement for Cotypist on
+Linux, Omarchy first: useful suggestions that appear fast, stay quiet and never
+edit the wrong place. Tested coverage is in the [README](README.md); Git
+history keeps completed work and earlier experiment logs.
 
-## Now: working in daily apps
+Standing user decisions (2026-09-26): IME-parity for Chromium-based apps and
+Zen ([ADR 0003](docs/decisions/0003-ime-parity-append-only.md)), promote a
+quality fix only without a per-language harm increase, keep the model resident,
+and give explicit requests about 1.2 s.
 
-User decisions (2026-09-26): IME-parity for Chromium-based apps and Zen
-([ADR 0003](docs/decisions/0003-ime-parity-append-only.md)), promote a quality fix
-only without a per-language harm increase, keep the model resident, and give
-explicit requests about 1.2 s. Live with disposable text on 2026-09-27:
-Chromium, Zen, Telegram, VS Code, Cursor, Omawrite, Obsidian and Bash; on
-2026-10-06: Codex desktop, Brave Origin in the user's profile and Zen 1.23b.
+## Gap to Cotypist (research, 2026-10-06)
 
-- [x] Codex desktop composer: live acceptance in Codex desktop 26.930.
-- [x] Brave Origin full acceptance trial; Zen undo after acceptance: one Ctrl+Z
-      removes the acceptance alone (Brave removes the preceding typing too).
-- [ ] Discord: listing `force-renderer-accessibility` in its `settings.json`
-      `chromiumSwitches` exposes the web tree for one launch only; the web
-      client then resets the list. Remaining routes need a decision: a launcher
-      that re-adds it before every start (Discord's own relaunches bypass it)
-      or the desktop-wide AT-SPI `ScreenReaderEnabled` (untested). A composer
-      trial also needs a private channel, since typing shows an indicator.
-- [x] Fcitx 5.1.22 compatibility frontend across fresh logins: five logins from
-      2026-10-02 to 2026-10-06 kept it with no fallback.
-- [x] Observer lock check: the Quickshell lock query now runs while the field
-      is read (80 ms query: inspect 123 → 83 ms). The shell's `lock` IPC target
-      has no signals, so an event-driven lock state would need a new source.
+Based on Cotypist's macOS documentation and changelog, the Linux and Omarchy
+landscape, and Badi's measured state. There has been no side-by-side run on a
+Mac yet.
 
-## Code quality: fast, light, reliable (2026-09-27)
+- **Coverage is ahead of every Linux alternative found.** It includes
+  Chromium-based apps, Zen, rich editors on any website, Omarchy web apps,
+  Telegram, LibreOffice Writer, Obsidian and Bash. All of them keep exact
+  binding, and native undo is preserved wherever the app supports it. The
+  closest Omarchy alternative, Oma Tab, replaces the input method and ships a
+  4.8 GB model.
+- **The interaction is behind.**
+  - Cotypist keeps a suggestion while you type through it, accepts word by
+    word and stays quiet in search boxes and small fields. Where it cannot
+    draw ghost text inline, it shows a mirror window.
+  - Badi drops the suggestion on every key and requests a new one, although
+    [VISION](VISION.md) promises type-through. It accepts word by word only in
+    Obsidian.
+  - Where caret geometry is missing (Qt, LibreOffice, iframes, VS Code 1.140),
+    Badi falls back to the Fcitx panel.
+- **Speed and footprint.** A warm suggestion becomes visible in 0.37–0.65 s:
+  the model takes 215–280 ms, after a 120 ms typing pause. `llama-server`
+  holds about 2.0 GB on the CPU while the Intel GPU sits idle.
+- **Quality.** The installed Qwen3-1.7B scores weakly on independent sets, and
+  Persian misses its time budget. The language comes from the keyboard layout
+  rather than the text.
+- **Personal touch.** Cotypist learns from your writing and takes global and
+  per-app instructions and languages. Badi has none of these.
+- **Installation.** Badi installs through user-local scripts. Omarchy already
+  has a pattern for first-class tools, which Voxtype follows: a first-run
+  invitation, a menu installer and a removal path. Omarchy's default Chromium
+  flags also lack `--enable-wayland-ime`; upstream
+  [omarchy#12139](https://github.com/omacom/omarchy/pull/12139) adds it and is
+  still open.
 
-- [x] Remove the old evaluator, capability receipts and V3 gates, the browser
-      extension and its Dillinger/Monaco build, the legacy panel, the try-native
-      registry and research logs (about 42k lines).
-- [x] Move the Prediction Lab worker into its own crate; the broker has no Lab
-      feature, hook or dependency.
-- [x] Broker: a bounded loopback HTTP/1.1 client replaces reqwest (43 crates
-      instead of 98, binary 3.6 → 2.8 MB); in-place lexicon lookup (no 2 MiB
-      index); no idle wakeups; pidfd exit wait; resident model service.
-- [x] Installers: shared helpers, one backup layout keeping three per installer
-      (about 300 → 17 MB), compatibility-build reuse (67 s → instant).
-- [x] Editors: one Obsidian connection; idle Bash bridges exit.
-- [x] Readability: `engine.rs` split into modules (longest function 242 → 82
-      lines), one server handler per message kind, observer replies decided
-      in the tested Fcitx core, the observer split into desktop, field and
-      geometry sides with a contract dispatch table, and one app-identity list
-      checked across addon and observer in CI.
-- [x] `badictl` behind one request exchange (`run` 100 → 20 lines, output
-      pinned byte for byte); one hex encoder and one language-tag check; one
-      Fcitx session-open path; `addon.cpp` as event, decision and action glue
-      (longest function 80 → 44 lines); runbooks trimmed to current facts.
-- [x] The Lab's paced subprocess test orders its steps by events, not
-      wall-clock margins; 10/10 passes at load ~50.
+## Decisions for the user
 
-## Prediction quality
+1. **Accept keys.** In Cotypist, Tab accepts the next word and a second key
+   accepts the rest. Badi's suggestions are at most four words.
+   Recommendation:
+   - Tab keeps accepting the whole suggestion.
+   - A word key (Ctrl+Right, only while a suggestion is shown) accepts the
+     next word.
+   - The panel can swap the two keys.
+2. **Context beyond the field.** Cotypist reads on-screen context, but Badi's
+   [context firewall](VISION.md#context-firewall) forbids screen scraping. The
+   compatible option is an opt-in, per-app read of the same window's
+   accessibility text, such as the message being answered. Either way this
+   needs a VISION amendment.
+3. **Learning.** Either opt-in style learning or none. Learning would draw only
+   on accepted suggestions and samples the user chooses, stored encrypted on
+   this machine, with deletion in one step.
+4. **Distribution.** An AUR package first, then a proposal to Omarchy. Both
+   count as publication and need the naming and licence review.
+5. **Discord** (Phase 5): a launcher that re-adds the flag, or the
+   desktop-wide AT-SPI switch.
 
-Measured baseline: the installed Qwen3-1.7B path is weak on independent sets,
-Persian often misses the 550 ms budget, and no ~350M candidate passed the
-English/German/Persian gates (2026-09-10). Promotion needs a new hypothesis,
-fresh independent cases, native Persian review where ambiguous and the full Lab
-qualification.
+## Phase 1: the interaction
 
-- [ ] Freeze a new independent multilingual confirmation set (at least 100
-      prefixes). Report usefulness, abstention, errors, useful words and
-      keystroke savings separately; target warm visible p50 ≤ 250 ms and
-      p95 ≤ 500 ms and report misses.
-- [ ] Reduce the combined instruction/boundary mode's latency (18/22 useful in
-      development, but a 2.8 s cold median) and confirm it independently.
-- [ ] Keep facts from style examples from overriding the current draft; the
-      Lab's `style_fact_conflict` fence still needs a multilingual confirmation.
+Exit criteria: in Brave, Zen, Telegram, VS Code and Obsidian, typing through a
+suggestion keeps it without a model call, and both word and whole acceptance
+work. The installed-flow matrix must record zero wrong-field or stale edits.
+
+- [ ] Type-through.
+      - A typed character that matches the suggestion's next character keeps
+        the remainder visible; any other key dismisses it.
+      - The broker rebinds the remainder to the new revision and fingerprint
+        without running inference.
+      - Every agreement check still runs before display and acceptance.
+      - Record this authority change in an ADR.
+- [ ] Word acceptance on the Fcitx paths: one append-only commit of
+      `accept_word`, with the remainder rebound as for type-through
+      (decision 1).
+- [ ] Quiet where it doesn't help.
+      - No automatic suggestions in search and URL-like fields, file dialogs
+        or narrow fields; an explicit request still works.
+      - A setting for how long Escape keeps a field quiet. Today it lasts until
+        the text changes.
+- [ ] A preview wherever caret geometry is missing.
+      - Anchor a ghost line to the field's extents instead of falling back to
+        the Fcitx panel (Qt, LibreOffice, iframes).
+      - VS Code 1.140's hidden textarea is caret-wide, so calibration rejects
+        the glyph; a new drawing bound needs recorded-extent tests.
+      - Draw the preview text at the host's font size.
+
+## Phase 2: faster and lighter
+
+Exit criteria on this laptop:
+- warm visible p50 ≤ 250 ms and p95 ≤ 500 ms, with misses reported;
+- resident memory back to about 1.3 GB;
+- no quality regression in the Lab.
+
+- [ ] Reuse the prompt and KV cache across keystrokes in one field. Start
+      inference before the 120 ms pause ends, and cancel it on a mismatch.
+- [ ] GPU offload through Vulkan on the Intel iGPU (Arch ships `ggml-vulkan`):
+      measure latency, power and the fallback to CPU.
+- [ ] Qualify smaller and newer models in the Lab: Qwen3 0.6B, Gemma 4 E2B with
+      its multi-token drafter, and Qwen3 4B on the GPU. Defer hybrid-attention
+      models until llama.cpp reuses their caches.
+- [ ] Battery mode as a setting: a longer pause and a smaller model on battery.
+- [ ] Lower-memory hardware: cold start, RAM, sustained latency, power and
+      crash recovery.
+
+## Phase 3: one-command install on Omarchy
+
+Exit criteria: on a fresh Omarchy install, one menu action covers install,
+suggestion, acceptance, update and uninstall, and uninstall leaves no files,
+services or flags behind.
+
+- [ ] A package (PKGBUILD) that installs the addon in `/usr/lib/fcitx5`, plus
+      the broker, the observer and the user units. The hardware-selected model
+      downloads in a separate step that is pinned and hash-verified.
+- [ ] Omarchy integration following Voxtype:
+      - a first-run invitation (`omarchy-done ensure` and
+        `omarchy-notification-send --exec`);
+      - a floating-terminal installer with a hardware probe;
+      - menu entries for settings and removal;
+      - keybindings;
+      - theme colours for the preview.
+- [ ] Chromium-family flags: support omarchy#12139, and keep the installer's
+      per-browser flags until it lands.
+- [ ] Broker sandbox: `PrivateNetwork=yes` and a read-only model directory, so
+      that the absence of network access can be proven. Signed updates.
+- [ ] Retire the Fcitx 5.1.22 compatibility frontend once Arch ships the
+      upstream fix.
+- [ ] Installed-flow matrix with zero wrong-field or stale edits, covering:
+      - service restart;
+      - suspend and resume;
+      - native undo and pause;
+      - composition and stale focus;
+      - fractional scaling and several monitors.
+- [ ] Licensing and naming review before any release. No publication or Git
+      history changes without the user's request.
+
+## Phase 4: better suggestions
+
+The Qwen3-1.7B baseline is weak on independent sets, and Persian often misses
+the 550 ms budget. No candidate of about 350M parameters passed the
+English/German/Persian gates (2026-09-10). Promoting a model needs a new
+hypothesis, fresh independent cases, native Persian review where results are
+ambiguous, and the full Lab qualification.
+
+- [ ] Freeze a new independent multilingual confirmation set of at least 100
+      prefixes.
+      - Report usefulness, abstention, errors, useful words and keystroke
+        savings separately.
+      - Report misses against the Phase 2 latency targets.
+- [ ] Detect the language from the field's text rather than the keyboard
+      layout, with a per-app override.
+- [ ] Global and per-app instructions, and a strength setting that trades
+      frequency for confidence. Opt-in learning follows decision 3.
+- [ ] Content-free statistics in the panel: suggestions shown and accepted,
+      and words saved.
+- [ ] Reduce the latency of the combined instruction/boundary mode and confirm
+      it independently. It scored 18/22 useful in development but had a 2.8 s
+      cold median.
+- [ ] Keep facts from style examples from overriding the current draft. The
+      Lab's `style_fact_conflict` fence still needs a multilingual
+      confirmation.
 - [ ] Tell an intended partial word from a completed one before automatic
-      contextual lookup (`mire` → `Mirella` must complete; `marin` must not
-      become `Marinella`); dictionary membership is the wrong splitter.
-- [ ] German/Persian correction: the 40-case run failed (2 and 4 useful, one
-      unwanted change each). Improve names and nearby-word handling on
-      independent cases before any application integration.
-- [ ] Calibrate token confidence against reviewed full additions per language
+      contextual lookup: `mire` → `Mirella` must complete, but `marin` must not
+      become `Marinella`. Dictionary membership is the wrong way to split them.
+- [ ] Spelling correction in native fields and Obsidian, with exact replacement
+      ranges and explicit acceptance. The 40-case German/Persian run failed: 2
+      and 4 useful, with one unwanted change each. Improve the handling of
+      names and nearby words on independent cases first.
+- [ ] Calibrate token confidence against reviewed full additions, per language
       and boundary category.
-- [ ] Cotypist parity needs the same tasks on a named Cotypist version and Mac;
-      source research cannot establish it.
+- [ ] Measure Cotypist parity: run the same tasks on a named Cotypist version
+      on a Mac. Source research cannot establish parity.
 
-## Coverage and reliability
+## Phase 5: the remaining surfaces
 
-- [ ] Validate the installed flow as a matrix: service restart, native undo,
-      pause, composition and stale focus, with zero wrong-field or stale edits.
-- [ ] Native coverage beyond Omawrite/Xournal++/Telegram through measured
-      toolkit integrations. LibreOffice Writer is covered (2026-10-06); its
-      paragraphs expose `EditableText`, a possible route to exact replacement.
-- [ ] VS Code 1.140 inline preview: its hidden textarea is caret-wide, so
-      calibration rejects the glyph and the Fcitx panel is shown; a new
-      drawing bound needs recorded-extent tests.
-- [x] Apps found on this machine (user decision 2026-10-06): Omarchy web apps
-      as Brave `--app` windows, LibreOffice Writer and Grok Bot.
-- [ ] Grok Bot composer trial in the signed-in app after a relaunch with
-      `grok-bot-flags.conf`; a fresh profile shows only its sign-in screen.
-- [ ] Browser rich editors beyond single-paragraph composers, frames/shadow
-      roots and Firefox, keeping exact field binding and per-site consent.
-- [ ] Fish/Zsh and terminal editors through their own buffers; never accept by
-      executing a generated command.
-- [ ] Spelling correction in native fields and Obsidian with exact replacement
-      ranges and explicit acceptance.
-- [ ] Install, update, reload and uninstall on a fresh Omarchy session.
-- [ ] Lower-memory hardware and GPU: cold start, RAM, sustained latency, power
-      and crash recovery.
+- [ ] Browser rich editors. Chromium already handles multi-block `<p>`/`<div>`
+      editors, headings, inline marks, iframes and shadow roots (2026-10-06).
+      Remaining:
+      - a caret inside a list or a quote;
+      - EditContext editors (VS Code's default editor, CodeMirror on recent
+        Chromium);
+      - multi-paragraph fields in Zen, because Gecko sends only the caret's
+        paragraph;
+      - Firefox.
+- [ ] Discord.
+      - Listing `force-renderer-accessibility` in its `settings.json`
+        `chromiumSwitches` exposes the web tree for one launch only; the web
+        client then resets the list (decision 5).
+      - A composer trial needs a private channel, because typing shows an
+        indicator.
+- [ ] Grok Bot composer trial in the signed-in app, after a relaunch with
+      `grok-bot-flags.conf`. A fresh profile shows only its sign-in screen.
+- [ ] Native coverage beyond Omawrite, Xournal++, Telegram and LibreOffice
+      Writer, through measured toolkit integrations. LibreOffice paragraphs
+      expose `EditableText`, a possible route to exact replacement.
+- [ ] Fish, Zsh and Neovim through their own buffers; never accept by running
+      a generated command.
+- [ ] Prompts of terminal agents such as Claude Code and Codex. Terminals send
+      no surrounding text, so these need a channel per program or stay
+      unsupported.
 
 ## Later
 
 - [ ] Other Linux desktops and a standard tray integration.
-- [ ] Opt-in personalization with explicit retention and clear controls.
-- [ ] Release packaging, licensing and naming review. No publication or Git
-      history changes without the user's request.
+- [ ] Emoji shortcodes and personal snippets.
 
 Update this file in place; record durable decisions in
 [docs/decisions](docs/decisions/).

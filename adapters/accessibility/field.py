@@ -23,10 +23,18 @@ MAX_URI_BYTES = 4096
 # documents are unsupported rather than slow; each block costs a few calls.
 EMBEDDED_OBJECT = "￼"
 MAX_RICH_BLOCKS = 64
-# Chromium's text-input-v3 surrounding text ends every <p> with two line
-# breaks when anything is rendered after the editor, and only one after a
-# paragraph whose text already ends in a line break.
-PARAGRAPH_END = "\n\n"
+# Chromium frames whose document has its creator's origin (HTML: initial and srcdoc documents).
+INHERITED_ORIGIN_URIS = frozenset({"about:blank", "about:srcdoc"})
+# Chromium's text-input-v3 surrounding text ends each block of a rich editor
+# when anything is rendered after the editor: a <p> (role paragraph) with two
+# line breaks and a <div> (role section) with one, and with one fewer when the
+# block's own text already ends in a line break (an empty line, a trailing <br>).
+BLOCK_ENDS = {"paragraph": "\n\n", "heading": "\n\n", "section": "\n"}
+# Inline elements inside a block (<strong>, <em>, <code>, <span>, <a>, <mark>,
+# <sub>, <sup>) whose text Chromium serializes in place of their U+FFFC.
+INLINE_ROLES = frozenset({"static", "link", "mark", "subscript", "superscript"})
+MAX_INLINE_OBJECTS = 64
+MAX_INLINE_DEPTH = 4
 
 
 class CaretText(NamedTuple):
@@ -44,6 +52,7 @@ class RichLayout:
     total_chars: int
     selections: int
     caret_text: CaretText
+    caret_block: int
 
 
 class FieldBackend:
@@ -102,6 +111,7 @@ class FieldBackend:
                 "role": role, "tag": attributes.get("tag", ""), "input_type": attributes.get("text-input-type", ""),
                 **self.states(flags), "caret": caret, "total_chars": count, "selection_count": selections,
                 "geometry": geometry, "node": node, "flatten": flatten, "blocks": rich.blocks if rich else None,
+                "caret_block": rich.caret_block if rich else None,
                 "sentence_start": sentence_start}
 
     def sentence_start(self, local):
@@ -163,7 +173,7 @@ class FieldBackend:
         """`metadata` with the same field's caret, length and selections read again."""
         caret, count, selections, rich = self.caret_position(metadata["node"], metadata["flatten"])
         return {**metadata, "caret": caret, "total_chars": count, "selection_count": selections,
-                "blocks": rich.blocks if rich else None}
+                "blocks": rich.blocks if rich else None, "caret_block": rich.caret_block if rich else None}
 
     def text(self, metadata, start, end):
         """The field's text in [start, end) of its flattened coordinates."""
@@ -171,6 +181,24 @@ class FieldBackend:
         if not metadata.get("blocks"):
             return self.atspi.Text.get_text(metadata["node"].get_text_iface(), start, end)
         return rich_text(metadata["blocks"], start, end, self.read_block)
+
+    def serialized(self, metadata, start, before, after):
+        """A rich root's `before` and `after` the caret as Chromium sends them to Fcitx."""
+        return chromium_text(metadata["blocks"], start, before + after, start + len(before), self.read_block,
+                             self.inline_text)
+
+    def rich_window(self, metadata, start, end):
+        """The snapshot window and its scope.
+
+        The whole window when every block in it serializes exactly; otherwise
+        only the caret's own block, which Fcitx's text must end with.
+        """
+        blocks = metadata["blocks"]
+        if not any(block["kind"] == "opaque" and block["start"] < end and
+                   start < block["start"] + block["length"] + len(block["end"]) for block in blocks):
+            return start, end, "field"
+        block = blocks[metadata["caret_block"]]
+        return (max(start, block["start"]), min(end, block["start"] + block["length"] + len(block["end"])), "block")
 
     def read_block(self, block, first, last):
         self.budget()
@@ -275,11 +303,16 @@ class FieldBackend:
         return uri
 
     def nearest_document_uri(self, node):
-        """The nearest document's URI; None only when no ancestor is a document."""
+        """The nearest document's URI; None only when no ancestor is a document.
+
+        An about:blank or about:srcdoc frame (TinyMCE's editing iframe, a
+        srcdoc widget) has its creator's origin, so its enclosing document's
+        URI stands for it.
+        """
         for ancestor in self.ancestors(node):
             if "Document" in ancestor.get_interfaces():
                 uri = self.document_attribute(ancestor, "URI")
-                if uri:
+                if uri and uri not in INHERITED_ORIGIN_URIS:
                     return uri
         return None
 
@@ -380,14 +413,16 @@ class FieldBackend:
     def rich_layout(self, root, count, caret):
         """Flattened coordinates of a Chromium rich editor root, or None for a plain field.
 
-        A ProseMirror composer (Codex desktop) is a focused `entry` whose text
-        is one U+FFFC per paragraph; the paragraph holds the typed text,
-        reports the caret, and the root's caret is the offset of that
-        paragraph's embedded object. Only lengths, caret offsets and structure
-        are read here, never prose. Anything the flattening cannot resolve
-        fails closed: root text that is not solely embedded paragraphs, a
-        paragraph with its own embedded objects (placeholder, image, mention,
-        link), another role, a foreign parent, or an ambiguous caret.
+        A rich editor (ProseMirror in Codex, Lexical, Quill, Draft.js, Slate,
+        CKEditor, TinyMCE, a contenteditable of <p> or <div> lines) is a focused
+        root whose text is one U+FFFC per block, and the root's caret is the
+        offset of the block holding the caret. A block is plain text, text with
+        inline objects (bold, code, links), or opaque (a list, quote, table or
+        image). Only roles, lengths, links, caret offsets and structure are read
+        here, never prose, so each block counts its raw length and full end; the
+        snapshot serializes them as Chromium does. The caret must be in a plain
+        or inline block. Anything else fails closed: root text that is not
+        solely embedded blocks, a foreign parent, or an ambiguous caret.
         """
         if "Hypertext" not in root.get_interfaces():
             return None
@@ -400,37 +435,80 @@ class FieldBackend:
             raise Denied("unsupported_field")
         blocks, carets, selections, start = [], [], 0, 0
         for index in range(links):
-            paragraph = self.linked_paragraph(root, hypertext, index)
-            text = paragraph.get_text_iface()
-            length, offset = text.get_character_count(), text.get_caret_offset()
-            selections += text.get_n_selections()
-            blocks.append({"node": paragraph, "start": start, "length": length})
+            node = self.linked_block(root, hypertext, index)
+            block = {"node": node, "start": start, **self.block_shape(node)}
+            if "Text" in node.get_interfaces():
+                text = node.get_text_iface()
+                block["length"], offset = text.get_character_count(), text.get_caret_offset()
+                selections += text.get_n_selections()
+            else:
+                block["length"], offset = 1, -1
+            blocks.append(block)
             carets.append(offset)
-            start += length + len(PARAGRAPH_END)
+            start += block["length"] + len(block["end"])
         return flattened_layout(blocks, carets, selections, start, caret)
 
-    def linked_paragraph(self, root, hypertext, index):
-        """The plain paragraph that the root's embedded object `index` links to."""
+    def linked_block(self, root, hypertext, index):
+        """The child block that the root's embedded object `index` links to."""
         A = self.atspi
         self.budget()
         link = A.Hypertext.get_link(hypertext, index)
         if (link is None or A.Hyperlink.get_start_index(link) != index or
                 A.Hyperlink.get_end_index(link) != index + 1 or A.Hyperlink.get_n_anchors(link) != 1):
             raise Denied("unsupported_field")
-        paragraph = A.Hyperlink.get_object(link, 0)
-        if not self.plain_paragraph_of(paragraph, root):
-            raise Denied("unsupported_field")
-        return paragraph
-
-    def plain_paragraph_of(self, node, root):
-        """A `paragraph` child of `root` whose own text embeds no further objects."""
+        node = A.Hyperlink.get_object(link, 0)
         parent = node.get_parent() if node is not None else None
-        if (node is None or parent is None or node.get_role_name() != "paragraph" or
-                (parent.app.bus_name, parent.path) != (root.app.bus_name, root.path)):
-            return False
-        interfaces = node.get_interfaces()
-        return ("Text" in interfaces and "Hypertext" in interfaces and
-                self.atspi.Hypertext.get_n_links(node.get_hypertext_iface()) == 0)
+        if node is None or parent is None or (parent.app.bus_name, parent.path) != (root.app.bus_name, root.path):
+            raise Denied("unsupported_field")
+        return node
+
+    def block_shape(self, node):
+        """A block's kind, Chromium end and inline objects, from structure alone."""
+        role, interfaces = node.get_role_name(), node.get_interfaces()
+        opaque = {"kind": "opaque", "end": "\n", "inline": ()}
+        if role not in BLOCK_ENDS or "Text" not in interfaces or "Hypertext" not in interfaces:
+            return opaque
+        objects = self.inline_objects(node)
+        if objects is None:
+            return opaque
+        return {"kind": "inline" if objects else "plain", "end": BLOCK_ENDS[role], "inline": objects}
+
+    def inline_objects(self, node, depth=0):
+        """Each embedded object's offset and node when all are inline text, else None."""
+        A = self.atspi
+        self.budget()
+        hypertext = node.get_hypertext_iface()
+        count = A.Hypertext.get_n_links(hypertext)
+        if count > MAX_INLINE_OBJECTS or depth > MAX_INLINE_DEPTH:
+            return None
+        objects = []
+        for index in range(count):
+            link = A.Hypertext.get_link(hypertext, index)
+            if link is None or A.Hyperlink.get_n_anchors(link) != 1:
+                return None
+            offset = A.Hyperlink.get_start_index(link)
+            child = A.Hyperlink.get_object(link, 0)
+            if (A.Hyperlink.get_end_index(link) != offset + 1 or child is None or
+                    child.get_role_name() not in INLINE_ROLES or "Text" not in child.get_interfaces()):
+                return None
+            nested = self.inline_objects(child, depth + 1) if "Hypertext" in child.get_interfaces() else []
+            if nested is None:
+                return None
+            objects.append({"offset": offset, "node": child, "inline": nested})
+        return objects
+
+    def inline_text(self, entry):
+        """An inline object's text with its own inline objects in place."""
+        self.budget()
+        text = entry["node"].get_text_iface()
+        value = self.atspi.Text.get_text(text, 0, text.get_character_count())
+        for nested in sorted(entry["inline"], key=lambda item: item["offset"], reverse=True):
+            if value[nested["offset"]:nested["offset"] + 1] != EMBEDDED_OBJECT:
+                raise Denied("unsupported_field")
+            value = value[:nested["offset"]] + self.inline_text(nested) + value[nested["offset"] + 1:]
+        if EMBEDDED_OBJECT in value:
+            raise Denied("unsupported_field")
+        return value
 
 
 def only_field(fields, pid):
@@ -449,47 +527,65 @@ def browser_interface(uri):
 
 
 def flattened_layout(blocks, carets, selections, total_chars, root_caret):
-    """The layout when exactly the paragraph that the root's caret names holds the caret."""
+    """The layout when exactly the text block that the root's caret names holds the caret."""
+    if 0 <= root_caret < len(blocks) and blocks[root_caret]["kind"] == "opaque":
+        raise Denied("unsupported_field")
     if not 0 <= root_caret < len(blocks) or not 0 <= carets[root_caret] <= blocks[root_caret]["length"] or any(
             offset != -1 for index, offset in enumerate(carets) if index != root_caret):
         raise Denied("invalid_caret")
     block, caret = blocks[root_caret], carets[root_caret]
     return RichLayout(blocks, block["start"] + caret, total_chars, selections,
-                      CaretText(block["node"].get_text_iface(), caret, block["length"]))
+                      CaretText(block["node"].get_text_iface(), caret, block["length"]), root_caret)
 
 
 def rich_text(blocks, start, end, read):
     """Text of [start, end) in a rich root's flattened coordinates.
 
-    Each block is its paragraph text followed by PARAGRAPH_END, exactly as
-    Chromium serializes a paragraph that does not end in a line break. One that
-    does (an empty ProseMirror paragraph, a trailing hard break) gets only one
-    more break from Chromium, which these lengths cannot express without
-    reading prose at inspection, so it fails closed whenever its end is in the
-    window. `read(block, first, last)` returns block-local text and must not
-    contain embedded objects, whose text cannot be resolved.
+    Each block is its own raw text, inline objects as U+FFFC, followed by its
+    full end ("\n\n" or "\n"). `read(block, first, last)` returns block-local
+    text; an opaque block, or an embedded object that is not one of the block's
+    inline objects, cannot be resolved.
     """
     parts = []
     for block in blocks:
         first, length = block["start"], block["length"]
         separator = first + length
         low, high = max(start, first), min(end, separator)
-        value = _paragraph_text(read(block, low - first, high - first)) if low < high else ""
-        parts.append(value)
-        if start < separator + len(PARAGRAPH_END) and separator < end:
-            last = value[-1:] if high == separator and value else _last_character(block, read)
-            if not isinstance(last, str) or len(last) != 1 or last in ("\n", EMBEDDED_OBJECT):
-                raise Denied("unsupported_field")
-            parts.append(PARAGRAPH_END[max(start - separator, 0):end - separator])
+        if low < high and block["kind"] == "opaque":
+            raise Denied("unsupported_field")
+        parts.append(_block_text(read(block, low - first, high - first), block, low - first) if low < high else "")
+        if start < separator + len(block["end"]) and separator < end:
+            parts.append(block["end"][max(start - separator, 0):end - separator])
     return "".join(parts)
 
 
-def _paragraph_text(value):
-    if not isinstance(value, str) or EMBEDDED_OBJECT in value:
+def chromium_text(blocks, start, text, caret, read, inline_text):
+    """`text` from flattened position `start`, as Chromium serializes it, split at `caret`.
+
+    Each inline object's U+FFFC becomes its text. A block whose own text ends
+    in a line break (an empty line, a trailing <br>) is followed by one line
+    break fewer than its full end.
+    """
+    objects = {block["start"] + entry["offset"]: entry for block in blocks for entry in block["inline"]}
+    drop = set()
+    for block in blocks:
+        separator = block["start"] + block["length"]
+        if not block["length"] or not start <= separator < start + len(text):
+            continue
+        last = text[separator - 1 - start] if separator > start else read(block, block["length"] - 1, block["length"])
+        if last == "\n":
+            drop.add(separator)
+    kept = [(position, inline_text(objects[position]) if position in objects else char)
+            for position, char in enumerate(text, start) if position not in drop]
+    return "".join(char for position, char in kept if position < caret), \
+        "".join(char for position, char in kept if position >= caret)
+
+
+def _block_text(value, block, first):
+    """Block text whose only embedded objects are the block's own inline objects."""
+    if not isinstance(value, str):
+        raise Denied("unsupported_field")
+    offsets = {entry["offset"] for entry in block["inline"]}
+    if any(char == EMBEDDED_OBJECT and first + index not in offsets for index, char in enumerate(value)):
         raise Denied("unsupported_field")
     return value
-
-
-def _last_character(block, read):
-    length = block["length"]
-    return read(block, length - 1, length) if length else ""

@@ -7,13 +7,13 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <utility>
 
 namespace badi::fcitx5 {
 namespace {
 
 constexpr std::uint64_t kMaxSafeCounter = (std::uint64_t{1} << 53U) - 1U;
 // Chromium's text-input serialization of a <p> block end (see state.h).
-constexpr std::string_view kParagraphEnd = "\n\n";
 
 std::uint64_t mix(std::string_view value, std::uint64_t seed) {
     auto hash = seed;
@@ -282,13 +282,12 @@ std::optional<ContextWindow> captureContextWindow(std::string_view text,
 }
 
 void normalizeObservedParagraphEnd(ContextWindow &context) {
-    if (context.paragraphEndAfter || context.after != kParagraphEnd) return;
-    context.after.clear();
-    context.paragraphEndAfter = true;
+    if (!context.paragraphEnd.empty() || (context.after != "\n\n" && context.after != "\n")) return;
+    context.paragraphEnd = std::exchange(context.after, {});
 }
 
 std::string observedAfter(const ContextWindow &context) {
-    return context.paragraphEndAfter ? std::string(kParagraphEnd) : context.after;
+    return context.paragraphEnd.empty() ? context.after : context.paragraphEnd;
 }
 
 bool SessionState::focusIn(std::string sessionId, std::string targetId,
@@ -354,7 +353,7 @@ SessionState::updateContext(ContextWindow context) {
     // identity manual contract is limited to native exact apps.
     // The paragraph-end normalization is the observed IME-parity rule.
     if ((imeParityApp(appId_) && !context.identityKnown) ||
-        (context.paragraphEndAfter && (!imeParityApp(appId_) || !context.identityKnown ||
+        (!context.paragraphEnd.empty() && (!imeParityApp(appId_) || !context.identityKnown ||
                                     editPath_ != NativeEditPath::Observed || !context.after.empty())) ||
         context.anchor != context.head ||
         !validLanguageTag(context.language) || !validContextText(context.before) || !validContextText(context.after)) {

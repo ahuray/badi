@@ -532,6 +532,7 @@
         "global_disabled",
         "context_disabled",
         "matched_rule",
+        "matched_default",
         "suggestions_disabled",
         "unknown_identity"
       ]

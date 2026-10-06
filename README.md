@@ -18,6 +18,7 @@ not a general Linux claim.
 | Chromium, VS Code, Cursor | IME-parity: automatic, grey inline preview (else the Fcitx panel), Tab accepts once | Live 2026-09-27: Chromium 152, VS Code 1.138, Cursor 3.21; password fields denied. 2026-10-06: Chromium 152 again, VS Code 1.140 (Fcitx panel) |
 | Zen | IME-parity for the exact `zen` identity (Gecko) | Live 2026-10-06, Zen 1.23b: preview, acceptance, Escape, password denial; Ctrl+Z undoes the acceptance alone |
 | Brave Origin | IME-parity with a per-site grant | Live 2026-10-06 in the user's profile, Brave Origin 1.96: preview, acceptance, Escape, password denial |
+| Websites in Chromium and Brave (`badi site all on`, or per site) | IME-parity: plain fields, contenteditable `<p>`/`<div>`/`<br>` lines, ProseMirror, Lexical, Slate, Draft.js, Quill, CKEditor 5, TinyMCE and CodeMirror editors, iframe and shadow-root fields | Live 2026-10-06 on local editor builds and the official Lexical, Slate, CKEditor 5, ProseMirror and TinyMCE demo pages, one exact append each. Unavailable: EditContext editors (CodeMirror on recent Chromium), a caret inside a list or quote |
 | Omarchy web apps (HEY, X, Basecamp, Zoom) | Brave Origin `--app` windows, per-site grant | Live 2026-10-06 on a local fixture `--app` window: preview, acceptance, Escape, password denial |
 | LibreOffice Writer | IME-parity for document paragraphs, `badi app libreoffice on`; suggestion in the Fcitx panel | Live 2026-10-06, LibreOffice 26.8: acceptance, Escape, Ctrl+Z undoes the acceptance alone; Calc gets none |
 | Telegram | Observed native Fcitx path; suggestion in the Fcitx panel | Live 2026-09-27; Qt reports no caret geometry for an inline preview |
@@ -62,6 +63,24 @@ badi app chatgpt on                 # likewise code, cursor, telegram, obsidian,
 badi site https://example.com on    # one browser origin, shared by Chromium, Brave and Zen
 badi autostart on
 ```
+
+Apps and websites each have a list mode. The **allowlist** (the default) lets
+Badi write only where you allowed it; the **blocklist** lets it write everywhere
+it can except where you blocked it:
+
+```sh
+badi apps blocklist                 # every supported app except blocked ones
+badi app discord off                # ... except Discord
+badi sites allowlist                # only allowed websites
+badi site https://mail.example.com on
+badi app list                       # mode and rules; likewise badi site list
+badi app discord reset              # drop the rule; the app follows the mode
+```
+
+In app blocklist mode Badi opens only fields its accessibility observer can
+verify, so an app that needs Tab requests (Xournal++) still needs `badi app ...
+on`. Password and sensitive fields are refused in every mode. The settings
+panel's Applications page offers the same choices.
 
 ### Chromium-based apps and Zen (IME-parity)
 
