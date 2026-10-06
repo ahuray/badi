@@ -11,15 +11,20 @@ User decisions (2026-09-26): IME-parity for Chromium-based apps and Zen
 ([ADR 0003](docs/decisions/0003-ime-parity-append-only.md)), promote a quality fix
 only without a per-language harm increase, keep the model resident, and give
 explicit requests about 1.2 s. Live with disposable text on 2026-09-27:
-Chromium, Zen, Telegram, VS Code, Cursor, Omawrite, Obsidian and Bash.
+Chromium, Zen, Telegram, VS Code, Cursor, Omawrite, Obsidian and Bash; on
+2026-10-06: Codex desktop, Brave Origin in the user's profile and Zen 1.23b.
 
-- [ ] Codex desktop composer: rich-composer flattening passed an equivalent
-      Chromium fixture; run the live acceptance trial in Codex itself.
-- [ ] Brave Origin full acceptance trial; Zen undo grouping after acceptance.
-- [ ] Discord: its updater drops command-line flags and environment, so renderer
-      accessibility has no supported launcher.
-- [ ] Confirm the Fcitx 5.1.22 compatibility frontend across a fresh login; its
-      login-order fix has not been through a reboot.
+- [x] Codex desktop composer: live acceptance in Codex desktop 26.930.
+- [x] Brave Origin full acceptance trial; Zen undo after acceptance: one Ctrl+Z
+      removes the acceptance alone (Brave removes the preceding typing too).
+- [ ] Discord: listing `force-renderer-accessibility` in its `settings.json`
+      `chromiumSwitches` exposes the web tree for one launch only; the web
+      client then resets the list. Remaining routes need a decision: a launcher
+      that re-adds it before every start (Discord's own relaunches bypass it)
+      or the desktop-wide AT-SPI `ScreenReaderEnabled` (untested). A composer
+      trial also needs a private channel, since typing shows an indicator.
+- [x] Fcitx 5.1.22 compatibility frontend across fresh logins: five logins from
+      2026-10-02 to 2026-10-06 kept it with no fallback.
 - [x] Observer lock check: the Quickshell lock query now runs while the field
       is read (80 ms query: inspect 123 → 83 ms). The shell's `lock` IPC target
       has no signals, so an event-driven lock state would need a new source.

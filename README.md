@@ -16,11 +16,11 @@ not a general Linux claim.
 | Obsidian | Vault plugin: inline words, Tab accepts a word, Ctrl/Command+Right all | Caret at note end; reload the plugin after an update |
 | Bash | Grey Readline preview, narrow English correction; Ctrl-X then Tab requests/accepts | Ghostty 1.3.1 / Bash 5.3.15: preview, correction, acceptance and undo |
 | Chromium, VS Code, Cursor | IME-parity: automatic, grey inline preview (else the Fcitx panel), Tab accepts once | Live 2026-09-27: Chromium 152, VS Code 1.138, Cursor 3.21; password fields denied |
-| Zen | IME-parity for the exact `zen` identity (Gecko) | Live 2026-09-27: preview, acceptance, Escape, password denial; undo untested |
-| Brave Origin | IME-parity with a per-site grant | Field selection live; full acceptance trial pending |
+| Zen | IME-parity for the exact `zen` identity (Gecko) | Live 2026-10-06, Zen 1.23b: preview, acceptance, Escape, password denial; Ctrl+Z undoes the acceptance alone |
+| Brave Origin | IME-parity with a per-site grant | Live 2026-10-06 in the user's profile, Brave Origin 1.96: preview, acceptance, Escape, password denial |
 | Telegram | Observed native Fcitx path; suggestion in the Fcitx panel | Live 2026-09-27; Qt reports no caret geometry for an inline preview |
-| Codex desktop (`chatgpt`) | IME-parity with rich-composer flattening | Passed on an equivalent Chromium fixture; live Codex acceptance pending |
-| Discord | IME-parity identity | Unsupported: its updater drops the accessibility flag, so no field is visible |
+| Codex desktop (`chatgpt`) | IME-parity with rich-composer flattening | Live 2026-10-06, Codex desktop 26.930: composer preview and one append |
+| Discord | IME-parity identity | Unsupported: its updater drops the accessibility flag, and Discord resets its own switch list after one launch |
 
 Other browsers and Gecko builds, canvas editors, TUIs and Fish/Zsh are
 unavailable or unverified; see [future plans](<future plans.md>).
@@ -65,16 +65,17 @@ badi autostart on
 These apps have no editor-owned channel, so Badi reads the focused field through
 the [accessibility observer](adapters/accessibility/README.md) and accepts with
 one append-only Fcitx commit that behaves like typed text. Undo may merge it
-with your preceding typing, and a page that moves focus during input can
-redirect it like a keystroke ([decision](docs/decisions/0003-ime-parity-append-only.md)).
+with your preceding typing (it did in Brave; Zen undoes it alone), and a page
+that moves focus during input can redirect it like a keystroke
+([decision](docs/decisions/0003-ime-parity-append-only.md)).
 Field identity, caret agreement, expiry, one-shot acceptance, password denial
 and foreign-IME yield still apply; corrections stay editor-owned.
 
 Each Chromium-based app must start with `--force-renderer-accessibility=complete`:
 `install-desktop.py --observed-app chromium|brave-origin|chatgpt|code|cursor`
 adds it to that app's flags file (Zen needs none). VS Code also needs
-`"editor.editContext": false`. `badi site all on` allows every browser origin,
-private windows included.
+`"editor.editContext": false`.
+`badi site all on` allows every browser origin, private windows included.
 
 ## Troubleshooting
 
