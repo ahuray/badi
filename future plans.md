@@ -48,6 +48,11 @@ Standing user decisions:
 
 ## Interaction
 
+- [ ] Obsidian acceptance inserts the text, but the broker never receives its
+      `commit.result`, so each commit lease expires and counts as a failure
+      (`node adapters/obsidian/live.mjs --headless --local` fails on
+      `commit_failures`). It reproduces with the broker from before
+      type-through, so the fault is in the plugin or shared client.
 - [ ] Live type-through trials in Zen and Brave Origin; tab mode needs the
       user's running browser.
 - [ ] No automatic suggestions in file dialogs or very narrow fields, and a
