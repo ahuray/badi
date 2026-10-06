@@ -183,7 +183,8 @@ inconsistency yields no geometry, and the addon uses the Fcitx panel.
 
 - **Chromium and Electron** report D, E and G in physical pixels offset by F's
   origin times the scale s, where `D.width / F.width` must equal the monitor
-  scale within 0.01. The logical caret is `x = (G.x + G.width - F.x*s)/s`,
+  scale within 0.01. In an iframe the outermost page document proves the scale
+  instead and must contain the iframe's document. The logical caret is `x = (G.x + G.width - F.x*s)/s`,
   `y = (G.y - F.y*s)/s`, with line height `G.height/s`.
 - **Caret-wide fields.** VS Code (with `editor.editContext` off) keeps its
   input textarea only as wide as the caret and places it right after G. A

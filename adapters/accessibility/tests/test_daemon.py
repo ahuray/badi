@@ -934,7 +934,7 @@ class FocusSelectionTests(unittest.TestCase):
         backend.nearest_document_uri = lambda _node: (_ for _ in ()).throw(Denied("origin_unavailable"))
         self.assertTrue(backend.page_content(FakeNode()), "an unreadable document is never browser UI")
 
-    def test_frame_and_nearest_document_ancestors(self):
+    def test_frame_nearest_and_outermost_document_ancestors(self):
         backend = FieldBackend(None, APPS)
         backend.budget = lambda: None
         application = FakeNode(role="application")
@@ -942,13 +942,14 @@ class FocusSelectionTests(unittest.TestCase):
         outer = FakeNode(role="document web", parent=FakeNode(role="panel", parent=frame))
         inner = FakeNode(role="document web", parent=FakeNode(role="section", parent=outer))
         field = FakeNode(parent=FakeNode(role="paragraph", parent=inner))
-        self.assertEqual(backend.frame_and_document(field), (frame, inner))
-        self.assertEqual(backend.frame_and_document(FakeNode(parent=None)), (None, None))
-        self.assertEqual(backend.frame_and_document(FakeNode(parent=frame)), (frame, None))
+        self.assertEqual(backend.frame_documents(field), (frame, inner, outer))
+        self.assertEqual(backend.frame_documents(FakeNode(parent=outer)), (frame, outer, outer))
+        self.assertEqual(backend.frame_documents(FakeNode(parent=None)), (None, None, None))
+        self.assertEqual(backend.frame_documents(FakeNode(parent=frame)), (frame, None, None))
         chain = FakeNode(role="section")
         for _ in range(100):
             chain = FakeNode(role="section", parent=chain)
-        self.assertEqual(backend.frame_and_document(FakeNode(parent=chain)), (None, None))
+        self.assertEqual(backend.frame_documents(FakeNode(parent=chain)), (None, None, None))
 
 
 class GeckoDocument(FakeNode):
@@ -1074,9 +1075,9 @@ class GeckoFocusTests(unittest.TestCase):
         with self.assertRaisesRegex(Denied, "operation_timeout"):
             self.backend.gecko_document_url(field)
 
-    def test_frame_and_document_follow_gecko_ancestry(self):
+    def test_frame_and_documents_follow_gecko_ancestry(self):
         field = gecko_field(self.document)
-        self.assertEqual(self.backend.frame_and_document(field), (self.frame, self.document))
+        self.assertEqual(self.backend.frame_documents(field)[:2], (self.frame, self.document))
 
 
 def rect(x, y, width, height):
@@ -1141,6 +1142,24 @@ class CalibrationTests(unittest.TestCase):
             values = {**self.VSCODE, **change}
             self.assertIsNone(calibrated_geometry(**values, window=dict(self.VSCODE_WINDOW), monitors=[self.MONITOR],
                                                   caret=54), name)
+
+    # A textarea in a srcdoc iframe, Chromium 152 at scale 2, live 2026-10-06:
+    # the iframe's own document is 1280 of the frame's 701 logical pixels, so
+    # only the page document proves the scale.
+    IFRAME = dict(frame=rect(0, 0, 701, 418), document=rect(48, 608, 1280, 181), field=rect(64, 624, 1198, 133),
+                  glyph=rect(436, 630, 20, 42))
+    IFRAME_PAGE = rect(0, 174, 1402, 662)
+
+    def test_an_iframe_field_is_scaled_by_its_page_document(self):
+        window = {**self.VSCODE_WINDOW, "pid": 8}
+        result = calibrated_geometry(**self.IFRAME, window=window, monitors=[self.MONITOR], caret=24,
+                                     page=self.IFRAME_PAGE)
+        self.assertEqual(result["caret"], {"x": 228, "y": 315, "height": 21})
+        self.assertEqual(result["field"], {"x": 32, "y": 312, "width": 599, "height": 66.5})
+        self.assertIsNone(calibrated_geometry(**self.IFRAME, window=window, monitors=[self.MONITOR], caret=24),
+                          "the iframe document alone does not prove the scale")
+        self.assertIsNone(calibrated_geometry(**self.IFRAME, window=window, monitors=[self.MONITOR], caret=24,
+                                              page=rect(0, 174, 1402, 400)), "the page must contain the iframe")
 
     def test_rejections_fail_closed(self):
         frame, document, field, glyph = rect(0, 0, 900, 650), rect(0, 170, 1800, 1130), rect(100, 200, 1200, 80), rect(400, 220, 20, 40)
@@ -1726,7 +1745,7 @@ class RichEditorTests(unittest.TestCase):
     def test_calibrated_offset_names_the_flattened_caret(self):
         del self.backend.geometry
         rich = self.composer(["Hello", "world"], 1, [-1, 3])
-        self.backend.frame_and_document = lambda node: (None, None)
+        self.backend.frame_documents = lambda node: (None, None, None)
         self.assertIsNone(self.backend.metadata("chatgpt", True)["geometry"])
         extents = lambda x, y, w, h: SimpleNamespace(get_extents=lambda kind: SimpleNamespace(x=x, y=y, width=w, height=h))
         frame = FakeNode(role="frame", interfaces=["Component"])
@@ -1736,7 +1755,7 @@ class RichEditorTests(unittest.TestCase):
         rich.get_component_iface = lambda: extents(10100, 6200, 1200, 80)
         rich.children[1].text.get_character_extents = lambda offset, kind: SimpleNamespace(
             x=10400, y=6220, width=20, height=40)
-        self.backend.frame_and_document = lambda node: (frame, document)
+        self.backend.frame_documents = lambda node: (frame, document, document)
         self.backend.desktop.request = lambda _request: [CalibrationTests.MONITOR]
         self.window.update(CalibrationTests.WINDOW)
         geometry = self.backend.metadata("chatgpt", True)["geometry"]

@@ -19,13 +19,15 @@ MAX_COORDINATE = 10**7
 CARET_MARK_WIDTH = 2
 
 
-def calibrated_geometry(frame, document, field, glyph, window, monitors, caret, container=None):
+def calibrated_geometry(frame, document, field, glyph, window, monitors, caret, container=None, page=None):
     """Window-local logical caret geometry for this request, or None.
 
     Chromium and Electron report document, field and glyph SCREEN extents in
     physical pixels offset by the frame's SCREEN origin times the scale; the
     frame itself is logical and Electron's origin is arbitrary. The document
     to frame width ratio must equal the monitor scale for this convention.
+    A field in an iframe has its own nearest document; then `page`, the
+    outermost web document, proves the scale and must contain it.
 
     The glyph must lie inside the field, which bounds the drawing. An editor
     that keeps its input field only as wide as the caret (VS Code with
@@ -38,9 +40,10 @@ def calibrated_geometry(frame, document, field, glyph, window, monitors, caret, 
         if output is None:
             return None
         scale = output[1]
-        if abs(document["width"] / frame["width"] - scale) > SCALE_TOLERANCE:
+        reference = document if page is None else page
+        if abs(reference["width"] / frame["width"] - scale) > SCALE_TOLERANCE:
             return None
-        if not _inside(field, document):
+        if not _inside(field, document) or (page is not None and not (_is_rect(page) and _inside(document, page))):
             return None
         bound = field
         if not _inside(glyph, field):

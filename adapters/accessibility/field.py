@@ -380,16 +380,20 @@ class FieldBackend:
             return gecko_calibrated_geometry(rects["frame"], rects["document"], rects["field"], rects["glyph"],
                                              window, monitors, offset)
         return calibrated_geometry(rects["frame"], rects["document"], rects["field"], rects["glyph"],
-                                   window, monitors, offset, rects.get("container"))
+                                   window, monitors, offset, rects.get("container"), rects.get("page"))
 
     def screen_extents(self, node, text, caret):
         """SCREEN extents of the outermost frame, nearest web document, field, glyph before the
-        caret and, when it has a component, the field's parent (a caret-wide field's editor)."""
-        frame, document = self.frame_and_document(node)
+        caret and, when present, the outermost web document of an iframe field ("page") and
+        the field's parent (a caret-wide field's editor)."""
+        frame, document, page = self.frame_documents(node)
         if frame is None or document is None:
             return None
         extents = {}
-        for name, item in (("frame", frame), ("document", document), ("field", node)):
+        items = [("frame", frame), ("document", document), ("field", node)]
+        if page is not document:
+            items.append(("page", page))
+        for name, item in items:
             if "Component" not in item.get_interfaces():
                 return None
             self.budget()
@@ -402,22 +406,21 @@ class FieldBackend:
             extents["container"] = parent.get_component_iface().get_extents(self.atspi.CoordType.SCREEN)
         return extents
 
-    def frame_and_document(self, node):
-        """The outermost frame and the field's nearest web document ancestor."""
-        ancestor, frame, document = node.get_parent(), None, None
+    def frame_documents(self, node):
+        """The outermost frame, the nearest web document and the outermost web document."""
+        ancestor, frame, document, page = node.get_parent(), None, None, None
         for _ in range(MAX_FRAME_DEPTH):
             self.budget()
-            if ancestor is None:
-                return frame, document
+            if ancestor is None or ancestor.get_role_name() == "application":
+                return frame, document, page
             role = ancestor.get_role_name()
-            if role == "application":
-                return frame, document
-            if document is None and role == "document web":
-                document = ancestor
+            if role == "document web":
+                document = document or ancestor
+                page = ancestor
             if role in ("frame", "window", "dialog"):
                 frame = ancestor
             ancestor = ancestor.get_parent()
-        return None, None
+        return None, None, None
 
     def rich_layout(self, root, count, caret):
         """Flattened coordinates of a Chromium rich editor root, or None for a plain field.
