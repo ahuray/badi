@@ -126,38 +126,56 @@ agreement check fails closed as `observer_context_mismatch`.
 
 ### Rich editors
 
-Codex desktop's ProseMirror composer is one focused `entry` (tag `div`,
-`xml-roles=textbox`) whose text is one U+FFFC embedded object per paragraph and
-whose caret is the offset of the paragraph holding the caret. Each `paragraph`
-child holds its text; the one with the caret reports it, the others -1. An empty
-composer's paragraph is `"\n"` plus a U+FFFC placeholder, so it fails closed
-until text is typed.
+A rich editor root (Codex's ProseMirror composer, Lexical, Quill, Draft.js,
+Slate, CKEditor 5, TinyMCE, CodeMirror in contenteditable mode, or a
+contenteditable of `<p>` or `<div>` lines) is one focused editable whose text is
+one U+FFFC embedded object per block, and whose caret is the offset of the block
+holding the caret. The root is an `entry` (`role=textbox`) or, without that
+role, a `section` whose tag is `div` (Lexical, Quill) or an editing iframe's
+`body` (TinyMCE). Each block's caret is -1 except the caret's block.
 
-For Chromium and Electron web content (never Gecko or native toolkits), such a
-root is flattened the way Chromium 152 serializes text-input surrounding text:
-each paragraph's text followed by `"\n\n"`, margins or not, the last paragraph
-included. `caret`, `total_chars` and `character_offset` are in those flattened
-coordinates. Geometry and direction come from the caret paragraph's glyph; a
-caret at a paragraph's start has none, so the addon uses the Fcitx panel.
-`inspect` reads only link offsets, roles, lengths, caret offsets and selection
-counts. `snapshot` reads, and rereads for the stale check, only the paragraphs
-overlapping its 512/128-character window.
+For Chromium and Electron web content (never Gecko or native toolkits), the
+root is flattened the way Chromium serializes text-input surrounding text when
+anything is rendered after the editor: a `paragraph` (`<p>`) or `heading` ends
+with `"\n\n"`, a `section` (`<div>` line) with `"\n"`, and a block whose own
+text already ends in a line break (an empty line, a trailing `<br>`, Slate's
+U+FEFF line) with one break fewer. Inline objects inside a block (`<strong>`,
+`<em>`, `<code>`, `<span>`, links, `<mark>`, `<sub>`, `<sup>`; roles `static`,
+`link`, `mark`, `subscript`, `superscript`) are written as their own text. Any
+other block (a list, quote, table, image or figure) is opaque.
+
+`inspect` reads only roles, link offsets, lengths, caret offsets and selection
+counts, so `caret`, `total_chars` and `character_offset` count each block's raw
+text and full end. `snapshot`, after the policy grant, reads the blocks in its
+window one character per block wider than 512/128 (Chromium can drop one break
+per block), rereads them for the stale check, serializes them as above and
+keeps the last 512 characters before and 128 after the caret. When an opaque
+block overlaps that window, the snapshot covers only the caret's own block and
+says `scope: "block"`; the addon then requires Fcitx's text to end with exactly
+that block from a line start. Geometry and direction come from the caret
+block's glyph; a caret at a block's start has none, so the addon uses the Fcitx
+panel.
 
 Anything unresolvable fails closed before prose:
 
 - `unsupported_field`: text directly in the root, more than 64 blocks, a
-  non-`paragraph` or foreign-parent block, or a paragraph with its own embedded
-  objects (placeholder, image, mention, link, code span).
+  foreign-parent block, a caret in an opaque block (inside a list or quote), or
+  a caret block whose embedded objects are not inline text (an image).
 - `invalid_caret`: an ambiguous or out-of-range caret.
-- `selection_present`: a selection in any paragraph.
+- `selection_present`: a selection in any block.
 
-`snapshot` also fails as `unsupported_field` on a U+FFFC read as text, and on a
-paragraph ending in a line break (an empty ProseMirror paragraph or a trailing
-hard break) whose end is in the window: Chromium adds only one `"\n"` after it,
-which these lengths cannot express without reading prose at inspection. An
-isolated Chromium 152 fixture of the same `<div role=textbox><p>` shape
-displayed, accepted and dismissed suggestions; the multi-paragraph rules come
-from the recorded serialization and fakes.
+`snapshot` also fails as `unsupported_field` on a U+FFFC that is not one of the
+block's inline objects. An `about:blank` or `about:srcdoc` frame has its
+creator's origin, so a TinyMCE or srcdoc field takes its enclosing page's URI.
+Editors on Chromium's EditContext API (CodeMirror on recent Chromium, VS Code's
+default) expose no editable DOM node and stay unavailable.
+
+Live on 2026-10-06 in Chromium 152, both in an empty editor and in a second
+line under an existing one: textarea, text input, contenteditable plain, `<p>`,
+`<div>` and `<br>` lines, Quill, CKEditor 5, Draft.js, Slate, CodeMirror,
+TinyMCE, an input in a shadow root and a textarea in an iframe; and on the
+official demo pages of Lexical, Slate, CKEditor 5, ProseMirror and TinyMCE,
+each with one exact append.
 
 ## Snapshots and field events
 

@@ -95,8 +95,12 @@ qualification.
       as Brave `--app` windows, LibreOffice Writer and Grok Bot.
 - [ ] Grok Bot composer trial in the signed-in app after a relaunch with
       `grok-bot-flags.conf`; a fresh profile shows only its sign-in screen.
-- [ ] Browser rich editors beyond single-paragraph composers, frames/shadow
-      roots and Firefox, keeping exact field binding and per-site consent.
+- [ ] Browser rich editors: multi-block `<p>`/`<div>` editors, headings,
+      inline marks, iframes and shadow roots work in Chromium (2026-10-06).
+      Remaining: a caret inside a list or quote, EditContext editors
+      (CodeMirror on recent Chromium), multi-paragraph fields in Zen (Gecko
+      sends only the caret's paragraph), Firefox, and an inline preview in
+      iframe fields (the Fcitx panel is shown).
 - [ ] Fish/Zsh and terminal editors through their own buffers; never accept by
       executing a generated command.
 - [ ] Spelling correction in native fields and Obsidian with exact replacement
