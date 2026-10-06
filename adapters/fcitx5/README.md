@@ -102,6 +102,11 @@ authority there. Every other guard stays:
 - A browser field needs an origin allow: its exact `browser_origin` rule, or
   `badi site all on` for every origin without one. The observer cannot tell
   private windows apart, so site-all covers them too.
+- An app allowed only by the app blocklist mode (policy reason
+  `matched_default`) opens only an observed field; on the manual
+  unknown-identity path the addon treats it as denied (`app_rule_required`), so
+  an app outside Badi's integrations keeps its own Tab until it gets an exact
+  rule.
 - Before context publication, display and `commitString`, a fresh observer
   snapshot must agree with Fcitx's live surrounding text, absolute caret and
   document length. Disagreement or an unanswered RPC fails closed with a

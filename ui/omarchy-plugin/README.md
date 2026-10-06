@@ -74,6 +74,10 @@ badi resume
 badi app omawrite off          # block context reading and predictions
 badi app omawrite on
 badi app xournalpp off
+badi apps blocklist            # every supported app except blocked ones; allowlist reverts
+badi sites blocklist           # every website except blocked ones; allowlist reverts
+badi app list                  # mode and rules; likewise badi site list
+badi app omawrite reset        # drop the rule; the app follows the mode
 badi autostart off             # leave the current model process running
 badi service stop              # release model memory
 badi service start
@@ -84,8 +88,11 @@ badi logs                      # last 60 broker journal entries
 ```
 
 Settings mutations use the broker's revision compare-and-swap API. Conflicts
-fail visibly rather than retrying over another change. Window writes carry the
-optional `all_web_origins` flag (`badi site all on`) through unchanged. `doctor` exits nonzero
+fail visibly rather than retrying over another change. The Applications page
+sets both list modes (`all_linux_apps`, `all_web_origins`), allows or blocks each
+supported app (a Tab-request app such as Xournal++ stays off until allowed, even
+in blocklist mode), and lists, adds and removes exact website rules. Other
+window writes carry both flags through unchanged. `doctor` exits nonzero
 when the broker is unreachable/degraded or the running native addon is missing.
 The CLI uses Linux user services; the GUI and desktop installer target Omarchy.
 This plugin is not a portable StatusNotifier tray implementation.

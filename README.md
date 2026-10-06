@@ -64,6 +64,24 @@ badi site https://example.com on    # one browser origin, shared by Chromium, Br
 badi autostart on
 ```
 
+Apps and websites each have a list mode. The **allowlist** (the default) lets
+Badi write only where you allowed it; the **blocklist** lets it write everywhere
+it can except where you blocked it:
+
+```sh
+badi apps blocklist                 # every supported app except blocked ones
+badi app discord off                # ... except Discord
+badi sites allowlist                # only allowed websites
+badi site https://mail.example.com on
+badi app list                       # mode and rules; likewise badi site list
+badi app discord reset              # drop the rule; the app follows the mode
+```
+
+In app blocklist mode Badi opens only fields its accessibility observer can
+verify, so an app that needs Tab requests (Xournal++) still needs `badi app ...
+on`. Password and sensitive fields are refused in every mode. The settings
+panel's Applications page offers the same choices.
+
 ### Chromium-based apps and Zen (IME-parity)
 
 These apps have no editor-owned channel, so Badi reads the focused field through
