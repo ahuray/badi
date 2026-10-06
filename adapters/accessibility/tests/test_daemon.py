@@ -403,6 +403,7 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual((APPS["zen"].executables, APPS["zen"].classes), ({"/opt/zen-browser-bin/zen-bin"}, {"zen"}))
         self.assertEqual({app for app, rule in APPS.items() if not rule.web}, {"telegram", "omawrite"})
         self.assertEqual(APPS["telegram"].classes, {"org.telegram.desktop"})
+        self.assertEqual(APPS["code"].classes, {"code", "com.microsoft.VSCode"})
 
     def test_exact_executables_and_owner(self):
         for app_id, executable in (("chromium", "/usr/lib/chromium/chromium"), ("brave-origin", "/opt/brave-origin-bin/brave"),

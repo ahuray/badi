@@ -41,12 +41,12 @@ bool unobservedChromiumFamily(std::string_view appId) {
         "chrome", "brave", "opera", "vivaldi", "msedge", "helium", "helium-browser", "thorium",
         "thorium-browser", "cromite", "ungoogled-chromium", "code-oss", "code-insiders", "codium",
         "vscodium", "discordcanary", "discordptb", "vesktop", "legcord", "webcord"};
-    constexpr std::array<std::string_view, 23> prefixes{
+    constexpr std::array<std::string_view, 24> prefixes{
         "chrome-", "crx_", "chromium-", "google-chrome", "brave-", "microsoft-edge", "msedge-",
         "vivaldi-", "opera-", "yandex-browser", "electron", "discord-", "com.google.chrome",
         "org.chromium.", "com.brave.", "com.microsoft.edge", "com.vivaldi.", "com.opera.",
-        "io.github.ungoogled_software.", "com.visualstudio.code", "com.vscodium.", "com.discordapp.",
-        "dev.vencord."};
+        "io.github.ungoogled_software.", "com.visualstudio.code", "com.microsoft.vscode", "com.vscodium.",
+        "com.discordapp.", "dev.vencord."};
     return std::find(exact.begin(), exact.end(), appId) != exact.end() ||
            std::any_of(prefixes.begin(), prefixes.end(),
                        [appId](std::string_view prefix) { return appId.starts_with(prefix); });

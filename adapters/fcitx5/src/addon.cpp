@@ -85,7 +85,7 @@ std::optional<std::string> randomUuid() {
 // The one app identity used for policy, sessions, debug and the observer.
 // Empty when program() is not an app identifier.
 std::string canonicalProgram(const ::fcitx::InputContext &inputContext) {
-    return canonicalAppId(inputContext.program()).value_or("");
+    return programAppId(inputContext.program()).value_or("");
 }
 
 const ::fcitx::Key &invokeChord() {

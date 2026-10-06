@@ -854,7 +854,8 @@ constexpr std::array kUnobservedChromiumFamily{
     "brave-browser-nightly", "microsoft-edge", "microsoft-edge-stable", "microsoft-edge-beta",
     "vivaldi", "vivaldi-stable", "vivaldi-snapshot", "opera", "opera-beta", "helium", "thorium-browser",
     "yandex-browser", "electron", "electron42", "code-oss", "code-insiders", "codium", "vscodium",
-    "com.visualstudio.code", "com.vscodium.codium", "discord-canary", "discord-ptb", "discordcanary",
+    "com.visualstudio.code", "com.microsoft.vscodeinsiders", "com.vscodium.codium", "discord-canary",
+    "discord-ptb", "discordcanary",
     "vesktop", "com.discordapp.discord", "dev.vencord.vesktop"};
 
 void nativeAppClassesAreExplicit() {
@@ -981,6 +982,12 @@ void canonicalAppIdsFoldAsciiCase() {
         check(canonical && validLinuxAppId(*canonical),
               "every folded identity satisfies the broker's lowercase validator");
     }
+    check(programAppId("com.microsoft.VSCode") == "code" && programAppId("Code") == "code" &&
+              programAppId("Telegram") == "telegram" && !programAppId("A window title"),
+          "VS Code's renamed Wayland id keeps its identity; other programs only fold");
+    check(classifyNativeApp(*canonicalAppId("com.microsoft.VSCode")) == NativeAppClass::Unavailable &&
+              classifyNativeApp(*canonicalAppId("com.microsoft.VSCodeInsiders")) == NativeAppClass::Unavailable,
+          "unmapped VS Code reverse-DNS ids never reach the native exact path");
     check(classifyNativeApp(*canonicalAppId("Code")) == NativeAppClass::ImeParityDesktop &&
               classifyNativeApp(*canonicalAppId("Brave-Origin")) == NativeAppClass::ImeParityBrowser &&
               classifyNativeApp(*canonicalAppId("FIREFOX")) == NativeAppClass::Unavailable &&

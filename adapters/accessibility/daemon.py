@@ -30,7 +30,8 @@ APPS = {
     # /usr/bin/zen-browser execs this binary; its Wayland app id and Fcitx program() are both "zen".
     "zen": App(frozenset({"/opt/zen-browser-bin/zen-bin"}), frozenset({"zen"}), browser=True, web=True, gecko=True),
     "chatgpt": App(frozenset({"/usr/lib/chatgpt/ChatGPT"}), frozenset({"chatgpt"}), web=True),
-    "code": App(frozenset({"/usr/share/code/code"}), frozenset({"code"}), web=True),
+    # VS Code 1.140 renamed its Wayland app id; the addon maps both to "code".
+    "code": App(frozenset({"/usr/share/code/code"}), frozenset({"code", "com.microsoft.VSCode"}), web=True),
     "cursor": App(frozenset({"/usr/lib/electron42/electron"}), frozenset({"cursor"}), web=True,
                   entry="/usr/share/cursor/resources/app/cursor.mjs"),
     "discord": App(classes=frozenset({"discord"}), web=True, per_user=True),

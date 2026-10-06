@@ -209,6 +209,14 @@ std::optional<std::string> canonicalAppId(std::string_view program) {
     return result;
 }
 
+std::optional<std::string> programAppId(std::string_view program) {
+    // VS Code 1.140 renamed its Wayland app id from "code"; its grants,
+    // sessions and observer rule keep the original identity.
+    auto app = canonicalAppId(program);
+    if (app == "com.microsoft.vscode") return "code";
+    return app;
+}
+
 bool validLanguageTag(std::string_view value) {
     if (value.size() < 2 || value.size() > 35) return false;
     std::size_t subtagStart = 0;
