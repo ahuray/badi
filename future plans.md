@@ -86,9 +86,12 @@ work. The installed-flow matrix must record zero wrong-field or stale edits.
       candidate commits `accept_word`, and the rest carries. Tab still accepts
       the whole suggestion: a second Tab before the remainder returns would
       move focus (ADR 0004). This is the recommended answer to decision 1.
-- [ ] Live trials of type-through and Ctrl+Right in Brave, Zen, Telegram and
-      VS Code. They need the installed broker and addon; the installer run was
-      not authorized in the 2026-10-06 session.
+- [x] Live trials (2026-10-06) in Chromium 152 (textarea, input,
+      contenteditable) and Telegram Saved Messages: every typed key counted,
+      there was no model call, and the rest returned 0.05–0.36 s after the
+      last key. Ctrl+Right inserted one word.
+- [ ] Live type-through in Zen and Brave Origin. Tab mode needs the user's
+      running browser, and neither was running on 2026-10-06.
 - [ ] Quiet where it doesn't help.
       - [x] Search, email and URL inputs, combo boxes and ARIA search boxes
         get no suggestions (search boxes added 2026-10-06).

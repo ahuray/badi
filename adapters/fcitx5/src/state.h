@@ -150,7 +150,8 @@ struct PreKey {
     bool escape = false;
     bool chord = false;  // Badi's invoke or accept chord, handled after the input method
     bool word = false;   // Ctrl+Right that no earlier handler took
-    // The key types the next characters of Badi's visible suggestion.
+    // The key types the next characters of Badi's suggestion, visible or
+    // hidden by an earlier typed-through key.
     bool typesSuggestion = false;
 };
 

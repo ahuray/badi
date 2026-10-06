@@ -202,8 +202,13 @@ LocalAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
 
 PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeShown,
                           bool suggestionVisible, const PanelObservation &panel) {
+    // Type-through only shortens the next inspection; the key always reaches
+    // the app. Its own edit retires the observed field until the observer
+    // binds it again, so a fast next key finds no edit path yet.
+    const bool typingThrough = key.typesSuggestion && !key.repeat && !hasForeignImeUi(panel);
     if (!editingAvailable || key.repeat) {
-        return key.modifier ? PreKeyAction::PassThrough : PreKeyAction::Cancel;
+        if (key.modifier) return PreKeyAction::PassThrough;
+        return typingThrough ? PreKeyAction::CancelTypingThrough : PreKeyAction::Cancel;
     }
     if (key.tab) return PreKeyAction::Tab;
     if (key.escape && noticeShown && !suggestionVisible && !hasForeignImeUi(panel)) {
@@ -217,7 +222,8 @@ PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeS
     if (key.word && ownedUi) return PreKeyAction::AcceptWord;
     if (key.modifier || key.chord) return PreKeyAction::PassThrough;
     if (key.escape) return PreKeyAction::CancelDeclining;
-    return key.typesSuggestion && ownedUi ? PreKeyAction::CancelTypingThrough : PreKeyAction::Cancel;
+    // The candidate may already be hidden by an earlier typed-through key.
+    return typingThrough ? PreKeyAction::CancelTypingThrough : PreKeyAction::Cancel;
 }
 
 bool typesSuggestionStart(std::string_view typed, std::string_view suggestion) {

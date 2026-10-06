@@ -659,10 +659,14 @@ void preInputKeysConsumeOnlyBadiUi() {
           "without Badi's own live candidate Ctrl+Right stays the application's");
     check(decide(typing, false, true, owned) == PreKeyAction::CancelTypingThrough,
           "typing the suggestion's next characters cancels and inspects sooner");
-    check(decide(typing, false, false, {}) == PreKeyAction::Cancel &&
-              decide(typing, false, true, foreign) == PreKeyAction::Cancel &&
-              decide({.repeat = true, .typesSuggestion = true}, false, true, owned) == PreKeyAction::Cancel,
-          "type-through needs Badi's live candidate and a fresh key press");
+    check(decide(typing, false, false, {}) == PreKeyAction::CancelTypingThrough,
+          "type-through continues while an earlier typed-through key hid the remainder");
+    check(decide(typing, false, false, {}, false) == PreKeyAction::CancelTypingThrough,
+          "a fast next key types through while its field waits to be observed again");
+    check(decide(typing, false, true, foreign) == PreKeyAction::Cancel &&
+              decide({.repeat = true, .typesSuggestion = true}, false, true, owned) == PreKeyAction::Cancel &&
+              decide({.repeat = true, .typesSuggestion = true}, false, false, {}, false) == PreKeyAction::Cancel,
+          "foreign input-method UI or auto-repeat ends type-through");
     check(typesSuggestionStart(" ", " for your time") && typesSuggestionStart(" f", " for your time") &&
               !typesSuggestionStart("", " for your time") && !typesSuggestionStart("f", " for your time") &&
               !typesSuggestionStart(" for your time", " for your time") &&

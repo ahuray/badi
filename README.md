@@ -29,8 +29,11 @@ not a general Linux claim.
 On every Fcitx field above, typing the next characters of a suggestion keeps
 its remainder without a new model call, and Ctrl+→ accepts only the next word
 ([type-through](docs/decisions/0004-type-through-carries-text-not-authority.md)).
-This is verified with the real broker and addon on a private Fcitx bus; live
-app trials are pending.
+Live 2026-10-06 in Chromium 152 (textarea, input, contenteditable; grey
+preview) and Telegram (Fcitx panel), with no model call:
+- the rest returned 0.05–0.36 s after the last typed key, against 0.39–0.68 s
+  for a new suggestion;
+- Ctrl+→ inserted one word, and the rest carried on.
 
 Other browsers and Gecko builds, canvas editors, TUIs and Fish/Zsh are
 unavailable or unverified; see [future plans](<future plans.md>).

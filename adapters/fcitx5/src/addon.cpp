@@ -177,6 +177,9 @@ private:
         // accepted: the broker may carry the remainder at once (ADR 0004), so
         // the next inspection skips most of the typing pause.
         bool typedThrough = false;
+        // The suggestion text not yet typed, until it is shown again: keys
+        // typed faster than the remainder returns still count as type-through.
+        std::string typeThroughRest;
 
         [[nodiscard]] bool observed() const { return !observedFocus.is_null(); }
     };
@@ -267,6 +270,7 @@ private:
         binding.observationExplicit = false;
         binding.dismissedContext.reset();
         binding.typedThrough = false;
+        binding.typeThroughRest.clear();
         binding.inspection.input();
         binding.surroundingFreshness.focusIn();
         if (!binding.state.focusIn(*sessionId, contextId, appId, *salt)) {
@@ -364,6 +368,10 @@ private:
         }
         const auto panel = observePanel(*binding);
         const bool unclaimed = !event.filtered() && !event.accepted();
+        const auto typed = typedText(key);
+        // Copied: retiring the candidate below releases its text.
+        const std::string expected(binding->state.suggestionVisible() ? binding->state.visibleText()
+                                                                      : binding->typeThroughRest);
         const PreKey pressed{
             .modifier = key.isModifier(),
             .repeat = !!(event.key().states() & ::fcitx::KeyState::Repeat),
@@ -371,7 +379,7 @@ private:
             .escape = key.check(::fcitx::Key(FcitxKey_Escape)),
             .chord = key.check(invokeChord()) || key.check(acceptChord()),
             .word = key.check(wordKey()) && unclaimed,
-            .typesSuggestion = typesSuggestionStart(typedText(key), binding->state.visibleText()),
+            .typesSuggestion = typesSuggestionStart(typed, expected),
         };
         switch (decidePreKey(pressed, binding->state.editingAvailable(), !binding->ownedAuxiliary.empty(),
                              binding->state.suggestionVisible(), panel)) {
@@ -382,11 +390,13 @@ private:
             [[fallthrough]];
         case PreKeyAction::Cancel:
             binding->typedThrough = false;
+            binding->typeThroughRest.clear();
             cancelForInput(*binding);
             return;
         case PreKeyAction::CancelTypingThrough:
             cancelForInput(*binding);
             binding->typedThrough = true;
+            binding->typeThroughRest = expected.substr(typed.size());
             debug_.record("input", app, "typed_through");
             return;
         case PreKeyAction::Tab:
@@ -839,6 +849,7 @@ private:
         binding->overlayOwned = overlay;
         binding->pendingSuggestion.reset();
         binding->typedThrough = false;
+        binding->typeThroughRest.clear();
         if (!overlay) showCandidate(*binding, suggestion);
         // The local lease must also hide UI if the broker stalls before its
         // suggestion.clear arrives. Only this exact candidate may be retired.
@@ -930,11 +941,14 @@ private:
             binding->state.invalidateContext();
             return refuseCommit(prepare, binding);
         }
+        const std::string shown(binding->state.visibleText());
         const auto dispatch = binding->state.authorizeCommit(prepare, transport_.nowMs(), observePanel(*binding));
         if (!dispatch) return reportStale(prepare);
         clearOwnedPanel(*binding);
         // The broker may carry the rest after a word (ADR 0004).
-        binding->typedThrough = prepare.acceptance == "word";
+        const bool word = prepare.acceptance == "word" && shown.starts_with(dispatch->text);
+        binding->typedThrough = word;
+        binding->typeThroughRest = word ? shown.substr(dispatch->text.size()) : std::string();
         // One append, like typed text. Fcitx cannot see the client apply it,
         // so the result is dispatched-unverified, never applied.
         binding->inputContext->commitString(dispatch->text);

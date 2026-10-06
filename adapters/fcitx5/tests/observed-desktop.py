@@ -868,16 +868,21 @@ def session(root, report):
         wait(lambda: context.candidate() == SUFFIX, 'candidate before type-through')
         calls, typed = provider_calls(), reason_count('typed_through')
         assert not context.key(ord(' ')), 'a typed-through key still reaches the application'
-        assert reason_count('typed_through') == typed + 1
+        # The app's edit retires the observed field; the next key arrives
+        # before it is bound again and the remainder returns, and still types through.
+        daemon.observer.invalidate('fixture_field_changed')
+        quiet(.05)
+        assert not context.key(ord('f'))
+        assert reason_count('typed_through') == typed + 2, 'a key typed before the remainder returns'
         commits = context.commits()
-        change(PREFIX + ' ')
-        wait(lambda: context.candidate() == SUFFIX[1:], 'type-through remainder')
+        change(PREFIX + ' f')
+        wait(lambda: context.candidate() == SUFFIX[2:], 'type-through remainder')
         assert provider_calls() == calls, 'the remainder is carried, never generated'
         assert context.key(RIGHT, CONTROL), 'Ctrl+Right is claimed over a live candidate'
-        wait(lambda: context.commits() == [*commits, 'for'], 'Ctrl+Right dispatches the next word')
+        wait(lambda: context.commits() == [*commits, 'or'], 'Ctrl+Right dispatches the rest of the word')
         change(PREFIX + ' for')
         wait(lambda: context.candidate() == ' your time', 'remainder after a word acceptance')
-        assert provider_calls() == calls and context.commits() == [*commits, 'for']
+        assert provider_calls() == calls and context.commits() == [*commits, 'or']
         assert context.key(desktop.ESCAPE)
         wait(lambda: context.candidate() is None, 'Escape ends type-through')
         assert not context.key(RIGHT, CONTROL), 'without a candidate Ctrl+Right stays the application key'

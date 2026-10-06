@@ -27,10 +27,12 @@ the broker and observer wire details.
   otherwise stays the application's key. **Ctrl+Shift+Space** requests or
   refreshes, **Ctrl+Shift+Y** accepts, and **Escape** dismisses a suggestion or
   closes a notice. A key is consumed only for its matching local action.
-- **Type-through.** A key that types the next characters of the visible
-  suggestion still reaches the application. It retires the candidate like any
-  edit, and the next inspection waits 30 ms instead of 120 ms; a word
-  acceptance does the same. The broker then answers the new field session with
+- **Type-through.** A key that types the next characters of the suggestion
+  still reaches the application. It retires the candidate like any edit, and
+  the next inspection waits 30 ms instead of 120 ms; a word acceptance does the
+  same. The addon keeps the untyped rest in memory until a suggestion is shown
+  again. Keys typed before the remainder returns, while the field waits to be
+  observed again, therefore still count. The broker then answers the new field session with
   the remainder and no model call
   ([decision](../../docs/decisions/0004-type-through-carries-text-not-authority.md)).
   Every observer check runs again before the remainder is shown and before it
