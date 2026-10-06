@@ -74,19 +74,25 @@ Exit criteria: in Brave, Zen, Telegram, VS Code and Obsidian, typing through a
 suggestion keeps it without a model call, and both word and whole acceptance
 work. The installed-flow matrix must record zero wrong-field or stale edits.
 
-- [ ] Type-through.
-      - A typed character that matches the suggestion's next character keeps
-        the remainder visible; any other key dismisses it.
-      - The broker rebinds the remainder to the new revision and fingerprint
-        without running inference.
-      - Every agreement check still runs before display and acceptance.
-      - Record this authority change in an ADR.
-- [ ] Word acceptance on the Fcitx paths: one append-only commit of
-      `accept_word`, with the remainder rebound as for type-through
-      (decision 1).
+- [x] Type-through (2026-10-06,
+      [ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md)).
+      - The broker carries the last shown suggestion as text only and answers
+        the next admitted request that adds a typed prefix of it with the
+        remainder, with no model call.
+      - The Fcitx addon re-inspects 30 ms after such a key instead of 120 ms.
+      - Verified with engine tests, the real-broker Fcitx smoke and the
+        private-bus observed addon lane.
+- [x] Word acceptance on Fcitx fields: Ctrl+Right over Badi's own live
+      candidate commits `accept_word`, and the rest carries. Tab still accepts
+      the whole suggestion: a second Tab before the remainder returns would
+      move focus (ADR 0004). This is the recommended answer to decision 1.
+- [ ] Live trials of type-through and Ctrl+Right in Brave, Zen, Telegram and
+      VS Code. They need the installed broker and addon; the installer run was
+      not authorized in the 2026-10-06 session.
 - [ ] Quiet where it doesn't help.
-      - No automatic suggestions in search and URL-like fields, file dialogs
-        or narrow fields; an explicit request still works.
+      - [x] Search, email and URL inputs, combo boxes and ARIA search boxes
+        get no suggestions (search boxes added 2026-10-06).
+      - File dialogs and narrow fields.
       - A setting for how long Escape keeps a field quiet. Today it lasts until
         the text changes.
 - [ ] A preview wherever caret geometry is missing.
@@ -103,10 +109,23 @@ Exit criteria on this laptop:
 - resident memory back to about 1.3 GB;
 - no quality regression in the Lab.
 
-- [ ] Reuse the prompt and KV cache across keystrokes in one field. Start
-      inference before the 120 ms pause ends, and cancel it on a mismatch.
-- [ ] GPU offload through Vulkan on the Intel iGPU (Arch ships `ggml-vulkan`):
-      measure latency, power and the fallback to CPU.
+- [x] Reuse the prompt and KV cache across keystrokes. The runtime already
+      runs with `cache_prompt` and context checkpoints.
+- [ ] Start inference before the 120 ms pause ends, and cancel it on a
+      mismatch.
+- [x] Measure GPU offload. Setup: Vulkan on the Iris Xe (Mesa 26.2.2), with the
+      official Vulkan build of llama.cpp b10726, against the CPU build (4
+      threads, batch 16), 2026-10-06.
+      - The GPU is faster only for long cold prompts, and only with a large
+        batch that would weaken cancellation: 192-token prompts ran at about
+        400 tokens/s on the GPU against 75–107 on the CPU.
+      - It is slower on every keystroke's request, which is mostly generation:
+        13–20 against 19–30 tokens/s. A 16-token prompt plus 6 generated
+        tokens ran at 30 against 33–53 tokens/s.
+      - Badi stays on the CPU. Six or eight threads were within noise of four.
+- [ ] Generation is the warm bottleneck at about 33–50 ms per token. Evaluate
+      speculative decoding with a small draft model, and fewer generated tokens
+      per request.
 - [ ] Qualify smaller and newer models in the Lab: Qwen3 0.6B, Gemma 4 E2B with
       its multi-token drafter, and Qwen3 4B on the GPU. Defer hybrid-attention
       models until llama.cpp reuses their caches.

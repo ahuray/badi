@@ -60,6 +60,10 @@ bool invalidates(const nlohmann::json &event, std::string_view appId);
 class InspectionSchedule {
 public:
     static constexpr std::uint64_t kTypingPauseUs = 120'000;
+    // After a key that typed the suggestion's next characters, or a word
+    // acceptance, the broker can answer at once (ADR 0004). This short pause
+    // lets the field's own accessibility events arrive first.
+    static constexpr std::uint64_t kTypeThroughPauseUs = 30'000;
     static constexpr unsigned int kMaxIdleReinspections = 3;
     // A previous field's reply can still be pending after a rapid focus
     // switch; the new field retries within the observer's reply deadline.
@@ -71,8 +75,9 @@ public:
     }
     void inspecting() { inspectedSerial_ = inputSerial_; }
     [[nodiscard]] bool reinspectAfterInvalidation(bool fieldChanged);
-    [[nodiscard]] std::uint64_t delayUs(bool immediate) const {
-        return immediate ? 1 : kTypingPauseUs << idleInvalidations_;
+    [[nodiscard]] std::uint64_t delayUs(bool immediate, bool typedThrough = false) const {
+        if (immediate) return 1;
+        return typedThrough ? kTypeThroughPauseUs : kTypingPauseUs << idleInvalidations_;
     }
     void resetBusyRetries() { busyRetries_ = 0; }
     [[nodiscard]] bool retryWhileBusy() { return busyRetries_++ < kMaxBusyRetries; }

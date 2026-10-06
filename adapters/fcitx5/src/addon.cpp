@@ -98,6 +98,18 @@ const ::fcitx::Key &acceptChord() {
     return key;
 }
 
+const ::fcitx::Key &wordKey() {
+    static const ::fcitx::Key key("Control+Right");
+    return key;
+}
+
+// The text a key types, if it types without a command modifier.
+std::string typedText(const ::fcitx::Key &key) {
+    if (key.states().testAny(::fcitx::KeyStates{::fcitx::KeyState::Ctrl, ::fcitx::KeyState::Alt,
+                                                ::fcitx::KeyState::Super})) return {};
+    return ::fcitx::Key::keySymToUTF8(key.sym());
+}
+
 std::size_t surroundingDigest(const ::fcitx::SurroundingText &surrounding) {
     return std::hash<std::string_view>{}(surrounding.text()) ^
            (static_cast<std::size_t>(surrounding.cursor()) * 0x9e3779b97f4a7c15ULL) ^ surrounding.anchor();
@@ -161,6 +173,10 @@ private:
         std::unique_ptr<::fcitx::EventSourceTime> observeTimer;
         // Escape declined this context; it is not requested automatically again.
         std::optional<ContextWindow> dismissedContext;
+        // The last key typed the suggestion's next characters, or a word was
+        // accepted: the broker may carry the remainder at once (ADR 0004), so
+        // the next inspection skips most of the typing pause.
+        bool typedThrough = false;
 
         [[nodiscard]] bool observed() const { return !observedFocus.is_null(); }
     };
@@ -250,6 +266,7 @@ private:
         stopObserving(binding);
         binding.observationExplicit = false;
         binding.dismissedContext.reset();
+        binding.typedThrough = false;
         binding.inspection.input();
         binding.surroundingFreshness.focusIn();
         if (!binding.state.focusIn(*sessionId, contextId, appId, *salt)) {
@@ -346,12 +363,15 @@ private:
                 editingUnavailableReason(binding->state.appId(), binding->observed()));
         }
         const auto panel = observePanel(*binding);
+        const bool unclaimed = !event.filtered() && !event.accepted();
         const PreKey pressed{
             .modifier = key.isModifier(),
             .repeat = !!(event.key().states() & ::fcitx::KeyState::Repeat),
-            .tab = tab && !event.filtered() && !event.accepted(),
+            .tab = tab && unclaimed,
             .escape = key.check(::fcitx::Key(FcitxKey_Escape)),
             .chord = key.check(invokeChord()) || key.check(acceptChord()),
+            .word = key.check(wordKey()) && unclaimed,
+            .typesSuggestion = typesSuggestionStart(typedText(key), binding->state.visibleText()),
         };
         switch (decidePreKey(pressed, binding->state.editingAvailable(), !binding->ownedAuxiliary.empty(),
                              binding->state.suggestionVisible(), panel)) {
@@ -361,7 +381,13 @@ private:
             declineContext(*binding);
             [[fallthrough]];
         case PreKeyAction::Cancel:
+            binding->typedThrough = false;
             cancelForInput(*binding);
+            return;
+        case PreKeyAction::CancelTypingThrough:
+            cancelForInput(*binding);
+            binding->typedThrough = true;
+            debug_.record("input", app, "typed_through");
             return;
         case PreKeyAction::Tab:
             tabKey(event, *binding, panel);
@@ -372,6 +398,9 @@ private:
             break;
         case PreKeyAction::Dismiss:
             dismissSuggestion(*binding, panel);
+            break;
+        case PreKeyAction::AcceptWord:
+            requestAcceptance(*binding, true);
             break;
         }
         event.filterAndAccept();
@@ -487,9 +516,9 @@ private:
         showNotice(binding, notice::kThinking);
     }
 
-    void requestAcceptance(Binding &binding) {
+    void requestAcceptance(Binding &binding, bool word = false) {
         const auto request = binding.state.editingAvailable()
-            ? binding.state.requestAcceptance(transport_.nowMs(), observePanel(binding))
+            ? binding.state.requestAcceptance(transport_.nowMs(), observePanel(binding), word)
             : std::nullopt;
         if (!request || !transport_.requestAcceptance(*request)) clearOwnedPanel(binding);
     }
@@ -522,7 +551,8 @@ private:
                     return true;
                 });
         }
-        binding.observeTimer->setNextInterval(binding.inspection.delayUs(explicitRequest && !retry));
+        binding.observeTimer->setNextInterval(
+            binding.inspection.delayUs(explicitRequest && !retry, binding.typedThrough));
         binding.observeTimer->setOneShot();
     }
 
@@ -808,6 +838,7 @@ private:
         }
         binding->overlayOwned = overlay;
         binding->pendingSuggestion.reset();
+        binding->typedThrough = false;
         if (!overlay) showCandidate(*binding, suggestion);
         // The local lease must also hide UI if the broker stalls before its
         // suggestion.clear arrives. Only this exact candidate may be retired.
@@ -902,6 +933,8 @@ private:
         const auto dispatch = binding->state.authorizeCommit(prepare, transport_.nowMs(), observePanel(*binding));
         if (!dispatch) return reportStale(prepare);
         clearOwnedPanel(*binding);
+        // The broker may carry the rest after a word (ADR 0004).
+        binding->typedThrough = prepare.acceptance == "word";
         // One append, like typed text. Fcitx cannot see the client apply it,
         // so the result is dispatched-unverified, never applied.
         binding->inputContext->commitString(dispatch->text);

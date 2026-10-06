@@ -113,6 +113,7 @@ bool policyStatus(const Json &value, const Json &payload) {
 bool sessionControlResult(const Json &value, const Json &payload) {
     const bool knownAction = payload.contains("action") &&
                              (payload["action"] == "accept_all" ||
+                              payload["action"] == "accept_word" ||
                               payload["action"] == "dismiss");
     return exactKeys(value, {"v", "id", "type", "mono_ms", "payload"}) &&
            value["v"] == 2 && value["type"] == "control.result" &&
@@ -588,7 +589,7 @@ public:
         if (!ready()) return false;
         return queue(envelope(
             "control.request", request.controlId, nowMs(),
-            Json{{"action", "accept_all"},
+            Json{{"action", request.acceptance == "word" ? "accept_word" : "accept_all"},
                  {"fingerprint", request.coordinates.fingerprint},
                  {"suggestion_id", request.suggestionId}},
             &request.coordinates));
@@ -932,6 +933,7 @@ private:
                 .suggestionId = payload["suggestion_id"].get<std::string>(),
                 .text = *text,
                 .expiresAtMs = nowMs() + payload["ttl_ms"].get<std::uint64_t>(),
+                .acceptWord = *acceptWord,
             });
         }
         return true;
@@ -949,7 +951,8 @@ private:
             !exactKeys(payload, {"fingerprint", "suggestion_id", "text", "acceptance"}) ||
             !payload["suggestion_id"].is_string() ||
             !validOpaqueId(payload["suggestion_id"].get_ref<const std::string &>()) ||
-            !payload["text"].is_string() || payload["acceptance"] != "all") {
+            !payload["text"].is_string() ||
+            (payload["acceptance"] != "all" && payload["acceptance"] != "word")) {
             return false;
         }
         const auto coordinates = parseCoordinates(value, payload);
@@ -961,7 +964,7 @@ private:
                 .controlId = value["id"].get<std::string>(),
                 .suggestionId = payload["suggestion_id"].get<std::string>(),
                 .text = *text,
-                .acceptance = "all",
+                .acceptance = payload["acceptance"].get<std::string>(),
             });
         }
         return true;

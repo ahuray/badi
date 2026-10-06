@@ -83,6 +83,15 @@ def run(args):
                     if status["metrics"][metric] != value:
                         raise RuntimeError(f"unexpected broker counter: {metric}")
                 if not args.model_directory:
+                    subprocess.run([args.client, "--type-through", str(socket), "omawrite"],
+                                   env=environment, check=True, timeout=10)
+                    status = json.loads(subprocess.run(
+                        [args.cli, "status"], env=environment, check=True,
+                        capture_output=True, text=True, timeout=5,
+                    ).stdout)
+                    # Only the first of its three suggestions was generated.
+                    if (status["metrics"]["provider_calls"], status["metrics"]["suggestions_shown"]) != (5, 7):
+                        raise RuntimeError("type-through generated instead of carrying")
                     recovery = subprocess.Popen(
                         [args.client, "--reconnect", str(socket), "omawrite"],
                         env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,

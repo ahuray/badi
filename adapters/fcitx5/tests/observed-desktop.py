@@ -37,7 +37,8 @@ IME_PARITY_APPS = ('chromium', 'chromium-browser', 'brave-origin', 'zen', 'chatg
 UNAVAILABLE_NOTICE = 'Badi cannot safely insert suggestions in this app yet'
 OBSERVER_UNAVAILABLE_NOTICE = 'Badi cannot see this text field — check badi doctor'
 FIELD_DENIED_NOTICE = 'Badi cannot read this text field — run badi debug status'
-PANEL_HINT = 'Badi · Tab to accept · Escape to dismiss'
+RIGHT, CONTROL = 0xff53, 1 << 2
+PANEL_HINT = 'Badi · Tab to accept · Ctrl+→ next word · Escape to dismiss'
 # Chromium's text-input-v3 path adds UppercaseWords (0x80072 in total).
 CHROMIUM_HINT = 1 << 19
 ALLOWED_URI = 'https://allowed.example.test/document'
@@ -856,6 +857,35 @@ def session(root, report):
                           'dispatch snapshot, fail closed with distinct content-free reasons')
 
         ime_parity('brave-origin', True, CHROMIUM_HINT, 'IME-parity browser (brave-origin, exact origin)')
+
+        # Type-through (ADR 0004). Each edit ends the observer's binding, so the
+        # broker answers the next field session with the remainder instead of
+        # generating; Ctrl+Right dispatches only the next word.
+        def provider_calls():
+            return control('status')['metrics']['provider_calls']
+
+        change(PREFIX)
+        wait(lambda: context.candidate() == SUFFIX, 'candidate before type-through')
+        calls, typed = provider_calls(), reason_count('typed_through')
+        assert not context.key(ord(' ')), 'a typed-through key still reaches the application'
+        assert reason_count('typed_through') == typed + 1
+        commits = context.commits()
+        change(PREFIX + ' ')
+        wait(lambda: context.candidate() == SUFFIX[1:], 'type-through remainder')
+        assert provider_calls() == calls, 'the remainder is carried, never generated'
+        assert context.key(RIGHT, CONTROL), 'Ctrl+Right is claimed over a live candidate'
+        wait(lambda: context.commits() == [*commits, 'for'], 'Ctrl+Right dispatches the next word')
+        change(PREFIX + ' for')
+        wait(lambda: context.candidate() == ' your time', 'remainder after a word acceptance')
+        assert provider_calls() == calls and context.commits() == [*commits, 'for']
+        assert context.key(desktop.ESCAPE)
+        wait(lambda: context.candidate() is None, 'Escape ends type-through')
+        assert not context.key(RIGHT, CONTROL), 'without a candidate Ctrl+Right stays the application key'
+        change(PREFIX + ' fo')
+        wait(lambda: provider_calls() > calls, 'after Escape a typed prefix is generated again')
+        checks.append('IME-parity type-through: a typed prefix of the suggestion shows its remainder in the next '
+                      'field session without a model call; Ctrl+Right dispatches one word and its rest carries; '
+                      'Escape ends the carry')
 
         # Foreign composition and a rendered overlay on the same browser field.
         change(PREFIX)

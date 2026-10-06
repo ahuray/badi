@@ -78,6 +78,10 @@ def eligible(metadata):
             raise Denied("unsupported_field")
         if input_type not in ("", "text", "textarea"):
             raise Denied("unsupported_field")
+        # An ARIA search box is a plain entry to accessibility, like the
+        # search input type above: queries, not prose.
+        if "searchbox" in metadata.get("xml_roles", "").split():
+            raise Denied("unsupported_field")
     if metadata["caret"] < 0 or metadata["caret"] > metadata["total_chars"]:
         raise Denied("invalid_caret")
 

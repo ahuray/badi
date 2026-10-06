@@ -304,12 +304,12 @@ Item {
               Caption { text: "Pause keeps the model loaded. Your choice persists after restart." }
               PanelSeparator { Layout.fillWidth: true; foreground: Color.popups.text }
               SectionTitle { text: "Try a continuation" }
-              BodyText { text: "Suggestions appear on their own in supported apps: Tab inserts a visible suggestion, Escape dismisses, Ctrl+Shift+Space asks explicitly. In a Xournal++ text cell, press Tab to request words and Tab again to insert them. Obsidian: Tab takes one word, Ctrl/Command+Right takes all." }
+              BodyText { text: "Suggestions appear on their own in supported apps: Tab inserts a visible suggestion, Ctrl+Right inserts its next word, typing its next letters keeps the rest, Escape dismisses, Ctrl+Shift+Space asks explicitly. In a Xournal++ text cell, press Tab to request words and Tab again to insert them. Obsidian: Tab takes one word, Ctrl/Command+Right takes all." }
               RowLayout {
                 ActionButton { text: "Open Omawrite"; bordered: true; focusable: true; enabled: !root.controlsBusy; onClicked: root.runAction(["launch", "omawrite"], "Opening Omawrite…", "Omawrite opened. Type a phrase; press Tab to insert the suggestion.") }
                 ActionButton { text: "Open Xournal++"; bordered: true; focusable: true; enabled: !root.controlsBusy; onClicked: root.runAction(["launch", "xournalpp"], "Opening Xournal++…", "Xournal++ opened. Select the Text tool and click the page.") }
               }
-              Caption { text: "Example: Please find attached the\nEscape dismisses. Suggestions last five seconds and clear when text or focus changes." }
+              Caption { text: "Example: Please find attached the\nEscape dismisses. Suggestions last five seconds and clear when focus changes or the text stops matching them." }
               Caption {
                 visible: client.brokerReachable
                 text: client.overview.desktop ? "Requests  " + client.overview.desktop.requests + "     Suggestions  " + client.overview.desktop.suggestions + "     Errors  " + client.overview.desktop.errors : ""

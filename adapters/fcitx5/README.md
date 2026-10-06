@@ -23,9 +23,18 @@ the broker and observer wire details.
   also requests at the end of a nonempty phrase with an English, German or
   Persian input-method language and no selection. Otherwise, and whenever a
   foreign IME owns the panel, it stays the application's Tab.
-  **Ctrl+Shift+Space** requests or refreshes, **Ctrl+Shift+Y** accepts, and
-  **Escape** dismisses a suggestion or closes a notice. A key is consumed only
-  for its matching local action.
+  **Ctrl+Right** accepts only the next word of Badi's own live candidate and
+  otherwise stays the application's key. **Ctrl+Shift+Space** requests or
+  refreshes, **Ctrl+Shift+Y** accepts, and **Escape** dismisses a suggestion or
+  closes a notice. A key is consumed only for its matching local action.
+- **Type-through.** A key that types the next characters of the visible
+  suggestion still reaches the application. It retires the candidate like any
+  edit, and the next inspection waits 30 ms instead of 120 ms; a word
+  acceptance does the same. The broker then answers the new field session with
+  the remainder and no model call
+  ([decision](../../docs/decisions/0004-type-through-carries-text-not-authority.md)).
+  Every observer check runs again before the remainder is shown and before it
+  is dispatched.
 - **Manual request.** It needs a collapsed, non-composing, non-sensitive
   surrounding-text snapshot, the live Fcitx `SurroundingText` capability and a
   valid language from the active input-method entry. Each focus epoch must
@@ -36,7 +45,7 @@ the broker and observer wire details.
   composing, selected, unknown-language and unknown-app states send no context.
 - **Display.** A suggestion appears as the observer's inline preview or as the
   single candidate of Badi's own Fcitx panel, with “Badi · Tab to accept ·
-  Escape to dismiss”. Thinking, no-continuation and connection notices expire
+  Ctrl+→ next word · Escape to dismiss”. Thinking, no-continuation and connection notices expire
   after five seconds.
 - **Acceptance.** The broker authorizes first. A matching `commit.prepare`
   causes exactly one `InputContext::commitString`, reported as
