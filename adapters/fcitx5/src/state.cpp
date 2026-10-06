@@ -24,12 +24,17 @@ std::uint64_t mix(std::string_view value, std::uint64_t seed) {
     return hash;
 }
 
-// IME-parity apps are exactly the accessibility observer's web-app rules
-// (adapters/accessibility/daemon.py APPS); tests/observer-identities.py keeps
-// the lists equal, because an id without a rule could never be observed.
+// IME-parity apps are exactly the accessibility observer's web-app and
+// observed-only rules (adapters/accessibility/daemon.py APPS);
+// tests/observer-identities.py keeps the lists equal, because an id without a
+// rule could never be observed.
 constexpr std::array<std::string_view, 4> kImeParityBrowsers{
     "chromium", "chromium-browser", "brave-origin", "zen"};
-constexpr std::array<std::string_view, 4> kImeParityDesktopApps{"chatgpt", "code", "cursor", "discord"};
+constexpr std::array<std::string_view, 5> kImeParityDesktopApps{"chatgpt", "code", "cursor", "discord", "grok-bot"};
+// Native apps on the same observed, append-only contract: one Fcitx program
+// id serves modules or fields the observer must tell apart (LibreOffice Calc
+// cells must keep Tab), so no manual path may exist.
+constexpr std::array<std::string_view, 1> kImeParityNativeApps{"libreoffice"};
 
 // Chromium-family identities without an observer rule: other Chromium
 // browsers, channels and Flatpak ids, installed web-app windows (Wayland
@@ -119,7 +124,7 @@ NativeAppClass classifyNativeApp(std::string_view appId) {
     if (!validLinuxAppId(appId) || listed(unavailable) || unobservedGeckoFamily(appId))
         return NativeAppClass::Unavailable;
     if (listed(kImeParityBrowsers)) return NativeAppClass::ImeParityBrowser;
-    if (listed(kImeParityDesktopApps)) return NativeAppClass::ImeParityDesktop;
+    if (listed(kImeParityDesktopApps) || listed(kImeParityNativeApps)) return NativeAppClass::ImeParityDesktop;
     if (unobservedChromiumFamily(appId)) return NativeAppClass::Unavailable;
     return NativeAppClass::NativeExact;
 }

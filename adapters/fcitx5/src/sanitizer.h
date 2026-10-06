@@ -31,7 +31,10 @@ bool validLinuxAppId(std::string_view value);
 // Folds an ASCII app identifier (^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)*$,
 // at most 128 bytes) to the lowercase form validLinuxAppId accepts.
 std::optional<std::string> canonicalAppId(std::string_view program);
-// canonicalAppId, with an app's renamed Wayland id mapped to its existing identity.
+// Whether program() names a Brave --app (web-app) window.
+bool braveWebAppWindow(std::string_view program);
+// canonicalAppId, with a Brave web-app window or an app's renamed Wayland id
+// mapped to its existing identity.
 std::optional<std::string> programAppId(std::string_view program);
 bool validLanguageTag(std::string_view value);
 bool validContextText(std::string_view value);

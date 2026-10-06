@@ -985,6 +985,29 @@ void canonicalAppIdsFoldAsciiCase() {
     check(programAppId("com.microsoft.VSCode") == "code" && programAppId("Code") == "code" &&
               programAppId("Telegram") == "telegram" && !programAppId("A window title"),
           "VS Code's renamed Wayland id keeps its identity; other programs only fold");
+    for (const auto program : {"brave-app.hey.com__-Default", "brave-launchpad.37signals.com__-Default",
+                               "brave-app.zoom.us__wc_home-Default", "brave-x.com__-Profile_1",
+                               "brave-127.0.0.1__0123abc_fixture-Default"}) {
+        check(braveWebAppWindow(program) && programAppId(program) == "brave-origin",
+              "Brave --app windows keep the browser identity, even with digit-led host labels");
+    }
+    for (const auto program : {"brave-nngceckbapebfimnlniiiahkandclblb-Default", "brave-browser",
+                               "brave-x.com__-Profile 1", "brave-x.com__/-Default", "chrome-app.hey.com__-Default",
+                               "brave__", "brave-app.hey.com_-Default"}) {
+        check(!braveWebAppWindow(program) && programAppId(program) != "brave-origin",
+              "PWAs, other builds, other browsers and malformed names are not Brave web-app windows");
+    }
+    check(!braveWebAppWindow("brave-" + std::string(240, 'a') + "__-Default"),
+          "an overlong web-app window name is rejected");
+    check(classifyNativeApp("grok-bot") == NativeAppClass::ImeParityDesktop && imeParityApp("grok-bot"),
+          "Grok Bot accepts only through its observed field");
+    for (const auto program : {"libreoffice-startcenter", "libreoffice-writer", "libreoffice-calc", "LibreOffice-Impress"}) {
+        check(programAppId(program) == "libreoffice", "every LibreOffice window keeps one identity");
+    }
+    check(classifyNativeApp("libreoffice") == NativeAppClass::ImeParityDesktop &&
+              nativeEditingAvailable("libreoffice", NativeEditTarget::DesktopApplication, NativeEditPath::Observed) &&
+              !nativeEditingAvailable("libreoffice", NativeEditTarget::DesktopApplication, NativeEditPath::Manual),
+          "LibreOffice has no manual path, so Calc cells keep their Tab");
     check(classifyNativeApp(*canonicalAppId("com.microsoft.VSCode")) == NativeAppClass::Unavailable &&
               classifyNativeApp(*canonicalAppId("com.microsoft.VSCodeInsiders")) == NativeAppClass::Unavailable,
           "unmapped VS Code reverse-DNS ids never reach the native exact path");

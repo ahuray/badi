@@ -25,15 +25,17 @@ import badi_install
 ROOT = Path(__file__).resolve().parents[1]
 # Each launcher's user flags file and how that wrapper turns it into arguments:
 # "glib" is /usr/bin/chromium's GLib shell parsing, "words" strips # comments
-# and splits on whitespace without quote handling (Codex: read -a; VS Code:
-# sed plus unquoted expansion), and "line" passes every non-comment line as one
-# argument (mapfile). Discord has no such file; see the accessibility runbook.
+# and splits on whitespace without quote handling (Codex: read -a; VS Code and
+# Grok Bot: sed plus unquoted expansion), and "line" passes every non-comment
+# line as one argument (mapfile). Discord has no such file; see the
+# accessibility runbook.
 OBSERVED_APP_FLAGS = {
     "chromium": ("chromium-flags.conf", "glib"),
     "brave-origin": ("brave-origin-flags.conf", "line"),
     "chatgpt": ("codex-flags.conf", "words"),
     "code": ("code-flags.conf", "words"),
     "cursor": ("cursor-flags.conf", "line"),
+    "grok-bot": ("grok-bot-flags.conf", "words"),
 }
 # Measured on Chromium 152: "basic" and "form-controls" omit the HTML tag the
 # observer's purpose gate needs and the character extents its caret geometry

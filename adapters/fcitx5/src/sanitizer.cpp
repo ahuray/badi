@@ -209,11 +209,31 @@ std::optional<std::string> canonicalAppId(std::string_view program) {
     return result;
 }
 
+bool braveWebAppWindow(std::string_view program) {
+    // Brave names each --app window "brave-<host>_<path>-<profile>" with the
+    // URL path's slashes as underscores; the path starts with one, so the name
+    // holds "__". Installed-PWA windows ("brave-<extension id>-<profile>") and
+    // Brave's own builds ("brave-browser*") have none and stay unmapped.
+    constexpr std::string_view prefix = "brave-";
+    if (!program.starts_with(prefix) || program.size() > 255 ||
+        program.find("__", prefix.size()) == std::string_view::npos) return false;
+    return std::all_of(program.begin(), program.end(), [](unsigned char byte) {
+        return byte > ' ' && byte < 0x7f && byte != '/';
+    });
+}
+
 std::optional<std::string> programAppId(std::string_view program) {
+    // A Brave web-app window shows pages whose origin, not this window name,
+    // selects policy, so it keeps the browser's identity.
+    if (braveWebAppWindow(program)) return "brave-origin";
     // VS Code 1.140 renamed its Wayland app id from "code"; its grants,
     // sessions and observer rule keep the original identity.
     auto app = canonicalAppId(program);
     if (app == "com.microsoft.vscode") return "code";
+    // Every LibreOffice window reports its first window's id, usually
+    // libreoffice-startcenter, so no module id can select a path on its own;
+    // the observer's window rule picks the module.
+    if (app && app->starts_with("libreoffice-")) return "libreoffice";
     return app;
 }
 

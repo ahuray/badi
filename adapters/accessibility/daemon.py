@@ -26,7 +26,9 @@ APPS = {
     # other way, the same executable's Wayland app id is chromium-browser.
     "chromium-browser": App(frozenset({"/usr/lib/chromium/chromium"}), frozenset({"chromium-browser"}),
                             browser=True, web=True),
-    "brave-origin": App(frozenset({"/opt/brave-origin-bin/brave"}), frozenset({"brave-origin"}), browser=True, web=True),
+    # Omarchy web apps open as Brave --app windows; the addon maps them to this id.
+    "brave-origin": App(frozenset({"/opt/brave-origin-bin/brave"}), frozenset({"brave-origin"}), browser=True, web=True,
+                        web_apps="brave-"),
     # /usr/bin/zen-browser execs this binary; its Wayland app id and Fcitx program() are both "zen".
     "zen": App(frozenset({"/opt/zen-browser-bin/zen-bin"}), frozenset({"zen"}), browser=True, web=True, gecko=True),
     "chatgpt": App(frozenset({"/usr/lib/chatgpt/ChatGPT"}), frozenset({"chatgpt"}), web=True),
@@ -35,8 +37,13 @@ APPS = {
     "cursor": App(frozenset({"/usr/lib/electron42/electron"}), frozenset({"cursor"}), web=True,
                   entry="/usr/share/cursor/resources/app/cursor.mjs"),
     "discord": App(classes=frozenset({"discord"}), web=True, per_user=True),
+    "grok-bot": App(frozenset({"/opt/Grok Bot/grok-bot"}), frozenset({"grok-bot"}), web=True),
     "telegram": App(frozenset({"/usr/bin/Telegram"}), frozenset({"org.telegram.desktop"})),
     "omawrite": App(frozenset({"/usr/bin/omawrite"}), frozenset({"omawrite"})),
+    # Writer document paragraphs only: Calc, Impress and dialog fields share
+    # LibreOffice's Fcitx program id and fail closed here.
+    "libreoffice": App(frozenset({"/usr/lib/libreoffice/program/soffice.bin"}), frozenset({"libreoffice-writer"}),
+                       roles=frozenset({"paragraph"}), observed_only=True, sentence_bounded=True),
 }
 OPERATION_SECONDS = 0.35
 MAX_CLIENTS = 4

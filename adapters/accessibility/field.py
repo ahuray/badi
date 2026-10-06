@@ -83,6 +83,8 @@ class FieldBackend:
         node.clear_cache()
         flags = node.get_state_set()
         role = node.get_role_name()
+        if app.roles is not None and role not in app.roles:
+            raise Denied("unsupported_field")
         attributes = self.text_attributes(node, role)
         uri = self.page_address(node, app)
         # Gecko serializes block boundaries differently and is unverified;
@@ -90,6 +92,7 @@ class FieldBackend:
         flatten = app.web and not app.gecko
         caret, count, selections, rich = self.caret_position(node, flatten)
         local = rich.caret_text if rich else CaretText(node.get_text_iface(), caret, count)
+        sentence_start = self.sentence_start(local) if app.sentence_bounded else 0
         geometry = None
         if (calibrate and 1 <= local.caret <= local.length and flags.contains(self.atspi.StateType.SHOWING) and
                 window.get("xwayland") is False):
@@ -98,7 +101,20 @@ class FieldBackend:
                 "process_id": window["pid"], "app_id": app_id, "uri": uri, "browser": app.browser, "web": app.web,
                 "role": role, "tag": attributes.get("tag", ""), "input_type": attributes.get("text-input-type", ""),
                 **self.states(flags), "caret": caret, "total_chars": count, "selection_count": selections,
-                "geometry": geometry, "node": node, "flatten": flatten, "blocks": rich.blocks if rich else None}
+                "geometry": geometry, "node": node, "flatten": flatten, "blocks": rich.blocks if rich else None,
+                "sentence_start": sentence_start}
+
+    def sentence_start(self, local):
+        """Where the caret's sentence starts. LibreOffice Writer gives Fcitx only
+        that sentence as surrounding text, so a snapshot must begin there to agree."""
+        text, caret, _length = local
+        if caret < 1:
+            return 0
+        self.budget()
+        sentence = self.atspi.Text.get_string_at_offset(text, caret - 1, self.atspi.TextGranularity.SENTENCE)
+        if sentence is None or not 0 <= sentence.start_offset <= caret - 1 < sentence.end_offset:
+            raise Denied("invalid_caret")
+        return sentence.start_offset
 
     def text_attributes(self, node, role):
         """A text field's attributes; a password fails before any caret, extent or text call."""

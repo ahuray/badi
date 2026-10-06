@@ -396,12 +396,15 @@ class IdentityTests(unittest.TestCase):
 
     def test_supported_ids_match_the_fcitx_addon(self):
         self.assertEqual(set(APPS), {"chromium", "chromium-browser", "brave-origin", "zen", "chatgpt", "code",
-                                     "cursor", "discord", "telegram", "omawrite"})
+                                     "cursor", "discord", "grok-bot", "telegram", "omawrite", "libreoffice"})
         self.assertEqual({app for app, rule in APPS.items() if rule.browser},
                          {"chromium", "chromium-browser", "brave-origin", "zen"})
         self.assertEqual({app for app, rule in APPS.items() if rule.gecko}, {"zen"})
         self.assertEqual((APPS["zen"].executables, APPS["zen"].classes), ({"/opt/zen-browser-bin/zen-bin"}, {"zen"}))
-        self.assertEqual({app for app, rule in APPS.items() if not rule.web}, {"telegram", "omawrite"})
+        self.assertEqual({app for app, rule in APPS.items() if not rule.web}, {"telegram", "omawrite", "libreoffice"})
+        self.assertEqual({app for app, rule in APPS.items() if rule.observed_only}, {"libreoffice"})
+        self.assertEqual((APPS["libreoffice"].classes, APPS["libreoffice"].roles),
+                         ({"libreoffice-writer"}, {"paragraph"}))
         self.assertEqual(APPS["telegram"].classes, {"org.telegram.desktop"})
         self.assertEqual(APPS["code"].classes, {"code", "com.microsoft.VSCode"})
 
@@ -409,6 +412,8 @@ class IdentityTests(unittest.TestCase):
         for app_id, executable in (("chromium", "/usr/lib/chromium/chromium"), ("brave-origin", "/opt/brave-origin-bin/brave"),
                                    ("zen", "/opt/zen-browser-bin/zen-bin"),
                                    ("chatgpt", "/usr/lib/chatgpt/ChatGPT"), ("code", "/usr/share/code/code"),
+                                   ("grok-bot", "/opt/Grok Bot/grok-bot"),
+                                   ("libreoffice", "/usr/lib/libreoffice/program/soffice.bin"),
                                    ("telegram", "/usr/bin/Telegram"), ("omawrite", "/usr/bin/omawrite")):
             with self.subTest(app_id=app_id):
                 self.setUp()
@@ -558,6 +563,19 @@ class WindowTests(unittest.TestCase):
                     self.backend({**window, **change}).window(APPS["telegram"])
             with self.assertRaisesRegex(Denied, "unsupported_app"):
                 self.backend(window).app("org.telegram.desktop")
+            brave = APPS["brave-origin"]
+            for window_class in ("brave-origin", "brave-app.hey.com__-Default", "brave-launchpad.37signals.com__-Default",
+                                 "brave-app.zoom.us__wc_home-Profile_1", "brave-127.0.0.1__0123abc_fixture-Default"):
+                with self.subTest(window_class=window_class):
+                    shown = {"pid": 42, "class": window_class, "mapped": True, "hidden": False}
+                    self.assertEqual(self.backend(shown).window(brave), shown)
+            # Installed PWAs, other Brave builds, other browsers' web apps and malformed names are not Brave Origin pages.
+            for window_class in ("brave-nngceckbapebfimnlniiiahkandclblb-Default", "brave-browser", "brave",
+                                 "chrome-app.hey.com__-Default", "brave-x.com__-Profile 1", "brave-x.com__/-Default",
+                                 "brave-" + "a" * 250 + "__-Default"):
+                with self.subTest(window_class=window_class), self.assertRaisesRegex(Denied, "app_mismatch"):
+                    self.backend({"pid": 42, "class": window_class, "mapped": True, "hidden": False}).window(brave)
+            self.assertIsNone(APPS["chromium"].web_apps)
             chromium = {"pid": 42, "class": "chromium-browser", "mapped": True, "hidden": False}
             self.assertEqual(self.backend(chromium).window(APPS["chromium-browser"]), chromium)
             for app_id, window_class in (("chromium", "chromium-browser"), ("chromium-browser", "chromium")):
@@ -1289,7 +1307,11 @@ class MetadataTests(unittest.TestCase):
         node.app, node.path = SimpleNamespace(bus_name=":1.9"), "/field"
         atspi = SimpleNamespace(StateType=SimpleNamespace(FOCUSED="focused", EDITABLE="editable", SHOWING="showing",
                                                           VISIBLE="visible", ENABLED="enabled"),
-                                Text=SimpleNamespace(get_attribute_run=lambda *_args: ({"direction": "lr"}, 0, 5)))
+                                Text=SimpleNamespace(get_attribute_run=lambda *_args: ({"direction": "lr"}, 0, 5),
+                                                     get_string_at_offset=lambda _text, offset, granularity:
+                                                         sentences[(offset, granularity)]),
+                                TextGranularity=SimpleNamespace(SENTENCE="sentence"))
+        sentences = {(4, "sentence"): SimpleNamespace(start_offset=2, end_offset=5)}
         backend = FieldBackend(atspi, APPS)
         backend.budget = lambda: None
         window = {"pid": 42, "xwayland": False}
@@ -1306,6 +1328,22 @@ class MetadataTests(unittest.TestCase):
         window["xwayland"] = True
         self.assertIsNone(backend.metadata("code", True)["geometry"])
         self.assertEqual(backend.metadata("telegram")["web"], False)
+        # LibreOffice accepts only Writer's document paragraphs; dialog entries fail closed.
+        node.get_attributes = lambda: {}
+        node.role = "paragraph"
+        self.assertEqual((backend.metadata("libreoffice")["role"], backend.metadata("libreoffice")["web"]),
+                         ("paragraph", False))
+        self.assertEqual(backend.metadata("libreoffice")["sentence_start"], 2)
+        self.assertEqual(backend.metadata("code")["sentence_start"], 0, "only sentence-bounded apps look it up")
+        for start, end in ((5, 6), (0, 4), (-1, 5)):
+            sentences[(4, "sentence")] = SimpleNamespace(start_offset=start, end_offset=end)
+            with self.subTest(sentence=(start, end)), self.assertRaisesRegex(Denied, "invalid_caret"):
+                backend.metadata("libreoffice")
+        sentences[(4, "sentence")] = SimpleNamespace(start_offset=2, end_offset=5)
+        for role in ("text", "entry"):
+            node.role = role
+            with self.subTest(role=role), self.assertRaisesRegex(Denied, "unsupported_field"):
+                backend.metadata("libreoffice")
 
 
 class GeckoMetadataTests(unittest.TestCase):
