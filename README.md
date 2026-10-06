@@ -18,9 +18,12 @@ not a general Linux claim.
 | Chromium, VS Code, Cursor | IME-parity: automatic, grey inline preview (else the Fcitx panel), Tab accepts once | Live 2026-09-27: Chromium 152, VS Code 1.138, Cursor 3.21; password fields denied. 2026-10-06: Chromium 152 again, VS Code 1.140 (Fcitx panel) |
 | Zen | IME-parity for the exact `zen` identity (Gecko) | Live 2026-10-06, Zen 1.23b: preview, acceptance, Escape, password denial; Ctrl+Z undoes the acceptance alone |
 | Brave Origin | IME-parity with a per-site grant | Live 2026-10-06 in the user's profile, Brave Origin 1.96: preview, acceptance, Escape, password denial |
+| Omarchy web apps (HEY, X, Basecamp, Zoom) | Brave Origin `--app` windows, per-site grant | Live 2026-10-06 on a local fixture `--app` window: preview, acceptance, Escape, password denial |
+| LibreOffice Writer | IME-parity for document paragraphs, `badi app libreoffice on`; suggestion in the Fcitx panel | Live 2026-10-06, LibreOffice 26.8: acceptance, Escape, Ctrl+Z undoes the acceptance alone; Calc gets none |
 | Telegram | Observed native Fcitx path; suggestion in the Fcitx panel | Live 2026-09-27; Qt reports no caret geometry for an inline preview |
 | Codex desktop (`chatgpt`) | IME-parity with rich-composer flattening | Live 2026-10-06, Codex desktop 26.930: composer preview and one append |
 | Discord | IME-parity identity | Unsupported: its updater drops the accessibility flag, and Discord resets its own switch list after one launch |
+| Grok Bot | IME-parity, `badi app grok-bot on` | 0.35 exposes its web tree with the flag; composer acceptance needs a signed-in session and is untested |
 
 Other browsers and Gecko builds, canvas editors, TUIs and Fish/Zsh are
 unavailable or unverified; see [future plans](<future plans.md>).
@@ -72,7 +75,7 @@ Field identity, caret agreement, expiry, one-shot acceptance, password denial
 and foreign-IME yield still apply; corrections stay editor-owned.
 
 Each Chromium-based app must start with `--force-renderer-accessibility=complete`:
-`install-desktop.py --observed-app chromium|brave-origin|chatgpt|code|cursor`
+`install-desktop.py --observed-app chromium|brave-origin|chatgpt|code|cursor|grok-bot`
 adds it to that app's flags file (Zen needs none). VS Code also needs
 `"editor.editContext": false`.
 `badi site all on` allows every browser origin, private windows included.

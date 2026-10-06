@@ -16,14 +16,16 @@ not a claim that an application's complete editing flow works; the
 | --- | --- | --- | --- |
 | `chromium` | `/usr/lib/chromium/chromium` | `chromium` | browser origin |
 | `chromium-browser` | `/usr/lib/chromium/chromium` started without `/usr/bin/chromium`'s `CHROME_DESKTOP` | `chromium-browser` | browser origin |
-| `brave-origin` | `/opt/brave-origin-bin/brave` (its Bash wrapper is only the parent) | `brave-origin` | browser origin |
+| `brave-origin` | `/opt/brave-origin-bin/brave` (its Bash wrapper is only the parent) | `brave-origin`, or an `--app` window `brave-<host>__<path>-<profile>` | browser origin |
 | `zen` (Gecko) | `/opt/zen-browser-bin/zen-bin` (`/usr/bin/zen-browser` only `exec`s it) | `zen` | browser origin |
 | `chatgpt` (Codex desktop) | `/usr/lib/chatgpt/ChatGPT` | `chatgpt` | desktop app |
 | `code` (VS Code) | `/usr/share/code/code` | `code`, or `com.microsoft.VSCode` from 1.140 | desktop app |
 | `cursor` | `/usr/lib/electron42/electron`, whose first non-switch argument is exactly `/usr/share/cursor/resources/app/cursor.mjs` | `cursor` | desktop app |
 | `discord` | `$XDG_CONFIG_HOME/discord/app-<version>/Discord` | `discord` | desktop app |
+| `grok-bot` | `/opt/Grok Bot/grok-bot` | `grok-bot` | desktop app |
 | `telegram` | `/usr/bin/Telegram` | `org.telegram.desktop` | desktop app |
 | `omawrite` | `/usr/bin/omawrite` | `omawrite` | desktop app |
+| `libreoffice` | `/usr/lib/libreoffice/program/soffice.bin` | `libreoffice-writer`, `paragraph` fields only | desktop app |
 
 Executables come from `/proc/PID/exe` without further symlink resolution; a
 deleted or replaced binary does not match.
@@ -41,6 +43,17 @@ deleted or replaced binary does not match.
   directory and regular file owned by this user without group/other write
   permission, and the file must be the inode the process runs. Symlinked
   components, other owners, traversal spellings and `(deleted)` fail.
+- **Brave web apps** (Omarchy's HEY, X, Basecamp, Zoom) are Brave Origin
+  `--app` windows named `brave-<host>__<path>-<profile>`. The addon maps that
+  program id to `brave-origin` before folding, since host labels may start
+  with a digit, and the rule accepts such a class (printable ASCII, at most 255
+  bytes) for the same executable. The page origin selects policy as in a tab.
+- **LibreOffice** reports one Fcitx program id for every module, so the rule
+  admits only `libreoffice-writer` windows and `paragraph` fields; Calc,
+  Impress and dialog entries fail closed. Writer gives Fcitx only the caret's
+  sentence as surrounding text, so the snapshot starts at that sentence's AT-SPI
+  `SENTENCE` boundary and must still equal it exactly. Its frame has no web
+  document, so the suggestion shows in the Fcitx panel.
 
 Browser targets use the broker's single browser-origin identity (adapter
 `chromium`), so one `badi site ... on` grant covers Chromium, Brave and Zen
@@ -375,6 +388,7 @@ user flags file under `$XDG_CONFIG_HOME`, parsed the way its wrapper reads it:
 | `chatgpt` | `codex-flags.conf` | `/usr/bin/chatgpt`: text after `#` removed, split on whitespace |
 | `code` | `code-flags.conf` | `/usr/bin/code`: text after `#` removed, split on whitespace |
 | `cursor` | `cursor-flags.conf` | `/usr/share/cursor/cursor`: each non-comment line is one argument, after Cursor's entry |
+| `grok-bot` | `grok-bot-flags.conf` | `/usr/bin/grok-bot`: text after `#` removed, split on whitespace |
 
 A file that already has the bare or `=complete` switch is left untouched. Any
 other value, or `--disable-renderer-accessibility`, stops the installer before

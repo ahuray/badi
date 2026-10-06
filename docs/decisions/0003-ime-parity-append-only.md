@@ -2,7 +2,8 @@
 
 - Status: accepted
 - Date: 2026-09-26
-- Scope: Fcitx IME-parity apps (Chromium, Brave, Zen, Codex, VS Code, Cursor, Discord)
+- Scope: Fcitx IME-parity apps (Chromium, Brave and its web-app windows, Zen,
+  Codex, VS Code, Cursor, Discord, Grok Bot, LibreOffice Writer)
 
 ## Context
 
@@ -34,6 +35,15 @@ yield, exact observer identity with snapshot and caret agreement before display
 and dispatch, revision, fingerprint and expiry binding, one-shot acceptance,
 and no retries or synthetic keys. The native adapter negotiates no
 `text_replacement`, so correction stays editor-owned (Obsidian, Bash).
+
+## Extension (2026-10-06)
+
+The user extended the scope to the Chromium-based apps found on this machine,
+Grok Bot and Omarchy's web apps (Brave Origin `--app` windows, whose page origin
+selects policy), and to LibreOffice Writer. LibreOffice is native, but every
+module reports one Fcitx program id, so a manual path would claim Tab in Calc
+cells; it therefore takes this same observed, append-only contract, limited by
+the observer to Writer's document paragraphs.
 
 ## Consequences
 
