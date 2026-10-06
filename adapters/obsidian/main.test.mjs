@@ -57,7 +57,10 @@ async function harness(context) {
   const plugin = new module.exports.default();
   await plugin.onload();
   const state = (text, head = text.length) => ({
-    doc: { length: text.length, sliceString: (from = 0, to = text.length) => text.slice(from, to) },
+    // Like CodeMirror's Text: sliceString has no default start, so a
+    // whole-document read must use toString().
+    doc: { length: text.length, toString: () => text,
+      sliceString: (from, to = text.length) => (typeof from === 'number' ? text.slice(from, to) : '') },
     selection: { ranges: [{}], main: { head, empty: true }, eq(other) { return other.main.head === head; } },
     readOnly: false,
   });
@@ -97,7 +100,7 @@ test('Obsidian automatically requests, accepts one word or all, and isolates eac
   assert.equal(controller.text, ' for your time');
   assert.equal(controller.key({ isTrusted: true, key: 'Tab' }), true);
   await settle();
-  assert.equal(view.state.doc.sliceString(), 'thank you for');
+  assert.equal(view.state.doc.toString(), 'thank you for');
   assert.deepEqual(client.modes, ['word']);
   assert.deepEqual(client.reports, [{ text: ' for', status: 'applied' }]);
   assert.equal(view.transactions[0].annotations[1].isolateHistory, 'full');
@@ -106,7 +109,7 @@ test('Obsidian automatically requests, accepts one word or all, and isolates eac
   assert.equal(controller.key({ isTrusted: true, key: 'ArrowRight', ctrlKey: true }), true);
   await settle();
   assert.deepEqual(client.modes, ['word', 'all']);
-  assert.equal(view.state.doc.sliceString(), 'thank you for for your time');
+  assert.equal(view.state.doc.toString(), 'thank you for for your time');
   assert.equal(controller.key({ isTrusted: true, key: 'Tab', shiftKey: true }), false);
 });
 
@@ -120,7 +123,7 @@ test('Obsidian replaces exactly the misspelled suffix including a typed space in
   assert.equal(controller.text, 'address ');
   assert.equal(controller.decorations[0].widget.text, ' adress → address');
   await controller.accept('word');
-  assert.equal(view.state.doc.sliceString(), 'Please check the address ');
+  assert.equal(view.state.doc.toString(), 'Please check the address ');
   assert.equal(view.transactions.length, 1);
   assert.equal(view.transactions[0].changes.to - view.transactions[0].changes.from, 'adress '.length);
   assert.equal(view.transactions[0].annotations[1].isolateHistory, 'full');
@@ -135,7 +138,7 @@ test('Obsidian refuses a different replacement grant without changing the note',
   client.authorize = async () => ({ text: 'address ', replaceBefore: 'other ' });
   await controller.request();
   await controller.accept('word');
-  assert.equal(view.state.doc.sliceString(), 'Please check the adress ');
+  assert.equal(view.state.doc.toString(), 'Please check the adress ');
   assert.equal(view.transactions.length, 0);
   assert.deepEqual(client.reports, [{ text: 'address ', status: 'stale' }]);
 });

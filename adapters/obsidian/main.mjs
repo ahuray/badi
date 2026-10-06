@@ -164,7 +164,7 @@ class WritingView {
     try {
       const grant = await this.client.authorize(acceptance);
       if (generation !== this.generation || !this.matches(snapshot) || grant.replaceBefore !== replaceBefore ||
-          (replaceBefore !== undefined && !validCorrection(snapshot.doc.sliceString(), replaceBefore, grant.text))) {
+          (replaceBefore !== undefined && !validCorrection(snapshot.doc.toString(), replaceBefore, grant.text))) {
         this.client.report(grant, 'stale'); return;
       }
       const end = snapshot.selection.main.head;
@@ -173,7 +173,7 @@ class WritingView {
       try {
         this.view.dispatch({ changes: { from, to: end, insert: grant.text }, selection: { anchor: from + grant.text.length },
           annotations: [Transaction.userEvent.of('input.complete'), isolateHistory.of('full')] });
-        const applied = this.view.state.doc.sliceString() === snapshot.doc.sliceString(0, from) + grant.text &&
+        const applied = this.view.state.doc.toString() === snapshot.doc.sliceString(0, from) + grant.text &&
           this.view.state.selection.main.head === from + grant.text.length;
         this.client.report(grant, applied ? 'applied' : 'failed');
         inserted = applied;
