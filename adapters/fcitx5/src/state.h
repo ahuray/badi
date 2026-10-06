@@ -98,6 +98,8 @@ struct Suggestion {
     std::string suggestionId;
     std::string text;
     std::uint64_t expiresAtMs = 0;
+    // The broker's next-word part of `text`; the whole text when absent.
+    std::string acceptWord = {};
 };
 
 struct AcceptRequest {
@@ -105,6 +107,8 @@ struct AcceptRequest {
     std::string controlId;
     std::string suggestionId;
     std::string expectedText;
+    // "all" or "word", as the broker's commit grant must repeat it.
+    std::string acceptance = "all";
 };
 
 struct DismissRequest {
@@ -145,15 +149,22 @@ struct PreKey {
     bool tab = false;    // plain Tab that no earlier handler took
     bool escape = false;
     bool chord = false;  // Badi's invoke or accept chord, handled after the input method
+    bool word = false;   // Ctrl+Right that no earlier handler took
+    // The key types the next characters of Badi's visible suggestion.
+    bool typesSuggestion = false;
 };
 
 enum class PreKeyAction {
     PassThrough,
     Cancel,           // the key may edit the field: retire Badi's context and candidate
     CancelDeclining,  // Escape without Badi's candidate: also never re-suggest this context
+    // Cancel, for a key that types the suggestion's next characters: the
+    // broker may carry the remainder (ADR 0004), so inspect again sooner.
+    CancelTypingThrough,
     Tab,              // decideTabAction() owns plain Tab
     CloseNotice,      // Escape closes Badi's notice
     Dismiss,          // Escape dismisses Badi's candidate
+    AcceptWord,       // Ctrl+Right accepts the candidate's next word
 };
 
 // What Badi shows in Fcitx's auxiliary text.
@@ -169,7 +180,7 @@ inline constexpr std::string_view kDisabled = "Badi is disabled for this applica
 inline constexpr std::string_view kModelNotConnected = "Badi model is not connected";
 inline constexpr std::string_view kThinking = "Badi is thinking…";
 inline constexpr std::string_view kRequestFailed = "Badi request failed — check the tray status";
-inline constexpr std::string_view kSuggestionKeys = "Badi · Tab to accept · Escape to dismiss";
+inline constexpr std::string_view kSuggestionKeys = "Badi · Tab to accept · Ctrl+→ next word · Escape to dismiss";
 } // namespace notice
 
 // How an explicit request (the invoke chord, or Tab on the manual path) proceeds.
@@ -261,10 +272,13 @@ LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
                               const PanelObservation &panel);
 LocalAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
                             const PanelObservation &panel, NativeEditPath path);
-// Only Tab and Escape on Badi's own UI are consumed before the input method.
+// Only Tab, Escape and Ctrl+Right on Badi's own UI are consumed before the
+// input method.
 PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeShown,
                           bool suggestionVisible, const PanelObservation &panel);
 bool tabEligibleContext(const std::optional<ContextWindow> &context);
+// `typed` (a key's text) is a non-empty proper prefix of `suggestion`.
+bool typesSuggestionStart(std::string_view typed, std::string_view suggestion);
 // The bounded window around a collapsed caret. The caller has already denied
 // sensitive, special-purpose and composing contexts.
 std::optional<ContextWindow> captureContextWindow(std::string_view text,
@@ -288,8 +302,9 @@ public:
     std::optional<ContextUpdate> updateContext(ContextWindow context);
 
     bool showSuggestion(Suggestion suggestion, std::uint64_t nowMs);
+    // `word` accepts only the suggestion's next word.
     std::optional<AcceptRequest>
-    requestAcceptance(std::uint64_t nowMs, const PanelObservation &panel);
+    requestAcceptance(std::uint64_t nowMs, const PanelObservation &panel, bool word = false);
     std::optional<DismissRequest>
     requestDismissal(std::uint64_t nowMs, const PanelObservation &panel);
     std::optional<CommitDispatch> authorizeCommit(const CommitPrepare &prepare,
@@ -305,6 +320,9 @@ public:
     }
     [[nodiscard]] NativeEditPath editPath() const { return editPath_; }
     [[nodiscard]] bool suggestionVisible() const { return visible_.has_value(); }
+    [[nodiscard]] std::string_view visibleText() const {
+        return visible_ ? std::string_view(visible_->text) : std::string_view();
+    }
     [[nodiscard]] const Coordinates &coordinates() const { return coordinates_; }
     [[nodiscard]] const std::string &appId() const { return appId_; }
     [[nodiscard]] const std::string &targetId() const { return targetId_; }

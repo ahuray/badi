@@ -213,8 +213,15 @@ PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeS
     if (decideLocalAction(false, false, key.escape, liveOwnedCandidate, panel) == LocalAction::Dismiss) {
         return PreKeyAction::Dismiss;
     }
+    const bool ownedUi = liveOwnedCandidate && hasOwnedCandidate(panel) && !hasForeignImeUi(panel);
+    if (key.word && ownedUi) return PreKeyAction::AcceptWord;
     if (key.modifier || key.chord) return PreKeyAction::PassThrough;
-    return key.escape ? PreKeyAction::CancelDeclining : PreKeyAction::Cancel;
+    if (key.escape) return PreKeyAction::CancelDeclining;
+    return key.typesSuggestion && ownedUi ? PreKeyAction::CancelTypingThrough : PreKeyAction::Cancel;
+}
+
+bool typesSuggestionStart(std::string_view typed, std::string_view suggestion) {
+    return !typed.empty() && typed.size() < suggestion.size() && suggestion.starts_with(typed);
 }
 
 InvokeRoute routeInvoke(std::string_view appId, bool editingAvailable, bool fieldObserved) {
@@ -388,6 +395,8 @@ bool SessionState::showSuggestion(Suggestion suggestion, std::uint64_t nowMs) {
         suggestion.coordinates != coordinates_) {
         return false;
     }
+    const auto word = sanitizeSuggestion(suggestion.acceptWord);
+    suggestion.acceptWord = word && clean->starts_with(*word) ? *word : *clean;
     suggestion.text = *clean;
     visible_ = std::move(suggestion);
     pendingAcceptance_.reset();
@@ -396,7 +405,7 @@ bool SessionState::showSuggestion(Suggestion suggestion, std::uint64_t nowMs) {
 
 std::optional<AcceptRequest>
 SessionState::requestAcceptance(std::uint64_t nowMs,
-                               const PanelObservation &panel) {
+                               const PanelObservation &panel, bool word) {
     if (!editingAvailable() || !hasOwnedCandidate(panel)) {
         clearSuggestion();
         return std::nullopt;
@@ -413,7 +422,8 @@ SessionState::requestAcceptance(std::uint64_t nowMs,
                      std::to_string(visible_->coordinates.focusEpoch) + "." +
                      std::to_string(visible_->coordinates.revision),
         .suggestionId = visible_->suggestionId,
-        .expectedText = visible_->text,
+        .expectedText = word ? visible_->acceptWord : visible_->text,
+        .acceptance = word ? "word" : "all",
     };
     pendingAcceptance_ = request;
     return request;
@@ -458,7 +468,7 @@ SessionState::authorizeCommit(const CommitPrepare &prepare,
         prepare.controlId != pendingAcceptance_->controlId ||
         prepare.suggestionId != pendingAcceptance_->suggestionId ||
         prepare.text != pendingAcceptance_->expectedText ||
-        prepare.acceptance != "all") {
+        prepare.acceptance != pendingAcceptance_->acceptance) {
         return std::nullopt;
     }
     CommitDispatch dispatch{

@@ -26,6 +26,12 @@ not a general Linux claim.
 | Discord | IME-parity identity | Unsupported: its updater drops the accessibility flag, and Discord resets its own switch list after one launch |
 | Grok Bot | IME-parity, `badi app grok-bot on` | 0.35 exposes its web tree with the flag; composer acceptance needs a signed-in session and is untested |
 
+On every Fcitx field above, typing the next characters of a suggestion keeps
+its remainder without a new model call, and Ctrl+→ accepts only the next word
+([type-through](docs/decisions/0004-type-through-carries-text-not-authority.md)).
+This is verified with the real broker and addon on a private Fcitx bus; live
+app trials are pending.
+
 Other browsers and Gecko builds, canvas editors, TUIs and Fish/Zsh are
 unavailable or unverified; see [future plans](<future plans.md>).
 

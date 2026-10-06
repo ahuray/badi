@@ -3612,3 +3612,178 @@ async fn control_requests_and_explicit_probes_are_explicit() {
         ]
     );
 }
+
+/// An observed Fcitx field: protocol v2 with a native reading window. Each
+/// edit opens a new session with a new target id, like the observer's epochs.
+async fn open_observed_session(
+    broker: &Broker,
+    target_id: &str,
+) -> (SessionId, mpsc::Receiver<BrokerEvent>) {
+    let session_id = SessionId::new();
+    let (sink, receiver) = mpsc::channel(32);
+    broker
+        .open_session(
+            coordinates(session_id, 0),
+            SessionOpenPayload {
+                target: TargetDescriptor {
+                    kind: TargetKind::DesktopApplication,
+                    app_id: "org.telegram.desktop".to_owned(),
+                    target_id: target_id.to_owned(),
+                    origin: None,
+                },
+                activation: Activation::Always,
+            },
+            SessionAuthority {
+                protocol_version: 2,
+                adapter_kind: AdapterKind::Fcitx,
+                capabilities: vec![
+                    Capability::Context,
+                    Capability::Suggestion,
+                    Capability::CommitDispatchedUnverified,
+                ],
+            },
+            event_sink(sink),
+        )
+        .await
+        .expect("open observed session");
+    (session_id, receiver)
+}
+
+/// Publishes `before` at revision 1 of `session_id`, requests, and returns
+/// the next shown suggestion, skipping the clear of an earlier one.
+async fn shown_after(
+    broker: &Broker,
+    session_id: SessionId,
+    events: &mut mpsc::Receiver<BrokerEvent>,
+    before: &str,
+) -> Option<crate::protocol::SuggestionShowPayload> {
+    let mut update = context(1, FieldPurpose::Normal);
+    update.before = before.to_owned();
+    broker
+        .update_context(coordinates(session_id, 1), update.clone())
+        .await
+        .expect("context");
+    broker
+        .request_suggestion(
+            coordinates(session_id, 1),
+            SuggestRequestPayload {
+                fingerprint: update.fingerprint,
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("request");
+    loop {
+        match timeout(Duration::from_millis(100), events.recv()).await {
+            Ok(Some(BrokerEvent::SuggestionShow { payload, .. })) => break Some(payload),
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => break None,
+        }
+    }
+}
+
+#[tokio::test]
+async fn typing_through_a_suggestion_carries_its_remainder_into_the_next_field_session() {
+    let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
+    let broker = Broker::new(provider.clone(), BrokerConfig::default());
+    let (first, mut first_events) = open_observed_session(&broker, "field-epoch-1").await;
+    let shown = shown_after(&broker, first, &mut first_events, "Hello")
+        .await
+        .expect("generated suggestion");
+    assert_eq!(shown.text, " revision Hello");
+    broker
+        .close_session(coordinates(first, 1))
+        .await
+        .expect("close");
+
+    let (second, mut second_events) = open_observed_session(&broker, "field-epoch-2").await;
+    let carried = shown_after(&broker, second, &mut second_events, "Hello rev")
+        .await
+        .expect("carried remainder");
+    assert_eq!(carried.text, "ision Hello");
+    assert_eq!(carried.accept_word, "ision");
+    assert_ne!(carried.suggestion_id, shown.suggestion_id);
+    assert!(carried.ttl_ms <= shown.ttl_ms);
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 1);
+
+    // A character that differs from the suggestion asks the model again.
+    let (third, mut third_events) = open_observed_session(&broker, "field-epoch-3").await;
+    let generated = shown_after(&broker, third, &mut third_events, "Hello rex")
+        .await
+        .expect("generated suggestion");
+    assert_eq!(generated.text, " revision Hello rex");
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 2);
+}
+
+#[tokio::test]
+async fn escape_whole_acceptance_and_pause_end_type_through() {
+    for action in [
+        Some(ControlAction::Dismiss),
+        Some(ControlAction::AcceptAll),
+        None,
+    ] {
+        let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
+        let broker = Broker::new(provider.clone(), BrokerConfig::default());
+        let (first, mut events) = open_observed_session(&broker, "field-epoch-1").await;
+        let shown = shown_after(&broker, first, &mut events, "Hello")
+            .await
+            .expect("generated suggestion");
+        if let Some(action) = action {
+            broker
+                .session_control(
+                    coordinates(first, 1),
+                    SessionControlRequestPayload {
+                        action,
+                        fingerprint: shown.fingerprint.clone(),
+                        suggestion_id: Some(shown.suggestion_id.clone()),
+                    },
+                    None,
+                )
+                .await
+                .expect("control");
+        } else {
+            assert!(broker.set_paused(true).await);
+            assert!(!broker.set_paused(false).await);
+        }
+        let (second, mut second_events) = open_observed_session(&broker, "field-epoch-2").await;
+        let next = shown_after(&broker, second, &mut second_events, "Hello rev")
+            .await
+            .expect("generated suggestion");
+        assert_eq!(next.text, " revision Hello rev", "{action:?}");
+        assert_eq!(provider.calls.load(Ordering::Relaxed), 2, "{action:?}");
+    }
+}
+
+#[tokio::test]
+async fn the_remainder_after_a_word_acceptance_carries() {
+    let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
+    let broker = Broker::new(provider.clone(), BrokerConfig::default());
+    let (first, mut events) = open_observed_session(&broker, "field-epoch-1").await;
+    let shown = shown_after(&broker, first, &mut events, "Hello")
+        .await
+        .expect("generated suggestion");
+    broker
+        .session_control(
+            coordinates(first, 1),
+            SessionControlRequestPayload {
+                action: ControlAction::AcceptWord,
+                fingerprint: shown.fingerprint.clone(),
+                suggestion_id: Some(shown.suggestion_id.clone()),
+            },
+            Some("word".to_owned()),
+        )
+        .await
+        .expect("accept word");
+    let Some(BrokerEvent::CommitPrepare { payload, .. }) = events.recv().await else {
+        panic!("expected a commit grant");
+    };
+    assert_eq!(payload.text, " revision");
+
+    let (second, mut second_events) = open_observed_session(&broker, "field-epoch-2").await;
+    let carried = shown_after(&broker, second, &mut second_events, "Hello revision")
+        .await
+        .expect("carried remainder");
+    assert_eq!(carried.text, " Hello");
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 1);
+}

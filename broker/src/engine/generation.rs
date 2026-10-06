@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::outcomes::current_unix_day;
 use super::session::evaluate_context;
+use super::type_through::{CarryScope, TypeThrough};
 use super::{
     Broker, BrokerError, BrokerEvent, BrokerState, SessionState, VisibleSuggestion, duration_millis,
 };
@@ -46,6 +47,14 @@ struct GenerationBinding {
     deadline: Instant,
     before: String,
     after: String,
+    language: Option<String>,
+}
+
+/// A type-through remainder keeps its original suggestion's deadline and
+/// `Shown` aggregate, so typing never extends a display or counts it twice.
+struct Carried {
+    expires_at: Instant,
+    aggregate_day: Option<u64>,
 }
 
 /// Why a finished generation shows nothing.
@@ -70,10 +79,12 @@ impl Broker {
         {
             return Err(BrokerError::InvalidPayload);
         }
-        let admitted = self
+        if let Some(admitted) = self
             .admit_generation(coordinates, payload, request_id)
-            .await?;
-        tokio::spawn(self.clone().run_generation(admitted));
+            .await?
+        {
+            tokio::spawn(self.clone().run_generation(admitted));
+        }
         Ok(())
     }
 
@@ -95,13 +106,14 @@ impl Broker {
     }
 
     /// Checks the request against the session's current context and policy,
-    /// retires any older generation, and takes provider capacity for this one.
+    /// retires any older generation, and either shows a type-through
+    /// remainder (`None`) or takes provider capacity for a new generation.
     async fn admit_generation(
         &self,
         coordinates: Coordinates,
         payload: SuggestRequestPayload,
         request_id: Option<String>,
-    ) -> Result<AdmittedGeneration, BrokerError> {
+    ) -> Result<Option<AdmittedGeneration>, BrokerError> {
         let trigger = RequestTrigger::from_explicit(payload.explicit);
         let generation_timeout = self.inner.config.generation_timeout_for(trigger);
         let metrics = &self.inner.metrics;
@@ -134,27 +146,50 @@ impl Broker {
         // tested. A saturated broker therefore fails closed without
         // allowing an obsolete suggestion to remain eligible.
         session.retire_generation(metrics, ReasonCode::Superseded);
+        let scope = CarryScope::of(session);
+        let carried = state.type_through.as_ref().and_then(|carry| {
+            let remainder = carry.remainder(&scope, &context, Instant::now())?;
+            Some((remainder, carry.expires_at, carry.aggregate_day))
+        });
+        let session = state.session_with_data_access(coordinates.session_id)?;
+        let binding = GenerationBinding {
+            coordinates,
+            fingerprint: payload.fingerprint,
+            generation: session.generation.wrapping_add(1),
+            request_id,
+            deadline: Instant::now() + generation_timeout,
+            before: context.before.clone(),
+            after: context.after.clone(),
+            language: context.language.clone(),
+        };
+        if let Some((text, expires_at, aggregate_day)) = carried {
+            session.generation = binding.generation;
+            self.renew_context_authority_lease(session, generation_timeout);
+            let proposal = WritingProposal {
+                text,
+                replace_before: None,
+            };
+            let carried = Carried {
+                expires_at,
+                aggregate_day,
+            };
+            let cancellation = CancellationToken::new();
+            self.show_if_current(state, binding, &cancellation, proposal, Some(carried));
+            return Ok(None);
+        }
         let provider_permit = Arc::clone(&self.inner.provider_admissions)
             .try_acquire_owned()
             .map_err(|_| {
                 metrics.record_provider_error();
                 BrokerError::ProviderBusy
             })?;
-        session.generation = session.generation.wrapping_add(1);
+        session.generation = binding.generation;
         let cancellation = CancellationToken::new();
         session.cancellation = Some(cancellation.clone());
         self.renew_context_authority_lease(session, generation_timeout);
-        Ok(AdmittedGeneration {
+        Ok(Some(AdmittedGeneration {
             allow_replacement: session.allows_text_replacement(),
-            binding: GenerationBinding {
-                coordinates,
-                fingerprint: payload.fingerprint,
-                generation: session.generation,
-                request_id,
-                deadline: Instant::now() + generation_timeout,
-                before: context.before.clone(),
-                after: context.after.clone(),
-            },
+            binding,
             request: ProviderRequest {
                 before: context.before,
                 after: context.after,
@@ -163,7 +198,7 @@ impl Broker {
             trigger,
             cancellation,
             provider_permit,
-        })
+        }))
     }
 
     async fn run_generation(self, admitted: AdmittedGeneration) {
@@ -237,7 +272,7 @@ impl Broker {
                 .clear_failed_generation(binding, ReasonCode::ProviderTimeout)
                 .await;
         }
-        self.show_if_current(state, binding, cancellation, proposal);
+        self.show_if_current(state, binding, cancellation, proposal, None);
     }
 
     fn check_provider_result(
@@ -299,6 +334,7 @@ impl Broker {
         binding: GenerationBinding,
         cancellation: &CancellationToken,
         proposal: WritingProposal,
+        carried: Option<Carried>,
     ) {
         let metrics = &self.inner.metrics;
         let settings_revision = state.settings_revision;
@@ -314,7 +350,9 @@ impl Broker {
             generation,
             request_id,
             deadline,
-            ..
+            before,
+            after,
+            language,
         } = binding;
         if proposal.replace_before.is_some() && !session.allows_text_replacement() {
             metrics.record_provider_error();
@@ -327,8 +365,12 @@ impl Broker {
             ));
             return;
         }
-        let suggestion_ttl = self.inner.config.suggestion_ttl_for(&session.authority);
-        let expires_at = Instant::now() + suggestion_ttl;
+        let now = Instant::now();
+        let full_ttl = self.inner.config.suggestion_ttl_for(&session.authority);
+        let expires_at = carried.as_ref().map_or(now + full_ttl, |carried| {
+            carried.expires_at.min(now + full_ttl)
+        });
+        let suggestion_ttl = expires_at.saturating_duration_since(now);
         let payload = self.suggestion_payload(fingerprint, proposal, suggestion_ttl);
         if Instant::now() >= deadline {
             self.record_generation_timeout(cancellation);
@@ -350,21 +392,35 @@ impl Broker {
             return;
         }
         metrics.record_suggestion_shown();
-        let aggregate_day = current_unix_day().filter(|&event_day| {
-            self.queue_outcome(
-                &session.target.target,
-                settings_revision,
-                event_day,
-                PersonalizationSignal::Shown,
-            )
-        });
+        let aggregate_day = match carried {
+            Some(carried) => carried.aggregate_day,
+            None => current_unix_day().filter(|&event_day| {
+                self.queue_outcome(
+                    &session.target.target,
+                    settings_revision,
+                    event_day,
+                    PersonalizationSignal::Shown,
+                )
+            }),
+        };
         let suggestion_id = payload.suggestion_id.clone();
+        // A correction replaces typed text, so typing cannot carry it.
+        let type_through = payload.replace_before.is_none().then(|| TypeThrough {
+            scope: CarryScope::of(session),
+            before,
+            after,
+            language,
+            text: payload.text.clone(),
+            expires_at,
+            aggregate_day,
+        });
         session.visible = Some(VisibleSuggestion {
             payload,
             expires_at,
             request_id,
             aggregate_day,
         });
+        state.type_through = type_through;
         drop(state);
 
         let broker = self.clone();

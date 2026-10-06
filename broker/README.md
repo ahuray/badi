@@ -40,6 +40,15 @@ usable Git metadata both fields are `unknown`; packagers may set both
   within 1.5 s (a lease capped at 5 s); retained context is revoked after 3 s
   of silence; protocol v2 native and editor suggestions stay readable for 5 s.
   Stale, foreign or unknown state fails closed.
+- Type-through ([decision](../docs/decisions/0004-type-through-carries-text-not-authority.md)):
+  the last shown continuation is kept as text only.
+  - When a later admitted request in the same app or site has the same
+    `after` and language, and a `before` that adds a typed proper prefix of
+    the suggestion, the broker shows the remainder without a model call.
+  - The remainder is a new suggestion bound to that request, with the
+    original deadline.
+  - Escape, a whole acceptance, pause, an authority change or the deadline end
+    the carry; a word acceptance keeps it, so the rest can follow.
 - Settings (`badi.settings.v2`) are replaced by compare-and-swap on their
   revision. While a replacement's outcome is unknown, suggestions stay paused.
   `badi pause` persists in settings; `badictl pause` is runtime only.

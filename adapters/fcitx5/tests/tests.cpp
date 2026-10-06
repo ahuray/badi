@@ -236,7 +236,10 @@ void sessionControlResultIsExact() {
     constexpr auto dismiss = R"({"v":2,"id":"fcitx.dismiss.1.1","type":"control.result","mono_ms":7,"payload":{"action":"dismiss","accepted":true,"reason":"accepted","paused":false}})";
     check(strictSessionControlResult(dismiss),
           "requested dismissal result must be recognized");
-    constexpr auto wrongAction = R"({"v":2,"id":"fcitx.accept.1.1","type":"control.result","mono_ms":7,"payload":{"action":"accept_word","accepted":true,"reason":"accepted","paused":false}})";
+    constexpr auto word = R"({"v":2,"id":"fcitx.accept.1.1","type":"control.result","mono_ms":7,"payload":{"action":"accept_word","accepted":true,"reason":"accepted","paused":false}})";
+    check(strictSessionControlResult(word),
+          "requested accept-word result must be recognized");
+    constexpr auto wrongAction = R"({"v":2,"id":"fcitx.accept.1.1","type":"control.result","mono_ms":7,"payload":{"action":"request","accepted":true,"reason":"accepted","paused":false}})";
     check(!strictSessionControlResult(wrongAction),
           "unrequested control actions must fail closed");
     constexpr auto extraKey = R"({"v":2,"id":"fcitx.accept.1.1","type":"control.result","mono_ms":7,"payload":{"action":"accept_all","accepted":true,"reason":"accepted","paused":false,"extra":false}})";
@@ -644,6 +647,57 @@ void preInputKeysConsumeOnlyBadiUi() {
               decide(modifier, false, true, owned) == PreKeyAction::PassThrough &&
               decide(chord, false, true, owned) == PreKeyAction::PassThrough,
           "typing cancels, while modifiers and Badi's chords wait for the input method");
+
+    const PreKey word{.word = true};
+    const PreKey typing{.typesSuggestion = true};
+    check(decide(word, false, true, owned) == PreKeyAction::AcceptWord,
+          "Ctrl+Right accepts the live candidate's next word");
+    check(decide(word, false, false, {}) == PreKeyAction::Cancel &&
+              decide(word, false, true, foreign) == PreKeyAction::Cancel &&
+              decide(word, false, true, owned, false) == PreKeyAction::Cancel &&
+              decide({.repeat = true, .word = true}, false, true, owned) == PreKeyAction::Cancel,
+          "without Badi's own live candidate Ctrl+Right stays the application's");
+    check(decide(typing, false, true, owned) == PreKeyAction::CancelTypingThrough,
+          "typing the suggestion's next characters cancels and inspects sooner");
+    check(decide(typing, false, false, {}) == PreKeyAction::Cancel &&
+              decide(typing, false, true, foreign) == PreKeyAction::Cancel &&
+              decide({.repeat = true, .typesSuggestion = true}, false, true, owned) == PreKeyAction::Cancel,
+          "type-through needs Badi's live candidate and a fresh key press");
+    check(typesSuggestionStart(" ", " for your time") && typesSuggestionStart(" f", " for your time") &&
+              !typesSuggestionStart("", " for your time") && !typesSuggestionStart("f", " for your time") &&
+              !typesSuggestionStart(" for your time", " for your time") &&
+              !typesSuggestionStart(" ", ""),
+          "only a non-empty proper prefix of the suggestion types through it");
+}
+
+void wordAcceptanceGrantsOnlyTheNextWord() {
+    auto state = focusedState();
+    const auto update = explicitContext(state);
+    auto suggestion = suggestionFor(update);
+    suggestion.acceptWord = " for";
+    check(state.showSuggestion(suggestion, 100), "a suggestion with a next word displays");
+    const auto word = state.requestAcceptance(100, kOwnedPanel, true);
+    check(word && word->expectedText == " for" && word->acceptance == "word",
+          "a word acceptance expects only the next word");
+    const CommitPrepare whole{word->coordinates, word->controlId, word->suggestionId, " for your time", "all"};
+    check(!state.authorizeCommit(whole, 101, kOwnedPanel),
+          "a whole-text grant cannot answer a word acceptance");
+    const CommitPrepare mislabeled{word->coordinates, word->controlId, word->suggestionId, " for", "all"};
+    check(!state.authorizeCommit(mislabeled, 101, kOwnedPanel),
+          "the grant must repeat the requested acceptance");
+    const CommitPrepare granted{word->coordinates, word->controlId, word->suggestionId, " for", "word"};
+    const auto dispatch = state.authorizeCommit(granted, 101, kOwnedPanel);
+    check(dispatch && dispatch->text == " for" && !state.suggestionVisible(),
+          "the word grant dispatches once and retires the candidate");
+
+    auto other = focusedState();
+    const auto next = explicitContext(other);
+    auto unrelated = suggestionFor(next);
+    unrelated.acceptWord = " you";
+    check(other.showSuggestion(unrelated, 100), "a suggestion displays");
+    const auto fallback = other.requestAcceptance(100, kOwnedPanel, true);
+    check(fallback && fallback->expectedText == " for your time",
+          "a next word that is not the text's start falls back to the whole text");
 }
 
 void invokeRoutesByEditPathAndExplainsWaits() {
@@ -687,7 +741,7 @@ void invokeRoutesByEditPathAndExplainsWaits() {
     check(notice::kUnavailableApp == "Badi cannot safely insert suggestions in this app yet" &&
               notice::kObserverUnavailable == "Badi cannot see this text field — check badi doctor" &&
               notice::kFieldUnreadable == "Badi cannot read this text field — run badi debug status" &&
-              notice::kSuggestionKeys == "Badi · Tab to accept · Escape to dismiss",
+              notice::kSuggestionKeys == "Badi · Tab to accept · Ctrl+→ next word · Escape to dismiss",
           "notices keep the wording the desktop lane and runbook name");
 }
 
@@ -742,6 +796,8 @@ void inspectionBacksOffWithoutInput() {
     InspectionSchedule schedule;
     check(schedule.delayUs(true) == 1 && schedule.delayUs(false) == 120'000,
           "an explicit request inspects at once, typing after a pause");
+    check(schedule.delayUs(false, true) == 30'000 && schedule.delayUs(true, true) == 1,
+          "typing through a suggestion inspects after a short pause");
     schedule.input();
     schedule.inspecting();
     for (const std::uint64_t delay : {240'000, 480'000, 960'000}) {
@@ -1389,6 +1445,7 @@ int main(int argc, char **argv) {
         {"observer requests name the bound field", observerRequestsNameTheBoundField},
         {"inspection backoff without input", inspectionBacksOffWithoutInput},
         {"pre-input keys consume only Badi UI", preInputKeysConsumeOnlyBadiUi},
+        {"word acceptance grants only the next word", wordAcceptanceGrantsOnlyTheNextWord},
         {"invoke routes and waiting notices", invokeRoutesByEditPathAndExplainsWaits},
         {"Tab decision reasons", tabReasonNamesTheFirstBlocker},
         {"broker session retirement", brokerSessionRetiresSessionAndPolicyTogether},

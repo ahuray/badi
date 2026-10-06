@@ -66,6 +66,11 @@ impl Broker {
             let _ =
                 self.queue_outcome(&session.target.target, settings_revision, event_day, signal);
         }
+        // Escape or a whole acceptance ends type-through; after the next word
+        // the remainder may still carry (ADR 0004).
+        if acceptance != Some(Acceptance::Word) {
+            state.type_through = None;
+        }
         Ok(())
     }
 

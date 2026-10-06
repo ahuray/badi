@@ -5,6 +5,7 @@
 #include <fcitx-utils/eventloopinterface.h>
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -158,13 +159,86 @@ void runReconnect(const std::string &socket, const std::string &appId) {
     transport.disconnect();
 }
 
+// Typing the suggestion's next characters gets its remainder without another
+// generation, and Ctrl+Right's word grant leaves the rest to carry on
+// (ADR 0004). The phrase fixture would suggest differently for these texts.
+void runTypeThrough(const std::string &socket, const std::string &appId) {
+    ::fcitx::EventLoop loop;
+    SessionState state;
+    require(state.focusIn("550e8400-e29b-41d4-a716-446655440003", "type-through-context",
+                          appId, "0123456789abcdef0123456789abcdef"));
+    Transport *wire = nullptr;
+    const std::array<std::string, 3> expected{" for your time", "r your time", " your time"};
+    std::size_t shown = 0;
+    bool wordGranted = false;
+    bool dismissed = false;
+    const auto publish = [&](const std::string &before) {
+        const auto update = state.updateContext(ContextWindow{
+            .before = before, .after = "", .anchor = before.size(), .head = before.size(),
+            .language = "en", .multiline = true,
+        });
+        require(update && wire->publishContext(*update));
+    };
+    Transport transport(loop, WireCallbacks{
+        .onReady = [&] {
+            require(wire->openSession(state.coordinates(), targetOf(state)));
+            publish("thank you");
+        },
+        .onAuthority = [](const AuthoritySnapshot &authority) { require(authority.initial && !authority.paused); },
+        .onSuggestion = [&](Suggestion suggestion) {
+            require(shown < expected.size() && suggestion.text == expected[shown]);
+            require(state.showSuggestion(std::move(suggestion), wire->nowMs()));
+            ++shown;
+            if (shown == 1) return publish("thank you fo");
+            if (shown == 2) {
+                const auto word = state.requestAcceptance(wire->nowMs(), kPanel, true);
+                require(word && word->expectedText == "r" && wire->requestAcceptance(*word));
+                return;
+            }
+            const auto dismissal = state.requestDismissal(wire->nowMs(), kPanel);
+            require(dismissal && wire->requestDismissal(*dismissal));
+        },
+        .onClear = [&](const ClearNotice &notice) {
+            if (shown != expected.size()) return; // Superseded contexts clear earlier candidates.
+            require(notice.coordinates == state.coordinates());
+            dismissed = true;
+            loop.exit();
+        },
+        .onCommitPrepare = [&](const CommitPrepare &prepare) {
+            require(prepare.acceptance == "word" && prepare.text == "r");
+            const auto dispatch = state.authorizeCommit(prepare, wire->nowMs(), kPanel);
+            require(dispatch && !wordGranted);
+            wordGranted = true;
+            require(wire->reportCommit(dispatch->coordinates, dispatch->controlId,
+                                       dispatch->suggestionId, "dispatched-unverified"));
+            publish("thank you for");
+        },
+        .onDisconnected = [&] { loop.exit(); },
+        .onPolicy = {},
+    }, socket);
+    wire = &transport;
+    auto deadline = loop.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
+        [&](::fcitx::EventSourceTime *, std::uint64_t) { loop.exit(); return true; });
+    deadline->setNextInterval(8'000'000);
+    deadline->setOneShot();
+    require(transport.connect());
+    loop.exec();
+    require(dismissed && wordGranted && shown == expected.size());
+    transport.disconnect();
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
     if (argc != 3 && argc != 4 && argc != 5) return 64;
     try {
-        if (argc == 4 && std::string(argv[1]) == "--reconnect") runReconnect(argv[2], argv[3]);
-        else {
+        if (argc == 4 && std::string(argv[1]) == "--reconnect") {
+            runReconnect(argv[2], argv[3]);
+        } else if (argc == 4 && std::string(argv[1]) == "--type-through") {
+            runTypeThrough(argv[2], argv[3]);
+            std::cout << "Native transport: type-through and word acceptance passed\n";
+            return 0;
+        } else {
             if (argc == 4) return 64;
             run(argv[1], argv[2], argc == 5 ? argv[3] : "thank you",
                 argc == 5 ? argv[4] : " for your time");

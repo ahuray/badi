@@ -14,6 +14,7 @@ mod settings;
 mod status;
 #[cfg(test)]
 mod tests;
+mod type_through;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -216,6 +217,8 @@ struct BrokerState {
     /// The latest authority epoch each policy connection acknowledged.
     policy_clients: HashMap<String, Option<u64>>,
     sessions: HashMap<SessionId, SessionState>,
+    /// The last shown continuation that typing may carry (ADR 0004).
+    type_through: Option<type_through::TypeThrough>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -340,7 +343,9 @@ impl Broker {
 
     /// Releases the state lock, then announces its authority epoch to every
     /// policy connection.
-    fn publish_authority_change(&self, state: MutexGuard<'_, BrokerState>) {
+    fn publish_authority_change(&self, mut state: MutexGuard<'_, BrokerState>) {
+        // Derived text never outlives the authority it was shown under.
+        state.type_through = None;
         let event = state.authority_changed();
         drop(state);
         let _ = self.inner.authority_events.send(event);
@@ -399,6 +404,7 @@ impl BrokerState {
             session.revoke_context_authority(metrics, reason);
         }
         self.sessions.clear();
+        self.type_through = None;
     }
 }
 
