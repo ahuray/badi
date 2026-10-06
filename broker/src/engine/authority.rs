@@ -34,7 +34,9 @@ impl Broker {
     }
 
     /// Publishes a changed epoch and, while paused, fences queued outcome
-    /// writes before the pause is acknowledged.
+    /// writes before the pause is acknowledged. Returns the pause state this
+    /// transition established under the lock; a fresh read after the fence
+    /// could report a concurrent toggle's state instead.
     async fn finish_pause_transition(
         &self,
         state: MutexGuard<'_, BrokerState>,
@@ -49,7 +51,7 @@ impl Broker {
         if effective_paused {
             self.flush_outcomes_before_pause_ack().await;
         }
-        self.is_paused().await
+        effective_paused
     }
 
     pub async fn is_paused(&self) -> bool {
