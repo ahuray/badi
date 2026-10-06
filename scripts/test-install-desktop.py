@@ -221,7 +221,8 @@ class DesktopInstallTests(unittest.TestCase):
     def test_observed_apps_use_each_launchers_own_flags_file(self):
         self.assertEqual({app: name for app, (name, _parser) in installer.OBSERVED_APP_FLAGS.items()},
                          {'chromium': 'chromium-flags.conf', 'brave-origin': 'brave-origin-flags.conf',
-                          'chatgpt': 'codex-flags.conf', 'code': 'code-flags.conf', 'cursor': 'cursor-flags.conf'})
+                          'chatgpt': 'codex-flags.conf', 'code': 'code-flags.conf', 'cursor': 'cursor-flags.conf',
+                          'grok-bot': 'grok-bot-flags.conf'})
         self.assertNotIn('discord', installer.OBSERVED_APP_FLAGS, 'Discord has no supported flags file')
 
     def test_observed_flags_follow_each_installed_wrappers_quoting(self):
@@ -234,13 +235,13 @@ class DesktopInstallTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'unbalanced quoting'):
             installer.observed_flags("'--force-renderer-accessibility\n", 'chromium')
         # The other wrappers pass quote characters literally: not a recognized switch.
-        for app in ('chatgpt', 'code', 'brave-origin', 'cursor'):
+        for app in ('chatgpt', 'code', 'grok-bot', 'brave-origin', 'cursor'):
             with self.subTest(app=app):
                 result = installer.observed_flags(quoted, app)
                 self.assertIn('\n' + installer.OBSERVED_FLAG + '\n', result)
                 self.assertIsNone(installer.observed_flags(result, app))
         # Word-splitting wrappers strip text after any # and split one line.
-        for app in ('chatgpt', 'code'):
+        for app in ('chatgpt', 'code', 'grok-bot'):
             with self.subTest(app=app):
                 self.assertIsNone(installer.observed_flags('--a --force-renderer-accessibility=complete#note\n', app))
                 self.assertIsNotNone(installer.observed_flags('--a #--force-renderer-accessibility=complete\n', app))

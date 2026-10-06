@@ -35,6 +35,10 @@ class App:
     gecko: bool = False  # Gecko browser: DocURL, one focused field, window-relative extents.
     entry: str | None = None  # A shared Electron runtime must load exactly this app.
     per_user: bool = False  # Self-updating build under $XDG_CONFIG_HOME/discord.
+    web_apps: str | None = None  # Class prefix of this browser's --app windows: <prefix><host>_<path>-<profile>.
+    roles: frozenset | None = None  # Only these field roles, when set.
+    observed_only: bool = False  # A native app on the addon's IME-parity contract (web rules always are).
+    sentence_bounded: bool = False  # Its Fcitx surrounding text is only the caret's sentence.
 
 
 def hyprland_directory():
@@ -295,4 +299,12 @@ def _unshared(path, kind, uid):
 
 
 def _shows(window, app):
-    return window.get("class") in app.classes and window.get("mapped") is True and window.get("hidden") is False
+    return _app_class(window.get("class"), app) and window.get("mapped") is True and window.get("hidden") is False
+
+
+def _app_class(value, app):
+    if value in app.classes:
+        return True
+    prefix = app.web_apps
+    return (prefix is not None and isinstance(value, str) and value.startswith(prefix) and len(value) <= 255
+            and "__" in value[len(prefix):] and all(" " < char < "\x7f" and char != "/" for char in value))

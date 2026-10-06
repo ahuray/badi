@@ -16,14 +16,16 @@ not a claim that an application's complete editing flow works; the
 | --- | --- | --- | --- |
 | `chromium` | `/usr/lib/chromium/chromium` | `chromium` | browser origin |
 | `chromium-browser` | `/usr/lib/chromium/chromium` started without `/usr/bin/chromium`'s `CHROME_DESKTOP` | `chromium-browser` | browser origin |
-| `brave-origin` | `/opt/brave-origin-bin/brave` (its Bash wrapper is only the parent) | `brave-origin` | browser origin |
+| `brave-origin` | `/opt/brave-origin-bin/brave` (its Bash wrapper is only the parent) | `brave-origin`, or an `--app` window `brave-<host>__<path>-<profile>` | browser origin |
 | `zen` (Gecko) | `/opt/zen-browser-bin/zen-bin` (`/usr/bin/zen-browser` only `exec`s it) | `zen` | browser origin |
 | `chatgpt` (Codex desktop) | `/usr/lib/chatgpt/ChatGPT` | `chatgpt` | desktop app |
-| `code` (VS Code) | `/usr/share/code/code` | `code` | desktop app |
+| `code` (VS Code) | `/usr/share/code/code` | `code`, or `com.microsoft.VSCode` from 1.140 | desktop app |
 | `cursor` | `/usr/lib/electron42/electron`, whose first non-switch argument is exactly `/usr/share/cursor/resources/app/cursor.mjs` | `cursor` | desktop app |
 | `discord` | `$XDG_CONFIG_HOME/discord/app-<version>/Discord` | `discord` | desktop app |
+| `grok-bot` | `/opt/Grok Bot/grok-bot` | `grok-bot` | desktop app |
 | `telegram` | `/usr/bin/Telegram` | `org.telegram.desktop` | desktop app |
 | `omawrite` | `/usr/bin/omawrite` | `omawrite` | desktop app |
+| `libreoffice` | `/usr/lib/libreoffice/program/soffice.bin` | `libreoffice-writer`, `paragraph` fields only | desktop app |
 
 Executables come from `/proc/PID/exe` without further symlink resolution; a
 deleted or replaced binary does not match.
@@ -41,6 +43,17 @@ deleted or replaced binary does not match.
   directory and regular file owned by this user without group/other write
   permission, and the file must be the inode the process runs. Symlinked
   components, other owners, traversal spellings and `(deleted)` fail.
+- **Brave web apps** (Omarchy's HEY, X, Basecamp, Zoom) are Brave Origin
+  `--app` windows named `brave-<host>__<path>-<profile>`. The addon maps that
+  program id to `brave-origin` before folding, since host labels may start
+  with a digit, and the rule accepts such a class (printable ASCII, at most 255
+  bytes) for the same executable. The page origin selects policy as in a tab.
+- **LibreOffice** reports one Fcitx program id for every module, so the rule
+  admits only `libreoffice-writer` windows and `paragraph` fields; Calc,
+  Impress and dialog entries fail closed. Writer gives Fcitx only the caret's
+  sentence as surrounding text, so the snapshot starts at that sentence's AT-SPI
+  `SENTENCE` boundary and must still equal it exactly. Its frame has no web
+  document, so the suggestion shows in the Fcitx panel.
 
 Browser targets use the broker's single browser-origin identity (adapter
 `chromium`), so one `badi site ... on` grant covers Chromium, Brave and Zen
@@ -87,19 +100,19 @@ Fcitx context carries the `Url` purpose, which the addon's
 dispatch requires the snapshot around the caret to equal Fcitx's live
 surrounding text.
 
-Gecko (Zen 1.22.3b, Gecko 156) exposes web content without a flag. Its
-Documents carry `DocURL` and an empty `URI`; the browser window (role `frame`)
-is itself a Document, `chrome://browser/content/browser.xhtml`, and every node
-reports the window's process. Exactly one node is focused and editable: the
-urlbar (role `combo box`, no `document web` ancestor) while it has the keyboard,
-otherwise the page field. The urlbar shares the page's Fcitx context without a
-`Url` purpose, so the observer, not the addon, denies it: the one focused
-editable node's nearest Document must be a `document web` with an HTTP(S)
-`DocURL`. The urlbar and other browser UI, and `about:`, `moz-extension:`,
-`resource:`, `file:` or empty addresses, fail as `unsupported_field` before any
-text read; a second focused field fails as `focus_unavailable`. Only the nearest
-Document counts, so an `about:blank` or loading frame never borrows its parent
-page's origin.
+Gecko (Zen 1.22.3b and 1.23b, Gecko 156 and 157) exposes web content without a
+flag. Its Documents carry `DocURL` and an empty `URI`; the browser window (role
+`frame`) is itself a Document, `chrome://browser/content/browser.xhtml`, and
+every node reports the window's process. Exactly one node is focused and
+editable: the urlbar (role `combo box`, no `document web` ancestor) while it has
+the keyboard, otherwise the page field. The urlbar shares the page's Fcitx
+context without a `Url` purpose, so the observer, not the addon, denies it: the
+one focused editable node's nearest Document must be a `document web` with an
+HTTP(S) `DocURL`. The urlbar and other browser UI, and `about:`,
+`moz-extension:`, `resource:`, `file:` or empty addresses, fail as
+`unsupported_field` before any text read; a second focused field fails as
+`focus_unavailable`. Only the nearest Document counts, so an `about:blank` or
+loading frame never borrows its parent page's origin.
 
 Zen page fields are role `entry` with tag `textarea`, `input` plus
 `text-input-type=text`, or `div` for a `role=textbox` contenteditable. Gecko
@@ -292,7 +305,8 @@ Hyprland window, D inside F, E inside D, and G/s inside E; the caret is then
 surface can be taller than the tile Hyprland shows, so the caret must fit
 Hyprland's window size, never F's height. At scale 2 the prediction was within
 0.3 logical pixels of the page's own caret; scale 1 is the identity, and other
-scales use the Fcitx panel.
+scales use the Fcitx panel. A tile narrower than Zen's minimum content width
+(F 500 wide in a 341-pixel tile) fails the width rule and also uses the panel.
 
 Preview geometry carries `caret_edge: "right"` only when the last approved
 snapshot's caret run is left-to-right and its line before the caret holds
@@ -374,6 +388,7 @@ user flags file under `$XDG_CONFIG_HOME`, parsed the way its wrapper reads it:
 | `chatgpt` | `codex-flags.conf` | `/usr/bin/chatgpt`: text after `#` removed, split on whitespace |
 | `code` | `code-flags.conf` | `/usr/bin/code`: text after `#` removed, split on whitespace |
 | `cursor` | `cursor-flags.conf` | `/usr/share/cursor/cursor`: each non-comment line is one argument, after Cursor's entry |
+| `grok-bot` | `grok-bot-flags.conf` | `/usr/bin/grok-bot`: text after `#` removed, split on whitespace |
 
 A file that already has the bare or `=complete` switch is left untouched. Any
 other value, or `--disable-renderer-accessibility`, stops the installer before
@@ -383,12 +398,14 @@ the desktop backup's `changes.json` and recorded in the install receipt.
 Running app windows keep their old flags until relaunched.
 
 Discord has no supported mechanism: its updater drops command-line flags and
-environment, `/usr/bin/discord` reads no flags file and forwards only its own
-arguments, and its desktop entry passes `--url -- %u`.
-Discord's `settings.json` `chromiumSwitches` is an undocumented internal list:
-its allowlist check accepts unlisted names only because `0 !== undefined`, and
-it appends names without values. Whether it applies before Chromium reads the
-accessibility mode is untested, and the installer does not write it.
+environment, and `/usr/bin/discord` reads no flags file. Its startup code does
+append every unlisted name in `settings.json` `chromiumSwitches` as a bare
+switch, and with `force-renderer-accessibility` listed Discord 1.0.159 exposed
+its web tree over AT-SPI (2026-10-06). The setting does not persist: about six
+seconds after start the web client replaced the list through the desktop
+core's `setChromiumSwitches`, so the next launch, including Discord's own
+relaunch after an update, starts without it. The installer therefore writes
+nothing for Discord.
 
 ## Tests
 

@@ -55,7 +55,10 @@ Omarchy first. Preserve exact editing authority and prove the affected user flow
   Codex/ChatGPT desktop, VS Code, Cursor and Discord. By user request
   (2026-09-26) it also covers the Zen browser (Gecko, exact `zen` identity
   only); its urlbar has no Url purpose, so the observer alone must deny browser
-  UI there. Other Gecko builds stay unavailable. These apps may accept through
+  UI there. Other Gecko builds stay unavailable. By user request (2026-10-06)
+  it also covers Grok Bot, Brave Origin web-app windows (Omarchy web apps) and
+  LibreOffice Writer document paragraphs (native, observed-only, because all
+  LibreOffice modules share one Fcitx program id). These apps may accept through
   one append-only Fcitx `commitString` that behaves like typed text: undo may
   coalesce with preceding typing, and page script that moves focus or caret
   during `beforeinput` may redirect it like a keystroke. Document that; never

@@ -138,7 +138,8 @@ class Observer:
         metadata, focus = self.bound_focus(request)
         self.authorize(focus["binding"])
         caret = metadata["caret"]
-        start, end = max(0, caret - MAX_BEFORE), min(metadata["total_chars"], caret + MAX_AFTER)
+        start = max(0, caret - MAX_BEFORE, metadata.get("sentence_start", 0))
+        end = min(metadata["total_chars"], caret + MAX_AFTER)
         text = self.stable_text(metadata, focus["binding"]["epoch"], start, end)
         before, after = text[:caret - start], text[caret - start:]
         self.caret_edge = "right" if ltr_caret_line(metadata.get("direction"), before) else None

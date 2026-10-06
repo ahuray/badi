@@ -49,10 +49,11 @@ HELP = """Badi — local writing controls
 
 Keys: Tab accepts a visible suggestion and otherwise stays Tab; Escape
 dismisses; Ctrl+Shift+Space requests. Suggestions appear on their own in
-Omawrite, Telegram and the IME-parity apps (Chromium, Brave, Zen, Codex,
-VS Code, Cursor, Discord), each with an app or site grant; one site grant
-covers all three browsers. IME-parity accepts once, append-only, like typing:
-undo may merge it with earlier typing.
+Omawrite, Telegram and the IME-parity apps (Chromium, Brave and its web
+apps, Zen, Codex, VS Code, Cursor, Discord, Grok Bot, LibreOffice Writer),
+each with an app or site grant; one site grant covers all three browsers.
+IME-parity accepts once, append-only, like typing: undo may merge it with
+earlier typing.
 Xournal++ text cells: Tab requests, Tab again accepts.
 Obsidian: Tab accepts a word, Ctrl/Command+Right all.
 Bash: Ctrl-X then Tab requests/accepts, Ctrl-X then Escape dismisses.
@@ -347,7 +348,7 @@ def vscode_edit_context_note():
 def health_report():
     report = {"schema": "badi.desktop-health.v1", "service": service_state(),
               "native_apps": list(APPS), "problems": [], "notes": []}
-    report["notes"].append("Chromium, Brave, Zen, Codex, VS Code, Cursor and Discord fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it. Source and nested-session evidence only.")
+    report["notes"].append("Chromium, Brave and its web apps, Zen, Codex, VS Code, Cursor, Discord, Grok Bot and LibreOffice Writer fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it.")
     problems = report["problems"]
     observer = report["accessibility"] = accessibility_state()
     if observer.get("loaded"):
@@ -442,7 +443,7 @@ def status_text(health, settings=None):
             f"Requests: {counters['provider_calls']} · Suggestions: {counters['suggestions_shown']} · Errors: {counters['provider_errors']} · {misses}\n"
             "Native Fcitx: automatic in Omawrite; Tab request/accept in the Xournal++ Text tool\n"
             "Editors: Obsidian automatic/Tab · Bash Ctrl-X then Tab\n"
-            "Observed fields: automatic for Omawrite, Telegram and IME-parity apps (Chromium, Brave, Zen, Codex, VS Code, Cursor, Discord); Tab accepts a visible suggestion, otherwise stays Tab; Ctrl+Shift+Space requests\n"
+            "Observed fields: automatic for Omawrite, Telegram and IME-parity apps (Chromium, Brave and its web apps, Zen, Codex, VS Code, Cursor, Discord, Grok Bot, LibreOffice Writer); Tab accepts a visible suggestion, otherwise stays Tab; Ctrl+Shift+Space requests\n"
             + ("Web sites: every http(s) site unless blocked (badi site all off)\n"
                if (settings or {}).get("all_web_origins") is True else "")
             + "Escape: dismiss · Why nothing appeared: badi doctor; badi debug on; badi debug watch")

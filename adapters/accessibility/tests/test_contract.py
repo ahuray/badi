@@ -137,6 +137,14 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(self.snapshot(focus)["ok"])
         self.assertEqual((self.backend.lock_checks, self.backend.positions), ([False], 1))
 
+    def test_sentence_bounded_snapshot_starts_at_the_carets_sentence(self):
+        # LibreOffice Writer gives Fcitx only the caret's sentence; the snapshot must equal it.
+        self.backend.content = "First. Same text"
+        self.backend.meta.update(caret=16, total_chars=16, sentence_start=7)
+        snapshot = self.snapshot(self.inspect()["focus"])["focus"]
+        self.assertEqual((snapshot["before"], snapshot["after"]), ("Same text", ""))
+        self.assertTrue(all(start == 7 for start, _end in self.backend.reads))
+
     def test_invalidation_during_the_read_rejects(self):
         focus = self.inspect()["focus"]
         self.backend.change = lambda _backend: self.observer.invalidate("field_changed")
