@@ -1,0 +1,41 @@
+[Unit]
+Description=Badi local writing model
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+# Never give up on a transient failure such as an exited runtime; the backoff
+# below bounds the retry rate. The broker waits out short available memory.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=%h/.local/lib/badi/badi-broker
+Restart=on-failure
+RestartSec=2
+RestartSteps=5
+RestartMaxDelaySec=60
+# 78: the model or runtime is missing, unsupported, or larger than this host.
+# Retrying cannot help, so the unit stays failed for badi doctor to report.
+RestartPreventExitStatus=78
+UMask=0077
+RuntimeDirectory=badi
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+# The broker owns graceful runtime shutdown. Sending TERM to both processes
+# makes the runtime receive a second TERM from the broker during cleanup.
+# Keep the final forced-kill fallback scoped to the entire service cgroup.
+KillMode=mixed
+TimeoutStopSec=10
+# Keep the idle model resident. The runtime repacks most weights into about
+# 760 MiB of anonymous memory, which zram swapped out while idle; the first
+# suggestion afterwards missed its budget. Inference also touches about 410 MiB
+# of the mapped model file. MemoryLow covers both (1.2 GB measured working set)
+# but only protects when the parent slices reserve memory too.
+MemorySwapMax=0
+MemoryLow=1200M
+# A short inference burst outranks ordinary applications (weight 100) when the
+# CPU is oversubscribed; measured 3.5 s instead of 6.3 s per request there.
+CPUWeight=1000
+
+[Install]
+WantedBy=graphical-session.target

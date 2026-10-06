@@ -1,0 +1,96 @@
+{
+  "v": 1,
+  "algorithm": "leading_whitespace_plus_first_unicode_word_or_grapheme_v1",
+  "cases": [
+    {
+      "name": "leading-whitespace",
+      "input": "   hello world",
+      "accepted": "   hello",
+      "remainder": " world"
+    },
+    {
+      "name": "latin-accent",
+      "input": " café noir",
+      "accepted": " café",
+      "remainder": " noir"
+    },
+    {
+      "name": "contraction",
+      "input": " can't wait",
+      "accepted": " can't",
+      "remainder": " wait"
+    },
+    {
+      "name": "decimal",
+      "input": " 3.14 seconds",
+      "accepted": " 3.14",
+      "remainder": " seconds"
+    },
+    {
+      "name": "underscore-word",
+      "input": " snake_case next",
+      "accepted": " snake_case",
+      "remainder": " next"
+    },
+    {
+      "name": "combining-mark",
+      "input": " élan vital",
+      "accepted": " élan",
+      "remainder": " vital"
+    },
+    {
+      "name": "greek",
+      "input": " κόσμε ξανά",
+      "accepted": " κόσμε",
+      "remainder": " ξανά"
+    },
+    {
+      "name": "simple-emoji",
+      "input": " 😊 next",
+      "accepted": " 😊",
+      "remainder": " next"
+    },
+    {
+      "name": "emoji-zwj",
+      "input": " 👩🏽‍💻 next",
+      "accepted": " 👩🏽‍💻",
+      "remainder": " next"
+    },
+    {
+      "name": "persian",
+      "input": " فارسی خوب",
+      "accepted": " فارسی",
+      "remainder": " خوب"
+    },
+    {
+      "name": "arabic",
+      "input": " العربية جميلة",
+      "accepted": " العربية",
+      "remainder": " جميلة"
+    },
+    {
+      "name": "single-han-word",
+      "input": " 文 next",
+      "accepted": " 文",
+      "remainder": " next"
+    },
+    {
+      "name": "symbol",
+      "input": " § 42",
+      "accepted": " §",
+      "remainder": " 42"
+    },
+    {
+      "name": "punctuation-before-word",
+      "input": ", however",
+      "accepted": ",",
+      "remainder": " however"
+    },
+    {
+      "name": "hyphen-before-word",
+      "input": " -ready",
+      "accepted": " -",
+      "remainder": "ready"
+    }
+  ]
+}

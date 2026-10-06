@@ -1,0 +1,14 @@
+#lookup-language{margin-bottom:18px}
+#lookup-before{font-size:17px}
+#lookup-expected{margin-top:2px}
+.lookup-reference-note{margin-top:15px}
+#lookup-status{font-size:12px;color:var(--muted);min-height:40px;margin:14px 0 0}
+#lookup-status.lookup-error{color:var(--gold)}
+#lookup-cancel{width:100%;margin-top:10px}
+.lookup-suffix{color:#e3e7e5;background:#c5d0c21f;border-bottom:1px solid #b8c5bd80;border-radius:2px;box-decoration-break:clone}
+#lookup-count{font-size:14px;color:var(--muted);margin-inline-start:8px}
+.lookup-result-head{display:flex;justify-content:space-between;gap:15px;flex-wrap:wrap}
+.lookup-result-head h3{font-size:14px;margin:0}
+.lookup-result-head p{margin:0;font-size:12px;color:var(--muted)}
+.lookup-review{margin-top:14px}
+@media(max-width:450px){.lab-tabs [role=tab]{padding:9px 8px;font-size:11px}}

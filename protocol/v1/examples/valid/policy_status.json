@@ -1,0 +1,17 @@
+{
+  "v": 1,
+  "id": "policy:fixture",
+  "type": "policy.status",
+  "mono_ms": 11,
+  "payload": {
+    "authority_epoch": 4,
+    "settings_revision": 3,
+    "paused": false,
+    "activation": "always",
+    "context_allowed": true,
+    "display_allowed": true,
+    "suggestions_allowed": true,
+    "learning_allowed": false,
+    "reason": "matched_rule"
+  }
+}

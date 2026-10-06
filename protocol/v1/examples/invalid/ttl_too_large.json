@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "type": "suggestion.show",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 1,
+  "revision": 1,
+  "mono_ms": 1,
+  "payload": {
+    "fingerprint": "fingerprint_000000000001",
+    "suggestion_id": "s:1234",
+    "text": " safe text",
+    "accept_word": " safe",
+    "ttl_ms": 601,
+    "provider": "phrase_v1"
+  }
+}

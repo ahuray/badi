@@ -1,0 +1,21 @@
+.lab-tabs{display:flex;gap:5px;width:max-content;padding:4px;margin:0 0 24px;background:#111a15;border:1px solid var(--line);border-radius:10px}
+.lab-tabs [role=tab]{min-width:110px;padding:9px 18px;background:transparent;color:var(--muted)}
+.lab-tabs [aria-selected=true]{background:#2c3d32;color:var(--text);box-shadow:0 1px 4px #0004}
+.spelling-workspace{align-items:start}
+#spelling-language{margin:0 0 20px}
+#spelling-before{font-size:17px;min-height:128px}
+.optional{font-weight:400;color:var(--muted)}
+.spelling-expected-hint{margin-top:9px}
+.spelling-status{min-height:40px;color:var(--muted);font-size:12px;margin:14px 0 0}
+#spelling-cancel{width:100%;margin-top:10px}
+.spelling-preview-note{margin-top:20px;margin-bottom:0}
+.spelling-before-word{color:#c2b19d;text-decoration-color:#d0a58a;text-decoration-thickness:1px}
+.spelling-after-word{color:#e6ebe8;text-decoration:none;background:#c1cdc21a;border:1px solid #b9c6bd38;border-radius:4px;padding:1px 4px;margin-inline-start:6px;box-decoration-break:clone}
+.spelling-word-pair{white-space:normal}
+#spelling-count{color:var(--muted);font-size:14px;margin-inline-start:8px}
+.spelling-result-head{display:flex;justify-content:space-between;gap:15px;flex-wrap:wrap}
+.spelling-result-head h3{font-size:14px;margin:0}
+.spelling-result-head p{margin:0;color:var(--muted);font-size:12px}
+.spelling-judgment{margin-top:14px}
+.spelling-error{color:var(--gold)}
+@media(max-width:850px){.lab-tabs{width:100%}.lab-tabs [role=tab]{flex:1;min-width:0}}

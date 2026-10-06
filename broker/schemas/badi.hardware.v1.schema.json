@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:badi:schema:hardware:v1",
+  "title": "Badi hardware report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "architecture",
+    "logical_cpus",
+    "cpu",
+    "memory",
+    "gpu",
+    "on_battery"
+  ],
+  "properties": {
+    "schema": { "const": "badi.hardware.v1" },
+    "architecture": { "type": "string", "minLength": 1 },
+    "logical_cpus": { "type": "integer", "minimum": 1 },
+    "cpu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["avx2", "avx512f"],
+      "properties": {
+        "avx2": { "type": "boolean" },
+        "avx512f": { "type": "boolean" }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total_mib", "available_mib"],
+      "properties": {
+        "total_mib": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Detected total host memory, or null when unavailable."
+        },
+        "available_mib": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Currently available host memory, or null when unavailable."
+        }
+      }
+    },
+    "gpu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nvidia",
+        "amd",
+        "intel",
+        "hybrid",
+        "dedicated_memory_mib",
+        "usable_memory_mib",
+        "backend"
+      ],
+      "properties": {
+        "nvidia": { "type": "boolean" },
+        "amd": { "type": "boolean" },
+        "intel": { "type": "boolean" },
+        "hybrid": { "type": "boolean" },
+        "dedicated_memory_mib": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Largest detected total dedicated-memory value. It is not usable runtime capacity."
+        },
+        "usable_memory_mib": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Capacity exposed by a validated inference backend; null for detection-only reports."
+        },
+        "backend": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "Validated backend associated with usable_memory_mib, or null."
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "usable_memory_mib": { "type": "null" },
+            "backend": { "type": "null" }
+          }
+        },
+        {
+          "properties": {
+            "usable_memory_mib": { "type": "integer" },
+            "backend": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "on_battery": {
+      "type": ["boolean", "null"],
+      "description": "True while a detected battery is discharging, false on known non-discharging power, or null when unknown."
+    }
+  }
+}

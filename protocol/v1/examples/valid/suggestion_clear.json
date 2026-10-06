@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "id": "suggest-1",
+  "type": "suggestion.clear",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 1,
+  "revision": 1,
+  "mono_ms": 41,
+  "payload": {
+    "fingerprint": "fingerprint_000000000001",
+    "suggestion_id": "s:1234",
+    "reason": "dismissed"
+  }
+}

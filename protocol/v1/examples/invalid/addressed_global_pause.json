@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "type": "control.request",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 1,
+  "revision": 1,
+  "mono_ms": 1,
+  "payload": { "action": "pause" }
+}

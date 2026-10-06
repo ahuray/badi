@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "id": "ctl:settings-get",
+  "type": "settings.get",
+  "mono_ms": 1000,
+  "payload": {}
+}

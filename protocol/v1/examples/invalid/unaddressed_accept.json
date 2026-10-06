@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "type": "control.request",
+  "mono_ms": 1,
+  "payload": {
+    "action": "accept_all",
+    "fingerprint": "fingerprint_000000000001",
+    "suggestion_id": "s:1234"
+  }
+}

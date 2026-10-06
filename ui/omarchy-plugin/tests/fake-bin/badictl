@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+scenario=${BADI_FAKE_SCENARIO:-healthy}
+
+if [[ -n ${BADI_FAKE_CALL_LOG:-} ]]; then
+  printf '%s\n' "$*" >>"$BADI_FAKE_CALL_LOG"
+fi
+
+# Stand in for a wedged badictl: ignore TERM, record the PID and wait for KILL.
+hang_ignoring_term() {
+  trap '' TERM
+  if [[ -n ${BADI_FAKE_PID_LOG:-} ]]; then
+    printf '%s\n' "$$" >>"$BADI_FAKE_PID_LOG"
+  fi
+  exec sleep 300
+}
+
+if [[ ${1:-} == overview && ${2:-} == --json ]]; then
+  if [[ -n ${BADI_FAKE_HOLD_OVERVIEW:-} && -f $BADI_FAKE_HOLD_OVERVIEW ]]; then
+    trap '' TERM
+    exec sleep 300
+  fi
+  case "$scenario" in
+  term-ignoring) hang_ignoring_term ;;
+  healthy) ;;
+  *)
+    printf 'unknown fake scenario: %s\n' "$scenario" >&2
+    exit 64
+    ;;
+  esac
+
+  all_web_origins=false
+  [[ ${BADI_FAKE_ALL_WEB_ORIGINS:-} == 1 ]] && all_web_origins=true
+
+  jq -n --argjson all_web_origins "$all_web_origins" '
+    {
+      schema: "badi.overview.v2",
+      broker: {
+        reachable: true,
+        provider: "phrase_v1",
+        paused: false,
+        authority_epoch: 11,
+        settings_revision: 7,
+        control_plane_degraded: false,
+        sessions: 0,
+        socket_mode: "0600",
+        max_frame_bytes: 65536
+      },
+      settings: ((if $all_web_origins then {all_web_origins: true} else {} end) + {
+        schema: "badi.settings.v2",
+        revision: 7,
+        paused: false,
+        subjects: [
+          {
+            identity: {
+              kind: "browser_origin",
+              adapter: "chromium",
+              scheme: "https",
+              host: "example.com",
+              port: 443
+            },
+            permissions: {
+              suggest: "allow",
+              display: "allow",
+              context_read: "allow",
+              learn: "block",
+              retention: {mode: "none"}
+            }
+          },
+          {
+            identity: {
+              kind: "linux_app",
+              adapter: "fcitx",
+              app_id: "omawrite"
+            },
+            permissions: {
+              suggest: "allow",
+              display: "allow",
+              context_read: "allow",
+              learn: "block",
+              retention: {mode: "none"}
+            }
+          }
+        ]
+      })
+    }
+  '
+  exit 0
+fi
+
+if [[ ${1:-} == settings && ${2:-} == replace ]]; then
+  if [[ -n ${BADI_FAKE_HOLD_MUTATION:-} && -f $BADI_FAKE_HOLD_MUTATION ]]; then
+    hang_ignoring_term
+  fi
+  [[ ${3:-} == --if-revision && ${5:-} == --json && -n ${4:-} && -n ${6:-} ]]
+  jq -e '
+    .schema == "badi.settings.v2"
+    and any(.subjects[];
+      .identity == {kind: "linux_app", adapter: "fcitx", app_id: "omawrite"})
+  ' <<<"$6" >/dev/null
+  exit 0
+fi
+
+printf 'unsupported fake badictl argv\n' >&2
+exit 64

@@ -1,0 +1,17 @@
+{
+  "v": 2,
+  "type": "session.open",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 0,
+  "revision": 0,
+  "mono_ms": 1,
+  "payload": {
+    "target": {
+      "kind": "desktop_application",
+      "app_id": "omawrite",
+      "target_id": "ic:1",
+      "origin": { "scheme": "https", "host": "example.com" }
+    },
+    "activation": "manual"
+  }
+}

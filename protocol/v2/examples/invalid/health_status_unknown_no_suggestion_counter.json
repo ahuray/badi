@@ -1,0 +1,45 @@
+{
+  "v": 2,
+  "id": "ctl:health",
+  "type": "health.status",
+  "mono_ms": 61,
+  "payload": {
+    "provider": "local_model",
+    "paused": false,
+    "authority_epoch": 1,
+    "settings_revision": 1,
+    "control_plane_degraded": false,
+    "sessions": 0,
+    "socket_mode": "0600",
+    "max_frame_bytes": 65536,
+    "metrics": {
+      "context_updates": 3,
+      "provider_calls": 3,
+      "provider_input_bytes": 60,
+      "provider_output_bytes": 14,
+      "cancellations": 0,
+      "stale_results": 0,
+      "suggestions_shown": 1,
+      "suggestions_expired": 0,
+      "denied": 0,
+      "manual_required": 0,
+      "dismissals": 0,
+      "commits_prepared": 0,
+      "commits_applied": 0,
+      "commit_failures": 0,
+      "provider_errors": 0,
+      "no_suggestion": {
+        "request_abstained": 0,
+        "budget_prefill": 1,
+        "budget_stream": 0,
+        "model_abstained": 1,
+        "output_rejected": 0,
+        "stale": 0,
+        "timeout": 0,
+        "provider_error": 0,
+        "last": "budget_prefill",
+        "guessed_reason": 1
+      }
+    }
+  }
+}

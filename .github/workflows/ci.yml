@@ -1,0 +1,170 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust 1.98
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: clippy, rustfmt
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Lint default features
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Lint all features
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --all-features --locked
+      - name: Install Node for editor protocol and Readline checks
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.20.0
+      - name: Exercise editor clients against the real broker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash-builtins libreadline-dev
+          python3 adapters/shell/build-preview.py
+          cargo build -p badi-broker --bins --locked
+          node --test adapters/shared/broker-client.test.mjs
+
+  rust-msrv:
+    name: Rust MSRV 1.85
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Rust MSRV
+        uses: dtolnay/rust-toolchain@1.85.0
+      - name: Check declared minimum version
+        run: cargo check --workspace --all-targets --all-features --locked
+
+  omarchy-plugin:
+    name: Omarchy plugin / pinned Arch host
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure the dated Arch package snapshot
+        run: |
+          # Pacman expands these repository placeholders.
+          # shellcheck disable=SC2016
+          printf '%s\n' \
+            'Server = https://archive.archlinux.org/repos/2026/08/31/$repo/os/$arch' \
+            > /etc/pacman.d/mirrorlist
+          pacman -Syyu --noconfirm
+          pacman -S --needed --noconfirm ca-certificates git
+      - name: Check out Badi
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check out the reviewed Omarchy host
+        uses: actions/checkout@v7
+        with:
+          repository: omacom/omarchy
+          ref: 0534987009061cbe2dacdde4ad564092ab698d12
+          path: .ci/omarchy
+          persist-credentials: false
+      - name: Install the reviewed QML runtime and test tools
+        run: |
+          pacman -S --needed --noconfirm \
+            jq procps-ng 'qt6-declarative=6.11.2-1' \
+            'quickshell=0.3.1-1' shellcheck util-linux
+          pacman -Q quickshell qt6-declarative
+      - name: Validate pinned host, QML, manifest, and lifecycle contracts
+        env:
+          BADI_OMARCHY_ROOT: ${{ github.workspace }}/.ci/omarchy
+        run: bash ui/omarchy-plugin/tests/check-host.sh
+
+  fcitx5:
+    name: Fcitx5 addon / pinned Arch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure the dated Arch package snapshot
+        run: |
+          # Pacman expands these repository placeholders.
+          # shellcheck disable=SC2016
+          printf '%s\n' \
+            'Server = https://archive.archlinux.org/repos/2026/08/31/$repo/os/$arch' \
+            > /etc/pacman.d/mirrorlist
+          pacman -Syyu --noconfirm
+          pacman -S --needed --noconfirm \
+            at-spi2-core ca-certificates cmake dbus fcitx5 gcc git ninja nlohmann-json python python-gobject
+          pacman -Q at-spi2-core cmake dbus fcitx5 gcc ninja nlohmann-json python python-gobject
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build and test the cooperative addon
+        run: |
+          cmake -S adapters/fcitx5 -B adapters/fcitx5/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build adapters/fcitx5/build
+          ctest --test-dir adapters/fcitx5/build --output-on-failure
+      - name: Install Rust for the native transport integration
+        uses: dtolnay/rust-toolchain@1.98.0
+      - name: Exercise the C++ transport against the real Rust broker
+        run: |
+          cargo build -p badi-broker --bins --locked
+          python adapters/fcitx5/tests/broker-smoke.py
+      - name: Exercise isolated accessibility buses and actual addon event flow
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python adapters/accessibility/tests/run-isolated.py
+          PYTHONDONTWRITEBYTECODE=1 python adapters/fcitx5/tests/observed-desktop.py
+
+  checks:
+    name: Repository checks / Node 24
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.20.0
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Install Bash display builtin build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash-builtins libreadline-dev
+      - name: Run docs, editor, desktop, accessibility, Omarchy and writing checks
+        run: npm run check
+      - name: Check whitespace
+        run: git diff --check

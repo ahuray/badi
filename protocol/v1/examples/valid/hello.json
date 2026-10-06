@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "hello-1",
+  "type": "hello",
+  "mono_ms": 10,
+  "payload": {
+    "min_v": 1,
+    "max_v": 1,
+    "adapter": { "kind": "browser", "name": "chromium", "version": "0.1.0" },
+    "capabilities": ["context", "suggestion", "commit.applied", "control", "health"]
+  }
+}

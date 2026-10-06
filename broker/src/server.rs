@@ -1,0 +1,2039 @@
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde::Serialize;
+use thiserror::Error;
+use tokio::net::{UnixListener, UnixStream};
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::{Semaphore, broadcast, mpsc};
+use tokio::task::JoinSet;
+use tokio::time;
+use tokio_util::sync::CancellationToken;
+
+use crate::control_plane::{ControlPlaneError, ControlPlaneSnapshot};
+use crate::engine::{
+    Broker, BrokerError, BrokerEvent, BrokerEventSink, OutcomeRecorderHealth, SessionAuthority,
+};
+use crate::ipc::{FrameError, read_envelope, verify_peer_uid, write_envelope};
+use crate::policy::PolicyReason;
+use crate::protocol::{
+    AdapterKind, AuthorityAckPayload, AuthorityChangedPayload, CURRENT_PROTOCOL_VERSION,
+    Capability, CommitResultPayload, ContextChangedPayload, ControlAction, ControlResultPayload,
+    EmptyPayload, ErrorPayload, GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload,
+    HelloPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SAFE_COUNTER,
+    MAX_SUGGESTION_CHARS, MAX_SUGGESTION_WORDS, MemoryStatusPayload, MessageType, PROTOCOL_VERSION,
+    PolicyQueryPayload, ProbeRequestPayload, ProtocolError, ReasonCode, SessionClosePayload,
+    SessionControlRequestPayload, SessionId, SessionOpenPayload, SettingsReplacePayload,
+    SettingsStatusPayload, SuggestCancelPayload, SuggestRequestPayload, WireEnvelope,
+};
+use crate::settings::{SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2};
+
+const MAX_CONNECTIONS: usize = 32;
+const MAX_SESSIONS_PER_CONNECTION: usize = 64;
+const WIRE_QUEUE_CAPACITY: usize = 64;
+const EVENT_QUEUE_CAPACITY: usize = 32;
+const HELLO_TIMEOUT: Duration = Duration::from_secs(3);
+/// Closes quiet request/response clients. Policy subscribers (long-lived
+/// adapters) are exempt: silence is their normal state, and a peer that exits
+/// closes its socket.
+const CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+const WRITER_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
+const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+pub async fn run(socket_path: &Path, broker: Broker) -> Result<(), ServerError> {
+    // Register both handlers before binding. Once the socket is visible, either
+    // supported termination signal is therefore guaranteed to unwind through
+    // this function and drop the inode-checked SocketGuard.
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+    let (listener, _guard) = bind_secure(socket_path)?;
+    let admissions = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let shutdown = CancellationToken::new();
+    let mut connections = JoinSet::new();
+    let provider_exited = broker.provider_exited();
+    tokio::pin!(provider_exited);
+    let mut accept_failing = false;
+    let outcome = loop {
+        tokio::select! {
+            () = &mut provider_exited => break Err(ServerError::ProviderExited),
+            accepted = listener.accept() => {
+                let stream = match accepted {
+                    Ok((stream, _)) => {
+                        accept_failing = false;
+                        stream
+                    }
+                    Err(error) if is_transient_accept_error(&error) => {
+                        if !accept_failing {
+                            eprintln!("badi-broker: accept failed, retrying: {error}");
+                        }
+                        accept_failing = true;
+                        time::sleep(ACCEPT_RETRY_DELAY).await;
+                        continue;
+                    }
+                    Err(error) => break Err(ServerError::Io(error)),
+                };
+                let Ok(permit) = Arc::clone(&admissions).try_acquire_owned() else {
+                    drop(stream);
+                    continue;
+                };
+                let connection_broker = broker.clone();
+                let connection_shutdown = shutdown.clone();
+                connections.spawn(async move {
+                    let _permit = permit;
+                    let _ = serve_connection(stream, connection_broker, connection_shutdown).await;
+                });
+            }
+            completed = connections.join_next(), if !connections.is_empty() => {
+                let _ = completed;
+            }
+            _ = interrupt.recv() => {
+                break Ok(());
+            }
+            _ = terminate.recv() => {
+                break Ok(());
+            }
+        }
+    };
+
+    shutdown.cancel();
+    broker.shutdown().await;
+    while connections.join_next().await.is_some() {}
+    // A connection may have been between its last cancellation check and a
+    // session.open when shutdown began. The join closes owned sessions; this
+    // final pass makes the server-level postcondition explicit.
+    broker.shutdown().await;
+    outcome
+}
+
+/// Failures of one accept call (descriptor or memory exhaustion, an aborted
+/// peer, an interrupted call) rather than of the listening socket.
+fn is_transient_accept_error(error: &io::Error) -> bool {
+    use rustix::io::Errno;
+
+    matches!(
+        Errno::from_io_error(error),
+        Some(
+            Errno::MFILE
+                | Errno::NFILE
+                | Errno::CONNABORTED
+                | Errno::INTR
+                | Errno::AGAIN
+                | Errno::NOBUFS
+                | Errno::NOMEM
+        )
+    )
+}
+
+pub fn bind_secure(path: &Path) -> Result<(UnixListener, SocketGuard), ServerError> {
+    use std::os::unix::fs::{
+        DirBuilderExt as _, FileTypeExt as _, MetadataExt as _, PermissionsExt as _,
+    };
+
+    let parent = path.parent().ok_or(ServerError::InvalidSocketPath)?;
+    match std::fs::symlink_metadata(parent) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let mut builder = std::fs::DirBuilder::new();
+            builder.mode(0o700).create(parent)?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let parent_metadata = std::fs::symlink_metadata(parent)?;
+    if !parent_metadata.is_dir()
+        || parent_metadata.uid() != rustix::process::getuid().as_raw()
+        || parent_metadata.mode() & 0o077 != 0
+    {
+        return Err(ServerError::UnsafeSocketPath);
+    }
+
+    if let Ok(metadata) = std::fs::symlink_metadata(path) {
+        if !metadata.file_type().is_socket()
+            || metadata.uid() != rustix::process::getuid().as_raw()
+            || metadata.mode() & 0o077 != 0
+        {
+            return Err(ServerError::UnsafeSocketPath);
+        }
+        match std::os::unix::net::UnixStream::connect(path) {
+            Ok(_) => return Err(ServerError::SocketAlreadyActive),
+            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
+                let current = std::fs::symlink_metadata(path)?;
+                if !current.file_type().is_socket()
+                    || current.dev() != metadata.dev()
+                    || current.ino() != metadata.ino()
+                {
+                    return Err(ServerError::UnsafeSocketPath);
+                }
+                std::fs::remove_file(path)?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => return Err(ServerError::UnsafeSocketPath),
+        }
+    }
+
+    let listener = UnixListener::bind(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    let metadata = std::fs::symlink_metadata(path)?;
+    let guard = SocketGuard {
+        path: path.to_path_buf(),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    };
+    Ok((listener, guard))
+}
+
+#[derive(Debug)]
+pub struct SocketGuard {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+}
+
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
+
+        let Ok(metadata) = std::fs::symlink_metadata(&self.path) else {
+            return;
+        };
+        if metadata.file_type().is_socket()
+            && metadata.dev() == self.device
+            && metadata.ino() == self.inode
+        {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+async fn serve_connection(
+    stream: UnixStream,
+    broker: Broker,
+    shutdown: CancellationToken,
+) -> Result<(), ServerError> {
+    serve_connection_with_timeouts(
+        stream,
+        broker,
+        shutdown,
+        HELLO_TIMEOUT,
+        CONNECTION_IDLE_TIMEOUT,
+    )
+    .await
+}
+
+/// What a connection negotiated in its hello exchange.
+struct Negotiated {
+    authority: SessionAuthority,
+    connection_id: String,
+    policy_enabled: bool,
+    authority_rx: broadcast::Receiver<AuthorityChangedPayload>,
+}
+
+/// Completes the hello exchange and, for a policy client, delivers the
+/// current authority epoch. `None` means the server began shutting down.
+async fn negotiate(
+    stream: &mut UnixStream,
+    broker: &Broker,
+    shutdown: &CancellationToken,
+    hello_timeout: Duration,
+) -> Result<Option<Negotiated>, ServerError> {
+    verify_peer_uid(stream)?;
+    let first = tokio::select! {
+        () = shutdown.cancelled() => return Ok(None),
+        incoming = time::timeout(hello_timeout, read_envelope(stream)) => {
+            incoming
+                .map_err(|_| ServerError::HandshakeTimeout)??
+                .ok_or(ServerError::HelloRequired)?
+        }
+    };
+    if first.message_type != MessageType::Hello {
+        return Err(ServerError::HelloRequired);
+    }
+    let hello: HelloPayload = first.decode_payload()?;
+    hello.validate_for_frame(first.v)?;
+    let selected_version = hello
+        .select_version()
+        .ok_or(ProtocolError::VersionNegotiationFailed)?;
+    let negotiated = Negotiated {
+        authority: SessionAuthority {
+            protocol_version: selected_version,
+            adapter_kind: hello.adapter.kind,
+            capabilities: hello.capabilities.clone(),
+        },
+        connection_id: format!("c:{}", uuid::Uuid::new_v4()),
+        policy_enabled: hello.capabilities.contains(&Capability::Policy),
+        authority_rx: broker.subscribe_authority_changes(),
+    };
+    let mut acknowledgment = WireEnvelope::global(
+        MessageType::HelloAck,
+        broker.mono_ms(),
+        &HelloAckPayload {
+            selected_v: selected_version,
+            connection_id: negotiated.connection_id.clone(),
+            enabled_capabilities: hello.capabilities,
+            max_frame_bytes: MAX_FRAME_BYTES,
+            max_before_chars: MAX_BEFORE_CHARS,
+            max_after_chars: MAX_AFTER_CHARS,
+            max_suggestion_chars: MAX_SUGGESTION_CHARS,
+            max_suggestion_words: MAX_SUGGESTION_WORDS,
+            paused: broker.is_paused().await,
+        },
+    )?
+    .at_version(selected_version)?;
+    acknowledgment.id = first.id;
+    if !write_handshake_frame(stream, &acknowledgment, shutdown, hello_timeout).await? {
+        return Ok(None);
+    }
+    if negotiated.policy_enabled {
+        broker
+            .register_policy_client(negotiated.connection_id.clone())
+            .await;
+        let authority = broker.authority_snapshot().await;
+        let initial = WireEnvelope::global(
+            MessageType::AuthorityChanged,
+            broker.mono_ms(),
+            &AuthorityChangedPayload {
+                authority_epoch: authority.authority_epoch,
+                settings_revision: authority.settings_revision,
+                paused: authority.paused,
+            },
+        )?
+        .at_version(selected_version)?;
+        if !write_handshake_frame(stream, &initial, shutdown, hello_timeout).await? {
+            return Ok(None);
+        }
+    }
+    Ok(Some(negotiated))
+}
+
+/// Returns `false` when shutdown interrupted the write.
+async fn write_handshake_frame(
+    stream: &mut UnixStream,
+    envelope: &WireEnvelope,
+    shutdown: &CancellationToken,
+    hello_timeout: Duration,
+) -> Result<bool, ServerError> {
+    tokio::select! {
+        () = shutdown.cancelled() => Ok(false),
+        outgoing = time::timeout(hello_timeout, write_envelope(stream, envelope)) => {
+            outgoing.map_err(|_| ServerError::HandshakeTimeout)??;
+            Ok(true)
+        }
+    }
+}
+
+// Bounded forwarding and teardown deliberately stay together so every exit
+// is visibly covered by the same owned-session cleanup path.
+#[allow(clippy::too_many_lines)]
+async fn serve_connection_with_timeouts(
+    mut stream: UnixStream,
+    broker: Broker,
+    shutdown: CancellationToken,
+    hello_timeout: Duration,
+    idle_timeout: Duration,
+) -> Result<(), ServerError> {
+    let Some(Negotiated {
+        authority,
+        connection_id,
+        policy_enabled,
+        mut authority_rx,
+    }) = negotiate(&mut stream, &broker, &shutdown, hello_timeout).await?
+    else {
+        return Ok(());
+    };
+    let selected_version = authority.protocol_version;
+
+    let (mut reader, mut writer) = stream.into_split();
+    // Keep frame decoding in one owned task. Cancelling read_envelope after it
+    // consumed only part of a frame would discard those bytes and desynchronize
+    // the stream when an outbound broker event wins the connection select.
+    let (incoming_tx, mut incoming_rx) =
+        mpsc::channel::<Result<Option<WireEnvelope>, FrameError>>(1);
+    let reader_task = tokio::spawn(async move {
+        loop {
+            let incoming = read_envelope(&mut reader).await;
+            let terminal = !matches!(incoming, Ok(Some(_)));
+            if incoming_tx.send(incoming).await.is_err() || terminal {
+                break;
+            }
+        }
+    });
+    let (wire_tx, mut wire_rx) = mpsc::channel::<WireEnvelope>(WIRE_QUEUE_CAPACITY);
+    let mut writer_task = tokio::spawn(async move {
+        while let Some(mut envelope) = wire_rx.recv().await {
+            envelope.v = selected_version;
+            write_envelope(&mut writer, &envelope).await?;
+        }
+        Ok::<(), FrameError>(())
+    });
+    let (event_tx, mut event_rx) = mpsc::channel::<BrokerEvent>(EVENT_QUEUE_CAPACITY);
+    let connection_lifetime = CancellationToken::new();
+    let event_sink = BrokerEventSink::new(event_tx.clone(), connection_lifetime.clone());
+
+    let mut owned_sessions = Vec::<SessionId>::new();
+    let idle_deadline = time::sleep(idle_timeout);
+    tokio::pin!(idle_deadline);
+    let outcome = loop {
+        tokio::select! {
+            () = shutdown.cancelled() => break Ok(()),
+            () = connection_lifetime.cancelled() => break Ok(()),
+            () = wire_tx.closed() => break Ok(()),
+            () = &mut idle_deadline, if !policy_enabled => break Ok(()),
+            event = event_rx.recv() => {
+                let Some(event) = event else {
+                    break Ok(());
+                };
+                let envelope = match event.into_wire(broker.mono_ms()) {
+                    Ok(envelope) => envelope,
+                    Err(error) => break Err(ServerError::Protocol(error)),
+                };
+                if wire_tx.try_send(envelope).is_err() {
+                    break Ok(());
+                }
+            }
+            authority = authority_rx.recv(), if policy_enabled => {
+                let Ok(event) = authority else {
+                    break Ok(());
+                };
+                // Policy-capable adapters retire their bindings at every new
+                // epoch. Retire both broker state and connection bookkeeping
+                // before notifying them, including transient pause/resume.
+                broker.close_owned_sessions(&owned_sessions).await;
+                owned_sessions.clear();
+                let envelope = WireEnvelope::global(
+                    MessageType::AuthorityChanged,
+                    broker.mono_ms(),
+                    &event,
+                )?;
+                if wire_tx.try_send(envelope).is_err() {
+                    break Ok(());
+                }
+            }
+            incoming = incoming_rx.recv() => {
+                let envelope = match incoming {
+                    None | Some(Ok(None)) => break Ok(()),
+                    Some(Ok(Some(envelope))) => envelope,
+                    Some(Err(error)) => {
+                        let _ = send_error(&wire_tx, &broker, None, reason_for_frame(&error));
+                        break Ok(());
+                    }
+                };
+                if envelope.v != selected_version {
+                    let _ = send_error(
+                        &wire_tx,
+                        &broker,
+                        envelope.id,
+                        ReasonCode::UnsupportedVersion,
+                    );
+                    break Ok(());
+                }
+                idle_deadline
+                    .as_mut()
+                    .reset(time::Instant::now() + idle_timeout);
+                let request_id = envelope.id.clone();
+                let request_type = envelope.message_type;
+                let mut handler = MessageHandler {
+                    broker: &broker,
+                    authority: &authority,
+                    connection_id: &connection_id,
+                    event_sink: &event_sink,
+                    owned_sessions: &mut owned_sessions,
+                    wire_tx: &wire_tx,
+                };
+                match handler.handle(envelope).await {
+                    Ok(()) => {}
+                    Err(ServerError::Broker(error)) => {
+                        if send_broker_error(
+                            &wire_tx,
+                            &broker,
+                            request_id,
+                            request_type,
+                            &error,
+                        )
+                        .await
+                        .is_err()
+                        {
+                            break Ok(());
+                        }
+                    }
+                    Err(error) => {
+                        let _ = send_error(
+                            &wire_tx,
+                            &broker,
+                            request_id,
+                            reason_for_server(&error),
+                        );
+                        break Ok(());
+                    }
+                }
+            }
+        }
+    };
+
+    broker.close_owned_sessions(&owned_sessions).await;
+    if policy_enabled {
+        broker.unregister_policy_client(&connection_id).await;
+    }
+    reader_task.abort();
+    let _ = reader_task.await;
+    drop(event_sink);
+    drop(event_tx);
+    drop(wire_tx);
+    if time::timeout(WRITER_DRAIN_TIMEOUT, &mut writer_task)
+        .await
+        .is_err()
+    {
+        writer_task.abort();
+        let _ = writer_task.await;
+    }
+    outcome
+}
+
+/// Handles one inbound message within the connection's negotiated authority.
+struct MessageHandler<'a> {
+    broker: &'a Broker,
+    authority: &'a SessionAuthority,
+    connection_id: &'a str,
+    event_sink: &'a BrokerEventSink,
+    owned_sessions: &'a mut Vec<SessionId>,
+    wire_tx: &'a mpsc::Sender<WireEnvelope>,
+}
+
+impl MessageHandler<'_> {
+    async fn handle(&mut self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        match envelope.message_type {
+            MessageType::SessionOpen => self.open_session(envelope).await,
+            MessageType::SessionClose => self.close_session(envelope).await,
+            MessageType::ContextChanged => self.update_context(envelope).await,
+            MessageType::SuggestRequest => self.request_suggestion(envelope).await,
+            MessageType::SuggestCancel => self.cancel_suggestion(envelope).await,
+            MessageType::ControlRequest => self.control(envelope).await,
+            MessageType::CommitResult => self.commit_result(envelope).await,
+            MessageType::HealthRequest => self.health(envelope).await,
+            MessageType::PolicyQuery => self.resolve_policy(envelope).await,
+            MessageType::AuthorityAck => self.acknowledge_authority(envelope).await,
+            MessageType::SettingsGet => self.settings_get(envelope).await,
+            MessageType::SettingsReplace => self.settings_replace(envelope).await,
+            MessageType::MemoryClear => self.memory_clear(envelope).await,
+            MessageType::ProbeRequest => self.probe(envelope).await,
+            MessageType::Hello
+            | MessageType::HelloAck
+            | MessageType::SuggestionShow
+            | MessageType::SuggestionClear
+            | MessageType::ControlResult
+            | MessageType::CommitPrepare
+            | MessageType::HealthStatus
+            | MessageType::PolicyStatus
+            | MessageType::AuthorityChanged
+            | MessageType::SettingsStatus
+            | MessageType::MemoryStatus
+            | MessageType::ProbeResult
+            | MessageType::Error => Err(ServerError::InvalidMessage),
+        }
+    }
+
+    fn protocol_version(&self) -> u8 {
+        self.authority.protocol_version
+    }
+
+    fn reply<P: Serialize>(
+        &self,
+        message_type: MessageType,
+        request_id: Option<String>,
+        payload: &P,
+    ) -> Result<(), ServerError> {
+        send_reply(self.wire_tx, self.broker, message_type, request_id, payload)
+    }
+
+    async fn open_session(&mut self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_capability(self.authority, Capability::Context)?;
+        require_capability(self.authority, Capability::Suggestion)?;
+        require_capability(self.authority, Capability::Policy)?;
+        ensure_session_capacity(self.owned_sessions)?;
+        let coordinates = envelope.coordinates()?;
+        let payload: SessionOpenPayload = envelope.decode_payload()?;
+        payload
+            .target
+            .validate_for_version(self.protocol_version())?;
+        self.broker
+            .open_session(
+                coordinates,
+                payload,
+                self.authority.clone(),
+                self.event_sink.clone(),
+            )
+            .await?;
+        self.owned_sessions.push(coordinates.session_id);
+        Ok(())
+    }
+
+    async fn close_session(&mut self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        let coordinates = envelope.coordinates()?;
+        ensure_owned(self.owned_sessions, coordinates.session_id)?;
+        let _: SessionClosePayload = envelope.decode_payload()?;
+        self.broker.close_session(coordinates).await?;
+        self.owned_sessions
+            .retain(|session_id| *session_id != coordinates.session_id);
+        Ok(())
+    }
+
+    async fn update_context(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_capability(self.authority, Capability::Context)?;
+        let coordinates = envelope.coordinates()?;
+        ensure_owned(self.owned_sessions, coordinates.session_id)?;
+        let payload: ContextChangedPayload = envelope.decode_payload()?;
+        payload.validate_for_version(self.protocol_version())?;
+        let _ = self.broker.update_context(coordinates, payload).await?;
+        Ok(())
+    }
+
+    async fn request_suggestion(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_capability(self.authority, Capability::Suggestion)?;
+        let coordinates = envelope.coordinates()?;
+        ensure_owned(self.owned_sessions, coordinates.session_id)?;
+        let payload: SuggestRequestPayload = envelope.decode_payload()?;
+        self.broker
+            .request_suggestion(coordinates, payload, envelope.id)
+            .await?;
+        Ok(())
+    }
+
+    async fn cancel_suggestion(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_capability(self.authority, Capability::Suggestion)?;
+        let coordinates = envelope.coordinates()?;
+        ensure_owned(self.owned_sessions, coordinates.session_id)?;
+        let payload: SuggestCancelPayload = envelope.decode_payload()?;
+        self.broker.cancel_suggestion(coordinates, payload).await?;
+        Ok(())
+    }
+
+    async fn control(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_capability(self.authority, Capability::Control)?;
+        let action: ControlAction = serde_json::from_value(
+            envelope
+                .payload
+                .get("action")
+                .cloned()
+                .ok_or(ServerError::InvalidMessage)?,
+        )
+        .map_err(|_| ServerError::InvalidMessage)?;
+        if action.is_global() {
+            let payload: GlobalControlRequestPayload = envelope.decode_payload()?;
+            payload.validate()?;
+            match action {
+                ControlAction::Pause => self.broker.set_paused(true).await,
+                ControlAction::Resume => self.broker.set_paused(false).await,
+                ControlAction::PauseToggle => self.broker.toggle_paused().await,
+                ControlAction::Request
+                | ControlAction::AcceptWord
+                | ControlAction::AcceptAll
+                | ControlAction::Dismiss => return Err(ServerError::InvalidMessage),
+            };
+        } else {
+            let coordinates = envelope.coordinates()?;
+            let payload: SessionControlRequestPayload = envelope.decode_payload()?;
+            self.broker
+                .session_control(coordinates, payload, envelope.id.clone())
+                .await?;
+        }
+        let result = ControlResultPayload {
+            action,
+            accepted: true,
+            reason: ReasonCode::Accepted,
+            paused: self.broker.is_paused().await,
+        };
+        self.reply(MessageType::ControlResult, envelope.id, &result)
+    }
+
+    async fn commit_result(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        let coordinates = envelope.coordinates()?;
+        ensure_owned(self.owned_sessions, coordinates.session_id)?;
+        let payload: CommitResultPayload = envelope.decode_payload()?;
+        self.broker.commit_result(coordinates, payload).await?;
+        Ok(())
+    }
+
+    async fn health(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_capability(self.authority, Capability::Health)?;
+        let _: EmptyPayload = envelope.decode_payload()?;
+        let health = self.broker.health_snapshot().await;
+        let status = HealthStatusPayload {
+            provider: health.provider,
+            paused: health.paused,
+            authority_epoch: health.authority_epoch,
+            settings_revision: health.settings_revision,
+            control_plane_degraded: health.control_plane_degraded,
+            sessions: health.sessions,
+            socket_mode: "0600".to_owned(),
+            max_frame_bytes: health.max_frame_bytes,
+            // The legacy v1 wire keeps its frozen counter set.
+            metrics: if self.protocol_version() == CURRENT_PROTOCOL_VERSION {
+                health.metrics
+            } else {
+                health.metrics.without_no_suggestion()
+            },
+            active: health.active,
+        };
+        self.reply(MessageType::HealthStatus, envelope.id, &status)
+    }
+
+    async fn resolve_policy(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_capability(self.authority, Capability::Policy)?;
+        let payload: PolicyQueryPayload = envelope.decode_payload()?;
+        payload.validate_for_version(self.protocol_version())?;
+        let status = self.broker.resolve_policy(&payload.target).await;
+        self.reply(MessageType::PolicyStatus, envelope.id, &status)
+    }
+
+    async fn acknowledge_authority(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_capability(self.authority, Capability::Policy)?;
+        let payload: AuthorityAckPayload = envelope.decode_payload()?;
+        payload.validate()?;
+        self.broker
+            .acknowledge_authority(self.connection_id, payload.authority_epoch)
+            .await?;
+        Ok(())
+    }
+
+    async fn settings_get(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_settings_authority(self.authority)?;
+        let _: EmptyPayload = envelope.decode_payload()?;
+        let snapshot = self.broker.control_plane_snapshot().await?;
+        self.reply_settings_status(envelope.id, &snapshot)
+    }
+
+    async fn settings_replace(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_settings_authority(self.authority)?;
+        let payload: SettingsReplacePayload = envelope.decode_payload()?;
+        payload.validate()?;
+        let source_schema = payload
+            .document
+            .get("schema")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(ServerError::InvalidMessage)?;
+        let speaks_v1 = self.protocol_version() == PROTOCOL_VERSION;
+        let expected_schema = if speaks_v1 {
+            SETTINGS_SCHEMA_V1
+        } else {
+            SETTINGS_SCHEMA
+        };
+        if source_schema != expected_schema {
+            return Err(ServerError::InvalidMessage);
+        }
+        let mut next: SettingsV2 =
+            serde_json::from_value(payload.document).map_err(|_| ServerError::InvalidMessage)?;
+        if speaks_v1 {
+            let current = self.broker.control_plane_snapshot().await?;
+            next = next.preserving_v2_policy_from(&current.settings);
+        }
+        next.validate().map_err(|_| ServerError::InvalidMessage)?;
+        let snapshot = self
+            .broker
+            .replace_settings(payload.expected_revision, next)
+            .await?;
+        self.reply_settings_status(envelope.id, &snapshot)
+    }
+
+    fn reply_settings_status(
+        &self,
+        request_id: Option<String>,
+        snapshot: &ControlPlaneSnapshot,
+    ) -> Result<(), ServerError> {
+        let status = settings_status_payload(
+            snapshot,
+            self.broker.outcome_recorder_health(),
+            self.protocol_version(),
+        )?;
+        self.reply(MessageType::SettingsStatus, request_id, &status)
+    }
+
+    async fn memory_clear(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_settings_authority(self.authority)?;
+        let _: EmptyPayload = envelope.decode_payload()?;
+        let (changed, snapshot) = self.broker.clear_personalization().await?;
+        let status = MemoryStatusPayload {
+            revision: snapshot.personalization.revision,
+            records: saturating_counter(snapshot.personalization.records.len()),
+            bytes: saturating_counter(snapshot.persisted_personalization_bytes),
+            changed,
+        };
+        self.reply(MessageType::MemoryStatus, envelope.id, &status)
+    }
+
+    async fn probe(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_settings_authority(self.authority)?;
+        if self.protocol_version() != CURRENT_PROTOCOL_VERSION {
+            return Err(ServerError::InvalidMessage);
+        }
+        let payload: ProbeRequestPayload = envelope.decode_payload()?;
+        let result = self.broker.probe(payload).await?;
+        result.validate()?;
+        self.reply(MessageType::ProbeResult, envelope.id, &result)
+    }
+}
+
+fn require_settings_authority(authority: &SessionAuthority) -> Result<(), ServerError> {
+    require_capability(authority, Capability::Settings)?;
+    if authority.adapter_kind == AdapterKind::Cli {
+        Ok(())
+    } else {
+        Err(ServerError::InvalidCapability)
+    }
+}
+
+fn settings_status_payload(
+    snapshot: &ControlPlaneSnapshot,
+    recorder: OutcomeRecorderHealth,
+    protocol_version: u8,
+) -> Result<SettingsStatusPayload, ServerError> {
+    let payload = SettingsStatusPayload {
+        document: snapshot
+            .settings
+            .wire_document(protocol_version)
+            .map_err(ProtocolError::from)?,
+        personalization_revision: snapshot.personalization.revision,
+        personalization_records: saturating_counter(snapshot.personalization.records.len()),
+        personalization_bytes: saturating_counter(snapshot.persisted_personalization_bytes),
+        personalization_store_available: snapshot.personalization_store_available,
+        personalization_recorder_available: recorder.available,
+        personalization_write_failures: recorder.write_failures.min(MAX_SAFE_COUNTER),
+        personalization_dropped_signals: recorder.dropped_signals.min(MAX_SAFE_COUNTER),
+    };
+    payload.validate()?;
+    Ok(payload)
+}
+
+fn saturating_counter(value: usize) -> u64 {
+    u64::try_from(value)
+        .unwrap_or(MAX_SAFE_COUNTER)
+        .min(MAX_SAFE_COUNTER)
+}
+
+fn require_capability(
+    authority: &SessionAuthority,
+    capability: Capability,
+) -> Result<(), ServerError> {
+    if authority.capabilities.contains(&capability) {
+        Ok(())
+    } else {
+        Err(ServerError::InvalidCapability)
+    }
+}
+
+fn ensure_owned(owned: &[SessionId], session_id: SessionId) -> Result<(), ServerError> {
+    if owned.contains(&session_id) {
+        Ok(())
+    } else {
+        Err(ServerError::SessionNotOwned)
+    }
+}
+
+fn ensure_session_capacity(owned: &[SessionId]) -> Result<(), ServerError> {
+    if owned.len() < MAX_SESSIONS_PER_CONNECTION {
+        Ok(())
+    } else {
+        Err(ServerError::ResourceLimit)
+    }
+}
+
+fn send_reply<P: Serialize>(
+    wire_tx: &mpsc::Sender<WireEnvelope>,
+    broker: &Broker,
+    message_type: MessageType,
+    request_id: Option<String>,
+    payload: &P,
+) -> Result<(), ServerError> {
+    let mut envelope = WireEnvelope::global(message_type, broker.mono_ms(), payload)?;
+    envelope.id = request_id;
+    wire_tx
+        .try_send(envelope)
+        .map_err(|_| ServerError::ConnectionClosed)
+}
+
+fn send_error(
+    wire_tx: &mpsc::Sender<WireEnvelope>,
+    broker: &Broker,
+    request_id: Option<String>,
+    reason: ReasonCode,
+) -> Result<(), ServerError> {
+    send_reply(
+        wire_tx,
+        broker,
+        MessageType::Error,
+        request_id,
+        &ErrorPayload::simple(reason),
+    )
+}
+
+async fn send_broker_error(
+    wire_tx: &mpsc::Sender<WireEnvelope>,
+    broker: &Broker,
+    request_id: Option<String>,
+    request_type: MessageType,
+    error: &BrokerError,
+) -> Result<(), ServerError> {
+    let mut payload = ErrorPayload::simple(reason_for_broker(error));
+    if request_type == MessageType::SettingsReplace {
+        let authority = broker.authority_snapshot().await;
+        payload.settings_revision = Some(authority.settings_revision);
+        payload.control_plane_degraded = Some(authority.control_plane_degraded);
+        if let Some((code, committed)) = settings_replace_failure(error) {
+            payload.code = code;
+            payload.committed = committed;
+        }
+    }
+    payload.validate()?;
+    send_reply(wire_tx, broker, MessageType::Error, request_id, &payload)
+}
+
+/// The settings-specific code, and whether the replacement is known to have
+/// committed (`None` when unknown).
+fn settings_replace_failure(error: &BrokerError) -> Option<(ReasonCode, Option<bool>)> {
+    match error {
+        BrokerError::SettingsCommittedDegraded(_) => {
+            Some((ReasonCode::SettingsCommittedDegraded, Some(true)))
+        }
+        BrokerError::SettingsCommitUnknown(_) | BrokerError::ControlPlaneTask => {
+            Some((ReasonCode::SettingsCommitUnknown, None))
+        }
+        BrokerError::ControlPlane(ControlPlaneError::Settings(
+            SettingsStoreError::RevisionConflict { .. },
+        )) => Some((ReasonCode::SettingsConflict, Some(false))),
+        BrokerError::ControlPlane(_) | BrokerError::ControlPlaneUnavailable => {
+            Some((ReasonCode::SettingsRejected, Some(false)))
+        }
+        _ => None,
+    }
+}
+
+const fn reason_for_broker(error: &BrokerError) -> ReasonCode {
+    match error {
+        BrokerError::Denied(PolicyReason::Paused) => ReasonCode::Paused,
+        BrokerError::Denied(PolicyReason::FieldSensitive) => ReasonCode::FieldSensitive,
+        BrokerError::Denied(PolicyReason::FieldNotEditable) => ReasonCode::FieldNotEditable,
+        BrokerError::Denied(PolicyReason::FieldAmbiguous) => ReasonCode::FieldAmbiguous,
+        BrokerError::Denied(PolicyReason::PolicyNever) => ReasonCode::PolicyNever,
+        BrokerError::InvalidCapability => ReasonCode::InvalidCapability,
+        BrokerError::CommitLeaseExpired => ReasonCode::Expired,
+        BrokerError::EventSinkClosed | BrokerError::ShuttingDown => ReasonCode::SessionClosed,
+        BrokerError::Denied(
+            PolicyReason::AllowedAlways
+            | PolicyReason::AllowedExplicit
+            | PolicyReason::ManualRequired,
+        )
+        | BrokerError::InvalidPayload
+        | BrokerError::Protocol(_)
+        | BrokerError::ControlPlane(_)
+        | BrokerError::ControlPlaneTask
+        | BrokerError::ControlPlaneTimeout
+        | BrokerError::ControlPlaneUnavailable
+        | BrokerError::OutcomeRecorderThread(_)
+        | BrokerError::SettingsCommitUnknown(_)
+        | BrokerError::SettingsCommittedDegraded(_)
+        | BrokerError::SessionAlreadyOpen => ReasonCode::InvalidMessage,
+        BrokerError::ManualRequired => ReasonCode::ManualRequired,
+        BrokerError::NoContext => ReasonCode::NoContext,
+        BrokerError::NoPendingCommit | BrokerError::Stale => ReasonCode::Stale,
+        BrokerError::NoSuggestion => ReasonCode::NoSuggestion,
+        BrokerError::ProviderBusy => ReasonCode::ProviderError,
+        BrokerError::UnknownSession => ReasonCode::UnknownSession,
+    }
+}
+
+fn reason_for_frame(error: &FrameError) -> ReasonCode {
+    match error {
+        FrameError::Protocol(ProtocolError::UnsupportedVersion(_)) => {
+            ReasonCode::UnsupportedVersion
+        }
+        FrameError::Oversized(_) | FrameError::Empty | FrameError::Truncated => {
+            ReasonCode::InvalidFrame
+        }
+        FrameError::Io(_)
+        | FrameError::InvalidRuntimeDir
+        | FrameError::MissingRuntimeDir
+        | FrameError::PeerCredentialsUnavailable
+        | FrameError::PeerUidMismatch
+        | FrameError::Protocol(_)
+        | FrameError::Serde(_)
+        | FrameError::UnsafeSocket => ReasonCode::InvalidMessage,
+    }
+}
+
+const fn reason_for_server(error: &ServerError) -> ReasonCode {
+    match error {
+        ServerError::InvalidCapability => ReasonCode::InvalidCapability,
+        ServerError::ProviderExited => ReasonCode::ProviderError,
+        ServerError::Broker(error) => reason_for_broker(error),
+        ServerError::Frame(FrameError::Protocol(ProtocolError::UnsupportedVersion(_))) => {
+            ReasonCode::UnsupportedVersion
+        }
+        ServerError::Frame(_) => ReasonCode::InvalidFrame,
+        ServerError::ConnectionClosed
+        | ServerError::HandshakeTimeout
+        | ServerError::HelloRequired
+        | ServerError::InvalidMessage
+        | ServerError::InvalidSocketPath
+        | ServerError::Io(_)
+        | ServerError::Protocol(_)
+        | ServerError::ResourceLimit
+        | ServerError::SessionNotOwned
+        | ServerError::SocketAlreadyActive
+        | ServerError::UnsafeSocketPath => ReasonCode::InvalidMessage,
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ServerError {
+    #[error("broker")]
+    Broker(#[from] BrokerError),
+    #[error("connection_closed")]
+    ConnectionClosed,
+    #[error("frame")]
+    Frame(#[from] FrameError),
+    #[error("hello_required")]
+    HelloRequired,
+    #[error("handshake_timeout")]
+    HandshakeTimeout,
+    #[error("invalid_capability")]
+    InvalidCapability,
+    #[error("invalid_message")]
+    InvalidMessage,
+    #[error("invalid_socket_path")]
+    InvalidSocketPath,
+    #[error("io")]
+    Io(#[from] io::Error),
+    #[error("protocol")]
+    Protocol(#[from] ProtocolError),
+    #[error("provider_exited")]
+    ProviderExited,
+    #[error("resource_limit")]
+    ResourceLimit,
+    #[error("session_not_owned")]
+    SessionNotOwned,
+    #[error("socket_already_active")]
+    SocketAlreadyActive,
+    #[error("unsafe_socket_path")]
+    UnsafeSocketPath,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tempfile::tempdir;
+    use tokio::io::AsyncWriteExt as _;
+    use tokio::net::UnixStream;
+    use tokio::sync::Semaphore;
+    use tokio::time::{sleep, timeout};
+    use tokio_util::sync::CancellationToken;
+
+    use super::{
+        MAX_CONNECTIONS, MAX_SESSIONS_PER_CONNECTION, ServerError, bind_secure,
+        ensure_session_capacity, serve_connection_with_timeouts,
+    };
+    use crate::control_plane::ControlPlane;
+    use crate::engine::{Broker, BrokerConfig};
+    use crate::ipc::{read_envelope, write_envelope};
+    use crate::protocol::{
+        Activation, AdapterDescriptor, AdapterKind, AuthorityAckPayload, AuthorityChangedPayload,
+        CURRENT_PROTOCOL_VERSION, Capability, ContextChangedPayload, Coordinates, EmptyPayload,
+        FieldDescriptor, FieldPurpose, HealthStatusPayload, HelloAckPayload, HelloPayload,
+        MessageType, OffsetUnit, PROTOCOL_VERSION, ProbeOutcome, ProbeRequestPayload,
+        ProbeResultPayload, Selection, SessionId, SessionOpenPayload, SettingsReplacePayload,
+        SettingsStatusPayload, SuggestRequestPayload, TargetDescriptor, TargetKind, WireEnvelope,
+    };
+    use crate::provider::DeterministicPhraseProvider;
+    use crate::settings::{
+        BrowserAdapter, LinuxAdapter, SETTINGS_SCHEMA, SettingsV2, StableIdentity, StoragePaths,
+        SubjectPermissions, SubjectRule, WebScheme,
+    };
+
+    fn broker() -> Broker {
+        Broker::new(
+            Arc::new(DeterministicPhraseProvider::default()),
+            BrokerConfig::default(),
+        )
+    }
+
+    async fn open_test_session(client: &mut UnixStream, session_id: SessionId) {
+        let mut hello = WireEnvelope::global(
+            MessageType::Hello,
+            0,
+            &HelloPayload {
+                min_v: PROTOCOL_VERSION,
+                max_v: PROTOCOL_VERSION,
+                adapter: AdapterDescriptor {
+                    kind: AdapterKind::Test,
+                    name: "server-test".to_owned(),
+                    version: "1".to_owned(),
+                },
+                capabilities: vec![
+                    Capability::Context,
+                    Capability::Suggestion,
+                    Capability::Health,
+                    Capability::Policy,
+                ],
+            },
+        )
+        .expect("hello");
+        hello.id = Some("test:hello".to_owned());
+        write_envelope(client, &hello).await.expect("write hello");
+        let acknowledgment = read_envelope(client)
+            .await
+            .expect("read hello acknowledgment")
+            .expect("hello acknowledgment");
+        assert_eq!(acknowledgment.message_type, MessageType::HelloAck);
+        assert_eq!(acknowledgment.id, hello.id);
+        let authority = read_envelope(client)
+            .await
+            .expect("read initial authority")
+            .expect("initial authority");
+        assert_eq!(authority.message_type, MessageType::AuthorityChanged);
+        let authority: AuthorityChangedPayload = authority
+            .decode_payload()
+            .expect("initial authority payload");
+        let acknowledgment = WireEnvelope::global(
+            MessageType::AuthorityAck,
+            1,
+            &AuthorityAckPayload {
+                authority_epoch: authority.authority_epoch,
+            },
+        )
+        .expect("authority acknowledgment");
+        write_envelope(client, &acknowledgment)
+            .await
+            .expect("write authority acknowledgment");
+
+        reopen_test_session(client, session_id).await;
+    }
+
+    async fn reopen_test_session(client: &mut UnixStream, session_id: SessionId) {
+        let session = WireEnvelope::session(
+            MessageType::SessionOpen,
+            Coordinates {
+                session_id,
+                focus_epoch: 1,
+                revision: 0,
+            },
+            1,
+            &SessionOpenPayload {
+                target: TargetDescriptor {
+                    kind: TargetKind::Fixture,
+                    app_id: "server-test".to_owned(),
+                    target_id: "field-1".to_owned(),
+                    origin: None,
+                },
+                activation: Activation::Always,
+            },
+        )
+        .expect("session open");
+        write_envelope(client, &session)
+            .await
+            .expect("write session open");
+    }
+
+    async fn wait_for_sessions(broker: &Broker, expected: u64) {
+        timeout(Duration::from_millis(250), async {
+            loop {
+                if broker.session_count().await == expected {
+                    break;
+                }
+                sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("session count");
+    }
+
+    #[tokio::test]
+    async fn authority_changes_retire_sessions_and_release_connection_capacity() {
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let broker = broker();
+        let task_broker = broker.clone();
+        let shutdown = CancellationToken::new();
+        let task_shutdown = shutdown.clone();
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                task_broker,
+                task_shutdown,
+                Duration::from_secs(1),
+                Duration::from_secs(5),
+            )
+            .await
+        });
+        let session_id = SessionId::new();
+        open_test_session(&mut client, session_id).await;
+        wait_for_sessions(&broker, 1).await;
+
+        for _ in 0..=MAX_SESSIONS_PER_CONNECTION {
+            for paused in [true, false] {
+                assert_eq!(broker.set_paused(paused).await, paused);
+                let event = timeout(Duration::from_secs(1), read_envelope(&mut client))
+                    .await
+                    .expect("authority deadline")
+                    .expect("read authority")
+                    .expect("authority event");
+                assert_eq!(event.message_type, MessageType::AuthorityChanged);
+                assert_eq!(
+                    broker.session_count().await,
+                    0,
+                    "old sessions must be retired before publishing the new epoch"
+                );
+                let payload: AuthorityChangedPayload = event.decode_payload().expect("authority");
+                let ack = WireEnvelope::global(
+                    MessageType::AuthorityAck,
+                    0,
+                    &AuthorityAckPayload {
+                        authority_epoch: payload.authority_epoch,
+                    },
+                )
+                .expect("ack");
+                write_envelope(&mut client, &ack).await.expect("write ack");
+            }
+            // Adapters reuse a document session after revocation. More than
+            // 64 cycles also proves old bookkeeping cannot exhaust the quota.
+            reopen_test_session(&mut client, session_id).await;
+            wait_for_sessions(&broker, 1).await;
+        }
+        shutdown.cancel();
+        connection
+            .await
+            .expect("connection task")
+            .expect("clean shutdown");
+        assert_eq!(broker.session_count().await, 0);
+    }
+
+    #[test]
+    fn connection_admission_is_hard_capped() {
+        let admissions = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+        let permits = (0..MAX_CONNECTIONS)
+            .map(|_| {
+                Arc::clone(&admissions)
+                    .try_acquire_owned()
+                    .expect("capacity permit")
+            })
+            .collect::<Vec<_>>();
+        assert!(Arc::clone(&admissions).try_acquire_owned().is_err());
+        drop(permits);
+        assert!(Arc::clone(&admissions).try_acquire_owned().is_ok());
+    }
+
+    #[test]
+    fn per_connection_session_count_is_hard_capped() {
+        let sessions = (0..MAX_SESSIONS_PER_CONNECTION)
+            .map(|_| SessionId::new())
+            .collect::<Vec<_>>();
+        assert!(ensure_session_capacity(&sessions[..sessions.len() - 1]).is_ok());
+        assert!(matches!(
+            ensure_session_capacity(&sessions),
+            Err(ServerError::ResourceLimit)
+        ));
+    }
+
+    #[tokio::test]
+    async fn hello_deadline_rejects_an_idle_new_connection() {
+        let (server, _client) = UnixStream::pair().expect("Unix stream pair");
+        let result = serve_connection_with_timeouts(
+            server,
+            broker(),
+            CancellationToken::new(),
+            Duration::from_millis(5),
+            Duration::from_secs(1),
+        )
+        .await;
+        assert!(matches!(result, Err(ServerError::HandshakeTimeout)));
+    }
+
+    #[tokio::test]
+    async fn v2_negotiation_versions_every_frame_and_rejects_a_v1_rebind() {
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                broker(),
+                CancellationToken::new(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+        });
+        let hello = WireEnvelope::global(
+            MessageType::Hello,
+            0,
+            &HelloPayload {
+                min_v: CURRENT_PROTOCOL_VERSION,
+                max_v: CURRENT_PROTOCOL_VERSION,
+                adapter: AdapterDescriptor {
+                    kind: AdapterKind::Fcitx,
+                    name: "badi-fcitx5".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                capabilities: vec![
+                    Capability::Context,
+                    Capability::Suggestion,
+                    Capability::Policy,
+                ],
+            },
+        )
+        .expect("v2 hello")
+        .at_version(CURRENT_PROTOCOL_VERSION)
+        .expect("versioned v2 hello");
+        write_envelope(&mut client, &hello)
+            .await
+            .expect("write v2 hello");
+
+        let acknowledgment = read_envelope(&mut client)
+            .await
+            .expect("read v2 acknowledgment")
+            .expect("v2 acknowledgment");
+        assert_eq!(acknowledgment.v, CURRENT_PROTOCOL_VERSION);
+        let payload: HelloAckPayload = acknowledgment
+            .decode_payload()
+            .expect("hello acknowledgment payload");
+        assert_eq!(payload.selected_v, CURRENT_PROTOCOL_VERSION);
+        payload.validate().expect("valid v2 acknowledgment");
+
+        let authority = read_envelope(&mut client)
+            .await
+            .expect("read v2 authority")
+            .expect("v2 authority");
+        assert_eq!(authority.v, CURRENT_PROTOCOL_VERSION);
+        assert_eq!(authority.message_type, MessageType::AuthorityChanged);
+
+        let wrong_version = WireEnvelope::global(
+            MessageType::AuthorityAck,
+            1,
+            &AuthorityAckPayload { authority_epoch: 0 },
+        )
+        .expect("legacy authority acknowledgment");
+        write_envelope(&mut client, &wrong_version)
+            .await
+            .expect("write wrong-version frame");
+        let error = read_envelope(&mut client)
+            .await
+            .expect("read version error")
+            .expect("version error");
+        assert_eq!(error.v, CURRENT_PROTOCOL_VERSION);
+        assert_eq!(error.message_type, MessageType::Error);
+
+        connection
+            .await
+            .expect("connection task")
+            .expect("clean version rejection");
+    }
+
+    #[tokio::test]
+    async fn handshake_rejects_a_mixed_range_that_matches_no_versioned_schema() {
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                broker(),
+                CancellationToken::new(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+        });
+        let hello = WireEnvelope::global(
+            MessageType::Hello,
+            0,
+            &HelloPayload {
+                min_v: PROTOCOL_VERSION,
+                max_v: CURRENT_PROTOCOL_VERSION,
+                adapter: AdapterDescriptor {
+                    kind: AdapterKind::Test,
+                    name: "mixed-range".to_owned(),
+                    version: "1".to_owned(),
+                },
+                capabilities: vec![Capability::Health],
+            },
+        )
+        .expect("structurally supported hello");
+        write_envelope(&mut client, &hello)
+            .await
+            .expect("write mixed-range hello");
+        drop(client);
+
+        assert!(matches!(
+            connection.await.expect("connection task"),
+            Err(ServerError::Protocol(
+                crate::protocol::ProtocolError::VersionNegotiationFailed
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn v1_settings_roundtrip_projects_browser_rules_and_preserves_native_rules() {
+        let temporary = tempdir().expect("temporary directory");
+        let paths = StoragePaths::new(
+            temporary.path().join("config/badi"),
+            temporary.path().join("data/badi"),
+        )
+        .expect("storage paths");
+        let control_plane = Arc::new(ControlPlane::open(paths).expect("control plane"));
+        control_plane
+            .replace_settings(
+                0,
+                SettingsV2 {
+                    schema: SETTINGS_SCHEMA.to_owned(),
+                    revision: 1,
+                    paused: false,
+                    all_web_origins: false,
+                    all_linux_apps: false,
+                    subjects: vec![
+                        SubjectRule {
+                            identity: StableIdentity::browser_origin(
+                                BrowserAdapter::Chromium,
+                                WebScheme::Https,
+                                "example.com",
+                                None,
+                            )
+                            .expect("browser identity"),
+                            permissions: SubjectPermissions::deny_all(),
+                        },
+                        SubjectRule {
+                            identity: StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite")
+                                .expect("Linux identity"),
+                            permissions: SubjectPermissions::deny_all(),
+                        },
+                    ],
+                },
+            )
+            .expect("seed mixed settings");
+        let broker = Broker::with_control_plane(
+            Arc::new(DeterministicPhraseProvider::default()),
+            BrokerConfig::default(),
+            Arc::clone(&control_plane),
+        )
+        .expect("controlled broker");
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                broker,
+                CancellationToken::new(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+        });
+        let hello = WireEnvelope::global(
+            MessageType::Hello,
+            0,
+            &HelloPayload {
+                min_v: PROTOCOL_VERSION,
+                max_v: PROTOCOL_VERSION,
+                adapter: AdapterDescriptor {
+                    kind: AdapterKind::Cli,
+                    name: "legacy-cli".to_owned(),
+                    version: "1".to_owned(),
+                },
+                capabilities: vec![Capability::Settings],
+            },
+        )
+        .expect("legacy hello");
+        write_envelope(&mut client, &hello)
+            .await
+            .expect("write legacy hello");
+        let _ = read_envelope(&mut client)
+            .await
+            .expect("read hello acknowledgment")
+            .expect("hello acknowledgment");
+
+        let mut get = WireEnvelope::global(MessageType::SettingsGet, 1, &EmptyPayload {})
+            .expect("settings get");
+        get.id = Some("settings:get".to_owned());
+        write_envelope(&mut client, &get)
+            .await
+            .expect("write settings get");
+        let response = read_envelope(&mut client)
+            .await
+            .expect("read settings status")
+            .expect("settings status");
+        let status: SettingsStatusPayload = response.decode_payload().expect("settings payload");
+        assert_eq!(status.document["schema"], "badi.settings.v1");
+        assert_eq!(
+            status.document["subjects"]
+                .as_array()
+                .expect("subjects")
+                .len(),
+            1
+        );
+
+        let mut replace = WireEnvelope::global(
+            MessageType::SettingsReplace,
+            2,
+            &SettingsReplacePayload {
+                expected_revision: 1,
+                document: serde_json::json!({
+                    "schema": "badi.settings.v1",
+                    "revision": 2,
+                    "paused": false,
+                    "subjects": []
+                }),
+            },
+        )
+        .expect("legacy replace");
+        replace.id = Some("settings:replace".to_owned());
+        write_envelope(&mut client, &replace)
+            .await
+            .expect("write legacy replacement");
+        let response = read_envelope(&mut client)
+            .await
+            .expect("read replacement status")
+            .expect("replacement status");
+        assert_eq!(response.message_type, MessageType::SettingsStatus);
+        drop(client);
+        connection
+            .await
+            .expect("connection task")
+            .expect("legacy connection shutdown");
+
+        let snapshot = control_plane.snapshot().expect("final settings");
+        assert_eq!(snapshot.settings.revision, 2);
+        assert_eq!(snapshot.settings.subjects.len(), 1);
+        assert!(matches!(
+            snapshot.settings.subjects[0].identity,
+            StableIdentity::LinuxApp { .. }
+        ));
+    }
+
+    async fn connect_test_client(
+        kind: AdapterKind,
+        version: u8,
+        capabilities: Vec<Capability>,
+    ) -> (UnixStream, tokio::task::JoinHandle<Result<(), ServerError>>) {
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                broker(),
+                CancellationToken::new(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+        });
+        let hello = WireEnvelope::global(
+            MessageType::Hello,
+            0,
+            &HelloPayload {
+                min_v: version,
+                max_v: version,
+                adapter: AdapterDescriptor {
+                    kind,
+                    name: "diagnostic-test".to_owned(),
+                    version: "1".to_owned(),
+                },
+                capabilities,
+            },
+        )
+        .expect("hello")
+        .at_version(version)
+        .expect("versioned hello");
+        write_envelope(&mut client, &hello)
+            .await
+            .expect("write hello");
+        let acknowledgment = read_envelope(&mut client)
+            .await
+            .expect("read acknowledgment")
+            .expect("acknowledgment");
+        assert_eq!(acknowledgment.message_type, MessageType::HelloAck);
+        (client, connection)
+    }
+
+    async fn exchange(
+        client: &mut UnixStream,
+        message_type: MessageType,
+        version: u8,
+        payload: &impl serde::Serialize,
+    ) -> WireEnvelope {
+        let mut request = WireEnvelope::global(message_type, 1, payload)
+            .expect("request")
+            .at_version(version)
+            .expect("versioned request");
+        request.id = Some("ctl:diagnostic".to_owned());
+        write_envelope(client, &request)
+            .await
+            .expect("write request");
+        read_envelope(client)
+            .await
+            .expect("read response")
+            .expect("response")
+    }
+
+    #[tokio::test]
+    async fn probe_is_a_private_v2_cli_request_and_v1_health_keeps_its_counters() {
+        let probe = ProbeRequestPayload {
+            before: "Thank you".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+            allow_replacement: false,
+            explicit: false,
+        };
+        let (mut cli, connection) = connect_test_client(
+            AdapterKind::Cli,
+            CURRENT_PROTOCOL_VERSION,
+            vec![
+                Capability::Control,
+                Capability::Health,
+                Capability::Settings,
+            ],
+        )
+        .await;
+        let response = exchange(
+            &mut cli,
+            MessageType::ProbeRequest,
+            CURRENT_PROTOCOL_VERSION,
+            &probe,
+        )
+        .await;
+        assert_eq!(response.message_type, MessageType::ProbeResult);
+        assert_eq!(response.id.as_deref(), Some("ctl:diagnostic"));
+        let result: ProbeResultPayload = response.decode_payload().expect("probe result");
+        result.validate().expect("valid probe result");
+        assert_eq!(result.outcome, ProbeOutcome::Suggested);
+        assert_eq!(result.text.as_deref(), Some(" for your time"));
+        let health = exchange(
+            &mut cli,
+            MessageType::HealthRequest,
+            CURRENT_PROTOCOL_VERSION,
+            &EmptyPayload {},
+        )
+        .await;
+        let health: HealthStatusPayload = health.decode_payload().expect("health");
+        assert_eq!(
+            health.metrics.provider_calls, 0,
+            "probes are not adapter traffic"
+        );
+        assert!(health.metrics.no_suggestion.is_some());
+        drop(cli);
+        connection.await.expect("CLI task").expect("CLI shutdown");
+
+        for (kind, version, capabilities) in [
+            (
+                AdapterKind::Fcitx,
+                CURRENT_PROTOCOL_VERSION,
+                vec![Capability::Health, Capability::Settings],
+            ),
+            (
+                AdapterKind::Cli,
+                CURRENT_PROTOCOL_VERSION,
+                vec![Capability::Control, Capability::Health],
+            ),
+            (
+                AdapterKind::Cli,
+                PROTOCOL_VERSION,
+                vec![Capability::Health, Capability::Settings],
+            ),
+        ] {
+            let (mut client, connection) = connect_test_client(kind, version, capabilities).await;
+            let rejected = exchange(&mut client, MessageType::ProbeRequest, version, &probe).await;
+            assert_eq!(
+                rejected.message_type,
+                MessageType::Error,
+                "{kind:?} v{version}"
+            );
+            connection
+                .await
+                .expect("connection task")
+                .expect("rejected probe closes cleanly");
+        }
+
+        let (mut legacy, connection) =
+            connect_test_client(AdapterKind::Cli, PROTOCOL_VERSION, vec![Capability::Health]).await;
+        let health = exchange(
+            &mut legacy,
+            MessageType::HealthRequest,
+            PROTOCOL_VERSION,
+            &EmptyPayload {},
+        )
+        .await;
+        assert!(health.payload["metrics"].get("no_suggestion").is_none());
+        drop(legacy);
+        connection
+            .await
+            .expect("legacy task")
+            .expect("legacy shutdown");
+    }
+
+    #[tokio::test]
+    async fn cancellation_closes_every_session_owned_by_connection() {
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let broker = broker();
+        let shutdown = CancellationToken::new();
+        let task_broker = broker.clone();
+        let task_shutdown = shutdown.clone();
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                task_broker,
+                task_shutdown,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+        });
+        open_test_session(&mut client, SessionId::new()).await;
+        wait_for_sessions(&broker, 1).await;
+
+        shutdown.cancel();
+        connection
+            .await
+            .expect("connection task")
+            .expect("connection shutdown");
+        assert_eq!(broker.session_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn final_protocol_error_is_drained_before_connection_closes() {
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let broker = broker();
+        let task_broker = broker.clone();
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                task_broker,
+                CancellationToken::new(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+        });
+        open_test_session(&mut client, SessionId::new()).await;
+        wait_for_sessions(&broker, 1).await;
+
+        let duplicate_hello = WireEnvelope::global(
+            MessageType::Hello,
+            2,
+            &HelloPayload {
+                min_v: PROTOCOL_VERSION,
+                max_v: PROTOCOL_VERSION,
+                adapter: AdapterDescriptor {
+                    kind: AdapterKind::Test,
+                    name: "server-test".to_owned(),
+                    version: "1".to_owned(),
+                },
+                capabilities: vec![Capability::Context, Capability::Suggestion],
+            },
+        )
+        .expect("duplicate hello");
+        write_envelope(&mut client, &duplicate_hello)
+            .await
+            .expect("write duplicate hello");
+        let response = timeout(Duration::from_millis(250), read_envelope(&mut client))
+            .await
+            .expect("final response timeout")
+            .expect("read final response")
+            .expect("final response");
+        assert_eq!(response.message_type, MessageType::Error);
+
+        connection
+            .await
+            .expect("connection task")
+            .expect("protocol-error shutdown");
+        assert_eq!(broker.session_count().await, 0);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn outbound_event_does_not_cancel_a_partially_read_inbound_frame() {
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let broker = Broker::new(
+            Arc::new(DeterministicPhraseProvider::default()),
+            BrokerConfig {
+                debounce: Duration::from_millis(40),
+                ..BrokerConfig::default()
+            },
+        );
+        let task_broker = broker.clone();
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                task_broker,
+                CancellationToken::new(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+        });
+        let session_id = SessionId::new();
+        open_test_session(&mut client, session_id).await;
+        wait_for_sessions(&broker, 1).await;
+
+        let coordinates = Coordinates {
+            session_id,
+            focus_epoch: 1,
+            revision: 1,
+        };
+        let context = ContextChangedPayload {
+            fingerprint: "frame-race-fingerprint".to_owned(),
+            before: "Thank you".to_owned(),
+            after: String::new(),
+            selection: Selection {
+                anchor: 9,
+                head: 9,
+                unit: OffsetUnit::Utf16CodeUnits,
+            },
+            field: FieldDescriptor {
+                purpose: FieldPurpose::Normal,
+                editable: true,
+                multiline: true,
+                composing: false,
+                sensitive: false,
+                identity_known: true,
+                focused: true,
+                lock_screen: false,
+            },
+            activation: Activation::Always,
+            explicit: false,
+            language: Some("en".to_owned()),
+        };
+        let context_envelope =
+            WireEnvelope::session(MessageType::ContextChanged, coordinates, 2, &context)
+                .expect("context envelope");
+        write_envelope(&mut client, &context_envelope)
+            .await
+            .expect("write context");
+        let suggestion_envelope = WireEnvelope::session(
+            MessageType::SuggestRequest,
+            coordinates,
+            3,
+            &SuggestRequestPayload {
+                fingerprint: context.fingerprint,
+                explicit: false,
+            },
+        )
+        .expect("suggestion envelope");
+        write_envelope(&mut client, &suggestion_envelope)
+            .await
+            .expect("write suggestion request");
+
+        let mut health = WireEnvelope::global(MessageType::HealthRequest, 4, &EmptyPayload {})
+            .expect("health envelope");
+        health.id = Some("health-after-partial-frame".to_owned());
+        let health_body = serde_json::to_vec(&health).expect("serialize health envelope");
+        let health_length = u32::try_from(health_body.len())
+            .expect("health frame length")
+            .to_le_bytes();
+        let mut health_frame = Vec::with_capacity(4 + health_body.len());
+        health_frame.extend_from_slice(&health_length);
+        health_frame.extend_from_slice(&health_body);
+
+        let (mut client_reader, mut client_writer) = client.into_split();
+        client_writer
+            .write_all(&health_frame[..1])
+            .await
+            .expect("write first health-frame byte");
+        let suggestion = timeout(
+            Duration::from_millis(250),
+            read_envelope(&mut client_reader),
+        )
+        .await
+        .expect("suggestion event timeout")
+        .expect("read suggestion event")
+        .expect("suggestion event");
+        assert_eq!(suggestion.message_type, MessageType::SuggestionShow);
+
+        client_writer
+            .write_all(&health_frame[1..])
+            .await
+            .expect("complete health frame");
+        let health_response = timeout(
+            Duration::from_millis(250),
+            read_envelope(&mut client_reader),
+        )
+        .await
+        .expect("health response timeout")
+        .expect("read health response")
+        .expect("health response");
+        assert_eq!(health_response.message_type, MessageType::HealthStatus);
+        assert_eq!(health_response.id, health.id);
+
+        drop(client_writer);
+        connection
+            .await
+            .expect("connection task")
+            .expect("connection shutdown");
+    }
+
+    #[tokio::test]
+    async fn idle_deadline_spares_policy_subscribers_and_closes_other_clients() {
+        let broker = broker();
+        let spawn_connection = |stream, broker| {
+            tokio::spawn(serve_connection_with_timeouts(
+                stream,
+                broker,
+                CancellationToken::new(),
+                Duration::from_secs(1),
+                Duration::from_millis(50),
+            ))
+        };
+        let (stream, mut subscriber) = UnixStream::pair().expect("Unix stream pair");
+        let mut subscription = spawn_connection(stream, broker.clone());
+        open_test_session(&mut subscriber, SessionId::new()).await;
+        wait_for_sessions(&broker, 1).await;
+
+        let (stream, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let quiet = spawn_connection(stream, broker.clone());
+        let hello = WireEnvelope::global(
+            MessageType::Hello,
+            0,
+            &HelloPayload {
+                min_v: PROTOCOL_VERSION,
+                max_v: PROTOCOL_VERSION,
+                adapter: AdapterDescriptor {
+                    kind: AdapterKind::Test,
+                    name: "quiet-client".to_owned(),
+                    version: "1".to_owned(),
+                },
+                capabilities: vec![Capability::Health],
+            },
+        )
+        .expect("hello");
+        write_envelope(&mut client, &hello)
+            .await
+            .expect("write hello");
+        let acknowledgment = read_envelope(&mut client)
+            .await
+            .expect("read hello acknowledgment")
+            .expect("hello acknowledgment");
+        assert_eq!(acknowledgment.message_type, MessageType::HelloAck);
+        timeout(Duration::from_secs(1), quiet)
+            .await
+            .expect("idle client closed")
+            .expect("connection task")
+            .expect("idle shutdown");
+        assert!(read_envelope(&mut client).await.expect("EOF").is_none());
+
+        assert!(
+            timeout(Duration::from_millis(200), &mut subscription)
+                .await
+                .is_err(),
+            "a policy subscriber outlives the idle deadline"
+        );
+        assert_eq!(broker.session_count().await, 1);
+        drop(subscriber);
+        timeout(Duration::from_secs(1), subscription)
+            .await
+            .expect("subscriber closed")
+            .expect("connection task")
+            .expect("peer close");
+        assert_eq!(broker.session_count().await, 0);
+    }
+
+    #[test]
+    fn only_per_call_accept_failures_are_retried() {
+        use std::io;
+
+        use rustix::io::Errno;
+
+        for errno in [
+            Errno::MFILE,
+            Errno::NFILE,
+            Errno::CONNABORTED,
+            Errno::INTR,
+            Errno::AGAIN,
+            Errno::NOBUFS,
+            Errno::NOMEM,
+        ] {
+            let error = io::Error::from_raw_os_error(errno.raw_os_error());
+            assert!(super::is_transient_accept_error(&error), "{errno:?}");
+        }
+        for errno in [Errno::BADF, Errno::INVAL, Errno::NOTSOCK] {
+            let error = io::Error::from_raw_os_error(errno.raw_os_error());
+            assert!(!super::is_transient_accept_error(&error), "{errno:?}");
+        }
+        assert!(!super::is_transient_accept_error(&io::Error::other(
+            "not an errno"
+        )));
+    }
+
+    #[tokio::test]
+    async fn socket_and_parent_are_private_and_guard_cleans_exact_socket() {
+        let temporary = tempdir().expect("temporary directory");
+        let socket_path = temporary.path().join("private").join("broker.sock");
+        let (listener, guard) = bind_secure(&socket_path).expect("secure listener");
+        assert_eq!(
+            std::fs::metadata(socket_path.parent().expect("parent"))
+                .expect("parent metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&socket_path)
+                .expect("socket metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        drop(listener);
+        drop(guard);
+        assert!(!socket_path.exists());
+    }
+
+    #[tokio::test]
+    async fn rejects_existing_public_parent_without_changing_its_mode() {
+        let temporary = tempdir().expect("temporary directory");
+        let parent = temporary.path().join("existing");
+        std::fs::create_dir(&parent).expect("existing parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755))
+            .expect("public permissions");
+        let result = bind_secure(&parent.join("broker.sock"));
+        assert!(matches!(result, Err(super::ServerError::UnsafeSocketPath)));
+        assert_eq!(
+            std::fs::metadata(&parent)
+                .expect("parent metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+        assert!(!parent.join("broker.sock").exists());
+    }
+
+    #[tokio::test]
+    async fn refuses_to_unlink_an_active_socket() {
+        let temporary = tempdir().expect("temporary directory");
+        let socket_path = temporary.path().join("private").join("broker.sock");
+        let (listener, guard) = bind_secure(&socket_path).expect("first listener");
+        assert!(matches!(
+            bind_secure(&socket_path),
+            Err(super::ServerError::SocketAlreadyActive)
+        ));
+        assert!(socket_path.exists());
+        drop(listener);
+        drop(guard);
+        assert!(!socket_path.exists());
+    }
+
+    #[tokio::test]
+    async fn replaces_only_a_stale_owned_private_socket() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temporary = tempdir().expect("temporary directory");
+        let parent = temporary.path().join("private");
+        std::fs::create_dir(&parent).expect("private parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("private permissions");
+        let socket_path = parent.join("broker.sock");
+        let stale = std::os::unix::net::UnixListener::bind(&socket_path).expect("stale socket");
+        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+            .expect("socket permissions");
+        drop(stale);
+
+        let (listener, guard) = bind_secure(&socket_path).expect("replace stale socket");
+        assert!(socket_path.exists());
+        drop(listener);
+        drop(guard);
+        assert!(!socket_path.exists());
+    }
+}

@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "id": "bad-1",
+  "type": "error",
+  "mono_ms": 71,
+  "payload": { "code": "invalid_message" }
+}

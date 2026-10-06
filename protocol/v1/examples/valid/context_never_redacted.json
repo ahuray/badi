@@ -1,0 +1,26 @@
+{
+  "v": 1,
+  "type": "context.changed",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 1,
+  "revision": 2,
+  "mono_ms": 31,
+  "payload": {
+    "fingerprint": "fingerprint_000000000002",
+    "before": "",
+    "after": "",
+    "selection": { "anchor": 0, "head": 0, "unit": "utf16_code_units" },
+    "field": {
+      "purpose": "password",
+      "editable": true,
+      "multiline": false,
+      "composing": false,
+      "sensitive": true,
+      "identity_known": true,
+      "focused": true,
+      "lock_screen": false
+    },
+    "activation": "never",
+    "explicit": false
+  }
+}

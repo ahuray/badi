@@ -1,0 +1,123 @@
+#pragma once
+
+#include "state.h"
+
+#include <nlohmann/json_fwd.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace fcitx {
+class EventLoop;
+}
+
+namespace badi::fcitx5 {
+
+constexpr std::size_t kMaxFrameBytes = 65'536;
+
+std::optional<std::vector<std::uint8_t>> encodeFrame(std::string_view body);
+bool strictBoundedJsonObject(std::string_view body);
+bool strictSessionControlResult(std::string_view body);
+bool strictSuggestionClear(std::string_view body);
+bool strictPolicyStatus(std::string_view body);
+// The broker target of a manual field: the canonical app id and the opaque
+// Fcitx context id. An observed field uses the observer's inspect target.
+std::optional<nlohmann::json> desktopApplicationTarget(std::string_view appId,
+                                                       std::string_view targetId);
+std::optional<std::string>
+serializeSessionOpenEnvelope(const Coordinates &coordinates,
+                             const nlohmann::json &target,
+                             std::uint64_t monoMs);
+std::optional<std::string> serializeContextEnvelope(const ContextUpdate &update,
+                                                    std::uint64_t monoMs);
+
+class FrameDecoder {
+public:
+    bool feed(std::span<const std::uint8_t> bytes);
+    std::vector<std::string> takeFrames();
+    [[nodiscard]] bool failed() const { return failed_; }
+
+private:
+    std::vector<std::uint8_t> pending_;
+    std::vector<std::string> frames_;
+    bool failed_ = false;
+};
+
+struct ClearNotice {
+    Coordinates coordinates;
+    std::optional<std::string> suggestionId;
+    std::string reason;
+};
+
+bool dispatchSuggestionClear(
+    const nlohmann::json &value,
+    const std::function<void(const ClearNotice &)> &onClear);
+
+struct AuthoritySnapshot {
+    std::uint64_t authorityEpoch = 0;
+    std::uint64_t settingsRevision = 0;
+    bool paused = true;
+    bool initial = false;
+};
+
+// Each connection starts with an initial snapshot. Returns true when a
+// snapshot carries authority the adapter has not observed: every later epoch
+// on a connection, or a reconnect whose initial authority differs from the
+// last one observed on an earlier connection.
+class AuthorityContinuity {
+public:
+    bool observe(const AuthoritySnapshot &snapshot);
+
+private:
+    std::optional<AuthoritySnapshot> observed_;
+};
+
+struct WireCallbacks {
+    std::function<void()> onReady;
+    std::function<void(const AuthoritySnapshot &)> onAuthority;
+    std::function<void(Suggestion)> onSuggestion;
+    std::function<void(const ClearNotice &)> onClear;
+    std::function<void(const CommitPrepare &)> onCommitPrepare;
+    std::function<void()> onDisconnected;
+    // (session, allowed, byDefault): byDefault marks an allowance from the app
+    // list mode (matched_default), not from an exact rule.
+    std::function<void(std::string_view, bool, bool)> onPolicy;
+};
+
+class Transport {
+public:
+    Transport(::fcitx::EventLoop &eventLoop, WireCallbacks callbacks,
+              std::string socketPath = {});
+    ~Transport();
+    Transport(const Transport &) = delete;
+    Transport &operator=(const Transport &) = delete;
+
+    bool connect();
+    void disconnect();
+    [[nodiscard]] bool ready() const;
+    [[nodiscard]] std::uint64_t nowMs() const;
+
+    bool queryPolicy(const Coordinates &coordinates, const nlohmann::json &target);
+    bool openSession(const Coordinates &coordinates, const nlohmann::json &target);
+    bool closeSession(const Coordinates &coordinates);
+    bool publishContext(const ContextUpdate &update);
+    bool requestAcceptance(const AcceptRequest &request);
+    bool requestDismissal(const DismissRequest &request);
+    bool reportCommit(const Coordinates &coordinates,
+                      std::string_view controlId,
+                      std::string_view suggestionId,
+                      std::string_view status);
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+} // namespace badi::fcitx5

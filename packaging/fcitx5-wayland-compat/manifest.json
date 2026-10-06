@@ -1,0 +1,22 @@
+{
+  "schema": "badi.fcitx-wayland-compat.v2",
+  "upstream_version": "5.1.22",
+  "upstream_commit": "c7ecdb931d8b378ccdcd87382a3ef7ff0bd10def",
+  "source_url": "https://codeload.github.com/fcitx/fcitx5/tar.gz/c7ecdb931d8b378ccdcd87382a3ef7ff0bd10def",
+  "source_bytes": 7833569,
+  "source_sha256": "3743c26ee354823c3f808afd6e17af32ed5e6460edc562854e95d5b0f4d8cd4d",
+  "patch": "done-preedit-refresh.patch",
+  "patch_sha256": "d6be2639ede491461731e2f1fb678185ed8ba4be3cc43bd01e7016e64402f328",
+  "backport": {
+    "upstream_pr": "https://github.com/fcitx/fcitx5/pull/1690",
+    "upstream_commit": "1e00551899f9d0fa5418d899f468b6e421401adf",
+    "fixed_in": "5.1.23"
+  },
+  "license": "LGPL-2.1-or-later; bundled protocol notices retained in full source archive",
+  "targeted_compositor": "Hyprland 0.56.2",
+  "targeted_clients": [
+    "Chromium 151",
+    "Brave Origin 152"
+  ],
+  "physical_fix_verified": false
+}
