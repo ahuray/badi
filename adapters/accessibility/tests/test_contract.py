@@ -95,6 +95,8 @@ class ContractTests(unittest.TestCase):
     def test_electron_web_content_keeps_html_purpose_gates(self):
         self.backend.meta.update(app_id="code", browser=False, web=True, uri="")
         for change in ({"tag": "input", "input_type": "email"}, {"tag": "input", "input_type": "search"},
+                       {"tag": "input", "input_type": "text", "xml_roles": "searchbox"},
+                       {"tag": "div", "xml_roles": "searchbox"},
                        {"tag": "unknown"}, {"role": "password text"}):
             with self.subTest(change=change):
                 before = copy.deepcopy(self.backend.meta)

@@ -109,6 +109,7 @@ class FieldBackend:
         return {"direction": self.direction(local), "bus": node.app.bus_name, "path": node.path,
                 "process_id": window["pid"], "app_id": app_id, "uri": uri, "browser": app.browser, "web": app.web,
                 "role": role, "tag": attributes.get("tag", ""), "input_type": attributes.get("text-input-type", ""),
+                "xml_roles": attributes.get("xml-roles", ""),
                 **self.states(flags), "caret": caret, "total_chars": count, "selection_count": selections,
                 "geometry": geometry, "node": node, "flatten": flatten, "blocks": rich.blocks if rich else None,
                 "caret_block": rich.caret_block if rich else None,

@@ -60,7 +60,9 @@ Browser targets use the broker's single browser-origin identity (adapter
 alike; the binding keeps the exact app id. Other apps are `desktop_application`
 targets granted with `badi app APP_ID on`. Electron apps render web content, so
 the HTML purpose gates (tag and input type) apply to them as to browsers. A
-missing tag or input type is ineligible, never guessed.
+missing tag or input type is ineligible, never guessed. Search, email and URL
+inputs, combo boxes and ARIA search boxes (`xml-roles: searchbox`, which
+accessibility reports as a plain entry) get no suggestions.
 
 ## Authority boundary
 
