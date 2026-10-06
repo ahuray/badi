@@ -364,11 +364,17 @@ fn strictly_reduces_authority(current: &SettingsV2, next: &SettingsV2) -> bool {
     if current.paused && !next.paused {
         return false;
     }
-    // The all-web default is authority over every unlisted http(s) origin.
-    match (current.all_web_origins, next.all_web_origins) {
-        (false, true) => return false,
-        (true, false) => reduced = true,
-        _ => {}
+    // The all-web and all-app defaults are authority over every unlisted
+    // http(s) origin or Linux app.
+    for (was, is) in [
+        (current.all_web_origins, next.all_web_origins),
+        (current.all_linux_apps, next.all_linux_apps),
+    ] {
+        match (was, is) {
+            (false, true) => return false,
+            (true, false) => reduced = true,
+            _ => {}
+        }
     }
 
     // Compare effective permissions: an unlisted identity has its document's
@@ -479,6 +485,7 @@ fn personalization_privacy_floor(current: &SettingsV2, next: &SettingsV2) -> Set
         revision: current.revision,
         paused: current.paused || next.paused,
         all_web_origins: false,
+        all_linux_apps: false,
         subjects,
     }
 }
@@ -597,6 +604,7 @@ mod tests {
             revision,
             paused: false,
             all_web_origins: false,
+            all_linux_apps: false,
             subjects: vec![SubjectRule {
                 identity: identity(),
                 permissions: SubjectPermissions {
@@ -612,6 +620,30 @@ mod tests {
 
     fn granted_settings(revision: u64) -> SettingsV2 {
         learning_settings(revision, RetentionPermission::Bounded { days: 30 })
+    }
+
+    #[test]
+    fn the_all_app_default_is_authority_like_the_all_web_default() {
+        let current = granted_settings(7);
+        let mut all_apps = current.clone();
+        all_apps.all_linux_apps = true;
+        let mut all_apps_off = all_apps.clone();
+        all_apps_off.revision = 8;
+        all_apps_off.all_linux_apps = false;
+        assert!(strictly_reduces_authority(&all_apps, &all_apps_off));
+        let mut paused = current.clone();
+        paused.revision = 8;
+        paused.paused = true;
+        let mut blocked = current.clone();
+        blocked.revision = 8;
+        blocked.subjects[0].permissions = SubjectPermissions::deny_all();
+        for mut grant in [paused, blocked] {
+            grant.all_linux_apps = true;
+            assert!(
+                !strictly_reduces_authority(&current, &grant),
+                "turning the app default on is a grant even with a pause or a revoke"
+            );
+        }
     }
 
     #[test]
@@ -769,6 +801,7 @@ mod tests {
             revision: 2,
             paused: false,
             all_web_origins: false,
+            all_linux_apps: false,
             subjects: Vec::new(),
         };
         control
@@ -854,6 +887,7 @@ mod tests {
             revision: 100,
             paused: true,
             all_web_origins: false,
+            all_linux_apps: false,
             subjects: Vec::new(),
         };
         assert!(matches!(
@@ -922,6 +956,7 @@ mod tests {
             revision: 2,
             paused: true,
             all_web_origins: false,
+            all_linux_apps: false,
             subjects,
         };
         assert!(matches!(
@@ -1210,6 +1245,7 @@ mod tests {
             revision: 2,
             paused: false,
             all_web_origins: false,
+            all_linux_apps: false,
             subjects: vec![SubjectRule {
                 identity: identity(),
                 permissions: SubjectPermissions::deny_all(),

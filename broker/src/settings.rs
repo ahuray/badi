@@ -241,8 +241,9 @@ impl Default for SubjectPermissions {
     }
 }
 
-/// Permissions of an http(s) origin that has no exact rule while
-/// `all_web_origins` is on: prediction only, never learning or retention.
+/// Permissions of an http(s) origin, or a Linux app, that has no exact rule
+/// while `all_web_origins`, or `all_linux_apps`, is on: prediction only, never
+/// learning or retention.
 pub const ALL_WEB_ORIGINS_PERMISSIONS: SubjectPermissions = SubjectPermissions {
     suggest: PermissionDecision::Allow,
     display: PermissionDecision::Allow,
@@ -250,6 +251,7 @@ pub const ALL_WEB_ORIGINS_PERMISSIONS: SubjectPermissions = SubjectPermissions {
     learn: PermissionDecision::Block,
     retention: RetentionPermission::None,
 };
+pub const ALL_LINUX_APPS_PERMISSIONS: SubjectPermissions = ALL_WEB_ORIGINS_PERMISSIONS;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -271,6 +273,11 @@ pub struct SettingsV2 {
     /// applies. Omitted when off.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub all_web_origins: bool,
+    /// Opt-in app default (blocklist mode): a Linux app without an exact rule
+    /// gets [`ALL_LINUX_APPS_PERMISSIONS`], reported as a default so adapters
+    /// open only fields they can corroborate. Omitted when off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all_linux_apps: bool,
     pub subjects: Vec<SubjectRule>,
 }
 
@@ -282,6 +289,8 @@ struct SettingsDocument {
     paused: bool,
     #[serde(default)]
     all_web_origins: Option<bool>,
+    #[serde(default)]
+    all_linux_apps: Option<bool>,
     subjects: Vec<SubjectRule>,
 }
 
@@ -307,11 +316,17 @@ impl<'de> Deserialize<'de> for SettingsV2 {
                 "all_web_origins_requires_settings_v2",
             ));
         }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.all_linux_apps.is_some() {
+            return Err(serde::de::Error::custom(
+                "all_linux_apps_requires_settings_v2",
+            ));
+        }
         Ok(Self {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: decoded.revision,
             paused: decoded.paused,
             all_web_origins: decoded.all_web_origins.unwrap_or(false),
+            all_linux_apps: decoded.all_linux_apps.unwrap_or(false),
             subjects: decoded.subjects,
         })
     }
@@ -325,6 +340,7 @@ impl SettingsV2 {
             revision: 0,
             paused: true,
             all_web_origins: false,
+            all_linux_apps: false,
             subjects: Vec::new(),
         }
     }
@@ -381,7 +397,7 @@ impl SettingsV2 {
                 settings_revision: self.revision,
                 paused: self.paused,
                 identity_known: true,
-                configured: true,
+                source: PolicySource::Rule,
                 permissions: self.subjects[index].permissions,
             },
             Err(_)
@@ -392,15 +408,26 @@ impl SettingsV2 {
                     settings_revision: self.revision,
                     paused: self.paused,
                     identity_known: true,
-                    configured: true,
+                    source: PolicySource::ListDefault,
                     permissions: ALL_WEB_ORIGINS_PERMISSIONS,
+                }
+            }
+            Err(_)
+                if self.all_linux_apps && matches!(identity, StableIdentity::LinuxApp { .. }) =>
+            {
+                PolicyResolution {
+                    settings_revision: self.revision,
+                    paused: self.paused,
+                    identity_known: true,
+                    source: PolicySource::ListDefault,
+                    permissions: ALL_LINUX_APPS_PERMISSIONS,
                 }
             }
             Err(_) => PolicyResolution {
                 settings_revision: self.revision,
                 paused: self.paused,
                 identity_known: true,
-                configured: false,
+                source: PolicySource::Unconfigured,
                 permissions: SubjectPermissions::deny_all(),
             },
         }
@@ -444,11 +471,12 @@ impl SettingsV2 {
     }
 
     /// A protocol v1 settings client can still manage its browser-origin
-    /// slice, but cannot erase native rules or the all-web default that its
-    /// schema is unable to represent.
+    /// slice, but cannot erase native rules or the all-web and all-app
+    /// defaults that its schema is unable to represent.
     #[must_use]
     pub fn preserving_v2_policy_from(mut self, current: &Self) -> Self {
         self.all_web_origins = current.all_web_origins;
+        self.all_linux_apps = current.all_linux_apps;
         self.subjects.extend(
             current
                 .subjects
@@ -473,8 +501,19 @@ pub struct PolicyResolution {
     pub settings_revision: u64,
     pub paused: bool,
     pub identity_known: bool,
-    pub configured: bool,
+    pub source: PolicySource,
     pub permissions: SubjectPermissions,
+}
+
+/// Where a resolution's permissions come from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PolicySource {
+    /// No rule and no list-mode default: deny.
+    Unconfigured,
+    /// An exact subject rule.
+    Rule,
+    /// The site or app blocklist mode's default for an unlisted subject.
+    ListDefault,
 }
 
 impl PolicyResolution {
@@ -483,9 +522,21 @@ impl PolicyResolution {
             settings_revision,
             paused,
             identity_known: false,
-            configured: false,
+            source: PolicySource::Unconfigured,
             permissions: SubjectPermissions::deny_all(),
         }
+    }
+
+    /// An exact rule or a list-mode default decided the permissions.
+    #[must_use]
+    pub const fn configured(self) -> bool {
+        !matches!(self.source, PolicySource::Unconfigured)
+    }
+
+    /// Allowed by a list-mode default, not by an exact rule.
+    #[must_use]
+    pub const fn by_default(self) -> bool {
+        matches!(self.source, PolicySource::ListDefault)
     }
 
     #[must_use]
@@ -1243,11 +1294,11 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        BrowserAdapter, LinuxAdapter, MAX_SETTINGS_BYTES, MAX_SUBJECTS, PRIVATE_FILE_MODE,
-        PermissionDecision, PrivateStorage, PrivateStorageError, RetentionPermission,
-        SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2, StableIdentity,
-        StoragePaths, SubjectPermissions, SubjectRule, WebScheme, remove_private_file_with_sync,
-        write_settings,
+        ALL_LINUX_APPS_PERMISSIONS, BrowserAdapter, LinuxAdapter, MAX_SETTINGS_BYTES, MAX_SUBJECTS,
+        PRIVATE_FILE_MODE, PermissionDecision, PrivateStorage, PrivateStorageError,
+        RetentionPermission, SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2,
+        StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
+        remove_private_file_with_sync, write_settings,
     };
     use crate::protocol::{
         MAX_FRAME_BYTES, Origin, OriginScheme, TargetDescriptor, TargetKind, WireEnvelope,
@@ -1276,6 +1327,7 @@ mod tests {
             revision: 1,
             paused: false,
             all_web_origins: false,
+            all_linux_apps: false,
             subjects: vec![rule],
         }
     }
@@ -1286,11 +1338,46 @@ mod tests {
         settings.validate().expect("safe settings");
         let resolution = settings.resolve_identity(&identity("example.com"));
         assert!(resolution.identity_known);
-        assert!(!resolution.configured);
+        assert!(!resolution.configured());
         assert!(!resolution.allows_context_read());
         assert!(!resolution.allows_suggestion());
         assert!(!resolution.allows_display());
         assert!(!resolution.allows_learning());
+    }
+
+    #[test]
+    fn all_linux_apps_allows_unlisted_apps_by_default_but_exact_rules_win() {
+        let app = |id: &str| StableIdentity::linux_app(LinuxAdapter::Fcitx, id).expect("app");
+        let mut settings = settings_with(SubjectRule {
+            identity: app("discord"),
+            permissions: SubjectPermissions::deny_all(),
+        });
+        settings.subjects.push(SubjectRule {
+            identity: app("omawrite"),
+            permissions: ALL_LINUX_APPS_PERMISSIONS,
+        });
+        settings.validate().expect("valid settings");
+        for all_linux_apps in [false, true] {
+            settings.all_linux_apps = all_linux_apps;
+            let unlisted = settings.resolve_identity(&app("libreoffice"));
+            assert_eq!(
+                (unlisted.configured(), unlisted.by_default()),
+                (all_linux_apps, all_linux_apps)
+            );
+            assert_eq!(unlisted.allows_suggestion(), all_linux_apps);
+            assert!(!unlisted.allows_learning(), "never learns by default");
+            let blocked = settings.resolve_identity(&app("discord"));
+            assert!(
+                blocked.configured() && !blocked.by_default() && !blocked.allows_context_read()
+            );
+            let listed = settings.resolve_identity(&app("omawrite"));
+            assert!(
+                listed.allows_suggestion() && !listed.by_default(),
+                "an exact allow is never a default"
+            );
+            let site = settings.resolve_identity(&identity("mail.example"));
+            assert!(!site.configured(), "websites keep their own mode");
+        }
     }
 
     #[test]
@@ -1318,7 +1405,7 @@ mod tests {
             settings.all_web_origins = all_web_origins;
             for origin in [identity("mail.example"), http.clone()] {
                 let resolution = settings.resolve_identity(&origin);
-                assert_eq!(resolution.configured, all_web_origins);
+                assert_eq!(resolution.configured(), all_web_origins);
                 assert_eq!(resolution.allows_context_read(), all_web_origins);
                 assert_eq!(resolution.allows_display(), all_web_origins);
                 assert_eq!(resolution.allows_suggestion(), all_web_origins);
@@ -1540,6 +1627,7 @@ mod tests {
             revision: 1,
             paused: false,
             all_web_origins: false,
+            all_linux_apps: false,
             subjects: vec![first.clone(), second.clone()],
         };
         valid.validate().expect("canonical settings");
@@ -1574,6 +1662,7 @@ mod tests {
             revision: crate::protocol::MAX_SAFE_COUNTER,
             paused: true,
             all_web_origins: false,
+            all_linux_apps: false,
             subjects,
         };
         settings.validate().expect("maximum-shape settings");

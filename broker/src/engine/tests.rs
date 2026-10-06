@@ -17,8 +17,8 @@ use crate::personalization::PersonalizationSignal;
 use crate::protocol::{
     Activation, AdapterKind, Capability, CommitResultPayload, CommitStatus, ContextChangedPayload,
     ControlAction, Coordinates, FieldDescriptor, FieldPurpose, OffsetUnit, Origin, OriginScheme,
-    ProviderKind, ReasonCode, Selection, SessionControlRequestPayload, SessionId,
-    SessionOpenPayload, SuggestRequestPayload, TargetDescriptor, TargetKind,
+    PolicyResolutionReason, ProviderKind, ReasonCode, Selection, SessionControlRequestPayload,
+    SessionId, SessionOpenPayload, SuggestRequestPayload, TargetDescriptor, TargetKind,
 };
 use crate::protocol::{ProbeOutcome, ProbeRequestPayload};
 use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
@@ -743,6 +743,7 @@ fn controlled_settings(revision: u64, allowed: bool, learn: bool) -> SettingsV2 
         revision,
         paused: false,
         all_web_origins: false,
+        all_linux_apps: false,
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,
@@ -776,6 +777,7 @@ fn controlled_learning_settings(revision: u64, retention: RetentionPermission) -
         revision,
         paused: false,
         all_web_origins: false,
+        all_linux_apps: false,
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,
@@ -2586,6 +2588,53 @@ async fn persisted_policy_is_enforced_and_replacement_revokes_live_sessions() {
             .await,
         Err(BrokerError::Denied(_))
     ));
+}
+
+#[tokio::test]
+async fn all_linux_apps_reports_its_default_so_adapters_can_tell_it_from_a_rule() {
+    let temporary = tempdir().expect("temporary directory");
+    let paths = StoragePaths::new(
+        temporary.path().join("config/badi"),
+        temporary.path().join("data/badi"),
+    )
+    .expect("storage paths");
+    let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+    let mut settings = controlled_settings(1, false, false);
+    settings.all_linux_apps = true;
+    settings.all_web_origins = true;
+    control_plane
+        .replace_settings(0, settings)
+        .expect("all-app default");
+    let broker = Broker::with_control_plane(
+        std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+        BrokerConfig::default(),
+        std::sync::Arc::clone(&control_plane),
+    )
+    .expect("controlled broker");
+    let app = |app_id: &str| TargetDescriptor {
+        kind: TargetKind::DesktopApplication,
+        app_id: app_id.to_owned(),
+        target_id: "ic:1".to_owned(),
+        origin: None,
+    };
+    let unlisted = broker.resolve_policy(&app("libreoffice")).await;
+    assert!(unlisted.context_allowed && unlisted.suggestions_allowed && !unlisted.learning_allowed);
+    assert_eq!(unlisted.reason, PolicyResolutionReason::MatchedDefault);
+    let site = broker
+        .resolve_policy(&TargetDescriptor {
+            origin: Some(Origin {
+                scheme: OriginScheme::Https,
+                host: "mail.example".to_owned(),
+                port: None,
+            }),
+            ..controlled_target()
+        })
+        .await;
+    assert_eq!(
+        site.reason,
+        PolicyResolutionReason::MatchedRule,
+        "website defaults keep the protocol v1 reason"
+    );
 }
 
 #[tokio::test]

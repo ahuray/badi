@@ -970,6 +970,37 @@ def session(root, report):
         assert 'A window title' not in backend.requested
         checks.append('A non-identifier program never becomes an app identity')
 
+        # App blocklist mode: an app without a rule is allowed by default, which
+        # opens only a field the observer corroborates; the manual path still
+        # needs an exact rule, so Tab stays the application's.
+        listed = control('settings', 'show', '--json')
+        default_mode = {**listed, 'revision': listed['revision'] + 1, 'all_linux_apps': True,
+                        'subjects': [rule for rule in listed['subjects']
+                                     if rule['identity'].get('app_id') not in ('cursor', FIXTURE_APP)]}
+        control('settings', 'replace', '--if-revision', str(listed['revision']), '--json', json.dumps(default_mode))
+        required = reason_count('app_rule_required')
+        open_context(FIXTURE_APP)
+        context.text(PREFIX)
+        wait(lambda: reason_count('app_rule_required') > required, 'default-allowed manual app needs a rule')
+        assert not context.key(desktop.TAB), 'the manual path keeps Tab without an exact app rule'
+        quiet(.3)
+        assert context.candidate() is None and context.commits() == []
+        backend.browser, backend.uri, backend.role = False, ALLOWED_URI, 'text'
+        backend.apps.add('cursor')
+        backend.value, backend.caret = PREFIX, len(PREFIX)
+        backend.field += 1
+        daemon.observer.invalidate('fixture_field_changed')
+        open_context('cursor')
+        context.text(PREFIX, len(PREFIX))
+        wait(lambda: context.candidate() == SUFFIX, 'default-allowed observed app suggestion')
+        assert context.key(desktop.ESCAPE)
+        quiet(.2)
+        restored = control('settings', 'show', '--json')
+        control('settings', 'replace', '--if-revision', str(restored['revision']), '--json',
+                json.dumps({**listed, 'revision': restored['revision'] + 1}))
+        checks.append('App blocklist mode opens an unlisted IME-parity app through its observed field and leaves an '
+                      'unlisted manual-path app with its own Tab')
+
         # Replacement is not negotiated. A peer that injects one anyway, on an
         # otherwise valid IME-parity observed session, loses the connection.
         broker_metrics = control('status')['metrics']

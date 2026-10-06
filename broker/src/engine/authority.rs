@@ -6,7 +6,7 @@ use super::{Broker, BrokerError, BrokerState};
 use crate::metrics::Metrics;
 use crate::protocol::{
     Activation, AuthorityChangedPayload, PolicyResolutionReason, PolicyStatusPayload, ReasonCode,
-    TargetDescriptor,
+    TargetDescriptor, TargetKind,
 };
 use crate::settings::{PolicyResolution, SettingsV2};
 
@@ -154,7 +154,7 @@ pub(super) fn settings_allow_data(
 ) -> bool {
     let resolution = settings.resolve_target_validated(target);
     !runtime_paused
-        && resolution.configured
+        && resolution.configured()
         && resolution.allows_context_read()
         && resolution.allows_display()
         && resolution.allows_suggestion()
@@ -187,14 +187,19 @@ pub(super) fn policy_status(
         display_allowed: true,
         suggestions_allowed: true,
         learning_allowed: resolution.allows_learning(),
-        reason: PolicyResolutionReason::MatchedRule,
+        // Browser defaults keep matched_rule, which protocol v1 clients know.
+        reason: if resolution.by_default() && target.kind != TargetKind::Browser {
+            PolicyResolutionReason::MatchedDefault
+        } else {
+            PolicyResolutionReason::MatchedRule
+        },
     }
 }
 
 fn denial_reason(resolution: PolicyResolution) -> Option<PolicyResolutionReason> {
     if !resolution.identity_known {
         Some(PolicyResolutionReason::UnknownIdentity)
-    } else if !resolution.configured {
+    } else if !resolution.configured() {
         Some(PolicyResolutionReason::DefaultPolicy)
     } else if !resolution.allows_context_read() {
         Some(PolicyResolutionReason::ContextDisabled)

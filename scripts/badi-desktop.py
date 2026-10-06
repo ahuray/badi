@@ -29,13 +29,16 @@ HELP = """Badi — local writing controls
   badi settings                Open the Omarchy settings panel
   badi settings --json          Read the current settings document
   badi pause | resume          Persistently pause or resume predictions
-  badi app APP_ID on|off
-                               Allow or block predictions in one app
-  badi site ORIGIN on|off       Allow or block one exact browser origin
-  badi site all on|off          Allow every http(s) site unless its exact rule
-                               blocks it (off by default). Covers
-                               Chromium/Brave/Zen fields, which have no second
-                               site gate
+  badi apps allowlist|blocklist  Apps: only allowed apps (default), or every
+                               supported app except blocked ones
+  badi sites allowlist|blocklist Sites: only allowed sites (default), or every
+                               http(s) site except blocked ones; covers
+                               Chromium/Brave/Zen fields
+  badi app APP_ID on|off|reset  Allow or block one app; reset follows the mode
+  badi site ORIGIN on|off|reset Allow or block one exact browser origin
+  badi app list | site list     Show the mode and every app or site rule
+  badi app all on|off           Same as badi apps blocklist|allowlist
+  badi site all on|off          Same as badi sites blocklist|allowlist
   badi service start|stop|restart|status
                                Manage the local model process
   badi autostart on|off         Start with the graphical session (next login)
@@ -65,6 +68,9 @@ ALL_SITES_NOTE = ("Every http(s) site is allowed for predictions unless its exac
                   "(badi site all off to return to listed sites). This includes "
                   "Chromium/Brave/Zen fields, which have no second site gate and cannot exclude private "
                   "windows. Sensitive fields stay denied.")
+ALL_APPS_NOTE = ("Apps use the blocklist: every app Badi supports is allowed unless its rule blocks it "
+                 "(badi apps allowlist to return to allowed apps only). The default opens only fields the "
+                 "accessibility observer corroborates; a manual Tab-request app still needs badi app APP on.")
 INSTALLED_BROKER = ".local/lib/badi/badi-broker"
 # Broker no-suggestion classes; counters never include typed text.
 NO_SUGGESTION = {
@@ -404,8 +410,11 @@ def health_report():
         report["notes"].append("Predictions are paused. Run badi resume when you want suggestions again.")
     elif broker and broker.get("metrics", {}).get("provider_calls") == 0:
         report["notes"].append("The model is ready but has received no prediction requests since startup. Run badi debug on and badi debug watch, then type in a supported field. Native manual fields require Tab; observed fields need matching accessibility and Fcitx context.")
-    if broker and web_settings().get("all_web_origins") is True:
+    settings = web_settings() if broker else {}
+    if settings.get("all_web_origins") is True:
         report["notes"].append(ALL_SITES_NOTE)
+    if settings.get("all_linux_apps") is True:
+        report["notes"].append(ALL_APPS_NOTE)
     editor = vscode_edit_context_note()
     if editor:
         report["notes"].append(editor)
@@ -444,8 +453,8 @@ def status_text(health, settings=None):
             "Native Fcitx: automatic in Omawrite; Tab request/accept in the Xournal++ Text tool\n"
             "Editors: Obsidian automatic/Tab · Bash Ctrl-X then Tab\n"
             "Observed fields: automatic for Omawrite, Telegram and IME-parity apps (Chromium, Brave and its web apps, Zen, Codex, VS Code, Cursor, Discord, Grok Bot, LibreOffice Writer); Tab accepts a visible suggestion, otherwise stays Tab; Ctrl+Shift+Space requests\n"
-            + ("Web sites: every http(s) site unless blocked (badi site all off)\n"
-               if (settings or {}).get("all_web_origins") is True else "")
+            + f"Apps: {mode_text((settings or {}).get('all_linux_apps'), 'app')}\n"
+            + f"Web sites: {mode_text((settings or {}).get('all_web_origins'), 'site')}\n"
             + "Escape: dismiss · Why nothing appeared: badi doctor; badi debug on; badi debug watch")
 
 
@@ -460,10 +469,7 @@ def update_settings(change):
 
 
 def set_app(document, app, enabled):
-    app_id = APP_IDS.get(app, app)
-    if len(app_id) > 128 or not re.fullmatch(r"[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*", app_id):
-        raise RuntimeError("Use the exact canonical app_id from badi debug status")
-    identity = {"kind": "linux_app", "adapter": APP_ADAPTERS.get(app_id, "fcitx"), "app_id": app_id}
+    identity = app_identity(app)
     subject = next((item for item in document["subjects"] if item["identity"] == identity), None)
     if subject is None:
         subject = {"identity": identity}
@@ -472,15 +478,57 @@ def set_app(document, app, enabled):
     document["subjects"].sort(key=lambda item: identity_key(item["identity"]))
 
 
-def set_all_sites(document, enabled):
-    # Absent is the canonical off state; exact site rules are left untouched.
-    if enabled:
-        document["all_web_origins"] = True
+def set_mode(document, key, blocklist):
+    # Absent is the canonical allowlist state; exact rules are left untouched.
+    if blocklist:
+        document[key] = True
     else:
-        document.pop("all_web_origins", None)
+        document.pop(key, None)
 
 
-def set_site(document, value, enabled):
+def mode_text(blocklist, kind):
+    if blocklist is True:
+        return ("blocklist: every supported app except blocked ones" if kind == "app"
+                else "blocklist: every http(s) site except blocked ones")
+    return "allowlist: only allowed apps" if kind == "app" else "allowlist: only allowed sites"
+
+
+def remove_rule(document, identity):
+    document["subjects"] = [item for item in document["subjects"] if item["identity"] != identity]
+
+
+def app_identity(app):
+    app_id = APP_IDS.get(app, app)
+    if len(app_id) > 128 or not re.fullmatch(r"[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*", app_id):
+        raise RuntimeError("Use the exact canonical app_id from badi debug status")
+    return {"kind": "linux_app", "adapter": APP_ADAPTERS.get(app_id, "fcitx"), "app_id": app_id}
+
+
+def rule_state(permissions):
+    decisions = {permissions.get(key) for key in ("context_read", "display", "suggest")}
+    return "allowed" if decisions == {"allow"} else "blocked" if decisions == {"block"} else "limited"
+
+
+def origin_text(identity):
+    default = 443 if identity["scheme"] == "https" else 80
+    return f"{identity['scheme']}://{identity['host']}" + ("" if identity["port"] == default else f":{identity['port']}")
+
+
+def rule_list(document, kind):
+    key, label = ("all_linux_apps", "app") if kind == "app" else ("all_web_origins", "site")
+    lines = [("Apps" if kind == "app" else "Sites") + ": " + mode_text(document.get(key), label)]
+    for item in document.get("subjects", []):
+        identity = item["identity"]
+        if kind == "app" and identity["kind"] == "linux_app":
+            lines.append(f"  {rule_state(item['permissions']):8} {identity['app_id']}")
+        elif kind == "site" and identity["kind"] == "browser_origin":
+            lines.append(f"  {rule_state(item['permissions']):8} {origin_text(identity)}")
+    if len(lines) == 1:
+        lines.append("  (no rules)")
+    return "\n".join(lines)
+
+
+def site_identity(value):
     parsed = urlsplit(value)
     if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
         raise RuntimeError("Use an exact http(s) origin without a path or credentials")
@@ -489,6 +537,11 @@ def set_site(document, value, enabled):
                 "port": parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)}
     if not 1 <= identity["port"] <= 65535:
         raise RuntimeError("Invalid origin port")
+    return identity
+
+
+def set_site(document, value, enabled):
+    identity = site_identity(value)
     subject = next((item for item in document["subjects"] if item["identity"] == identity), None)
     if subject is None:
         subject = {"identity": identity}
@@ -639,18 +692,33 @@ def main(arguments):
         update_settings(lambda document: document.update(paused=paused))
         print("Predictions paused." if paused else "Predictions resumed.")
         return
+    modes = {("apps", "allowlist"): ("all_linux_apps", False), ("apps", "blocklist"): ("all_linux_apps", True),
+             ("sites", "allowlist"): ("all_web_origins", False), ("sites", "blocklist"): ("all_web_origins", True),
+             ("app", "all", "off"): ("all_linux_apps", False), ("app", "all", "on"): ("all_linux_apps", True),
+             ("site", "all", "off"): ("all_web_origins", False), ("site", "all", "on"): ("all_web_origins", True)}
+    if tuple(arguments) in modes:
+        key, blocklist = modes[tuple(arguments)]
+        update_settings(lambda document: set_mode(document, key, blocklist))
+        if key == "all_web_origins":
+            print(ALL_SITES_NOTE if blocklist else "Sites use the allowlist: only sites with their own allow rule.")
+        else:
+            print(ALL_APPS_NOTE if blocklist else "Apps use the allowlist: only apps with their own allow rule.")
+        return
+    if arguments in (["app", "list"], ["site", "list"]):
+        print(rule_list(json.loads(control(["settings", "show", "--json"])), arguments[0]))
+        return
     if len(arguments) == 3 and arguments[0] == "app" and arguments[2] in ("on", "off"):
         update_settings(lambda document: set_app(document, arguments[1], arguments[2] == "on"))
         print(f"{arguments[1]} predictions {arguments[2]}.")
         return
-    if arguments[:2] == ["site", "all"] and len(arguments) == 3 and arguments[2] in ("on", "off"):
-        update_settings(lambda document: set_all_sites(document, arguments[2] == "on"))
-        print(ALL_SITES_NOTE if arguments[2] == "on" else
-              "Predictions are limited to sites with their own allow rule again.")
-        return
     if len(arguments) == 3 and arguments[0] == "site" and arguments[2] in ("on", "off"):
         update_settings(lambda document: set_site(document, arguments[1], arguments[2] == "on"))
         print(f"{arguments[1]} predictions {arguments[2]}. The exact-origin rule applies to Badi's browser integrations.")
+        return
+    if len(arguments) == 3 and arguments[0] in ("app", "site") and arguments[2] == "reset":
+        identity = app_identity(arguments[1]) if arguments[0] == "app" else site_identity(arguments[1])
+        update_settings(lambda document: remove_rule(document, identity))
+        print(f"{arguments[1]} has no rule now and follows the {arguments[0]} list mode.")
         return
     if arguments == ["service", "status"]:
         state = service_state()

@@ -71,7 +71,7 @@ public:
               .onClear = [](const ClearNotice &) {},
               .onCommitPrepare = [](const CommitPrepare &) {},
               .onDisconnected = [this] { disconnected_ = true; loop_.exit(); },
-              .onPolicy = [this](std::string_view session, bool allowed) { onPolicy(session, allowed); },
+              .onPolicy = [this](std::string_view session, bool allowed, bool) { onPolicy(session, allowed); },
           }, (runtime_.path / "broker.sock").string()) {
         listener_ = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
         require(listener_ >= 0, "listener creation failed");

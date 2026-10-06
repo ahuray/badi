@@ -167,6 +167,37 @@ fn linux_application_segments_match_the_formal_schema() {
 }
 
 #[test]
+fn all_linux_apps_is_an_optional_v2_only_boolean() {
+    let mut document = json!({
+        "schema": "badi.settings.v2",
+        "revision": 4,
+        "paused": false,
+        "all_linux_apps": true,
+        "subjects": []
+    });
+    assert!(validator(2).is_valid(&document));
+    let decoded: SettingsV2 = serde_json::from_value(document.clone()).expect("typed settings");
+    decoded.validate().expect("valid settings");
+    assert!(decoded.all_linux_apps && !decoded.all_web_origins);
+    assert_eq!(serde_json::to_value(&decoded).expect("encoded"), document);
+    document["all_linux_apps"] = json!("yes");
+    assert!(!validator(2).is_valid(&document));
+    assert!(serde_json::from_value::<SettingsV2>(document.clone()).is_err());
+    document["all_linux_apps"] = json!(false);
+    let encoded =
+        serde_json::to_value(serde_json::from_value::<SettingsV2>(document).expect("off"))
+            .expect("encoded");
+    assert!(
+        encoded.get("all_linux_apps").is_none(),
+        "off is the canonical absence"
+    );
+    let legacy = json!({"schema": "badi.settings.v1", "revision": 4, "paused": false,
+                        "all_linux_apps": true, "subjects": []});
+    assert!(!validator(1).is_valid(&legacy));
+    assert!(serde_json::from_value::<SettingsV2>(legacy).is_err());
+}
+
+#[test]
 fn all_web_origins_is_an_optional_v2_only_boolean() {
     let mut document = json!({
         "schema": "badi.settings.v2",

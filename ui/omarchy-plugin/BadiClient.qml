@@ -165,13 +165,17 @@ Scope {
   }
 
   function isSettingsDocument(value) {
-    // `badi site all on` adds all_web_origins; producers omit it when false.
-    // Panel writes clone the document, so they carry it through unchanged.
+    // The blocklist modes add all_web_origins and all_linux_apps; producers
+    // omit them when false.
     var keys = ["schema", "revision", "paused", "subjects"]
-    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "all_web_origins"))
-      keys.push("all_web_origins")
+    var modes = ["all_web_origins", "all_linux_apps"]
+    for (var mode = 0; mode < modes.length; mode += 1) {
+      if (isObject(value) && Object.prototype.hasOwnProperty.call(value, modes[mode])) {
+        if (typeof value[modes[mode]] !== "boolean") return false
+        keys.push(modes[mode])
+      }
+    }
     if (!hasExactKeys(value, keys)
-        || (keys.length === 5 && typeof value.all_web_origins !== "boolean")
         || value.schema !== "badi.settings.v2"
         || !Number.isSafeInteger(value.revision)
         || value.revision < 0

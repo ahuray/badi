@@ -98,7 +98,7 @@ bool policyStatus(const Json &value, const Json &payload) {
     if (payload["activation"] != "always" && payload["activation"] != "manual" &&
         payload["activation"] != "never") return false;
     static constexpr std::array reasons{"default_policy", "global_disabled", "context_disabled",
-        "matched_rule", "suggestions_disabled", "unknown_identity"};
+        "matched_rule", "matched_default", "suggestions_disabled", "unknown_identity"};
     if (!payload["reason"].is_string() ||
         std::find(reasons.begin(), reasons.end(), payload["reason"].get<std::string>()) == reasons.end()) return false;
     if (payload["learning_allowed"] == true ||
@@ -896,7 +896,7 @@ private:
         const bool allowed = payload["paused"] == false &&
             payload["activation"] == "always" && payload["context_allowed"] == true &&
             payload["display_allowed"] == true && payload["suggestions_allowed"] == true;
-        if (callbacks_.onPolicy) callbacks_.onPolicy(session, allowed);
+        if (callbacks_.onPolicy) callbacks_.onPolicy(session, allowed, payload["reason"] == "matched_default");
         return true;
     }
 

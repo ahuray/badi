@@ -175,6 +175,17 @@ for all_web_origins in '"true"' null 1; do
     '{schema: "badi.settings.v2", revision: 1, paused: false, all_web_origins: $value, subjects: []}')
   [[ $(ipc validateSettings "$document") == false ]]
 done
+# The app list mode is the same optional boolean, alone or with the site mode.
+for value in true false; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, all_linux_apps: $value, all_web_origins: true, subjects: []}')
+  [[ $(ipc validateSettings "$document") == true ]]
+done
+for value in '"true"' null 1; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, all_linux_apps: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == false ]]
+done
 
 # A settings write changes only its own field at the next revision and carries
 # every subject and the `badi site all on` flag through unchanged.

@@ -172,7 +172,8 @@ impl PersonalizationV1 {
                 return false;
             }
             let resolution = settings.resolve_identity_validated(&record.identity);
-            if !resolution.configured || resolution.permissions.learn != PermissionDecision::Allow {
+            if !resolution.configured() || resolution.permissions.learn != PermissionDecision::Allow
+            {
                 return false;
             }
             let days = resolution.permissions.retention.days().map_or(1, u64::from);
@@ -621,6 +622,7 @@ mod tests {
             revision: 1,
             paused: false,
             all_web_origins: false,
+            all_linux_apps: false,
             subjects: vec![SubjectRule {
                 identity: identity("example.com"),
                 permissions: SubjectPermissions {

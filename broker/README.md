@@ -50,6 +50,13 @@ usable Git metadata both fields are `unknown`; packagers may set both
   erase the flag. While the memory store is unavailable only a strict authority
   reduction is accepted: clearing the flag is one; setting it, or removing an
   origin block while it is set, is a grant.
+- `"all_linux_apps": true` (`badi apps blocklist`) is the same default for a
+  Linux app without its own rule: prediction only, never learning or
+  retention, exact app rules win, and it carries the same authority rules. Its
+  policy reply says `matched_default` instead of `matched_rule`, so the Fcitx
+  addon opens only an observed field with it and keeps the manual Tab-request
+  path for exact rules. Browser defaults keep `matched_rule`, which protocol v1
+  clients know.
 - Policy connections stay open while idle; control and health clients close
   after 300 s without a request. A transient `accept` failure is logged once
   and retried after 100 ms.

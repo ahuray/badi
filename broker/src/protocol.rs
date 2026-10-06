@@ -628,6 +628,8 @@ pub enum PolicyResolutionReason {
     GlobalDisabled,
     ContextDisabled,
     MatchedRule,
+    /// Allowed by the app list mode (`all_linux_apps`), not an exact rule.
+    MatchedDefault,
     SuggestionsDisabled,
     UnknownIdentity,
 }
