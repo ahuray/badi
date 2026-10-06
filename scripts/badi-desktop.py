@@ -347,7 +347,7 @@ def vscode_edit_context_note():
 def health_report():
     report = {"schema": "badi.desktop-health.v1", "service": service_state(),
               "native_apps": list(APPS), "problems": [], "notes": []}
-    report["notes"].append("Chromium, Brave, Zen, Codex, VS Code, Cursor and Discord fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it. Source and nested-session evidence only.")
+    report["notes"].append("Chromium, Brave, Zen, Codex, VS Code, Cursor and Discord fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it.")
     problems = report["problems"]
     observer = report["accessibility"] = accessibility_state()
     if observer.get("loaded"):
