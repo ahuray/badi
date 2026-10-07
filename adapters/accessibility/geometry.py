@@ -117,10 +117,7 @@ def native_calibrated_geometry(frame, field, glyph, window, monitors, caret):
         if output is None:
             return None
         _monitor, _scale, width, height = output
-        if (frame["x"] != 0 or frame["y"] != 0 or abs(frame["width"] - width) > EDGE_TOLERANCE
-                or abs(frame["height"] - height) > EDGE_TOLERANCE):
-            return None
-        if not _inside(field, frame) or not _inside(glyph, field):
+        if not _spans_window(frame, width, height) or not _inside(field, frame) or not _inside(glyph, field):
             return None
         return _reply(output, caret, round(glyph["x"] + glyph["width"], 2), round(glyph["y"], 2),
                       round(glyph["height"], 2), {key: round(field[key], 2) for key in RECT_KEYS}, window)
@@ -128,14 +125,15 @@ def native_calibrated_geometry(frame, field, glyph, window, monitors, caret):
         return None
 
 
-def input_method_geometry(rect, window, monitors, caret):
+def input_method_geometry(rect, window, monitors, caret, frame=None, field=None):
     """Window-local logical caret geometry from the caret rectangle an app gave
     its input method, or None.
 
     Qt's Fcitx module (the RelativeRect capability) reports the caret relative
     to its window in physical pixels, with its device pixel ratio as `scale`,
-    which must equal the monitor's. The field's extent is unknown, so the
-    window bounds the drawing.
+    which must equal the monitor's. The field's WINDOW extents bound the
+    drawing when its frame spans the window and the field holds the caret;
+    otherwise the window does.
     """
     try:
         if not isinstance(rect, dict) or set(rect) != {*RECT_KEYS, "scale"}:
@@ -144,12 +142,15 @@ def input_method_geometry(rect, window, monitors, caret):
         output = _output(box, box, box, box, window, monitors, caret)
         if output is None:
             return None
-        _monitor, scale, width, _height = output
+        _monitor, scale, width, height = output
         if type(rect["scale"]) not in (int, float) or abs(rect["scale"] - scale) > SCALE_TOLERANCE:
             return None
-        y, line = round(box["y"] / scale, 2), round(box["height"] / scale, 2)
-        return _reply(output, caret, round(box["x"] / scale, 2), y, line,
-                      {"x": 0, "y": y, "width": width, "height": line}, window)
+        x, y, line = (round(box[key] / scale, 2) for key in ("x", "y", "height"))
+        bounds = {"x": 0, "y": y, "width": width, "height": line}
+        if (_is_rect(frame) and _is_rect(field) and _spans_window(frame, width, height) and _inside(field, frame)
+                and _inside({"x": x, "y": y, "width": 0, "height": line}, field)):
+            bounds = {key: round(field[key], 2) for key in RECT_KEYS}
+        return _reply(output, caret, x, y, line, bounds, window)
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return None
 
@@ -202,6 +203,12 @@ def _is_rect(value):
     return (isinstance(value, dict) and all(type(value.get(key)) in (int, float) and math.isfinite(value[key])
             and abs(value[key]) <= MAX_COORDINATE for key in RECT_KEYS)
             and value["width"] >= 0 and value["height"] >= 0)
+
+
+def _spans_window(frame, width, height):
+    """A WINDOW-coordinate frame at the origin with the window's size."""
+    return (frame["x"] == 0 and frame["y"] == 0 and abs(frame["width"] - width) <= EDGE_TOLERANCE
+            and abs(frame["height"] - height) <= EDGE_TOLERANCE)
 
 
 def _inside(inner, outer):

@@ -77,8 +77,8 @@ async function harness(context) {
         if (!transaction.changes) return;
         this.transactions.push(transaction);
         const before = this.state;
-        this.state = state(before.doc.sliceString(0, transaction.changes.from) + transaction.changes.insert,
-          transaction.selection.anchor);
+        this.state = state(before.doc.sliceString(0, transaction.changes.from) + transaction.changes.insert +
+          before.doc.sliceString(transaction.changes.to), transaction.selection.anchor);
         controller.update({ docChanged: true, state: this.state, startState: before });
       },
     };
@@ -96,7 +96,7 @@ async function harness(context) {
 test('Obsidian automatically requests, accepts one word or all, and isolates each undo transaction', async context => {
   const { controller, view, client, tick } = await harness(context);
   await tick(250);
-  assert.deepEqual(client.requests, [{ before: 'thank you', language: 'en', explicit: false }]);
+  assert.deepEqual(client.requests, [{ before: 'thank you', language: 'en', explicit: false, after: '' }]);
   assert.equal(controller.text, ' for your time');
   assert.equal(controller.key({ isTrusted: true, key: 'Tab' }), true);
   await settle();
@@ -162,12 +162,22 @@ test('Obsidian preserves manual policy and refuses a grant after focus changes',
   assert.equal(client.reports[0].status, 'stale');
 });
 
-test('Obsidian suppresses unsupported cursor/composition states and stores an explicit language preference', async context => {
-  const { plugin, controller, view, client, tick, state } = await harness(context);
-  view.state = state('thank you', 2);
-  await tick(250);
-  assert.equal(client.requests.length, 0);
-  assert.equal(controller.blockedReason(), 'caret_not_at_note_end');
+test('Obsidian suggests mid-note with the text after the caret and inserts there', async context => {
+  const { controller, view, client, state } = await harness(context);
+  controller.invalidate();
+  client.requests.length = 0;
+  view.state = state('thank you. See you soon', 9);
+  assert.equal(controller.blockedReason(), null);
+  await controller.request(false);
+  assert.deepEqual(client.requests, [{ before: 'thank you', language: 'en', explicit: false, after: '. See you soon' }]);
+  await controller.accept('all');
+  assert.equal(view.state.doc.toString(), 'thank you for your time. See you soon');
+  assert.equal(view.state.selection.main.head, 23);
+  assert.deepEqual(client.reports.at(-1), { text: ' for your time', status: 'applied' });
+});
+
+test('Obsidian yields Tab during composition and stores an explicit language preference', async context => {
+  const { plugin, controller, view, client, state } = await harness(context);
   view.state = state('Vielen Dank');
   view.composing = true;
   assert.equal(controller.key({ isTrusted: true, key: 'Tab' }), false);

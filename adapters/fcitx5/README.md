@@ -121,6 +121,10 @@ Chromium's surrounding text current. Neither provides an editor transaction.
   field only, `normalizeObservedParagraphEnd()` treats exactly that suffix as
   end of field: Tab and the broker see `after: ""`, while the fingerprint and
   every observer check use the raw text (`observedAfter()`).
+- **Mid-text.** An observed field requests with text after the caret too; the
+  broker suggests only what fits before it, and Tab inserts at the caret. The
+  manual Tab-request path still requires the end of the field, so Tab keeps its
+  meaning inside native text.
 - **Agreement** is exact with two equivalences: an empty Fcitx `after` matches
   an observed block end alone, and a `scope: "block"` snapshot (an opaque list,
   quote or table in the window) matches when Fcitx's `before` ends with it

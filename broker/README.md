@@ -117,10 +117,16 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   and Persian suggest whole words only. English and Persian prompts drop
   trailing spaces and require them back (`TRAILING_SPACE_HEALING`).
 - **Abstention.** A continuation abstains when it adds a number absent from the
-  typed text.
+  typed text, and every request when the caret splits a word.
+- **Mid-line.** When words follow the caret on its line, the prompt is still
+  the text before the caret, and `mid_line_insertion()` keeps only what fits:
+  the words before the point where the continuation reproduces the line's
+  first word or mark, a phrase the model closes with a clause mark before the
+  line's own mark, or else the rest of the word being typed. Anything else is
+  `output_rejected`.
 - **Spelling** is English only and needs negotiated exact replacement of the
-  word before the caret; a single dictionary candidate is proposed without
-  inference.
+  word before the caret at the end of the field; a single dictionary candidate
+  is proposed without inference.
 
 ## Shutdown and tests
 

@@ -1235,6 +1235,25 @@ class NativeCalibrationTests(unittest.TestCase):
                     {key: value for key, value in self.CARET_RECT.items() if key != "scale"}, "rect"):
             self.assertIsNone(self.input_method(bad), bad)
 
+    def test_a_qt_field_holding_the_caret_bounds_the_preview(self):
+        # Omawrite 0.5.0, maximized: the caret rectangle at the end of a line
+        # in its centred text column, whose WINDOW extents Qt reports.
+        omawrite = {"x": 1212, "y": 86, "width": 2, "height": 52, "scale": 2.0}
+        column = rect(318, 43, 780, 711)
+
+        def bounded(frame=self.FRAME, field=column):
+            return input_method_geometry(omawrite, dict(self.WINDOW), [self.MONITOR], 24, frame, field)["field"]
+
+        self.assertEqual(bounded(), column)
+        self.assertEqual(input_method_geometry(omawrite, dict(self.WINDOW), [self.MONITOR], 24)["caret"],
+                         {"x": 606, "y": 43, "height": 26})
+        window_line = {"x": 0, "y": 43, "width": 1416, "height": 26}
+        for name, change in {"a frame offset by a toolbar": dict(frame=rect(0, 27, 1416, 823)),
+                             "a field without the caret": dict(field=rect(700, 43, 300, 711)),
+                             "a field outside the frame": dict(field=rect(318, 43, 780, 900)),
+                             "no extents": dict(frame=None, field=None)}.items():
+            self.assertEqual(bounded(**change), window_line, name)
+
 
 class GeckoCalibrationTests(unittest.TestCase):
     # Zen 1.22.3b / Gecko 156.0.1 on eDP-1 at scale 2, live 2026-09-26. The

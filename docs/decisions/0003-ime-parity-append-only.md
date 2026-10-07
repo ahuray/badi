@@ -1,7 +1,7 @@
 # ADR 0003: extension-free editing accepts one append-only IME commit
 
 - Status: accepted
-- Date: 2026-09-26, extended 2026-10-06
+- Date: 2026-09-26, extended 2026-10-06 and 2026-10-07
 - Scope: Fcitx IME-parity apps: Chromium, Brave Origin and its `--app` windows
   (Omarchy web apps), Zen (exact `zen` identity only), Codex desktop, VS Code,
   Cursor, Discord, Grok Bot and LibreOffice Writer
@@ -27,9 +27,12 @@ showed that this route cannot carry an editor transaction:
 
 These apps accept a suggestion through exactly one append-only
 `commitString`, which behaves like typed text and reports
-`dispatched-unverified`. Badi documents that undo may coalesce with earlier
-typing and that `beforeinput` script may redirect the text; it never claims
-exact undo or verified field authority there.
+`dispatched-unverified`. Append-only means insertion at the caret without
+deletion: since 2026-10-07 (user request) the caret may also sit mid-text, where
+the observer and Fcitx must still agree on the text after it and the broker
+offers only what fits before that text. Badi documents that undo may coalesce
+with earlier typing and that `beforeinput` script may redirect the text; it
+never claims exact undo or verified field authority there.
 
 Every other guard stays: sensitive and purpose denial, foreign composition
 yield, exact observer identity with snapshot and caret agreement before display

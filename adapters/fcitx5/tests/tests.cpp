@@ -1353,9 +1353,13 @@ void observerRequestsNameTheBoundField() {
     empty.identityKnown = true;
     auto middle = *captureContextWindow("thank you", 5, 5, true, "en");
     middle.identityKnown = true;
+    auto middleObserved = observed;
+    middleObserved["before"] = "thank";
+    middleObserved["after"] = " you";
+    middleObserved["caret"] = 5;
     check(observedRequestBlocked(observed, empty, false) == "empty_prefix" &&
-              observedRequestBlocked(observed, middle, false) == "caret_not_at_end",
-          "a request needs a prefix and an end-of-text caret");
+              !observedRequestBlocked(middleObserved, middle, false),
+          "a request needs a prefix; an agreeing caret mid-text requests");
 
     check(invalidates({{"event", "invalidate"}}, "code") && invalidates({{"app_id", ""}}, "code") &&
               invalidates({{"app_id", "code"}}, "code") && invalidates({{"app_id", 7}}, "code") &&

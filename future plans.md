@@ -59,6 +59,9 @@ Standing user decisions:
 - [ ] No automatic suggestions in file dialogs or very narrow fields, and a
       setting for how long Escape keeps a field quiet (today: until the text
       changes).
+- [ ] Mid-sentence suggestions see only the text before the caret and keep
+      what rejoins the next word, so whole-word insertions are rare. Try a
+      prompt that also carries the text after the caret, measured in the Lab.
 - [ ] Match the host's font in the inline preview. It draws its own sans font
       sized from the caret height, so it sits about 2 px high next to
       Omawrite's monospace text.

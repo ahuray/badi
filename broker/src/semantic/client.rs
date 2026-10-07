@@ -644,7 +644,10 @@ impl CompletionProvider for SemanticClient {
         if cancellation.is_cancelled() {
             return Err(ProviderError::Cancelled);
         }
+        // A correction replaces the last word of the field; mid-text it stays
+        // editor-owned.
         if allow_replacement
+            && request.after.is_empty()
             && matches!(validate_request(&request), Ok(InputEligibility::Eligible))
             && request
                 .language
@@ -696,6 +699,17 @@ impl CompletionProvider for SemanticClient {
         {
             Ok(text) => text,
             Err(reason) => return Ok(ProviderOutcome::NoSuggestion(reason)),
+        };
+        let text = match crate::writing::line_rest(&after) {
+            Some(line) => match crate::writing::mid_line_insertion(&before, line, &text) {
+                Some(inserted) => inserted,
+                None => {
+                    return Ok(ProviderOutcome::NoSuggestion(
+                        NoSuggestionReason::OutputRejected,
+                    ));
+                }
+            },
+            None => text,
         };
         let valid =
             crate::writing::validate_proposal(&before, &after, &text, language.as_deref()).is_ok();
@@ -764,7 +778,7 @@ fn validate_request(request: &ProviderRequest) -> Result<InputEligibility, Clien
     if !crate::segment::valid_orthographic_joiners(&request.before)
         || crate::writing::WritingLanguage::from_tag(language).is_none()
         || request.before.is_empty()
-        || !request.after.is_empty()
+        || crate::writing::caret_inside_word(&request.before, &request.after)
     {
         Ok(InputEligibility::Abstain)
     } else {
@@ -1022,6 +1036,40 @@ fn finish_observed_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_after_the_caret_is_eligible_unless_the_caret_splits_a_word() {
+        let request = |before: &str, after: &str| ProviderRequest {
+            before: before.to_owned(),
+            after: after.to_owned(),
+            language: Some("en".to_owned()),
+        };
+        for (before, after, expected) in [
+            ("Please find the", "", InputEligibility::Eligible),
+            (
+                "Please find the",
+                " report today.",
+                InputEligibility::Eligible,
+            ),
+            (
+                "Please find the ",
+                "report today.",
+                InputEligibility::Eligible,
+            ),
+            ("Please find the upd", ".", InputEligibility::Eligible),
+            (
+                "Please find the rep",
+                "ort today.",
+                InputEligibility::Abstain,
+            ),
+        ] {
+            assert_eq!(
+                validate_request(&request(before, after)).expect("valid request"),
+                expected,
+                "{before:?} | {after:?}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn cancelled_and_expired_writing_request_remains_cancelled() {

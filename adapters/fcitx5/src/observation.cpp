@@ -100,7 +100,6 @@ std::optional<std::string_view> observedRequestBlocked(const Json &observed, con
                                                        bool foreignIme) {
     if (!context.identityKnown) return "field_identity_unknown";
     if (context.before.empty()) return "empty_prefix";
-    if (!context.after.empty()) return "caret_not_at_end";
     if (foreignIme) return "foreign_ime_active";
     if (!observerAgrees(observed, context)) return "observer_context_mismatch";
     return std::nullopt;

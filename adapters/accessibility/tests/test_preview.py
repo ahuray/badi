@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from preview import Preview, font_pixels, ltr_text, mapped_caret, place_inline, valid_preview_text
+from preview import Preview, font_pixels, ltr_text, mapped_caret, place_chip, place_inline, valid_preview_text
 
 
 def focus():
@@ -23,6 +23,8 @@ class PreviewGeometryTests(unittest.TestCase):
     def test_window_local_caret_maps_once_into_global_logical_coordinates(self):
         caret = mapped_caret(focus())
         self.assertEqual((caret.x, caret.y, caret.line_height, caret.field_right), (210, 150, 20, 720))
+        self.assertEqual((caret.field_left, caret.field_top, caret.field_bottom), (120, 140, 180))
+        self.assertFalse(caret.text_follows)
         self.assertEqual(caret.monitor, (0, 0, 1440, 900))
         # Right after the caret; the text box's baseline lands on the glyph's.
         self.assertEqual(place_inline(caret, 200, 24, 19), (211, 147))
@@ -92,6 +94,28 @@ class PreviewGeometryTests(unittest.TestCase):
         for size in ((0, 24, 19), (200, 24, 0), (200, 24, 30), (float("inf"), 24, 19), (200, float("nan"), 19)):
             self.assertIsNone(place_inline(caret, *size), size)
 
+    def test_a_chip_starts_at_the_caret_below_its_line_and_stays_inside_the_window(self):
+        data = focus()
+        data["geometry"]["text_follows"] = True
+        data["geometry"]["field"]["height"] = 200
+        caret = mapped_caret(data)
+        self.assertTrue(caret.text_follows)
+        # Inside a tall field: right under the caret's line, text aligned with the caret.
+        self.assertEqual(place_chip(caret, 120, 24), (203, 172))
+        # Near the field's right edge it shifts left to stay inside the field.
+        self.assertEqual(place_chip(caret, 590, 24), (130, 172))
+        # Wider than the field: inside the window instead.
+        self.assertEqual(place_chip(caret, 800, 24), (200, 172))
+        self.assertIsNone(place_chip(caret, 901, 24), "wider than the window")
+        # A one-line field: just below it, or above the line at the window's bottom.
+        data = focus()
+        self.assertEqual(place_chip(mapped_caret(data), 120, 24), (203, 172))
+        data["geometry"]["caret"]["y"] = 610
+        data["geometry"]["field"]["y"] = 600
+        self.assertEqual(place_chip(mapped_caret(data), 120, 24), (203, 684))
+        for size in ((0, 24), (120, 0), (float("nan"), 24)):
+            self.assertIsNone(place_chip(caret, *size), size)
+
     def test_font_follows_the_caret_glyph_and_text_is_ltr_only(self):
         self.assertAlmostEqual(font_pixels(mapped_caret(focus())), 17.2)
         data = focus()
@@ -126,6 +150,8 @@ class PreviewGeometryTests(unittest.TestCase):
                                         set_margin=lambda _window, edge, value: calls.append((edge, value)))
         sizes = {"h": natural[0], "v": natural[1]}
         preview.window = SimpleNamespace(set_visible=lambda visible: calls.append(("visible", visible)),
+                                         add_css_class=lambda name: calls.append(("class", name)),
+                                         remove_css_class=lambda name: calls.append(("unclass", name)),
                                          measure=lambda orientation, _for: SimpleNamespace(natural=sizes[orientation]))
         preview.label = SimpleNamespace(set_text=lambda text: calls.append(("text", text)),
                                         set_attributes=lambda _attrs: None,
@@ -144,9 +170,25 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertEqual(calls[-2:], [("visible", True), ("timer", 1500)])
         self.assertEqual(preview.timer, 7)
 
+    def test_render_shows_a_chip_when_words_follow_the_caret_or_inline_text_overflows(self):
+        data = focus()
+        data["geometry"]["text_follows"] = True
+        preview, calls, _monitor = self.render_fixture((120, 24))
+        self.assertTrue(preview.render(data, " final", 1500))
+        self.assertIn(("class", "chip"), calls)
+        self.assertNotIn(("text", " final"), calls, "a chip never draws inline over the following words")
+        self.assertIn(("text", "final"), calls)
+        self.assertIn(("left", 203), calls)
+        self.assertIn(("top", 172), calls)
+        preview, calls, _monitor = self.render_fixture((700, 24))
+        self.assertTrue(preview.render(focus(), " next", 1500), "past the field's right edge")
+        self.assertEqual([call for call in calls if call[0] in ("class", "unclass")],
+                         [("unclass", "chip"), ("class", "chip")])
+        self.assertEqual(calls[-2:], [("visible", True), ("timer", 1500)])
+
     def test_render_refuses_rtl_unmapped_or_unfitting_text(self):
         for text, data, natural in ((" متن", focus(), (200, 24)), (" next", {**focus(), "geometry": None}, (200, 24)),
-                                    (" next", focus(), (700, 24))):
+                                    (" next", focus(), (1000, 24))):
             preview, calls, _monitor = self.render_fixture(natural)
             self.assertFalse(preview.render(data, text, 1500))
             self.assertNotIn(("visible", True), calls)

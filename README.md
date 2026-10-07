@@ -19,6 +19,11 @@ Obsidian swaps the first two: Tab takes a word and Ctrl/Command+→ takes all.
 Bash uses Ctrl-X then Tab to request and accept. In a Xournal++ text cell, Tab
 requests and Tab again accepts. A suggestion lasts up to five seconds.
 
+In the middle of a sentence Badi suggests only what fits before the next word:
+the rest of a word you are typing, or words the model would write right before
+the text that follows. Where grey text would cover those words, it shows in a
+small box under the line instead.
+
 ## Where it works
 
 Tested on the development workstation (Arch Linux, Hyprland 0.56, Fcitx 5.1.22)
@@ -35,7 +40,7 @@ Linux in general.
 | Telegram | | Telegram desktop (Qt) |
 | Omawrite | | 0.5.0 |
 | Xournal++ text tool | Tab requests, exact native undo | 1.3.7 |
-| Obsidian | Badi plugin; caret at the end of a note | 1.13.7 |
+| Obsidian | Badi plugin | 1.13.7 |
 | Bash | Grey Readline preview and narrow English spelling fixes | Bash 5.3.15 in Ghostty 1.3.1 |
 | Grok Bot | Ready, but its composer is untested | 0.35 |
 
@@ -127,9 +132,9 @@ what you typed:
 | Reason | Meaning |
 | --- | --- |
 | `app_disabled` | The app or site has no grant. |
-| `request_abstained` | Unsupported language, text after the caret, or a lone unfinished word. |
+| `request_abstained` | Unsupported language, a caret inside a word, or a lone unfinished word. |
 | `budget_prefill`, `budget_stream` | The time budget ran out: 550 ms while typing, 1.2 s after an explicit request. |
-| `model_abstained`, `output_rejected` | The model declined, or its words failed a language, dictionary, number or safety check. |
+| `model_abstained`, `output_rejected` | The model declined, or its words failed a language, dictionary, number or safety check, or did not fit before the text after the caret. |
 | `stale`, `timeout`, `provider_error` | The text changed first, or the model was late or failed. |
 
 Debug mode expires after 15 minutes. A crashed model service restarts with

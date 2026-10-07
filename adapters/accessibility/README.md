@@ -205,19 +205,25 @@ its monitor.
   places the caret: Qt's Fcitx module declares `RelativeRect` and reports the
   caret relative to its window in physical pixels, so the caret is
   `x = rect.x/s`, `y = rect.y/s` with line height `rect.height/s`, and
-  `rect.scale` must equal the monitor scale. The field bounds are unknown, so
-  the window bounds the drawing; a rectangle outside the visible window (a
-  clipped tile) yields nothing.
+  `rect.scale` must equal the monitor scale. The field's `WINDOW` extents bound
+  the drawing when its frame spans the window and the field holds the caret;
+  otherwise the window does. A rectangle outside the visible window (a clipped
+  tile) yields nothing.
 
 Geometry is offered only for left-to-right text: the caret's line must hold
 no right-to-left character and the field must report the `lr` direction or
 glyphs ordered left to right. Qt reports neither; a native field without a
 direction needs a strong left-to-right letter on the caret's line, because Qt
-takes a paragraph's direction from its first strong character. The GTK4 layer-shell overlay
-draws the suggestion as translucent grey text right after the caret, with no
-background, at a size derived from the glyph height. It draws only suggestions
-of at most 64 characters that fit inside the field, window and monitor;
-otherwise it returns `rendered: false`. The surface takes no input or
+takes a paragraph's direction from its first strong character.
+
+The GTK4 layer-shell overlay draws the suggestion as translucent grey text right
+after the caret, with no background, at a size derived from the glyph height.
+When the last snapshot had words after the caret on its line
+(`text_follows`), or the text would pass the field's right edge, it draws a
+compact dark chip instead: the text starts under the caret, just below its line
+(above it when there is no room), inside the field when it fits and always
+inside the window and monitor. Suggestions are at most 64 characters; one that
+fits nowhere returns `rendered: false`. The surface takes no input or
 focus, and any invalidation, new render or expiry hides it. The helper forces
 software rendering and the simple GTK input module, so it never loads a GPU
 driver or connects to an input method.

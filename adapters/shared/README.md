@@ -9,7 +9,7 @@ excluded.
 
 | Integration | Keys | Tested with |
 | --- | --- | --- |
-| Obsidian | Automatic, or Tab to request; Tab accepts one word, Ctrl/Command+Right all, Escape dismisses. Caret at the end of the note. | Obsidian 1.13.7 / Electron 43, real app and model: English, German and Persian display, acceptance, undo, Escape, broker restart |
+| Obsidian | Automatic, or Tab to request; Tab accepts one word, Ctrl/Command+Right all, Escape dismisses. Mid-note, only what fits before the next word. | Obsidian 1.13.7 / Electron 43, real app and model: English, German and Persian display, acceptance, undo, Escape, broker restart |
 | Bash | Ctrl-X then Tab requests and accepts, Ctrl-X then Escape dismisses; never submits ([details](../shell/README.md)) | Bash 5.3.15, Readline 8.3, Ghostty 1.3.1 |
 
 Browser fields use the [IME-parity path](../../README.md#how-badi-edits-chromium-based-apps-and-zen)

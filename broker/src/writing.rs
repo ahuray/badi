@@ -145,9 +145,13 @@ pub fn validate_suggestion_shape(
     suggestion: &str,
 ) -> Result<(), crate::segment::OutputError> {
     // Native prefix inference may continue the word at the caret. Permit only
-    // same-script letters at that left boundary; all spacing, overlap and right
-    // boundary checks still apply. No document mutation authority changes.
-    let suffix = after.is_empty()
+    // same-script letters at that left boundary, and only where no word starts
+    // right after the caret; all spacing, overlap and right boundary checks
+    // still apply. No document mutation authority changes.
+    let suffix = after
+        .chars()
+        .next()
+        .is_none_or(|right| !right.is_alphanumeric())
         && before
             .chars()
             .next_back()
@@ -159,6 +163,75 @@ pub fn validate_suggestion_shape(
                     && matches!(left.script(), Script::Latin | Script::Arabic)
             });
     crate::segment::validate_completion_shape(before, after, suggestion, suffix)
+}
+
+/// Whether the caret splits a word, where nothing is suggested.
+#[must_use]
+pub fn caret_inside_word(before: &str, after: &str) -> bool {
+    before
+        .chars()
+        .next_back()
+        .is_some_and(char::is_alphanumeric)
+        && after.chars().next().is_some_and(char::is_alphanumeric)
+}
+
+/// The rest of the caret's line when it holds more than whitespace: a
+/// suggestion there is inserted mid-line instead of continuing the line.
+#[must_use]
+pub fn line_rest(after: &str) -> Option<&str> {
+    let line = after.split(['\n', '\r']).next().unwrap_or_default();
+    (!line.trim().is_empty()).then_some(line)
+}
+
+/// What a continuation inserts before `line`, the text after the caret.
+///
+/// The model continues from the caret. Where its continuation reproduces the
+/// line's first word or punctuation mark at a word boundary, the text before
+/// that point fits between the two sides, and a phrase the model closes with a
+/// clause mark fits before the line's own mark. Otherwise only the rest of a
+/// word being typed is offered, since whole new words could not be shown to
+/// fit.
+#[must_use]
+pub fn mid_line_insertion(before: &str, line: &str, continuation: &str) -> Option<String> {
+    let clause_mark = |character: char| matches!(character, '.' | ',' | '!' | '?' | ';' | ':');
+    let start = line.len() - line.trim_start().len();
+    let head_len = match line[start..].chars().next() {
+        Some(first) if first.is_alphanumeric() => line[start..]
+            .unicode_word_indices()
+            .next()
+            .map_or(first.len_utf8(), |(_, word)| word.len()),
+        Some(first) => first.len_utf8(),
+        None => 0,
+    };
+    if head_len > 0 {
+        let head = &line[..start + head_len];
+        let rejoin = continuation
+            .match_indices(head)
+            .map(|(index, _)| index)
+            .find(|&index| {
+                // A word right after the caret needs a space before it; a space or
+                // punctuation there needs none.
+                let needs_space = head.starts_with(char::is_alphanumeric);
+                index > 0
+                    && continuation[..index].ends_with(char::is_whitespace) == needs_space
+                    && !continuation[index + head.len()..].starts_with(char::is_alphanumeric)
+            });
+        if let Some(index) = rejoin {
+            return Some(continuation[..index].to_owned());
+        }
+        if line[start..].starts_with(clause_mark) {
+            if let Some(phrase) = continuation.trim_end().strip_suffix(clause_mark) {
+                if phrase.ends_with(|character: char| character.is_alphanumeric()) {
+                    return Some(phrase.to_owned());
+                }
+            }
+        }
+    }
+    let word_end = continuation
+        .find(|character: char| !character.is_alphabetic())
+        .unwrap_or(continuation.len());
+    (word_end > 0 && before.ends_with(char::is_alphabetic))
+        .then(|| continuation[..word_end].to_owned())
 }
 
 /// [`validate_suggestion_shape`], plus: a completion that continues a word
@@ -851,9 +924,90 @@ impl WritingError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ENGLISH_LEXICON, complete_word_prefix, correction_word, english_word_prefix,
-        known_english_word, memory_retry_delay, valid_correction,
+        ENGLISH_LEXICON, caret_inside_word, complete_word_prefix, correction_word,
+        english_word_prefix, known_english_word, line_rest, memory_retry_delay, mid_line_insertion,
+        valid_correction, validate_proposal,
     };
+
+    #[test]
+    fn mid_line_insertions_end_where_the_continuation_rejoins_the_line() {
+        let cases = [
+            // The next word after a space, after the caret's own space, and
+            // after punctuation.
+            (
+                "Please find the",
+                " report today",
+                " final report for",
+                Some(" final"),
+            ),
+            (
+                "Please find the ",
+                "report today",
+                "final report for",
+                Some("final "),
+            ),
+            ("Thanks", ", John.", " a lot, John", Some(" a lot")),
+            // The rest of a word being typed, with or without a rejoin.
+            (
+                "Please find the upd",
+                " report",
+                "ated report",
+                Some("ated"),
+            ),
+            (
+                "Please find the upd",
+                " report",
+                "ated version of the",
+                Some("ated"),
+            ),
+            ("I will send the docu", ".", "ment", Some("ment")),
+            // Nothing fits: the continuation starts with the next word, never
+            // rejoins at a word boundary, or rejoins inside a word.
+            ("Please find the", " report", " report for you", None),
+            ("Please find the", " report", " latest version of", None),
+            ("Please find the", " report", " reports and", None),
+            ("Please find the", " port", " report", None),
+        ];
+        for (before, line, continuation, expected) in cases {
+            assert_eq!(
+                mid_line_insertion(before, line, continuation).as_deref(),
+                expected,
+                "{before:?} | {line:?} <- {continuation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_phrase_closed_with_a_clause_mark_fits_before_the_line_s_mark() {
+        let insert = |line, continuation| {
+            mid_line_insertion("I hope this email finds you", line, continuation)
+        };
+        // The stop word stays in the continuation, so a period rejoins.
+        assert_eq!(insert(". Best", " well.").as_deref(), Some(" well"));
+        assert_eq!(insert(", Best", " well.").as_deref(), Some(" well"));
+        assert_eq!(
+            insert("? Best", " well today?").as_deref(),
+            Some(" well today")
+        );
+        // Not closed, or the next word did not come back: no proof it fits.
+        assert_eq!(insert(", Best", " well and"), None);
+        assert_eq!(insert(" today", " well."), None);
+    }
+
+    #[test]
+    fn mid_line_requests_need_a_word_boundary_and_text_on_the_line() {
+        assert!(caret_inside_word("Please find the rep", "ort"));
+        assert!(!caret_inside_word("Please find the rep", " today"));
+        assert!(!caret_inside_word("Please find the ", "report"));
+        assert_eq!(line_rest(" report\nNext"), Some(" report"));
+        assert_eq!(line_rest(" \nNext paragraph"), None);
+        assert_eq!(line_rest(""), None);
+        // A word completion may end right before punctuation or a space, and
+        // the inserted words must not repeat the word after the caret.
+        assert!(validate_proposal("I will send the docu", ".", "ment", Some("en")).is_ok());
+        assert!(validate_proposal("Please find the upd", " report", "ated", Some("en")).is_ok());
+        assert!(validate_proposal("Please find the", " report", " report", Some("en")).is_err());
+    }
 
     #[test]
     fn in_place_lexicon_lookups_match_a_sorted_word_list() {

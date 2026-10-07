@@ -107,6 +107,7 @@ class Observer:
         self.authorize = lambda _binding: None
         self.disarm = lambda: None
         self.caret_edge = None
+        self.text_follows = False
         self.operations = {"status": self.status, "hide": self.hide_preview, "inspect": self.inspect,
                            "snapshot": self.snapshot, "preview": self.preview}
 
@@ -119,10 +120,11 @@ class Observer:
                      "reason": reason, "app_id": previous["app_id"] if previous else ""})
 
     def withdraw(self):
-        """Clear the preview, the field's event match and the verified caret edge."""
+        """Clear the preview, the field's event match and the verified caret line."""
         self.hide()
         self.disarm()
         self.caret_edge = None
+        self.text_follows = False
 
     def request(self, request):
         request_id = request.get("id") if isinstance(request, dict) else None
@@ -166,8 +168,10 @@ class Observer:
             focus["scope"] = "block"
         native = not metadata.get("web")
         self.caret_edge = "right" if ltr_caret_line(metadata.get("direction"), before, native) else None
+        # Words after the caret on its line: inline text would cover them.
+        self.text_follows = bool(after.split("\n", 1)[0].strip())
         if focus["geometry"] and self.caret_edge:
-            focus["geometry"]["caret_edge"] = self.caret_edge
+            focus["geometry"].update(caret_edge=self.caret_edge, text_follows=self.text_follows)
         focus.update(before=before, after=after, total_chars=metadata["total_chars"])
         return {"focus": focus}
 
@@ -230,7 +234,7 @@ class Observer:
         binding = {"epoch": self.epoch, **key}
         target = self.policy_target(metadata, app_id)
         if metadata.get("geometry") and self.caret_edge:
-            metadata["geometry"]["caret_edge"] = self.caret_edge
+            metadata["geometry"].update(caret_edge=self.caret_edge, text_follows=self.text_follows)
         focus = {"binding": binding, "target": target, "purpose": "plain_text",
                  "caret": metadata["caret"], "selection_count": metadata["selection_count"],
                  "geometry": metadata.get("geometry")}

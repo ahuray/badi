@@ -963,20 +963,30 @@ def session(root, report):
         assert context.commits() == [SUFFIX] and context.candidate() is None
         checks.append('IME-parity desktop (chatgpt): a paragraph end "\\n\\n" agreed by the observer is end of '
                       'field; the suggestion displays and Tab dispatches one exact append')
-        for observed_after, fcitx_after, reason in (('', '\n\n', 'observer_context_mismatch'),
-                                                    ('\n', '\n\n', 'observer_context_mismatch'),
-                                                    ('\n\n\n', '\n\n\n', 'caret_not_at_end'),
-                                                    ('\n\nmore', '\n\nmore', 'caret_not_at_end')):
-            unchanged, count = updates(), reason_count(reason)
+        for observed_after, fcitx_after in (('', '\n\n'), ('\n', '\n\n')):
+            unchanged, count = updates(), reason_count('observer_context_mismatch')
             paragraph_end(observed_after, fcitx_after)
-            wait(lambda: reason_count(reason) > count, 'chatgpt ' + reason + ' for ' + repr(fcitx_after))
+            wait(lambda: reason_count('observer_context_mismatch') > count,
+                 'chatgpt observer_context_mismatch for ' + repr(fcitx_after))
             quiet(.2)
             assert updates() == unchanged and context.candidate() is None, repr((observed_after, fcitx_after))
             assert not context.key(desktop.TAB), repr((observed_after, fcitx_after))
             quiet(.3)
             assert updates() == unchanged and context.candidate() is None and context.commits() == [SUFFIX]
-        checks.append('IME-parity desktop (chatgpt): observer disagreement about the paragraph end, three line '
-                      'breaks and text after it fail closed and keep the application Tab')
+        checks.append('IME-parity desktop (chatgpt): observer disagreement about the paragraph end fails closed '
+                      'and keeps the application Tab')
+        # Agreed text after the caret is a request; the phrase fixture abstains
+        # there, so nothing shows and Tab stays the application's.
+        for after in ('\n\n\n', '\n\nmore'):
+            unchanged = updates()
+            paragraph_end(after, after)
+            wait(lambda: updates() > unchanged, 'chatgpt request with text after the caret ' + repr(after))
+            quiet(.3)
+            assert context.candidate() is None and not context.key(desktop.TAB), repr(after)
+            quiet(.3)
+            assert context.candidate() is None and context.commits() == [SUFFIX]
+        checks.append('IME-parity desktop (chatgpt): agreed text after the caret requests; the fixture abstains '
+                      'and Tab stays the application\'s')
         # A <div> line ends with one break; an EditContext editor sends none while the DOM shows one.
         for observed_after, fcitx_after in (('\n', '\n'), ('\n', '')):
             paragraph_end(observed_after, fcitx_after, new_field=True)

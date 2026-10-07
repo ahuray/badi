@@ -51,7 +51,8 @@ bool observerCorroborates(const nlohmann::json &captured, const nlohmann::json &
                           const ContextWindow &context);
 
 // Why an observed snapshot cannot become a request for this Fcitx context;
-// nullopt when both agree on a nonempty prefix at the end of the text.
+// nullopt when both agree on a nonempty prefix. Text may follow the caret: the
+// broker suggests only what fits before it.
 std::optional<std::string_view> observedRequestBlocked(const nlohmann::json &observed,
                                                        const ContextWindow &context, bool foreignIme);
 

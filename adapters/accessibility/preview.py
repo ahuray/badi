@@ -32,6 +32,12 @@ def valid_preview_text(text):
     return True
 
 
+# The chip's text starts at the caret: its padding plus border.
+CHIP_INSET = 7
+# Space between the caret's line and a chip above or below it.
+CHIP_GAP = 2
+
+
 @dataclass(frozen=True)
 class CaretGeometry:
     connector: str
@@ -40,7 +46,11 @@ class CaretGeometry:
     x: float
     y: float
     line_height: float
+    field_left: float
+    field_top: float
     field_right: float
+    field_bottom: float
+    text_follows: bool
 
 
 def ltr_text(text):
@@ -78,7 +88,10 @@ def mapped_caret(focus):
             (monitor["x"], monitor["y"], monitor["width"] / scale, monitor["height"] / scale),
             (at[0], at[1], size[0], size[1]),
             at[0] + local["x"], at[1] + local["y"], local["height"],
-            at[0] + min(field["x"] + field["width"], size[0]))
+            at[0] + max(field["x"], 0), at[1] + max(field["y"], 0),
+            at[0] + min(field["x"] + field["width"], size[0]),
+            at[1] + min(field["y"] + field["height"], size[1]),
+            geometry.get("text_follows") is True)
         mx, my, mw, mh = result.monitor
         if not (mx <= result.x <= mx + mw and my <= result.y < my + mh):
             return None
@@ -96,7 +109,7 @@ def place_inline(caret, width, height, baseline):
     """Monitor-local origin for text right after the caret on its baseline.
 
     The text must end inside the field, window and monitor; otherwise the
-    caller hides it and Fcitx shows its own candidate panel instead.
+    caller shows it as a chip instead.
     """
     if not _number(width, 1, 4096) or not _number(height, 1, 256) or not _number(baseline, 1, height):
         return None
@@ -108,6 +121,35 @@ def place_inline(caret, width, height, baseline):
             or y < max(my, wy) or y + height > min(my + mh, wy + wh)):
         return None
     return round(x - mx), round(y - my)
+
+
+def place_chip(caret, width, height):
+    """Monitor-local origin for a compact chip under the caret's line.
+
+    Inline text would cover the words after the caret, or overflow the field,
+    so the chip's text starts below the caret instead: inside the field when
+    there is room, else just outside it, and above the line when nothing fits
+    below. It always stays inside the window and monitor; when it cannot, the
+    caller hides it and Fcitx shows its own candidate panel instead.
+    """
+    if not _number(width, 1, 4096) or not _number(height, 1, 256):
+        return None
+    mx, my, mw, mh = caret.monitor
+    wx, wy, ww, wh = caret.window
+    left, right = max(mx, wx), min(mx + mw, wx + ww)
+    top, bottom = max(my, wy), min(my + mh, wy + wh)
+    if width > right - left:
+        return None
+    field_left, field_right = max(left, caret.field_left), min(right, caret.field_right)
+    if width > field_right - field_left:
+        field_left, field_right = left, right
+    x = min(max(caret.x - CHIP_INSET, field_left), field_right - width)
+    below, above = caret.y + caret.line_height + CHIP_GAP, caret.y - CHIP_GAP - height
+    for low, high in ((max(top, caret.field_top), min(bottom, caret.field_bottom)), (top, bottom)):
+        for y in (below, above):
+            if low <= y and y + height <= high:
+                return round(x - mx), round(y - my)
+    return None
 
 
 class Preview:
@@ -145,6 +187,7 @@ class Preview:
         self.window.set_child(self.label)
         self.css = Gtk.CssProvider()
         # Inline ghost text: mid grey stays readable on light and dark fields.
+        # A chip carries its own dark background, since it may lie over text.
         self.css.load_from_string("""
             window.badi-writing-preview {
                 background: none;
@@ -158,6 +201,13 @@ class Preview:
                 padding: 0;
                 margin: 0;
                 font-weight: 400;
+            }
+            window.badi-writing-preview.chip label {
+                color: rgba(232, 232, 236, 0.96);
+                background-color: rgba(34, 36, 44, 0.94);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 1px 6px;
             }
         """)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), self.css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
@@ -175,6 +225,17 @@ class Preview:
         surface = self.window.get_surface()
         if surface is not None:
             surface.set_input_region(self.cairo.Region())
+
+    def _layout(self, text, chip):
+        """(width, height, baseline) of `text` drawn inline or as a chip."""
+        if chip:
+            self.window.add_css_class("chip")
+        else:
+            self.window.remove_css_class("chip")
+        self.label.set_text(text)
+        width = self.window.measure(self.Gtk.Orientation.HORIZONTAL, -1).natural
+        height = self.window.measure(self.Gtk.Orientation.VERTICAL, width).natural
+        return width, height, self.label.get_layout().get_baseline() / self.Pango.SCALE
 
     def warm(self):
         """Load fonts and the layout path once, before any request's deadline."""
@@ -213,14 +274,16 @@ class Preview:
         if len(matching) != 1:
             return False
         self.Layer.set_monitor(self.window, matching[0])
-        self.label.set_text(text)
         attributes = self.Pango.AttrList()
         attributes.insert(self.Pango.attr_size_new_absolute(round(font_pixels(caret) * self.Pango.SCALE)))
         self.label.set_attributes(attributes)
-        width = self.window.measure(self.Gtk.Orientation.HORIZONTAL, -1).natural
-        height = self.window.measure(self.Gtk.Orientation.VERTICAL, width).natural
-        baseline = self.label.get_layout().get_baseline() / self.Pango.SCALE
-        position = place_inline(caret, width, height, baseline)
+        position = None
+        if not caret.text_follows:
+            width, height, baseline = self._layout(text, chip=False)
+            position = place_inline(caret, width, height, baseline)
+        if position is None:
+            width, height, _baseline = self._layout(text.strip(" "), chip=True)
+            position = place_chip(caret, width, height)
         if position is None:
             self.label.set_text("")
             return False
