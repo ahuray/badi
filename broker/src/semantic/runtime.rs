@@ -1,8 +1,9 @@
 use std::fmt;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::os::fd::OwnedFd;
+use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Mutex;
 use std::thread;
@@ -24,7 +25,9 @@ use crate::provider::{
     WritingProposal,
 };
 
-use super::client::{ClientError, HealthStatus, SemanticClient, SemanticClientConfig};
+use super::client::{
+    ClientError, HealthStatus, RuntimeAddress, SemanticClient, SemanticClientConfig,
+};
 use super::provenance::{
     ProvenanceError, VerifiedDirectoryManifest, VerifiedFile, encode_lower_hex,
 };
@@ -148,6 +151,9 @@ pub struct LlamaCppLaunch {
     fixture_behavior: Option<FixtureBehavior>,
     profile: WritingProfile,
     launcher: Launcher,
+    /// Private directory that will hold `llama.sock`. `None` uses
+    /// `$XDG_RUNTIME_DIR/badi`, which the service unit creates mode 0700.
+    runtime_directory: Option<PathBuf>,
 }
 
 impl LlamaCppLaunch {
@@ -168,9 +174,18 @@ impl LlamaCppLaunch {
             fixture_behavior: None,
             profile: WritingProfile::PRODUCTION,
             launcher: Launcher::Direct,
+            runtime_directory: None,
         };
         launch.validate()?;
         Ok(launch)
+    }
+
+    /// Tests place the socket in a private directory. Production leaves this
+    /// unset and uses the service runtime directory.
+    #[must_use]
+    pub fn with_runtime_directory(mut self, directory: PathBuf) -> Self {
+        self.runtime_directory = Some(directory);
+        self
     }
 
     pub fn with_startup_timeout(mut self, startup_timeout: Duration) -> Result<Self, RuntimeError> {
@@ -194,6 +209,7 @@ impl LlamaCppLaunch {
             fixture_behavior: Some(behavior),
             profile: WritingProfile::PRODUCTION,
             launcher: Launcher::Direct,
+            runtime_directory: None,
         };
         launch.validate()?;
         Ok(launch)
@@ -225,21 +241,23 @@ impl LlamaCppLaunch {
     ) -> Result<OwnedRuntime, RuntimeError> {
         self.validate()?;
 
-        let endpoint = reserve_loopback_endpoint()?;
+        let socket_path = prepare_runtime_socket(&self.runtime_directory_path()?)?;
         let token = if self.fixture_behavior.is_some() {
             SecretToken::fixture()
         } else {
             SecretToken::new()
         };
         let negative_token = SecretToken::new();
-        let client = SemanticClient::new(SemanticClientConfig::new(
-            endpoint,
+        let client = SemanticClient::new(SemanticClientConfig::unix(
+            &socket_path,
             &self.model_alias,
             token.expose(),
         )?)?;
-        let negative_config =
-            SemanticClientConfig::new(endpoint, &self.model_alias, negative_token.expose())?;
-        let negative_client = SemanticClient::new(negative_config)?;
+        let negative_client = SemanticClient::new(SemanticClientConfig::unix(
+            &socket_path,
+            &self.model_alias,
+            negative_token.expose(),
+        )?)?;
         let identity = self.identity();
         let mut command = self.runtime_command()?;
         if self.fixture_behavior.is_some() {
@@ -249,8 +267,7 @@ impl LlamaCppLaunch {
             .env_clear()
             .env("LANG", "C.UTF-8")
             .env("LC_ALL", "C.UTF-8")
-            .env("LLAMA_ARG_HOST", Ipv4Addr::LOCALHOST.to_string())
-            .env("LLAMA_ARG_PORT", endpoint.port().to_string())
+            .env("LLAMA_ARG_HOST", &socket_path)
             .env("LLAMA_ARG_MODEL", self.model.path())
             .env("LLAMA_ARG_ALIAS", &self.model_alias)
             .env("LLAMA_API_KEY", token.expose())
@@ -287,7 +304,7 @@ impl LlamaCppLaunch {
             child: Mutex::new(Some(child)),
             exit_notice,
             client,
-            endpoint,
+            endpoint: RuntimeAddress::Unix(socket_path),
             token_credential: token,
             identity,
         };
@@ -307,7 +324,26 @@ impl LlamaCppLaunch {
             let _ = runtime.terminate();
             return Err(error.into());
         }
+        if let RuntimeAddress::Unix(path) = &runtime.endpoint {
+            if let Err(error) = tighten_runtime_socket(path) {
+                let _ = runtime.terminate();
+                return Err(error);
+            }
+        }
         Ok(runtime)
+    }
+
+    fn runtime_directory_path(&self) -> Result<PathBuf, RuntimeError> {
+        if let Some(directory) = &self.runtime_directory {
+            return Ok(directory.clone());
+        }
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+            .ok_or(RuntimeError::InvalidConfig("runtime_dir"))?;
+        let runtime = PathBuf::from(runtime);
+        if !runtime.is_absolute() {
+            return Err(RuntimeError::InvalidConfig("runtime_dir"));
+        }
+        Ok(runtime.join("badi"))
     }
 
     fn runtime_command(&self) -> Result<Command, RuntimeError> {
@@ -421,7 +457,7 @@ pub struct OwnedRuntime {
     /// Pidfd of the owned child; it becomes readable once the child exits.
     exit_notice: Option<OwnedFd>,
     client: SemanticClient,
-    endpoint: SocketAddr,
+    endpoint: RuntimeAddress,
     #[allow(dead_code)]
     token_credential: SecretToken,
     identity: StableRuntimeIdentity,
@@ -434,8 +470,8 @@ impl OwnedRuntime {
     }
 
     #[must_use]
-    pub const fn endpoint(&self) -> SocketAddr {
-        self.endpoint
+    pub const fn address(&self) -> &RuntimeAddress {
+        &self.endpoint
     }
 
     #[must_use]
@@ -540,7 +576,12 @@ impl OwnedRuntime {
         if child.is_none() {
             return Err(RuntimeError::MissingChild);
         }
-        terminate_owned_child_with(child, terminate_child).map_err(RuntimeError::Shutdown)
+        let status =
+            terminate_owned_child_with(child, terminate_child).map_err(RuntimeError::Shutdown);
+        if let RuntimeAddress::Unix(path) = &self.endpoint {
+            let _ = std::fs::remove_file(path);
+        }
+        status
     }
 }
 
@@ -707,7 +748,7 @@ pub enum RuntimeError {
     Provenance(#[from] ProvenanceError),
     #[error("runtime client initialization failed")]
     Client(#[from] ClientError),
-    #[error("failed to reserve a private loopback endpoint")]
+    #[error("failed to prepare the private runtime socket")]
     Endpoint(#[source] io::Error),
     #[error("failed to spawn the verified runtime binary")]
     Spawn(#[source] io::Error),
@@ -756,11 +797,48 @@ impl fmt::Debug for SecretToken {
     }
 }
 
-fn reserve_loopback_endpoint() -> Result<SocketAddr, RuntimeError> {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(RuntimeError::Endpoint)?;
-    let endpoint = listener.local_addr().map_err(RuntimeError::Endpoint)?;
-    drop(listener);
-    Ok(endpoint)
+fn prepare_runtime_socket(directory: &Path) -> Result<PathBuf, RuntimeError> {
+    if !directory.is_absolute() {
+        return Err(RuntimeError::InvalidConfig("runtime_dir"));
+    }
+    let metadata = match std::fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            std::fs::create_dir(directory).map_err(RuntimeError::Endpoint)?;
+            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
+                .map_err(RuntimeError::Endpoint)?;
+            std::fs::symlink_metadata(directory).map_err(RuntimeError::Endpoint)?
+        }
+        Err(error) => return Err(RuntimeError::Endpoint(error)),
+    };
+    if !metadata.is_dir()
+        || metadata.uid() != rustix::process::getuid().as_raw()
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(RuntimeError::InvalidConfig("runtime_dir"));
+    }
+    let path = directory.join("llama.sock");
+    if path.as_os_str().len() >= 108 {
+        return Err(RuntimeError::InvalidConfig("runtime_socket"));
+    }
+    if let Ok(existing) = std::fs::symlink_metadata(&path) {
+        if existing.file_type().is_socket() && existing.uid() == rustix::process::getuid().as_raw()
+        {
+            std::fs::remove_file(&path).map_err(RuntimeError::Endpoint)?;
+        } else {
+            return Err(RuntimeError::InvalidConfig("runtime_socket"));
+        }
+    }
+    Ok(path)
+}
+
+fn tighten_runtime_socket(path: &Path) -> Result<(), RuntimeError> {
+    let metadata = std::fs::symlink_metadata(path).map_err(RuntimeError::Endpoint)?;
+    if !metadata.file_type().is_socket() || metadata.uid() != rustix::process::getuid().as_raw() {
+        return Err(RuntimeError::InvalidConfig("runtime_socket"));
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(RuntimeError::Endpoint)
 }
 
 fn terminate_child(child: &mut Child) -> io::Result<ExitStatus> {
@@ -824,8 +902,8 @@ mod tests {
 
     use super::{
         CompletionProvider as _, FixtureBehavior, LlamaCppLaunch, OwnedRuntime, ProvenanceError,
-        RuntimeError, SecretToken, SemanticClient, SemanticClientConfig, StableRuntimeIdentity,
-        WritingProfile, terminate_child, terminate_owned_child_with,
+        RuntimeAddress, RuntimeError, SecretToken, SemanticClient, SemanticClientConfig,
+        StableRuntimeIdentity, WritingProfile, terminate_child, terminate_owned_child_with,
     };
     use crate::semantic::provenance::{
         DirectoryManifestExpectation, FileExpectation, VerifiedFile, directory_manifest_sha256,
@@ -1044,6 +1122,27 @@ mod tests {
     }
 
     #[test]
+    fn runtime_socket_stays_inside_a_private_directory() -> Result<(), Box<dyn Error>> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temporary = tempfile::tempdir()?;
+        let open = temporary.path().join("open");
+        fs::create_dir(&open)?;
+        fs::set_permissions(&open, fs::Permissions::from_mode(0o755))?;
+        assert!(matches!(
+            super::prepare_runtime_socket(&open),
+            Err(RuntimeError::InvalidConfig("runtime_dir"))
+        ));
+        let private = fs::canonicalize(temporary.path())?.join("private");
+        fs::create_dir(&private)?;
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o700))?;
+        let socket = super::prepare_runtime_socket(&private)?;
+        assert_eq!(socket, private.join("llama.sock"));
+        assert!(!socket.exists());
+        Ok(())
+    }
+
+    #[test]
     fn shutdown_allows_a_busy_child_to_finish_its_term_cleanup() -> Result<(), Box<dyn Error>> {
         let mut child = Command::new("/bin/sh")
             .args([
@@ -1159,7 +1258,7 @@ mod tests {
                 "fixture",
                 "public-fixture-token",
             )?)?,
-            endpoint,
+            endpoint: RuntimeAddress::Loopback(endpoint),
             token_credential: SecretToken::fixture(),
             identity: StableRuntimeIdentity {
                 launch_contract_id: crate::writing::WRITING_CONTRACT,

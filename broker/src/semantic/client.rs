@@ -1,5 +1,6 @@
 use std::fmt;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -42,10 +43,29 @@ const WARM_UP_PROMPT: &str = "Thank you for your";
 const WARM_UP_TOKENS: u16 = 2;
 // A non-streaming reply also echoes generation settings; its body is discarded.
 const MAX_WARM_UP_RESPONSE_BYTES: usize = 64 * 1_024;
+/// Linux `sockaddr_un.sun_path` holds at most 108 bytes.
+const MAX_UNIX_SOCKET_BYTES: usize = 108;
+
+/// Where the owned writing runtime accepts its HTTP connection.
+///
+/// Production uses a Unix socket in the private runtime directory. Loopback
+/// remains for tests and the Lab's stand-in servers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RuntimeAddress {
+    Loopback(SocketAddr),
+    Unix(PathBuf),
+}
+
+fn unix_socket_path_is_usable(path: &Path) -> bool {
+    path.is_absolute()
+        && path.file_name().and_then(|name| name.to_str()) == Some("llama.sock")
+        && path.as_os_str().len() < MAX_UNIX_SOCKET_BYTES
+}
+
 /// How to reach and bound the owned writing runtime.
 #[derive(Clone)]
 pub struct SemanticClientConfig {
-    endpoint: SocketAddr,
+    address: RuntimeAddress,
     model_alias: String,
     /// The `Authorization` header value: `Bearer` and the runtime's token.
     authorization: String,
@@ -71,12 +91,29 @@ impl SemanticClientConfig {
             return Err(ClientError::InvalidConfig("token"));
         }
         let config = Self {
-            endpoint,
+            address: RuntimeAddress::Loopback(endpoint),
             model_alias: model_alias.into(),
             authorization: format!("Bearer {raw_token}"),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
         };
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// A client for the production runtime socket. The path must be absolute
+    /// and end in `llama.sock`, and it must fit in a Unix socket address.
+    pub fn unix(
+        path: impl Into<PathBuf>,
+        model_alias: impl Into<String>,
+        token: impl AsRef<str>,
+    ) -> Result<Self, ClientError> {
+        let mut config = Self::new(
+            SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 1)),
+            model_alias,
+            token,
+        )?;
+        config.address = RuntimeAddress::Unix(path.into());
         config.validate()?;
         Ok(config)
     }
@@ -93,8 +130,8 @@ impl SemanticClientConfig {
     }
 
     #[must_use]
-    pub const fn endpoint(&self) -> SocketAddr {
-        self.endpoint
+    pub const fn address(&self) -> &RuntimeAddress {
+        &self.address
     }
 
     #[must_use]
@@ -103,8 +140,17 @@ impl SemanticClientConfig {
     }
 
     fn validate(&self) -> Result<(), ClientError> {
-        if !self.endpoint.ip().is_loopback() || self.endpoint.port() == 0 {
-            return Err(ClientError::InvalidConfig("endpoint"));
+        match &self.address {
+            RuntimeAddress::Loopback(endpoint) => {
+                if !endpoint.ip().is_loopback() || endpoint.port() == 0 {
+                    return Err(ClientError::InvalidConfig("endpoint"));
+                }
+            }
+            RuntimeAddress::Unix(path) => {
+                if !unix_socket_path_is_usable(path) {
+                    return Err(ClientError::InvalidConfig("endpoint"));
+                }
+            }
         }
         if self.model_alias.is_empty()
             || self.model_alias.len() > MAX_MODEL_ALIAS_BYTES
@@ -128,7 +174,7 @@ impl fmt::Debug for SemanticClientConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("SemanticClientConfig")
-            .field("endpoint", &self.endpoint)
+            .field("address", &self.address)
             .field("model_alias", &self.model_alias)
             .field("authorization", &"[redacted]")
             .field("connect_timeout", &self.connect_timeout)
@@ -343,13 +389,14 @@ impl SemanticClient {
             authorization: &self.config.authorization,
             body,
         };
-        wire::exchange(
-            self.config.endpoint,
-            request,
-            self.config.connect_timeout,
-            deadline,
-        )
-        .await
+        match &self.config.address {
+            RuntimeAddress::Loopback(endpoint) => {
+                wire::exchange(*endpoint, request, self.config.connect_timeout, deadline).await
+            }
+            RuntimeAddress::Unix(path) => {
+                wire::exchange_unix(path, request, self.config.connect_timeout, deadline).await
+            }
+        }
     }
 
     pub async fn probe_health(

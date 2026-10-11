@@ -96,8 +96,8 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       keybindings and theme colours for the preview.
 - [ ] Support [omarchy#12139](https://github.com/omacom/omarchy/pull/12139)
       (`--enable-wayland-ime` by default); keep the per-app flags until it lands.
-- [ ] Sandbox the broker (`PrivateNetwork=yes`, read-only model directory) so
-      the absence of network access is provable; signed updates.
+- [ ] Signed updates. The broker service is already sandboxed: `PrivateNetwork=yes`,
+      a Unix-only runtime socket, and a read-only model directory.
 - [ ] Retire the [Fcitx 5.1.22 frontend backport](packaging/fcitx5-wayland-compat/README.md)
       once Omarchy ships Fcitx 5.1.23.
 - [ ] An installed-flow matrix with zero wrong-field or stale edits: service

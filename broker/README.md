@@ -95,8 +95,11 @@ prints pinned download advice and downloads nothing
   exits 1; the [service unit](../packaging/systemd/badi-broker.service) restarts
   it with backoff, except after exit 78 (missing, unsupported or too-large
   model), which waits for `badi doctor`.
-- **Transport.** HTTP/1.1 to loopback only, with a bearer token, never proxied,
-  retried or pooled. Dropping a request closes its connection, which cancels it.
+- **Transport.** HTTP/1.1 over a Unix socket in the `0700` runtime directory
+  (`$XDG_RUNTIME_DIR/badi/llama.sock`, mode `0600`), with a bearer token that
+  does not cross TCP. The service unit has no network namespace address.
+  Requests are never proxied, retried or pooled. Dropping a request closes
+  its connection, which cancels it.
 - **Launch.** One 512-token slot reuses the common prompt prefix (KV cache);
   prefill batches are 16 tokens so cancellation lands quickly; up to four
   threads. The GPU is not used: Vulkan on the Iris Xe was slower for these

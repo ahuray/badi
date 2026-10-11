@@ -6,7 +6,8 @@
 //! the non-streaming warm-up, without a reply.
 
 use std::io::{self, Read, Write};
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
@@ -24,10 +25,11 @@ pub fn run() -> ExitCode {
         },
         _ => {}
     }
-    let Some((port, token)) = launch_contract() else {
+    let Some((socket, token)) = launch_contract() else {
         return ExitCode::FAILURE;
     };
-    let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, port)) else {
+    let _ = std::fs::remove_file(&socket);
+    let Ok(listener) = UnixListener::bind(&socket) else {
         return ExitCode::FAILURE;
     };
     let health: &'static [u8] = if behavior == "malformed_health" {
@@ -44,13 +46,12 @@ pub fn run() -> ExitCode {
 
 /// The production writing launch environment; a mismatch fails startup
 /// like a misconfigured server would.
-fn launch_contract() -> Option<(u16, String)> {
+fn launch_contract() -> Option<(PathBuf, String)> {
     let variable = |name| std::env::var(name).ok();
-    let port = variable("LLAMA_ARG_PORT")?.parse::<u16>().ok()?;
+    let socket = PathBuf::from(variable("LLAMA_ARG_HOST")?);
     let token = variable("LLAMA_API_KEY")?;
     let threads = variable("LLAMA_ARG_THREADS")?;
     let expected = [
-        ("LLAMA_ARG_HOST", "127.0.0.1"),
         ("LLAMA_ARG_CTX_SIZE", "512"),
         ("LLAMA_ARG_N_PARALLEL", "1"),
         ("LLAMA_ARG_N_GPU_LAYERS", "0"),
@@ -62,14 +63,16 @@ fn launch_contract() -> Option<(u16, String)> {
         ("LLAMA_ARG_UBATCH", "16"),
         ("LLAMA_ARG_THREADS_BATCH", threads.as_str()),
     ];
-    let valid = port != 0
+    let valid = socket.is_absolute()
+        && socket.file_name().and_then(|name| name.to_str()) == Some("llama.sock")
+        && variable("LLAMA_ARG_PORT").is_none()
         && !token.is_empty()
         && variable("LLAMA_ARG_MODEL").is_some_and(|model| model.starts_with('/'))
         && threads.parse::<usize>().is_ok_and(|threads| threads > 0)
         && expected
             .iter()
             .all(|(name, value)| variable(name).as_deref() == Some(value));
-    valid.then_some((port, token))
+    valid.then_some((socket, token))
 }
 
 struct Request {
@@ -79,7 +82,7 @@ struct Request {
     body: Value,
 }
 
-fn respond(mut stream: TcpStream, token: &str, health: &[u8]) -> io::Result<()> {
+fn respond(mut stream: UnixStream, token: &str, health: &[u8]) -> io::Result<()> {
     let request = read_request(&mut stream, token)?;
     let public = request.method == "GET" && request.path == "/health";
     if !request.authorized && !public {
@@ -114,7 +117,7 @@ fn respond(mut stream: TcpStream, token: &str, health: &[u8]) -> io::Result<()> 
     }
 }
 
-fn read_request(stream: &mut TcpStream, token: &str) -> io::Result<Request> {
+fn read_request(stream: &mut UnixStream, token: &str) -> io::Result<Request> {
     let invalid = || io::Error::from(io::ErrorKind::InvalidData);
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 4_096];
@@ -161,7 +164,7 @@ fn read_request(stream: &mut TcpStream, token: &str) -> io::Result<Request> {
     })
 }
 
-fn write_json(stream: &mut TcpStream, status: &str, body: &[u8]) -> io::Result<()> {
+fn write_json(stream: &mut UnixStream, status: &str, body: &[u8]) -> io::Result<()> {
     write!(
         stream,
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
