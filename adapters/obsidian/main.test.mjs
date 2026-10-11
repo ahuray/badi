@@ -22,7 +22,9 @@ async function harness(context) {
     requests = [];
     modes = [];
     reports = [];
+    dismissed = 0;
     connect() { this.emit('state', 'ready'); return Promise.resolve(true); }
+    dismiss() { this.dismissed++; }
     suggest(before, options) { this.requests.push({ before, ...options }); return Promise.resolve(' for your time'); }
     authorize(mode) { this.modes.push(mode); return Promise.resolve({ text: mode === 'word' ? ' for' : ' for your time' }); }
     report(grant, status) { this.reports.push({ text: grant.text, status }); }
@@ -196,6 +198,7 @@ test('Obsidian observes host-prevented Escape without consuming it or requesting
     preventDefault() { assert.fail('An observer must preserve the host event'); },
     stopPropagation() { assert.fail('An observer must preserve event routing'); } };
   assert.equal(domListeners.get('keydown')(event), undefined);
+  assert.equal(client.dismissed, 1, 'A visible suggestion is dismissed without taking the host key');
   assert.equal(controller.text, null);
   assert.equal(controller.decorations.length, 0);
   assert.equal(view.transactions.length, 0, 'Dismissal does not modify the note');
