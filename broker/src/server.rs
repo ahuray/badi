@@ -49,6 +49,7 @@ pub async fn run(socket_path: &Path, broker: Broker) -> Result<(), ServerError> 
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
     let (listener, _guard) = bind_secure(socket_path)?;
+    broker.remember_socket_path(socket_path.to_owned());
     let admissions = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let shutdown = CancellationToken::new();
     let mut connections = JoinSet::new();
@@ -620,22 +621,28 @@ impl MessageHandler<'_> {
         if action.is_global() {
             let payload: GlobalControlRequestPayload = envelope.decode_payload()?;
             payload.validate()?;
-            match action {
-                ControlAction::Pause => self.broker.set_paused(true).await,
-                ControlAction::Resume => self.broker.set_paused(false).await,
-                ControlAction::PauseToggle => self.broker.toggle_paused().await,
+            let paused = match action {
+                ControlAction::Pause => self.broker.set_paused(true).await?,
+                ControlAction::Resume => self.broker.set_paused(false).await?,
+                ControlAction::PauseToggle => self.broker.toggle_paused().await?,
                 ControlAction::Request
                 | ControlAction::AcceptWord
                 | ControlAction::AcceptAll
                 | ControlAction::Dismiss => return Err(ServerError::InvalidMessage),
             };
-        } else {
-            let coordinates = envelope.coordinates()?;
-            let payload: SessionControlRequestPayload = envelope.decode_payload()?;
-            self.broker
-                .session_control(coordinates, payload, envelope.id.clone())
-                .await?;
+            let result = ControlResultPayload {
+                action,
+                accepted: true,
+                reason: ReasonCode::Accepted,
+                paused,
+            };
+            return self.reply(MessageType::ControlResult, envelope.id, &result);
         }
+        let coordinates = envelope.coordinates()?;
+        let payload: SessionControlRequestPayload = envelope.decode_payload()?;
+        self.broker
+            .session_control(coordinates, payload, envelope.id.clone())
+            .await?;
         let result = ControlResultPayload {
             action,
             accepted: true,
@@ -664,7 +671,7 @@ impl MessageHandler<'_> {
             settings_revision: health.settings_revision,
             control_plane_degraded: health.control_plane_degraded,
             sessions: health.sessions,
-            socket_mode: "0600".to_owned(),
+            socket_mode: self.broker.measured_socket_mode(),
             max_frame_bytes: health.max_frame_bytes,
             // The legacy v1 wire keeps its frozen counter set.
             metrics: if self.protocol_version() == CURRENT_PROTOCOL_VERSION {
@@ -1170,7 +1177,7 @@ mod tests {
 
         for _ in 0..=MAX_SESSIONS_PER_CONNECTION {
             for paused in [true, false] {
-                assert_eq!(broker.set_paused(paused).await, paused);
+                assert_eq!(broker.set_paused(paused).await.expect("pause"), paused);
                 let event = timeout(Duration::from_secs(1), read_envelope(&mut client))
                     .await
                     .expect("authority deadline")

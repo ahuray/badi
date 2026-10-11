@@ -64,13 +64,30 @@ async fn run(arguments: Vec<OsString>) -> Result<(), ExitError> {
             return Ok(());
         }
     };
-    let control_plane =
-        Arc::new(ControlPlane::open_from_environment().map_err(|_| ExitError::ControlPlane)?);
+    let control_plane = Arc::new(ControlPlane::open_from_environment().map_err(|error| {
+        ExitError::ControlPlane {
+            name: error.startup_name(),
+            configuration: error.restart_cannot_help(),
+        }
+    })?);
     // Awaited directly on main's block_on thread: the runtime's parent-death
     // signal fires when the thread that spawned it exits.
     let provider = start_provider(provider, model_directory).await?;
     let broker = Broker::with_control_plane(provider, BrokerConfig::default(), control_plane)
-        .map_err(|_| ExitError::ControlPlane)?;
+        .map_err(|error| match error {
+            badi_broker::BrokerError::ControlPlane(error) => ExitError::ControlPlane {
+                name: error.startup_name(),
+                configuration: error.restart_cannot_help(),
+            },
+            badi_broker::BrokerError::OutcomeRecorderThread(_) => ExitError::ControlPlane {
+                name: "outcome_recorder".to_owned(),
+                configuration: false,
+            },
+            _ => ExitError::ControlPlane {
+                name: "control_plane".to_owned(),
+                configuration: false,
+            },
+        })?;
     server::run(&socket_path, broker)
         .await
         .map_err(|error| match error {
@@ -206,7 +223,10 @@ enum ProviderSelection {
 #[derive(Clone, Debug)]
 enum ExitError {
     Arguments,
-    ControlPlane,
+    ControlPlane {
+        name: String,
+        configuration: bool,
+    },
     Server,
     SocketPath,
     Model {
@@ -221,6 +241,10 @@ impl ExitError {
             Self::Model {
                 configuration: true,
                 ..
+            }
+            | Self::ControlPlane {
+                configuration: true,
+                ..
             } => ExitCode::from(EXIT_CONFIGURATION),
             _ => ExitCode::FAILURE,
         }
@@ -231,7 +255,7 @@ impl std::fmt::Display for ExitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Arguments => formatter.write_str("arguments"),
-            Self::ControlPlane => formatter.write_str("control_plane"),
+            Self::ControlPlane { name, .. } => write!(formatter, "control_plane: {name}"),
             Self::Server => formatter.write_str("server"),
             Self::SocketPath => formatter.write_str("socket_path"),
             Self::Model { message, .. } => write!(formatter, "local_model: {message}"),

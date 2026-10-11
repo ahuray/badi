@@ -14,8 +14,9 @@ Restart=on-failure
 RestartSec=2
 RestartSteps=5
 RestartMaxDelaySec=60
-# 78: the model or runtime is missing, unsupported, or larger than this host.
-# Retrying cannot help, so the unit stays failed for badi doctor to report.
+# 78: the model or runtime is missing, unsupported, or larger than this host,
+# or private settings are corrupt or unsafe. Retrying cannot help, so the
+# unit stays failed for badi doctor to report.
 RestartPreventExitStatus=78
 UMask=0077
 RuntimeDirectory=badi

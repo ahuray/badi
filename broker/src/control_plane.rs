@@ -556,6 +556,52 @@ pub enum ControlPlaneError {
     },
 }
 
+impl ControlPlaneError {
+    /// A stable, content-free name for startup diagnostics.
+    #[must_use]
+    pub fn startup_name(&self) -> String {
+        match self {
+            Self::ClockBeforeUnixEpoch => "clock_before_unix_epoch".to_owned(),
+            Self::LockPoisoned => "lock_poisoned".to_owned(),
+            Self::PersonalizationUnavailable => "personalization_unavailable".to_owned(),
+            Self::Personalization(error) => error.to_string(),
+            Self::Storage(error) => error.to_string(),
+            Self::Settings(error) => error.to_string(),
+            Self::SettingsCommittedReconciliation { .. } => {
+                "settings_committed_reconciliation".to_owned()
+            }
+        }
+    }
+
+    /// Corrupt or unsafe settings will not improve by restarting the process.
+    #[must_use]
+    pub fn restart_cannot_help(&self) -> bool {
+        match self {
+            Self::Settings(SettingsStoreError::Json(_) | SettingsStoreError::Validation(_))
+            | Self::Personalization(
+                PersonalizationStoreError::Json(_) | PersonalizationStoreError::Validation(_),
+            ) => true,
+            Self::Settings(SettingsStoreError::Storage(error))
+            | Self::Storage(error)
+            | Self::Personalization(PersonalizationStoreError::Storage(error)) => {
+                storage_restart_cannot_help(error)
+            }
+            _ => false,
+        }
+    }
+}
+
+fn storage_restart_cannot_help(error: &PrivateStorageError) -> bool {
+    matches!(
+        error,
+        PrivateStorageError::UnsafeDirectory
+            | PrivateStorageError::UnsafeFile
+            | PrivateStorageError::MissingHome(_)
+            | PrivateStorageError::PathNotAbsolute
+            | PrivateStorageError::InvalidFileName
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -596,6 +642,21 @@ mod tests {
             None,
         )
         .expect("other identity")
+    }
+
+    #[test]
+    fn unsafe_settings_are_named_and_do_not_restart() {
+        let unsafe_file = ControlPlaneError::Storage(PrivateStorageError::UnsafeFile);
+        assert_eq!(unsafe_file.startup_name(), "unsafe_file");
+        assert!(unsafe_file.restart_cannot_help());
+        let locked = ControlPlaneError::Storage(PrivateStorageError::LockUnavailable);
+        assert_eq!(locked.startup_name(), "lock_unavailable");
+        assert!(!locked.restart_cannot_help());
+        let corrupt = ControlPlaneError::Settings(SettingsStoreError::Validation(
+            SettingsValidationError::UnsupportedSchema,
+        ));
+        assert_eq!(corrupt.startup_name(), "validation");
+        assert!(corrupt.restart_cannot_help());
     }
 
     fn learning_settings(revision: u64, retention: RetentionPermission) -> SettingsV2 {

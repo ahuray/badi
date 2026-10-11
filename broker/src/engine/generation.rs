@@ -181,6 +181,7 @@ impl Broker {
             .try_acquire_owned()
             .map_err(|_| {
                 metrics.record_provider_error();
+                metrics.record_no_suggestion(NoSuggestionReason::ProviderError);
                 BrokerError::ProviderBusy
             })?;
         session.generation = binding.generation;
@@ -218,11 +219,20 @@ impl Broker {
         if self.inner.config.debounce != Duration::ZERO {
             tokio::select! {
                 () = time::sleep(self.inner.config.debounce) => {}
-                () = cancellation.cancelled() => return,
-                () = shutdown.cancelled() => return,
+                () = cancellation.cancelled() => {
+                    self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
+                    return;
+                }
+                () = shutdown.cancelled() => {
+                    self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
+                    return;
+                }
             }
         }
         if cancellation.is_cancelled() || shutdown.is_cancelled() {
+            self.inner
+                .metrics
+                .record_no_suggestion(NoSuggestionReason::Stale);
             return;
         }
         self.inner.metrics.record_provider_call(request.byte_len());
@@ -391,7 +401,10 @@ impl Broker {
             metrics.record_no_suggestion(NoSuggestionReason::Stale);
             return;
         }
-        metrics.record_suggestion_shown();
+        // A carried remainder is the same suggestion, not another show.
+        if carried.is_none() {
+            metrics.record_suggestion_shown();
+        }
         let aggregate_day = match carried {
             Some(carried) => carried.aggregate_day,
             None => current_unix_day().filter(|&event_day| {

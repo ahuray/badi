@@ -108,6 +108,9 @@ impl Broker {
                     visible.aggregate_day = None;
                 }
             }
+            if let Some(carry) = state.type_through.as_mut() {
+                carry.aggregate_day = None;
+            }
             recorder.begin_clear()?
         };
         let (changed, snapshot) = time::timeout(PERSONALIZATION_CLEAR_TIMEOUT, response)

@@ -191,6 +191,20 @@ export class BrokerClient extends EventEmitter {
     this.emit('state', status);
   }
 
+  // Escape ends the carried remainder (ADR 0004). Closing the session does not:
+  // Fcitx closes one on every edit and the next key still needs the carry.
+  dismiss() {
+    const candidate = this.#candidate;
+    if (candidate && this.#session && !this.#closed) {
+      try {
+        this.#send('control.request', {
+          action: 'dismiss', fingerprint: candidate.fingerprint, suggestion_id: candidate.suggestion_id,
+        }, randomUUID(), candidate);
+      } catch { /* The local preview still goes away. */ }
+    }
+    this.cancel();
+  }
+
   cancel(closeSession = true) {
     this.#generation++;
     clearTimeout(this.#expiry);

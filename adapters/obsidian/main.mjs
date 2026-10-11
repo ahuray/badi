@@ -194,7 +194,16 @@ class WritingView {
     if (this.destroyed || event.key !== 'Escape' || !event.isTrusted || event.isComposing || this.view.composing ||
         event.altKey || event.shiftKey || event.ctrlKey || event.metaKey ||
         !this.view.hasFocus || !this.view.dom.ownerDocument.hasFocus()) return;
-    if (this.text || this.pending) this.invalidate();
+    if (this.text) {
+      this.client.dismiss();
+      this.generation++;
+      clearTimeout(this.timer);
+      this.pending = false;
+      this.snapshot = null;
+      this.clearPreview();
+      return;
+    }
+    if (this.pending) this.invalidate();
   }
 
   key(event) {

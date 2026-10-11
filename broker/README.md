@@ -36,7 +36,10 @@ and whether they were dirty (`--version` prints both; packagers may set
     suggestion, the broker answers with the remainder and no model call.
   - The remainder is a new suggestion that keeps the original deadline.
   - Escape, a whole acceptance, pause or an authority change ends the carry; a
-    word acceptance keeps it.
+    word acceptance keeps it. Editors send `dismiss` for Escape. Closing the
+    session, which Fcitx does on every edit, does not end the carry. A carried
+    remainder is not another shown suggestion and does not record a second
+    outcome on the original aggregate.
 - **Settings** (`badi.settings.v2`) are replaced by compare-and-swap on their
   revision; while a replacement's outcome is unknown, suggestions pause.
   `badi pause` persists in settings; `badictl pause` is runtime only.

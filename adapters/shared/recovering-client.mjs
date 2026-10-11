@@ -77,6 +77,7 @@ export class RecoveringBrokerClient extends EventEmitter {
     return this.#client.authorize(...args);
   }
   report(...args) { if (this.allowed) this.#client.report(...args); }
+  dismiss() { this.#client?.dismiss(); }
   cancel() { this.#client?.cancel(); }
   close() {
     this.#closed = true;

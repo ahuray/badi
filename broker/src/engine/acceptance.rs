@@ -62,9 +62,15 @@ impl Broker {
             None => self.dismiss(session, visible),
             Some(acceptance) => self.prepare_commit(session, visible, acceptance, request_id)?,
         };
-        if let Some((event_day, signal)) = signal {
-            let _ =
-                self.queue_outcome(&session.target.target, settings_revision, event_day, signal);
+        // One Shown funds one outcome. A carried remainder must not record a
+        // second one against the same aggregate.
+        let recorded = signal.is_some_and(|(event_day, signal)| {
+            self.queue_outcome(&session.target.target, settings_revision, event_day, signal)
+        });
+        if recorded {
+            if let Some(carry) = state.type_through.as_mut() {
+                carry.aggregate_day = None;
+            }
         }
         // Escape or a whole acceptance ends type-through; after the next word
         // the remainder may still carry (ADR 0004).

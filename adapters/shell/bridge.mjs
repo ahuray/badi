@@ -64,7 +64,7 @@ try {
         respond('DONE');
       } else if (command.operation === 'cancel') {
         grant = null;
-        client.cancel();
+        client.dismiss();
         respond('DONE');
       } else {
         respond('ERROR', 'invalid_operation');

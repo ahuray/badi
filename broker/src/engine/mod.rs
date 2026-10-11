@@ -17,6 +17,8 @@ mod tests;
 mod type_through;
 
 use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt as _;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -204,6 +206,7 @@ struct BrokerInner {
     outcome_recorder: Option<OutcomeRecorder>,
     started: Instant,
     state: Mutex<BrokerState>,
+    socket_path: std::sync::Mutex<Option<PathBuf>>,
 }
 
 #[derive(Default)]
@@ -310,6 +313,7 @@ impl Broker {
                 authority_events,
                 outcome_recorder,
                 started: Instant::now(),
+                socket_path: std::sync::Mutex::new(None),
                 state: Mutex::new(BrokerState {
                     settings_revision: settings.as_ref().map_or(0, |value| value.revision),
                     settings,
@@ -322,6 +326,24 @@ impl Broker {
     #[must_use]
     pub fn provider_kind(&self) -> ProviderKind {
         self.inner.provider_kind
+    }
+
+    /// The bound socket, so health can report the mode that is on disk.
+    pub fn remember_socket_path(&self, path: PathBuf) {
+        *self.inner.socket_path.lock().expect("socket path") = Some(path);
+    }
+
+    /// Four-digit permission bits of the bound socket, or `0600` before bind.
+    #[must_use]
+    pub fn measured_socket_mode(&self) -> String {
+        let path = self.inner.socket_path.lock().expect("socket path").clone();
+        let Some(path) = path else {
+            return "0600".to_owned();
+        };
+        std::fs::metadata(path).ok().map_or_else(
+            || "0000".to_owned(),
+            |metadata| format!("{:04o}", metadata.permissions().mode() & 0o777),
+        )
     }
 
     /// Completes once the provider can no longer serve requests.

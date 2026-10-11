@@ -1636,12 +1636,12 @@ async fn pause_and_dismiss_cancel_eligibility() {
         )
         .await
         .expect("request");
-    assert!(broker.set_paused(true).await);
+    assert!(broker.set_paused(true).await.expect("pause"));
     sleep(Duration::from_millis(20)).await;
     assert!(events.try_recv().is_err());
     assert!(broker.active_locator().await.is_none());
 
-    assert!(!broker.set_paused(false).await);
+    assert!(!broker.set_paused(false).await.expect("resume"));
     let second = context(2, FieldPurpose::Normal);
     broker
         .update_context(coordinates(session_id, 2), second.clone())
@@ -1714,8 +1714,8 @@ async fn concurrent_pair_of_pause_toggles_is_linearizable() {
 
     barrier.wait().await;
     let (first, second) = tokio::join!(first, second);
-    let first = first.expect("first toggle task");
-    let second = second.expect("second toggle task");
+    let first = first.expect("first toggle task").expect("pause");
+    let second = second.expect("second toggle task").expect("pause");
 
     assert_ne!(first, second, "each toggle must observe one transition");
     assert_eq!(broker.is_paused().await, initial);
@@ -1763,7 +1763,7 @@ async fn paused_and_stale_addressed_accepts_emit_no_commit_prepare() {
         suggestion_id: Some(payload.suggestion_id.clone()),
     };
 
-    assert!(broker.set_paused(true).await);
+    assert!(broker.set_paused(true).await.expect("pause"));
     assert!(matches!(
         broker
             .session_control(coordinates(session_id, 1), control.clone(), None)
@@ -1773,7 +1773,7 @@ async fn paused_and_stale_addressed_accepts_emit_no_commit_prepare() {
     while events.try_recv().is_ok() {}
     assert!(events.try_recv().is_err());
 
-    assert!(!broker.set_paused(false).await);
+    assert!(!broker.set_paused(false).await.expect("resume"));
     let second = context(2, FieldPurpose::Normal);
     broker
         .update_context(coordinates(session_id, 2), second)
@@ -2300,7 +2300,7 @@ async fn pause_revokes_a_pending_commit_and_rejects_its_result() {
             if request_id.as_deref() == Some("accept-before-pause")
     ));
 
-    assert!(broker.set_paused(true).await);
+    assert!(broker.set_paused(true).await.expect("pause"));
     assert!(matches!(
         events.recv().await,
         Some(BrokerEvent::SuggestionClear { payload, request_id, .. })
@@ -2957,7 +2957,7 @@ async fn runtime_pause_ack_fences_pre_pause_outcome_writes() {
         Ok(Some(BrokerEvent::SuggestionShow { .. }))
     ));
 
-    assert!(broker.set_paused(true).await);
+    assert!(broker.set_paused(true).await.expect("pause"));
     let fenced = control_plane.snapshot().expect("direct aggregate snapshot");
     assert_eq!(fenced.personalization.records[0].shown, 1);
     assert_eq!(broker.outcome_recorder_health().write_failures, 0);
@@ -3277,7 +3277,7 @@ async fn probe_uses_the_provider_and_display_checks_without_session_or_counters(
     assert_eq!(broker.session_count().await, 0);
     assert!(broker.active_locator().await.is_none());
 
-    broker.set_paused(true).await;
+    broker.set_paused(true).await.expect("pause");
     let paused = broker
         .probe(probe_request("Thank you", "en", false))
         .await
@@ -3402,13 +3402,13 @@ async fn probe_withholds_its_result_when_a_pause_arrives_during_inference() {
     // Runtime pause (`badictl pause`) acknowledged while the provider runs.
     let pending = start();
     provider.entered.notified().await;
-    assert!(broker.set_paused(true).await);
+    assert!(broker.set_paused(true).await.expect("pause"));
     provider.release.notify_one();
     let paused = pending.await.expect("probe task").expect("probe");
     assert_eq!(paused.outcome, ProbeOutcome::Paused);
     assert_eq!((paused.text.as_deref(), paused.reason), (None, None));
     paused.validate().expect("valid paused result");
-    assert!(!broker.set_paused(false).await);
+    assert!(!broker.set_paused(false).await.expect("resume"));
 
     // Persisted pause (`badi pause`) committed while the provider runs.
     let pending = start();
@@ -3749,8 +3749,8 @@ async fn escape_whole_acceptance_and_pause_end_type_through() {
                 .await
                 .expect("control");
         } else {
-            assert!(broker.set_paused(true).await);
-            assert!(!broker.set_paused(false).await);
+            assert!(broker.set_paused(true).await.expect("pause"));
+            assert!(!broker.set_paused(false).await.expect("resume"));
         }
         let (second, mut second_events) = open_observed_session(&broker, "field-epoch-2").await;
         let next = shown_after(&broker, second, &mut second_events, "Hello rev")

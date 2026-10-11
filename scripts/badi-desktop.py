@@ -142,6 +142,15 @@ def startup_problem():
         # Only translate known metadata errors. Never pass arbitrary journal
         # lines (or a historical invocation's failure) into the health report.
         for line in reversed(journal.stdout.splitlines()):
+            if line.startswith("error_code=control_plane:"):
+                name = line.removeprefix("error_code=control_plane:").strip()
+                if name in {"unsafe_file", "unsafe_directory", "json", "validation", "missing_home"}:
+                    return {"code": "settings_" + name,
+                            "message": "Badi's private settings cannot be used, so the service has stopped instead of retrying.",
+                            "action": "Repair or replace ~/.config/badi/settings.json and its directory permissions, then badi service restart."}
+                return {"code": "control_plane",
+                        "message": "The broker could not open its private settings.",
+                        "action": "Run badi logs, then badi service restart if the settings directory is intact."}
             if not line.startswith("error_code=local_model:"):
                 continue
             if line.removeprefix("error_code=local_model:").strip() == "runtime_process_exited":
