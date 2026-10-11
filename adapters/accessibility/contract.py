@@ -150,6 +150,8 @@ class Observer:
     def snapshot(self, request):
         metadata, focus = self.bound_focus(request)
         self.authorize(focus["binding"])
+        if metadata.get("sentence_bounded"):
+            metadata["sentence_start"] = self.backend.sentence_start(metadata)
         caret = metadata["caret"]
         # Chromium may send a rich editor's text one line break shorter per block.
         margin = len(metadata.get("blocks") or ())

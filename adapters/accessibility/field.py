@@ -104,7 +104,8 @@ class FieldBackend:
         flatten = app.web and not app.gecko
         caret, count, selections, rich = self.caret_position(node, flatten)
         local = rich.caret_text if rich else CaretText(node.get_text_iface(), caret, count)
-        sentence_start = self.sentence_start(local) if app.sentence_bounded else 0
+        # The sentence boundary is prose. Inspect stops at metadata; snapshot
+        # asks for it only after the binding is authorized.
         geometry = None
         if (calibrate and 1 <= local.caret <= local.length and flags.contains(self.atspi.StateType.SHOWING) and
                 window.get("xwayland") is False):
@@ -119,15 +120,22 @@ class FieldBackend:
                 **self.states(flags), "caret": caret, "total_chars": count, "selection_count": selections,
                 "geometry": geometry, "node": node, "flatten": flatten, "blocks": rich.blocks if rich else None,
                 "caret_block": rich.caret_block if rich else None,
-                "sentence_start": sentence_start}
+                "sentence_bounded": app.sentence_bounded, "sentence_start": 0}
 
-    def sentence_start(self, local):
+    def sentence_start(self, metadata):
         """Where the caret's sentence starts. LibreOffice Writer gives Fcitx only
-        that sentence as surrounding text, so a snapshot must begin there to agree."""
-        text, caret, _length = local
+        that sentence as surrounding text, so a snapshot must begin there to agree.
+
+        Call this only from snapshot, after authorize. The lookup returns the
+        sentence text; inspect must not call it.
+        """
+        if not metadata.get("sentence_bounded"):
+            return 0
+        caret = metadata["caret"]
         if caret < 1:
             return 0
         self.budget()
+        text = metadata["node"].get_text_iface()
         sentence = self.atspi.Text.get_string_at_offset(text, caret - 1, self.atspi.TextGranularity.SENTENCE)
         if sentence is None or not 0 <= sentence.start_offset <= caret - 1 < sentence.end_offset:
             raise Denied("invalid_caret")

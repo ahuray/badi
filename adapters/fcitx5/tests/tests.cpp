@@ -1310,7 +1310,7 @@ void observerRepliesFailClosed() {
           "an observed block end and an empty Fcitx after both name the end of the field, and nothing else does");
     const auto quoted = captureContextWindow("Quoted list\n\nThanks for the", 27, 27, true, "en");
     check(quoted && observerAgrees({{"before", "Thanks for the"}, {"after", ""}, {"scope", "block"}}, *quoted) &&
-              observerAgrees({{"before", ""}, {"after", ""}, {"scope", "block"}}, *captureContextWindow("Above\n", 6, 6, true, "en")) &&
+              !observerAgrees({{"before", ""}, {"after", ""}, {"scope", "block"}}, *captureContextWindow("Above\n", 6, 6, true, "en")) &&
               !observerAgrees({{"before", "Thanks for the"}, {"after", ""}}, *quoted) &&
               !observerAgrees({{"before", "for the"}, {"after", ""}, {"scope", "block"}}, *quoted) &&
               !observerAgrees({{"before", "Thanks for the"}, {"after", ""}, {"scope", "field"}}, *quoted) &&

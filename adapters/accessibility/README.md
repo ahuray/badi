@@ -38,7 +38,8 @@ editing works ([coverage](../../README.md#where-it-works)).
 - **Brave web apps** take their page origin's policy, as a tab does.
 - **LibreOffice** reports one program id for every module, so only Writer's
   `paragraph` fields qualify. Writer gives Fcitx only the caret's sentence, so
-  the snapshot starts at the AT-SPI `SENTENCE` boundary and must still equal it.
+  the snapshot, after the binding is authorized, starts at the AT-SPI
+  `SENTENCE` boundary and must still equal it. Inspect does not read that sentence.
 
 Browser targets share one browser-origin identity (adapter `chromium`), so one
 `badi site ... on` grant covers Chromium, Brave and Zen; the binding keeps the

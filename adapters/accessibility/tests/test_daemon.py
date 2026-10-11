@@ -67,6 +67,16 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             json.loads('{"id":"first","id":"second"}', object_pairs_hook=unique_object)
 
+    def test_a_duplicate_key_keeps_the_owner_and_broken_json_does_not(self):
+        client, fd = self.client()
+        client.sendall(b'{"id":"first","id":"second"}\n')
+        self.assertTrue(self.daemon.read(fd, FakeGLib.IO_IN))
+        self.assertIn(fd, self.daemon.clients)
+        self.assertEqual(json.loads(client.recv(4096))["error"], "accessibility_unavailable")
+        client.sendall(b'{not json}\n')
+        self.assertFalse(self.daemon.read(fd, FakeGLib.IO_IN))
+        self.assertNotIn(fd, self.daemon.clients)
+
     def test_oversized_unterminated_frame_closes_connection(self):
         client, fd = self.client()
         client.sendall(b"x" * (MAX_FRAME + 1))
@@ -216,13 +226,13 @@ class PreviewLifecycleTests(unittest.TestCase):
             return preview
         return unittest.mock.patch.dict(sys.modules, {"preview": SimpleNamespace(Preview=build)})
 
-    def test_a_failed_construction_is_remembered(self):
+    def test_a_failed_construction_is_retried(self):
         with self.fake_module(RuntimeError("preview_wayland_unavailable")):
             self.assertFalse(self.daemon.warm_preview())
             self.assertFalse(self.daemon.render_preview({}, " text", 1000))
             self.assertFalse(self.daemon.render_preview({}, " text", 1000))
             self.daemon.hide_preview()
-        self.assertEqual(self.builds, [True])
+        self.assertEqual(self.builds, [True, True, True])
 
     def test_warming_builds_once_and_rendering_reuses_it(self):
         calls = []
@@ -1419,9 +1429,11 @@ class MetadataTests(unittest.TestCase):
                                                           VISIBLE="visible", ENABLED="enabled"),
                                 Text=SimpleNamespace(get_attribute_run=lambda *_args: ({"direction": "lr"}, 0, 5),
                                                      get_string_at_offset=lambda _text, offset, granularity:
-                                                         sentences[(offset, granularity)]),
+                                                         sentence_reads.append(sentences[(offset, granularity)].content)
+                                                         or sentences[(offset, granularity)]),
                                 TextGranularity=SimpleNamespace(SENTENCE="sentence"))
-        sentences = {(4, "sentence"): SimpleNamespace(start_offset=2, end_offset=5)}
+        sentence_reads = []
+        sentences = {(4, "sentence"): SimpleNamespace(start_offset=2, end_offset=5, content="Find the report")}
         backend = FieldBackend(atspi, APPS)
         backend.budget = lambda: None
         window = {"pid": 42, "xwayland": False}
@@ -1443,13 +1455,17 @@ class MetadataTests(unittest.TestCase):
         node.role = "paragraph"
         self.assertEqual((backend.metadata("libreoffice")["role"], backend.metadata("libreoffice")["web"]),
                          ("paragraph", False))
-        self.assertEqual(backend.metadata("libreoffice")["sentence_start"], 2)
-        self.assertEqual(backend.metadata("code")["sentence_start"], 0, "only sentence-bounded apps look it up")
+        libre = backend.metadata("libreoffice")
+        self.assertEqual(sentence_reads, [], "inspect metadata reads no sentence text")
+        self.assertEqual(backend.sentence_start(libre), 2)
+        self.assertEqual(sentence_reads, ["Find the report"])
+        self.assertEqual(backend.sentence_start(backend.metadata("code")), 0, "only sentence-bounded apps look it up")
+        self.assertEqual(sentence_reads, ["Find the report"])
         for start, end in ((5, 6), (0, 4), (-1, 5)):
-            sentences[(4, "sentence")] = SimpleNamespace(start_offset=start, end_offset=end)
+            sentences[(4, "sentence")] = SimpleNamespace(start_offset=start, end_offset=end, content="no")
             with self.subTest(sentence=(start, end)), self.assertRaisesRegex(Denied, "invalid_caret"):
-                backend.metadata("libreoffice")
-        sentences[(4, "sentence")] = SimpleNamespace(start_offset=2, end_offset=5)
+                backend.sentence_start(backend.metadata("libreoffice"))
+        sentences[(4, "sentence")] = SimpleNamespace(start_offset=2, end_offset=5, content="Find the report")
         for role in ("text", "entry"):
             node.role = role
             with self.subTest(role=role), self.assertRaisesRegex(Denied, "unsupported_field"):

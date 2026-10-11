@@ -90,7 +90,6 @@ class Daemon:
         self.window_events = None
         self.failed = False
         self.preview = None
-        self.preview_unavailable = False
         self.observer.render = self.render_preview
         self.observer.hide = self.hide_preview
         self.observer.authorize = self.arm_field_events
@@ -167,12 +166,14 @@ class Daemon:
 
     def load_preview(self):
         """The GTK preview, built at most once; None if it cannot be built here."""
-        if self.preview is None and not self.preview_unavailable:
+        if self.preview is None:
             try:
                 from preview import Preview
                 self.preview = Preview()
-            except Exception:
-                self.preview_unavailable = True
+            except Exception as error:
+                # Try again on the next preview. A missing display must not
+                # disable the grey text for the rest of the process.
+                print(f"badi-accessibility: {type(error).__name__}", file=sys.stderr)
         return self.preview
 
     def warm_preview(self):
@@ -352,9 +353,16 @@ class Daemon:
         except Denied as error:
             self.observer.invalidate("operation_timeout" if error.timed_out else "field_unavailable")
             self.send(fd, self.failure(request, str(error)))
-        except (ValueError, UnicodeError):
+        except (json.JSONDecodeError, UnicodeError):
             return False
-        except Exception:
+        except ValueError as error:
+            # A hook such as a duplicate key is not a broken frame. Keep the
+            # owner; log only the exception class.
+            print(f"badi-accessibility: {type(error).__name__}", file=sys.stderr)
+            self.observer.invalidate("accessibility_unavailable")
+            self.send(fd, self.failure(request, "accessibility_unavailable"))
+        except Exception as error:
+            print(f"badi-accessibility: {type(error).__name__}", file=sys.stderr)
             self.observer.invalidate("accessibility_unavailable")
             self.send(fd, self.failure(request, "accessibility_unavailable"))
         return True
@@ -464,13 +472,20 @@ def main():
                             category=DeprecationWarning)
     import gi
     gi.require_version("Atspi", "2.0")
-    from gi.repository import Atspi, GLib, GLibUnix
+    from gi.repository import Atspi, GLib
     GLib.log_set_handler("dbind", GLib.LogLevelFlags.LEVEL_WARNING, quiet_missing_cache, None)
     Atspi.set_timeout(50, 50)
     Atspi.init()
     daemon = Daemon(args.socket, Atspi, GLib)
-    GLibUnix.signal_add(GLib.PRIORITY_DEFAULT, 15, lambda *_args: daemon.loop.quit() or False)
-    GLibUnix.signal_add(GLib.PRIORITY_DEFAULT, 2, lambda *_args: daemon.loop.quit() or False)
+    quit_loop = lambda *_args: daemon.loop.quit() or False
+    try:
+        from gi.repository import GLibUnix
+        add_signal = GLibUnix.signal_add_full
+    except (ImportError, AttributeError):
+        # The pinned CI Arch snapshot predates the GLibUnix override.
+        add_signal = GLib.unix_signal_add_full
+    for signum in (15, 2):
+        add_signal(GLib.PRIORITY_DEFAULT, signum, quit_loop)
     try:
         daemon.run()
         if daemon.failed:

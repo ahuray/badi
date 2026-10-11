@@ -647,6 +647,8 @@ private:
     // IME-parity has no manual fallback, so an explicit request says why the
     // observer produced no field: the field's own purpose, or no observer.
     void observerUnavailable(Binding &binding, const Json &error = nullptr) {
+        // A failed inspection must not keep the previous field's grant.
+        if (binding.observed()) retireObservedField(binding);
         if (!imeParityApp(binding.state.appId())) return;
         const bool fieldDenied = observerDeniedField(error);
         debug_.record("request_blocked", binding.state.appId(),
