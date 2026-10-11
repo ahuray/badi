@@ -131,6 +131,27 @@ Persian review where results are ambiguous and the full Lab qualification.
 - [ ] Measure Cotypist parity with the same tasks on a named Cotypist version on
       a Mac.
 
+## Audit follow-ups
+
+From the 2026-10-11 audit. These are not part of the installed behavior.
+
+- [ ] The observer spawns `qs ipc` on every inspection
+      (`adapters/accessibility/desktop.py`).
+- [ ] Browser event cost on large pages (`daemon.py` focus handling and
+      `field.py` serialization).
+- [ ] The grey preview does not follow scrolling.
+- [ ] Document the limits of sensitive-field detection.
+- [ ] An ADR retiring protocol v1.
+- [ ] Enforce `authority.ack`, or delete it if nothing consumes it.
+- [ ] The panel keeps polling while it is hidden, once per monitor
+      (`DesktopPanel.qml`).
+- [ ] Bash wakes every 100 ms after the first preview (`preview.c`).
+- [ ] `badi doctor` in human-readable text as well as JSON.
+- [ ] Stop passing the settings document on the `badi` command line
+      (`badi-desktop.py`).
+- [ ] Split `broker/src/settings.rs`, `broker/src/engine/tests.rs` and
+      `adapters/fcitx5/addon.cpp`.
+
 ## Remaining surfaces
 
 - [ ] Browser rich editors: a caret inside a list or quote, EditContext editors
