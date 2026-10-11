@@ -149,7 +149,7 @@ class WritingView {
       this.decorations = Decoration.set([Decoration.widget({ widget: new SuggestionWidget(preview), side: 1 }).range(end)]);
       this.render();
     } catch {
-      if (generation === this.generation && this.view.hasFocus) this.owner.status.setText('Badi · no suggestion · Tab retries');
+      if (generation === this.generation && this.view.hasFocus) this.owner.status.setText('Badi · no suggestion · Ctrl+Shift+Space retries');
     } finally {
       if (generation === this.generation) this.pending = false;
     }
@@ -181,7 +181,7 @@ class WritingView {
         inserted = applied;
       } finally { this.applying = false; }
     } catch {
-      if (generation === this.generation) this.owner.status.setText('Badi · suggestion changed · Tab retries');
+      if (generation === this.generation) this.owner.status.setText('Badi · suggestion changed · Ctrl+Shift+Space retries');
     } finally {
       if (generation === this.generation) {
         this.invalidate();
@@ -198,19 +198,26 @@ class WritingView {
   }
 
   key(event) {
-    if (!event.isTrusted || event.isComposing || event.altKey || event.shiftKey) return false;
+    if (!event.isTrusted || event.isComposing || event.altKey) return false;
+    if (event.ctrlKey && event.shiftKey && !event.metaKey && event.key === ' ') {
+      if (event.repeat || this.pending || this.text) return true;
+      void this.request();
+      return true;
+    }
+    if (event.shiftKey) return false;
     if ((event.ctrlKey || event.metaKey) && event.key === 'ArrowRight' && this.text && this.eligible()) {
       if (!event.repeat) void this.accept('all');
       return true;
     }
     if (event.ctrlKey || event.metaKey) return false;
     if (event.key !== 'Tab') return false;
+    if (!this.text) return false;
     if (!this.client.connected) void this.client.connect().catch(() => undefined);
     const reason = this.blockedReason();
     recordActivity('obsidian', 'tab', reason ?? 'eligible');
     if (reason) { this.owner.status.setText(`Badi · ${reason.replaceAll('_', ' ')}`); return false; }
     if (event.repeat || this.pending) return true;
-    if (this.text) void this.accept(); else void this.request();
+    void this.accept();
     return true;
   }
 

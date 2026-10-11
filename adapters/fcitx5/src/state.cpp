@@ -177,6 +177,10 @@ bool matchesCapturedContext(
     return captured && current && captured->context == *current;
 }
 
+bool claimInvokeChord(bool editingAvailable, bool policyAllowed, bool foreignIme) {
+    return editingAvailable && policyAllowed && !foreignIme;
+}
+
 LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
                               bool escapeKey, bool hasLiveOwnedCandidate,
                               const PanelObservation &panel) {

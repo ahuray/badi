@@ -408,7 +408,7 @@ private:
         case PreKeyAction::CloseNotice:
             binding->state.invalidateContext();
             clearOwnedPanel(*binding);
-            break;
+            return;
         case PreKeyAction::Dismiss:
             dismissSuggestion(*binding, panel);
             break;
@@ -453,17 +453,18 @@ private:
         if (event.isVirtual() || event.filtered() || event.accepted()) return;
         const auto panel = observePanel(*binding);
         const auto key = event.key().normalize();
-        const bool invokeKey = key.check(invokeChord());
-        if (!binding->state.editingAvailable()) {
-            // Without an edit path only the invoke chord acts: it inspects or explains.
-            if (invokeKey && !hasForeignImeUi(panel)) {
-                invoke(*binding);
-                event.filterAndAccept();
-            }
-            return;
+        const bool invokeChordPressed = key.check(invokeChord());
+        const bool foreignIme = hasForeignImeUi(panel);
+        const bool claimInvoke = claimInvokeChord(binding->state.editingAvailable(),
+                                                   binding->broker.policyAllowed, foreignIme);
+        if (invokeChordPressed && !claimInvoke && !foreignIme) {
+            debug_.record("decision", binding->state.appId(),
+                          binding->state.editingAvailable() ? "app_disabled" : "no_edit_path");
         }
+        if (!binding->state.editingAvailable()) return;
         const bool liveOwnedCandidate = binding->state.suggestionVisible() && panel.candidatesOwnedByBadi;
-        switch (decideLocalAction(invokeKey, key.check(acceptChord()), key.check(::fcitx::Key(FcitxKey_Escape)),
+        switch (decideLocalAction(claimInvoke && invokeChordPressed, key.check(acceptChord()),
+                                  key.check(::fcitx::Key(FcitxKey_Escape)),
                                   liveOwnedCandidate, panel)) {
         case LocalAction::Invoke:
             invoke(*binding);
@@ -530,6 +531,9 @@ private:
     }
 
     void requestAcceptance(Binding &binding, bool word = false) {
+        // A second Tab or Ctrl+→ while the first acceptance is in flight is a
+        // no-op. Clearing the panel here would cancel that acceptance.
+        if (binding.state.acceptancePending()) return;
         const auto request = binding.state.editingAvailable()
             ? binding.state.requestAcceptance(transport_.nowMs(), observePanel(binding), word)
             : std::nullopt;

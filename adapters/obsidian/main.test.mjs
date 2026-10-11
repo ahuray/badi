@@ -148,7 +148,9 @@ test('Obsidian preserves manual policy and refuses a grant after focus changes',
   client.automaticAllowed = false;
   await tick(250);
   assert.equal(client.requests.length, 0);
-  assert.equal(controller.key({ isTrusted: true, key: 'Tab' }), true);
+  assert.equal(controller.key({ isTrusted: true, key: 'Tab' }), false, 'Tab indents when no suggestion is visible');
+  assert.equal(client.requests.length, 0);
+  assert.equal(controller.key({ isTrusted: true, key: ' ', ctrlKey: true, shiftKey: true }), true);
   await settle();
   assert.equal(client.requests[0].explicit, true);
   let authorize;

@@ -163,7 +163,7 @@ enum class PreKeyAction {
     // broker may carry the remainder (ADR 0004), so inspect again sooner.
     CancelTypingThrough,
     Tab,              // decideTabAction() owns plain Tab
-    CloseNotice,      // Escape closes Badi's notice
+    CloseNotice,      // Escape closes Badi's notice and still reaches the application
     Dismiss,          // Escape dismisses Badi's candidate
     AcceptWord,       // Ctrl+Right accepts the candidate's next word
 };
@@ -268,6 +268,10 @@ bool supportedWritingLanguage(std::string_view language);
 bool matchesCapturedContext(
     const std::optional<ContextUpdate> &captured,
     const std::optional<ContextWindow> &current);
+// Ctrl+Shift+Space requests only in a granted field Badi can edit. Otherwise
+// the chord reaches the application; `badi debug` keeps the reason.
+bool claimInvokeChord(bool editingAvailable, bool policyAllowed, bool foreignIme);
+
 LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
                               bool escapeKey, bool hasLiveOwnedCandidate,
                               const PanelObservation &panel);
@@ -321,6 +325,8 @@ public:
     }
     [[nodiscard]] NativeEditPath editPath() const { return editPath_; }
     [[nodiscard]] bool suggestionVisible() const { return visible_.has_value(); }
+    // A Tab or Ctrl+→ already asked to accept this suggestion.
+    [[nodiscard]] bool acceptancePending() const { return pendingAcceptance_.has_value(); }
     [[nodiscard]] std::string_view visibleText() const {
         return visible_ ? std::string_view(visible_->text) : std::string_view();
     }

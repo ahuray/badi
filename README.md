@@ -15,7 +15,9 @@ machine. Badi is pre-release software.
 | **Escape** | Dismiss. |
 | **Ctrl+Shift+Space** | Ask for a suggestion. |
 
-Obsidian swaps the first two: Tab takes a word and Ctrl/Command+→ takes all.
+Obsidian accepts one word with Tab only while a suggestion is visible, and
+takes all of it with Ctrl/Command+→. Ctrl+Shift+Space asks for one. Tab with
+nothing showing stays Tab.
 Bash uses Ctrl-X then Tab to request and accept. In a Xournal++ text cell, Tab
 requests and Tab again accepts. A suggestion lasts up to five seconds.
 

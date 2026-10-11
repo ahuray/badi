@@ -562,6 +562,11 @@ void foreignImeAndManualKeysYieldCooperatively() {
     check(!hasForeignImeUi(ownedCandidates), "owned panel must not self-yield");
     check(decideLocalAction(true, false, false, false, {}) == LocalAction::Invoke,
           "sole invoke chord should request explicitly");
+    check(claimInvokeChord(true, true, false),
+          "a granted field Badi can edit still takes Ctrl+Shift+Space");
+    check(!claimInvokeChord(false, true, false) && !claimInvokeChord(true, false, false) &&
+              !claimInvokeChord(false, false, false) && !claimInvokeChord(true, true, true),
+          "without a grant, without an edit path, or under a foreign IME the chord reaches the app");
     check(decideLocalAction(false, true, false, true, ownedCandidates) ==
               LocalAction::Accept,
           "accept chord should act only on owned live candidate");
@@ -637,7 +642,7 @@ void preInputKeysConsumeOnlyBadiUi() {
     check(decide(tab, false, true, owned) == PreKeyAction::Tab && decide(tab, false, false, foreign) == PreKeyAction::Tab,
           "plain Tab is decided by decideTabAction");
     check(decide(escape, true, false, {}) == PreKeyAction::CloseNotice,
-          "Escape closes Badi's own notice");
+          "Escape closes Badi's own notice and still reaches the application");
     check(decide(escape, true, false, foreign) == PreKeyAction::CancelDeclining,
           "a foreign input method keeps Escape even over Badi's notice");
     check(decide(escape, true, true, owned) == PreKeyAction::Dismiss &&
@@ -705,6 +710,21 @@ void wordAcceptanceGrantsOnlyTheNextWord() {
     const auto fallback = other.requestAcceptance(100, kOwnedPanel, true);
     check(fallback && fallback->expectedText == " for your time",
           "a next word that is not the text's start falls back to the whole text");
+
+    auto pending = focusedState();
+    const auto shown = explicitContext(pending);
+    check(pending.showSuggestion(suggestionFor(shown), 100), "a suggestion displays");
+    const auto first = pending.requestAcceptance(100, kOwnedPanel);
+    check(first && pending.acceptancePending() && pending.suggestionVisible(),
+          "the first acceptance stays pending");
+    check(!pending.requestAcceptance(101, kOwnedPanel) && !pending.requestAcceptance(102, kOwnedPanel, true),
+          "a second Tab or Ctrl+Right does not queue another acceptance");
+    check(pending.suggestionVisible() && pending.acceptancePending(),
+          "the in-flight acceptance is not cleared by the second key");
+    const CommitPrepare stillFirst{first->coordinates, first->controlId, first->suggestionId,
+                                   first->expectedText, "all"};
+    check(pending.authorizeCommit(stillFirst, 103, kOwnedPanel).has_value(),
+          "the first grant still dispatches");
 }
 
 void invokeRoutesByEditPathAndExplainsWaits() {
