@@ -226,13 +226,16 @@ class PreviewLifecycleTests(unittest.TestCase):
             return preview
         return unittest.mock.patch.dict(sys.modules, {"preview": SimpleNamespace(Preview=build)})
 
-    def test_a_failed_construction_is_retried(self):
+    def test_a_failed_construction_is_retried_after_a_pause(self):
         with self.fake_module(RuntimeError("preview_wayland_unavailable")):
             self.assertFalse(self.daemon.warm_preview())
             self.assertFalse(self.daemon.render_preview({}, " text", 1000))
             self.assertFalse(self.daemon.render_preview({}, " text", 1000))
+            self.assertEqual(self.builds, [True])
+            self.daemon.preview_retry_at = 0
+            self.assertFalse(self.daemon.render_preview({}, " text", 1000))
             self.daemon.hide_preview()
-        self.assertEqual(self.builds, [True, True, True])
+        self.assertEqual(self.builds, [True, True])
 
     def test_warming_builds_once_and_rendering_reuses_it(self):
         calls = []

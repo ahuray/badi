@@ -90,6 +90,7 @@ class Daemon:
         self.window_events = None
         self.failed = False
         self.preview = None
+        self.preview_retry_at = 0
         self.observer.render = self.render_preview
         self.observer.hide = self.hide_preview
         self.observer.authorize = self.arm_field_events
@@ -166,13 +167,15 @@ class Daemon:
 
     def load_preview(self):
         """The GTK preview, built at most once; None if it cannot be built here."""
-        if self.preview is None:
+        if self.preview is None and time.monotonic() >= self.preview_retry_at:
             try:
                 from preview import Preview
                 self.preview = Preview()
             except Exception as error:
-                # Try again on the next preview. A missing display must not
-                # disable the grey text for the rest of the process.
+                # Retry after a few seconds. A missing display must not disable
+                # the grey text for the process, and it must not rebuild GTK
+                # inside every 350 ms request.
+                self.preview_retry_at = time.monotonic() + 5
                 print(f"badi-accessibility: {type(error).__name__}", file=sys.stderr)
         return self.preview
 
