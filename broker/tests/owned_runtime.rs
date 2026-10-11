@@ -66,10 +66,11 @@ async fn owned_runtime_keeps_its_token_private_and_is_reaped() -> TestResult {
     let badi_broker::semantic::client::RuntimeAddress::Unix(socket) = runtime.address() else {
         return Err("the owned runtime must use its private socket".into());
     };
-    assert_eq!(
-        socket.file_name().and_then(|name| name.to_str()),
-        Some("llama.sock")
-    );
+    let name = socket
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    assert_eq!(name, format!("llama-{}.sock", std::process::id()));
     let mode = fs::symlink_metadata(socket)?.permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
     let process_id = runtime.process_id().expect("owned child process");

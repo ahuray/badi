@@ -817,7 +817,10 @@ fn prepare_runtime_socket(directory: &Path) -> Result<PathBuf, RuntimeError> {
     {
         return Err(RuntimeError::InvalidConfig("runtime_dir"));
     }
-    let path = directory.join("llama.sock");
+    // A fixed name would let a test, or a second broker, unlink the socket the
+    // running service is still using. Each process owns only its own name.
+    retire_dead_runtime_sockets(directory)?;
+    let path = directory.join(format!("llama-{}.sock", std::process::id()));
     if path.as_os_str().len() >= 108 {
         return Err(RuntimeError::InvalidConfig("runtime_socket"));
     }
@@ -830,6 +833,41 @@ fn prepare_runtime_socket(directory: &Path) -> Result<PathBuf, RuntimeError> {
         }
     }
     Ok(path)
+}
+
+fn retire_dead_runtime_sockets(directory: &Path) -> Result<(), RuntimeError> {
+    let mine = std::process::id();
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(RuntimeError::Endpoint(error)),
+    };
+    for entry in entries {
+        let entry = entry.map_err(RuntimeError::Endpoint)?;
+        let Some(name) = entry.file_name().into_string().ok() else {
+            continue;
+        };
+        let Some(pid) = name
+            .strip_prefix("llama-")
+            .and_then(|rest| rest.strip_suffix(".sock"))
+            .and_then(|pid| pid.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == mine || Path::new(&format!("/proc/{pid}")).exists() {
+            continue;
+        }
+        let metadata = match std::fs::symlink_metadata(entry.path()) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(RuntimeError::Endpoint(error)),
+        };
+        if metadata.file_type().is_socket() && metadata.uid() == rustix::process::getuid().as_raw()
+        {
+            std::fs::remove_file(entry.path()).map_err(RuntimeError::Endpoint)?;
+        }
+    }
+    Ok(())
 }
 
 fn tighten_runtime_socket(path: &Path) -> Result<(), RuntimeError> {
@@ -1136,9 +1174,18 @@ mod tests {
         let private = fs::canonicalize(temporary.path())?.join("private");
         fs::create_dir(&private)?;
         fs::set_permissions(&private, fs::Permissions::from_mode(0o700))?;
+        let live = private.join("llama-1.sock");
+        let dead = private.join("llama-999999999.sock");
+        let _live_listener = std::os::unix::net::UnixListener::bind(&live)?;
+        std::os::unix::net::UnixListener::bind(&dead)?;
         let socket = super::prepare_runtime_socket(&private)?;
-        assert_eq!(socket, private.join("llama.sock"));
+        assert_eq!(
+            socket,
+            private.join(format!("llama-{}.sock", std::process::id()))
+        );
         assert!(!socket.exists());
+        assert!(live.exists(), "a live process keeps its socket");
+        assert!(!dead.exists(), "a dead process does not keep a socket");
         Ok(())
     }
 

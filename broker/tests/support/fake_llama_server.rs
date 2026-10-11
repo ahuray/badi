@@ -64,7 +64,10 @@ fn launch_contract() -> Option<(PathBuf, String)> {
         ("LLAMA_ARG_THREADS_BATCH", threads.as_str()),
     ];
     let valid = socket.is_absolute()
-        && socket.file_name().and_then(|name| name.to_str()) == Some("llama.sock")
+        && socket
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(badi_socket_name)
         && variable("LLAMA_ARG_PORT").is_none()
         && !token.is_empty()
         && variable("LLAMA_ARG_MODEL").is_some_and(|model| model.starts_with('/'))
@@ -80,6 +83,16 @@ struct Request {
     path: String,
     authorized: bool,
     body: Value,
+}
+
+fn badi_socket_name(name: &str) -> bool {
+    let Some(pid) = name
+        .strip_prefix("llama-")
+        .and_then(|rest| rest.strip_suffix(".sock"))
+    else {
+        return false;
+    };
+    !pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn respond(mut stream: UnixStream, token: &str, health: &[u8]) -> io::Result<()> {

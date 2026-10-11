@@ -56,9 +56,24 @@ pub enum RuntimeAddress {
     Unix(PathBuf),
 }
 
+/// `llama-<pid>.sock` in the private runtime directory. The pid keeps a test
+/// or a second broker from replacing the socket the running service is using.
+pub(crate) fn is_owned_runtime_socket_name(name: &str) -> bool {
+    let Some(pid) = name
+        .strip_prefix("llama-")
+        .and_then(|rest| rest.strip_suffix(".sock"))
+    else {
+        return false;
+    };
+    !pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 fn unix_socket_path_is_usable(path: &Path) -> bool {
     path.is_absolute()
-        && path.file_name().and_then(|name| name.to_str()) == Some("llama.sock")
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_owned_runtime_socket_name)
         && path.as_os_str().len() < MAX_UNIX_SOCKET_BYTES
 }
 

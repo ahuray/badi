@@ -96,8 +96,10 @@ prints pinned download advice and downloads nothing
   it with backoff, except after exit 78 (missing, unsupported or too-large
   model), which waits for `badi doctor`.
 - **Transport.** HTTP/1.1 over a Unix socket in the `0700` runtime directory
-  (`$XDG_RUNTIME_DIR/badi/llama.sock`, mode `0600`), with a bearer token that
-  does not cross TCP. The service unit has no network namespace address.
+  (`$XDG_RUNTIME_DIR/badi/llama-<pid>.sock`, mode `0600`), with a bearer token
+  that does not cross TCP. The pid in the name keeps another process from
+  replacing the running service's socket. The service unit has no network
+  namespace address.
   Requests are never proxied, retried or pooled. Dropping a request closes
   its connection, which cancels it.
 - **Launch.** One 512-token slot reuses the common prompt prefix (KV cache);
