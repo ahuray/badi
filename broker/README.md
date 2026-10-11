@@ -122,8 +122,11 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   [the joiner fixtures](../protocol/orthographic-joiner-fixtures.json).
 - **Partial words.** An English suffix that continues the typed word must form
   a word in the pinned [SCOWL lexicon](data/writing-lexicon/README.md); German
-  and Persian suggest whole words only. English and Persian prompts drop
-  trailing spaces and require them back (`TRAILING_SPACE_HEALING`).
+  and Persian suggest whole words only. English healing echoes the last
+  unfinished word together with the spaces around it, so the prompt does not
+  end on a bare space. English and Persian prompts also echo trailing spaces
+  and require them back (`TRAILING_SPACE_HEALING`). Persian asks for about 2.6
+  times as many tokens as English.
 - **Abstention.** A continuation abstains when it adds a number absent from the
   typed text, and every request when the caret splits a word.
 - **Mid-line.** When words follow the caret on its line, the prompt is still

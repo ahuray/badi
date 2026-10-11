@@ -590,26 +590,56 @@ pub(crate) fn completion_plan<'a>(
         .language
         .as_deref()
         .and_then(WritingLanguage::from_tag);
-    if language.is_some_and(|language| healed_languages.contains(&language))
-        && context.ends_with(' ')
+    // A prompt that ends in a space tokenizes unlike the model's own " word"
+    // tokens. The echo therefore owns every separating space and, for English,
+    // the last healable word, whether or not the user already typed a space
+    // after it.
+    let trimmed = context.trim_end_matches(' ');
+    if let Some(word) = (language == Some(WritingLanguage::English))
+        .then(|| healing_prefix(trimmed))
+        .flatten()
     {
-        // A prompt ending in a space tokenizes unlike the model's own
-        // " word" tokens. Generate at the earlier boundary and require the
-        // exact spaces back; the echo keeps the ordinary eight-token budget.
-        let prompt = context.trim_end_matches(' ');
+        let (start, end) = healed_echo_span(context, word);
         return CompletionPlan {
-            prompt,
-            echo: Some(&context[prompt.len()..]),
-            max_tokens: 8,
+            prompt: &context[..start],
+            echo: Some(&context[start..end]),
+            max_tokens: token_budget(language, 12),
         };
     }
-    let echo = (language == Some(WritingLanguage::English))
-        .then(|| healing_prefix(context))
-        .flatten();
+    if language.is_some_and(|language| healed_languages.contains(&language))
+        && context.len() != trimmed.len()
+    {
+        return CompletionPlan {
+            prompt: trimmed,
+            echo: Some(&context[trimmed.len()..]),
+            max_tokens: token_budget(language, 8),
+        };
+    }
     CompletionPlan {
-        prompt: echo.map_or(context, |word| &context[..context.len() - word.len()]),
-        echo,
-        max_tokens: if echo.is_some() { 12 } else { 8 },
+        prompt: context,
+        echo: None,
+        max_tokens: token_budget(language, 8),
+    }
+}
+
+/// The echo of `word` inside `context`, including the ASCII spaces that
+/// separate it from the prompt and any spaces the user already typed after it.
+fn healed_echo_span(context: &str, word: &str) -> (usize, usize) {
+    let word_start = context.trim_end_matches(' ').len() - word.len();
+    let mut start = word_start;
+    while start > 0 && context.as_bytes()[start - 1] == b' ' {
+        start -= 1;
+    }
+    (start, context.len())
+}
+
+/// Persian needs about 2.6 times as many tokens as English for the same words.
+fn token_budget(language: Option<WritingLanguage>, english_tokens: u16) -> u16 {
+    if language == Some(WritingLanguage::Persian) {
+        // 2.6×, rounded to the nearest token (8 → 21, 12 → 31).
+        u16::try_from((u32::from(english_tokens) * 26 + 5) / 10).unwrap_or(english_tokens)
+    } else {
+        english_tokens
     }
 }
 
@@ -1072,8 +1102,16 @@ mod tests {
             language: Some("en".to_owned()),
         };
         let payload = super::completion_payload(&request);
-        assert_eq!(payload["prompt"], "Please review the ");
-        assert_eq!(payload["grammar"], "root ::= \"docum\" [^<>\\n\\r`]*");
+        assert_eq!(payload["prompt"], "Please review the");
+        assert_eq!(payload["grammar"], "root ::= \" docum\" [^<>\\n\\r`]*");
+        let spaced = crate::provider::ProviderRequest {
+            before: "Please review the docum ".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+        };
+        let spaced = super::completion_payload(&spaced);
+        assert_eq!(spaced["prompt"], "Please review the");
+        assert_eq!(spaced["grammar"], "root ::= \" docum \" [^<>\\n\\r`]*");
         assert_eq!(payload["cache_prompt"], true);
         assert_eq!(
             super::strip_healed_prefix("document", Some("docum")),
@@ -1105,7 +1143,7 @@ mod tests {
             language: Some("en".to_owned()),
         };
         let payload = super::completion_payload(&request);
-        assert_eq!(payload["prompt"], "Please review the ");
+        assert_eq!(payload["prompt"], "Please review the");
         assert_eq!(request.before, original);
         for context in ["word ".repeat(100), "فارسی ".repeat(100), "x".repeat(300)] {
             assert!(super::inference_context(&context).chars().count() <= 160);
@@ -1293,7 +1331,8 @@ mod tests {
                 plan.echo,
                 Some(&original[original.trim_end_matches(' ').len()..])
             );
-            assert_eq!(plan.max_tokens, 8);
+            let tokens = if language == "fa" { 21 } else { 8 };
+            assert_eq!(plan.max_tokens, tokens);
             let payload = plan.payload();
             assert_eq!(payload["stop"], serde_json::json!([".", "\n"]));
             assert_eq!(payload["seed"], 42);
@@ -1302,7 +1341,7 @@ mod tests {
             let legacy = super::completion_plan(&request, &[]);
             assert_eq!(legacy.prompt, original);
             assert_eq!(legacy.echo, None);
-            assert_eq!(legacy.max_tokens, 8);
+            assert_eq!(legacy.max_tokens, tokens);
         }
     }
 
@@ -1312,7 +1351,7 @@ mod tests {
             ("en", "Please review the docum", 12),
             ("en", "Please review the", 8),
             ("de", "Bitte lies die Dokum", 8),
-            ("fa", "لطفا این گزار", 8),
+            ("fa", "لطفا این گزار", 21),
             ("en", "Please review the\u{a0}", 8),
             ("en", "Please review the\t", 8),
             ("en", "Please review the\n", 8),
