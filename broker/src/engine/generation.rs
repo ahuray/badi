@@ -533,7 +533,8 @@ pub(super) fn checked_proposal(
 ) -> Option<WritingProposal> {
     let (text, replace_before) = if let Some(original) = raw.replace_before.as_deref() {
         // A correction may preserve the single space typed after its word.
-        // General continuation sanitization stays strict.
+        // A continuation may keep one trailing space; the shape check allows
+        // it only where it separates the insertion from the next word.
         crate::protocol::valid_spelling_replacement(original, &raw.text)
             .then_some((raw.text, raw.replace_before))?
     } else {

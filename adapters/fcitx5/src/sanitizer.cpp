@@ -146,7 +146,9 @@ std::optional<std::string> sanitizeSuggestion(std::string_view value) {
         }
         previousSpace = space;
     }
-    if (!anyNonSpace || previousSpace || words > kMaxSuggestionWords) {
+    // One trailing ASCII space separates a mid-sentence insertion from the
+    // next word. A second space was already rejected above.
+    if (!anyNonSpace || words > kMaxSuggestionWords) {
         return std::nullopt;
     }
     return std::string(value);

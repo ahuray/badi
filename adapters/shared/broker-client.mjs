@@ -4,7 +4,7 @@ import { lstatSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { recordActivity } from './activity.mjs';
-import { hasUnsafeText, validCorrection } from './text-safety.mjs';
+import { hasIsolatedSpaces, hasUnsafeText, validCorrection } from './text-safety.mjs';
 
 const PROFILES = Object.freeze({
   obsidian: { kind: 'obsidian', app_id: 'obsidian' },
@@ -15,7 +15,7 @@ const FRAME_LIMIT = 65536;
 const counter = value => Number.isSafeInteger(value) && value >= 0;
 const words = new Intl.Segmenter('en', { granularity: 'word' });
 export const validSuggestion = value => typeof value === 'string' && [...value].length <= 64 &&
-  value.trim().length > 0 && !hasUnsafeText(value) &&
+  hasIsolatedSpaces(value) && !hasUnsafeText(value) &&
   [...words.segment(value)].filter(part => part.isWordLike).length <= 4;
 
 export class BrokerClient extends EventEmitter {

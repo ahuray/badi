@@ -123,7 +123,11 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   the words before the point where the continuation reproduces the line's
   first word or mark, a phrase the model closes with a clause mark before the
   line's own mark, or else the rest of the word being typed. Anything else is
-  `output_rejected`.
+  `output_rejected`. If the caret already follows whitespace and the next
+  character is a letter or digit, the insertion may end in one ASCII space so
+  it does not join that word. End of text, punctuation, and a repeated space
+  stay rejected. Ctrl+→ on that last word includes the space, and typing its
+  first letters carries the space with the remainder.
 - **Spelling** is English only and needs negotiated exact replacement of the
   word before the caret at the end of the field; a single dictionary candidate
   is proposed without inference.

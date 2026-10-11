@@ -122,6 +122,9 @@ void fingerprintBindsExactCaptureAndSalt() {
 }
 
 void sanitizerAndIdentifiers() {
+    check(sanitizeSuggestion("final ") == "final ",
+          "one trailing space is the mid-sentence separator");
+    check(!sanitizeSuggestion("final  "), "two trailing spaces must fail");
     check(sanitizeSuggestion(" for your time") == " for your time",
           "ordinary suggestion should pass");
     check(!sanitizeSuggestion(""), "empty suggestion must fail");

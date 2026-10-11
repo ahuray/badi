@@ -159,6 +159,8 @@ static int badi_preview_builtin(WORD_LIST *list) {
     if (strlen(text) > 256 || strlen(before) > 8192 || !*text || !*before || !fits(before, text)) return 2;
     if (now < 0) return 1;
     hide(); forget();
+    /* The text is the broker's suggestion, including one trailing ASCII space
+     * that separates a mid-sentence insertion from the next word. */
     preview = strdup(text);
     prefix = strdup(before);
     if (!preview || !prefix) { forget(); return 1; }

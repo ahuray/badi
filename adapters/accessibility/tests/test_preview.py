@@ -129,9 +129,9 @@ class PreviewGeometryTests(unittest.TestCase):
             self.assertFalse(ltr_text(text), text)
 
     def test_text_is_plain_bounded_and_excludes_hidden_controls(self):
-        for text in [" the next words", "teh → the", "می‌توانیم", "<b>literal text</b>", "één woord"]:
+        for text in [" the next words", "teh → the", "می‌توانیم", "<b>literal text</b>", "één woord", "final "]:
             self.assertTrue(valid_preview_text(text), text)
-        for text in [None, "", " ", "x" * 65, "line\nline", "x\t", "x\u202ey", "می‌ شود", "\ud800"]:
+        for text in [None, "", " ", "x" * 65, "line\nline", "x\t", "x\u202ey", "می‌ شود", "\ud800", "final  "]:
             self.assertFalse(valid_preview_text(text), repr(text))
 
     def render_fixture(self, natural=(200, 24), baseline=19):
@@ -178,6 +178,9 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertIn(("class", "chip"), calls)
         self.assertNotIn(("text", " final"), calls, "a chip never draws inline over the following words")
         self.assertIn(("text", "final"), calls)
+        preview, calls, _monitor = self.render_fixture((120, 24))
+        self.assertTrue(preview.render(data, "final ", 1500))
+        self.assertIn(("text", "final "), calls, "the chip keeps the space that separates the next word")
         self.assertIn(("left", 203), calls)
         self.assertIn(("top", 172), calls)
         preview, calls, _monitor = self.render_fixture((700, 24))

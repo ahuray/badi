@@ -1,5 +1,10 @@
 const arabicLetter = value => value !== undefined && /[\u0620-\u063f\u0641-\u064a\u066e-\u066f\u0671-\u06d3\u06d5\u06e5-\u06e6\u06ee-\u06ef\u06fa-\u06fc\u06ff]/u.test(value);
 
+// V2 safe suggestion spacing: isolated U+0020, at most one leading and one
+// trailing. The trailing space separates a mid-sentence insertion from the
+// next word. Bash and Obsidian both display this text unchanged.
+export const hasIsolatedSpaces = value => /^ ?[^\s](?: ?[^\s])* ?$/u.test(value);
+
 export function hasUnsafeText(value, allowContextWhitespace = false) {
   const scalars = [...value];
   return scalars.some((character, index) => {

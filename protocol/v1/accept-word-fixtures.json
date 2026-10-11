@@ -1,6 +1,6 @@
 {
   "v": 1,
-  "algorithm": "leading_whitespace_plus_first_unicode_word_or_grapheme_v1",
+  "algorithm": "leading_whitespace_plus_first_unicode_word_or_grapheme_then_terminal_space_v2",
   "cases": [
     {
       "name": "leading-whitespace",
@@ -91,6 +91,18 @@
       "input": " -ready",
       "accepted": " -",
       "remainder": "ready"
+    },
+    {
+      "name": "terminal-separator",
+      "input": "final ",
+      "accepted": "final ",
+      "remainder": ""
+    },
+    {
+      "name": "terminal-separator-stays-with-the-last-word",
+      "input": "final report ",
+      "accepted": "final",
+      "remainder": " report "
     }
   ]
 }

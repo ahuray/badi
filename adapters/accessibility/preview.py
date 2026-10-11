@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import re
 import unicodedata
 
 from contract import RIGHT_TO_LEFT
@@ -20,8 +21,13 @@ def _arabic_letter(value):
         (0x06EE, 0x06EF), (0x06FA, 0x06FC), (0x06FF, 0x06FF)))
 
 
+# One trailing ASCII space is the mid-sentence separator. Repeated spaces and
+# any other whitespace stay out of the grey text.
+_PREVIEW_SPACING = re.compile(r"^ ?\S(?: ?\S)* ?$")
+
+
 def valid_preview_text(text):
-    if not isinstance(text, str) or not 1 <= len(text) <= 64 or not text.strip():
+    if not isinstance(text, str) or not 1 <= len(text) <= 64 or _PREVIEW_SPACING.fullmatch(text) is None:
         return False
     for index, char in enumerate(text):
         if char == "\u200c":
@@ -282,7 +288,9 @@ class Preview:
             width, height, baseline = self._layout(text, chip=False)
             position = place_inline(caret, width, height, baseline)
         if position is None:
-            width, height, _baseline = self._layout(text.strip(" "), chip=True)
+            # A leading space would draw over the following words. The trailing
+            # space is the separator that acceptance inserts, so the chip keeps it.
+            width, height, _baseline = self._layout(text.lstrip(" "), chip=True)
             position = place_chip(caret, width, height)
         if position is None:
             self.label.set_text("")

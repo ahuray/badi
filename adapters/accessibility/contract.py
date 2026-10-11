@@ -291,10 +291,15 @@ def caret_rectangle(value):
     return type(scale) in (int, float) and math.isfinite(scale) and .5 <= scale <= 4
 
 
+# Same isolated-space rule as v2 safeSuggestionText, including one trailing space.
+_SUGGESTION_SPACING = re.compile(r"^ ?\S(?: ?\S)* ?$")
+
+
 def suggestion_text(text):
     """1–160 characters, none a control or format character except a
-    zero-width non-joiner between two letters."""
-    if not isinstance(text, str) or not 1 <= len(text) <= 160 or not text.strip():
+    zero-width non-joiner between two letters. One trailing ASCII space is
+    the mid-sentence separator; repeated spaces are not."""
+    if not isinstance(text, str) or not 1 <= len(text) <= 160 or _SUGGESTION_SPACING.fullmatch(text) is None:
         return False
     return all(not unicodedata.category(char).startswith("C") or joins_letters(text, index)
                for index, char in enumerate(text))

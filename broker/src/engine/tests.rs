@@ -3793,3 +3793,60 @@ async fn the_remainder_after_a_word_acceptance_carries() {
     assert_eq!(carried.text, " Hello");
     assert_eq!(provider.calls.load(Ordering::Relaxed), 1);
 }
+
+#[cfg(feature = "local-model")]
+#[test]
+fn mid_sentence_space_before_a_word_survives_checked_proposal() {
+    let before = "Please find the ";
+    let after = "report today";
+    let continuation = "final report for";
+    let line = crate::writing::line_rest(after).expect("words follow the caret");
+    let inserted = crate::writing::mid_line_insertion(before, line, continuation)
+        .expect("the continuation rejoins the next word");
+    assert_eq!(inserted, "final ");
+    assert!(
+        crate::writing::validate_proposal(before, after, &inserted, Some("en")).is_ok(),
+        "the provider accepts the insertion before the broker's display check"
+    );
+
+    let shown = super::generation::checked_proposal(
+        ProviderKind::LocalModel,
+        before,
+        after,
+        crate::provider::WritingProposal {
+            text: inserted,
+            replace_before: None,
+        },
+    );
+    let shown = shown.expect("the separating space is part of the suggestion");
+    assert_eq!(shown.text, "final ");
+    let parts = crate::segment::accept_word(&shown.text);
+    assert_eq!(
+        parts.accepted, "final ",
+        "Ctrl+→ takes the last word and its space"
+    );
+    assert_eq!(parts.remainder, "");
+
+    for (before, after, text) in [
+        ("Please find the ", "", "final "),
+        ("Thanks ", ", John", "a lot "),
+        ("Please find the ", "report today", "final  "),
+        ("hello", "world", "final "),
+        ("hello ", " report", "final "),
+        ("hello ", "report", "final\u{00a0}"),
+    ] {
+        assert!(
+            super::generation::checked_proposal(
+                ProviderKind::LocalModel,
+                before,
+                after,
+                crate::provider::WritingProposal {
+                    text: text.to_owned(),
+                    replace_before: None,
+                },
+            )
+            .is_none(),
+            "rejected {before:?} | {text:?} | {after:?}"
+        );
+    }
+}

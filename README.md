@@ -21,8 +21,10 @@ requests and Tab again accepts. A suggestion lasts up to five seconds.
 
 In the middle of a sentence Badi suggests only what fits before the next word:
 the rest of a word you are typing, or words the model would write right before
-the text that follows. Where grey text would cover those words, it shows in a
-small box under the line instead.
+the text that follows. When the caret is already after a space and a word
+follows, the suggestion keeps one space so it does not join that word. Where
+grey text would cover those words, it shows in a small box under the line
+instead, and that box keeps the separating space.
 
 ## Where it works
 
