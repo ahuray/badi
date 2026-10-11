@@ -40,10 +40,12 @@ python3 scripts/install-omarchy-ui.py --wait-for-unlock 3600   # stage and wait 
 
 The updater runs the source checks, waits for an explicitly unlocked desktop
 (it never unlocks it), backs up replaced files under
-`~/.local/state/badi/ui-backups/<UTC time>/` (newest three kept), removes files
-the manifest no longer loads, restarts the Omarchy shell the supported way and
-checks that the new window answers IPC. `omarchy plugin disable
-io.github.ahuray.badi` hides the mark.
+`~/.local/state/badi/ui-backups/<UTC time>/` (newest three kept, plus the
+original backup), removes files the manifest no longer loads, restarts the
+Omarchy shell the supported way and checks that the new window answers IPC.
+A missing plugin directory is created and enabled with `omarchy plugin enable
+io.github.ahuray.badi`; `XDG_CONFIG_HOME` selects that directory. `omarchy
+plugin disable io.github.ahuray.badi` hides the mark.
 
 ## Client contract
 

@@ -1,4 +1,7 @@
 """Shared installer and CLI helpers: backups, receipts, atomic writes, systemd queries."""
+import contextlib
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -218,12 +221,16 @@ class InstallationTests(unittest.TestCase):
         self.assertTrue(saved.is_symlink(), 'The link itself is saved, not what it names')
         self.assertFalse(link.is_symlink())
 
-    def test_prior_setting_notes_create_the_backup_on_demand(self):
+    def test_a_note_alone_does_not_create_a_backup_directory(self):
         installation = badi_install.Installation(self.home, 'desktop')
         note = installation.note('accessibility-setting.json', {'bus_enabled': False})
-        self.assertEqual(note.parent, installation.directory)
+        self.assertIsNone(installation.directory)
+        self.assertEqual(note.parent, self.backups / 'notes')
         self.assertEqual(note.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(self.changes(installation)['changes'], [])
+        self.assertEqual(json.loads(note.read_text()), {'bus_enabled': False})
+        installation.write(self.home / '.bashrc', b'changed\n', 0o644)
+        recorded = installation.note('accessibility-setting.json', {'bus_enabled': True})
+        self.assertEqual(recorded.parent, installation.directory)
 
 
 class PruneTests(unittest.TestCase):
@@ -252,6 +259,20 @@ class PruneTests(unittest.TestCase):
             self.assertTrue(home.is_dir(), 'A symlinked entry is never followed')
             self.assertEqual(badi_install.prune_backups(home, 'omarchy-ui'), [], 'A missing directory is fine')
 
+    def test_the_original_backup_survives_pruning(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            root = home / '.local/state/badi/editor-backups'
+            names = [f'2026092{index}T120000.00000000{index}Z' for index in range(5)]
+            for name in names:
+                (root / name).mkdir(parents=True)
+                (root / name / 'changes.json').write_text('{"pinned": false}')
+            (root / names[0] / 'pinned').write_text('')
+            pruned = badi_install.prune_backups(home, 'editors')
+            self.assertEqual(sorted(path.name for path in pruned), sorted(names[1:2]))
+            self.assertTrue((root / names[0]).is_dir(), 'The pre-Badi backup stays')
+            self.assertTrue(all((root / name).is_dir() for name in names[2:]))
+
     def test_backup_names_order_by_creation_time(self):
         self.assertLess(badi_install.backup_time('1790447702770311229'),
                         badi_install.backup_time('20260927T170722.123456789Z'))
@@ -273,6 +294,40 @@ class ReceiptTests(unittest.TestCase):
             receipt = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
             self.assertEqual(receipt['files']['.local/share/badi/notice'], entry)
             self.assertEqual(receipt['source']['commit'], 'b' * 40)
+
+    def test_restore_reloads_units_and_points_the_receipt_at_restored_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            unit = home / '.config/systemd/user/badi-broker.service'
+            unit.parent.mkdir(parents=True)
+            unit.write_text('old unit\n')
+            broker = home / '.local/lib/badi/badi-broker'
+            broker.parent.mkdir(parents=True)
+            broker.write_bytes(b'old broker')
+            installation = badi_install.Installation(home, 'desktop')
+            installation.write(unit, b'new unit\n', 0o644)
+            installation.write(broker, b'new broker', 0o755)
+            badi_install.write_receipt(home, 'desktop', {'commit': 'a' * 40, 'dirty': False}, [unit, broker])
+            calls = []
+            real_run = subprocess.run
+
+            def execute(command, **kwargs):
+                if command[:3] == ['systemctl', '--user', 'daemon-reload']:
+                    calls.append(command)
+                    return subprocess.CompletedProcess(command, 0, '', '')
+                return real_run(command, **kwargs)
+
+            with patch.object(badi_install.subprocess, 'run', side_effect=execute), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(badi_install.restore(installation.directory), [])
+            self.assertEqual(unit.read_text(), 'old unit\n')
+            self.assertEqual(broker.read_bytes(), b'old broker')
+            self.assertEqual(calls, [['systemctl', '--user', 'daemon-reload']])
+            receipt = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
+            self.assertEqual(receipt['files']['.local/lib/badi/badi-broker']['sha256'],
+                             hashlib.sha256(b'old broker').hexdigest())
+            self.assertEqual(receipt['files']['.config/systemd/user/badi-broker.service']['sha256'],
+                             hashlib.sha256(b'old unit\n').hexdigest())
 
 
 if __name__ == '__main__':

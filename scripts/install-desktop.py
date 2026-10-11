@@ -482,7 +482,9 @@ class Plan:
     flag_updates: dict
     flags_present: list
     broker_updating: bool
-    accessibility_updating: bool
+    # True only when the user unit is enabled. A unit file left behind by an
+    # interrupted first install is loaded but not enabled, and must be enabled.
+    accessibility_enabled: bool
     compat: dict | None
     checkout: dict | None = None
 
@@ -535,17 +537,65 @@ def preflight(args):
             flag_updates[target] = (original, text)
     runtime = session_runtime()
     broker_updating = service_installed()
-    accessibility_updating, compat = False, None
+    accessibility_enabled, compat = False, None
     if not args.broker_only:
-        accessibility_updating = service_installed("badi-accessibility.service")
+        accessibility_enabled = unit_enabled("badi-accessibility.service")
         run(["systemctl", "--user", "is-active", "omarchy-fcitx5.service"], capture_output=True)
         if not args.no_wayland_compat:
             compat = plan_wayland_compat(home, args.wayland_compat_build)
     return Plan(args, home, config_home, runtime, flag_updates, flags_present,
-                broker_updating, accessibility_updating, compat)
+                broker_updating, accessibility_enabled, compat)
+
+
+def unit_enabled(unit):
+    """Whether systemd will start this user unit. LoadState is not enough:
+    an interrupted install can leave the unit file loaded and still disabled."""
+    return badi_install.unit_value(unit, "UnitFileState", timeout=4) == "enabled"
+
+
+# Pinned bytes from the balanced writing artifact in model_selection.rs and
+# from semantic/pinned_runtime.rs. The installer verifies them and does not
+# download; the broker has no network code of its own.
+WRITING_ASSETS = (
+    ("models/Qwen3-1.7B-Q4_K_M.gguf",
+     "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5",
+     1_282_439_264),
+    ("runtimes/llama-b10726/llama-server",
+     "4c20c6b55baa75eafeb02c17f118ce93314ba69aef89a9b4156284d58dcbc0c8",
+     17_896),
+    ("runtimes/downloads/llama-b10726-bin-ubuntu-x64.tar.gz",
+     "d3c4e406b2911c8c75d2d0858459645960f8f592c1ab372d565cf145b870c901",
+     16_702_536),
+)
+
+
+def require_writing_assets(home):
+    """Refuse to build until the pinned model and llama.cpp runtime match.
+
+    The broker reads ~/.local/share/badi/models and runtimes/llama-b10726 and
+    checks these hashes again at startup. A size mismatch is rejected before
+    the file is read, so a wrong multi-gigabyte download is not hashed here.
+    """
+    data = Path(home) / ".local/share/badi"
+    problems = []
+    for relative, digest, size in WRITING_ASSETS:
+        path = data / relative
+        if not path.is_file():
+            problems.append(f"{path} is missing")
+            continue
+        if path.stat().st_size != size or badi_install.file_sha256(path) != digest:
+            problems.append(f"{path} does not match the pinned hash")
+    if problems:
+        raise RuntimeError(
+            "Writing model or pinned llama.cpp b10726 runtime is not ready. "
+            "The desktop installer checks the pinned hashes before building. "
+            "`badictl models writing` prints hf download with --local-dir "
+            "~/.local/share/badi/models. " + " ".join(problems)
+        )
 
 
 def build(plan):
+    require_writing_assets(plan.home)
     # Record the checkout state that is about to be built and copied.
     plan.checkout = badi_install.source_identity(ROOT)
     # Build only the shipped package: installs never compile the Prediction Lab.
@@ -581,10 +631,27 @@ def xournal_launcher(home):
                              for line in text.splitlines()) + "\n"
 
 
+def flags_still_match(plan):
+    """Reject flag files that changed while the build ran, before any write."""
+    for target, (original, _text) in plan.flag_updates.items():
+        if target.parent.resolve() != target.parent or target.is_symlink() or (target.read_text() if target.exists() else None) != original:
+            raise RuntimeError("App startup configuration changed during the build; newer user settings were preserved.")
+
+
 def install_files(plan):
     """Install every file this run owns; returns the Installation with its backup and current files."""
+    if plan.native:
+        flags_still_match(plan)
+    installation = badi_install.Installation(plan.home, "desktop")
+    try:
+        return install_prepared_files(plan, installation)
+    except Exception:
+        badi_install.announce_stopped(installation)
+        raise
+
+
+def install_prepared_files(plan, installation):
     home, native = plan.home, plan.native
-    installation = badi_install.Installation(home, "desktop")
     install = installation.copy
 
     library = home / ".local/lib/badi"
@@ -669,7 +736,7 @@ def restart(plan, installation):
     if not plan.native:
         return probe
     require_unlocked()
-    if not plan.accessibility_updating:
+    if not plan.accessibility_enabled:
         run(["systemctl", "--user", "enable", "badi-accessibility.service"])
     run(["systemctl", "--user", "reset-failed", "badi-accessibility.service"])
     run(["systemctl", "--user", "restart", "badi-accessibility.service"])
@@ -717,8 +784,13 @@ def report(plan, probe):
 def main():
     plan = preflight(parse_arguments())
     build(plan)
-    installation = install_files(plan)
-    report(plan, restart(plan, installation))
+    installation = None
+    try:
+        installation = install_files(plan)
+        report(plan, restart(plan, installation))
+    except Exception:
+        badi_install.announce_stopped(installation)
+        raise
 
 
 if __name__ == "__main__":

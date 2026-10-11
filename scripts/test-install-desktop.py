@@ -91,6 +91,7 @@ def broker_only_install(root):
     with patch.object(installer, 'ROOT', project), \
          patch.object(installer.Path, 'home', return_value=home), \
          patch.object(installer.subprocess, 'run', side_effect=execute), \
+         patch.object(installer, 'require_writing_assets'), \
          patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
          patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(root / 'runtime'),
                                  'XDG_CONFIG_HOME': str(home / '.config')}), \
@@ -101,6 +102,95 @@ def broker_only_install(root):
 
 
 class DesktopInstallTests(unittest.TestCase):
+    def test_missing_or_wrong_model_stops_before_cargo(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            with self.assertRaisesRegex(RuntimeError, 'is missing'):
+                installer.require_writing_assets(home)
+            model = home / '.local/share/badi/models/Qwen3-1.7B-Q4_K_M.gguf'
+            model.parent.mkdir(parents=True)
+            model.write_bytes(b'not the model')
+            with self.assertRaisesRegex(RuntimeError, 'does not match the pinned hash'):
+                installer.require_writing_assets(home)
+
+    def test_changed_flags_abort_before_any_file_is_copied(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home, project = root / 'home', root / 'project'
+            native_project(project)
+            flags = home / '.config/chromium-flags.conf'
+            flags.parent.mkdir(parents=True)
+            flags.write_text('# mine\n')
+            plan = installer.Plan(
+                args=SimpleNamespace(broker_only=False, observed_app=['chromium']),
+                home=home, config_home=home / '.config', runtime=root / 'runtime',
+                flag_updates={flags: ('# mine\n', '# mine\n' + installer.OBSERVED_FLAG + '\n')},
+                flags_present=[], broker_updating=True, accessibility_enabled=True, compat=None)
+            flags.write_text('# mine\n# edited while building\n')
+            with patch.object(installer, 'ROOT', project), \
+                 self.assertRaisesRegex(RuntimeError, 'changed during the build'):
+                installer.install_files(plan)
+            self.assertFalse((home / '.local/lib/badi/badi-broker').exists())
+
+    def test_a_failed_install_names_the_backup_and_the_restore_command(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home, project = root / 'home', root / 'project'
+            native_project(project)
+
+            def execute(command, **kwargs):
+                output = str(root / 'runtime') if command[0] == 'loginctl' else 'loaded' if '--property=LoadState' in command else '{}'
+                return subprocess.CompletedProcess(command, 0, output, '')
+
+            with patch.object(installer, 'ROOT', project), \
+                 patch.object(installer.Path, 'home', return_value=home), \
+                 patch.object(installer.subprocess, 'run', side_effect=execute), \
+                 patch.object(installer, 'require_writing_assets'), \
+                 patch.object(installer, 'wait_model', side_effect=RuntimeError('broker did not become ready')), \
+                 patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(root / 'runtime'),
+                                         'XDG_CONFIG_HOME': str(home / '.config')}), \
+                 patch('sys.argv', ['install-desktop.py', '--broker-only']), \
+                 contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()) as error:
+                with self.assertRaisesRegex(RuntimeError, 'broker did not become ready'):
+                    installer.main()
+            text = error.getvalue()
+            backup, = (home / '.local/state/badi/install-backups').iterdir()
+            self.assertIn(str(backup), text)
+            self.assertIn(f'python3 scripts/badi_install.py restore {backup}', text)
+            self.assertEqual(text.count('Install stopped'), 1)
+
+    def test_a_loaded_but_disabled_accessibility_unit_is_enabled_on_restart(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            runtime = home / 'runtime'
+            profile = home / '.config/fcitx5/profile'
+            profile.parent.mkdir(parents=True)
+            profile.write_text('keep')
+            units = home / '.config/systemd/user'
+            units.mkdir(parents=True)
+            (units / 'badi-broker.service').write_text('[Service]\n')
+            (units / 'badi-accessibility.service').write_text('[Service]\n')
+            calls = []
+
+            def execute(command, **kwargs):
+                calls.append(command)
+                return subprocess.CompletedProcess(command, 0, '', '')
+
+            plan = installer.Plan(
+                args=SimpleNamespace(broker_only=False, observed_app=[]),
+                home=home, config_home=home / '.config', runtime=runtime,
+                flag_updates={}, flags_present=[], broker_updating=True,
+                accessibility_enabled=False, compat=None)
+            installation = receipts.Installation(home, 'desktop')
+            with patch.object(installer, 'run', side_effect=execute), \
+                 patch.object(installer, 'require_unlocked'), \
+                 patch.object(installer, 'wait_model', return_value={'paused': False}), \
+                 patch.object(installer, 'wait_accessibility'), \
+                 patch.object(installer, 'wait_native_addon'):
+                installer.restart(plan, installation)
+            self.assertIn(['systemctl', '--user', 'enable', 'badi-accessibility.service'], calls)
+
     def test_every_observer_module_is_installed(self):
         modules = {path.name for path in (CHECKOUT / 'adapters/accessibility').glob('*.py')}
         self.assertEqual(set(installer.OBSERVER_MODULES), modules)
@@ -220,7 +310,8 @@ class DesktopInstallTests(unittest.TestCase):
             installation = receipts.Installation(Path(temporary), 'desktop')
             with contextlib.redirect_stdout(io.StringIO()) as output:
                 installer.enable_accessibility(installation)
-            receipt = installation.directory / 'accessibility-setting.json'
+            receipt = Path(temporary) / '.local/state/badi/install-backups/notes/accessibility-setting.json'
+            self.assertIsNone(installation.directory)
             self.assertIn(str(receipt), output.getvalue(), 'The receipt location is reported')
             self.assertEqual(json.loads(receipt.read_text()), {'bus_enabled': False, 'toolkit_accessibility': False})
             self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
@@ -310,6 +401,7 @@ class DesktopInstallTests(unittest.TestCase):
             with patch.object(installer, 'ROOT', project), \
                  patch.object(installer.Path, 'home', return_value=home), \
                  patch.object(installer.subprocess, 'run', side_effect=execute), \
+                 patch.object(installer, 'require_writing_assets'), \
                  patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': True, 'control_plane_degraded': False}), \
                  patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(root / 'runtime'),
                                          'XDG_CONFIG_HOME': str(home / '.config')}), \
@@ -583,7 +675,7 @@ class DesktopInstallTests(unittest.TestCase):
                 calls = []
                 def execute(command, **kwargs):
                     calls.append(command)
-                    output = str(runtime) if command[0] == 'loginctl' else 'loaded' if '--property=LoadState' in command else '{}'
+                    output = str(runtime) if command[0] == 'loginctl' else 'loaded' if '--property=LoadState' in command else 'enabled' if '--property=UnitFileState' in command else '{}'
                     return subprocess.CompletedProcess(command, 0, output, '')
                 def ready(script, socket_path):
                     self.assertEqual(script, helper)
@@ -594,6 +686,7 @@ class DesktopInstallTests(unittest.TestCase):
                 with patch.object(installer, 'ROOT', project), \
                      patch.object(installer.Path, 'home', return_value=home), \
                      patch.object(installer.subprocess, 'run', side_effect=execute), \
+                     patch.object(installer, 'require_writing_assets'), \
                      patch.object(installer, 'require_unlocked'), \
                      patch.object(installer, 'require_accessibility_runtime'), \
                      patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
@@ -601,7 +694,8 @@ class DesktopInstallTests(unittest.TestCase):
                      patch.object(installer, 'wait_native_addon') as addon, \
                      patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(runtime), 'XDG_CONFIG_HOME': str(home / '.config')}), \
                      patch('sys.argv', ['install-desktop.py']), \
-                     contextlib.redirect_stdout(io.StringIO()) as output:
+                     contextlib.redirect_stdout(io.StringIO()) as output, \
+                     contextlib.redirect_stderr(io.StringIO()):
                     if helper_ready:
                         installer.main()
                     else:
@@ -662,10 +756,11 @@ class FullInstall:
                 return subprocess.CompletedProcess(command, 0, STOCK % argv, '')
             if any(str(part).endswith('fcitx5-wayland-compat/build.py') for part in command):
                 shutil.copytree(build, command[command.index('--work-dir') + 1])
-            output = 'loaded' if '--property=LoadState' in command else '{}'
+            output = 'loaded' if '--property=LoadState' in command else 'enabled' if '--property=UnitFileState' in command else '{}'
             return subprocess.CompletedProcess(command, 0, output, '')
 
         with patch.object(installer, 'ROOT', project), \
+             patch.object(installer, 'require_writing_assets'), \
              patch.object(installer.Path, 'home', return_value=home), \
              patch.object(installer.subprocess, 'run', side_effect=execute), \
              patch.object(installer, 'compat_launcher', return_value=launcher), \
@@ -771,7 +866,8 @@ class WaylandCompatTests(FullInstall, unittest.TestCase):
 
     def test_overriding_drop_in_stops_before_fcitx_restart(self):
         with tempfile.TemporaryDirectory() as temporary:
-            with self.assertRaisesRegex(RuntimeError, 'Fcitx was not restarted'):
+            with self.assertRaisesRegex(RuntimeError, 'Fcitx was not restarted'), \
+                 contextlib.redirect_stderr(io.StringIO()):
                 self.full_install(Path(temporary), [], overridden=True)
 
     def test_unselected_frontend_is_reported_without_claiming_activation(self):

@@ -84,15 +84,25 @@ python3 scripts/install-omarchy-ui.py   # bar mark and settings panel
 python3 scripts/install-editors.py --vault /path/to/vault --bash   # optional: Obsidian, Bash
 ```
 
+Prerequisites on the machine: Rust, Node.js, cmake, ninja, a C++20 compiler,
+Fcitx 5 headers, PyGObject, GTK 4 and gtk4-layer-shell, plus a network path
+for the pinned Fcitx compatibility source.
+
 The installers build user-local files, back up everything they replace and
-restart Badi's services and Fcitx. The newest three backups are kept, and
-`python3 scripts/badi_install.py restore DIR` rolls one back. The desktop
-install needs an unlocked desktop; `--broker-only` updates only the model
-service while locked. On Fcitx 5.1.22 it also installs a
+restart Badi's services and Fcitx. The newest three backups of each installer
+are kept, and the first backup — the files as they were before Badi — is kept
+as well. `python3 scripts/badi_install.py restore DIR` rolls one back, reloads
+user units when a service file was restored, and updates the install receipt
+to those restored bytes. The desktop install needs an unlocked desktop;
+`--broker-only` updates only the model service while locked. On Fcitx 5.1.22
+it also installs a
 [backported Fcitx frontend](packaging/fcitx5-wayland-compat/README.md) so
 Chromium-based apps keep sending their text (`--no-wayland-compat` skips it).
-The model files must already be present (`badictl models writing` prints the
-pinned download plan).
+The model files must already be present. `badictl models writing` prints
+`hf download` with `--local-dir ~/.local/share/badi/models`. The pinned
+llama.cpp runtime is `~/.local/share/badi/runtimes/llama-b10726`, with its
+archive in `runtimes/downloads/`. `install-desktop.py` checks those pinned
+hashes before it builds, and the broker checks them again before it starts.
 
 ## Choose where Badi writes
 

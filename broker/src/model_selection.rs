@@ -113,6 +113,10 @@ pub struct DownloadPlan {
     pub expected_sha256: &'static str,
 }
 
+/// Where `hf download --local-dir` must place a writing GGUF. The broker reads
+/// `~/.local/share/badi/models/<filename>`, not the Hugging Face cache.
+pub const MODEL_DOWNLOAD_DIRECTORY: &str = "~/.local/share/badi/models";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct MemoryFit {
     pub execution_target: &'static str,
@@ -284,6 +288,8 @@ pub fn recommend_model(hardware: HardwareProfile, use_case: ModelUseCase) -> Mod
                     recommended.filename,
                     "--revision",
                     recommended.revision,
+                    "--local-dir",
+                    MODEL_DOWNLOAD_DIRECTORY,
                 ],
                 expected_sha256: recommended.sha256,
             };

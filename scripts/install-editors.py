@@ -4,6 +4,7 @@
 import argparse
 import json
 from pathlib import Path
+import stat
 import subprocess
 
 import badi_install
@@ -47,7 +48,8 @@ def main():
         for name in ("main.js", "manifest.json", "styles.css"):
             installation.copy(ROOT / "adapters/obsidian/dist" / name, plugin / name, 0o644)
         if "badi" not in enabled:
-            installation.write(community, (json.dumps([*enabled, "badi"], indent=2) + "\n").encode(), 0o644)
+            installation.write(community, (json.dumps([*enabled, "badi"], indent=2) + "\n").encode(),
+                               stat.S_IMODE(community.stat().st_mode) if community.exists() else 0o644)
         print("Obsidian installed. Reload Obsidian; enable community plugins normally if restricted mode is on.")
     if args.bash:
         installation.write(home / ".local/lib/badi/editors/shell/badi-preview.so", shell_preview, 0o755)
@@ -58,7 +60,8 @@ def main():
         text = bashrc.read_text() if bashrc.exists() else ""
         source = '[[ -r "$HOME/.local/lib/badi/editors/shell/badi.bash" ]] && source "$HOME/.local/lib/badi/editors/shell/badi.bash"'
         if source not in text:
-            installation.write(bashrc, (text.rstrip() + "\n\n" + source + "\n").encode(), 0o644)
+            mode = stat.S_IMODE(bashrc.stat().st_mode) if bashrc.exists() else 0o644
+            installation.write(bashrc, (text.rstrip() + "\n\n" + source + "\n").encode(), mode)
         subprocess.run(["bash", "-n", str(bashrc)], check=True)
         print("Bash installed with grey inline previews. New interactive shells: Ctrl-X then Tab requests/accepts; ordinary Tab is unchanged.")
     installation.finish()

@@ -69,6 +69,8 @@ fn assert_semantic_invariants(advice: &ModelAdvice) {
                     recommended.filename,
                     "--revision",
                     recommended.revision,
+                    "--local-dir",
+                    badi_broker::MODEL_DOWNLOAD_DIRECTORY,
                 ]
             );
             for alternative in &advice.alternatives {
