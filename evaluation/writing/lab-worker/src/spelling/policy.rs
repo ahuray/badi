@@ -156,6 +156,9 @@ mod tests {
             ),
             vec!["Haxe", "Hose"]
         );
-        assert!(filter("bAdI", vec!["bAdE".into()], "de").is_empty());
+        assert_eq!(
+            filter("bAdI", vec!["bAdE".into()], "de"),
+            [] as [std::string::String; 0]
+        );
     }
 }

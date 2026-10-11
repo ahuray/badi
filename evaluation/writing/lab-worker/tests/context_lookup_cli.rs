@@ -60,10 +60,9 @@ fn lookup_waits_for_one_snapshot_eof_without_starting_threads_or_children()
     assert!(child.try_wait()?.is_none());
     let pid = child.id();
     assert_eq!(std::fs::read_dir(format!("/proc/{pid}/task"))?.count(), 1);
-    assert!(
-        std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))?
-            .trim()
-            .is_empty()
+    assert_eq!(
+        std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))?.trim(),
+        ""
     );
     let output = worker.finish()?;
     assert!(output.status.success() && output.stderr.is_empty());

@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   rust:
-    name: Rust 1.98
+    name: Rust 1.99
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -24,7 +24,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: clippy, rustfmt
       - name: Check formatting
@@ -59,7 +59,8 @@ jobs:
       - name: Install Rust MSRV
         uses: dtolnay/rust-toolchain@1.85.0
       - name: Check declared minimum version
-        run: cargo check --workspace --all-targets --all-features --locked
+        # rust-toolchain.toml overrides the toolchain this action installs.
+        run: cargo +1.85.0 check --workspace --all-targets --all-features --locked
 
   omarchy-plugin:
     name: Omarchy plugin / pinned Arch host
@@ -134,7 +135,7 @@ jobs:
           cmake --build adapters/fcitx5/build
           ctest --test-dir adapters/fcitx5/build --output-on-failure
       - name: Install Rust for the native transport integration
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.99.0
       - name: Exercise the C++ transport against the real Rust broker
         run: |
           cargo build -p badi-broker --bins --locked

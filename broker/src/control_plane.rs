@@ -566,7 +566,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{ControlPlane, ControlPlaneError, strictly_reduces_authority, unix_day};
-    use crate::personalization::{PersonalizationProvider, PersonalizationSignal};
+    use crate::personalization::{DailyAggregate, PersonalizationProvider, PersonalizationSignal};
     use crate::settings::{
         ALL_WEB_ORIGINS_PERMISSIONS, BrowserAdapter, PermissionDecision, PrivateStorage,
         PrivateStorageError, RetentionPermission, SETTINGS_SCHEMA, SettingsStoreError, SettingsV2,
@@ -765,7 +765,7 @@ mod tests {
         let control = ControlPlane::open(storage_paths.clone()).expect("control plane");
         let snapshot = control.snapshot().expect("snapshot");
         assert_eq!(snapshot.settings, SettingsV2::deny_by_default());
-        assert!(snapshot.personalization.records.is_empty());
+        assert_eq!(snapshot.personalization.records, [] as [DailyAggregate; 0]);
         assert_eq!(snapshot.persisted_personalization_bytes, 0);
         assert!(matches!(
             PrivateStorage::open(storage_paths),
@@ -808,7 +808,7 @@ mod tests {
             .replace_settings(1, denied)
             .expect("revoke settings");
         let snapshot = control.snapshot().expect("reconciled snapshot");
-        assert!(snapshot.personalization.records.is_empty());
+        assert_eq!(snapshot.personalization.records, [] as [DailyAggregate; 0]);
         assert_eq!(snapshot.persisted_personalization_bytes, 0);
         assert!(!storage_paths.personalization_path().exists());
     }
@@ -846,7 +846,10 @@ mod tests {
             )
             .expect("grant bounded retention");
         let after_grant = control.snapshot().expect("post-grant snapshot");
-        assert!(after_grant.personalization.records.is_empty());
+        assert_eq!(
+            after_grant.personalization.records,
+            [] as [DailyAggregate; 0]
+        );
         assert_eq!(after_grant.persisted_personalization_bytes, 0);
         assert!(!storage_paths.personalization_path().exists());
 
@@ -1017,13 +1020,13 @@ mod tests {
 
         let cleared = control.clear_personalization().expect("clear");
         assert!(cleared.changed);
-        assert!(
+        assert_eq!(
             control
                 .snapshot()
                 .expect("cleared snapshot")
                 .personalization
-                .records
-                .is_empty()
+                .records,
+            [] as [DailyAggregate; 0]
         );
     }
 
@@ -1109,13 +1112,13 @@ mod tests {
             .expect("stale signal is ignored");
         assert!(!stale.signal_recorded);
         assert!(stale.signal_dropped);
-        assert!(
+        assert_eq!(
             control
                 .snapshot()
                 .expect("snapshot")
                 .personalization
-                .records
-                .is_empty()
+                .records,
+            [] as [DailyAggregate; 0]
         );
 
         let current = control
@@ -1159,13 +1162,13 @@ mod tests {
             .expect("store available");
         assert!(expired.changed);
         assert!(!durable_paths.personalization_path().exists());
-        assert!(
+        assert_eq!(
             durable
                 .snapshot()
                 .expect("expired durable snapshot")
                 .personalization
-                .records
-                .is_empty()
+                .records,
+            [] as [DailyAggregate; 0]
         );
 
         let ephemeral_paths = paths(&temporary.path().join("ephemeral"));
@@ -1189,13 +1192,13 @@ mod tests {
             .expect("store available");
         assert!(expired.changed);
         assert!(!ephemeral_paths.personalization_path().exists());
-        assert!(
+        assert_eq!(
             ephemeral
                 .snapshot()
                 .expect("expired ephemeral snapshot")
                 .personalization
-                .records
-                .is_empty()
+                .records,
+            [] as [DailyAggregate; 0]
         );
     }
 
@@ -1225,7 +1228,10 @@ mod tests {
         let control = ControlPlane::open(storage_paths.clone()).expect("degraded control plane");
         let unavailable = control.snapshot().expect("unavailable snapshot");
         assert!(!unavailable.personalization_store_available);
-        assert!(unavailable.personalization.records.is_empty());
+        assert_eq!(
+            unavailable.personalization.records,
+            [] as [DailyAggregate; 0]
+        );
         assert_eq!(unavailable.persisted_personalization_bytes, 0);
         assert_eq!(
             fs::read(&personalization_path).expect("preserved corrupt store"),
@@ -1312,7 +1318,7 @@ mod tests {
         assert!(cleared.changed);
         let recovered = control.snapshot().expect("recovered snapshot");
         assert!(recovered.personalization_store_available);
-        assert!(recovered.personalization.records.is_empty());
+        assert_eq!(recovered.personalization.records, [] as [DailyAggregate; 0]);
         assert_eq!(recovered.persisted_personalization_bytes, 0);
         assert!(!personalization_path.exists());
         assert!(!orphaned_temporary.exists());

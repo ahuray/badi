@@ -17,7 +17,7 @@ fn prefill_probe_rejects_variable_inputs_before_runtime_activation() -> Result<(
             .args(args)
             .output()?;
         assert!(!output.status.success());
-        assert!(output.stderr.is_empty());
+        assert_eq!(output.stderr, [] as [u8; 0]);
         let response: serde_json::Value = serde_json::from_slice(&output.stdout)?;
         assert_eq!(
             response,

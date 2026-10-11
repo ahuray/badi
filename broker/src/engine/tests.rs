@@ -13,7 +13,7 @@ use super::{
 };
 use crate::control_plane::ControlPlane;
 use crate::metrics::NoSuggestionReason;
-use crate::personalization::PersonalizationSignal;
+use crate::personalization::{DailyAggregate, PersonalizationSignal};
 use crate::protocol::{
     Activation, AdapterKind, Capability, CommitResultPayload, CommitStatus, ContextChangedPayload,
     ControlAction, Coordinates, FieldDescriptor, FieldPurpose, OffsetUnit, Origin, OriginScheme,
@@ -2876,7 +2876,7 @@ async fn memory_clear_detaches_live_suggestions_from_deleted_aggregates() {
         .await
         .expect("clear personalization");
     assert!(changed);
-    assert!(cleared.personalization.records.is_empty());
+    assert_eq!(cleared.personalization.records, [] as [DailyAggregate; 0]);
     broker
         .session_control(
             coordinates(session_id, 1),
@@ -2894,7 +2894,10 @@ async fn memory_clear_detaches_live_suggestions_from_deleted_aggregates() {
         .control_plane_snapshot()
         .await
         .expect("flush aggregate queue");
-    assert!(after_dismiss.personalization.records.is_empty());
+    assert_eq!(
+        after_dismiss.personalization.records,
+        [] as [DailyAggregate; 0]
+    );
     assert_eq!(broker.outcome_recorder_health().write_failures, 0);
 }
 
@@ -3019,7 +3022,10 @@ async fn retention_grant_scrubs_pre_consent_memory_without_post_commit_persisten
     std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700))
         .expect("restore aggregate directory");
     assert_eq!(replacement.settings.revision, 2);
-    assert!(replacement.personalization.records.is_empty());
+    assert_eq!(
+        replacement.personalization.records,
+        [] as [DailyAggregate; 0]
+    );
     assert_eq!(broker.session_count().await, 0);
     assert!(!broker.is_paused().await);
     let policy = broker.resolve_policy(&controlled_target()).await;

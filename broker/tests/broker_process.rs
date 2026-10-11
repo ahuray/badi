@@ -47,7 +47,7 @@ fn missing_model_exits_with_the_configuration_status() -> Result<(), Box<dyn Err
         .env("XDG_DATA_HOME", directory.path().join("data"))
         .output()?;
     assert_eq!(output.status.code(), Some(78), "{output:?}");
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, [] as [u8; 0]);
     assert!(
         String::from_utf8(output.stderr)?.starts_with("error_code=local_model: "),
         "startup errors keep the prefix badi doctor classifies"

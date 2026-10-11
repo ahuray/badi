@@ -28,7 +28,7 @@ fn spelling_dispatch_rejects_invalid_configuration_without_model_activation()
             .args(args)
             .env_clear()
             .output()?;
-        assert!(output.stderr.is_empty());
+        assert_eq!(output.stderr, [] as [u8; 0]);
         let error: serde_json::Value = serde_json::from_slice(&output.stdout)?;
         assert_eq!(error["type"], "error");
         assert!(error["id"].is_null());
@@ -51,7 +51,7 @@ fn spelling_exec_helper_rejects_parent_mismatch_before_artifact_or_tokio_startup
         .env_clear()
         .output()?;
     assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, [] as [u8; 0]);
     assert_eq!(output.stderr, b"spelling_helper_failed\n");
     Ok(())
 }

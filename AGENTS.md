@@ -77,8 +77,11 @@ Preserve exact editing authority and prove the affected user flow.
 
 Run commands from the repository root with the root `package.json` and
 `package-lock.json` (`npm ci` when needed); never add adapter manifests or mix
-package managers. `Cargo.toml` sets Rust 1.85+ and edition 2024, and
-[CI](.github/workflows/ci.yml) pins the exact toolchains. Pick checks by the
+package managers. `Cargo.toml` sets the 1.85 MSRV and edition 2024.
+[rust-toolchain.toml](rust-toolchain.toml) pins the active toolchain at 1.99.0,
+and [CI](.github/workflows/ci.yml) uses that pin for the Rust and Fcitx jobs.
+The MSRV job stays on `cargo +1.85.0` because the toolchain file would
+otherwise override it. Pick checks by the
 changed surface:
 
 | Change | Checks |

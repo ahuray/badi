@@ -1141,7 +1141,7 @@ mod tests {
             assert_eq!(model.license, "Apache-2.0");
             assert_eq!(model.runtime, "llama.cpp");
             assert_eq!(model.minimum_runtime_version, "b5092");
-            assert!(!model.prompt_format.is_empty());
+            assert_ne!(model.prompt_format, "");
             assert!(model.runtime_caveat.contains("not validated by Badi"));
         }
     }

@@ -1202,12 +1202,12 @@ mod tests {
                 );
             } else {
                 assert!(prompt.ends_with(&value.before));
-                assert!(prepared.echo.is_empty());
+                assert_eq!(prepared.echo, "");
             }
         }
         let mut value = request(Mode::Healed);
         value.before = "Hello\u{a0}".to_owned();
-        assert!(prepare_prompt(&value).echo.is_empty());
+        assert_eq!(prepare_prompt(&value).echo, "");
         value.before = "Please review the docum".to_owned();
         assert_eq!(prepare_prompt(&value).echo, "docum");
     }
