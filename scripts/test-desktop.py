@@ -461,6 +461,7 @@ class DesktopTests(unittest.TestCase):
         running = {'loaded': True, 'active': 'active', 'process_id': 123}
         replacement = {**running, 'process_id': 456}
         with patch.object(desktop, 'observer_service_state', side_effect=[running, replacement]), \
+             patch.object(desktop, 'runtime_directory', return_value=Path('/private/badi')), \
              patch.object(desktop, 'observer_probe', return_value={'ready': True}) as probe, \
              patch.object(desktop.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'b true\n', '')):
             state = desktop.accessibility_state()
@@ -472,6 +473,7 @@ class DesktopTests(unittest.TestCase):
     def test_observer_health_reports_disabled_bridge_separately_from_ready_process(self):
         running = {'loaded': True, 'active': 'active', 'process_id': 123}
         with patch.object(desktop, 'observer_service_state', return_value=running), \
+             patch.object(desktop, 'runtime_directory', return_value=Path('/private/badi')), \
              patch.object(desktop, 'observer_probe', return_value={'ready': True}), \
              patch.object(desktop.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'b false\n', '')):
             state = desktop.accessibility_state()

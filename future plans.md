@@ -150,8 +150,8 @@ resident memory about 1.3 GB, and no quality regression in the Lab.
 Exit criteria: on a fresh Omarchy install, one menu action covers install,
 suggestion, acceptance, update and uninstall, leaving nothing behind.
 
-- [ ] Build and validate the [AUR candidate](packaging/aur/README.md), then
-      verify install/update/removal on fresh Omarchy before publication. It
+- [ ] Verify install/update/removal of the [AUR candidate](packaging/aur/README.md)
+      on fresh Omarchy before publication. It
       packages the addon, broker, observer and user units; writing assets are
       a separate pinned, hash-verified download.
 - [ ] Omarchy integration in the style of Voxtype's: a first-run invitation

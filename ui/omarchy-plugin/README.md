@@ -56,8 +56,8 @@ plugin disable io.github.ahuray.badi` hides the mark.
 
 `BadiClient.qml` never reads document text, model state or settings files
 directly. Every command is a fixed argv array through Quickshell `Process`;
-settings JSON goes through the child's stdin, closed after writing. It runs at most one overview read and one
-settings write, and a write invalidates any older read. Deactivation terminates
+settings JSON goes through the child's stdin, closed after writing. It runs at
+most one overview read and one settings write, and a write invalidates any older read. Deactivation terminates
 every child (SIGTERM, then SIGKILL), stale exit handlers change nothing, and a
 reactivation during teardown queues exactly one fresh read.
 

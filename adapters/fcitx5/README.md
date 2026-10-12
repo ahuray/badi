@@ -37,9 +37,9 @@ observer wire details.
   call ([ADR 0004](../../docs/decisions/0004-type-through-carries-text-not-authority.md)).
 - **Manual request.** It needs a collapsed, non-composing, non-sensitive
   surrounding-text snapshot, the live `SurroundingText` capability, a valid
-  input-method language or explicit app override (English, German or Persian), and a surrounding-text
-  update since focus or the last authority change. Until a request, text events
-  only invalidate local state.
+  input-method language or explicit app override (English, German or Persian),
+  and a surrounding-text update since focus or the last authority change.
+  Until a request, text events only invalidate local state.
 - **Quiet fields.** When the observer reports a file dialog or a very narrow
   field (`quiet` in the [observer contract](../accessibility/README.md#socket-contract)),
   automatic work stops before a snapshot, so the field's text is not read;
