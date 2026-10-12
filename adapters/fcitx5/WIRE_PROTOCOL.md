@@ -20,7 +20,9 @@ observer's (`badi.accessibility.v1`) requests and reply checks are in
 
 The first frame is `hello` with `v: 2`, `min_v: 2`, `max_v: 2`, adapter
 `{kind:"fcitx",name:"badi-fcitx5",version:"0.1.0"}`, and the exact capabilities
-`context`, `suggestion`, `commit.dispatched_unverified`, `control`, and `policy`.
+`context`, `suggestion`, `commit.dispatched_unverified`, `text_replacement`,
+`control`, and `policy`. `text_replacement` is applied only for native exact
+fields; IME-parity sessions stay append-only.
 The adapter waits for `hello.ack` and the initial `authority.changed`, queues an
 `authority.ack`, and only then opens sessions. Later authority epochs retire
 local candidate/context authority before reopening eligible focused sessions.

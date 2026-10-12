@@ -147,6 +147,14 @@ void sanitizerAndIdentifiers() {
     check(!sanitizeSuggestion(std::string(65, 'x')), "scalar limit must hold");
     check(!sanitizeSuggestion(" one two three four five six seven eight nine"),
           "word limit must hold");
+    check(nativeReplacementChars(false, "This is teh ", "teh ") == 4,
+          "a native suffix is deleted in UTF-8 scalars");
+    check(!nativeReplacementChars(true, "This is teh ", "teh "),
+          "IME-parity must not delete");
+    check(!nativeReplacementChars(false, "This is teh ", "other "),
+          "a stale suffix must not delete");
+    check(!nativeReplacementChars(false, "This is teh ", ""),
+          "an empty suffix must not delete");
 
     check(validLinuxAppId("omawrite"), "single segment app id should pass");
     check(validLinuxAppId("com.github.xournalpp.xournalpp"),

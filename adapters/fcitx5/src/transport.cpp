@@ -57,13 +57,26 @@ bool validFingerprint(const Json &value) {
 }
 
 bool exactCapabilities(const Json &value) {
-    if (!value.is_array() || value.size() != kRequiredCapabilities.size()) return false;
+    if (!value.is_array() || value.size() != kRequiredCapabilities.size() + 1) return false;
     for (const auto capability : kRequiredCapabilities) {
         const auto matches = std::count_if(
             value.begin(), value.end(), [capability](const Json &candidate) {
                 return candidate.is_string() && candidate == capability;
             });
         if (matches != 1) return false;
+    }
+    const auto replacements = std::count_if(value.begin(), value.end(), [](const Json &candidate) {
+        return candidate.is_string() && candidate == "text_replacement";
+    });
+    return replacements == 1;
+}
+
+bool allowsReplacementKey(const Json &value, std::initializer_list<std::string_view> keys) {
+    if (!value.is_object()) return false;
+    const bool replacement = value.contains("replace_before");
+    if (value.size() != keys.size() && !(replacement && value.size() == keys.size() + 1)) return false;
+    for (const auto key : keys) {
+        if (!value.contains(std::string(key))) return false;
     }
     return true;
 }
@@ -698,7 +711,7 @@ private:
                               {"version", "0.1.0"}}},
             {"capabilities", Json::array({"context", "suggestion",
                                            "commit.dispatched_unverified",
-                                           "control", "policy"})},
+                                           "text_replacement", "control", "policy"})},
         };
         if (!queue(envelope("hello", "fcitx.hello", nowMs(), helloPayload))) {
             return false;
@@ -906,7 +919,7 @@ private:
                                "focus_epoch", "revision", "mono_ms", "payload"}) ||
             !value["id"].is_string() ||
             !validOpaqueId(value["id"].get_ref<const std::string &>()) ||
-            !exactKeys(payload, {"fingerprint", "suggestion_id", "text",
+            !allowsReplacementKey(payload, {"fingerprint", "suggestion_id", "text",
                                  "accept_word", "ttl_ms", "provider"}) ||
             !payload["suggestion_id"].is_string() ||
             !validOpaqueId(payload["suggestion_id"].get_ref<const std::string &>()) ||
@@ -926,6 +939,12 @@ private:
             !text->starts_with(*acceptWord)) {
             return false;
         }
+        std::optional<std::string> replaceBefore;
+        if (payload.contains("replace_before")) {
+            if (!payload["replace_before"].is_string()) return false;
+            replaceBefore = sanitizeSuggestion(payload["replace_before"].get_ref<const std::string &>());
+            if (!replaceBefore) return false;
+        }
         if (callbacks_.onSuggestion) {
             callbacks_.onSuggestion(Suggestion{
                 .coordinates = *coordinates,
@@ -934,6 +953,7 @@ private:
                 .text = *text,
                 .expiresAtMs = nowMs() + payload["ttl_ms"].get<std::uint64_t>(),
                 .acceptWord = *acceptWord,
+                .replaceBefore = std::move(replaceBefore),
             });
         }
         return true;
@@ -948,7 +968,7 @@ private:
                                "focus_epoch", "revision", "mono_ms", "payload"}) ||
             !value["id"].is_string() ||
             !validOpaqueId(value["id"].get_ref<const std::string &>()) ||
-            !exactKeys(payload, {"fingerprint", "suggestion_id", "text", "acceptance"}) ||
+            !allowsReplacementKey(payload, {"fingerprint", "suggestion_id", "text", "acceptance"}) ||
             !payload["suggestion_id"].is_string() ||
             !validOpaqueId(payload["suggestion_id"].get_ref<const std::string &>()) ||
             !payload["text"].is_string() ||
@@ -957,7 +977,12 @@ private:
         }
         const auto coordinates = parseCoordinates(value, payload);
         const auto text = sanitizeSuggestion(payload["text"].get_ref<const std::string &>());
-        if (!coordinates || !text) return false;
+        std::optional<std::string> replaceBefore;
+        if (payload.contains("replace_before")) {
+            if (!payload["replace_before"].is_string()) return false;
+            replaceBefore = sanitizeSuggestion(payload["replace_before"].get_ref<const std::string &>());
+        }
+        if (!coordinates || !text || (payload.contains("replace_before") && !replaceBefore)) return false;
         if (callbacks_.onCommitPrepare) {
             callbacks_.onCommitPrepare(CommitPrepare{
                 .coordinates = *coordinates,
@@ -965,6 +990,7 @@ private:
                 .suggestionId = payload["suggestion_id"].get<std::string>(),
                 .text = *text,
                 .acceptance = payload["acceptance"].get<std::string>(),
+                .replaceBefore = std::move(replaceBefore),
             });
         }
         return true;

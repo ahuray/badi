@@ -178,6 +178,24 @@ impl Broker {
     }
 }
 
+/// Apps that accept only one append-only `commitString` ([ADR 0003]).
+/// Native exact ids such as `omawrite` are absent on purpose.
+fn fcitx_append_only_app(app_id: &str) -> bool {
+    matches!(
+        app_id,
+        "chromium"
+            | "chromium-browser"
+            | "brave-origin"
+            | "zen"
+            | "chatgpt"
+            | "code"
+            | "cursor"
+            | "discord"
+            | "grok-bot"
+            | "libreoffice"
+    )
+}
+
 impl SessionState {
     fn new(
         coordinates: Coordinates,
@@ -208,13 +226,15 @@ impl SessionState {
     }
 
     /// A spelling correction needs negotiated replacement and a field whose
-    /// identity the adapter knows.
+    /// identity the adapter knows. IME-parity apps stay append-only even when
+    /// the shared Fcitx connection advertises replacement for native fields.
     pub(super) fn allows_text_replacement(&self) -> bool {
         self.authority.grants(Capability::TextReplacement)
             && self
                 .context
                 .as_ref()
                 .is_some_and(|context| context.field.identity_known)
+            && !fcitx_append_only_app(&self.target.target.app_id)
     }
 
     pub(super) fn ensure_coordinates(&self, coordinates: Coordinates) -> Result<(), BrokerError> {

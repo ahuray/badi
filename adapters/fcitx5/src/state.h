@@ -31,6 +31,10 @@ enum class NativeAppClass {
 
 NativeAppClass classifyNativeApp(std::string_view appId);
 bool imeParityApp(std::string_view appId);
+// UTF-8 scalar count of `suffix` when a native field's text before the caret
+// ends with that exact suffix. IME-parity apps stay append-only.
+std::optional<unsigned> nativeReplacementChars(bool imeParity, std::string_view before,
+                                                std::string_view suffix);
 // Whether this app may be inspected by the observer at all.
 bool nativeObservationAvailable(std::string_view appId);
 bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target,
@@ -100,6 +104,8 @@ struct Suggestion {
     std::uint64_t expiresAtMs = 0;
     // The broker's next-word part of `text`; the whole text when absent.
     std::string acceptWord = {};
+    // Exact typed suffix a native field must delete before committing `text`.
+    std::optional<std::string> replaceBefore = std::nullopt;
 };
 
 struct AcceptRequest {
@@ -123,6 +129,7 @@ struct CommitPrepare {
     std::string suggestionId;
     std::string text;
     std::string acceptance;
+    std::optional<std::string> replaceBefore = std::nullopt;
 };
 
 struct CommitDispatch {
@@ -130,6 +137,7 @@ struct CommitDispatch {
     std::string controlId;
     std::string suggestionId;
     std::string text;
+    std::optional<std::string> replaceBefore = std::nullopt;
 };
 
 struct PanelObservation {

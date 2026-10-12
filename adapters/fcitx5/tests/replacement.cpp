@@ -40,7 +40,7 @@ struct Runtime {
 };
 
 const Json capabilities = Json::array({"context", "suggestion",
-    "commit.dispatched_unverified", "control", "policy"});
+    "commit.dispatched_unverified", "text_replacement", "control", "policy"});
 
 Json message(const char *type) {
     Json payload{{"fingerprint", "0123456789abcdef0123456789abcdef"},
@@ -63,10 +63,22 @@ public:
         : scenario_(std::move(scenario)), client_(loop_, WireCallbacks{
               .onReady = [this] { onReady(); },
               .onAuthority = [](const AuthoritySnapshot &) {},
-              .onSuggestion = [this](Suggestion) { ++suggestions_; },
+              .onSuggestion = [this](Suggestion suggestion) {
+                  ++suggestions_;
+                  if (scenario_ != "suggestion") return;
+                  require(suggestion.replaceBefore && *suggestion.replaceBefore == "adress",
+                          "replacement suffix was not delivered");
+                  loop_.exit();
+              },
               .onClear = [](const ClearNotice &) {},
-              .onCommitPrepare = [this](const CommitPrepare &) {
+              .onCommitPrepare = [this](const CommitPrepare &prepare) {
                   ++commits_;
+                  if (scenario_ == "commit") {
+                      require(prepare.replaceBefore && *prepare.replaceBefore == "adress",
+                              "replacement suffix was not delivered");
+                  } else {
+                      require(!prepare.replaceBefore, "append commit gained a replacement");
+                  }
                   finished_ = true;
                   loop_.exit();
               },
@@ -125,11 +137,18 @@ public:
         if (scenario_ == "append") {
             require(ready_ && finished_ && !disconnected_ && suggestions_ == 1 && commits_ == 1,
                     "ordinary append flow regressed");
+        } else if (scenario_ == "extra-capability") {
+            require(!ready_ && disconnected_ && !finished_ && suggestions_ == 0 && commits_ == 0,
+                    "an extra capability reached the ready transport");
+        } else if (scenario_.ends_with("empty")) {
+            require(ready_ && disconnected_ && !finished_ && suggestions_ == 0 && commits_ == 0,
+                    "empty replacement was not rejected before callbacks");
+        } else if (scenario_ == "suggestion") {
+            require(ready_ && !disconnected_ && !finished_ && suggestions_ == 1 && commits_ == 0,
+                    "valid replacement suggestion was not delivered");
         } else {
-            require(disconnected_ && !finished_ && suggestions_ == 0 && commits_ == 0,
-                    "unsolicited replacement was not rejected before callbacks");
-            require(ready_ == (scenario_ != "extra-capability"),
-                    "replacement injection reached an unexpected handshake phase");
+            require(ready_ && finished_ && !disconnected_ && suggestions_ == 0 && commits_ == 1,
+                    "valid replacement commit was not delivered");
         }
     }
 
@@ -142,12 +161,15 @@ private:
     }
 
     void hello(const Json &value) {
-        require(!helloSeen_ && value.at("type") == "hello", "unexpected native request");
+        // The client answers authority.changed with authority.ack on this same
+        // socket. That frame is not a second hello.
+        if (disconnected_ || helloSeen_) return;
+        require(value.at("type") == "hello", "unexpected native request");
         helloSeen_ = true;
         require(value.at("payload").at("capabilities") == capabilities,
                 "native client must advertise only append capabilities");
         auto enabled = capabilities;
-        if (scenario_ == "extra-capability") enabled.push_back("text_replacement");
+        if (scenario_ == "extra-capability") enabled.push_back("clipboard");
         send(Json{{"v", 2}, {"type", "hello.ack"}, {"id", "fcitx.hello"}, {"mono_ms", 0},
             {"payload", {{"selected_v", 2}, {"connection_id", "private-connection"},
                 {"enabled_capabilities", enabled}, {"max_frame_bytes", 65536},
@@ -169,8 +191,8 @@ private:
         const bool suggestion = scenario_.starts_with("suggestion");
         auto response = message(suggestion ? "suggestion.show" : "commit.prepare");
         response["payload"]["replace_before"] = scenario_.ends_with("empty") ? "" : "adress";
-        // These otherwise ordinary append frames must fail because of the
-        // replacement field itself, not because of spelling text sanitization.
+        // A real suffix is delivered. An empty suffix fails suggestion
+        // sanitization and must not reach a callback.
         send(response);
     }
 

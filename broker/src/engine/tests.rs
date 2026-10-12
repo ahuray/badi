@@ -791,6 +791,80 @@ async fn manual_unknown_identity_never_receives_spelling_authority() {
     assert_eq!(broker.metrics().snapshot().commits_prepared, 0);
 }
 
+#[tokio::test]
+async fn ime_parity_apps_do_not_receive_spelling_authority() {
+    for app_id in ["chromium", "code", "libreoffice", "zen"] {
+        let allowed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let broker = Broker::new(
+            std::sync::Arc::new(ReplacementAuthorityProbe(std::sync::Arc::clone(&allowed))),
+            BrokerConfig::default(),
+        );
+        let session_id = SessionId::new();
+        let (sink, mut events) = mpsc::channel(32);
+        broker
+            .open_session(
+                coordinates(session_id, 0),
+                SessionOpenPayload {
+                    target: TargetDescriptor {
+                        kind: if app_id == "libreoffice" {
+                            TargetKind::DesktopApplication
+                        } else {
+                            TargetKind::Browser
+                        },
+                        app_id: app_id.to_owned(),
+                        target_id: "field-1".to_owned(),
+                        origin: None,
+                    },
+                    activation: Activation::Always,
+                },
+                SessionAuthority {
+                    protocol_version: 1,
+                    adapter_kind: AdapterKind::Fcitx,
+                    capabilities: vec![
+                        Capability::Context,
+                        Capability::Suggestion,
+                        Capability::TextReplacement,
+                    ],
+                },
+                event_sink(sink),
+            )
+            .await
+            .expect("open session");
+        let mut update = context(1, FieldPurpose::Normal);
+        update.before = "This is teh ".to_owned();
+        update.selection.anchor = 12;
+        update.selection.head = 12;
+        broker
+            .update_context(coordinates(session_id, 1), update.clone())
+            .await
+            .expect("context");
+        broker
+            .request_suggestion(
+                coordinates(session_id, 1),
+                SuggestRequestPayload {
+                    fingerprint: update.fingerprint,
+                    explicit: false,
+                },
+                None,
+            )
+            .await
+            .expect("request");
+        let BrokerEvent::SuggestionClear { payload, .. } =
+            timeout(Duration::from_millis(100), events.recv())
+                .await
+                .expect("deadline")
+                .expect("event")
+        else {
+            panic!("{app_id} received a spelling suggestion")
+        };
+        assert_eq!(payload.reason, ReasonCode::InvalidCapability, "{app_id}");
+        assert!(
+            !allowed.load(std::sync::atomic::Ordering::SeqCst),
+            "{app_id} was offered replacement"
+        );
+    }
+}
+
 fn controlled_target() -> TargetDescriptor {
     TargetDescriptor {
         kind: TargetKind::Browser,

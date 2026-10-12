@@ -134,6 +134,17 @@ bool imeParityApp(std::string_view appId) {
     return kind == NativeAppClass::ImeParityBrowser || kind == NativeAppClass::ImeParityDesktop;
 }
 
+std::optional<unsigned> nativeReplacementChars(bool imeParity, std::string_view before,
+                                                std::string_view suffix) {
+    if (imeParity || suffix.empty() || !before.ends_with(suffix)) return std::nullopt;
+    unsigned count = 0;
+    for (const unsigned char byte : suffix) {
+        if ((byte & 0xC0U) != 0x80U) ++count;
+    }
+    if (count == 0) return std::nullopt;
+    return count;
+}
+
 bool nativeObservationAvailable(std::string_view appId) {
     return classifyNativeApp(appId) != NativeAppClass::Unavailable;
 }
@@ -408,6 +419,14 @@ bool SessionState::showSuggestion(Suggestion suggestion, std::uint64_t nowMs) {
     const auto word = sanitizeSuggestion(suggestion.acceptWord);
     suggestion.acceptWord = word && clean->starts_with(*word) ? *word : *clean;
     suggestion.text = *clean;
+    if (suggestion.replaceBefore) {
+        const auto saved = lastContext();
+        if (imeParityApp(appId_) || !saved ||
+            !saved->context.before.ends_with(*suggestion.replaceBefore)) {
+            clearSuggestion();
+            return false;
+        }
+    }
     visible_ = std::move(suggestion);
     pendingAcceptance_.reset();
     return true;
@@ -478,7 +497,8 @@ SessionState::authorizeCommit(const CommitPrepare &prepare,
         prepare.controlId != pendingAcceptance_->controlId ||
         prepare.suggestionId != pendingAcceptance_->suggestionId ||
         prepare.text != pendingAcceptance_->expectedText ||
-        prepare.acceptance != pendingAcceptance_->acceptance) {
+        prepare.acceptance != pendingAcceptance_->acceptance ||
+        prepare.replaceBefore != visible_->replaceBefore) {
         return std::nullopt;
     }
     CommitDispatch dispatch{
@@ -486,6 +506,7 @@ SessionState::authorizeCommit(const CommitPrepare &prepare,
         .controlId = prepare.controlId,
         .suggestionId = prepare.suggestionId,
         .text = prepare.text,
+        .replaceBefore = prepare.replaceBefore,
     };
     clearSuggestion();
     return dispatch;
