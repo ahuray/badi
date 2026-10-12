@@ -76,7 +76,7 @@ typing (Brave does; Zen does not), and a page that moves focus while you type
 can redirect it like a keystroke
 ([decision](docs/decisions/0003-ime-parity-append-only.md)). Badi checks field
 identity and caret position before showing a suggestion and again before
-inserting it, and it never reads password fields.
+inserting it, and it never reads a field the toolkit marks as a password.
 
 English spelling replaces the mistyped word in Bash, Obsidian, and native exact
 fields such as Omawrite, Telegram and Xournal++. The apps in the section above,
@@ -145,7 +145,9 @@ badi app discord reset              # drop a rule; the app follows the mode
 
 In app blocklist mode Badi opens only fields its observer can verify, so
 Xournal++, which uses Tab requests, still needs `badi app xournalpp on`.
-Password and sensitive fields are refused in every mode. The **b** mark in the
+A field the toolkit marks as a password is refused in every mode. A normal
+text field is not treated as sensitive from its label, placeholder, or
+autocomplete hint. The **b** mark in the
 Omarchy bar opens the same settings, and right-clicking it pauses Badi.
 
 ## When nothing appears
