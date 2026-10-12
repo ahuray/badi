@@ -39,6 +39,7 @@ struct AdmittedGeneration {
 }
 
 /// What a finished generation must still match before it may be shown.
+#[derive(Clone)]
 struct GenerationBinding {
     coordinates: Coordinates,
     fingerprint: String,
@@ -52,6 +53,7 @@ struct GenerationBinding {
 
 /// A type-through remainder keeps its original suggestion's deadline and
 /// `Shown` aggregate, so typing never extends a display or counts it twice.
+#[derive(Clone, Copy)]
 struct Carried {
     expires_at: Instant,
     aggregate_day: Option<u64>,
@@ -178,7 +180,7 @@ impl Broker {
                 aggregate_day,
             };
             let cancellation = CancellationToken::new();
-            self.show_if_current(state, binding, &cancellation, proposal, Some(carried));
+            self.show_if_current(state, binding, &cancellation, proposal, Some(carried), true);
             return Ok(None);
         }
         if !mid_line && crate::writing::word_follows_caret(&binding.after) {
@@ -215,6 +217,7 @@ impl Broker {
         }))
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn run_generation(self, admitted: AdmittedGeneration) {
         let AdmittedGeneration {
             request,
@@ -251,26 +254,77 @@ impl Broker {
         self.inner.metrics.record_provider_call(request.byte_len());
         let provider_deadline = Instant::now() + self.inner.config.provider_timeout;
         let deadline = binding.deadline.min(provider_deadline);
-        let result = tokio::select! {
-            () = cancellation.cancelled() => {
-                self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
-                return;
+        let stream_partials = request.after.is_empty();
+        let (partial_tx, mut partial_rx) = tokio::sync::mpsc::unbounded_channel();
+        let provider = time::timeout_at(
+            deadline.into(),
+            self.inner.provider.propose_outcome_with_partials(
+                request,
+                cancellation.clone(),
+                allow_replacement,
+                trigger,
+                stream_partials.then_some(partial_tx),
+            ),
+        );
+        tokio::pin!(provider);
+        let mut shown_partial = None;
+        let mut carried = None;
+        let mut partials_open = stream_partials;
+        loop {
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    if shown_partial.is_none() {
+                        self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
+                    }
+                    return;
+                }
+                () = shutdown.cancelled() => {
+                    if shown_partial.is_none() {
+                        self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
+                    }
+                    return;
+                }
+                partial = partial_rx.recv(), if partials_open => {
+                    match partial {
+                        Some(text) => {
+                            let extends = shown_partial.as_deref().is_none_or(|previous: &str| {
+                                text != previous && text.starts_with(previous)
+                            });
+                            if !extends {
+                                continue;
+                            }
+                            let Some(proposal) = checked_proposal(
+                                self.inner.provider_kind,
+                                &binding.before,
+                                &binding.after,
+                                WritingProposal { text: text.clone(), replace_before: None },
+                            ) else {
+                                continue;
+                            };
+                            let state = self.inner.state.lock().await;
+                            if let Some(updated) = self.show_if_current(
+                                state,
+                                binding.clone(),
+                                &cancellation,
+                                proposal,
+                                carried,
+                                false,
+                            ) {
+                                carried = Some(updated);
+                                shown_partial = Some(text);
+                            }
+                        }
+                        None => partials_open = false,
+                    }
+                }
+                result = &mut provider => {
+                    self.finish_generation(binding, &cancellation, result, shown_partial, carried)
+                        .await;
+                    return;
+                }
             }
-            () = shutdown.cancelled() => {
-                self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
-                return;
-            }
-            result = time::timeout_at(
-                deadline.into(),
-                self.inner.provider.propose_outcome(
-                    request,
-                    cancellation.clone(),
-                    allow_replacement,
-                    trigger,
-                ),
-            ) => result,
-        };
-        self.finish_generation(binding, &cancellation, result).await;
+        }
     }
 
     /// Every path records exactly one no-suggestion class or one shown result.
@@ -279,6 +333,8 @@ impl Broker {
         binding: GenerationBinding,
         cancellation: &CancellationToken,
         result: ProviderResult,
+        shown_partial: Option<String>,
+        carried: Option<Carried>,
     ) {
         let proposal = match self.check_provider_result(&binding, cancellation, result) {
             Ok(proposal) => proposal,
@@ -287,6 +343,13 @@ impl Broker {
             }
             Err(Withheld::Silently) => return,
         };
+        if shown_partial
+            .as_ref()
+            .is_some_and(|shown| shown == &proposal.text)
+        {
+            self.release_finished_generation(&binding).await;
+            return;
+        }
         let state = self.inner.state.lock().await;
         if Instant::now() >= binding.deadline {
             drop(state);
@@ -295,7 +358,19 @@ impl Broker {
                 .clear_failed_generation(binding, ReasonCode::ProviderTimeout)
                 .await;
         }
-        self.show_if_current(state, binding, cancellation, proposal, None);
+        self.show_if_current(state, binding, cancellation, proposal, carried, true);
+    }
+
+    /// The stream finished on text already shown. Drop its cancel token without
+    /// withdrawing that suggestion or counting it again.
+    async fn release_finished_generation(&self, binding: &GenerationBinding) {
+        let mut state = self.inner.state.lock().await;
+        let Some(session) = state.sessions.get_mut(&binding.coordinates.session_id) else {
+            return;
+        };
+        if session.generation == binding.generation && session.coordinates == binding.coordinates {
+            session.cancellation = None;
+        }
     }
 
     fn check_provider_result(
@@ -351,6 +426,7 @@ impl Broker {
             .record_no_suggestion(NoSuggestionReason::Timeout);
     }
 
+    #[allow(clippy::too_many_lines)]
     fn show_if_current(
         &self,
         mut state: MutexGuard<'_, BrokerState>,
@@ -358,15 +434,25 @@ impl Broker {
         cancellation: &CancellationToken,
         proposal: WritingProposal,
         carried: Option<Carried>,
-    ) {
+        settle: bool,
+    ) -> Option<Carried> {
         let metrics = &self.inner.metrics;
         let settings_revision = state.settings_revision;
         let Some(session) = session_awaiting(&mut state, &binding, cancellation) else {
-            metrics.record_stale_result();
-            metrics.record_no_suggestion(NoSuggestionReason::Stale);
-            return;
+            if settle {
+                metrics.record_stale_result();
+                metrics.record_no_suggestion(NoSuggestionReason::Stale);
+            }
+            return None;
         };
-        session.cancellation = None;
+        // A commit or dismissal already took the suggestion. A later word must
+        // not replace it.
+        if !settle && session.pending.is_some() {
+            return None;
+        }
+        if settle {
+            session.cancellation = None;
+        }
         let GenerationBinding {
             coordinates,
             fingerprint,
@@ -386,7 +472,7 @@ impl Broker {
                 ReasonCode::InvalidCapability,
                 request_id,
             ));
-            return;
+            return None;
         }
         let now = Instant::now();
         let full_ttl = self.inner.config.suggestion_ttl_for(&session.authority);
@@ -403,7 +489,7 @@ impl Broker {
                 ReasonCode::ProviderTimeout,
                 request_id,
             ));
-            return;
+            return None;
         }
         let show = BrokerEvent::SuggestionShow {
             coordinates,
@@ -412,7 +498,7 @@ impl Broker {
         };
         if session.sink.send(show).is_err() {
             metrics.record_no_suggestion(NoSuggestionReason::Stale);
-            return;
+            return None;
         }
         // A carried remainder is the same suggestion, not another show.
         if carried.is_none() {
@@ -456,6 +542,10 @@ impl Broker {
                 .expire_suggestion(coordinates, generation, suggestion_id)
                 .await;
         });
+        Some(Carried {
+            expires_at,
+            aggregate_day,
+        })
     }
 
     fn suggestion_payload(

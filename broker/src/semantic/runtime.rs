@@ -645,6 +645,25 @@ impl CompletionProvider for OwnedRuntime {
             .propose_outcome(request, cancellation, allow_replacement, trigger)
             .await
     }
+
+    async fn propose_outcome_with_partials(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        allow_replacement: bool,
+        trigger: RequestTrigger,
+        partials: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    ) -> Result<ProviderOutcome, ProviderError> {
+        self.client
+            .propose_outcome_with_partials(
+                request,
+                cancellation,
+                allow_replacement,
+                trigger,
+                partials,
+            )
+            .await
+    }
 }
 
 impl StableRuntimeIdentity {
