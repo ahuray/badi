@@ -135,7 +135,11 @@ The exact rules live in [src/writing.rs](src/writing.rs).
 - **Mid-line.** Off by default (`badi mid-line off`; omit `mid_line` in
   settings). A word after the caret then abstains before any model call.
   Punctuation after the caret can still complete the word being typed.
-  `badi mid-line on` asks the model. The prompt is still the text before
+  `badi mid-line on` asks the model. A 2026-10-12 Lab comparison of the 41
+  English development cases did not change this rejoin: today's rejoin showed
+  two suggestions and one matched the reference; the framed prompt missed 550 ms
+  on every cold case; the probability check showed only the punctuation
+  completion. The prompt is still the text before
   the caret, and `mid_line_insertion()` keeps only what fits:
   the words before the point where the continuation reproduces the line's
   first word or mark, a phrase the model closes with a clause mark before the
