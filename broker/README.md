@@ -102,10 +102,13 @@ prints pinned download advice and downloads nothing
   namespace address.
   Requests are never proxied, retried or pooled. Dropping a request closes
   its connection, which cancels it.
-- **Launch.** One 512-token slot reuses the common prompt prefix (KV cache);
-  prefill batches are 16 tokens so cancellation lands quickly; up to four
-  threads. The GPU is not used: Vulkan on the Iris Xe was slower for these
-  short requests.
+- **Launch.** One 512-token slot reuses the common prompt prefix (KV cache).
+  A 128 MiB host cache keeps the previous sentence when the prompt anchor
+  moves, and a matching run of at least 16 tokens is shifted instead of
+  recomputed. A second slot would split that 512-token context in half, so
+  the server stays at one slot. Prefill batches are 16 tokens so cancellation
+  lands quickly; up to four threads. The GPU is not used: Vulkan on the Iris
+  Xe was slower for these short requests.
 
 ## Suggestion limits
 

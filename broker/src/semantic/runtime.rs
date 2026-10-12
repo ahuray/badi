@@ -271,6 +271,7 @@ impl LlamaCppLaunch {
             .env("LLAMA_ARG_MODEL", self.model.path())
             .env("LLAMA_ARG_ALIAS", &self.model_alias)
             .env("LLAMA_API_KEY", token.expose())
+            // Two slots split the 512-token context into 256. One slot keeps it.
             .env("LLAMA_ARG_N_PARALLEL", "1")
             .env("LLAMA_ARG_THREADS", self.threads.to_string())
             .env("LLAMA_ARG_THREADS_BATCH", self.threads.to_string())
@@ -384,12 +385,14 @@ impl LlamaCppLaunch {
             command.env("BADI_FIXTURE_BEHAVIOR", behavior.environment_value());
         }
         let profile = self.profile;
-        // Reuse only the active slot's bounded KV state. Disable the separate
-        // RAM archive; no slot-save path or disk cache is enabled.
+        // The host cache keeps the previous sentence when the prompt anchor
+        // moves. A matching run of at least 16 tokens can be shifted instead
+        // of recomputed. No slot-save path or disk cache.
         command
             .env("LLAMA_ARG_CTX_SIZE", profile.context_size.to_string())
             .env("LLAMA_ARG_CACHE_PROMPT", "1")
-            .env("LLAMA_ARG_CACHE_RAM", "0")
+            .env("LLAMA_ARG_CACHE_RAM", "128")
+            .env("LLAMA_ARG_CACHE_REUSE", "16")
             // The runtime observes cancellation between prefill batches, so
             // the batch bounds the cost of a cancelled request.
             .env("LLAMA_ARG_BATCH", profile.batch_size.to_string())
@@ -1029,7 +1032,8 @@ mod tests {
             assert_eq!(environment["LLAMA_ARG_BATCH"], batch);
             assert_eq!(environment["LLAMA_ARG_UBATCH"], batch);
             assert_eq!(environment["LLAMA_ARG_CACHE_PROMPT"], "1");
-            assert_eq!(environment["LLAMA_ARG_CACHE_RAM"], "0");
+            assert_eq!(environment["LLAMA_ARG_CACHE_RAM"], "128");
+            assert_eq!(environment["LLAMA_ARG_CACHE_REUSE"], "16");
             assert_eq!(
                 environment
                     .get("LLAMA_ARG_CTX_CHECKPOINTS")
