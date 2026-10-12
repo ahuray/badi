@@ -1430,7 +1430,8 @@ class MetadataTests(unittest.TestCase):
         node.app, node.path = SimpleNamespace(bus_name=":1.9"), "/field"
         atspi = SimpleNamespace(StateType=SimpleNamespace(FOCUSED="focused", EDITABLE="editable", SHOWING="showing",
                                                           VISIBLE="visible", ENABLED="enabled"),
-                                Text=SimpleNamespace(get_attribute_run=lambda *_args: ({"direction": "lr"}, 0, 5),
+                                Text=SimpleNamespace(get_attribute_run=lambda *_args: (
+                                    {"direction": "lr", "family-name": "Iosevka", "size": "13", "weight": "regular"}, 0, 5),
                                                      get_string_at_offset=lambda _text, offset, granularity:
                                                          sentence_reads.append(sentences[(offset, granularity)].content)
                                                          or sentences[(offset, granularity)]),
@@ -1445,6 +1446,7 @@ class MetadataTests(unittest.TestCase):
         calibrations = []
         backend.geometry = lambda *args: calibrations.append(args) or {"coordinate_convention": CALIBRATED}
         metadata = backend.metadata("code")
+        self.assertEqual(metadata["font"], {"family": "Iosevka", "size_pt": 13.0, "weight": 400})
         self.assertIsNone(metadata["geometry"])
         self.assertEqual((metadata["browser"], metadata["web"], metadata["uri"]), (False, True, ""))
         self.assertEqual(calibrations, [])

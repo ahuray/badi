@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from preview import (Preview, field_box_ends_before_caret, font_pixels, ltr_text, mapped_caret,
+from preview import (Preview, field_box_ends_before_caret, font_facts, font_pixels, ltr_text, mapped_caret,
                     place_chip, place_inline, place_on_caret_line, valid_preview_text)
 
 
@@ -132,6 +132,16 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertEqual(font_pixels(mapped_caret(data)), 6)
         data["geometry"]["caret"]["height"] = 128
         self.assertEqual(font_pixels(mapped_caret(data)), 72)
+        self.assertEqual(font_facts({"family-name": "Iosevka, monospace", "size": "13pt", "weight": "bold"}),
+                         {"family": "Iosevka", "size_pt": 13.0, "weight": 700})
+        self.assertEqual(font_facts({"font-family": "Noto Sans", "font-size": "16px", "font-weight": 450}),
+                         {"family": "Noto Sans", "size_px": 16.0, "weight": 400})
+        self.assertEqual(font_facts({"family-name": "bad\nname", "size": "nope", "weight": "giant"}), {})
+        self.assertEqual(font_facts(None), {})
+        host = mapped_caret(focus())
+        self.assertAlmostEqual(font_pixels(host, {"size_pt": 13}), 13 * 96 / 72)
+        self.assertEqual(font_pixels(host, {"size_px": 15}), 15)
+        self.assertAlmostEqual(font_pixels(host, {}), 17.2)
         for text in (" the next words", "teh → the", "v2.0 release", "één woord"):
             self.assertTrue(ltr_text(text), text)
         for text in ("می‌توانیم", "שלום", " word ١٢"):
@@ -152,8 +162,10 @@ class PreviewGeometryTests(unittest.TestCase):
         preview.Gdk = SimpleNamespace(Display=SimpleNamespace(get_default=lambda: SimpleNamespace(get_monitors=lambda: monitors)))
         preview.GLib = SimpleNamespace(source_remove=Mock(), timeout_add=lambda ttl, _callback: calls.append(("timer", ttl)) or 7)
         preview.Gtk = SimpleNamespace(Orientation=SimpleNamespace(HORIZONTAL="h", VERTICAL="v"))
-        preview.Pango = SimpleNamespace(SCALE=1024, AttrList=lambda: SimpleNamespace(insert=lambda attr: calls.append(("size", attr))),
-                                        attr_size_new_absolute=lambda size: size)
+        preview.Pango = SimpleNamespace(SCALE=1024, AttrList=lambda: SimpleNamespace(insert=lambda attr: calls.append(("attr", attr))),
+                                        attr_size_new_absolute=lambda size: ("size", size),
+                                        attr_family_new=lambda family: ("family", family),
+                                        attr_weight_new=lambda weight: ("weight", weight))
         preview.Layer = SimpleNamespace(Edge=SimpleNamespace(LEFT="left", TOP="top"),
                                         set_monitor=lambda _window, chosen: calls.append(("monitor", chosen)),
                                         set_margin=lambda _window, edge, value: calls.append((edge, value)))
@@ -173,11 +185,20 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertTrue(preview.render(focus(), " next words", 1500))
         self.assertEqual(calls[:2], [("visible", False), ("text", "")], "a render first hides the old preview")
         self.assertIn(("monitor", monitor), calls)
-        self.assertIn(("size", round(17.2 * 1024)), calls)
+        self.assertIn(("attr", ("size", round(17.2 * 1024))), calls)
         self.assertIn(("left", 211), calls)
         self.assertIn(("top", 147), calls)
         self.assertEqual(calls[-2:], [("visible", True), ("timer", 1500)])
         self.assertEqual(preview.timer, 7)
+
+    def test_render_uses_a_reported_host_font(self):
+        preview, calls, _monitor = self.render_fixture()
+        data = focus()
+        data["font"] = {"family": "Iosevka", "size_pt": 13, "weight": 700}
+        self.assertTrue(preview.render(data, " next words", 1500))
+        self.assertIn(("attr", ("family", "Iosevka")), calls)
+        self.assertIn(("attr", ("weight", 700)), calls)
+        self.assertIn(("attr", ("size", round(13 * 96 / 72 * 1024))), calls)
 
     def test_render_shows_a_chip_when_words_follow_and_keeps_overflow_inside_the_field(self):
         data = focus()

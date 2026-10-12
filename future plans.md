@@ -64,9 +64,11 @@ Standing user decisions:
 - [ ] Mid-sentence suggestions see only the text before the caret and keep
       what rejoins the next word, so whole-word insertions are rare. Try a
       prompt that also carries the text after the caret, measured in the Lab.
-- [ ] Match the host's font in the inline preview. It draws its own sans font
-      sized from the caret height, so it sits about 2 px high next to
-      Omawrite's monospace text.
+- [ ] Confirm live that the inline preview matches the host font in Omawrite
+      (monospace), Chromium and Telegram. The overlay uses the caret run's
+      AT-SPI family, size and weight when those attributes exist, and otherwise
+      the caret's glyph height. That live comparison has not been repeated
+      since the attributes were wired up.
 - [ ] The headless Obsidian live lane (`adapters/obsidian/live.mjs
       --headless`) leaves Electron SIGTRAP core dumps when it signals the
       process group at teardown, and each dump makes Omarchy open a
@@ -173,5 +175,6 @@ From the 2026-10-11 audit. These are not part of the installed behavior.
       generated command.
 - [ ] Terminal agent prompts (Claude Code, Codex): terminals send no
       surrounding text, so each needs its own channel or stays unsupported.
-- [ ] Later: other Linux desktops, a standard tray, emoji shortcodes and
-      personal snippets.
+- [ ] Later: other Linux desktops, a standard tray and personal snippets.
+      Emoji stays with Fcitx: QuickPhrase and the Emoji module, not a Badi
+      colon shortcode.

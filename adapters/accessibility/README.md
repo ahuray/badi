@@ -218,9 +218,11 @@ direction needs a strong left-to-right letter on the caret's line, because Qt
 takes a paragraph's direction from its first strong character.
 
 The GTK4 layer-shell overlay draws the suggestion as translucent grey text right
-after the caret, with no background, at a size derived from the glyph height.
-A field box that ends before the caret still keeps that text on the caret's
-baseline inside the window, so it is not dropped onto the chrome under the
+after the caret, with no background. When the caret's text run reports a font
+family, a size (`size` in points, or `font-size` in px) or a weight, the
+overlay uses those. Otherwise the size comes from the glyph height and the
+face stays the overlay's own. A field box that ends before the caret still
+keeps that text on the caret's baseline inside the window, so it is not dropped onto the chrome under the
 input. A box that still contains the caret is a real edge: text that would
 pass it is not drawn over the controls beside the field. When the last
 snapshot had words after the caret on its line

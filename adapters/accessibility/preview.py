@@ -106,9 +106,101 @@ def mapped_caret(focus):
         return None
 
 
-def font_pixels(caret):
-    """Match the application's text: its glyph box is about 1.16 em tall."""
-    return max(6, min(72, caret.line_height * .86))
+_WEIGHTS = {
+    "thin": 100, "hairline": 100, "extralight": 200, "ultralight": 200,
+    "light": 300, "normal": 400, "regular": 400, "book": 400, "medium": 500,
+    "semibold": 600, "demibold": 600, "bold": 700, "extrabold": 800,
+    "ultrabold": 800, "black": 900, "heavy": 900,
+}
+
+
+def _family(value):
+    if not isinstance(value, str):
+        return None
+    name = value.split(",", 1)[0].strip().strip("'\"")
+    if not 1 <= len(name) <= 64 or any(ord(char) < 32 or char in "\\{}<>;" for char in name):
+        return None
+    return name
+
+
+def _font_size(value):
+    """(points, pixels). A bare AT-SPI size is in points; an explicit px is pixels."""
+    if isinstance(value, bool) or value is None:
+        return None, None
+    unit = "pt"
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        text = value.strip().lower()
+        if text.endswith("px"):
+            unit, text = "px", text[:-2].strip()
+        elif text.endswith("pt"):
+            text = text[:-2].strip()
+        try:
+            number = float(text)
+        except ValueError:
+            return None, None
+    else:
+        return None, None
+    if not math.isfinite(number) or not 4 <= number <= 96:
+        return None, None
+    return (None, number) if unit == "px" else (number, None)
+
+
+def _font_weight(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, str):
+        named = _WEIGHTS.get(value.strip().lower().replace(" ", "").replace("-", ""))
+        if named is not None:
+            return named
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+    elif isinstance(value, (int, float)) and math.isfinite(value):
+        number = float(value)
+    else:
+        return None
+    if not math.isfinite(number) or not 100 <= number <= 900:
+        return None
+    return int(round(number / 100) * 100)
+
+
+def font_facts(attributes):
+    """Family, size and weight from one AT-SPI text-attribute run.
+
+    Missing or unusable values are omitted. The caret glyph then supplies the size.
+    """
+    if not isinstance(attributes, dict):
+        return {}
+    facts = {}
+    family = _family(attributes.get("family-name", attributes.get("font-family")))
+    if family:
+        facts["family"] = family
+    points, pixels = _font_size(attributes.get("size", attributes.get("font-size")))
+    if points is not None:
+        facts["size_pt"] = points
+    elif pixels is not None:
+        facts["size_px"] = pixels
+    weight = _font_weight(attributes.get("weight", attributes.get("font-weight")))
+    if weight is not None:
+        facts["weight"] = weight
+    return facts
+
+
+def font_pixels(caret, font=None):
+    """The field's reported size when it is usable, otherwise its glyph box."""
+    fallback = max(6, min(72, caret.line_height * .86))
+    if not isinstance(font, dict):
+        return fallback
+    pixels = font.get("size_px")
+    if isinstance(pixels, (int, float)) and not isinstance(pixels, bool) and math.isfinite(pixels):
+        return max(6, min(72, float(pixels)))
+    points = font.get("size_pt")
+    if isinstance(points, (int, float)) and not isinstance(points, bool) and math.isfinite(points):
+        return max(6, min(72, float(points) * 96 / 72))
+    return fallback
 
 
 def place_inline(caret, width, height, baseline):
@@ -304,8 +396,16 @@ class Preview:
         if len(matching) != 1:
             return False
         self.Layer.set_monitor(self.window, matching[0])
+        font = focus.get("font") if isinstance(focus, dict) else None
         attributes = self.Pango.AttrList()
-        attributes.insert(self.Pango.attr_size_new_absolute(round(font_pixels(caret) * self.Pango.SCALE)))
+        attributes.insert(self.Pango.attr_size_new_absolute(round(font_pixels(caret, font) * self.Pango.SCALE)))
+        if isinstance(font, dict):
+            family = font.get("family")
+            if isinstance(family, str):
+                attributes.insert(self.Pango.attr_family_new(family))
+            weight = font.get("weight")
+            if isinstance(weight, int) and not isinstance(weight, bool):
+                attributes.insert(self.Pango.attr_weight_new(weight))
         self.label.set_attributes(attributes)
         position = None
         if not caret.text_follows:
