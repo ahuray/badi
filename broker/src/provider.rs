@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use thiserror::Error;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
 use crate::metrics::NoSuggestionReason;
@@ -120,6 +121,22 @@ pub trait CompletionProvider: Send + Sync + 'static {
                     ProviderOutcome::Proposal,
                 )
             })
+    }
+
+    /// Like [`Self::propose_outcome`], and may publish a growing prefix of the
+    /// same continuation before the final text. The final outcome is still
+    /// authoritative. Senders that are dropped are ignored.
+    async fn propose_outcome_with_partials(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        allow_replacement: bool,
+        trigger: RequestTrigger,
+        partials: Option<UnboundedSender<String>>,
+    ) -> Result<ProviderOutcome, ProviderError> {
+        let _ = partials;
+        self.propose_outcome(request, cancellation, allow_replacement, trigger)
+            .await
     }
 }
 

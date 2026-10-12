@@ -58,6 +58,9 @@ impl Broker {
             .as_deref()
             .ok_or(BrokerError::InvalidPayload)?;
         let visible = session.take_live_suggestion(suggestion_id, &self.inner.metrics)?;
+        // A growing continuation must not replace the suggestion after it was
+        // accepted or dismissed.
+        let _ = session.cancel_provider_work();
         let signal = match acceptance {
             None => self.dismiss(session, visible),
             Some(acceptance) => self.prepare_commit(session, visible, acceptance, request_id)?,

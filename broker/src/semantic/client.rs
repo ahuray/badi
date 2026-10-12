@@ -16,6 +16,7 @@ use crate::provider::{
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -447,6 +448,7 @@ impl SemanticClient {
             cancellation,
             Instant::now(),
             trigger.writing_budget(),
+            None,
         )
         .await
     }
@@ -457,6 +459,7 @@ impl SemanticClient {
         cancellation: CancellationToken,
         started: Instant,
         budget: Duration,
+        partials: Option<UnboundedSender<String>>,
     ) -> Result<ObservedCompletion, ClientError> {
         match validate_request(&request)? {
             InputEligibility::Abstain => return Ok(ObservedCompletion::language_abstention()),
@@ -477,8 +480,14 @@ impl SemanticClient {
         }
         let payload =
             serde_json::to_vec(&plan.payload()).map_err(|_| ClientError::InvalidRequest)?;
-        let operation =
-            self.complete_inner(payload, started, budget, cancellation.clone(), plan.echo);
+        let operation = self.complete_inner(
+            payload,
+            started,
+            budget,
+            cancellation.clone(),
+            plan.echo,
+            partials,
+        );
         let deadline = started + budget + WRITING_RESULT_GRACE;
         let observed = tokio::select! {
             biased;
@@ -511,9 +520,10 @@ impl SemanticClient {
         cancellation: CancellationToken,
         started: Instant,
         budget: Duration,
+        partials: Option<UnboundedSender<String>>,
     ) -> Result<Result<String, NoSuggestionReason>, ProviderError> {
         let observed = self
-            .complete_observed_started(request, cancellation, started, budget)
+            .complete_observed_started(request, cancellation, started, budget, partials)
             .await
             .map_err(|error| match error {
                 ClientError::Cancelled => ProviderError::Cancelled,
@@ -609,6 +619,7 @@ impl SemanticClient {
         budget: Duration,
         cancellation: CancellationToken,
         echoed_prefix: Option<&str>,
+        partials: Option<UnboundedSender<String>>,
     ) -> Result<ObservedCompletion, ClientError> {
         if cancellation.is_cancelled() {
             return Err(ClientError::Cancelled);
@@ -647,6 +658,7 @@ impl SemanticClient {
             budget,
             cancellation,
             echoed_prefix,
+            partials.as_ref(),
         )
         .await
     }
@@ -701,6 +713,18 @@ impl CompletionProvider for SemanticClient {
         allow_replacement: bool,
         trigger: RequestTrigger,
     ) -> Result<ProviderOutcome, ProviderError> {
+        self.propose_outcome_with_partials(request, cancellation, allow_replacement, trigger, None)
+            .await
+    }
+
+    async fn propose_outcome_with_partials(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        allow_replacement: bool,
+        trigger: RequestTrigger,
+        partials: Option<UnboundedSender<String>>,
+    ) -> Result<ProviderOutcome, ProviderError> {
         let started = Instant::now();
         let budget = trigger.writing_budget();
         if cancellation.is_cancelled() {
@@ -735,7 +759,14 @@ impl CompletionProvider for SemanticClient {
                     () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
                     result = tokio::time::timeout_at(
                         (started + budget + WRITING_RESULT_GRACE).into(),
-                        self.complete_inner(payload, started, budget, cancellation.clone(), None),
+                        self.complete_inner(
+                            payload,
+                            started,
+                            budget,
+                            cancellation.clone(),
+                            None,
+                            None,
+                        ),
                     ) => result.unwrap_or(Err(ClientError::Timeout)),
                 }
                 .map_err(|error| match error {
@@ -756,7 +787,7 @@ impl CompletionProvider for SemanticClient {
         let after = request.after.clone();
         let language = request.language.clone();
         let text = match self
-            .complete_started(request, cancellation, started, budget)
+            .complete_started(request, cancellation, started, budget, partials)
             .await?
         {
             Ok(text) => text,
@@ -795,6 +826,7 @@ impl CompletionProvider for SemanticClient {
             cancellation,
             Instant::now(),
             RequestTrigger::Automatic.writing_budget(),
+            None,
         )
         .await
         .map(Result::ok)
@@ -960,7 +992,9 @@ async fn read_stream(
     budget: Duration,
     cancellation: CancellationToken,
     echoed_prefix: Option<&str>,
+    partials: Option<&UnboundedSender<String>>,
 ) -> Result<ObservedCompletion, ClientError> {
+    let mut shown_partial = String::new();
     let mut pending = Vec::new();
     let mut response_body_bytes = 0_usize;
     let mut accumulator = StreamAccumulator::default();
@@ -1010,6 +1044,18 @@ async fn read_stream(
                 accumulator.ttft = None;
             }
             if !accumulator.invalid {
+                if let Some(output) =
+                    crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
+                        .and_then(crate::writing::available_complete_words)
+                {
+                    let extends = shown_partial.is_empty() || output.starts_with(&shown_partial);
+                    if extends && output != shown_partial {
+                        if let Some(partials) = partials {
+                            let _ = partials.send(output.clone());
+                        }
+                        shown_partial = output;
+                    }
+                }
                 if let Some(output) =
                     crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
                         .and_then(|raw| crate::writing::complete_word_prefix(raw, 4, false))
@@ -1155,12 +1201,19 @@ mod tests {
         let budget = RequestTrigger::Explicit.writing_budget();
         assert!(matches!(
             client
-                .complete_inner(Vec::new(), expired, budget, cancellation, None)
+                .complete_inner(Vec::new(), expired, budget, cancellation, None, None)
                 .await,
             Err(ClientError::Cancelled)
         ));
         let abstention = client
-            .complete_inner(Vec::new(), expired, budget, CancellationToken::new(), None)
+            .complete_inner(
+                Vec::new(),
+                expired,
+                budget,
+                CancellationToken::new(),
+                None,
+                None,
+            )
             .await
             .expect("expired budget");
         assert_eq!(

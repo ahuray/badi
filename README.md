@@ -2,7 +2,8 @@
 
 Badi (`بعدی`, Persian for “next”) is a local writing assistant for Linux,
 starting with Omarchy on Hyprland. While you type, a local model suggests up to
-four words in grey, and you accept them explicitly. Nothing leaves this
+four words in grey. The grey text can lengthen as each word finishes, and you
+accept whatever is showing. Nothing leaves this
 machine. Badi is pre-release software.
 
 ## Keys

@@ -21,7 +21,9 @@ use crate::protocol::{
     SessionId, SessionOpenPayload, SuggestRequestPayload, TargetDescriptor, TargetKind,
 };
 use crate::protocol::{ProbeOutcome, ProbeRequestPayload};
-use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
+use crate::provider::{
+    CompletionProvider, ProviderError, ProviderRequest, RequestTrigger, WritingProposal,
+};
 use crate::settings::{
     BrowserAdapter, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV2,
     StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
@@ -468,6 +470,157 @@ impl CompletionProvider for SpellingProvider {
             replace_before: Some(self.0.to_owned()),
         }))
     }
+}
+
+struct GrowingProvider;
+
+#[async_trait]
+impl CompletionProvider for GrowingProvider {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::PhraseV1
+    }
+
+    async fn complete(
+        &self,
+        _request: ProviderRequest,
+        _cancellation: CancellationToken,
+    ) -> Result<Option<String>, ProviderError> {
+        Ok(None)
+    }
+
+    async fn propose_outcome_with_partials(
+        &self,
+        _request: ProviderRequest,
+        cancellation: CancellationToken,
+        _allow_replacement: bool,
+        _trigger: RequestTrigger,
+        partials: Option<mpsc::UnboundedSender<String>>,
+    ) -> Result<crate::provider::ProviderOutcome, ProviderError> {
+        if let Some(partials) = partials {
+            let _ = partials.send(" for".to_owned());
+        }
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
+            () = sleep(Duration::from_millis(150)) => {}
+        }
+        Ok(crate::provider::ProviderOutcome::Proposal(
+            WritingProposal {
+                text: " for the opportunity".to_owned(),
+                replace_before: None,
+            },
+        ))
+    }
+}
+
+#[tokio::test]
+async fn a_growing_continuation_counts_as_one_shown_suggestion() {
+    let (broker, id, mut events) = setup(
+        std::sync::Arc::new(GrowingProvider),
+        BrokerConfig::default(),
+    )
+    .await;
+    let mut update = context(1, FieldPurpose::Normal);
+    update.before = "Thank you".to_owned();
+    update.selection.anchor = u64::try_from(update.before.len()).expect("small fixture");
+    update.selection.head = update.selection.anchor;
+    broker
+        .update_context(coordinates(id, 1), update.clone())
+        .await
+        .expect("context");
+    broker
+        .request_suggestion(
+            coordinates(id, 1),
+            SuggestRequestPayload {
+                fingerprint: update.fingerprint.clone(),
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("request");
+    let BrokerEvent::SuggestionShow { payload: first, .. } =
+        timeout(Duration::from_millis(200), events.recv())
+            .await
+            .expect("deadline")
+            .expect("event")
+    else {
+        panic!("expected the first word")
+    };
+    assert_eq!(first.text, " for");
+    let BrokerEvent::SuggestionShow { payload: full, .. } =
+        timeout(Duration::from_millis(400), events.recv())
+            .await
+            .expect("deadline")
+            .expect("event")
+    else {
+        panic!("expected the extended suggestion")
+    };
+    assert_eq!(full.text, " for the opportunity");
+    assert_ne!(first.suggestion_id, full.suggestion_id);
+    assert_eq!(broker.metrics().snapshot().suggestions_shown, 1);
+}
+
+#[tokio::test]
+async fn accepting_the_first_word_stops_the_growing_continuation() {
+    let (broker, id, mut events) = setup(
+        std::sync::Arc::new(GrowingProvider),
+        BrokerConfig::default(),
+    )
+    .await;
+    let mut update = context(1, FieldPurpose::Normal);
+    update.before = "Thank you".to_owned();
+    update.selection.anchor = u64::try_from(update.before.len()).expect("small fixture");
+    update.selection.head = update.selection.anchor;
+    broker
+        .update_context(coordinates(id, 1), update.clone())
+        .await
+        .expect("context");
+    broker
+        .request_suggestion(
+            coordinates(id, 1),
+            SuggestRequestPayload {
+                fingerprint: update.fingerprint.clone(),
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("request");
+    let BrokerEvent::SuggestionShow { payload, .. } =
+        timeout(Duration::from_millis(200), events.recv())
+            .await
+            .expect("deadline")
+            .expect("event")
+    else {
+        panic!("expected the first word")
+    };
+    broker
+        .session_control(
+            coordinates(id, 1),
+            SessionControlRequestPayload {
+                action: ControlAction::AcceptAll,
+                fingerprint: update.fingerprint,
+                suggestion_id: Some(payload.suggestion_id),
+            },
+            None,
+        )
+        .await
+        .expect("accept");
+    let BrokerEvent::CommitPrepare { payload, .. } =
+        timeout(Duration::from_millis(200), events.recv())
+            .await
+            .expect("deadline")
+            .expect("commit")
+    else {
+        panic!("expected commit of the first word")
+    };
+    assert_eq!(payload.text, " for");
+    sleep(Duration::from_millis(200)).await;
+    assert!(
+        matches!(events.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+        "the rest of the continuation must not replace an accepted word"
+    );
 }
 
 #[tokio::test]
