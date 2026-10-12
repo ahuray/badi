@@ -112,24 +112,17 @@ test('instructed healing is an explicit CLI experiment with unchanged defaults a
   assert.deepEqual(selected.configs, [{ id: 'instructed_healed', mode: 'instructed_healed',
     budget_ms: 1500, max_tokens: 16, cache_prompt: false, temperature: 0, seed: 42 }]);
   assert.equal(selected.seed, 73);
-  assert.equal(parseOptions([...base, '--modes', 'instructed_word']).configs[0].mode, 'instructed_word');
+  assert.throws(() => parseOptions([...base, '--modes', 'instructed_word']));
   assert.equal(parseOptions([...base, '--modes', 'context_confidence']).configs[0].mode, 'context_confidence');
   for (const extra of [['--modes', 'instructed_healed_typo'], ['--budget-ms', '549'], ['--max-tokens', '65']]) {
     assert.throws(() => parseOptions([...base, '--modes', 'instructed_healed', ...extra]));
   }
 });
 
-test('context-attested recovery is opt-in with ordinary experimental settings and strict bounds', () => {
+test('retired attested recovery cannot be selected', () => {
   const base = ['--suite', 'suite.json', '--output', 'output/writing/new'];
-  assert.deepEqual(parseOptions(base).configs.map(config => config.mode), ['production_boundary', 'context']);
-  const selected = parseOptions([...base, '--modes', 'healed,healed_attested', '--budget-ms', '5000',
-    '--max-tokens', '32', '--cache-prompt', 'false', '--seed', '71']);
-  assert.deepEqual(selected.configs, ['healed', 'healed_attested'].map(mode => ({ id: mode, mode,
-    budget_ms: 5000, max_tokens: 32, cache_prompt: false, temperature: 0, seed: 42 })));
-  assert.equal(selected.seed, 71);
-  for (const extra of [['--modes', 'healed_attested_typo'], ['--budget-ms', '549'], ['--max-tokens', '65']]) {
-    assert.throws(() => parseOptions([...base, '--modes', 'healed_attested', ...extra]));
-  }
+  assert.throws(() => parseOptions([...base, '--modes', 'healed_attested']));
+  assert.throws(() => parseOptions([...base, '--modes', 'healed,healed_attested']));
 });
 
 test('new run directories stay under the output root, exclude symlink escapes and never overwrite', async t => {

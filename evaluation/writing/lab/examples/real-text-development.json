@@ -1,0 +1,25 @@
+{
+  "schema": "badi.prediction-suite.v1",
+  "name": "Longer development prose. Expectations are scoring data, not a held-out benchmark.",
+  "cases": [
+    {"id": "en-mail-attached", "language": "en", "prefix": "Thank you for sending the notes from yesterday. I have attached the revised ", "context": "", "style": "", "expected": ["agenda"]},
+    {"id": "en-mail-arrival", "language": "en", "prefix": "The train was late, so I reached the office after the morning meeting had already ", "context": "", "style": "", "expected": ["started"]},
+    {"id": "en-mail-review", "language": "en", "prefix": "Please read the draft once more before we send it to the client. The second paragraph still needs a clearer ", "context": "", "style": "", "expected": ["ending"]},
+    {"id": "en-mail-deadline", "language": "en", "prefix": "We can finish the report today if the figures arrive before lunch. Otherwise the deadline will ", "context": "", "style": "", "expected": ["slip"]},
+    {"id": "en-note-garden", "language": "en", "prefix": "The path behind the library leads to a small garden. In the afternoon we should walk there and sit by the ", "context": "The afternoon stop is the botanical garden.", "style": "", "expected": ["fountain"]},
+    {"id": "en-note-keys", "language": "en", "prefix": "I left the spare keys in the blue bowl by the door. If you arrive first, please unlock the ", "context": "", "style": "", "expected": ["gate"]},
+    {"id": "en-note-recipe", "language": "en", "prefix": "Bring the soup to a gentle simmer and keep the lid half on. Stir it once so the bottom does not ", "context": "", "style": "", "expected": ["stick"]},
+    {"id": "en-note-close", "language": "en", "prefix": "That covers the open questions from last week. I will send a short summary after I hear back from ", "context": "", "style": "", "expected": ["you"]},
+    {"id": "de-mail-unterlagen", "language": "de", "prefix": "Vielen Dank für die Unterlagen von gestern. Ich habe die überarbeitete Tagesordnung im Anhang ", "context": "", "style": "", "expected": ["beigefügt"]},
+    {"id": "de-mail-zug", "language": "de", "prefix": "Der Zug hatte Verspätung, deshalb kam ich erst an, als die Besprechung schon ", "context": "", "style": "", "expected": ["begonnen"]},
+    {"id": "de-mail-absatz", "language": "de", "prefix": "Bitte lies den Entwurf noch einmal, bevor wir ihn verschicken. Der zweite Absatz braucht einen klareren ", "context": "", "style": "", "expected": ["Schluss"]},
+    {"id": "de-note-schluessel", "language": "de", "prefix": "Ich habe den Ersatzschlüssel in die blaue Schale an der Tür gelegt. Wenn du zuerst kommst, schließ bitte das ", "context": "", "style": "", "expected": ["Tor"]},
+    {"id": "de-note-suppe", "language": "de", "prefix": "Lass die Suppe sanft köcheln und den Deckel halb offen. Rühr einmal um, damit nichts am Boden ", "context": "", "style": "", "expected": ["anklebt"]},
+    {"id": "fa-mail-peyvast", "language": "fa", "prefix": "از یادداشت‌های دیروز متشکرم. نسخهٔ اصلاح‌شده را پیوست ", "context": "", "style": "", "expected": ["کرده‌ام"]},
+    {"id": "fa-mail-qatar", "language": "fa", "prefix": "قطار تأخیر داشت، برای همین وقتی رسیدم جلسهٔ صبح از قبل ", "context": "", "style": "", "expected": ["شروع"]},
+    {"id": "fa-mail-band", "language": "fa", "prefix": "لطفاً پیش‌نویس را یک بار دیگر بخوانید و بعد بفرستید. بند دوم هنوز به پایان روشن‌تری ", "context": "", "style": "", "expected": ["نیاز"]},
+    {"id": "fa-note-kelid", "language": "fa", "prefix": "کلید یدکی را در کاسهٔ آبی کنار در گذاشتم. اگر زودتر رسیدی، لطفاً در را ", "context": "", "style": "", "expected": ["باز"]},
+    {"id": "fa-note-soup", "language": "fa", "prefix": "سوپ را آهسته بجوشان و در قابلمه را نیمه باز بگذار. یک بار هم بزن تا ته آن ", "context": "", "style": "", "expected": ["نگیرَد"]},
+    {"id": "fa-note-end", "language": "fa", "prefix": "سؤال‌های باز هفتهٔ پیش همین‌ها بود. بعد از جواب تو خلاصهٔ کوتاهی می‌فرستم به ", "context": "", "style": "", "expected": ["تو"]}
+  ]
+}
