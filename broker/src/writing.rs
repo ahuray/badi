@@ -590,36 +590,63 @@ pub(crate) fn completion_plan<'a>(
         .language
         .as_deref()
         .and_then(WritingLanguage::from_tag);
+    let (prompt, echo, max_tokens) = healed_boundary(context, language, healed_languages);
+    CompletionPlan {
+        prompt,
+        echo,
+        max_tokens,
+    }
+}
+
+/// The production echo of `before`: separating spaces plus, for English, the
+/// last healable word. `None` when this language is not healed or the prompt
+/// would be empty.
+#[must_use]
+pub fn production_healed_echo<'a>(before: &'a str, language_tag: &str) -> Option<&'a str> {
+    let language = WritingLanguage::from_tag(language_tag);
+    healed_boundary(before, language, TRAILING_SPACE_HEALING).1
+}
+
+fn healed_boundary<'a>(
+    context: &'a str,
+    language: Option<WritingLanguage>,
+    healed_languages: &[WritingLanguage],
+) -> (&'a str, Option<&'a str>, u16) {
     // A prompt that ends in a space tokenizes unlike the model's own " word"
     // tokens. The echo therefore owns every separating space and, for English,
     // the last healable word, whether or not the user already typed a space
     // after it.
     let trimmed = context.trim_end_matches(' ');
-    if let Some(word) = (language == Some(WritingLanguage::English))
-        .then(|| healing_prefix(trimmed))
-        .flatten()
-    {
-        let (start, end) = healed_echo_span(context, word);
-        return CompletionPlan {
-            prompt: &context[..start],
-            echo: Some(&context[start..end]),
-            max_tokens: token_budget(language, 12),
-        };
+    let heal_english_words = language == Some(WritingLanguage::English)
+        && healed_languages.contains(&WritingLanguage::English);
+    if heal_english_words {
+        if let Some(word) = healing_prefix(trimmed) {
+            let (start, end) = healed_echo_span(context, word);
+            if start > 0 {
+                return (
+                    &context[..start],
+                    Some(&context[start..end]),
+                    token_budget(language, 12),
+                );
+            }
+            // The whole field is that word. A trailing space falls through and
+            // is healed with the word kept. With nothing else, an empty prompt
+            // abstains instead of sending the bare stem.
+            if context.len() == trimmed.len() {
+                return ("", None, token_budget(language, 8));
+            }
+        }
     }
     if language.is_some_and(|language| healed_languages.contains(&language))
         && context.len() != trimmed.len()
     {
-        return CompletionPlan {
-            prompt: trimmed,
-            echo: Some(&context[trimmed.len()..]),
-            max_tokens: token_budget(language, 8),
-        };
+        return (
+            trimmed,
+            Some(&context[trimmed.len()..]),
+            token_budget(language, 8),
+        );
     }
-    CompletionPlan {
-        prompt: context,
-        echo: None,
-        max_tokens: token_budget(language, 8),
-    }
+    (context, None, token_budget(language, 8))
 }
 
 /// The echo of `word` inside `context`, including the ASCII spaces that
@@ -633,14 +660,17 @@ fn healed_echo_span(context: &str, word: &str) -> (usize, usize) {
     (start, context.len())
 }
 
-/// Persian needs about 2.6 times as many tokens as English for the same words.
-fn token_budget(language: Option<WritingLanguage>, english_tokens: u16) -> u16 {
-    if language == Some(WritingLanguage::Persian) {
-        // 2.6×, rounded to the nearest token (8 → 21, 12 → 31).
-        u16::try_from((u32::from(english_tokens) * 26 + 5) / 10).unwrap_or(english_tokens)
-    } else {
-        english_tokens
-    }
+/// Tokens requested for one automatic continuation.
+///
+/// Persian was measured at 2.6× (8 → 21) on 2026-10-12, Lab
+/// `production_boundary`, the 13 Persian development cases, pinned 1.7B.
+/// All 13 missed 550 ms at 21 tokens and four returned no word. Eight tokens
+/// missed twice and still returned a word for every case 21 had answered.
+/// One of those words was shorter (`نظر من` became `نظر`). Neither arm
+/// matched a reference first word. This is that development comparison, not
+/// a held-out score.
+fn token_budget(_language: Option<WritingLanguage>, english_tokens: u16) -> u16 {
+    english_tokens
 }
 
 impl CompletionPlan<'_> {
@@ -1123,6 +1153,30 @@ mod tests {
         assert_eq!(super::healing_prefix("Please review."), None);
         assert_eq!(super::healing_prefix("We use version1"), None);
         assert_eq!(super::healing_prefix("Please find attached the"), None);
+        let rolled_back = crate::provider::ProviderRequest {
+            before: "Please review the docum ".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+        };
+        let rolled_back = super::completion_plan(&rolled_back, &[]);
+        assert_eq!(rolled_back.prompt, "Please review the docum ");
+        assert_eq!(rolled_back.echo, None);
+        let lone_word = crate::provider::ProviderRequest {
+            before: "Docum ".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+        };
+        let lone_word = super::completion_plan(&lone_word, super::TRAILING_SPACE_HEALING);
+        assert_eq!(lone_word.prompt, "Docum");
+        assert_eq!(lone_word.echo, Some(" "));
+        let bare_stem = crate::provider::ProviderRequest {
+            before: "Hel".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+        };
+        let bare_stem = super::completion_plan(&bare_stem, super::TRAILING_SPACE_HEALING);
+        assert_eq!(bare_stem.prompt, "");
+        assert_eq!(bare_stem.echo, None);
         assert_eq!(super::healing_prefix("او می‌تواند"), Some("می‌تواند"));
         assert_eq!(
             super::available_complete_words("ent and prov"),
@@ -1331,8 +1385,7 @@ mod tests {
                 plan.echo,
                 Some(&original[original.trim_end_matches(' ').len()..])
             );
-            let tokens = if language == "fa" { 21 } else { 8 };
-            assert_eq!(plan.max_tokens, tokens);
+            assert_eq!(plan.max_tokens, 8);
             let payload = plan.payload();
             assert_eq!(payload["stop"], serde_json::json!([".", "\n"]));
             assert_eq!(payload["seed"], 42);
@@ -1341,7 +1394,7 @@ mod tests {
             let legacy = super::completion_plan(&request, &[]);
             assert_eq!(legacy.prompt, original);
             assert_eq!(legacy.echo, None);
-            assert_eq!(legacy.max_tokens, tokens);
+            assert_eq!(legacy.max_tokens, 8);
         }
     }
 
@@ -1351,7 +1404,7 @@ mod tests {
             ("en", "Please review the docum", 12),
             ("en", "Please review the", 8),
             ("de", "Bitte lies die Dokum", 8),
-            ("fa", "لطفا این گزار", 21),
+            ("fa", "لطفا این گزار", 8),
             ("en", "Please review the\u{a0}", 8),
             ("en", "Please review the\t", 8),
             ("en", "Please review the\n", 8),
@@ -1364,7 +1417,17 @@ mod tests {
             };
             let legacy = super::completion_plan(&request, &[]);
             let candidate = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
-            assert_eq!(legacy.payload(), candidate.payload());
+            if before == "Please review the docum" {
+                assert_eq!(legacy.prompt, before);
+                assert!(
+                    legacy.echo.is_none(),
+                    "removing English rolls word healing back"
+                );
+                assert_eq!(candidate.prompt, "Please review the");
+                assert_eq!(candidate.echo, Some(" docum"));
+            } else {
+                assert_eq!(legacy.payload(), candidate.payload());
+            }
             assert_eq!(candidate.max_tokens, tokens);
             assert_eq!(
                 format!("{}{}", candidate.prompt, candidate.echo.unwrap_or("")),

@@ -219,9 +219,11 @@ takes a paragraph's direction from its first strong character.
 
 The GTK4 layer-shell overlay draws the suggestion as translucent grey text right
 after the caret, with no background, at a size derived from the glyph height.
-A field box that ends before the visible line still keeps that text on the
-caret's baseline inside the window, so it is not dropped onto the chrome under
-the input. When the last snapshot had words after the caret on its line
+A field box that ends before the caret still keeps that text on the caret's
+baseline inside the window, so it is not dropped onto the chrome under the
+input. A box that still contains the caret is a real edge: text that would
+pass it is not drawn over the controls beside the field. When the last
+snapshot had words after the caret on its line
 (`text_follows`), it draws a compact dark chip under the caret instead, and
 only while that chip fits inside the field. Suggestions are at most 64
 characters; one that fits nowhere returns `rendered: false`. The surface takes

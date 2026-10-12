@@ -117,7 +117,7 @@ impl SemanticClientConfig {
     }
 
     /// A client for the production runtime socket. The path must be absolute
-    /// and end in `llama.sock`, and it must fit in a Unix socket address.
+    /// and end in `llama-<pid>.sock`, and it must fit in a Unix socket address.
     pub fn unix(
         path: impl Into<PathBuf>,
         model_alias: impl Into<String>,

@@ -212,19 +212,36 @@ test('three-way counterbalancing gives each configuration every position across 
   }
 });
 
-test('reference keystrokes are the matched graphemes and observed savings need a later typed step', () => {
+test('reference keystrokes are whole words and observed savings stay inside one configuration', () => {
   const scored = scorePrediction(row({ prefix: 'Go to the', expected: [' station', ' market'] }), result({ text: ' market square' }));
   assert.equal(scored.reference_keystrokes_saved, 7);
   assert.equal(scored.observed_keystrokes_saved, null);
+  const inside = scorePrediction(row({ prefix: 'Go to the', expected: [' marble'] }), result({ text: ' market' }));
+  assert.equal(inside.matching_reference_graphemes, 4);
+  assert.equal(inside.reference_keystrokes_saved, 0);
+  const step = (id, prefix, text, config, at) => ({
+    case: row({ id, prefix, expected: [' market'], trace_id: 'walk', step: Number(id.at(-1)), at_ms: at }),
+    result: result({ text }), config_id: config,
+  });
   const records = [
-    { case: row({ id: 't0', prefix: 'Go to the', expected: [' market'], trace_id: 'walk', step: 0, at_ms: 0 }), result: result({ text: ' market' }), config_id: 'baseline' },
-    { case: row({ id: 't1', prefix: 'Go to the market', expected: [' square'], trace_id: 'walk', step: 1, at_ms: 200 }), result: result({ text: ' square' }), config_id: 'baseline' },
-    { case: row({ id: 'miss', prefix: 'Go to the', expected: [' station'] }), result: result({ text: ' library' }), config_id: 'baseline' },
+    step('a0', 'Go to the', ' market', 'left', 0),
+    step('a1', 'Go to the market', ' square', 'left', 200),
+    step('b0', 'Go to the', ' market', 'right', 0),
+    step('b1', 'Go to the market', ' square', 'right', 200),
+    { case: row({ id: 'alone', prefix: 'Go to the', expected: [' market'], trace_id: 'solo', step: 0, at_ms: 0 }), result: result({ text: ' market' }), config_id: 'left' },
+    { case: row({ id: 'miss', prefix: 'Go to the', expected: [' station'] }), result: result({ text: ' library' }), config_id: 'left' },
   ];
   const summary = summarizeResults(records);
-  assert.equal(summary.overall.observed_keystrokes_saved, ' market'.length);
-  assert.equal(summary.overall.reference_keystrokes_saved, ' market'.length + ' square'.length + 1);
-  assert.equal(summary.by_config.baseline.observed_keystrokes_saved, ' market'.length);
+  assert.equal(summary.by_config.left.observed_keystrokes_saved, ' market'.length);
+  assert.equal(summary.by_config.right.observed_keystrokes_saved, ' market'.length);
+  assert.equal(summary.overall.observed_keystrokes_saved, ' market'.length * 2);
+  const skipped = [
+    step('c0', 'Go to the', ' market', 'left', 0),
+    { case: row({ id: 'c1', prefix: 'Go to the m', expected: ['arket'], trace_id: 'walk', step: 1, at_ms: 100 }), result: result({ text: 'zzz' }), config_id: 'left' },
+    step('c2', 'Go to the market', ' square', 'left', 200),
+  ];
+  assert.equal(summarizeResults(skipped).overall.observed_keystrokes_saved, ' market'.length);
+  assert.equal(summarizeResults([records[4]]).overall.observed_keystrokes_saved, null);
 });
 
 test('paired first-word counts keep discordant cases in the same denominator', () => {

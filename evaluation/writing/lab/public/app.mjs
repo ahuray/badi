@@ -7,13 +7,6 @@ const headers = { 'Content-Type': 'application/json', 'X-Badi-Lab-Token': token 
 const names = { production_boundary: 'Current Badi logic', context: 'Full context', context_confidence: 'Full context + token confidence', instructed: 'Context + style', healed: 'Word-boundary experiment', instructed_healed: 'Instructions + word boundary', native_instructed: 'Selected model instructions' };
 const fixedProductionMode = mode => mode === 'production_boundary';
 const reasonLabels = {
-  constrained_complete_word: 'The model finished one word with a separator and a completion response. Its decoding was constrained to this shape.',
-  word_terminal_missing: 'The model did not confirm completion before the deadline.',
-  word_separator_missing: 'The model stopped without the required word-ending space.',
-  word_spacing: 'The proposed spacing does not match this word boundary.',
-  word_grammar_shape: 'The response did not match the one-word decoding constraint.',
-  word_count: 'The response contains no usable word.',
-  unsupported_compound: 'This one-word experiment cannot return a compound containing multiple Unicode words.',
   production_abstention_or_budget: 'The current provider returned no usable continuation. Its response does not distinguish an abstention from an exhausted time budget.',
   no_complete_word: 'The model did not produce a complete word.',
   token_preflight_deadline: 'The time budget expired while checking the prompt.',
@@ -22,8 +15,6 @@ const reasonLabels = {
   unsupported_language: 'This experiment currently supports English, German and Persian.',
   invalid_request: 'The input exceeds the supported limits or contains unsupported formatting.',
   invalid_model_output: 'The model returned an invalid response.',
-  attested_context_word_suffix: 'The completed word occurs exactly in your supplied context. This does not verify its spelling.',
-  attested_style_word_suffix: 'The completed word occurs exactly in your supplied writing examples. This does not verify its spelling.',
 };
 let cases = [];
 let session = null;

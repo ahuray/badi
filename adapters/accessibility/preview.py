@@ -129,11 +129,20 @@ def place_inline(caret, width, height, baseline):
     return round(x - mx), round(y - my)
 
 
+def field_box_ends_before_caret(caret):
+    """The reported field ends before the caret, so it is not the visible line.
+
+    A box that still contains the caret is a real edge: text that passes it
+    must not be drawn over the controls beside the field.
+    """
+    return caret.x + 1 > caret.field_right
+
+
 def place_on_caret_line(caret, width, height, baseline):
     """Ghost text on the caret's baseline, inside the window.
 
-    Some editors report a field box that ends before the visible line. A chip
-    under that box lands on the chrome beneath the input and stays there.
+    Only for a field box that ends before the caret. A chip under that box
+    lands on the chrome beneath the input and stays there.
     """
     if not _number(width, 1, 4096) or not _number(height, 1, 256) or not _number(baseline, 1, height):
         return None
@@ -302,7 +311,7 @@ class Preview:
         if not caret.text_follows:
             width, height, baseline = self._layout(text, chip=False)
             position = place_inline(caret, width, height, baseline)
-            if position is None:
+            if position is None and field_box_ends_before_caret(caret):
                 position = place_on_caret_line(caret, width, height, baseline)
         if position is None and caret.text_follows:
             # A leading space would draw over the following words. The trailing

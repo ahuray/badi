@@ -366,13 +366,9 @@ pub fn prepare_prompt(request: &Request) -> PreparedPrompt {
         request.config.mode,
         Mode::Healed | Mode::InstructedHealed | Mode::NativeInstructed
     ) {
-        let without_spaces = before.trim_end_matches(' ');
-        if without_spaces.len() != before.len() {
-            before[without_spaces.len()..].clone_into(&mut echo);
-            before = without_spaces;
-        } else if let Some(stem) = writing::healing_prefix(before) {
-            stem.clone_into(&mut echo);
-            before = &before[..before.len() - stem.len()];
+        if let Some(boundary) = writing::production_healed_echo(before, &request.language) {
+            boundary.clone_into(&mut echo);
+            before = &before[..before.len() - boundary.len()];
         }
     }
     let context = context_prefix(&request.context, &request.style_examples);
@@ -981,7 +977,7 @@ mod tests {
         value.before = "Hello\u{a0}".to_owned();
         assert_eq!(prepare_prompt(&value).echo, "");
         value.before = "Please review the docum".to_owned();
-        assert_eq!(prepare_prompt(&value).echo, "docum");
+        assert_eq!(prepare_prompt(&value).echo, " docum");
     }
 
     #[test]
@@ -1116,15 +1112,20 @@ mod tests {
     fn instructed_healed_returns_only_exact_multilingual_continuations() {
         for (before, language, raw, expected) in [
             ("Please review the  ", "en", "  report", "report"),
-            ("Please review the docum", "en", "documents and", "ents and"),
+            (
+                "Please review the docum",
+                "en",
+                " documents and",
+                "ents and",
+            ),
             (
                 "Bitte lies das ",
                 "de",
-                " Dokument sorgfältig",
+                "Dokument sorgfältig",
                 "Dokument sorgfältig",
             ),
             ("لطفا این گزارش را ", "fa", " بخوانید", "بخوانید"),
-            ("او می‌تواند", "fa", "می‌تواند بنویسد", " بنویسد"),
+            ("او می‌تواند", "fa", " بنویسد", " بنویسد"),
         ] {
             let mut value = request(Mode::InstructedHealed);
             value.before = before.to_owned();
@@ -1147,11 +1148,13 @@ mod tests {
             assert_eq!(result.text.as_deref(), Some(expected));
             assert!(result.word_complete && result.shape_valid);
             assert_eq!(result.terminal_received, Some(true));
-            assert!(
-                result
-                    .warnings
-                    .contains(&"ttft_includes_forced_boundary_echo")
-            );
+            if !prepared.echo.is_empty() {
+                assert!(
+                    result
+                        .warnings
+                        .contains(&"ttft_includes_forced_boundary_echo")
+                );
+            }
         }
     }
 
@@ -1167,7 +1170,7 @@ mod tests {
                 "echo_mismatch",
             ),
             (
-                "او می‌تواند",
+                "او می‌تواند ",
                 "fa",
                 "میتواند بنویسد",
                 true,
@@ -1177,7 +1180,7 @@ mod tests {
             (
                 "Please review the docum",
                 "en",
-                "documzzzz ",
+                " documzzzz ",
                 true,
                 false,
                 "output_seam",

@@ -29,13 +29,14 @@ NoNewPrivileges=yes
 RestrictAddressFamilies=AF_UNIX
 LockPersonality=yes
 # The model directory is read at startup and never written.
-ReadOnlyPaths=%h/.local/share/badi/models
-# Balanced Qwen3-1.7B Q4 is about 2298 MiB in the fit (1224 MiB of weights
-# plus 1074 MiB of runtime headroom). The measured working set is about
-# 1.2 GB. High throttles above that set; Max is the fit so a runaway
-# cannot eat the host reserve.
-MemoryHigh=2G
-MemoryMax=2560M
+# A missing model directory must reach the broker's exit 78, not a namespace failure.
+ReadOnlyPaths=-%h/.local/share/badi/models
+# Balanced Qwen3-1.7B Q4 is about 2298 MiB in the fit. Quality Qwen3-4B Q4 is
+# about 3746 MiB (artifact plus headroom). Max is that larger fit so the
+# service can start either tier; High throttles a 1.7B runaway earlier.
+# Swap stays off.
+MemoryHigh=3G
+MemoryMax=3746M
 # The broker owns graceful runtime shutdown. Sending TERM to both processes
 # makes the runtime receive a second TERM from the broker during cleanup.
 # Keep the final forced-kill fallback scoped to the entire service cgroup.
