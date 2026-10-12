@@ -152,6 +152,23 @@ test('comparison preserves trace order and resets cache between each configurati
   assert.equal(output.at(-1).type, 'complete');
 });
 
+test('warm prefix keeps one runtime for a configuration and still resets between configurations', async t => {
+  const lab = await setup(t);
+  const cases = [testCase({ id: 'one' }), testCase({ id: 'two', prefix: 'See you' })];
+  const configs = [config(), config({ id: 'framed', mode: 'framed' })];
+  const output = await events(await lab.post(payload({ suite: { ...payload().suite, cases }, configs, warm_prefix: true })));
+  assert.match(output[0].measurement, /repeated prompt prefix/u);
+  const records = output.filter(event => event.type === 'record');
+  assert.equal(records.length, 4);
+  assert.equal(lab.worker.calls[0].epoch, lab.worker.calls[1].epoch);
+  assert.notEqual(lab.worker.calls[1].epoch, lab.worker.calls[2].epoch);
+  assert.equal(lab.worker.calls[2].epoch, lab.worker.calls[3].epoch);
+  assert.equal(records[0].record.config.id, records[1].record.config.id);
+  assert.notEqual(records[1].record.config.id, records[2].record.config.id);
+  assert.equal((await lab.post(payload({ warm_prefix: false }))).status, 400);
+  assert.equal(output.at(-1).type, 'complete');
+});
+
 test('worker malformed/invalid outcomes become explicit error records and retain request denominators', async t => {
   const responses = [{ type: 'error', error: 'fixture input rejected' }, prediction({ outcome: 'invalid', text: 'unfinished fragment' }),
     prediction({ latency_ms: NaN })];

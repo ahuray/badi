@@ -142,6 +142,8 @@ node evaluation/writing/lab/run.mjs \
 
 Options: `--modes` (default `production_boundary,context`), `--budget-ms`
 550–10000, `--max-tokens` 8–64, `--seed`, `--cache-prompt true|false`,
+`--warm-prefix true` (one runtime per configuration, so a repeated prompt
+prefix can stay cached; not a counterbalanced cold comparison),
 `--prefill-batch 16|64`, `--model-artifact DESCRIPTOR`. Each run writes a new
 private directory under the ignored `output/writing/`:
 - `run.json` freezes the inputs before inference;

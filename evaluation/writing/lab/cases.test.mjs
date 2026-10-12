@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
-import { validateCase, validateSuite, modelInputForCase, scorePrediction, scoreCompleteWordPrefixes, summarizeResults, planComparison, pairedFirstWord } from './cases.mjs';
+import { validateCase, validateSuite, modelInputForCase, scorePrediction, scoreCompleteWordPrefixes, summarizeResults, planComparison, warmSchedule, pairedFirstWord } from './cases.mjs';
 
 const row = (overrides = {}) => ({ id: 'case-1', language: 'en', prefix: 'Please review the docum', expected: ['ent'], ...overrides });
 const result = (overrides = {}) => ({ outcome: 'suggestion', text: 'ent', latency_ms: 100, word_complete: true, ...overrides });
@@ -202,6 +202,22 @@ test('comparison order is reproducible, balanced by position, and keeps warm tra
   }
   for (const invalid of [-1, 2 ** 32, 1.5, '42']) assert.throws(() => planComparison(cases, configs, invalid));
   assert.throws(() => planComparison(cases, [{ id: 'same' }, { id: 'same' }], 1));
+});
+
+test('a warm schedule keeps one configuration together without reordering its cases', () => {
+  const cases = [row({ id: 'a' }), row({ id: 'b' })];
+  const configs = [{ id: 'left' }, { id: 'right' }];
+  const plan = planComparison(cases, configs, 3);
+  const warm = warmSchedule(plan);
+  assert.equal(warm.length, plan.length);
+  const switchAt = warm.findIndex((item, index) => index > 0 && item.config_id !== warm[index - 1].config_id);
+  assert.ok(switchAt > 0);
+  assert.ok(warm.slice(0, switchAt).every(item => item.config_id === warm[0].config_id));
+  assert.ok(warm.slice(switchAt).every(item => item.config_id === warm[switchAt].config_id));
+  for (const config of configs) {
+    assert.deepEqual(warm.filter(item => item.config_id === config.id).map(item => item.case_id),
+      plan.filter(item => item.config_id === config.id).map(item => item.case_id));
+  }
 });
 
 test('three-way counterbalancing gives each configuration every position across complete cycles', () => {

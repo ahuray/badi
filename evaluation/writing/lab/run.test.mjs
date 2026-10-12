@@ -81,6 +81,9 @@ test('CLI production mode keeps production settings despite experiment overrides
     assert.deepEqual(framed.configs.find(value => value.mode === mode), { id: mode, mode, budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 });
   }
   assert.equal(parsed.seed, 123);
+  assert.equal(parsed.warmPrefix, false);
+  assert.equal(parseOptions([...base, '--warm-prefix', 'true']).warmPrefix, true);
+  assert.throws(() => parseOptions([...base, '--warm-prefix', 'false']));
   assert.equal(parsed.configs.find(value => value.mode === 'context').budget_ms, 5000);
   assert.throws(() => parseOptions([...base, '--modes', 'production_boundary_unknown']));
   // The historical unhealed baseline is retired; production is the only baseline.
