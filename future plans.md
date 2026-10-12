@@ -116,6 +116,21 @@ resident memory about 1.3 GB, and no quality regression in the Lab.
       209–250 ms, middle 220–223, 19th of 20 is 244; Chromium 20/20 shown,
       227–371 ms, middle 246–249, 19th of 20 is 314. No miss in these 40.
       This is one machine and these prefixes.
+- [x] A known field starts the model on the key and keeps the suggestion
+      hidden until the 120 ms typing pause. The next key drops the held
+      suggestion. On the sample above, that pause is inside the generation
+      wait rather than added after it.
+- [x] Q4_0 does not replace the pinned Q4_K_M. On 2026-10-12, llama.cpp
+      b10726 with repack and flash attention left on auto, 4 threads and
+      batch 16, compared the installed Qwen3-1.7B-Q4_K_M with Bartowski's
+      Q4_0 (`c470091d31c4ada174ee5c2547daa020e930593cbca5ca8ca385ce8ff59a2fdf`,
+      file type Q4_0). They are not two quants of one source file. In six
+      alternating 8-token decodes, with the broker loaded, Q4_0 was a little
+      faster in four pairs and the rate fell from about 26 t/s to about 14
+      as the load rose. One paired run had Q4_0 slower (11.5 against 13.2
+      t/s). Raw greedy text, conversation mode off, differed on four of the
+      five disposable prefixes; Q4_0 continued "Thank" with " youngster".
+      Production stays on Q4_K_M.
 - [ ] Speculative decoding with a small draft model, or fewer generated tokens.
 - [ ] Qualify Qwen3 0.6B and Gemma 4 E2B (with its multi-token drafter) in the
       Lab. Defer hybrid-attention models until llama.cpp reuses their caches.
