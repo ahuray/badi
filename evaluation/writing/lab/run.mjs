@@ -51,7 +51,7 @@ export function parseOptions(args, cwd = process.cwd()) {
   if (!['true', 'false'].includes(values['cache-prompt'])) throw new Error('--cache-prompt must be true or false.');
   if (values['prefill-batch'] !== undefined && !['16', '64'].includes(values['prefill-batch'])) throw new Error('Use --prefill-batch 16 or 64.');
   const configs = validateConfigs(values.modes.split(',').map(mode => {
-    const fixed = mode === 'production_boundary';
+    const fixed = mode === 'production_boundary' || mode === 'framed' || mode === 'field_context';
     return { id: mode, mode, budget_ms: fixed ? 550 : budget, max_tokens: fixed ? 8 : tokens,
       cache_prompt: fixed || values['cache-prompt'] === 'true', temperature: 0, seed: 42 };
   }));

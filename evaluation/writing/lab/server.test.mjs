@@ -207,10 +207,12 @@ test('configuration and inference request allowlists keep arbitrary model parame
 });
 
 test('production-boundary mode requires the production budget, nominal tokens, cache and decoding settings', () => {
-  const boundary = config({ id: 'boundary', mode: 'production_boundary' });
-  assert.deepEqual(validateConfigs([boundary]), [boundary]);
-  for (const changed of [{ budget_ms: 551 }, { max_tokens: 9 }, { cache_prompt: false }, { temperature: .1 }, { seed: 43 }]) {
-    assert.throws(() => validateConfigs([{ ...boundary, ...changed }]), /fixed production settings/u);
+  for (const mode of ['production_boundary', 'framed', 'field_context']) {
+    const fixed = config({ id: mode, mode });
+    assert.deepEqual(validateConfigs([fixed]), [fixed]);
+    for (const changed of [{ budget_ms: 551 }, { max_tokens: 9 }, { cache_prompt: false }, { temperature: .1 }, { seed: 43 }]) {
+      assert.throws(() => validateConfigs([{ ...fixed, ...changed }]), /fixed production settings/u);
+    }
   }
   const modes = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'framed', 'field_context', 'probability_rejoin'];
   const all = modes.map(mode => config({ id: mode, mode }));

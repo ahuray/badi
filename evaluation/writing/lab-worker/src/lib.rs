@@ -677,8 +677,13 @@ async fn lab_rejoin(
         .warnings
         .push("experimental_output_not_qualified_for_production");
     result.used_context = request.config.mode == Mode::FieldContext && !request.context.is_empty();
+    result.config.budget_ms = 550;
+    result.config.max_tokens = 8;
+    result.config.cache_prompt = true;
+    result.config.temperature = 0.0;
+    result.config.seed = 42;
     let (prompt, echo) = quality_parts(request);
-    let payload = lab_completion_payload(&prompt, &echo, None, request.config.max_tokens, false);
+    let payload = lab_completion_payload(&prompt, &echo, None, 8, false);
     finish_lab_rejoin(
         runtime,
         request,
@@ -755,10 +760,13 @@ async fn finish_lab_rejoin(
 ) -> Result<ResultRecord, LabError> {
     result.effective_prompt = job.payload["prompt"].as_str().map(str::to_owned);
     result.model_requests.push(job.payload.clone());
-    let remaining = request
-        .config
-        .budget_ms
-        .saturating_sub(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+    let budget_ms = if matches!(request.config.mode, Mode::Framed | Mode::FieldContext) {
+        550
+    } else {
+        request.config.budget_ms
+    };
+    let remaining =
+        budget_ms.saturating_sub(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
     let observed = transport::stream(
         runtime.client(),
         job.payload,

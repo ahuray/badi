@@ -111,9 +111,10 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 Promoting a model needs a new hypothesis, fresh independent cases, native
 Persian review where results are ambiguous and the full Lab qualification.
 
-- [ ] Freeze an independent multilingual confirmation set of at least 100
-      prefixes; report usefulness, abstention, errors, useful words, keystroke
-      savings and latency misses separately.
+- [ ] Freeze an independent confirmation set you provide or approve, not
+      assistant-written text: at least 100 English, 40 German and 40 Persian
+      prefixes. Report usefulness, abstention, errors, useful words, keystroke
+      savings and latency misses separately before any model or prompt promotion.
 - [ ] Detect the language from the field's text, with a per-app override,
       instead of the keyboard layout.
 - [ ] Global and per-app instructions, and a strength setting that trades

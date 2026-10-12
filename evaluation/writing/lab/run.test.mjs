@@ -75,6 +75,11 @@ test('CLI production mode keeps production settings despite experiment overrides
   assert.equal(parsed.configs.length, 4);
   assert.deepEqual(parsed.configs.find(value => value.mode === 'production_boundary'), { id: 'production_boundary',
     mode: 'production_boundary', budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 });
+  assert.deepEqual(parsed.configs.find(value => value.mode === 'framed'), undefined);
+  const framed = parseOptions([...base, '--modes', 'framed,field_context', '--budget-ms', '5000', '--max-tokens', '64', '--cache-prompt', 'false']);
+  for (const mode of ['framed', 'field_context']) {
+    assert.deepEqual(framed.configs.find(value => value.mode === mode), { id: mode, mode, budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 });
+  }
   assert.equal(parsed.seed, 123);
   assert.equal(parsed.configs.find(value => value.mode === 'context').budget_ms, 5000);
   assert.throws(() => parseOptions([...base, '--modes', 'production_boundary_unknown']));
