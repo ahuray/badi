@@ -55,8 +55,10 @@ observer wire details.
   `commitString` the correction, still reported as `dispatched-unverified`.
   The suffix must still be the text before the caret. IME-parity apps stay
   append-only: a replacement is not shown or applied there
-  ([ADR 0003](../../docs/decisions/0003-ime-parity-append-only.md)). Live undo
-  for the native deletion has not been retried in the graphical session.
+  ([ADR 0003](../../docs/decisions/0003-ime-parity-append-only.md)). In Omawrite
+  0.5.0 on 2026-10-12, accepting `teh ` → `the ` took two native undos: the
+  first removed `the ` and the second restored `teh `. Telegram and Xournal++
+  were not retried.
 
 ## App classes
 
