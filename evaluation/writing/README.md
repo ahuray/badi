@@ -74,7 +74,9 @@ target/release/badi-writing-lab --rank-models < ranking-input.json
 ## Writing cases and modes
 
 Enter text before the caret and one acceptable addition per line, keeping
-intended leading spaces. Optionally add context and examples of your writing,
+intended leading spaces. An optional `after` field is the text after the caret,
+at most 128 characters; `production_boundary` passes it to the provider.
+Optionally add context and examples of your writing,
 pick modes and run; inspect the prompt, raw output, complete-word result and
 runtime identity. **Export** downloads drafts and results only when you ask.
 Drafts and results live in page and server memory only: no localStorage, logs
@@ -146,7 +148,8 @@ private directory under the ignored `output/writing/`:
 
 Progress prints counts, not prose. The
 [development set](lab/examples/quality-probes.json) has 16 boundary, context and
-style cases, the [longer prose set](lab/examples/real-text-development.json)
+style cases, the [mid-sentence set](lab/examples/mid-line-development.json) has
+40 English cases with text after the caret, the [longer prose set](lab/examples/real-text-development.json)
 has 19 email and note prefixes, and the [trace set](lab/examples/typing-traces.json)
 has six typing steps.
 

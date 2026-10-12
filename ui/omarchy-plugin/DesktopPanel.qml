@@ -115,10 +115,12 @@ Item {
     var document = client.cloneSettings()
     if (blocklist) document[key] = true
     else delete document[key]
-    var apps = key === "all_linux_apps"
-    client.replaceSettings(document, blocklist
-      ? (apps ? "Apps: every supported app except blocked ones." : "Websites: every site except blocked ones. Sensitive fields stay denied.")
-      : (apps ? "Apps: only allowed apps." : "Websites: only allowed sites."))
+    var message = key === "mid_line"
+      ? (blocklist ? "Mid-sentence suggestions are on." : "Mid-sentence suggestions are off.")
+      : (blocklist
+        ? (key === "all_linux_apps" ? "Apps: every supported app except blocked ones." : "Websites: every site except blocked ones. Sensitive fields stay denied.")
+        : (key === "all_linux_apps" ? "Apps: only allowed apps." : "Websites: only allowed sites."))
+    client.replaceSettings(document, message)
   }
 
   function writeRule(identity, decision) {
@@ -302,6 +304,24 @@ Item {
                 onClicked: client.brokerReachable ? root.togglePause() : root.runAction(["service", "start"], "Starting model…", "Model process started. Waiting for it to load…")
               }
               Caption { text: "Pause keeps the model loaded. Your choice persists after restart." }
+              RowLayout {
+                Layout.fillWidth: true
+                ActionButton {
+                  Layout.fillWidth: true
+                  text: "End of text"; selected: client.settings.mid_line !== true; bordered: true; focusable: true
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (client.settings.mid_line === true) root.setMode("mid_line", false)
+                  Accessible.name: "Suggestions only at the end of the text"
+                }
+                ActionButton {
+                  Layout.fillWidth: true
+                  text: "Mid-sentence"; selected: client.settings.mid_line === true; bordered: true; focusable: true
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (client.settings.mid_line !== true) root.setMode("mid_line", true)
+                  Accessible.name: "Suggestions when a word follows the caret"
+                }
+              }
+              Caption { text: "Mid-sentence is off until it can be measured. A word after the caret then asks for nothing. Punctuation can still finish the word you are typing." }
               PanelSeparator { Layout.fillWidth: true; foreground: Color.popups.text }
               SectionTitle { text: "Try a continuation" }
               BodyText { text: "Suggestions appear on their own in supported apps: Tab inserts a visible suggestion, Ctrl+Right inserts its next word, typing its next letters keeps the rest, Escape dismisses, Ctrl+Shift+Space asks explicitly. In a Xournal++ text cell, press Tab to request words and Tab again to insert them. Obsidian: Tab takes one word, Ctrl/Command+Right takes all." }

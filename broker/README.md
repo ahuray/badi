@@ -132,8 +132,11 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   token count. A 2.6× Persian budget missed 550 ms on the development cases.
 - **Abstention.** A continuation abstains when it adds a number absent from the
   typed text, and every request when the caret splits a word.
-- **Mid-line.** When words follow the caret on its line, the prompt is still
-  the text before the caret, and `mid_line_insertion()` keeps only what fits:
+- **Mid-line.** Off by default (`badi mid-line off`; omit `mid_line` in
+  settings). A word after the caret then abstains before any model call.
+  Punctuation after the caret can still complete the word being typed.
+  `badi mid-line on` asks the model. The prompt is still the text before
+  the caret, and `mid_line_insertion()` keeps only what fits:
   the words before the point where the continuation reproduces the line's
   first word or mark, a phrase the model closes with a clause mark before the
   line's own mark, or else the rest of the word being typed. Anything else is

@@ -68,7 +68,9 @@ test('case boundary retains exact whitespace, languages and explicit context/sty
 test('model input excludes all expected answers and trace metadata using an explicit allowlist', () => {
   const input = modelInputForCase(row({ expected: ['UNIQUE_REFERENCE_NOT_FOR_MODEL'], context: 'visible context', style: 'style text',
     trace_id: 'typing', step: 0, at_ms: 0 }));
-  assert.deepEqual(input, { language: 'en', prefix: 'Please review the docum', context: 'visible context', style: 'style text' });
+  assert.deepEqual(input, { language: 'en', prefix: 'Please review the docum', after: '', context: 'visible context', style: 'style text' });
+  assert.equal(modelInputForCase(row({ after: 'report today' })).after, 'report today');
+  assert.throws(() => validateCase(row({ after: 'a'.repeat(129) })));
   assert.equal(JSON.stringify(input).includes('UNIQUE_REFERENCE_NOT_FOR_MODEL'), false);
   assert.equal(Object.hasOwn(input, 'expected'), false);
 });

@@ -29,6 +29,8 @@ HELP = """Badi — local writing controls
   badi settings                Open the Omarchy settings panel
   badi settings --json          Read the current settings document
   badi pause | resume          Persistently pause or resume predictions
+  badi mid-line on|off         Suggestions with a word after the caret (off
+                               by default). Punctuation can still finish a word
   badi apps allowlist|blocklist  Apps: only allowed apps (default), or every
                                supported app except blocked ones
   badi sites allowlist|blocklist Sites: only allowed sites (default), or every
@@ -83,7 +85,7 @@ ALL_APPS_NOTE = ("Apps use the blocklist: every app Badi supports is allowed unl
 INSTALLED_BROKER = ".local/lib/badi/badi-broker"
 # Broker no-suggestion classes; counters never include typed text.
 NO_SUGGESTION = {
-    "request_abstained": "the field language is missing or unsupported, text follows the caret, nothing but spaces (or one unfinished English word) precedes it, or a Persian joiner is not yet between two letters",
+    "request_abstained": "the field language is missing or unsupported, the caret splits a word, a word follows the caret while mid-sentence suggestions are off, nothing but spaces (or one unfinished English word) precedes it, or a Persian joiner is not yet between two letters",
     "budget_prefill": "the writing budget (550 ms while typing, 1.2 s after Tab) ended before the model started answering (prompt prefill)",
     "budget_stream": "the writing budget (550 ms while typing, 1.2 s after Tab) ended before a complete word arrived",
     "model_abstained": "the model finished without a complete word",
@@ -709,6 +711,12 @@ def main(arguments):
         paused = arguments == ["pause"]
         update_settings(lambda document: document.update(paused=paused))
         print("Predictions paused." if paused else "Predictions resumed.")
+        return
+    if arguments in (["mid-line", "on"], ["mid-line", "off"]):
+        enabled = arguments[1] == "on"
+        update_settings(lambda document: set_mode(document, "mid_line", enabled))
+        print("Mid-sentence suggestions are on." if enabled
+              else "Mid-sentence suggestions are off. A word after the caret asks for nothing.")
         return
     modes = {("apps", "allowlist"): ("all_linux_apps", False), ("apps", "blocklist"): ("all_linux_apps", True),
              ("sites", "allowlist"): ("all_web_origins", False), ("sites", "blocklist"): ("all_web_origins", True),

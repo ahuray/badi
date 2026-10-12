@@ -58,7 +58,7 @@ export function workerRequest(testCase, config) {
   const parameters = { ...config }; delete parameters.id;
   const input = modelInputForCase(testCase);
   return { schema: 'badi.prediction-lab.request.v1', id: randomUUID(), before: input.prefix,
-    language: input.language, context: input.context,
+    after: input.after, language: input.language, context: input.context,
     style_examples: input.style.split(/\n\s*\n/u).filter(value => value.trim()), config: parameters };
 }
 

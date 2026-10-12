@@ -107,6 +107,10 @@ pub struct Request {
     pub schema: String,
     pub id: String,
     pub before: String,
+    /// Text after the caret. Empty for end-of-text cases. Production boundary
+    /// passes it to the provider so mid-line insertion can be measured.
+    #[serde(default)]
+    pub after: String,
     pub language: String,
     pub context: String,
     pub style_examples: Vec<String>,
@@ -271,6 +275,7 @@ impl Request {
             || self.id.chars().any(char::is_control)
             || self.before.trim().is_empty()
             || !valid_text(&self.before, 2048)
+            || !valid_text(&self.after, 128)
             || !valid_text(&self.context, 4096)
             || self.style_examples.len() > 8
             || self
@@ -302,7 +307,7 @@ impl Request {
     fn provider_request(&self) -> ProviderRequest {
         ProviderRequest {
             before: self.before.clone(),
-            after: String::new(),
+            after: self.after.clone(),
             language: Some(self.language.clone()),
         }
     }
@@ -867,6 +872,7 @@ mod tests {
             schema: REQUEST_SCHEMA.to_owned(),
             id: "case-1".to_owned(),
             before: "Please review the ".to_owned(),
+            after: String::new(),
             language: "en".to_owned(),
             context: "We are editing a city guide.".to_owned(),
             style_examples: vec!["Keep directions brief.".to_owned()],

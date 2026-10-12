@@ -22,6 +22,10 @@
       "type": "boolean",
       "description": "Opt-in app default (blocklist mode). When true, a Linux app without an exact subject rule may read context, display and suggest, never learn or retain; the policy reply says matched_default, so adapters open only fields they can corroborate. Exact app rules win. Producers omit the property when false."
     },
+    "mid_line": {
+      "type": "boolean",
+      "description": "Mid-sentence suggestions. When false or omitted, a word after the caret abstains before any model call. Punctuation after the caret can still complete the word being typed. Producers omit the property when false."
+    },
     "subjects": {
       "type": "array",
       "maxItems": 64,

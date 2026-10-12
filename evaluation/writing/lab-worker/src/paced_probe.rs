@@ -493,6 +493,7 @@ mod tests {
                         schema: super::super::REQUEST_SCHEMA.to_owned(),
                         id: uuid::Uuid::new_v4().to_string(),
                         before: format!("Disposable draft snapshot {}", &"abc"[..index]),
+                        after: String::new(),
                         language: "en".to_owned(),
                         context: "Supplied stable context.".to_owned(),
                         style_examples: vec!["Supplied style example.".to_owned()],
