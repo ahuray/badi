@@ -147,7 +147,14 @@ mod tests {
     fn process_state(pid: u32) -> std::io::Result<Option<(String, String)>> {
         let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
             Ok(stat) => stat,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            // A pid that exits during the read returns ESRCH, not ENOENT.
+            // That process is gone, which is the condition the caller waits for.
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    || error.raw_os_error() == Some(Errno::SRCH.raw_os_error()) =>
+            {
+                return Ok(None);
+            }
             Err(error) => return Err(error),
         };
         let invalid = || std::io::Error::other("invalid process fixture identity");
