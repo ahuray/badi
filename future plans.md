@@ -24,9 +24,11 @@ now true in the [README](README.md) or the affected runbook.
   session for a keystroke in the same field (build `206e782`) showed 260, 267,
   278, 322 and 351 ms (median 278 ms). The same build in a disposable
   Chromium page showed 246, 247, 248, 253 and 361 ms (median 248 ms). These
-  are five prefixes each, not a p95. The KV cache is already reused between
-  keystrokes. Before the timer accuracy fix (2026-10-06), Fcitx's 250 ms timer
-  slack made Chromium 0.40–0.62 s.
+  are five prefixes each, not a p95. Cold `badictl probe` calls for those same
+  prefixes, which do not reuse a keystroke cache, took 312, 405, 458, 461 and
+  550 ms (median 458). The live figures are the warm path. The KV cache is
+  already reused between keystrokes. Before the timer accuracy fix
+  (2026-10-06), Fcitx's 250 ms timer slack made Chromium 0.40–0.62 s.
 - **GPU:** Vulkan on the Iris Xe is slower per keystroke (13–20 against 19–30
   tokens/s for generation) and faster only for long cold prompts, so Badi stays
   on the CPU.
@@ -85,8 +87,10 @@ resident memory about 1.3 GB, and no quality regression in the Lab.
 - [ ] Warm visible p50 is still above 250 ms in Omawrite. On build `206e782`
       (2026-10-12, five disposable prefixes) Omawrite showed grey text at
       260–351 ms, median 278 ms. A disposable Chromium page on the same build
-      showed 246–361 ms, median 248 ms. Neither sample is large enough for a
-      p95.
+      showed 246–361 ms, median 248 ms. Cold probes of those prefixes took
+      312–550 ms, median 458 ms, so the live path is already the warm cache.
+      The next cut is fewer generated tokens or faster decode, measured before
+      any production change. Neither live sample is large enough for a p95.
 - [ ] Speculative decoding with a small draft model, or fewer generated tokens.
 - [ ] Qualify Qwen3 0.6B and Gemma 4 E2B (with its multi-token drafter) in the
       Lab. Defer hybrid-attention models until llama.cpp reuses their caches.
