@@ -622,14 +622,18 @@ fn healed_boundary<'a>(
     if heal_english_words {
         if let Some(word) = healing_prefix(trimmed) {
             let (start, end) = healed_echo_span(context, word);
-            // A field that is only that word would leave an empty prompt, which
-            // the client abstains. Keep the word and heal only a trailing space.
             if start > 0 {
                 return (
                     &context[..start],
                     Some(&context[start..end]),
                     token_budget(language, 12),
                 );
+            }
+            // The whole field is that word. A trailing space falls through and
+            // is healed with the word kept. With nothing else, an empty prompt
+            // abstains instead of sending the bare stem.
+            if context.len() == trimmed.len() {
+                return ("", None, token_budget(language, 8));
             }
         }
     }
@@ -1165,6 +1169,14 @@ mod tests {
         let lone_word = super::completion_plan(&lone_word, super::TRAILING_SPACE_HEALING);
         assert_eq!(lone_word.prompt, "Docum");
         assert_eq!(lone_word.echo, Some(" "));
+        let bare_stem = crate::provider::ProviderRequest {
+            before: "Hel".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+        };
+        let bare_stem = super::completion_plan(&bare_stem, super::TRAILING_SPACE_HEALING);
+        assert_eq!(bare_stem.prompt, "");
+        assert_eq!(bare_stem.echo, None);
         assert_eq!(super::healing_prefix("او می‌تواند"), Some("می‌تواند"));
         assert_eq!(
             super::available_complete_words("ent and prov"),
