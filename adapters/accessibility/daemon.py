@@ -52,7 +52,11 @@ MAX_BUFFER = MAX_FRAME * 4
 OWNER_OPERATIONS = frozenset({"inspect", "snapshot", "preview", "hide"})
 # Producer interest requested from the armed application. Its events reach
 # this helper only through a match on the armed field's exact sender and path.
+# Bounds and visible-data changes are how a toolkit reports that the caret
+# moved on screen without a text edit, including a scroll of that object.
+# A scroll reported only on an ancestor does not arrive here.
 FIELD_EVENTS = ("object:text-changed", "object:text-caret-moved", "object:text-selection-changed",
+                "object:bounds-changed", "object:visible-data-changed",
                 "object:state-changed:editable", "object:state-changed:showing",
                 "object:state-changed:defunct", "object:property-change:accessible-role")
 
