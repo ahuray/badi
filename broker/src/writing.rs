@@ -595,16 +595,21 @@ pub(crate) fn completion_plan<'a>(
     // the last healable word, whether or not the user already typed a space
     // after it.
     let trimmed = context.trim_end_matches(' ');
-    if let Some(word) = (language == Some(WritingLanguage::English))
-        .then(|| healing_prefix(trimmed))
-        .flatten()
-    {
-        let (start, end) = healed_echo_span(context, word);
-        return CompletionPlan {
-            prompt: &context[..start],
-            echo: Some(&context[start..end]),
-            max_tokens: token_budget(language, 12),
-        };
+    let heal_english_words = language == Some(WritingLanguage::English)
+        && healed_languages.contains(&WritingLanguage::English);
+    if heal_english_words {
+        if let Some(word) = healing_prefix(trimmed) {
+            let (start, end) = healed_echo_span(context, word);
+            // A field that is only that word would leave an empty prompt, which
+            // the client abstains. Keep the word and heal only a trailing space.
+            if start > 0 {
+                return CompletionPlan {
+                    prompt: &context[..start],
+                    echo: Some(&context[start..end]),
+                    max_tokens: token_budget(language, 12),
+                };
+            }
+        }
     }
     if language.is_some_and(|language| healed_languages.contains(&language))
         && context.len() != trimmed.len()
@@ -1123,6 +1128,22 @@ mod tests {
         assert_eq!(super::healing_prefix("Please review."), None);
         assert_eq!(super::healing_prefix("We use version1"), None);
         assert_eq!(super::healing_prefix("Please find attached the"), None);
+        let rolled_back = crate::provider::ProviderRequest {
+            before: "Please review the docum ".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+        };
+        let rolled_back = super::completion_plan(&rolled_back, &[]);
+        assert_eq!(rolled_back.prompt, "Please review the docum ");
+        assert_eq!(rolled_back.echo, None);
+        let lone_word = crate::provider::ProviderRequest {
+            before: "Docum ".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+        };
+        let lone_word = super::completion_plan(&lone_word, super::TRAILING_SPACE_HEALING);
+        assert_eq!(lone_word.prompt, "Docum");
+        assert_eq!(lone_word.echo, Some(" "));
         assert_eq!(super::healing_prefix("او می‌تواند"), Some("می‌تواند"));
         assert_eq!(
             super::available_complete_words("ent and prov"),
@@ -1364,7 +1385,14 @@ mod tests {
             };
             let legacy = super::completion_plan(&request, &[]);
             let candidate = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
-            assert_eq!(legacy.payload(), candidate.payload());
+            if before == "Please review the docum" {
+                assert_eq!(legacy.prompt, before);
+                assert!(legacy.echo.is_none(), "removing English rolls word healing back");
+                assert_eq!(candidate.prompt, "Please review the");
+                assert_eq!(candidate.echo, Some(" docum"));
+            } else {
+                assert_eq!(legacy.payload(), candidate.payload());
+            }
             assert_eq!(candidate.max_tokens, tokens);
             assert_eq!(
                 format!("{}{}", candidate.prompt, candidate.echo.unwrap_or("")),
