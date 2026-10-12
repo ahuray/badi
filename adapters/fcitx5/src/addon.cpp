@@ -788,13 +788,15 @@ private:
         }
         const auto context = currentContext(binding);
         if (!context) return debug_.record("request_blocked", app, unavailableContextReason(binding));
+        // Escape declines one context. Deleting that text, including clearing
+        // the field, ends the decline. An empty field still does not request.
+        if (binding.dismissedContext == *context) return;
+        binding.dismissedContext.reset();
         if (const auto blocked = observedRequestBlocked(observed, *context, hasForeignImeUi(observePanel(binding)))) {
             return debug_.record("request_blocked", app, *blocked, context->before.size(),
                                  observedAfter(*context).size());
         }
         binding.observedFocus = observed;
-        if (binding.dismissedContext == *context) return;
-        binding.dismissedContext.reset();
         const auto update = binding.state.updateContext(*context);
         if (update && open(binding) && transport_.publishContext(*update)) {
             binding.broker.coordinates = update->coordinates;
