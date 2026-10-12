@@ -97,6 +97,9 @@ pub enum Mode {
     /// Lab-only: force the next one or two words, then keep a prefix only when
     /// those words are not unlikely. The floor is uncalibrated.
     ProbabilityRejoin,
+    /// Lab-only: name the line after the caret, then continue from the text
+    /// before it. Production prompts do not include that line.
+    FollowingText,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -452,7 +455,7 @@ pub async fn run(
     }
     if matches!(
         request.config.mode,
-        Mode::Framed | Mode::FieldContext | Mode::ProbabilityRejoin
+        Mode::Framed | Mode::FieldContext | Mode::ProbabilityRejoin | Mode::FollowingText
     ) {
         return lab_rejoin(runtime, &request, cancellation, started).await;
     }
@@ -616,15 +619,17 @@ async fn baseline(
 fn quality_parts(request: &Request) -> (String, String) {
     let echo = writing::production_healed_echo(&request.before, &request.language).unwrap_or("");
     let stem = request.before.strip_suffix(echo).unwrap_or(&request.before);
-    let prefix = if request.config.mode == Mode::FieldContext {
-        let earlier = field_context::stable_prefix(&request.context);
-        if earlier.is_empty() {
-            String::new()
-        } else {
-            format!("{earlier}\n\n")
+    let prefix = match request.config.mode {
+        Mode::FieldContext => {
+            let earlier = field_context::stable_prefix(&request.context);
+            if earlier.is_empty() {
+                String::new()
+            } else {
+                format!("{earlier}\n\n")
+            }
         }
-    } else {
-        midline::FRAME.to_owned()
+        Mode::FollowingText => midline::following_text_prefix(&request.after),
+        _ => midline::FRAME.to_owned(),
     };
     (format!("{prefix}{stem}"), echo.to_owned())
 }
@@ -667,10 +672,10 @@ async fn lab_rejoin(
         return probability_rejoin(runtime, request, cancellation, started).await;
     }
     let mut result = request.result(runtime.identity());
-    let lab_only = if request.config.mode == Mode::FieldContext {
-        "field_context_is_lab_only"
-    } else {
-        midline::framed_warning()
+    let lab_only = match request.config.mode {
+        Mode::FieldContext => "field_context_is_lab_only",
+        Mode::FollowingText => "following_text_prompt_is_lab_only",
+        _ => midline::framed_warning(),
     };
     result.warnings.push(lab_only);
     result
@@ -760,7 +765,10 @@ async fn finish_lab_rejoin(
 ) -> Result<ResultRecord, LabError> {
     result.effective_prompt = job.payload["prompt"].as_str().map(str::to_owned);
     result.model_requests.push(job.payload.clone());
-    let budget_ms = if matches!(request.config.mode, Mode::Framed | Mode::FieldContext) {
+    let budget_ms = if matches!(
+        request.config.mode,
+        Mode::Framed | Mode::FieldContext | Mode::FollowingText
+    ) {
         550
     } else {
         request.config.budget_ms

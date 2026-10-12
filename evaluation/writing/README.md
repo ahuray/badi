@@ -94,6 +94,7 @@ or automatic files.
 | `framed` | Lab only: version `everyday-english-2026-10-12.v1`, production healing, and the constant everyday-English frame |
 | `field_context` | Lab only: earlier text of the same field, kept to about 200 tokens and moved only in jumps of about 64 so the prefix cache can hold |
 | `probability_rejoin` | Lab only: force the next words and keep a prefix only when they are not unlikely. The cut is uncalibrated and is not installed |
+| `following_text` | Lab only: name the line after the caret, then continue from the text before it. Production prompts do not include that line |
 
 `instructed_word` and `healed_attested` are not selectable. The 2026-09-09 next-word study had no useful `instructed_word` result in 30 opportunities and one harmful result. `healed_attested` added harmful suggestions on top of `healed`.
 

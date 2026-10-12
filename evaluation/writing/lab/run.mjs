@@ -54,7 +54,7 @@ export function parseOptions(args, cwd = process.cwd()) {
   if (values['warm-prefix'] !== undefined && values['warm-prefix'] !== 'true') throw new Error('--warm-prefix must be true when present.');
   const warmPrefix = values['warm-prefix'] === 'true';
   const configs = validateConfigs(values.modes.split(',').map(mode => {
-    const fixed = mode === 'production_boundary' || mode === 'framed' || mode === 'field_context';
+    const fixed = mode === 'production_boundary' || mode === 'framed' || mode === 'field_context' || mode === 'following_text';
     return { id: mode, mode, budget_ms: fixed ? 550 : budget, max_tokens: fixed ? 8 : tokens,
       cache_prompt: fixed || values['cache-prompt'] === 'true', temperature: 0, seed: 42 };
   }));
