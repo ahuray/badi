@@ -222,9 +222,18 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(self.backend.reads, reads)
         self.assertEqual(len(renders), 1)
         self.assertEqual(self.backend.geometry_requests, [False, False, True], "only preview calibrates")
+        self.backend.meta["geometry"] = {"caret": {"y": 10}}
+        self.observer.reposition_preview()
+        self.assertEqual(len(renders), 2)
+        self.assertEqual(renders[1][0]["geometry"]["caret"]["y"], 10)
+        self.assertLessEqual(renders[1][2], renders[0][2])
+        self.backend.meta["caret"] = 8
+        self.observer.reposition_preview()
+        self.assertEqual(self.events[-1]["reason"], "field_changed")
+        self.assertEqual(len(renders), 2, "a moved caret is not drawn again")
         self.backend.meta["path"] = "/other"
         self.assertFalse(self.observer.request(request)["ok"])
-        self.assertEqual(len(renders), 1)
+        self.assertEqual(len(renders), 2)
 
     def test_preview_denies_missed_caret_and_length_changes_before_render(self):
         for change in ({"caret": 700}, {"total_chars": 1201}):

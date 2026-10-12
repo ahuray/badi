@@ -292,6 +292,11 @@ class EventTests(unittest.TestCase):
             def __getattr__(self, name):
                 raise AssertionError("A field event payload is never read: " + name)
         self.daemon.field_event(None, ":1.7", "/field", "org.a11y.atspi.Event.Object", "TextChanged", Payload(), None)
+        moved = []
+        self.daemon.observer.reposition_preview = lambda: moved.append(True)
+        self.daemon.field_event(None, ":1.7", "/field", "org.a11y.atspi.Event.Object", "BoundsChanged", Payload(), None)
+        self.daemon.field_event(None, ":1.7", "/field", "org.a11y.atspi.Event.Object", "VisibleDataChanged", Payload(), None)
+        self.assertEqual(moved, [True, True])
         self.assert_invalidated("field_changed")
 
     def test_only_the_focus_listener_is_global(self):

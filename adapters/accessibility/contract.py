@@ -5,6 +5,7 @@ import hashlib
 import math
 import os
 import re
+import time
 import unicodedata
 from urllib.parse import urlsplit
 
@@ -108,6 +109,7 @@ class Observer:
         self.disarm = lambda: None
         self.caret_edge = None
         self.text_follows = False
+        self.preview_hold = None
         self.operations = {"status": self.status, "hide": self.hide_preview, "inspect": self.inspect,
                            "snapshot": self.snapshot, "preview": self.preview}
 
@@ -125,6 +127,7 @@ class Observer:
         self.disarm()
         self.caret_edge = None
         self.text_follows = False
+        self.preview_hold = None
 
     def request(self, request):
         request_id = request.get("id") if isinstance(request, dict) else None
@@ -191,8 +194,34 @@ class Observer:
         focus["rendered"] = bool(self.render(focus, request["text"], request["ttl_ms"]))
         if focus["binding"]["epoch"] != self.epoch:
             self.hide()
+            self.preview_hold = None
             raise Denied("stale_binding")
+        self.preview_hold = ((time.monotonic() + request["ttl_ms"] / 1000, request)
+                             if focus["rendered"] else None)
         return {"focus": focus}
+
+    def reposition_preview(self):
+        """Move a showing preview after the field scrolls, without a new suggestion.
+
+        The text offset must still match the preview. A moved caret or a caret
+        that can no longer be drawn ends the suggestion.
+        """
+        if self.preview_hold is None:
+            return
+        expires, request = self.preview_hold
+        remaining_ms = int((expires - time.monotonic()) * 1000)
+        if remaining_ms < 50:
+            return
+        nudged = dict(request)
+        nudged["ttl_ms"] = remaining_ms
+        try:
+            result = self.preview(nudged)
+        except Denied as error:
+            if str(error) not in MALFORMED:
+                self.invalidate("field_changed")
+            return
+        if not result["focus"]["rendered"]:
+            self.invalidate("field_changed")
 
     def bound_focus(self, request, calibrate=False, caret_rect=None):
         """The field as it is now, which must still be the request's binding and policy target."""
