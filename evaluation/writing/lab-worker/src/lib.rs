@@ -21,9 +21,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use tokio_util::sync::CancellationToken;
 use badi_broker::model_selection::current_memory;
 use badi_broker::provider::{CompletionProvider, ProviderRequest};
 use badi_broker::semantic::client::ClientError;
@@ -32,6 +29,9 @@ use badi_broker::semantic::runtime::{
     LlamaCppLaunch, OwnedRuntime, RuntimeError, StableRuntimeIdentity, WritingProfile,
 };
 use badi_broker::writing::{self, WritingError, WritingLanguage};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 use transport::{LabObservation, LabStream, RequestTrace, TokenLogprob};
 
 pub const REQUEST_SCHEMA: &str = "badi.prediction-lab.request.v1";
