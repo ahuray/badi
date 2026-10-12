@@ -105,9 +105,11 @@ resident memory about 1.3 GB, and no quality regression in the Lab.
       Omawrite showed grey text at 275–293 ms, median 283 ms. Warm broker
       probes of those prefixes were 190–248 ms, median 192 ms. Skipping the
       extra inspection did not move the median. The gap above 250 ms is still
-      the generation after that read. A continuation can now show its first
-      finished word and lengthen up to four; visible time for that build has
-      not been measured.
+      the generation after that read. A continuation now shows its first
+      finished word and lengthens up to four. On build `2630744`
+      (2026-10-12, the same five prefixes) Omawrite's first grey text was
+      221–240 ms, median 225 ms. Five samples are not a p95, and Chromium
+      was not remeasured on this build.
 - [ ] Speculative decoding with a small draft model, or fewer generated tokens.
 - [ ] Qualify Qwen3 0.6B and Gemma 4 E2B (with its multi-token drafter) in the
       Lab. Defer hybrid-attention models until llama.cpp reuses their caches.
