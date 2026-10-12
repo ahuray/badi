@@ -117,13 +117,13 @@ Chromium's surrounding text current. Neither provides an editor transaction.
   its Fcitx panel, which Hyprland places at the app's text-input caret
   rectangle.
 - **Inspection.** A keystroke in a field already under observation inspects
-  at once, so the model can run during the pause. The suggestion stays hidden
-  until 120 ms after that keystroke, or 30 ms after a typed-through key. The
-  first look at a field, and an idle invalidation, still wait (120 ms, then
-  240, 480 and 960 ms). A busy observer is retried every 20 ms. Badi's timers ask
-  for 1 ms accuracy, because Fcitx's sd-event loop otherwise allows 250 ms of
-  slack. With debug on, `inspect_sent` and `inspect_answered` time each
-  inspection.
+  at once and reuses that field's session, so the model can run during the
+  pause. The suggestion stays hidden until 120 ms after that keystroke, or
+  30 ms after a typed-through key. The first look at a field, and an idle
+  invalidation, still wait (120 ms, then 240, 480 and 960 ms). A busy observer
+  is retried every 20 ms. Badi's timers ask for 1 ms accuracy, because Fcitx's
+  sd-event loop otherwise allows 250 ms of slack. With debug on,
+  `inspect_sent` and `inspect_answered` time each inspection.
 - **Invalidations.** One without input re-inspects after 240, 480 and 960 ms
   and then waits for input (`observer_awaiting_input`); a change of the field
   itself always waits.

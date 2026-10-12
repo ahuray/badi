@@ -39,6 +39,10 @@ bool observerAnswered(const nlohmann::json &reply);
 bool matchesObservedFocus(const nlohmann::json &captured, const nlohmann::json &observed,
                           bool requireLength = false);
 
+// The same accessible and policy target, even after the caret moves. A
+// keystroke is not a new field.
+bool sameObservedField(const nlohmann::json &captured, const nlohmann::json &observed);
+
 // Nullopt when the inspected field's metadata is malformed or names another
 // app; prior authority is then retired rather than falling back.
 std::optional<NativeEditTarget> inspectedEditTarget(const nlohmann::json &focus, std::string_view appId);
