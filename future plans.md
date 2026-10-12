@@ -98,8 +98,12 @@ resident memory about 1.3 GB, and no quality regression in the Lab.
       `libggml-cpu-alderlake.so`) reached four words in 206–248 ms on those
       prefixes. Six threads produced the same greedy text and were not faster,
       so the thread cap stays 4. A keystroke in a field already under
-      observation re-reads that field without a second inspection. Visible
-      time on that build has not been measured.
+      observation re-reads that field without a second inspection. On build
+      `7957f16` (2026-10-12, the same five prefixes, predictions left on)
+      Omawrite showed grey text at 275–293 ms, median 283 ms. Warm broker
+      probes of those prefixes were 190–248 ms, median 192 ms. Skipping the
+      extra inspection did not move the median. The gap above 250 ms is still
+      the generation after that read.
 - [ ] Speculative decoding with a small draft model, or fewer generated tokens.
 - [ ] Qualify Qwen3 0.6B and Gemma 4 E2B (with its multi-token drafter) in the
       Lab. Defer hybrid-attention models until llama.cpp reuses their caches.
