@@ -186,8 +186,9 @@ Item {
   }
 
   Timer {
-    interval: window.visible ? 3000 : 10000
-    running: true; repeat: true
+    interval: 3000
+    running: window.visible && !window.minimized
+    repeat: true
     onTriggered: { client.refresh(true); root.probeService() }
   }
   Timer { id: actionTimeout; interval: 20000; onTriggered: if (action.running) { root.actionTimedOut = true; action.signal(15); actionKill.restart() } }
