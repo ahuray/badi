@@ -93,6 +93,11 @@ resident memory about 1.3 GB, and no quality regression in the Lab.
       312–550 ms, median 458 ms, so the live path is already the warm cache.
       The next cut is fewer generated tokens or faster decode, measured before
       any production change. Neither live sample is large enough for a p95.
+      On this CPU a private runtime with the production flags (4 threads,
+      batch 16, context 512; the live process already loads
+      `libggml-cpu-alderlake.so`) reached four words in 206–248 ms on those
+      prefixes. Six threads produced the same greedy text and were not faster,
+      so the thread cap stays 4.
 - [ ] Speculative decoding with a small draft model, or fewer generated tokens.
 - [ ] Qualify Qwen3 0.6B and Gemma 4 E2B (with its multi-token drafter) in the
       Lab. Defer hybrid-attention models until llama.cpp reuses their caches.
