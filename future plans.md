@@ -88,13 +88,12 @@ Standing user decisions:
 Exit criteria: warm visible p50 ≤ 250 ms and p95 ≤ 500 ms with misses reported,
 resident memory about 1.3 GB, and no quality regression in the Lab.
 
-- [ ] Warm visible p50 is still above 250 ms in Omawrite. On build `206e782`
+- [x] Warm first grey word meets the sample thresholds on this machine.
+      On build `206e782`
       (2026-10-12, five disposable prefixes) Omawrite showed grey text at
       260–351 ms, median 278 ms. A disposable Chromium page on the same build
       showed 246–361 ms, median 248 ms. Cold probes of those prefixes took
       312–550 ms, median 458 ms, so the live path is already the warm cache.
-      The next cut is fewer generated tokens or faster decode, measured before
-      any production change. Neither live sample is large enough for a p95.
       On this CPU a private runtime with the production flags (4 threads,
       batch 16, context 512; the live process already loads
       `libggml-cpu-alderlake.so`) reached four words in 206–248 ms on those
@@ -110,7 +109,13 @@ resident memory about 1.3 GB, and no quality regression in the Lab.
       (2026-10-12, the same five prefixes) Omawrite's first grey text was
       221–240 ms, median 225 ms. The same build in a disposable Chromium
       textarea, after one warmup, showed 248, 236, 235 and 236 ms, and one
-      sample did not appear within 2.8 s. Five samples are not a p95.
+      sample did not appear within 2.8 s. That miss was the dismissed text
+      staying declined after the field was cleared; build `5faafcf` ends the
+      decline when the text changes. On that build, the same five prefixes
+      repeated four times (predictions left on): Omawrite 20/20 shown,
+      209–250 ms, middle 220–223, 19th of 20 is 244; Chromium 20/20 shown,
+      227–371 ms, middle 246–249, 19th of 20 is 314. No miss in these 40.
+      This is one machine and these prefixes.
 - [ ] Speculative decoding with a small draft model, or fewer generated tokens.
 - [ ] Qualify Qwen3 0.6B and Gemma 4 E2B (with its multi-token drafter) in the
       Lab. Defer hybrid-attention models until llama.cpp reuses their caches.
