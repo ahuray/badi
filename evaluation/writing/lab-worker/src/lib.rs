@@ -367,7 +367,7 @@ pub fn prepare_prompt(request: &Request) -> PreparedPrompt {
         Mode::Healed | Mode::InstructedHealed | Mode::NativeInstructed
     ) {
         if let Some(boundary) = writing::production_healed_echo(before, &request.language) {
-            echo = boundary.to_owned();
+            boundary.clone_into(&mut echo);
             before = &before[..before.len() - boundary.len()];
         }
     }
