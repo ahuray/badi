@@ -78,10 +78,10 @@ Standing user decisions:
       a 16×35 glyph box, with no weight. Omawrite 0.5.0 reports no font
       attributes and a zero glyph box, so its overlay keeps the caret-size
       fallback.
-- [ ] The headless Obsidian live lane (`adapters/obsidian/live.mjs
-      --headless`) leaves Electron SIGTRAP core dumps when it signals the
-      process group at teardown, and each dump makes Omarchy open a
-      crash-diagnosis agent. Close Electron cleanly first.
+- [x] The headless Obsidian live lane closes Electron without a process-group
+      signal. On 2026-10-12, `node adapters/obsidian/live.mjs --headless`
+      passed on Obsidian 1.13.7-2 and left no new core dump. Tab is not
+      pressed while a suggestion is absent, because that indents the line.
 
 ## Speed and footprint
 
