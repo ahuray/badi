@@ -32,6 +32,12 @@ differs from the last one observed.
 
 ## Sessions and targets
 
+An allowed `policy.status` may include `language_override` (`en`, `de` or
+`fa`). It takes precedence over the keyboard hint for requests and manual Tab
+eligibility. It grants no permission and is cleared with the policy on focus,
+field, authority or connection changes. The broker independently applies the
+same preference after admitting context.
+
 Each binding asks `policy.query` (id `fcitx.policy.<session UUID>`, one
 outstanding per session) and, once allowed, sends `session.open` (id
 `fcitx.open.<session UUID>`, revision 0, activation `always`, matching the
@@ -49,9 +55,10 @@ installed app policy). Both name the same target, a JSON object of at most
   }
   ```
 
-- **Observed field:** the observer's `inspect` target verbatim, `browser` with
-  `origin` for exact-origin policy, or `desktop_application` with the same
-  canonical app id.
+- **Observed field:** the observer's `inspect` target, `browser` with `origin`
+  for exact-origin policy, or `desktop_application`, both with the exact
+  canonical app id. The addon substitutes only its random field-visit target
+  id for broker quieting; observer requests retain the original target.
 
 The canonical app id is `InputContext::program()` folded to ASCII lowercase
 once at focus-in, accepted only when it matches

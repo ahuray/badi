@@ -69,6 +69,8 @@ pub struct Metrics {
     dismissals: AtomicU64,
     commits_prepared: AtomicU64,
     commits_applied: AtomicU64,
+    words_applied: AtomicU64,
+    words_dispatched: AtomicU64,
     commit_failures: AtomicU64,
     provider_errors: AtomicU64,
     no_suggestion: [AtomicU64; 8],
@@ -135,14 +137,26 @@ pub struct MetricsSnapshot {
     /// Absent from protocol v1 and from brokers that predate the breakdown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_suggestion: Option<NoSuggestionSnapshot>,
+    /// Word completions since broker start; absent from v1 and older brokers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub word_savings: Option<WordSavings>,
+}
+
+/// An estimate, not a document audit: partial words count and undo is unknown.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WordSavings {
+    pub applied: u64,
+    pub dispatched_unverified: u64,
 }
 
 impl MetricsSnapshot {
     /// The frozen protocol v1 counter set.
     #[must_use]
-    pub const fn without_no_suggestion(self) -> Self {
+    pub const fn for_protocol_v1(self) -> Self {
         Self {
             no_suggestion: None,
+            word_savings: None,
             ..self
         }
     }
@@ -200,6 +214,12 @@ impl Metrics {
         self.commits_applied.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_word_savings(&self, applied: u64, dispatched_unverified: u64) {
+        self.words_applied.fetch_add(applied, Ordering::Relaxed);
+        self.words_dispatched
+            .fetch_add(dispatched_unverified, Ordering::Relaxed);
+    }
+
     pub fn record_commit_failure(&self) {
         self.commit_failures.fetch_add(1, Ordering::Relaxed);
     }
@@ -239,6 +259,10 @@ impl Metrics {
             commits_applied: self.commits_applied.load(Ordering::Relaxed),
             commit_failures: self.commit_failures.load(Ordering::Relaxed),
             provider_errors: self.provider_errors.load(Ordering::Relaxed),
+            word_savings: Some(WordSavings {
+                applied: self.words_applied.load(Ordering::Relaxed),
+                dispatched_unverified: self.words_dispatched.load(Ordering::Relaxed),
+            }),
             no_suggestion: Some(NoSuggestionSnapshot {
                 request_abstained: count(NoSuggestionReason::RequestAbstained),
                 budget_prefill: count(NoSuggestionReason::BudgetPrefill),
@@ -293,10 +317,12 @@ mod tests {
         assert_eq!(value["no_suggestion"]["budget_prefill"], 1);
         assert_eq!(value["no_suggestion"]["last"], "budget_prefill");
         let legacy =
-            serde_json::to_value(metrics.snapshot().without_no_suggestion()).expect("legacy JSON");
+            serde_json::to_value(metrics.snapshot().for_protocol_v1()).expect("legacy JSON");
         assert!(legacy.get("no_suggestion").is_none());
+        assert!(legacy.get("word_savings").is_none());
         let decoded: MetricsSnapshot = serde_json::from_value(legacy).expect("older broker");
         assert_eq!(decoded.no_suggestion, None);
+        assert_eq!(decoded.word_savings, None);
         let mut unknown = value;
         unknown["no_suggestion"]["guessed"] = serde_json::json!(1);
         assert!(serde_json::from_value::<MetricsSnapshot>(unknown).is_err());

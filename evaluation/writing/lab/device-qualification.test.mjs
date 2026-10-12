@@ -111,9 +111,11 @@ test('settings bind the exact config JSON, requested languages, worker bytes and
   }
   assert.notEqual(digest(await qualification.settings(config, ['en'])), digest(initial));
   assert.notEqual(digest(await new DeviceQualification({ executable, prefillBatch: 64 }).settings(config, ['de', 'en'])), digest(initial));
+  assert.notEqual((await new DeviceQualification({ executable, memoryMap: false }).settings(config, ['de', 'en'])).runtime_identity, initial.runtime_identity);
   await writeFile(executable, 'Changed worker implementation.');
   assert.notEqual((await qualification.settings(config, ['de', 'en'])).runtime_identity, initial.runtime_identity);
-  for (const languages of [[], ['en', 'en'], ['fr'], 'en']) await assert.rejects(qualification.settings(config, languages));
+  assert.deepEqual((await qualification.settings(config, ['fr', 'es'])).languages, ['es', 'fr']);
+  for (const languages of [[], ['en', 'en'], ['it'], 'en']) await assert.rejects(qualification.settings(config, languages));
   assert.throws(() => new DeviceQualification({ prefillBatch: 32 }));
 });
 

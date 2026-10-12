@@ -29,6 +29,12 @@ and whether they were dirty (`--version` prints both; packagers may set
 - **Leases.** An adapter must report a granted commit within 1.5 s; retained
   context is revoked after 3 s of silence; v2 native and editor suggestions
   stay readable for 5 s. Anything stale, foreign or unknown fails closed.
+- **Growing previews.** Each extension has an immutable id and text. Earlier
+  versions remain acceptable only within the same generation, exact field
+  revision and original expiry, so a new word crossing Tab on the socket
+  cannot swallow the acceptance. Accepting or dismissing any version retires
+  them all; cancellation, focus changes and expiry revoke the whole group.
+  At most 64 versions fit the protocol's 64-character limit.
 - **Type-through** ([ADR 0004](../docs/decisions/0004-type-through-carries-text-not-authority.md)).
   The last shown continuation is kept as text only.
   - When a later admitted request in the same app or site keeps `after` and
@@ -62,7 +68,7 @@ exits 1 with `error_code=CODE` on stderr.
 badictl status            # health, metrics and no-suggestion classes
 badictl overview          # broker, settings, privacy and model readiness
 badictl settings show
-badictl settings replace --if-revision N --json DOCUMENT
+badictl settings replace --if-revision N --json -   # read the document from stdin
 badictl memory clear      # text-free origin and day aggregates
 badictl pause [on|off|toggle]
 badictl request | accept-word | accept-all | dismiss   # the sole active session
@@ -74,6 +80,16 @@ badictl models writing --json
 `status` counts each call that showed nothing once under `no_suggestion`
 (`request_abstained`, `budget_prefill`, `budget_stream`, `model_abstained`,
 `output_rejected`, `stale`, `timeout`, `provider_error`) and names the latest.
+Its optional v2 `word_savings` counts space-delimited word parts after a valid
+commit result, separately for `applied` and `dispatched_unverified`. Spelling
+replacements, failed, stale and expired results add nothing. Partial words
+count; later undo is unknown. All health counters reset at broker restart.
+The frozen v1 health response omits the new counters.
+
+Settings replacements accept a bounded UTF-8 document on stdin with `--json -`;
+the desktop helper and panel use this path so settings stay out of process
+arguments. Schema validation and revision compare-and-swap are identical to
+the legacy `--json DOCUMENT` form, which remains available for compatibility.
 `probe` runs text through the live provider and the same display checks as a
 suggestion, without a session, commit authority, counters or logs; `-` reads
 the text from standard input, which keeps it out of shell history. `models`
@@ -109,6 +125,21 @@ prints pinned download advice and downloads nothing
   the server stays at one slot. Prefill batches are 16 tokens so cancellation
   lands quickly; up to four threads. The GPU is not used: Vulkan on the Iris
   Xe was slower for these short requests.
+- **Memory.** CPU weights are copied instead of mapped, allowing repacking to
+  release the original allocation. A frozen 260-case UD r2.16 confirmation
+  comparison on 2026-10-13 produced identical raw and displayed output for
+  both loading modes, with no errors or deadline misses. The installed
+  broker plus runtime used 1.43 GB RSS (1.33 GiB) after twenty warm Chromium
+  trials, versus 2.10 GB before. This is RSS, not cgroup memory or a claim
+  about other model sizes and hardware. The model and prompt are unchanged.
+
+Field language is selected only after context admission, from the last 512
+Unicode scalars before the caret. `whatlang` 0.18 considers its full language
+inventory; Badi uses only confident (≥0.9), at least 32-scalar English,
+German or Persian detections. Otherwise the adapter hint stays. An explicit
+per-app language always wins. The text, fingerprint, caret and edit authority
+are unchanged, and no sample is retained. French and Spanish generation
+still requires independent qualification.
 
 ## Suggestion limits
 
@@ -151,15 +182,31 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   it does not join that word. End of text, punctuation, and a repeated space
   stay rejected. Ctrl+→ on that last word includes the space, and typing its
   first letters carries the space with the remainder.
+- **Language overrides.** Optional `language_overrides` settings map up to 64
+  canonical app ids to `en`, `de` or `fa`. `badi language APP TAG` sets one;
+  `reset` removes it. The broker applies the override only after context
+  validation and policy admission, before generation. It never grants text
+  access or changes editing authority. Settings changes retire live sessions.
+  Chromium's `chromium-browser` alias also follows a `chromium` override;
+  Brave and Zen retain their own app ids while sharing origin permissions.
+  Without an override, confident field detection takes precedence over the
+  adapter's existing language hint.
+  An admitted v2 `policy.status` includes the optional `language_override`
+  so Fcitx manual Tab eligibility also uses this preference. Protocol v1
+  responses omit it; broker-side context handling still applies it.
 - **Escape quiet.** Off by default (`badi escape-quiet off`; omit
   `escape_quiet_seconds` in settings), so a dismissal lasts only until the
   text changes, as the adapters decline it. With `badi escape-quiet SECONDS`
   (1–3600) or the panel presets, a dismissal arms a broker-side quiet bound
-  to its session and focus epoch: automatic generation abstains across edits
+  to its field visit: automatic generation abstains across edits
   with no provider call, counted as `request_abstained`, until the time runs
   out, the focus epoch ends, or an explicit request asks again, which ends
-  the quiet at once. Every context and request already carries `explicit`,
-  so no protocol change was needed and every adapter inherits it. During the
+  the quiet at once. Fcitx observed fields keep a random broker target id for
+  that exact field visit across observer rebinds. The broker retains only the
+  latest such dismissal (target and deadline); a newly authorized session may
+  inherit its denial, never its context or editing grants. Unknown native
+  fields and other adapters keep session-and-focus-bound quieting. Every
+  context and request already carries `explicit`, so no wire change is needed. During the
   quiet, adapters still inspect and publish context under their existing
   grants; the model is never called.
 - **Spelling** is English only and needs negotiated exact replacement of the

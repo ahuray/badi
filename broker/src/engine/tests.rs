@@ -33,6 +33,7 @@ struct CountingProvider {
     calls: AtomicU64,
     bytes: AtomicU64,
     delay: Duration,
+    languages: std::sync::Mutex<Vec<Option<String>>>,
 }
 
 struct PendingProvider {
@@ -77,6 +78,7 @@ impl CountingProvider {
             calls: AtomicU64::new(0),
             bytes: AtomicU64::new(0),
             delay,
+            languages: std::sync::Mutex::new(Vec::new()),
         }
     }
 }
@@ -93,6 +95,10 @@ impl CompletionProvider for CountingProvider {
         _cancellation: CancellationToken,
     ) -> Result<Option<String>, ProviderError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
+        self.languages
+            .lock()
+            .expect("languages")
+            .push(request.language.clone());
         self.bytes.fetch_add(
             u64::try_from(request.byte_len()).unwrap_or(u64::MAX),
             Ordering::Relaxed,
@@ -559,6 +565,118 @@ async fn a_growing_continuation_counts_as_one_shown_suggestion() {
     assert_eq!(full.text, " for the opportunity");
     assert_ne!(first.suggestion_id, full.suggestion_id);
     assert_eq!(broker.metrics().snapshot().suggestions_shown, 1);
+    broker
+        .session_control(
+            coordinates(id, 1),
+            SessionControlRequestPayload {
+                action: ControlAction::AcceptAll,
+                fingerprint: update.fingerprint.clone(),
+                suggestion_id: Some(first.suggestion_id),
+            },
+            None,
+        )
+        .await
+        .expect("accept the shorter version still displayed by the adapter");
+    let BrokerEvent::CommitPrepare { payload, .. } = events.recv().await.expect("commit") else {
+        panic!("expected the exact accepted version")
+    };
+    assert_eq!(payload.text, " for");
+    assert!(
+        broker
+            .session_control(
+                coordinates(id, 1),
+                SessionControlRequestPayload {
+                    action: ControlAction::AcceptAll,
+                    fingerprint: update.fingerprint,
+                    suggestion_id: Some(full.suggestion_id),
+                },
+                None,
+            )
+            .await
+            .is_err(),
+        "accepting any version retires every sibling"
+    );
+}
+
+#[tokio::test]
+async fn cancelling_a_growing_continuation_revokes_every_version() {
+    let (broker, id, mut events) = setup(
+        std::sync::Arc::new(GrowingProvider),
+        BrokerConfig::default(),
+    )
+    .await;
+    let mut update = context(1, FieldPurpose::Normal);
+    update.before = "Thank you".to_owned();
+    update.selection.anchor = u64::try_from(update.before.len()).expect("small fixture");
+    update.selection.head = update.selection.anchor;
+    broker
+        .update_context(coordinates(id, 1), update.clone())
+        .await
+        .expect("context");
+    broker
+        .request_suggestion(
+            coordinates(id, 1),
+            SuggestRequestPayload {
+                fingerprint: update.fingerprint.clone(),
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("request");
+    let BrokerEvent::SuggestionShow { payload: first, .. } =
+        timeout(Duration::from_millis(200), events.recv())
+            .await
+            .expect("deadline")
+            .expect("event")
+    else {
+        panic!("expected the first word")
+    };
+    assert_eq!(first.text, " for");
+    let BrokerEvent::SuggestionShow { payload: full, .. } =
+        timeout(Duration::from_millis(400), events.recv())
+            .await
+            .expect("deadline")
+            .expect("event")
+    else {
+        panic!("expected the extended suggestion")
+    };
+    assert_eq!(full.text, " for the opportunity");
+    assert_ne!(first.suggestion_id, full.suggestion_id);
+    broker
+        .cancel_suggestion(
+            coordinates(id, 1),
+            crate::protocol::SuggestCancelPayload {
+                fingerprint: update.fingerprint.clone(),
+                reason: ReasonCode::Stale,
+            },
+        )
+        .await
+        .expect("cancel");
+    let BrokerEvent::SuggestionClear { payload, .. } = events.recv().await.expect("clear") else {
+        panic!("expected group revocation")
+    };
+    assert!(
+        payload.suggestion_id.is_none(),
+        "revoke even a shorter displayed version"
+    );
+    for suggestion in [first, full] {
+        assert!(
+            broker
+                .session_control(
+                    coordinates(id, 1),
+                    SessionControlRequestPayload {
+                        action: ControlAction::AcceptAll,
+                        fingerprint: update.fingerprint.clone(),
+                        suggestion_id: Some(suggestion.suggestion_id),
+                    },
+                    None
+                )
+                .await
+                .is_err(),
+            "no revoked version can grant an edit"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1045,6 +1163,7 @@ fn controlled_settings(revision: u64, allowed: bool, learn: bool) -> SettingsV2 
         all_linux_apps: false,
         mid_line: false,
         escape_quiet_seconds: 0,
+        language_overrides: std::collections::BTreeMap::new(),
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,
@@ -1081,6 +1200,7 @@ fn controlled_learning_settings(revision: u64, retention: RetentionPermission) -
         all_linux_apps: false,
         mid_line: false,
         escape_quiet_seconds: 0,
+        language_overrides: std::collections::BTreeMap::new(),
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,
@@ -2258,7 +2378,43 @@ async fn applied_all_retires_pre_mutation_context_without_continuation() {
     assert!(events.try_recv().is_err());
     let metrics = broker.metrics().snapshot();
     assert_eq!(metrics.commits_applied, 1);
+    assert_eq!(metrics.word_savings.unwrap().applied, 2);
+    assert_eq!(metrics.word_savings.unwrap().dispatched_unverified, 0);
     assert_eq!(metrics.commit_failures, 0);
+}
+
+#[tokio::test]
+async fn native_dispatch_counts_words_once_without_claiming_applied_edits() {
+    let broker = Broker::new(
+        std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+        BrokerConfig {
+            debounce: Duration::ZERO,
+            ..BrokerConfig::default()
+        },
+    );
+    let (session_id, mut events) = open_observed_session(&broker, "field-1").await;
+    let (update, suggestion_id) =
+        prepare_commit_result_case(&broker, session_id, &mut events, ControlAction::AcceptAll)
+            .await;
+    let result = CommitResultPayload {
+        fingerprint: update.fingerprint,
+        suggestion_id,
+        status: CommitStatus::DispatchedUnverified,
+    };
+    broker
+        .commit_result(coordinates(session_id, 1), result.clone())
+        .await
+        .expect("dispatch result");
+    assert!(
+        broker
+            .commit_result(coordinates(session_id, 1), result)
+            .await
+            .is_err()
+    );
+    let metrics = broker.metrics().snapshot();
+    assert_eq!(metrics.commits_applied, 0);
+    assert_eq!(metrics.word_savings.unwrap().applied, 0);
+    assert_eq!(metrics.word_savings.unwrap().dispatched_unverified, 2);
 }
 
 #[tokio::test]
@@ -2292,6 +2448,7 @@ async fn applied_word_without_rebind_retires_remainder_and_context() {
     assert!(events.try_recv().is_err());
     let metrics = broker.metrics().snapshot();
     assert_eq!(metrics.commits_applied, 1);
+    assert_eq!(metrics.word_savings.unwrap().applied, 1);
     assert_eq!(metrics.commit_failures, 0);
 }
 
@@ -2343,6 +2500,10 @@ async fn terminal_commit_failures_revoke_pre_commit_context_authority() {
             Err(BrokerError::NoContext)
         ));
         assert_eq!(broker.metrics().snapshot().commit_failures, 1);
+        assert_eq!(
+            broker.metrics().snapshot().word_savings.unwrap(),
+            crate::metrics::WordSavings::default()
+        );
     }
 }
 
@@ -2826,6 +2987,44 @@ async fn durable_corrupt_store_deny_ack_advances_epoch_and_revokes_all_live_auth
 }
 
 #[tokio::test]
+async fn field_language_overrides_the_hint_without_rebinding_the_edit() {
+    let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
+    let broker = Broker::new(provider.clone(), BrokerConfig::default());
+    let (session_id, mut events) = open_observed_session(&broker, "field-language").await;
+    let mut update = context(1, FieldPurpose::Normal);
+    update.before = "Vielen Dank für Ihre freundliche Nachricht.".to_owned();
+    let fingerprint = update.fingerprint.clone();
+    broker
+        .update_context(coordinates(session_id, 1), update)
+        .await
+        .expect("context");
+    broker
+        .request_suggestion(
+            coordinates(session_id, 1),
+            SuggestRequestPayload {
+                fingerprint: fingerprint.clone(),
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("request");
+    let BrokerEvent::SuggestionShow { payload, .. } =
+        timeout(Duration::from_millis(100), events.recv())
+            .await
+            .expect("deadline")
+            .expect("event")
+    else {
+        panic!("suggestion");
+    };
+    assert_eq!(payload.fingerprint, fingerprint);
+    assert_eq!(
+        *provider.languages.lock().expect("languages"),
+        [Some("de".to_owned())]
+    );
+}
+
+#[tokio::test]
 async fn persisted_policy_is_enforced_and_replacement_revokes_live_sessions() {
     let temporary = tempdir().expect("temporary directory");
     let paths = StoragePaths::new(
@@ -2834,17 +3033,30 @@ async fn persisted_policy_is_enforced_and_replacement_revokes_live_sessions() {
     )
     .expect("storage paths");
     let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+    let mut settings = controlled_settings(1, true, false);
+    settings.language_overrides.insert(
+        "chromium".to_owned(),
+        crate::settings::PredictionLanguage::German,
+    );
     control_plane
-        .replace_settings(0, controlled_settings(1, true, false))
+        .replace_settings(0, settings)
         .expect("allow controlled origin");
+    let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
     let broker = Broker::with_control_plane(
-        std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+        provider.clone(),
         BrokerConfig::default(),
         std::sync::Arc::clone(&control_plane),
     )
     .expect("controlled broker");
+    assert_eq!(
+        broker
+            .resolve_policy(&controlled_target())
+            .await
+            .language_override,
+        Some(crate::settings::PredictionLanguage::German)
+    );
     let session_id = SessionId::new();
-    let (sink, _events) = mpsc::channel(8);
+    let (sink, mut events) = mpsc::channel(8);
     broker
         .open_session(
             coordinates(session_id, 0),
@@ -2857,10 +3069,33 @@ async fn persisted_policy_is_enforced_and_replacement_revokes_live_sessions() {
         )
         .await
         .expect("allowed session");
+    let mut update = context(1, FieldPurpose::Normal);
+    update.before = "Please remember the importance of testing.".to_owned();
     broker
-        .update_context(coordinates(session_id, 1), context(1, FieldPurpose::Normal))
+        .update_context(coordinates(session_id, 1), update)
         .await
         .expect("allowed context");
+    broker
+        .request_suggestion(
+            coordinates(session_id, 1),
+            SuggestRequestPayload {
+                fingerprint: context(1, FieldPurpose::Normal).fingerprint,
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("language override request");
+    assert!(matches!(
+        timeout(Duration::from_millis(100), events.recv())
+            .await
+            .expect("suggestion timeout"),
+        Some(BrokerEvent::SuggestionShow { .. })
+    ));
+    assert_eq!(
+        *provider.languages.lock().expect("languages"),
+        [Some("de".to_owned())]
+    );
 
     let snapshot = broker
         .replace_settings(1, controlled_settings(2, false, false))

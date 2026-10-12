@@ -666,7 +666,7 @@ class LockReplyTests(unittest.TestCase):
         process.communicate.return_value = (reply, None)
         with unittest.mock.patch.object(observer_desktop.subprocess, "Popen", return_value=process) as command:
             try:
-                with self.backend.desktop.lock_query():
+                with observer_desktop.LockQuery(self.backend.remaining):
                     pass
             finally:
                 self.assertEqual(command.call_args.args[0], self.LOCK_QUERY)
@@ -696,13 +696,13 @@ class LockReplyTests(unittest.TestCase):
                 self.check_lock(failure=failure)
         with unittest.mock.patch.object(observer_desktop.subprocess, "Popen", side_effect=FileNotFoundError("qs")), \
              self.assertRaisesRegex(Denied, "desktop_unavailable"):
-            with self.backend.desktop.lock_query():
+            with observer_desktop.LockQuery(self.backend.remaining):
                 self.fail("no field is read without a lock query")
         for path in ("", "relative/omarchy"):
             with self.subTest(path=path), unittest.mock.patch.dict(os.environ, {"OMARCHY_PATH": path}), \
                  unittest.mock.patch.object(observer_desktop.subprocess, "Popen") as command, \
                  self.assertRaisesRegex(Denied, "desktop_unavailable"):
-                with self.backend.desktop.lock_query():
+                with observer_desktop.LockQuery(self.backend.remaining):
                     self.fail("no field is read without a lock query")
             command.assert_not_called()
 
@@ -740,7 +740,7 @@ class LockQueryProcessTests(unittest.TestCase):
         self.backend = FieldBackend(None, APPS)
         self.backend.deadline = time.monotonic() + 30
         self.queries = []
-        start = self.backend.desktop.lock_query
+        start = lambda: observer_desktop.LockQuery(self.backend.remaining)
         self.backend.desktop.lock_query = lambda: self.queries.append(start()) or self.queries[-1]
 
     def answer(self, script):
@@ -1606,7 +1606,7 @@ class GeckoMetadataTests(unittest.TestCase):
         focus = self.inspect()["focus"]
         self.assertEqual((focus["binding"]["app_id"], focus["binding"]["uri"]), ("zen", GeckoFocusTests.PAGE))
         self.assertEqual({key: focus["target"][key] for key in ("kind", "app_id", "origin")},
-                         {"kind": "browser", "app_id": "chromium",
+                         {"kind": "browser", "app_id": "zen",
                           "origin": {"scheme": "http", "host": "127.0.0.1", "port": 47811}})
         for attributes in ({"tag": "input", "text-input-type": "text"}, {"tag": "div", "xml-roles": "textbox"}):
             self.node = self.field("entry", attributes)

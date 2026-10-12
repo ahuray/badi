@@ -677,7 +677,7 @@ impl MessageHandler<'_> {
             metrics: if self.protocol_version() == CURRENT_PROTOCOL_VERSION {
                 health.metrics
             } else {
-                health.metrics.without_no_suggestion()
+                health.metrics.for_protocol_v1()
             },
             active: health.active,
         };
@@ -688,7 +688,10 @@ impl MessageHandler<'_> {
         require_capability(self.authority, Capability::Policy)?;
         let payload: PolicyQueryPayload = envelope.decode_payload()?;
         payload.validate_for_version(self.protocol_version())?;
-        let status = self.broker.resolve_policy(&payload.target).await;
+        let mut status = self.broker.resolve_policy(&payload.target).await;
+        if self.protocol_version() == 1 {
+            status.language_override = None;
+        }
         self.reply(MessageType::PolicyStatus, envelope.id, &status)
     }
 
@@ -1394,6 +1397,7 @@ mod tests {
                     all_linux_apps: false,
                     mid_line: false,
                     escape_quiet_seconds: 0,
+                    language_overrides: std::collections::BTreeMap::new(),
                     subjects: vec![
                         SubjectRule {
                             identity: StableIdentity::browser_origin(

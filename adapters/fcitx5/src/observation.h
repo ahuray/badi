@@ -42,6 +42,8 @@ bool matchesObservedFocus(const nlohmann::json &captured, const nlohmann::json &
 // The same accessible and policy target, even after the caret moves. A
 // keystroke is not a new field.
 bool sameObservedField(const nlohmann::json &captured, const nlohmann::json &observed);
+// Previously verified identities only; preserves a denial, never an editing binding.
+bool sameObservedFieldIdentity(const nlohmann::json &previous, const nlohmann::json &current);
 
 // A snapshot of a field we already hold. The caret may have moved. The record
 // itself must still be a well-formed plain-text caret, and the caller still

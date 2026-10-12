@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -113,7 +114,12 @@ impl StableIdentity {
 
     pub fn from_target(target: &TargetDescriptor) -> Result<Self, IdentityError> {
         match target.kind {
-            TargetKind::Browser if target.app_id == "chromium" => {
+            TargetKind::Browser
+                if matches!(
+                    target.app_id.as_str(),
+                    "chromium" | "chromium-browser" | "brave-origin" | "zen"
+                ) =>
+            {
                 let origin = target.origin.as_ref().ok_or(IdentityError::MissingOrigin)?;
                 let scheme = match origin.scheme {
                     OriginScheme::Http => WebScheme::Http,
@@ -262,6 +268,29 @@ pub struct SubjectRule {
     pub permissions: SubjectPermissions,
 }
 
+/// Explicit languages already supported by the installed provider. New
+/// languages must pass qualification before they become settings values.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum PredictionLanguage {
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "de")]
+    German,
+    #[serde(rename = "fa")]
+    Persian,
+}
+
+impl PredictionLanguage {
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::English => "en",
+            Self::German => "de",
+            Self::Persian => "fa",
+        }
+    }
+}
+
 /// Settings v1 documents deserialize into this type, but it is always
 /// canonical settings v2 in memory and on disk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -293,6 +322,9 @@ pub struct SettingsV2 {
     /// only. Omitted when zero.
     #[serde(default, skip_serializing_if = "escape_quiet_seconds_is_zero")]
     pub escape_quiet_seconds: u64,
+    /// Per-app quality hints, independent of app/site acquisition permission.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub language_overrides: BTreeMap<String, PredictionLanguage>,
     pub subjects: Vec<SubjectRule>,
 }
 
@@ -316,7 +348,15 @@ struct SettingsDocument {
     mid_line: Option<bool>,
     #[serde(default)]
     escape_quiet_seconds: Option<u64>,
+    #[serde(default, deserialize_with = "present_language_overrides")]
+    language_overrides: Option<BTreeMap<String, PredictionLanguage>>,
     subjects: Vec<SubjectRule>,
+}
+
+fn present_language_overrides<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<BTreeMap<String, PredictionLanguage>>, D::Error> {
+    BTreeMap::deserialize(deserializer).map(Some)
 }
 
 impl<'de> Deserialize<'de> for SettingsV2 {
@@ -354,6 +394,11 @@ impl<'de> Deserialize<'de> for SettingsV2 {
                 "escape_quiet_seconds_requires_settings_v2",
             ));
         }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.language_overrides.is_some() {
+            return Err(serde::de::Error::custom(
+                "language_overrides_requires_settings_v2",
+            ));
+        }
         Ok(Self {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: decoded.revision,
@@ -362,12 +407,25 @@ impl<'de> Deserialize<'de> for SettingsV2 {
             all_linux_apps: decoded.all_linux_apps.unwrap_or(false),
             mid_line: decoded.mid_line.unwrap_or(false),
             escape_quiet_seconds: decoded.escape_quiet_seconds.unwrap_or(0),
+            language_overrides: decoded.language_overrides.unwrap_or_default(),
             subjects: decoded.subjects,
         })
     }
 }
 
 impl SettingsV2 {
+    #[must_use]
+    pub fn language_override(&self, target: &TargetDescriptor) -> Option<PredictionLanguage> {
+        let app = match target.app_id.as_str() {
+            "chromium-browser" => "chromium",
+            app => app,
+        };
+        self.language_overrides
+            .get(&target.app_id)
+            .or_else(|| self.language_overrides.get(app))
+            .copied()
+    }
+
     #[must_use]
     pub fn deny_by_default() -> Self {
         Self {
@@ -378,6 +436,7 @@ impl SettingsV2 {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            language_overrides: BTreeMap::new(),
             subjects: Vec::new(),
         }
     }
@@ -391,6 +450,14 @@ impl SettingsV2 {
         }
         if self.escape_quiet_seconds > MAX_ESCAPE_QUIET_SECONDS {
             return Err(SettingsValidationError::EscapeQuietOutOfRange);
+        }
+        if self.language_overrides.len() > MAX_SUBJECTS
+            || self
+                .language_overrides
+                .keys()
+                .any(|app| !valid_linux_app_id(app))
+        {
+            return Err(SettingsValidationError::InvalidLanguageOverride);
         }
         if self.subjects.len() > MAX_SUBJECTS {
             return Err(SettingsValidationError::TooManySubjects);
@@ -517,6 +584,10 @@ impl SettingsV2 {
     pub fn preserving_v2_policy_from(mut self, current: &Self) -> Self {
         self.all_web_origins = current.all_web_origins;
         self.all_linux_apps = current.all_linux_apps;
+        self.mid_line = current.mid_line;
+        self.escape_quiet_seconds = current.escape_quiet_seconds;
+        self.language_overrides
+            .clone_from(&current.language_overrides);
         self.subjects.extend(
             current
                 .subjects
@@ -1262,6 +1333,8 @@ pub enum IdentityError {
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum SettingsValidationError {
+    #[error("invalid_language_override")]
+    InvalidLanguageOverride,
     #[error("duplicate_identity")]
     DuplicateIdentity,
     #[error("escape_quiet_out_of_range")]
@@ -1372,6 +1445,7 @@ mod tests {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            language_overrides: std::collections::BTreeMap::new(),
             subjects: vec![rule],
         }
     }
@@ -1484,6 +1558,11 @@ mod tests {
             permissions: super::ALL_WEB_ORIGINS_PERMISSIONS,
         });
         current.all_web_origins = true;
+        current.mid_line = true;
+        current.escape_quiet_seconds = 60;
+        current
+            .language_overrides
+            .insert("omawrite".to_owned(), super::PredictionLanguage::German);
         let legacy = current.wire_document(1).expect("v1 wire document");
         assert!(legacy.get("all_web_origins").is_none());
         assert_eq!(legacy["subjects"], serde_json::json!([]));
@@ -1492,6 +1571,9 @@ mod tests {
         let merged = next.preserving_v2_policy_from(&current);
         assert!(merged.all_web_origins);
         assert_eq!(merged.subjects, current.subjects);
+        assert_eq!(merged.language_overrides, current.language_overrides);
+        assert_eq!(merged.mid_line, current.mid_line);
+        assert_eq!(merged.escape_quiet_seconds, current.escape_quiet_seconds);
         assert_eq!(
             current.wire_document(2).expect("v2 wire document")["all_web_origins"],
             true
@@ -1549,6 +1631,16 @@ mod tests {
             StableIdentity::from_target(&target).expect("known browser origin"),
             identity("example.com")
         );
+        for app in ["chromium-browser", "brave-origin", "zen"] {
+            assert_eq!(
+                StableIdentity::from_target(&TargetDescriptor {
+                    app_id: app.to_owned(),
+                    ..target.clone()
+                })
+                .expect("shared site policy"),
+                identity("example.com")
+            );
+        }
 
         for rejected in [
             TargetDescriptor {
@@ -1709,6 +1801,7 @@ mod tests {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            language_overrides: std::collections::BTreeMap::new(),
             subjects: vec![first.clone(), second.clone()],
         };
         valid.validate().expect("canonical settings");
@@ -1746,6 +1839,14 @@ mod tests {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            language_overrides: (0..MAX_SUBJECTS)
+                .map(|index| {
+                    (
+                        format!("app{index:03}{}", "a".repeat(122)),
+                        super::PredictionLanguage::German,
+                    )
+                })
+                .collect(),
             subjects,
         };
         settings.validate().expect("maximum-shape settings");

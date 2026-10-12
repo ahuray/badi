@@ -88,7 +88,7 @@ struct WireCallbacks {
     std::function<void()> onDisconnected;
     // (session, allowed, byDefault): byDefault marks an allowance from the app
     // list mode (matched_default), not from an exact rule.
-    std::function<void(std::string_view, bool, bool)> onPolicy;
+    std::function<void(std::string_view, bool, bool, std::string)> onPolicy;
 };
 
 class Transport {

@@ -32,6 +32,16 @@
       "maximum": 3600,
       "description": "Seconds a dismissal (Escape) keeps its field quiet for automatic suggestions, across edits, until the focus epoch ends or an explicit request asks again. When omitted, only the adapters' own until-edit decline applies. Producers omit the property when zero."
     },
+    "language_overrides": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "maxLength": 128,
+        "pattern": "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)*$"
+      },
+      "additionalProperties": { "enum": ["en", "de", "fa"] },
+      "description": "Explicit writing language by canonical app id. This never grants context access or suggestions; exact app/site policy still applies. Omitted when empty."
+    },
     "subjects": {
       "type": "array",
       "maxItems": 64,

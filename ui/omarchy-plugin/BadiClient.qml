@@ -14,6 +14,7 @@ Scope {
   property bool overviewInvalidated: false
   property bool mutationTimedOut: false
   property string pendingSuccessMessage: ""
+  property string pendingSettings: ""
   property bool preserveMessageOnRefresh: false
   property bool active: false
   property bool disposed: false
@@ -182,6 +183,16 @@ Scope {
           || value.escape_quiet_seconds < 1 || value.escape_quiet_seconds > 3600) return false
       keys.push("escape_quiet_seconds")
     }
+    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "language_overrides")) {
+      if (!isObject(value.language_overrides)) return false
+      var apps = Object.keys(value.language_overrides)
+      if (apps.length > 64) return false
+      for (var app = 0; app < apps.length; app += 1) {
+        if (apps[app].length > 128 || !/^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/.test(apps[app])
+            || ["en", "de", "fa"].indexOf(value.language_overrides[apps[app]]) < 0) return false
+      }
+      keys.push("language_overrides")
+    }
     if (!hasExactKeys(value, keys)
         || value.schema !== "badi.settings.v2"
         || !Number.isSafeInteger(value.revision)
@@ -267,10 +278,12 @@ Scope {
     message = ""
     mutationTimedOut = false
     mutationGeneration = lifecycleGeneration
+    pendingSettings = JSON.stringify(document)
+    mutationProcess.stdinEnabled = true
     mutationProcess.exec(cliPrefix.concat([
       "settings", "replace",
       "--if-revision", String(settingsRevision),
-      "--json", JSON.stringify(document)
+      "--json", "-"
     ]))
   }
 
@@ -281,6 +294,7 @@ Scope {
     refreshQueued = false
     queuedPreserveMessage = false
     pendingSuccessMessage = ""
+    pendingSettings = ""
     preserveMessageOnRefresh = false
     refreshDrain.stop()
     overviewTimeout.stop()
@@ -310,6 +324,7 @@ Scope {
   function dispose() {
     if (disposed) return
     disposed = true
+    pendingSettings = ""
     active = false
     lifecycleGeneration += 1
     refreshQueued = false
@@ -429,8 +444,15 @@ Scope {
     stdout: StdioCollector {}
     stderr: StdioCollector { id: mutationStderr }
 
-    onStarted: mutationTimeout.restart()
+    onStarted: {
+      mutationTimeout.restart()
+      if (root.active && !root.disposed && root.mutationGeneration === root.lifecycleGeneration)
+        write(root.pendingSettings)
+      root.pendingSettings = ""
+      stdinEnabled = false
+    }
     onExited: function(exitCode) {
+      root.pendingSettings = ""
       mutationTimeout.stop()
       mutationKillTimeout.stop()
       var exitedGeneration = root.mutationGeneration

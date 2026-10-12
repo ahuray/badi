@@ -82,6 +82,13 @@ runtime identity. **Export** downloads drafts and results only when you ask.
 Drafts and results live in page and server memory only: no localStorage, logs
 or automatic files.
 
+Prediction experiments and qualification accept English, German, French,
+Spanish and Persian. French and Spanish are **Lab only**: `production_boundary`
+still abstains for them. Their experimental output uses the existing Latin
+script and seam checks; those checks do not prove correct language or quality.
+Full-addition review remains necessary. The style-fact fence covers weekday
+names in all five languages. Spelling and word lookup retain their own coverage.
+
 | Mode | Tests |
 | --- | --- |
 | `production_boundary` | The installed provider exactly as production runs it (550 ms, eight tokens, its guards); context and style ignored |
@@ -145,7 +152,13 @@ Options: `--modes` (default `production_boundary,context`), `--budget-ms`
 550–10000, `--max-tokens` 8–64, `--seed`, `--cache-prompt true|false`,
 `--warm-prefix true` (one runtime per configuration, so a repeated prompt
 prefix can stay cached; not a counterbalanced cold comparison),
-`--prefill-batch 16|64`, `--model-artifact DESCRIPTOR`. Each run writes a new
+`--prefill-batch 16|64`, `--memory-map true|false` (default true),
+`--model-artifact DESCRIPTOR`. The memory-loading experiment changes only how
+the runtime loads weights, and records that choice in its verified identity
+and qualification identity. It does not change installed broker settings.
+The installed broker now uses copied weights; the Lab retains an explicit
+mapped default so existing experiment commands keep their loading mode.
+Each run writes a new
 private directory under the ignored `output/writing/`:
 - `run.json` freezes the inputs before inference;
 - `events.ndjson` holds progress and results;
@@ -181,6 +194,23 @@ Fixed runtime probes take no prompt or settings:
 runs the fixed paced-typing diagnostic. It compares `cold` and `primed` arms
 over append-only snapshots at 0/100/250/500 ms with a 550 ms deadline, and
 reports eligibility times, not visible UI delivery.
+
+The field-language diagnostic starts no model:
+
+```sh
+printf '%s\n' '{"id":"sample","before":"Vielen Dank für Ihre freundliche Nachricht."}' \
+  | target/release/badi-writing-lab --detect-language
+```
+
+It reads bounded JSON lines and emits only the sample id, selected language
+(or `null`) and elapsed microseconds. It calls the broker's exact selector.
+After development on 5,700 UD r2.16 dev prefixes, a frozen confirmation rule
+(32–512 Unicode scalars, confidence ≥0.9, only EN/DE/FA eligible) selected
+30/100 English, 23/40 German and 22/40 Persian test prefixes correctly, with
+no selections on the 40 French or 40 Spanish cases. All 75 selections were
+correct and the broker diagnostic matched the frozen candidate. These are
+language-selection results, not suggestion usefulness or new-language
+qualification. Short and uncertain input retains its adapter hint.
 
 ## Local API
 

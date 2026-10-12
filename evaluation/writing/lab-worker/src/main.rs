@@ -33,16 +33,26 @@ struct LabOptions {
     directory: PathBuf,
     artifact: Option<badi_writing_lab::artifact::ModelArtifactOverride>,
     prefill_batch: badi_writing_lab::PrefillBatch,
+    memory_map: bool,
 }
 
 fn lab_options_from(args: &[std::ffi::OsString]) -> Result<LabOptions, &'static str> {
     let mut directory = None;
     let mut descriptor = None;
     let mut prefill_batch = None;
+    let mut memory_map = None;
     let mut pairs = args.chunks_exact(2);
     for pair in &mut pairs {
         if pair[0] == "--prefill-batch" && prefill_batch.is_none() {
             prefill_batch = Some(badi_writing_lab::PrefillBatch::parse(&pair[1])?);
+            continue;
+        }
+        if pair[0] == "--memory-map" && memory_map.is_none() {
+            memory_map = Some(match pair[1].to_str() {
+                Some("true") => true,
+                Some("false") => false,
+                _ => return Err("invalid_arguments"),
+            });
             continue;
         }
         let path = PathBuf::from(&pair[1]);
@@ -67,11 +77,19 @@ fn lab_options_from(args: &[std::ffi::OsString]) -> Result<LabOptions, &'static 
         directory: directory.map_or_else(|| directory_from(&[]), Ok)?,
         artifact,
         prefill_batch: prefill_batch.unwrap_or_default(),
+        memory_map: memory_map.unwrap_or(true),
     })
 }
 
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "--detect-language") {
+        if let Err(code) = detect_languages(&args[1..]) {
+            let _ = error(None, code);
+            std::process::exit(1);
+        }
+        return;
+    }
     if args.first().is_some_and(|arg| {
         arg == "--inspect-device" || arg == "--assess-model" || arg == "--rank-models"
     }) {
@@ -120,6 +138,46 @@ fn main() {
         }
     }
     run_worker();
+}
+
+/// Content-free results for explicit Lab samples; no runtime is started.
+fn detect_languages(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Sample {
+        id: String,
+        before: String,
+    }
+    if !args.is_empty() {
+        return Err("invalid_arguments");
+    }
+    let mut input = std::io::stdin().lock();
+    loop {
+        let mut frame = Vec::new();
+        let read = input
+            .by_ref()
+            .take((MAX_FRAME_BYTES + 1) as u64)
+            .read_until(b'\n', &mut frame)
+            .map_err(|_| "invalid_frame")?;
+        if read == 0 {
+            return Ok(());
+        }
+        if frame.len() > MAX_FRAME_BYTES || frame.last() != Some(&b'\n') {
+            return Err("invalid_frame");
+        }
+        let sample: Sample = serde_json::from_slice(&frame).map_err(|_| "invalid_request")?;
+        if sample.id.is_empty() || sample.id.len() > 128 || sample.id.chars().any(char::is_control)
+        {
+            return Err("invalid_request");
+        }
+        let started = std::time::Instant::now();
+        let language = badi_broker::language::detect_field_language(&sample.before);
+        emit(
+            &json!({"schema":"badi.field-language.result.v1", "id":sample.id,
+            "language":language, "elapsed_us":started.elapsed().as_secs_f64() * 1_000_000.0}),
+        )
+        .map_err(|_| "output_closed")?;
+    }
 }
 
 fn qualification(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
@@ -235,6 +293,7 @@ async fn paced_probe(args: &[std::ffi::OsString]) -> Result<bool, &'static str> 
         directory,
         artifact,
         prefill_batch,
+        memory_map,
     } = lab_options_from(args)?;
     let cancellation = ProbeCancellation::default();
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
@@ -293,6 +352,7 @@ async fn paced_probe(args: &[std::ffi::OsString]) -> Result<bool, &'static str> 
         directory,
         artifact,
         prefill_batch,
+        memory_map,
         input,
         cancellation,
         |ready| emit(&serde_json::to_value(ready).map_err(|_| ())?).map_err(|_| ()),
@@ -351,6 +411,7 @@ async fn worker(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
         directory,
         artifact,
         prefill_batch,
+        memory_map,
     } = lab_options_from(args)?;
     let cancellation = CancellationToken::new();
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
@@ -395,7 +456,7 @@ async fn worker(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
     let runtime = tokio::select! {
         biased;
         () = cancellation.cancelled() => return Ok(()),
-        runtime = badi_writing_lab::activate_with_options(directory, artifact, prefill_batch) => runtime.map_err(|_| "runtime_start_failed")?,
+        runtime = badi_writing_lab::activate_with_options(directory, artifact, prefill_batch, memory_map) => runtime.map_err(|_| "runtime_start_failed")?,
     };
     emit(
         &json!({"type":"ready","identity":runtime.identity(),"runtime_pid":runtime.process_id(),
@@ -461,6 +522,15 @@ mod tests {
             lab_options_from(&args).unwrap().prefill_batch,
             PrefillBatch::Tokens16
         );
+        assert!(lab_options_from(&args).unwrap().memory_map);
+        let mut copied = args.clone();
+        copied.extend(["--memory-map".into(), "false".into()]);
+        assert!(!lab_options_from(&copied).unwrap().memory_map);
+        copied.extend(["--memory-map".into(), "true".into()]);
+        assert!(lab_options_from(&copied).is_err());
+        let mut invalid_loading = args.clone();
+        invalid_loading.extend(["--memory-map".into(), "0".into()]);
+        assert!(lab_options_from(&invalid_loading).is_err());
         for (value, expected) in [
             ("16", PrefillBatch::Tokens16),
             ("64", PrefillBatch::Tokens64),

@@ -135,7 +135,7 @@ class ContractTests(unittest.TestCase):
     def test_brave_shares_chromium_site_policy_but_keeps_its_binding(self):
         self.backend.meta.update(app_id="brave-origin")
         focus = self.observer.request({"schema": SCHEMA, "id": "1", "op": "inspect", "app_id": "brave-origin"})["focus"]
-        self.assertEqual((focus["target"]["kind"], focus["target"]["app_id"]), ("browser", "chromium"))
+        self.assertEqual((focus["target"]["kind"], focus["target"]["app_id"]), ("browser", "brave-origin"))
         self.assertEqual(focus["target"]["origin"], {"scheme": "https", "host": "example.test"})
         self.assertEqual(focus["binding"]["app_id"], "brave-origin")
 

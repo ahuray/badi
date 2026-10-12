@@ -14,7 +14,9 @@ use badi_broker::protocol::{
     ProtocolError, ProviderKind, ReasonCode, SessionControlRequestPayload, SettingsReplacePayload,
     SettingsStatusPayload, WireEnvelope,
 };
-use badi_broker::settings::{PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV2};
+use badi_broker::settings::{
+    MAX_SETTINGS_BYTES, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV2,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -51,7 +53,7 @@ async fn run() -> Result<(), CliError> {
         } => {
             // Read standard input before connecting, so typing it cannot
             // outlast the handshake timeout.
-            let command = with_probe_stdin(command).await?;
+            let command = with_stdin(command).await?;
             let mut stream = connect(&socket_path).await?;
             println!("{}", broker_report(&mut stream, command).await?);
         }
@@ -93,6 +95,7 @@ async fn broker_report(stream: &mut UnixStream, command: Command) -> Result<Stri
             let status = exchange(stream, request, validate_settings_response).await?;
             serde_json::to_string_pretty(&status.document)?
         }
+        Command::SettingsReplaceStdin { .. } => return Err(CliError::Arguments),
         Command::MemoryClear => {
             let request = cli_global(MessageType::MemoryClear, &serde_json::json!({}))?;
             let memory = exchange(stream, request, validate_memory_response).await?;
@@ -114,7 +117,10 @@ async fn broker_report(stream: &mut UnixStream, command: Command) -> Result<Stri
     })
 }
 
-async fn with_probe_stdin(command: Command) -> Result<Command, CliError> {
+async fn with_stdin(command: Command) -> Result<Command, CliError> {
+    if let Command::SettingsReplaceStdin { expected_revision } = command {
+        return read_settings_stdin(tokio::io::stdin(), expected_revision).await;
+    }
     let Command::Probe {
         mut payload,
         text_from_stdin: true,
@@ -128,6 +134,25 @@ async fn with_probe_stdin(command: Command) -> Result<Command, CliError> {
         payload,
         text_from_stdin: false,
     })
+}
+
+async fn read_settings_stdin<R: tokio::io::AsyncRead + Unpin>(
+    reader: R,
+    expected_revision: u64,
+) -> Result<Command, CliError> {
+    use tokio::io::AsyncReadExt as _;
+    let mut bytes = Vec::new();
+    reader
+        .take((MAX_SETTINGS_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .await?;
+    if bytes.len() > MAX_SETTINGS_BYTES {
+        return Err(CliError::Arguments);
+    }
+    settings_replacement(
+        expected_revision,
+        std::str::from_utf8(&bytes).map_err(|_| CliError::Arguments)?,
+    )
 }
 
 /// Reads probe text without placing it in argv (visible to other local users
@@ -652,7 +677,7 @@ fn cli_session<P: Serialize>(
 const CLI_USAGE: &str = "Usage: badictl [--socket ABSOLUTE] COMMAND\n\
 Local commands:\n  hardware [--json]       Inspect content-free hardware capabilities\n  models [USE] [--json]   Recommend pinned local models; USE is writing or code\n\
 Broker commands:\n  status [--json]  Show content-free broker status as JSON\n  request          Request a suggestion for the sole active session\n  accept-word      Accept the authorized first word-part\n  accept-all       Accept the authorized full suggestion\n  dismiss          Dismiss the current suggestion\n  pause [MODE]     MODE is on, off, or toggle (default)\n\
-  overview [--json]  Show broker, policy, privacy, and model readiness\n  settings show [--json]\n                    Show the strict badi.settings.v2 document\n  settings replace --if-revision N --json DOCUMENT\n                    Replace settings with compare-and-swap protection\n  memory clear      Clear local text-free origin/day interaction aggregates\n\
+  overview [--json]  Show broker, policy, privacy, and model readiness\n  settings show [--json]\n                    Show the strict badi.settings.v2 document\n  settings replace --if-revision N --json DOCUMENT|-\n                    Replace settings with compare-and-swap protection; - reads\n                    a bounded document from stdin, keeping it out of argv\n  memory clear      Clear local text-free origin/day interaction aggregates\n\
   probe [--language TAG] [--after TEXT] [--replace] [--explicit] [--] TEXT|-\n                    Run TEXT (before the caret) through the live provider and\n                    display checks; print JSON. The broker opens no session or\n                    commit and stores nothing. Arguments stay in shell history\n                    and the process list; - reads TEXT from stdin instead.\n                    TAG defaults to en; --replace allows spelling replacement;\n                    --explicit uses the Tab-request budget (1200 ms, not 550 ms)\n\
 Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n  --version          Print the version and embedded source commit\n";
 
@@ -818,28 +843,38 @@ fn parse_settings_command(arguments: &[String]) -> Result<Command, CliError> {
                 && json_flag == "--json" =>
         {
             let expected_revision = revision.parse::<u64>().map_err(|_| CliError::Arguments)?;
-            let document: Value =
-                serde_json::from_str(document).map_err(|_| CliError::Arguments)?;
-            if !has_current_settings_schema(&document) {
+            if expected_revision >= MAX_SAFE_COUNTER {
                 return Err(CliError::Arguments);
             }
-            let settings: SettingsV2 =
-                serde_json::from_value(document.clone()).map_err(|_| CliError::Arguments)?;
-            settings.validate().map_err(|_| CliError::Arguments)?;
-            let next_revision = expected_revision
-                .checked_add(1)
-                .filter(|revision| *revision <= MAX_SAFE_COUNTER)
-                .ok_or(CliError::Arguments)?;
-            if settings.revision != next_revision {
-                return Err(CliError::Arguments);
+            if document == "-" {
+                Ok(Command::SettingsReplaceStdin { expected_revision })
+            } else {
+                settings_replacement(expected_revision, document)
             }
-            Ok(Command::SettingsReplace {
-                expected_revision,
-                document,
-            })
         }
         _ => Err(CliError::Arguments),
     }
+}
+
+fn settings_replacement(expected_revision: u64, json: &str) -> Result<Command, CliError> {
+    let document: Value = serde_json::from_str(json).map_err(|_| CliError::Arguments)?;
+    if !has_current_settings_schema(&document) {
+        return Err(CliError::Arguments);
+    }
+    let settings: SettingsV2 =
+        serde_json::from_value(document.clone()).map_err(|_| CliError::Arguments)?;
+    settings.validate().map_err(|_| CliError::Arguments)?;
+    let next_revision = expected_revision
+        .checked_add(1)
+        .filter(|revision| *revision <= MAX_SAFE_COUNTER)
+        .ok_or(CliError::Arguments)?;
+    if settings.revision != next_revision {
+        return Err(CliError::Arguments);
+    }
+    Ok(Command::SettingsReplace {
+        expected_revision,
+        document,
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -856,6 +891,9 @@ enum Command {
     SettingsReplace {
         expected_revision: u64,
         document: Value,
+    },
+    SettingsReplaceStdin {
+        expected_revision: u64,
     },
     SettingsShow,
     Status,
@@ -1333,6 +1371,42 @@ mod tests {
             ])),
             Err(CliError::Arguments)
         ));
+    }
+
+    #[tokio::test]
+    async fn settings_stdin_is_bounded_and_uses_the_same_schema_and_revision_checks() {
+        let valid = br#"{"schema":"badi.settings.v2","revision":1,"paused":true,"subjects":[]}"#;
+        let parsed = parse_arguments(arguments(&[
+            "--socket",
+            "/tmp/broker.sock",
+            "settings",
+            "replace",
+            "--if-revision",
+            "0",
+            "--json",
+            "-",
+        ]))
+        .expect("stdin option");
+        assert!(matches!(
+            parsed,
+            ParsedCommand::Remote {
+                command: Command::SettingsReplaceStdin {
+                    expected_revision: 0
+                },
+                ..
+            }
+        ));
+        assert_eq!(
+            super::read_settings_stdin(&valid[..], 0)
+                .await
+                .expect("stdin document"),
+            super::settings_replacement(0, std::str::from_utf8(valid).unwrap()).unwrap()
+        );
+        let oversized = vec![b' '; super::MAX_SETTINGS_BYTES + 1];
+        for invalid in [&b""[..], &b"\xff"[..], &b"{}"[..], &oversized[..]] {
+            assert!(super::read_settings_stdin(invalid, 0).await.is_err());
+        }
+        assert!(super::read_settings_stdin(&valid[..], 1).await.is_err());
     }
 
     #[test]

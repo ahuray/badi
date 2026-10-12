@@ -18,19 +18,13 @@ snapshot of the parity work is in
   no model call ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md)).
   The inline preview reaches VS Code, iframe editors, Qt apps (Telegram,
   Omawrite) and LibreOffice Writer.
-- **Speed:** before inspection moved to the keystroke, a new suggestion was
-  visible 0.35–0.39 s after the last key in Chromium: about 120 ms of pause,
-  25 ms of inspection and policy, and 210 ms of model and display. On
-  2026-10-12, Omawrite 0.5.0 with keystroke inspection (build `f657f7c`) showed
-  grey text at 266, 329, 347, 350 and 392 ms (median 347 ms). Reusing the
-  session for a keystroke in the same field (build `206e782`) showed 260, 267,
-  278, 322 and 351 ms (median 278 ms). The same build in a disposable
-  Chromium page showed 246, 247, 248, 253 and 361 ms (median 248 ms). These
-  are five prefixes each, not a p95. Cold `badictl probe` calls for those same
-  prefixes, which do not reuse a keystroke cache, took 312, 405, 458, 461 and
-  550 ms (median 458). The live figures are the warm path. The KV cache is
-  already reused between keystrokes. Before the timer accuracy fix
-  (2026-10-06), Fcitx's 250 ms timer slack made Chromium 0.40–0.62 s.
+- **Speed and footprint:** the latest installed Chromium sample showed and
+  accepted 20/20 warm suggestions, p50 228 ms / p95 284 ms, with zero
+  wrong-field edits ([live evidence](adapters/fcitx5/README.md#tested-with)).
+  The broker and runtime used 1.43 GB RSS (1.33 GiB) after an independently
+  checked loading change; model and prompt are unchanged
+  ([runtime](broker/README.md#writing-model-runtime)). These are bounded
+  samples on this machine, not universal latency or language-quality claims.
 - **GPU:** Vulkan on the Iris Xe is slower per keystroke (13–20 against 19–30
   tokens/s for generation) and faster only for long cold prompts, so Badi stays
   on the CPU.
@@ -46,21 +40,11 @@ Standing user decisions:
 - promote a quality fix only without a per-language harm increase;
 - keep the model resident;
 - explicit requests get about 1.2 s;
-- Tab accepts all and Ctrl+→ one word on Fcitx fields.
-
-## Open decisions for the user
-
-1. **Context beyond the field.** Cotypist reads on-screen context, but the
-   [context firewall](VISION.md#context-firewall) forbids screen scraping. The
-   compatible option is an opt-in, per-app read of the same window's
-   accessibility text, such as the message being answered. Either way it needs
-   a VISION amendment.
-2. **Learning:** opt-in style learning from accepted suggestions and chosen
-   samples, stored encrypted locally with one-step deletion, or none.
-3. **Distribution:** an AUR package first, then a proposal to Omarchy. Both are
-   publication and need a naming and licence review.
-4. **Discord:** a launcher that re-adds its accessibility switch before every
-   start, or the desktop-wide AT-SPI `ScreenReaderEnabled` setting.
+- Tab accepts all and Ctrl+→ one word on Fcitx fields;
+- distribution starts with an AUR package; publication and an Omarchy proposal
+  still need approval after naming and licence review;
+- Discord uses desktop-wide AT-SPI `ScreenReaderEnabled`, with recorded prior
+  settings and unchanged Badi app/site permissions (confirmed 2026-10-13).
 
 ## Interaction
 
@@ -166,8 +150,10 @@ resident memory about 1.3 GB, and no quality regression in the Lab.
 Exit criteria: on a fresh Omarchy install, one menu action covers install,
 suggestion, acceptance, update and uninstall, leaving nothing behind.
 
-- [ ] A PKGBUILD with the addon in `/usr/lib/fcitx5`, the broker, observer and
-      user units; the model downloads in a separate pinned, hash-verified step.
+- [ ] Verify install/update/removal of the [AUR candidate](packaging/aur/README.md)
+      on fresh Omarchy before publication. It
+      packages the addon, broker, observer and user units; writing assets are
+      a separate pinned, hash-verified download.
 - [ ] Omarchy integration in the style of Voxtype's: a first-run invitation
       (`omarchy-done ensure`, `omarchy-notification-send --exec`), a
       floating-terminal installer, menu entries for settings and removal,
@@ -184,18 +170,43 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 ## Better suggestions
 
+The user confirmed on 2026-10-12: window context and learning stay on the
+device, with global and per-app opt-outs. Language work prioritizes English,
+German, French and Spanish; existing Persian behavior keeps its regression
+gates. The [context firewall](VISION.md#context-firewall) owns this contract.
+
+- [ ] Implement bounded same-window accessibility context with separate
+      global and per-app controls, sensitive-node and cross-origin exclusion,
+      ephemeral storage and cancellation on scope or focus changes. No extra
+      context reaches production inference before independent Lab evidence.
+- [ ] Implement local style learning from authorized samples, encrypted
+      storage, global and per-app opt-outs, and one-step deletion; verify
+      that disabling it stops reads and writes and that draft facts win.
+- [ ] Qualify French and Spanish before enabling them. Gather independently
+      reviewed confirmation prefixes and full-addition reviews for both,
+      alongside the existing English, German and Persian confirmation gate.
+
 Promoting a model needs a new hypothesis, fresh independent cases, native
 Persian review where results are ambiguous and the full Lab qualification.
 
-- [ ] Freeze an independent confirmation set you provide or approve, not
-      assistant-written text: at least 100 English, 40 German and 40 Persian
-      prefixes. Report usefulness, abstention, errors, useful words, keystroke
-      savings and latency misses separately before any model or prompt promotion.
-- [ ] Detect the language from the field's text, with a per-app override,
-      instead of the keyboard layout.
+- [ ] Complete qualification on the user-approved public confirmation set:
+      UD r2.16 test, 100 English and 40 each German, French, Spanish and Persian
+      prefixes. It is frozen privately at
+      `output/writing/confirmation-ud-r2.16-2026-10-12/suite.json`, SHA-256
+      `72a69d10d9ec6b261373a6f382b203b512290eb3bff2b71c3b3ee3efd769c1cc`,
+      with source hashes, licenses and approval. Select and freeze the candidate
+      on development data before inference. The set's first use is the frozen
+      runtime-loading equivalence comparison, followed by the frozen field-language
+      selector check. Neither is a full model or language quality qualification. Report
+      usefulness, abstention, errors, useful words, keystroke savings and latency
+      misses separately; review full additions before model or prompt promotion.
+- [ ] Improve short-fragment language coverage without reducing precision.
+      The conservative field selector keeps the adapter hint for short or
+      uncertain text; explicit per-app overrides remain available
+      ([contract](broker/README.md#writing-model-runtime)). French and Spanish
+      remain Lab-only until their generation quality passes independently.
 - [ ] Global and per-app instructions, and a strength setting that trades
       frequency for confidence.
-- [ ] Content-free statistics in the panel: shown, accepted, words saved.
 - [ ] Cut the latency of the combined instruction/boundary mode (18/22 useful
       in development, 2.8 s cold median) and confirm it independently.
 - [ ] Keep facts in style examples from overriding the draft; confirm the Lab's
@@ -217,8 +228,6 @@ Persian review where results are ambiguous and the full Lab qualification.
 
 From the 2026-10-11 audit. These are not part of the installed behavior.
 
-- [ ] The observer spawns `qs ipc` on every inspection
-      (`adapters/accessibility/desktop.py`).
 - [ ] Browser event cost on large pages (`daemon.py` focus handling and
       `field.py` serialization).
 - [x] The grey preview follows a scroll reported on the armed field or a
@@ -234,9 +243,6 @@ From the 2026-10-11 audit. These are not part of the installed behavior.
       toggled from the bar, and the next time the window opens.
 - [x] Bash's Readline timer runs only while a grey preview is held
       (`preview.c`). An idle prompt does not wake every 100 ms.
-- [ ] `badi doctor` in human-readable text as well as JSON.
-- [ ] Stop passing the settings document on the `badi` command line
-      (`badi-desktop.py`).
 - [ ] Split `broker/src/settings.rs`, `broker/src/engine/tests.rs` and
       `adapters/fcitx5/addon.cpp`.
 
@@ -245,7 +251,7 @@ From the 2026-10-11 audit. These are not part of the installed behavior.
 - [ ] Browser rich editors: a caret inside a list or quote, EditContext editors
       (VS Code's default, CodeMirror on recent Chromium), multi-paragraph fields
       in Zen (Gecko sends only the caret's paragraph) and Firefox.
-- [ ] Discord (decision 4); a composer trial needs a private channel, since
+- [ ] Discord with desktop-wide accessibility; a composer trial needs a private channel, since
       typing shows an indicator.
 - [ ] Grok Bot composer trial in the signed-in app after a relaunch with
       `grok-bot-flags.conf`.

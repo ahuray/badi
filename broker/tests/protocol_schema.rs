@@ -542,9 +542,10 @@ fn diagnostics_are_v2_only_and_match_broker_payloads() {
         }))
         .expect("v1 metrics schema");
         assert!(!v1_metrics.is_valid(&serde_json::to_value(snapshot).expect("full metrics")));
-        assert!(v1_metrics.is_valid(
-            &serde_json::to_value(snapshot.without_no_suggestion()).expect("v1 metrics")
-        ));
+        assert!(
+            v1_metrics
+                .is_valid(&serde_json::to_value(snapshot.for_protocol_v1()).expect("v1 metrics"))
+        );
     }
 
     for result in [

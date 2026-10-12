@@ -62,7 +62,7 @@ Linux in general.
 | Grok Bot | Ready, but its composer is untested | 0.35 |
 
 **Not yet:**
-- Discord: it drops the accessibility flag Badi needs.
+- Discord: desktop-wide accessibility can be enabled, but its composer is unverified.
 - Firefox and Gecko builds other than Zen.
 - Editors built on Chromium's EditContext (VS Code's default, CodeMirror on
   recent Chromium).
@@ -92,8 +92,14 @@ second restores the mistyped word. Telegram and Xournal++ have not been retried.
 Chromium-based apps must start with `--force-renderer-accessibility=complete`.
 `install-desktop.py --observed-app chromium|brave-origin|chatgpt|code|cursor|grok-bot`
 adds it to that app's flags file; Zen needs nothing.
+For Discord, `install-desktop.py --screen-reader-accessibility` opts into
+desktop-wide accessibility with recorded rollback values
+([scope and rollback](adapters/accessibility/README.md#installation-and-the-renderer-flag)).
 
 ## Install
+
+An [AUR package candidate](packaging/aur/README.md) is available for local
+review; it has not been published. The current desktop installer remains:
 
 On Omarchy with Fcitx 5, from this checkout:
 
@@ -131,6 +137,7 @@ badi status
 badi pause                          # persists across restarts; badi resume
 badi mid-line on                    # suggestions when a word follows the caret; off by default
 badi escape-quiet 60                # a dismissal keeps its field quiet for a minute; off by default
+badi language brave-origin de      # use German in Brave; en, de, fa, or reset
 badi app telegram on                # allow an app
 badi site https://example.com on    # allow a website (Chromium, Brave and Zen share it)
 badi autostart on
@@ -154,11 +161,21 @@ A field the toolkit marks as a password is refused in every mode. A normal
 text field is not treated as sensitive from its label, placeholder, or
 autocomplete hint. The **b** mark in the
 Omarchy bar opens the same settings, and right-clicking it pauses Badi.
+Its Writing view shows content-free shown and accepted counts and estimated
+words saved since model start ([counter definitions](ui/omarchy-plugin/README.md#statistics)).
+
+A language override takes precedence over detection and the adapter's hint
+without granting access to an app or website. `badi language APP reset`
+restores automatic selection. For longer text, Badi conservatively detects
+English, German or Persian from the authorized field; short or uncertain
+text keeps the app or keyboard hint. French and Spanish generation remain
+in the Lab until qualified.
 
 ## When nothing appears
 
 ```sh
 badi doctor                  # setup and startup problems
+badi doctor --json           # the same diagnosis for tools; exit 1 on problems
 badi debug on                # then: badi debug watch, and type in another app
 badictl probe -              # run a disposable phrase through the live model
 badi service restart
@@ -185,7 +202,8 @@ here) on the CPU and verifies its bytes at startup. English includes careful
 partial-word completion; German and Persian are experimental and complete whole
 words only. The [Prediction Lab](evaluation/writing/README.md) (`npm run
 writing:lab`) compares models and prompts on your own test drafts without
-changing the installed model.
+changing the installed model. It also evaluates French and Spanish; those
+languages remain Lab-only until their independent qualification passes.
 
 ## For contributors
 

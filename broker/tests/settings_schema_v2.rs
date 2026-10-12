@@ -236,3 +236,39 @@ fn all_web_origins_is_an_optional_v2_only_boolean() {
         assert!(serde_json::from_value::<SettingsV2>(legacy).is_err());
     }
 }
+
+#[test]
+fn language_overrides_match_the_schema_and_do_not_grant_access() {
+    let schema = validator(2);
+    let oversized: serde_json::Map<String, Value> =
+        (0..65).map(|i| (format!("app{i}"), json!("en"))).collect();
+    for (overrides, valid) in [
+        (
+            json!({"brave-origin": "de", "zen": "fa", "chromium": "en"}),
+            true,
+        ),
+        (json!({}), true),
+        (Value::Null, false),
+        (json!({"zen": "fr"}), false),
+        (json!({"zen": "de-DE"}), false),
+        (json!({"app.1invalid": "en"}), false),
+        (Value::Object(oversized), false),
+    ] {
+        let mut document = json!({"schema": SETTINGS_SCHEMA, "revision": 1,
+            "paused": false, "subjects": [], "language_overrides": overrides});
+        assert_eq!(schema.is_valid(&document), valid);
+        let decoded = serde_json::from_value::<SettingsV2>(document.clone());
+        assert_eq!(decoded.as_ref().is_ok_and(|s| s.validate().is_ok()), valid);
+        if valid {
+            let settings = decoded.expect("valid overrides");
+            let app = StableIdentity::linux_app(
+                badi_broker::settings::LinuxAdapter::Fcitx,
+                "brave-origin",
+            )
+            .expect("app");
+            assert!(!settings.resolve_identity(&app).allows_suggestion());
+        }
+        document["schema"] = json!("badi.settings.v1");
+        assert!(serde_json::from_value::<SettingsV2>(document).is_err());
+    }
+}

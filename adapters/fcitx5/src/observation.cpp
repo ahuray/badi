@@ -59,6 +59,23 @@ bool sameObservedField(const Json &captured, const Json &observed) {
            observed.value("selection_count", Json()) == 0;
 }
 
+bool sameObservedFieldIdentity(const Json &previous, const Json &current) {
+    // Only for a denial surviving reacquisition. Display and dispatch still
+    // require the complete, current binding including its observation epoch.
+    if (!previous.is_object() || !current.is_object()) return false;
+    auto oldBinding = previous.value("binding", Json());
+    auto newBinding = current.value("binding", Json());
+    auto oldTarget = previous.value("target", Json());
+    auto newTarget = current.value("target", Json());
+    if (!oldBinding.is_object() || !newBinding.is_object() ||
+        !oldTarget.is_object() || !newTarget.is_object()) return false;
+    oldBinding.erase("epoch");
+    newBinding.erase("epoch");
+    oldTarget.erase("target_id");
+    newTarget.erase("target_id");
+    return oldBinding == newBinding && oldTarget == newTarget;
+}
+
 bool continuedFieldSnapshot(const Json &previous, const Json &observed) {
     return sameObservedField(previous, observed) && matchesObservedFocus(observed, observed, true);
 }
@@ -75,7 +92,8 @@ std::optional<NativeEditTarget> inspectedEditTarget(const Json &focus, std::stri
         !matchesObservedFocus(focus, focus)) return std::nullopt;
     const auto &target = focus["target"];
     const auto kind = target.value("kind", Json());
-    if (kind == "browser") return NativeEditTarget::BrowserOrigin;
+    if (kind == "browser" && target.value("app_id", Json()) == app)
+        return NativeEditTarget::BrowserOrigin;
     if (kind == "desktop_application" && target.value("app_id", Json()) == app)
         return NativeEditTarget::DesktopApplication;
     return std::nullopt;

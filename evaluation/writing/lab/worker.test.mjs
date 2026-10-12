@@ -16,6 +16,7 @@ import { once } from 'node:events';
 const [mode, runtimePath, runtimeDigest] = process.argv.slice(1);
 const batchFlag = process.argv.indexOf('--prefill-batch');
 const batch = batchFlag < 0 ? 16 : Number(process.argv[batchFlag + 1]);
+const memoryFlag = process.argv.indexOf('--memory-map');
 const emit = value => process.stdout.write(JSON.stringify(value) + '\\n');
 let runtime = null;
 let runtimeExit = null;
@@ -51,6 +52,7 @@ else {
   if (mode === 'runtime-dead') { runtime.kill('SIGTERM'); await runtimeExit; }
   const identity = {fixture:true, pid:process.pid, runtime_pid:runtime.pid,
     batch_size:mode === 'runtime-wrong-batch' ? 64 : batch, ubatch_size:batch,
+    ...(memoryFlag >= 0 ? {memory_map:mode === 'runtime-wrong-memory' || process.argv[memoryFlag + 1] !== 'false'} : {}),
     binary_sha256:mode === 'runtime-wrong-digest' ? '0'.repeat(64) : runtimeDigest};
   emit({type:'ready', schema:'badi.prediction-lab.worker.v1',
     runtime_pid:mode === 'runtime-missing' ? undefined : mode === 'runtime-wrong-parent' ? process.pid : runtime.pid,
@@ -249,7 +251,7 @@ test('missing, stale and mismatched ready ownership never resolves and permanent
   }
 });
 
-test('prompt batch is a bounded launch choice and readiness must confirm that choice', async t => {
+test('runtime batch and memory loading choices must agree with readiness', async t => {
   for (const prefillBatch of [0, 32, '64', null]) assert.throws(() => new LabWorker({ prefillBatch }));
   assert.throws(() => new LabWorker({ args: ['--prefill-batch', '64'] }));
   const standard = new LabWorker(); assert.deepEqual(standard.args, []);
@@ -258,4 +260,14 @@ test('prompt batch is a bounded launch choice and readiness must confirm that ch
   const identity = await candidate.start();
   assert.equal(identity.batch_size, 64); assert.equal(identity.ubatch_size, 64);
   await candidate.stop(); reaped(identity.pid);
+  for (const memoryMap of [0, 'false', null]) assert.throws(() => new LabWorker({ memoryMap }));
+  assert.throws(() => new LabWorker({ args: ['--memory-map=false'] }));
+  const copied = await makeWorker(t, 'normal', { memoryMap: false });
+  const copiedIdentity = await copied.start();
+  assert.equal(copiedIdentity.memory_map, false);
+  await copied.stop(); reaped(copiedIdentity.pid);
+  const mismatch = await makeWorker(t, 'runtime-wrong-memory', { memoryMap: false });
+  await assert.rejects(mismatch.start(), error => /ownership and cleanup/u.test(error.message)
+    && /memory loading mode/u.test(error.cause?.message));
+  await assert.rejects(mismatch.stop(), /ownership and cleanup/u);
 });

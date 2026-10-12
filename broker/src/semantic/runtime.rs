@@ -93,6 +93,8 @@ pub struct WritingProfile {
     pub batch_size: u16,
     /// Limit on the runtime's context checkpoints; `None` keeps its default.
     pub context_checkpoints: Option<u16>,
+    /// Map model weights instead of copying them into owned memory.
+    pub memory_map: bool,
     /// Where the model came from when it is not the installed catalog model.
     pub model_origin: Option<&'static str>,
 }
@@ -104,6 +106,9 @@ impl WritingProfile {
         context_size: CONTEXT_SIZE,
         batch_size: 16,
         context_checkpoints: None,
+        // Copy once: CPU repacking otherwise retains both mapped and owned
+        // weights. The independent loading comparison preserved every output.
+        memory_map: false,
         model_origin: None,
     };
 
@@ -377,6 +382,7 @@ impl LlamaCppLaunch {
             gpu_layers: GPU_LAYERS,
             batch_size: Some(profile.batch_size),
             ubatch_size: Some(profile.batch_size),
+            memory_map: profile.memory_map,
         }
     }
 
@@ -397,6 +403,7 @@ impl LlamaCppLaunch {
             // the batch bounds the cost of a cancelled request.
             .env("LLAMA_ARG_BATCH", profile.batch_size.to_string())
             .env("LLAMA_ARG_UBATCH", profile.batch_size.to_string());
+        command.env("LLAMA_ARG_MMAP", if profile.memory_map { "1" } else { "0" });
         if let Some(checkpoints) = profile.context_checkpoints {
             command.env("LLAMA_ARG_CTX_CHECKPOINTS", checkpoints.to_string());
         }
@@ -453,6 +460,14 @@ pub struct StableRuntimeIdentity {
     pub batch_size: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ubatch_size: Option<u16>,
+    /// Absence in older serialized identities means the pinned mapped default.
+    #[serde(skip_serializing_if = "memory_mapping_enabled")]
+    pub memory_map: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // Serde's required signature.
+fn memory_mapping_enabled(enabled: &bool) -> bool {
+    *enabled
 }
 
 pub struct OwnedRuntime {
@@ -975,6 +990,7 @@ mod tests {
         context_size: 1_024,
         batch_size: 64,
         context_checkpoints: Some(0),
+        memory_map: false,
         model_origin: Some("test_artifact"),
     };
 
@@ -1029,6 +1045,7 @@ mod tests {
         as_production.batch_size = Some(16);
         as_production.ubatch_size = Some(16);
         as_production.model_origin = None;
+        as_production.memory_map = WritingProfile::PRODUCTION.memory_map;
         assert_eq!(as_production, production.identity());
         // An absent origin is omitted from the digest input, not serialized.
         let without_origin = launch
@@ -1044,15 +1061,17 @@ mod tests {
         );
         assert_ne!(without_origin.sha256(), identity.sha256());
 
-        for (selected, batch, checkpoints) in
-            [(production, "16", None), (profiled, "64", Some("0"))]
-        {
+        for (selected, batch, checkpoints, memory_map) in [
+            (production, "16", None, "0"),
+            (profiled, "64", Some("0"), "0"),
+        ] {
             let environment = launch_environment(&selected);
             assert_eq!(environment["LLAMA_ARG_BATCH"], batch);
             assert_eq!(environment["LLAMA_ARG_UBATCH"], batch);
             assert_eq!(environment["LLAMA_ARG_CACHE_PROMPT"], "1");
             assert_eq!(environment["LLAMA_ARG_CACHE_RAM"], "128");
             assert_eq!(environment["LLAMA_ARG_CACHE_REUSE"], "16");
+            assert_eq!(environment["LLAMA_ARG_MMAP"], memory_map);
             assert_eq!(
                 environment
                     .get("LLAMA_ARG_CTX_CHECKPOINTS")
@@ -1118,13 +1137,14 @@ mod tests {
             batch_size: 8_192,
             context_checkpoints: Some(64),
             model_origin: Some(&long_origin[1..]),
+            memory_map: true,
         };
         assert!(launch.with_writing_profile(boundary).is_ok());
         Ok(())
     }
 
     /// Installed runtimes and run provenance compare the identity digest, so
-    /// the production launch keeps its exact serialized identity.
+    /// loading changes must be explicit in the serialized production identity.
     #[test]
     fn production_identity_serialization_is_pinned() -> Result<(), Box<dyn Error>> {
         let temporary = tempfile::tempdir()?;
@@ -1137,7 +1157,7 @@ mod tests {
                 ",\"runtime_bundle_manifest_sha256\":null",
                 ",\"model_sha256\":\"c7a3a8c7435ef8e4cf1ca2d261f7e09ca85de6cdb70f7c689a836680523a180c\"",
                 ",\"model_size\":13,\"model_alias\":\"fixture-en-v1\",\"threads\":1",
-                ",\"context_size\":512,\"gpu_layers\":0,\"batch_size\":16,\"ubatch_size\":16}",
+                ",\"context_size\":512,\"gpu_layers\":0,\"batch_size\":16,\"ubatch_size\":16,\"memory_map\":false}",
             )
         );
         Ok(())
@@ -1262,7 +1282,8 @@ mod tests {
             &bundle_path,
             bundle_digest,
         )?)?;
-        let launch = LlamaCppLaunch::new(binary, bundle, model, "fixture", 1)?;
+        let launch = LlamaCppLaunch::new(binary, bundle, model, "fixture", 1)?
+            .with_runtime_directory(root.join("sockets"));
         let process_id = Arc::new(AtomicU32::new(0));
         let observed_process_id = Arc::clone(&process_id);
         let result = launch
@@ -1343,6 +1364,7 @@ mod tests {
                 gpu_layers: super::GPU_LAYERS,
                 batch_size: Some(16),
                 ubatch_size: Some(16),
+                memory_map: true,
             },
         })
     }

@@ -11,7 +11,7 @@ const HASH = /^[a-f0-9]{64}$/u;
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$/u;
 const isHash = value => typeof value === 'string' && HASH.test(value);
 const isId = value => typeof value === 'string' && ID.test(value);
-const LANGUAGES = ['en', 'de', 'fa'];
+const LANGUAGES = ['en', 'de', 'fr', 'es', 'fa'];
 const IDENTITY_KEYS = ['candidate_sha256', 'device_fingerprint', 'settings_sha256'];
 const COUNT_KEYS = ['total', 'reviewed', 'useful_on_time', 'harmful', 'generic_or_incorrect', 'abstained_or_failed', 'p50_complete_word_ms', 'p95_complete_word_ms'];
 const METRIC_KEYS = ['measured_at_unix_s', 'cold_start_ms', 'preparation_ms', 'peak_rss_bytes', 'sustained_seconds'];

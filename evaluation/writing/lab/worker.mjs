@@ -36,12 +36,16 @@ export async function processIdentity(pid) {
   }
 }
 
-async function verifyRuntime(message, workerPid, cache, prefillBatch) {
+async function verifyRuntime(message, workerPid, cache, prefillBatch, memoryMap) {
   if (message.schema !== 'badi.prediction-lab.worker.v1' || !message.identity || typeof message.identity !== 'object'
     || Array.isArray(message.identity) || typeof message.identity.binary_sha256 !== 'string'
     || !/^[a-f0-9]{64}$/u.test(message.identity.binary_sha256)) throw new Error('Invalid verified runtime identity.');
   if (message.identity.batch_size !== prefillBatch || message.identity.ubatch_size !== prefillBatch) {
     throw new Error('The model runtime does not match the selected prompt-processing batch.');
+  }
+  if (Object.hasOwn(message.identity, 'memory_map') && typeof message.identity.memory_map !== 'boolean'
+    || (message.identity.memory_map ?? true) !== memoryMap) {
+    throw new Error('The model runtime does not match the selected memory loading mode.');
   }
   const runtime = await processIdentity(message.runtime_pid);
   if (!runtime || runtime.parent !== workerPid || runtime.group !== runtime.pid
@@ -93,15 +97,18 @@ async function cleanupRuntime(identity) {
 
 // The browser never selects an executable, model path, runtime address or key.
 export class LabWorker {
-  constructor({ executable = binary, args = [], startupMs = 30000, prefillBatch = 16 } = {}) {
-    if (![16, 64].includes(prefillBatch) || !Array.isArray(args)
-      || args.some(arg => typeof arg !== 'string' || arg === '--prefill-batch' || arg.startsWith('--prefill-batch='))) {
-      throw new Error('Select prefillBatch 16 or 64 through the worker option, not raw arguments.');
+  constructor({ executable = binary, args = [], startupMs = 30000, prefillBatch = 16, memoryMap = true } = {}) {
+    if (![16, 64].includes(prefillBatch) || typeof memoryMap !== 'boolean' || !Array.isArray(args)
+      || args.some(arg => typeof arg !== 'string' || ['--prefill-batch', '--memory-map']
+        .some(flag => arg === flag || arg.startsWith(flag + '=')))) {
+      throw new Error('Select prefillBatch 16 or 64 and a boolean memoryMap through worker options, not raw arguments.');
     }
     this.executable = resolve(executable);
-    this.args = [...args, ...(prefillBatch === 64 ? ['--prefill-batch', '64'] : [])];
+    this.args = [...args, ...(prefillBatch === 64 ? ['--prefill-batch', '64'] : []),
+      ...(!memoryMap ? ['--memory-map', 'false'] : [])];
     this.originalArgs = [...this.args];
     this.prefillBatch = prefillBatch;
+    this.memoryMap = memoryMap;
     this.startupMs = startupMs;
     this.session = null;
     this.runtimeExecutableCache = new Map();
@@ -169,7 +176,7 @@ export class LabWorker {
           session.readyAnnounced = true;
           session.captureRuntime = (async () => {
             try {
-              session.runtime = await verifyRuntime(message, child.pid, this.runtimeExecutableCache, this.prefillBatch);
+              session.runtime = await verifyRuntime(message, child.pid, this.runtimeExecutableCache, this.prefillBatch, this.memoryMap);
               assertModelArtifactIdentity(message.identity, this.modelArtifact);
               if (session.closed || session.stopping) return;
               session.identity = message.identity;

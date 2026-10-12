@@ -14,10 +14,11 @@ import time
 import uuid
 from urllib.parse import urlsplit
 
-# Installed beside this CLI (~/.local/lib/badi); in the checkout, beside it in scripts/.
+# Installed beside this CLI; in the checkout, beside it in scripts/.
 import badi_install
 
-ROOT = Path(__file__).resolve().parents[1]
+LIBRARY = Path(__file__).resolve().parent
+ROOT = LIBRARY.parent
 APPS = ("xournalpp", "omawrite")
 APP_IDS = {"omawrite": "omawrite", "xournalpp": "com.github.xournalpp.xournalpp"}
 APP_ADAPTERS = {"obsidian": "obsidian", "bash": "shell"}
@@ -34,6 +35,9 @@ HELP = """Badi — local writing controls
   badi escape-quiet SECONDS|off How long a dismissal keeps its field quiet
                                (1-3600 seconds, across edits; off keeps quiet
                                only until the text changes, the default)
+  badi language APP en|de|fa|reset
+                               Override one app's writing language; reset
+                               restores automatic language selection
   badi apps allowlist|blocklist  Apps: only allowed apps (default), or every
                                supported app except blocked ones
   badi sites allowlist|blocklist Sites: only allowed sites (default), or every
@@ -47,8 +51,8 @@ HELP = """Badi — local writing controls
   badi service start|stop|restart|status
                                Manage the local model process
   badi autostart on|off         Start with the graphical session (next login)
-  badi doctor                  Inspect service, model, install identity and
-                               no-suggestion reasons as JSON
+  badi doctor [--json]         Inspect service, model, install identity and
+                               no-suggestion reasons; --json is for tools
   badi debug on|off|status|watch
                                Trace activity for 15 minutes, without typed text
   badi logs                    Print the last 60 service log entries
@@ -67,9 +71,8 @@ Obsidian: Tab accepts a word, Ctrl/Command+Right all.
 Bash: Ctrl-X then Tab requests/accepts, Ctrl-X then Escape dismisses.
 For protocol commands: badictl --help
 """
-# Apps whose fields work today. Discord is an IME-parity identity, but it drops
-# the accessibility flag, so it stays out of these sentences. README "Not yet"
-# is the same list.
+# Apps whose fields work today. Discord still needs a private composer trial
+# with desktop-wide accessibility; README "Not yet" is the same list.
 WORKING_IME_APPS = (
     "Chromium", "Brave and its web apps", "Zen", "Codex", "VS Code", "Cursor",
     "Grok Bot", "LibreOffice Writer",
@@ -100,14 +103,17 @@ NO_SUGGESTION = {
 
 
 def cli_path():
+    companion = LIBRARY / "badictl"
+    if companion.is_file():
+        return companion
     installed = Path.home() / ".local/lib/badi/badictl"
     return installed if installed.is_file() else ROOT / "target/release/badictl"
 
 
-def control(arguments, endpoint=None):
+def control(arguments, endpoint=None, *, input_text=None):
     endpoint = endpoint or runtime_directory() / "broker.sock"
     result = subprocess.run([str(cli_path()), "--socket", str(endpoint), *arguments],
-                            capture_output=True, text=True, timeout=8)
+                            input=input_text, capture_output=True, text=True, timeout=8)
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or "Badi is offline. Run: badi service start")
     return result.stdout
@@ -199,10 +205,11 @@ def observer_service_state():
 
 
 def observer_probe(endpoint, expected_pid):
-    path = ROOT / "adapters/accessibility/health.py"
-    if not path.is_file():
-        path = Path.home() / ".local/lib/badi/accessibility/health.py"
-    if not path.is_file():
+    path = next((candidate for candidate in (
+        LIBRARY / "accessibility/health.py", ROOT / "adapters/accessibility/health.py",
+        Path.home() / ".local/lib/badi/accessibility/health.py",
+    ) if candidate.is_file()), None)
+    if path is None:
         return {"ready": False, "error": "health_module_missing"}
     spec = importlib.util.spec_from_file_location("badi_accessibility_health", path)
     module = importlib.util.module_from_spec(spec)
@@ -377,7 +384,7 @@ def vscode_edit_context_note():
 def health_report():
     report = {"schema": "badi.desktop-health.v1", "service": service_state(),
               "native_apps": list(APPS), "problems": [], "notes": []}
-    report["notes"].append(f"{IME_APPS} fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it. Discord is not in that list: it drops the accessibility flag.")
+    report["notes"].append(f"{IME_APPS} fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it. Discord still needs a private composer trial with desktop-wide accessibility.")
     problems = report["problems"]
     observer = report["accessibility"] = accessibility_state()
     if observer.get("loaded"):
@@ -452,6 +459,30 @@ def health_report():
     return report
 
 
+def doctor_text(report):
+    """Render the same diagnosis as JSON without dumping internal identifiers."""
+    service = report.get("service", {})
+    broker = report.get("broker", {})
+    native = report.get("native", {})
+    observer = report.get("accessibility", {})
+    problems = report["problems"]
+    model = ("paused" if broker.get("paused") else "ready") if broker else "unreachable"
+    addon = {True: "loaded", False: "not loaded"}.get(native.get("addon_loaded"), "unknown")
+    lines = ["Badi doctor: " + (f"{len(problems)} problem(s)" if problems else "no problems found"),
+             f"  Service: {service.get('active', 'unknown')} ({service.get('state', 'unknown')})",
+             f"  Model: {model}" + (f" · {broker['provider']}" if broker.get("provider") else ""),
+             f"  Fcitx addon: {addon}",
+             "  Field observer: " + ("ready" if observer.get("ready") else "unavailable")]
+    installed = report.get("install", {}).get("desktop") or {}
+    if installed.get("commit"):
+        lines.append(f"  Installed source: {installed['commit']}" + (" (modified)" if installed.get("dirty") else ""))
+    for problem in problems:
+        lines.extend(["", f"{problem['code']}: {problem['message']}", f"  Next: {problem['action']}"])
+    for note in report["notes"]:
+        lines.extend(["", note])
+    return "\n".join(lines)
+
+
 def web_settings():
     """The current settings document, or {} when it cannot be read."""
     try:
@@ -490,7 +521,7 @@ def update_settings(change):
     document["revision"] = revision + 1
     # Let the broker reject concurrent changes; never overwrite newer settings.
     return control(["settings", "replace", "--if-revision", str(revision),
-                    "--json", json.dumps(document)])
+                    "--json", "-"], input_text=json.dumps(document))
 
 
 def set_app(document, app, enabled):
@@ -517,6 +548,21 @@ def set_escape_quiet(document, seconds):
         document["escape_quiet_seconds"] = seconds
     else:
         document.pop("escape_quiet_seconds", None)
+
+
+def set_language(document, app, language):
+    app_id = app_identity(app)["app_id"]
+    if app_id == "chromium-browser":
+        app_id = "chromium"
+    if language not in ("en", "de", "fa", "reset"):
+        raise RuntimeError("Use en, de, fa or reset. French and Spanish are still Lab-only.")
+    overrides = document.setdefault("language_overrides", {})
+    if language == "reset":
+        overrides.pop(app_id, None)
+    else:
+        overrides[app_id] = language
+    if not overrides:
+        document.pop("language_overrides", None)
 
 
 def mode_text(blocklist, kind):
@@ -731,6 +777,12 @@ def main(arguments):
         print("Mid-sentence suggestions are on." if enabled
               else "Mid-sentence suggestions are off. A word after the caret asks for nothing.")
         return
+    if len(arguments) == 3 and arguments[0] == "language":
+        app, language = arguments[1:]
+        update_settings(lambda document: set_language(document, app, language))
+        print(f"{app}: " + ("automatic language selection restored." if language == "reset"
+                            else f"writing language is {language}. App and site permissions still apply."))
+        return
     if len(arguments) == 2 and arguments[0] == "escape-quiet":
         value = arguments[1]
         if value == "off":
@@ -792,9 +844,9 @@ def main(arguments):
     if arguments == ["logs"]:
         subprocess.run(["journalctl", "--user", "-u", SERVICE, "-n", "60", "--no-pager"], check=True, timeout=5)
         return
-    if arguments == ["doctor"]:
+    if arguments in (["doctor"], ["doctor", "--json"]):
         report = health_report()
-        print(json.dumps(report, indent=2))
+        print(json.dumps(report, indent=2) if arguments[-1] == "--json" else doctor_text(report))
         if report["problems"]:
             raise SystemExit(1)
         return
@@ -823,6 +875,8 @@ def main(arguments):
         overview["desktop"] = {
             "requests": counters["provider_calls"], "suggestions": counters["suggestions_shown"],
             "errors": counters["provider_errors"],
+            "accepted": counters.get("commits_prepared"),
+            "word_savings": counters.get("word_savings"),
             "activity": debug_activity(),
         }
         print(json.dumps(overview))

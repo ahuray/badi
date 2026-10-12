@@ -34,6 +34,18 @@ Item {
     : client.controlPlaneDegraded ? "Settings need attention" : paused ? "Predictions paused"
     : !anyAppEnabled ? "Applications disabled" : "Model ready"
   readonly property var activity: client.overview.desktop ? client.overview.desktop.activity || ({}) : ({})
+  readonly property var statistics: client.objectValue(client.overview, "desktop")
+  readonly property var wordSavings: client.objectValue(statistics, "word_savings")
+
+  function countLabel(value) {
+    return Number.isSafeInteger(value) && value >= 0 ? String(value) : "—"
+  }
+
+  function wordsSaved() {
+    var applied = client.integerValue(wordSavings, "applied", -1)
+    var dispatched = client.integerValue(wordSavings, "dispatched_unverified", -1)
+    return applied >= 0 && dispatched >= 0 ? countLabel(applied + dispatched) : "—"
+  }
   property int page: 0
   property var serviceState: ({})
   property string serviceError: ""
@@ -378,7 +390,13 @@ Item {
               Caption { text: "Example: Please find attached the\nEscape dismisses. Suggestions last five seconds and clear when focus changes or the text stops matching them." }
               Caption {
                 visible: client.brokerReachable
-                text: client.overview.desktop ? "Requests  " + client.overview.desktop.requests + "     Suggestions  " + client.overview.desktop.suggestions + "     Errors  " + client.overview.desktop.errors : ""
+                text: "Shown  " + root.countLabel(root.statistics.suggestions)
+                  + "     Accepted  " + root.countLabel(root.statistics.accepted)
+                  + "     Words saved ≈ " + root.wordsSaved()
+              }
+              Caption {
+                visible: client.brokerReachable
+                text: "Since model start. Accepted counts your acceptance requests. Words saved includes partial words; native insertions and later undo cannot be verified."
               }
               Caption { text: "Local inference · No cloud · No clipboard or screen reading\nNative app text is not retained or used for learning." }
             }

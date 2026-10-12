@@ -26,7 +26,7 @@ export const LAB_CRATE = 'evaluation/writing/lab-worker';
 const BROKER_SOURCES = ['broker/src/writing.rs', 'broker/src/semantic/mod.rs', 'broker/src/semantic/client.rs',
   'broker/src/semantic/wire.rs', 'broker/src/semantic/runtime.rs', 'broker/src/semantic/process.rs',
   'broker/src/semantic/provenance.rs', 'broker/src/semantic/pinned_runtime.rs', 'broker/src/provider.rs',
-  'broker/src/segment.rs', 'broker/src/protocol.rs', 'broker/src/model_selection.rs', 'broker/src/lib.rs',
+  'broker/src/segment.rs', 'broker/src/language.rs', 'broker/src/protocol.rs', 'broker/src/model_selection.rs', 'broker/src/lib.rs',
   'broker/Cargo.toml', 'Cargo.toml', 'Cargo.lock', 'broker/data/writing-lexicon/en.txt'];
 const hash = value => createHash('sha256').update(value).digest('hex');
 const jsonBytes = value => JSON.stringify(value, null, 2) + '\n';
@@ -39,6 +39,7 @@ export function parseOptions(args, cwd = process.cwd()) {
     seed: { type: 'string', default: '42' }, 'cache-prompt': { type: 'string', default: 'true' },
     'warm-prefix': { type: 'string' },
     'model-artifact': { type: 'string' }, 'prefill-batch': { type: 'string' },
+    'memory-map': { type: 'string' },
   } });
   if (!values.suite || !values.output) throw new Error('Supply --suite PATH and --output NEWDIR under output/writing.');
   const integer = (name, min, max) => {
@@ -51,6 +52,7 @@ export function parseOptions(args, cwd = process.cwd()) {
   const seed = integer('seed', 0, 2147483647);
   if (!['true', 'false'].includes(values['cache-prompt'])) throw new Error('--cache-prompt must be true or false.');
   if (values['prefill-batch'] !== undefined && !['16', '64'].includes(values['prefill-batch'])) throw new Error('Use --prefill-batch 16 or 64.');
+  if (values['memory-map'] !== undefined && !['true', 'false'].includes(values['memory-map'])) throw new Error('Use --memory-map true or false.');
   if (values['warm-prefix'] !== undefined && values['warm-prefix'] !== 'true') throw new Error('--warm-prefix must be true when present.');
   const warmPrefix = values['warm-prefix'] === 'true';
   const configs = validateConfigs(values.modes.split(',').map(mode => {
@@ -60,6 +62,7 @@ export function parseOptions(args, cwd = process.cwd()) {
   }));
   return { suitePath: resolve(cwd, values.suite), outputPath: resolve(cwd, values.output), configs, seed, warmPrefix,
     ...(values['prefill-batch'] !== undefined ? { prefillBatch: Number(values['prefill-batch']) } : {}),
+    ...(values['memory-map'] !== undefined ? { memoryMap: values['memory-map'] === 'true' } : {}),
     ...(values['model-artifact'] !== undefined ? { modelArtifactPath: modelArtifactPath(values['model-artifact']) } : {}) };
 }
 
@@ -219,7 +222,7 @@ export async function runSuite(options, { worker: suppliedWorker, outputRoot = O
     finally { await file.close(); }
   });
   const beforeSources = await sourceHashes();
-  const worker = suppliedWorker ?? new ObservedWorker({ artifact, prefillBatch: options.prefillBatch ?? 16 });
+  const worker = suppliedWorker ?? new ObservedWorker({ artifact, prefillBatch: options.prefillBatch ?? 16, memoryMap: options.memoryMap ?? true });
   const declaredWorker = suppliedWorker ? null : await fileIdentity(WORKER_BINARY);
   const started = new Date().toISOString();
   const initial = { schema: 'badi.prediction-lab.cli-run.v1', started_at: started,
@@ -227,6 +230,7 @@ export async function runSuite(options, { worker: suppliedWorker, outputRoot = O
     normalized_suite_sha256: hash(jsonBytes(suite)), configs, order_seed: options.seed, plan,
     provenance: { execution_kind: suppliedWorker ? 'injected_fixture' : 'local_model_worker', node: process.version,
       ...(options.prefillBatch !== undefined ? { requested_prefill_batch: options.prefillBatch } : {}),
+      ...(options.memoryMap !== undefined ? { requested_memory_map: options.memoryMap } : {}),
       declared_worker: declaredWorker, source_sha256: beforeSources, model_artifact: modelArtifactProvenance(artifact) },
     evidence: 'Explicit development inputs; expected outputs are scoring-only append strings. This run does not qualify applications, human usefulness or Cotypist parity.' };
   await save('suite-input.json', suiteBytes);

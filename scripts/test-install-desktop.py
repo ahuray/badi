@@ -178,7 +178,7 @@ class DesktopInstallTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, '', '')
 
             plan = installer.Plan(
-                args=SimpleNamespace(broker_only=False, observed_app=[]),
+                args=SimpleNamespace(broker_only=False, observed_app=[], screen_reader_accessibility=False),
                 home=home, config_home=home / '.config', runtime=runtime,
                 flag_updates={}, flags_present=[], broker_updating=True,
                 accessibility_enabled=False, compat=None)
@@ -316,6 +316,30 @@ class DesktopInstallTests(unittest.TestCase):
             self.assertEqual(json.loads(receipt.read_text()), {'bus_enabled': False, 'toolkit_accessibility': False})
             self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
         self.assertIn('set-property', command.call_args_list[2].args[0])
+
+    def test_screen_reader_opt_in_preserves_rollback_and_rejects_unknown_state(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(installer, 'require_unlocked'):
+            installation = receipts.Installation(Path(temporary), 'desktop')
+            receipt = Path(temporary) / '.local/state/badi/install-backups/notes/accessibility-screen-reader.json'
+
+            def replies(values):
+                return [subprocess.CompletedProcess([], 0, value + '\n', '') for value in values]
+
+            with patch.object(installer, 'run', side_effect=replies(
+                    ['b false', 'false', '', '', 'b true', 'true'])), contextlib.redirect_stdout(io.StringIO()):
+                installer.enable_screen_reader_accessibility(installation)
+            original = receipt.read_bytes()
+            self.assertEqual(json.loads(original), {'screen_reader_enabled': False, 'screen_reader_setting': False})
+            self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+            with patch.object(installer, 'run', side_effect=replies(['b true', 'true'])) as command:
+                installer.enable_screen_reader_accessibility(installation)
+                self.assertEqual(command.call_count, 2)
+            self.assertEqual(receipt.read_bytes(), original)
+            with patch.object(installer, 'run', side_effect=replies(['unknown', 'false'])) as command:
+                with self.assertRaisesRegex(RuntimeError, 'prior screen-reader'):
+                    installer.enable_screen_reader_accessibility(installation)
+                self.assertEqual(command.call_count, 2)
+            self.assertEqual(receipt.read_bytes(), original)
 
     def test_trial_runtime_is_rejected_before_installation(self):
         with patch.object(installer.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '/run/user/1000\n', '')) as command, \
@@ -968,6 +992,7 @@ class WaylandCompatTests(FullInstall, unittest.TestCase):
 
     def test_compat_flags_are_not_broker_only_side_effects(self):
         for argv in (['--broker-only', '--wayland-compat-build', '/x'],
+                     ['--broker-only', '--screen-reader-accessibility'],
                      ['--no-wayland-compat', '--wayland-compat-build', '/x']):
             with self.subTest(argv=argv), patch('sys.argv', ['install-desktop.py', *argv]), \
                  patch.object(installer.subprocess, 'run') as command, contextlib.redirect_stderr(io.StringIO()):

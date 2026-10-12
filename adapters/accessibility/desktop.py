@@ -7,8 +7,10 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import stat
+import struct
 import subprocess
 
 from contract import Denied
@@ -60,6 +62,7 @@ class Desktop:
         self.apps = apps
         self.remaining = remaining
         self.request_socket = request_socket
+        self.lock_endpoint = LockEndpoint()
 
     def app(self, app_id):
         app = self.apps.get(app_id)
@@ -75,7 +78,8 @@ class Desktop:
         return window
 
     def lock_query(self):
-        return LockQuery(self.remaining)
+        endpoint = self.lock_endpoint.resolve(self.remaining)
+        return SocketLockQuery(self.remaining, self.lock_endpoint, endpoint) if endpoint else LockQuery(self.remaining)
 
     def active_window(self):
         window = self.request("j/activewindow")
@@ -108,6 +112,127 @@ class Desktop:
                 raise Denied("desktop_unavailable")
             connection.settimeout(self.remaining(IPC_SECONDS))
         return raw
+
+
+class LockEndpoint:
+    """Cache discovery, never an unlocked answer. Quickshell 0.3.1's wire
+    format is pinned; other versions keep using the supported CLI.
+
+    Creating or removing any shell instance, or replacing qs, invalidates the
+    cache. The same stamp is checked after each query, including a query that
+    overlapped a shell restart. Peer credentials bind it to the discovered PID.
+    """
+
+    def __init__(self):
+        self.stamp = None
+        self.endpoint = None
+
+    @staticmethod
+    def current_stamp():
+        runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+        shell = os.environ.get("OMARCHY_PATH", "")
+        executable = shutil.which("qs")
+        if not os.path.isabs(runtime) or not os.path.isabs(shell) or not executable:
+            raise Denied("desktop_unavailable")
+        instances = Path(runtime) / "quickshell/by-id"
+        def identity(path):
+            info = os.stat(path)
+            return info.st_dev, info.st_ino, info.st_mtime_ns
+        return runtime, shell, executable, identity(executable), identity(instances)
+
+    def resolve(self, remaining):
+        try:
+            stamp = self.current_stamp()
+            if stamp == self.stamp:
+                return self.endpoint
+            self.stamp, self.endpoint = None, None
+            runtime, shell, executable, *_ = stamp
+            def run(*args):
+                return subprocess.run((executable, *args), stdin=subprocess.DEVNULL,
+                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                      check=True, timeout=remaining(IPC_SECONDS)).stdout
+            if run("--version").startswith(b"Quickshell 0.3.1 ("):
+                instances = json.loads(run("list", "-j", "-n", "-p", os.path.join(shell, "shell")))
+                if not isinstance(instances, list) or len(instances) != 1:
+                    raise Denied("desktop_unavailable")
+                instance = instances[0]
+                identifier, pid = instance.get("id"), instance.get("pid")
+                if (not isinstance(identifier, str) or not re.fullmatch(r"[a-z0-9]{1,64}", identifier)
+                        or type(pid) is not int or pid <= 0
+                        or instance.get("config_path") != os.path.realpath(os.path.join(shell, "shell/shell.qml"))):
+                    raise Denied("desktop_unavailable")
+                self.endpoint = Path(runtime) / "quickshell/by-id" / identifier / "ipc.sock", pid
+            if self.current_stamp() != stamp:
+                self.endpoint = None
+                raise Denied("desktop_unavailable")
+            self.stamp = stamp
+            return self.endpoint
+        except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError):
+            raise Denied("desktop_unavailable") from None
+
+
+class SocketLockQuery:
+    """Fresh `lock.status` over the pinned QDataStream wire (see runbook).
+
+    Only StringCall(lock, status, []) is sent, and only Completed(non-void,
+    bounded QString) is accepted. The socket overlaps field inspection just
+    like the CLI query, but does not spawn a process on the warm path.
+    """
+    REQUEST = b"\x03\x00\x00\x00\x08\x00l\x00o\x00c\x00k\x00\x00\x00\x0c\x00s\x00t\x00a\x00t\x00u\x00s\x00\x00\x00\x00"
+
+    def __init__(self, remaining, cache, endpoint):
+        self.remaining, self.cache, self.endpoint = remaining, cache, endpoint
+        self.connection = None
+
+    def __enter__(self):
+        try:
+            self.connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.connection.settimeout(self.remaining(IPC_SECONDS))
+            path, pid = self.endpoint
+            self.connection.connect(str(path))
+            peer_pid, uid, _ = struct.unpack("3i", self.connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            if (peer_pid, uid) != (pid, os.getuid()):
+                raise Denied("desktop_unavailable")
+            self.connection.sendall(self.REQUEST)
+            return self
+        except (OSError, Denied):
+            self.close()
+            raise Denied("desktop_unavailable") from None
+
+    def __exit__(self, *_exception):
+        try:
+            if self.read(2) != b"\x05\x00":
+                raise Denied("desktop_unavailable")
+            size = struct.unpack(">I", self.read(4))[0]
+            if size > MAX_IPC_REPLY or size % 2:
+                raise Denied("desktop_unavailable")
+            state = json.loads(self.read(size).decode("utf-16-be"))
+            if self.cache.current_stamp() != self.cache.stamp:
+                raise Denied("desktop_unavailable")
+            require_unlocked(state)
+        except (OSError, ValueError):
+            raise Denied("desktop_unavailable") from None
+        finally:
+            self.close()
+
+    def read(self, count):
+        raw = bytearray()
+        while len(raw) < count:
+            self.connection.settimeout(self.remaining(IPC_SECONDS))
+            part = self.connection.recv(count - len(raw))
+            if not part:
+                raise Denied("desktop_unavailable")
+            raw.extend(part)
+        return raw
+
+    def close(self):
+        if self.connection is not None:
+            self.connection.close()
+
+
+def require_unlocked(state):
+    if not isinstance(state, dict) or any(state.get(flag) is not False for flag in LOCK_FLAGS):
+        raise Denied("desktop_locked")
 
 
 class LockQuery:
@@ -157,8 +282,7 @@ class LockQuery:
             state = json.loads(raw) if len(raw) <= MAX_IPC_REPLY else None
         except ValueError:
             raise Denied("desktop_unavailable") from None
-        if not isinstance(state, dict) or any(state.get(flag) is not False for flag in LOCK_FLAGS):
-            raise Denied("desktop_locked")
+        require_unlocked(state)
 
     def reply(self):
         """The query's output, once it exits successfully."""

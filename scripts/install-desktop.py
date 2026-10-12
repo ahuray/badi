@@ -156,6 +156,31 @@ def enable_accessibility(installation):
         raise RuntimeError("Desktop accessibility did not enable; Fcitx was not restarted.")
 
 
+def enable_screen_reader_accessibility(installation):
+    """Opt into desktop-wide AT-SPI activation, recording its persistent state."""
+    bus = ["busctl", "--user", "--timeout=2s"]
+    address = ["org.a11y.Bus", "/org/a11y/bus", "org.a11y.Status", "ScreenReaderEnabled"]
+    setting = ["org.gnome.desktop.a11y.applications", "screen-reader-enabled"]
+
+    def state():
+        active = run([*bus, "get-property", *address], capture_output=True, text=True, timeout=3).stdout.strip()
+        persistent = run(["gsettings", "get", *setting], capture_output=True, text=True, timeout=3).stdout.strip()
+        if active not in ("b true", "b false") or persistent not in ("true", "false"):
+            raise RuntimeError("Cannot determine the prior screen-reader accessibility state; it was not changed.")
+        return {"screen_reader_enabled": active == "b true", "screen_reader_setting": persistent == "true"}
+
+    previous = state()
+    if all(previous.values()):
+        return  # An unchanged install must not overwrite the original rollback values.
+    require_unlocked()
+    receipt = installation.note("accessibility-screen-reader.json", previous)
+    print(f"Prior desktop-wide accessibility settings recorded in {receipt}", flush=True)
+    run(["gsettings", "set", *setting, "true"], capture_output=True, timeout=3)
+    run([*bus, "set-property", *address, "b", "true"], capture_output=True, timeout=3)
+    if not all(state().values()):
+        raise RuntimeError("Desktop-wide accessibility did not enable; inspect the recorded prior settings before retrying.")
+
+
 def require_unlocked():
     if not badi_install.explicitly_unlocked(badi_install.lock_state()):
         raise RuntimeError("Unlock the desktop before updating the native input addon. --broker-only can update the model and controls while locked.")
@@ -503,13 +528,15 @@ def parse_arguments():
                         help="Update only the broker, commands and service; leave the native input method running")
     parser.add_argument("--observed-app", action="append", choices=tuple(OBSERVED_APP_FLAGS), default=[],
                         help=f"Add {OBSERVED_FLAG} to this app's user flags file for its next launch (backed up)")
+    parser.add_argument("--screen-reader-accessibility", action="store_true",
+                        help="Enable desktop-wide AT-SPI ScreenReaderEnabled, including Discord; record prior settings for rollback")
     parser.add_argument("--no-wayland-compat", action="store_true",
                         help="Leave omarchy-fcitx5.service on its current frontend (skip the pinned Fcitx 5.1.22 compatibility frontend)")
     parser.add_argument("--wayland-compat-build", type=Path, metavar="DIR",
                         help="Install this existing checked compatibility build instead of building one")
     args = parser.parse_args()
-    if args.broker_only and args.observed_app:
-        parser.error("--observed-app requires the complete unlocked native installation")
+    if args.broker_only and (args.observed_app or args.screen_reader_accessibility):
+        parser.error("Accessibility options require the complete unlocked native installation")
     if args.broker_only and args.wayland_compat_build:
         parser.error("--wayland-compat-build requires the complete unlocked native installation")
     if args.no_wayland_compat and args.wayland_compat_build:
@@ -741,8 +768,10 @@ def restart(plan, installation):
     run(["systemctl", "--user", "reset-failed", "badi-accessibility.service"])
     run(["systemctl", "--user", "restart", "badi-accessibility.service"])
     wait_accessibility(home / ".local/lib/badi/accessibility/daemon.py", runtime / "badi/accessibility.sock")
-    if plan.args.observed_app:
+    if plan.args.observed_app or plan.args.screen_reader_accessibility:
         enable_accessibility(installation)
+    if plan.args.screen_reader_accessibility:
+        enable_screen_reader_accessibility(installation)
     if plan.installs_compat and fcitx_command() not in {compat_command(item, plan.compat["version"]) for item in plan.compat["homes"]}:
         raise RuntimeError("Another omarchy-fcitx5.service override replaces the compatibility command, so Fcitx was not restarted. "
                            "Inspect its drop-ins, restore the newest backup in ~/.local/state/badi/install-backups, or rerun with --no-wayland-compat.")

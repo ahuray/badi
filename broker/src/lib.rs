@@ -6,6 +6,7 @@ pub mod build_info;
 pub mod control_plane;
 pub mod engine;
 pub mod ipc;
+pub mod language;
 pub mod metrics;
 pub mod model_selection;
 pub mod personalization;
