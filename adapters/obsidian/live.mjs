@@ -141,14 +141,14 @@ try {
   await page.waitForFunction(expected => app.workspace.activeLeaf.view.editor.getValue() === expected, prefix + firstWord);
   await page.keyboard.press('Control+z');
   assert.equal(await text(), prefix, 'One native undo removes exactly the accepted word');
-  await page.keyboard.press('Tab');
+  // Undo asks again. Tab with no suggestion indents the line.
   await ghost.waitFor({ state: 'visible' });
   const all = await ghost.textContent();
   await page.keyboard.press('Control+ArrowRight');
   await page.waitForFunction(expected => app.workspace.activeLeaf.view.editor.getValue() === expected, prefix + all);
   await page.keyboard.press('Control+z');
   assert.equal(await text(), prefix, 'Full acceptance is one native undo step');
-  await page.keyboard.press('Tab'); await ghost.waitFor({ state: 'visible' });
+  await ghost.waitFor({ state: 'visible' });
   await page.evaluate(() => {
     globalThis.badiEscapeTrace = [];
     const view = app.workspace.activeLeaf.view.editor.cm;
@@ -167,7 +167,8 @@ try {
   await delay(600);
   assert.equal(await ghost.count(), 0, 'Dismissal stays quiet until new input or explicit invocation');
   assert.equal(await text(), prefix);
-  await page.keyboard.press('Tab'); await ghost.waitFor({ state: 'visible' });
+  await page.keyboard.press('Control+Shift+Space');
+  await ghost.waitFor({ state: 'visible' });
   await page.keyboard.press('ArrowLeft');
   await ghost.waitFor({ state: 'hidden', timeout: 500 });
   await setPrefix(prefix); await ghost.waitFor({ state: 'visible' });
@@ -223,11 +224,13 @@ try {
   }
   throw error;
 } finally {
-  await browser?.close();
-  if (app?.exitCode === null) {
+  await browser?.close().catch(() => undefined);
+  if (app?.exitCode === null && app.pid) {
+    // Signal the app only. A group signal delivers SIGTRAP to Electron's
+    // crash helper and makes Omarchy open a crash-diagnosis agent.
     const exited = once(app, 'exit');
-    process.kill(-app.pid, 'SIGTERM');
-    const timer = setTimeout(() => { try { process.kill(-app.pid, 'SIGKILL'); } catch {} }, 5000);
+    try { process.kill(app.pid, 'SIGTERM'); } catch { /* already gone */ }
+    const timer = setTimeout(() => { try { process.kill(app.pid, 'SIGKILL'); } catch { /* already gone */ } }, 5000);
     try { await exited; } finally { clearTimeout(timer); }
   }
   await stopBroker();
