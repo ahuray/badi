@@ -139,7 +139,10 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   English development cases did not change this rejoin: today's rejoin showed
   two suggestions and one matched the reference; the framed prompt missed 550 ms
   on every cold case; the probability check showed only the punctuation
-  completion. The prompt is still the text before the caret, and `mid_line_insertion()` keeps only what fits:
+  completion. Naming the line after the caret in a lab prompt
+  (`following_text`) showed one suggestion and missed 550 ms on 34 of 41,
+  because that line changes every case and is not cached. The prompt is still
+  the text before the caret, and `mid_line_insertion()` keeps only what fits:
   the words before the point where the continuation reproduces the line's
   first word or mark, a phrase the model closes with a clause mark before the
   line's own mark, or else the rest of the word being typed. Anything else is

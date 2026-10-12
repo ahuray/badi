@@ -67,9 +67,13 @@ Standing user decisions:
 - [ ] No automatic suggestions in file dialogs or very narrow fields, and a
       setting for how long Escape keeps a field quiet (today: until the text
       changes).
-- [ ] Mid-sentence suggestions see only the text before the caret and keep
-      what rejoins the next word, so whole-word insertions are rare. Try a
-      prompt that also carries the text after the caret, measured in the Lab.
+- [x] Mid-sentence suggestions see only the text before the caret and keep
+      what rejoins the next word. Naming the following line in the prompt
+      (`following_text`, lab only) does not change that. On 2026-10-12, the
+      41 English development cases, warm prefix, production budget: today's
+      rejoin showed 2 suggestions and 1 reference match, with no deadline
+      misses; the following-line prompt showed 1 suggestion and 1 reference
+      match, and missed 550 ms on 34 of 41 because that line is not cached.
 - [ ] Confirm live that the grey preview uses the host font in Telegram.
       A disposable Chromium textarea (2026-10-12, build `7957f16`) set to
       JetBrainsMono NF at 20px reports `family-name` JetBrainsMono NF and

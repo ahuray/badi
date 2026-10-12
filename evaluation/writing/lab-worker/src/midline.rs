@@ -90,6 +90,17 @@ pub(crate) fn accept_forced_prefix(prefix: &str, mean_logprob: f64) -> Option<St
     Some(prefix.to_owned())
 }
 
+/// Lab-only prefix that names the line after the caret. The continuation is
+/// still generated from the text before the caret. Production prompts omit this.
+pub(crate) fn following_text_prefix(after: &str) -> String {
+    let line = after.split(['\n', '\r']).next().unwrap_or_default().trim();
+    if line.is_empty() {
+        return String::new();
+    }
+    let line: String = line.chars().take(120).collect();
+    format!("Words after the caret: {line}\n\n")
+}
+
 /// Today's rejoin, applied to a lab continuation. Production is unchanged.
 pub(crate) fn rejoin(before: &str, after: &str, continuation: &str) -> Option<String> {
     let line = writing::line_rest(after)?;
@@ -112,6 +123,23 @@ mod tests {
         );
         assert_eq!(following_words("."), None);
         assert_eq!(following_words("\nreport"), None);
+    }
+
+    #[test]
+    fn following_text_names_one_line_after_the_caret() {
+        assert_eq!(
+            following_text_prefix("report today\nand more"),
+            "Words after the caret: report today\n\n"
+        );
+        assert_eq!(following_text_prefix("  \nreport"), "");
+        assert_eq!(following_text_prefix(""), "");
+        let long = "a".repeat(200);
+        let prefix = following_text_prefix(&long);
+        let line = prefix
+            .strip_prefix("Words after the caret: ")
+            .unwrap()
+            .trim();
+        assert_eq!(line.chars().count(), 120);
     }
 
     #[test]
