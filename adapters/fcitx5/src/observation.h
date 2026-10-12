@@ -43,6 +43,11 @@ bool matchesObservedFocus(const nlohmann::json &captured, const nlohmann::json &
 // keystroke is not a new field.
 bool sameObservedField(const nlohmann::json &captured, const nlohmann::json &observed);
 
+// A snapshot of a field we already hold. The caret may have moved. The record
+// itself must still be a well-formed plain-text caret, and the caller still
+// has to match its text to Fcitx before publishing.
+bool continuedFieldSnapshot(const nlohmann::json &previous, const nlohmann::json &observed);
+
 // Nullopt when the inspected field's metadata is malformed or names another
 // app; prior authority is then retired rather than falling back.
 std::optional<NativeEditTarget> inspectedEditTarget(const nlohmann::json &focus, std::string_view appId);
