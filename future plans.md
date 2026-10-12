@@ -78,7 +78,9 @@ Standing user decisions:
 Exit criteria: warm visible p50 ≤ 250 ms and p95 ≤ 500 ms with misses reported,
 resident memory about 1.3 GB, and no quality regression in the Lab.
 
-- [ ] Start inference before the 120 ms pause ends, cancelling on a mismatch.
+- [ ] Measure warm visible latency in Chromium and Omawrite after this
+      change: a known field is inspected on the keystroke, and the suggestion
+      stays hidden until the 120 ms pause. A newer key still cancels it.
 - [ ] Speculative decoding with a small draft model, or fewer generated tokens.
 - [ ] Qualify Qwen3 0.6B and Gemma 4 E2B (with its multi-token drafter) in the
       Lab. Defer hybrid-attention models until llama.cpp reuses their caches.

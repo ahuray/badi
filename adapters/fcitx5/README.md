@@ -27,8 +27,9 @@ observer wire details.
   | Ctrl+Shift+Space, Ctrl+Shift+Y | Request or refresh; accept. |
 
 - **Type-through.** A key that types the suggestion's next characters still
-  reaches the app and retires the candidate like any edit, but the next
-  inspection waits 30 ms instead of 120 ms. A word acceptance does the same.
+  reaches the app and retires the candidate like any edit. Inspection starts
+  at once, and the next suggestion waits 30 ms instead of 120 ms. A word
+  acceptance does the same.
   The addon remembers the untyped rest until a suggestion shows again, so keys
   typed before the remainder returns, even while the field waits to be observed
   again, still count. The broker then answers with the remainder and no model
@@ -115,8 +116,11 @@ Chromium's surrounding text current. Neither provides an editor transaction.
   the field but reports `rendered:false` (no calibrated geometry), Badi shows
   its Fcitx panel, which Hyprland places at the app's text-input caret
   rectangle.
-- **Inspection.** It runs 120 ms after input pauses, or 30 ms after a
-  typed-through key; a busy observer is retried every 20 ms. Badi's timers ask
+- **Inspection.** A keystroke in a field already under observation inspects
+  at once, so the model can run during the pause. The suggestion stays hidden
+  until 120 ms after that keystroke, or 30 ms after a typed-through key. The
+  first look at a field, and an idle invalidation, still wait (120 ms, then
+  240, 480 and 960 ms). A busy observer is retried every 20 ms. Badi's timers ask
   for 1 ms accuracy, because Fcitx's sd-event loop otherwise allows 250 ms of
   slack. With debug on, `inspect_sent` and `inspect_answered` time each
   inspection.
