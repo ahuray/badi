@@ -212,7 +212,9 @@ From the 2026-10-11 audit. These are not part of the installed behavior.
 - [ ] Browser event cost on large pages (`daemon.py` focus handling and
       `field.py` serialization).
 - [ ] The grey preview does not follow scrolling.
-- [ ] Document the limits of sensitive-field detection.
+- [x] Document the limits of sensitive-field detection. A password role or
+      password input type is refused. Labels, placeholders, and HTML
+      autocomplete hints are not.
 - [ ] An ADR retiring protocol v1.
 - [ ] Enforce `authority.ack`, or delete it if nothing consumes it.
 - [ ] The panel keeps polling while it is hidden, once per monitor

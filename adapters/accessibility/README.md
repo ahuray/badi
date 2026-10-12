@@ -48,6 +48,19 @@ to them too. A missing tag or input type is ineligible, never guessed. Search,
 email and URL inputs, combo boxes and ARIA search boxes (`xml-roles:
 searchbox`) get no suggestions.
 
+### Sensitive fields
+
+Detection is the toolkit's mark, not the words in the field.
+
+- The Fcitx addon reads no context when the input method reports
+  `PasswordOrSensitive`, or a special purpose such as email, number, URL,
+  date, or time.
+- The observer refuses an accessible whose role is `password text`, or whose
+  `text-input-type` is `password`, before it reads the caret or any text.
+- It does not look at the label, placeholder, accessible name, or HTML
+  `autocomplete` value. A `type=text` password, PIN, or card field that the
+  toolkit does not mark is handled like other prose.
+
 ## Authority boundary
 
 `inspect` verifies the unlocked Omarchy session, the active Hyprland window's
