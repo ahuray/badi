@@ -147,9 +147,13 @@ class Daemon:
             binding["bus"], "org.a11y.atspi.Event.Object", None, binding["path"], None,
             Gio.DBusSignalFlags.NONE, self.field_event, None)
 
-    def field_event(self, _connection, _sender, _path, _interface, _signal, _parameters, _data):
-        # Any event on the field ends its epoch. The payload is never unpacked:
-        # a text change carries the typed text itself.
+    def field_event(self, _connection, _sender, _path, _interface, signal, _parameters, _data):
+        # The payload is never unpacked: a text change carries the typed text.
+        # A bounds or visible-data signal is a scroll of this same field. Move
+        # the preview when the text offset is unchanged.
+        if signal in {"BoundsChanged", "VisibleDataChanged"}:
+            self.observer.reposition_preview()
+            return
         self.observer.invalidate("field_changed")
 
     def disarm_field_events(self):
