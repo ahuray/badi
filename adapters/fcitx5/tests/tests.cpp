@@ -688,6 +688,16 @@ void preInputKeysConsumeOnlyBadiUi() {
               !typesSuggestionStart(" for your time", " for your time") &&
               !typesSuggestionStart(" ", ""),
           "only a non-empty proper prefix of the suggestion types through it");
+    check(typeThroughContextReady("Thank you", " ", "Thank you ") &&
+              !typeThroughContextReady("Thank you", " ", "Thank you") &&
+              !typeThroughContextReady("Thank you", " ", "Thank youx") &&
+              typeThroughContextReady("Thank you", " f", "Thank you f"),
+          "type-through waits until the typed characters are in the field");
+    const std::string base(200, 'a');
+    const auto tail = base.substr(base.size() - 128);
+    check(typeThroughContextReady(base, " ", std::string("zz") + tail + " ") &&
+              !typeThroughContextReady(base, " ", tail),
+          "a slid field window still has to contain the typed characters");
 }
 
 void wordAcceptanceGrantsOnlyTheNextWord() {

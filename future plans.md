@@ -63,7 +63,13 @@ Standing user decisions:
 ## Interaction
 
 - [ ] Live type-through trials in Zen and Brave Origin; tab mode needs the
-      user's running browser.
+      user's running browser. On 2026-10-12 a disposable Brave Origin page
+      showed grey "for the opportunity" after "Thank you". The addon counted
+      the following space as type-through and the field gained that space, but
+      the broker made another model call. The addon now waits until the typed
+      characters are in the field before asking again. That wait is not in the
+      installed addon yet. A fresh Zen profile exposed only the window frame,
+      so its page was not typed in.
 - [ ] No automatic suggestions in file dialogs or very narrow fields, and a
       setting for how long Escape keeps a field quiet (today: until the text
       changes).

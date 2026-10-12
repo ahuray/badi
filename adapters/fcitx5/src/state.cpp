@@ -245,6 +245,16 @@ bool typesSuggestionStart(std::string_view typed, std::string_view suggestion) {
     return !typed.empty() && typed.size() < suggestion.size() && suggestion.starts_with(typed);
 }
 
+bool typeThroughContextReady(std::string_view base, std::string_view typed, std::string_view before) {
+    constexpr std::size_t kSlideBytes = 128;
+    if (typed.empty() || typed.size() > before.size()) return false;
+    if (!before.ends_with(typed)) return false;
+    const auto stem = before.substr(0, before.size() - typed.size());
+    if (stem == base) return true;
+    if (base.size() < kSlideBytes || stem.size() < kSlideBytes) return false;
+    return stem.ends_with(base.substr(base.size() - kSlideBytes));
+}
+
 InvokeRoute routeInvoke(std::string_view appId, bool editingAvailable, bool fieldObserved) {
     if (editingAvailable) return fieldObserved ? InvokeRoute::ObservedField : InvokeRoute::Manual;
     return imeParityApp(appId) && !fieldObserved ? InvokeRoute::InspectField : InvokeRoute::Unavailable;

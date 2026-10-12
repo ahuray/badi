@@ -28,8 +28,9 @@ observer wire details.
 
 - **Type-through.** A key that types the suggestion's next characters still
   reaches the app and retires the candidate like any edit. Inspection starts
-  at once, and the next suggestion waits 30 ms instead of 120 ms. A word
-  acceptance does the same.
+  at once, and the next suggestion waits 30 ms instead of 120 ms. The request
+  waits until those characters are in the field, so a snapshot from before
+  the key lands does not call the model. A word acceptance does the same.
   The addon remembers the untyped rest until a suggestion shows again, so keys
   typed before the remainder returns, even while the field waits to be observed
   again, still count. The broker then answers with the remainder and no model
