@@ -131,7 +131,16 @@ resident memory about 1.3 GB, and no quality regression in the Lab.
       t/s). Raw greedy text, conversation mode off, differed on four of the
       five disposable prefixes; Q4_0 continued "Thank" with " youngster".
       Production stays on Q4_K_M.
-- [ ] Speculative decoding with a small draft model, or fewer generated tokens.
+- [x] Speculative decoding does not bring the first word forward on this
+      machine. A private llama-server with the production flags, the healing
+      grammar and the five disposable prefixes (2026-10-12) kept the pinned
+      1.7B's greedy text under both trials. N-gram speculation was no faster
+      than the baseline run beside it. A Qwen3-0.6B Q4_K_M draft
+      (`9acfc1e001311f34b4252001b626f2e466d592a42065f66571bff3790d4e1b14`,
+      two tokens ahead) accepted between 0.13 and 0.88 of its drafts and
+      still took about 0.5–1.8 s to the first word, against about 0.15–0.47 s
+      with no draft. Production does not load a draft model.
+- [ ] Fewer generated tokens, only after a held-out quality comparison.
 - [ ] Qualify Qwen3 0.6B and Gemma 4 E2B (with its multi-token drafter) in the
       Lab. Defer hybrid-attention models until llama.cpp reuses their caches.
 - [ ] Battery mode: a longer pause and a smaller model on battery.
