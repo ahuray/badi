@@ -349,6 +349,8 @@ class FieldSubscriptionTests(unittest.TestCase):
         return {"epoch": epoch, "bus": bus, "path": path, "process_id": 42, "app_id": "chromium", "uri": ""}
 
     def test_arming_registers_the_application_once_and_matches_only_the_field(self):
+        self.assertIn("object:bounds-changed", observer_daemon.FIELD_EVENTS)
+        self.assertIn("object:visible-data-changed", observer_daemon.FIELD_EVENTS)
         self.daemon.arm_field_events(self.binding())
         self.assertEqual(self.bus.calls, [("sync", "RegisterEvent", (event, [], ":1.7")) for event in observer_daemon.FIELD_EVENTS])
         self.assertEqual(self.bus.subscriptions, [(":1.7", "org.a11y.atspi.Event.Object", None, "/field", None)])

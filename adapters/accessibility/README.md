@@ -186,7 +186,11 @@ every failure except a malformed request or `observer_busy` hides the preview:
 | `operation_timeout`, `observer_busy`, `accessibility_unavailable` | Budget exceeded; another owner; AT-SPI failed |
 
 Unsolicited `{schema,event:"invalidate",epoch,reason,app_id}` messages name the
-previous app; a client must drop its candidate and inspect afresh.
+previous app; a client must drop its candidate and inspect afresh. The armed
+field also ends that epoch on `object:bounds-changed` and
+`object:visible-data-changed`, so a scroll the toolkit reports on the field
+clears the grey preview instead of leaving it at the old coordinates. A scroll
+reported only on an ancestor does not.
 
 ## Caret geometry and preview
 
