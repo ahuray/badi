@@ -739,6 +739,12 @@ void wordAcceptanceGrantsOnlyTheNextWord() {
           "a second Tab or Ctrl+Right does not queue another acceptance");
     check(pending.suggestionVisible() && pending.acceptancePending(),
           "the in-flight acceptance is not cleared by the second key");
+    auto extension = suggestionFor(shown);
+    extension.suggestionId = "extended";
+    extension.text += " today";
+    check(!pending.showSuggestion(extension, 102) && pending.acceptancePending() &&
+              pending.visibleText() == first->expectedText,
+          "a streamed extension cannot replace the text already accepted");
     const CommitPrepare stillFirst{first->coordinates, first->controlId, first->suggestionId,
                                    first->expectedText, "all"};
     check(pending.authorizeCommit(stillFirst, 103, kOwnedPanel).has_value(),
@@ -823,15 +829,15 @@ void brokerSessionRetiresSessionAndPolicyTogether() {
     const auto update = explicitContext(state);
     BrokerSession broker;
     check(!broker.opened && !broker.policyKnown && !broker.policyAllowed, "a binding starts without a session");
-    broker.answer(true);
+    broker.answer(true, "de");
     broker.open(update.coordinates);
     check(broker.opened && broker.policyKnown && broker.policyAllowed &&
               broker.coordinates.sessionId == kSession && broker.coordinates.revision == 0 &&
-              broker.coordinates.fingerprint.empty(),
+              broker.coordinates.fingerprint.empty() && broker.languageOverride == "de",
           "a session opens at revision zero of its focus epoch");
     broker.retire();
     check(!broker.opened && !broker.policyKnown && !broker.policyAllowed &&
-              broker.coordinates.sessionId == kSession,
+              broker.coordinates.sessionId == kSession && broker.languageOverride.empty(),
           "retiring forgets the session and its policy, keeping the coordinates a close names");
     broker.answer(false);
     check(broker.policyKnown && !broker.policyAllowed, "a denial is a known answer");
@@ -885,6 +891,13 @@ void nativePolicyMustBeCoherent() {
             {"activation", "always"}, {"context_allowed", true}, {"display_allowed", true},
             {"suggestions_allowed", true}, {"learning_allowed", false}, {"reason", "matched_rule"}}}};
     check(strictPolicyStatus(allowed.dump()), "a coherent app grant must pass");
+    for (const auto &language : {"en", "de", "fa", "fr", "de-DE"}) {
+        auto preference = allowed;
+        preference["payload"]["language_override"] = language;
+        const auto tag = std::string_view(language);
+        check(strictPolicyStatus(preference.dump()) == (tag == "en" || tag == "de" || tag == "fa"),
+              "policy overrides use only canonical promoted language tags");
+    }
     for (const auto key : {"context_allowed", "display_allowed", "paused", "learning_allowed"}) {
         auto invalid = allowed;
         invalid["payload"][key] = !invalid["payload"][key].get<bool>();
@@ -1180,7 +1193,9 @@ void imeParityRequiresObservedAppendOnlyField() {
                               accept->expectedText, "some"};
         check(!state.authorizeCommit(prepare, 2, kOwnedPanel),
               "only an acceptance of the whole append can dispatch");
-        check(state.showSuggestion(append, 3), "a fresh append recovers after the refused dispatch");
+        const auto refreshed = state.updateContext(automatic);
+        check(refreshed && state.showSuggestion(suggestionFor(*refreshed), 3),
+              "a fresh context recovers after the refused dispatch");
         const auto fresh = state.requestAcceptance(4, kOwnedPanel);
         check(fresh.has_value(), "fresh append acceptance");
         prepare = {fresh->coordinates, fresh->controlId, fresh->suggestionId, fresh->expectedText, "all"};
@@ -1262,7 +1277,7 @@ void unobservedParityAndUnavailableAppsCannotEdit() {
 
 nlohmann::json observedField(std::string_view kind = "desktop_application") {
     nlohmann::json target{{"kind", kind}, {"target_id", "observed-target"}};
-    if (kind == "desktop_application") target["app_id"] = "code";
+    target["app_id"] = "code";
     return {{"binding", {{"app_id", "code"}, {"field", 7}}}, {"target", target}, {"caret", 9},
             {"purpose", "plain_text"}, {"selection_count", 0}, {"total_chars", 9}};
 }
@@ -1300,6 +1315,13 @@ void observerRepliesFailClosed() {
               return denied;
           }()),
           "a sensitive purpose is not the same field");
+    auto rebound = field;
+    rebound["binding"]["epoch"] = 99;
+    rebound["target"]["target_id"] = "fresh-observer-target";
+    check(sameObservedFieldIdentity(field, rebound) && !sameObservedField(field, rebound),
+          "reacquisition may preserve quieting but cannot preserve an editing binding");
+    rebound["binding"]["path"] = "/another/field";
+    check(!sameObservedFieldIdentity(field, rebound), "quieting cannot cross field identity");
     auto cropped = field;
     cropped["total_chars"] = 12;
     check(matchesObservedFocus(field, cropped) && !matchesObservedFocus(field, cropped, true),

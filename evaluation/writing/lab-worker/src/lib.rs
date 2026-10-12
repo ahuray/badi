@@ -41,6 +41,28 @@ pub const LAUNCH_CONTRACT: &str = "badi.prediction-lab.owned-2048.v2";
 pub const CONTEXT_TOKENS: u16 = 2048;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
+/// Languages admitted for experiments, independently of production support.
+#[must_use]
+pub fn supported_language(tag: &str) -> bool {
+    matches!(
+        tag.split('-')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "en" | "de" | "fr" | "es" | "fa"
+    )
+}
+
+fn accepts_language_output(tag: &str, text: &str) -> bool {
+    let language = WritingLanguage::from_tag(tag).or_else(|| {
+        // French and Spanish experiments use the same Latin script boundary.
+        // This is a shape check, not evidence of correct language or quality.
+        supported_language(tag).then_some(WritingLanguage::English)
+    });
+    language.is_some_and(|language| language.accepts_output(text))
+}
+
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     use std::fmt::Write as _;
@@ -204,13 +226,14 @@ pub async fn activate_with_artifact(
     directory: PathBuf,
     artifact: Option<artifact::ModelArtifactOverride>,
 ) -> Result<OwnedRuntime, LabError> {
-    activate_with_options(directory, artifact, PrefillBatch::default()).await
+    activate_with_options(directory, artifact, PrefillBatch::default(), true).await
 }
 
 pub async fn activate_with_options(
     directory: PathBuf,
     artifact: Option<artifact::ModelArtifactOverride>,
     prefill_batch: PrefillBatch,
+    memory_map: bool,
 ) -> Result<OwnedRuntime, LabError> {
     let explicit_artifact = artifact.is_some();
     let launch = match artifact {
@@ -218,7 +241,7 @@ pub async fn activate_with_options(
         None => installed_launch(directory).await,
     }
     .map_err(|_| LabError::RuntimeUnavailable)?;
-    configure_launch(launch, prefill_batch, explicit_artifact)
+    configure_launch(launch, prefill_batch, explicit_artifact, memory_map)
         .map_err(|_| LabError::RuntimeUnavailable)?
         .spawn()
         .await
@@ -256,6 +279,7 @@ fn configure_launch(
     launch: LlamaCppLaunch,
     prefill_batch: PrefillBatch,
     explicit_artifact: bool,
+    memory_map: bool,
 ) -> Result<LlamaCppLaunch, RuntimeError> {
     let profile = WritingProfile {
         launch_contract_id: LAUNCH_CONTRACT,
@@ -264,6 +288,7 @@ fn configure_launch(
         // Bounded model comparisons own one active slot. Recurrent model
         // checkpoint copies must not inherit the runtime's default of 32.
         context_checkpoints: Some(0),
+        memory_map,
         model_origin: explicit_artifact.then_some("explicit_lab_artifact"),
     };
     Ok(launch.with_writing_profile(profile)?.contained())
@@ -307,7 +332,7 @@ impl Request {
         {
             return Err(LabError::InvalidRequest);
         }
-        if WritingLanguage::from_tag(&self.language).is_none() {
+        if !supported_language(&self.language) {
             return Err(LabError::UnsupportedLanguage);
         }
         if config.mode == Mode::ProductionBoundary && self.before.chars().count() > 512 {
@@ -829,8 +854,7 @@ async fn finish_lab_rejoin(
         Some(&request.language),
     )
     .is_err()
-        || !WritingLanguage::from_tag(&request.language)
-            .is_some_and(|language| language.accepts_output(&insertion))
+        || !accepts_language_output(&request.language, &insertion)
     {
         result.outcome = "abstention";
         result.reason = "output_seam";
@@ -900,8 +924,7 @@ fn apply_observation(
             return;
         }
     };
-    let language_valid = WritingLanguage::from_tag(&request.language)
-        .is_some_and(|language| language.accepts_output(&candidate));
+    let language_valid = accepts_language_output(&request.language, &candidate);
     let seam_valid =
         writing::validate_proposal(&request.before, "", &candidate, Some(&request.language))
             .is_ok();
@@ -1043,6 +1066,20 @@ fn is_weekday(token: &str) -> bool {
         "freitag",
         "samstag",
         "sonntag",
+        "lundi",
+        "mardi",
+        "mercredi",
+        "jeudi",
+        "vendredi",
+        "samedi",
+        "dimanche",
+        "lunes",
+        "martes",
+        "miércoles",
+        "jueves",
+        "viernes",
+        "sábado",
+        "domingo",
         "شنبه",
         "یکشنبه",
         "دوشنبه",
@@ -1172,6 +1209,7 @@ mod tests {
             gpu_layers: 0,
             batch_size: None,
             ubatch_size: None,
+            memory_map: true,
         }
     }
 
@@ -1599,6 +1637,37 @@ mod tests {
     }
 
     #[test]
+    fn french_and_spanish_are_lab_only_with_the_same_style_fact_fence() {
+        for (language, before, style, day) in [
+            (
+                "fr",
+                "La réunion est prévue ",
+                "Exemple : rendez-vous mercredi.",
+                "mercredi",
+            ),
+            (
+                "es",
+                "La reunión será el ",
+                "Ejemplo: nos vemos el miércoles.",
+                "miércoles",
+            ),
+        ] {
+            let mut value = request(Mode::Context);
+            value.language = language.to_owned();
+            assert!(value.validate().is_ok());
+            assert!(
+                WritingLanguage::from_tag(language).is_none(),
+                "production stays unqualified"
+            );
+            let conflict = observe_continuation(Mode::Context, before, language, "", &[style], day);
+            assert_eq!(conflict.reason, "style_fact_conflict");
+            let current = observe_continuation(Mode::Context, before, language, day, &[style], day);
+            assert_eq!(current.text.as_deref(), Some(day));
+            assert!(!accepts_language_output(language, "گزارش"));
+        }
+    }
+
+    #[test]
     fn style_examples_cannot_introduce_calendar_or_numeric_facts() {
         let conflict = observe_continuation(
             Mode::Healed,
@@ -1785,7 +1854,7 @@ mod tests {
             (PrefillBatch::Tokens64, false, GOLDEN_TOKENS64),
             (PrefillBatch::Tokens16, true, GOLDEN_EXPLICIT_ARTIFACT),
         ] {
-            let identity = configure_launch(launch.clone(), prefill_batch, explicit_artifact)
+            let identity = configure_launch(launch.clone(), prefill_batch, explicit_artifact, true)
                 .expect("Lab launch")
                 .identity();
             let serialized = serde_json::to_string(&identity).expect("identity JSON");
@@ -1793,6 +1862,14 @@ mod tests {
                 serialized, expected,
                 "{prefill_batch:?} {explicit_artifact}"
             );
+            let copied = configure_launch(launch.clone(), prefill_batch, explicit_artifact, false)
+                .expect("copied weights launch")
+                .identity();
+            assert_ne!(copied.sha256(), identity.sha256());
+            assert!(!copied.memory_map);
+            let mut mapped = copied;
+            mapped.memory_map = true;
+            assert_eq!(mapped, identity);
         }
     }
 

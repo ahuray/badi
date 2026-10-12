@@ -37,7 +37,7 @@ observer wire details.
   call ([ADR 0004](../../docs/decisions/0004-type-through-carries-text-not-authority.md)).
 - **Manual request.** It needs a collapsed, non-composing, non-sensitive
   surrounding-text snapshot, the live `SurroundingText` capability, a valid
-  input-method language (English, German or Persian) and a surrounding-text
+  input-method language or explicit app override (English, German or Persian), and a surrounding-text
   update since focus or the last authority change. Until a request, text events
   only invalidate local state.
 - **Quiet fields.** When the observer reports a file dialog or a very narrow
@@ -53,6 +53,10 @@ observer wire details.
   causes exactly one `commitString`, reported as `dispatched-unverified`. The
   candidate must still be present and owned at dispatch, and a local timer
   clears it when its lease expires.
+  Tab freezes the chosen version of a growing preview while authorization
+  is in flight; later extensions cannot replace its text or pending request.
+  If a preview still occupies the observer, the commit snapshot waits up to
+  500 ms for it; it still takes a fresh snapshot and keeps the original leases.
 - **Reconnect.** A closed connection retires every session, revision,
   candidate, grant and pending observer reply. Reconnection retries at most ten
   times, with backoff capped at five seconds, renewed by a key or focus. Unchanged
@@ -112,6 +116,13 @@ the app; `badi debug` records `no_edit_path`.
 
 ### Observed fields
 
+The broker target id is random per field visit. It survives reacquisition of
+the exact same AT-SPI bus, object, process, app and URI solely to preserve a
+timed dismissal. Focus loss, a different field or denied acquisition ends the
+visit. Observer epochs, sessions, revisions, salts, policy checks and commit
+grants remain fresh after invalidation; the observer's own epoch-bound target
+still corroborates every snapshot and preview.
+
 The [accessibility observer](../accessibility/README.md) supplies field identity
 and corroboration. On Fcitx 5.1.22 the
 [frontend backport](../../packaging/fcitx5-wayland-compat/README.md) keeps
@@ -154,6 +165,21 @@ Chromium's surrounding text current. Neither provides an editor transaction.
 Arch Linux, native Wayland, Hyprland 0.56.2, Fcitx 5.1.22 (5.1.21 for Omawrite
 and Xournal++), input method `keyboard-us`. These are probe cells, not
 toolkit-wide claims.
+
+On 2026-10-12, the modified `26eb1d9` checkout installed on this desktop
+showed and accepted 20/20 warm Chromium 152 suggestions across five disposable
+prefixes repeated four times. On 2026-10-13, after the independently checked
+weight-loading change, the same twenty trials all showed and accepted:
+visible p50 228.0 ms, nearest-rank p95 283.6 ms, zero wrong-field edits.
+Two focus-interrupted attempts were retained separately and are not part of
+that completed timing sample. Timing ran from last key release
+to the addon's display acknowledgement. Three further trials passed timed
+Escape quiet across same-field edits, explicit requests during quiet, and
+narrow-field quiet before acquisition. Moving focus before Tab dispatched no
+commit. Native undo could merge acceptance with preceding typing, as permitted
+by IME-parity. These are live samples, not held-out language quality evidence;
+Omawrite 0.5.0’s native Open File location field also reported `file_dialog`,
+made no automatic model call after typing, and displayed an explicit request.
 
 | Application | Reaches Fcitx through | Boundary |
 | --- | --- | --- |
@@ -212,6 +238,18 @@ Settings and model files stay. A recovered service proves no prediction,
 insertion or undo; check those in an app.
 
 ## Try it
+
+On 2026-10-13, the installed `badi language chromium de` override produced
+and accepted German suggestions in three disposable Chromium fields while
+Fcitx stayed on `keyboard-us`; no insertion reached the second field. The
+previous language setting was restored. This tests the override and native
+dispatch, not independent German quality.
+
+With the override removed and the same English keyboard, two unfinished German
+phrases selected German from their field text and accepted into the correct
+field: one automatic suggestion and one explicit request after no automatic
+suggestion appeared. Two earlier complete phrases abstained. This verifies
+the installed language path, not a latency distribution or quality score.
 
 Open Omawrite or Xournal++ with `badi launch omawrite` or `badi launch
 xournalpp` (in Xournal++, select the **Text** tool and click the page). Type

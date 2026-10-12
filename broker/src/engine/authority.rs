@@ -189,6 +189,7 @@ pub(super) fn policy_status(
         display_allowed: true,
         suggestions_allowed: true,
         learning_allowed: resolution.allows_learning(),
+        language_override: settings.language_override(target),
         // Browser defaults keep matched_rule, which protocol v1 clients know.
         reason: if resolution.by_default() && target.kind != TargetKind::Browser {
             PolicyResolutionReason::MatchedDefault
@@ -227,6 +228,7 @@ fn denied_policy_status(
         display_allowed: false,
         suggestions_allowed: false,
         learning_allowed: false,
+        language_override: None,
         reason,
     }
 }

@@ -222,6 +222,9 @@ struct BrokerState {
     sessions: HashMap<SessionId, SessionState>,
     /// The last shown continuation that typing may carry (ADR 0004).
     type_through: Option<type_through::TypeThrough>,
+    /// A denial only: a freshly authorized observed session may inherit this
+    /// field visit's dismissal, never context or a suggestion/commit grant.
+    rebound_quiet: Option<ReboundQuiet>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -263,6 +266,11 @@ struct EscapeQuiet {
     until: Instant,
 }
 
+struct ReboundQuiet {
+    target: crate::protocol::TargetDescriptor,
+    until: Instant,
+}
+
 impl EscapeQuiet {
     fn active(self, focus_epoch: u64, now: Instant) -> bool {
         self.focus_epoch == focus_epoch && now < self.until
@@ -271,6 +279,9 @@ impl EscapeQuiet {
 
 struct VisibleSuggestion {
     payload: SuggestionShowPayload,
+    /// Immutable shorter versions of this growing continuation. They share
+    /// this generation and its original expiry, never another field/revision.
+    earlier: Vec<SuggestionShowPayload>,
     expires_at: Instant,
     request_id: Option<String>,
     /// The day of the recorded `Shown` aggregate this suggestion belongs to.
@@ -283,6 +294,8 @@ struct PendingCommit {
     suggestion_id: String,
     request_id: Option<String>,
     expires_at: Instant,
+    /// Content-free estimate; counted only after a valid successful result.
+    saved_words: u64,
 }
 
 impl Broker {
@@ -407,6 +420,7 @@ impl BrokerState {
     }
 
     fn advance_authority_epoch(&mut self) {
+        self.rebound_quiet = None;
         self.authority_epoch = self.authority_epoch.saturating_add(1).min(MAX_SAFE_COUNTER);
     }
 
@@ -443,6 +457,7 @@ impl BrokerState {
         }
         self.sessions.clear();
         self.type_through = None;
+        self.rebound_quiet = None;
     }
 }
 

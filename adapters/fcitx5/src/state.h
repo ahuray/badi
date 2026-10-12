@@ -230,6 +230,7 @@ struct BrokerSession {
     bool opened = false;
     bool policyKnown = false;
     bool policyAllowed = false;
+    std::string languageOverride;
 
     void open(const Coordinates &session) {
         coordinates = session;
@@ -237,14 +238,16 @@ struct BrokerSession {
         coordinates.fingerprint.clear();
         opened = true;
     }
-    void answer(bool allowed) {
+    void answer(bool allowed, std::string language = {}) {
         policyKnown = true;
         policyAllowed = allowed;
+        languageOverride = allowed ? std::move(language) : std::string{};
     }
     void retire() {
         opened = false;
         policyKnown = false;
         policyAllowed = false;
+        languageOverride.clear();
     }
 };
 

@@ -173,10 +173,16 @@ private:
         std::string ownedAuxiliary;
         bool overlayOwned = false;
         std::unique_ptr<::fcitx::EventSourceTime> expiryTimer;
+        std::unique_ptr<::fcitx::EventSourceTime> commitTimer;
         // A suggestion waiting for the observer before display.
         std::optional<std::string> pendingSuggestion;
         // The observed field. Replies of an older generation are ignored.
         Json observedFocus;
+        // Identity for a field visit, used only to preserve broker quieting.
+        // Observation epochs and editing sessions still retire on every
+        // invalidation; this contains no text or reusable editing grant.
+        Json fieldVisit;
+        std::string fieldVisitId;
         std::uint64_t observationGeneration = 0;
         bool observationExplicit = false;
         bool waitingForForeignUi = false;
@@ -223,8 +229,8 @@ private:
                 addon->onCommitPrepare(prepare);
             },
             .onDisconnected = [addon] { addon->onDisconnected(); },
-            .onPolicy = [addon](std::string_view session, bool allowed, bool byDefault) {
-                addon->onPolicy(session, allowed, byDefault);
+            .onPolicy = [addon](std::string_view session, bool allowed, bool byDefault, std::string language) {
+                addon->onPolicy(session, allowed, byDefault, std::move(language));
             },
         };
     }
@@ -590,11 +596,17 @@ private:
         const auto request = binding.state.editingAvailable()
             ? binding.state.requestAcceptance(transport_.nowMs(), observePanel(binding), word)
             : std::nullopt;
-        if (!request || !transport_.requestAcceptance(*request)) clearOwnedPanel(binding);
+        if (!request || !transport_.requestAcceptance(*request)) return clearOwnedPanel(binding);
+        // Retain local ownership until the grant is checked, but stop painting
+        // extensions once the user has chosen this immutable candidate.
+        binding.heldSuggestion.reset();
+        if (binding.holdTimer) binding.holdTimer->setEnabled(false);
+        hidePreview();
     }
 
     void dismissSuggestion(Binding &binding, const PanelObservation &panel) {
         if (const auto request = binding.state.requestDismissal(transport_.nowMs(), panel)) {
+            ++binding.observationGeneration;
             declineContext(binding);
             transport_.requestDismissal(*request);
         }
@@ -688,10 +700,15 @@ private:
         const auto session = randomUuid();
         const auto salt = randomSalt();
         if (!session || !salt) return;
+        if (!sameObservedFieldIdentity(binding.fieldVisit, focus)) {
+            binding.fieldVisit = focus;
+            binding.fieldVisitId = *session;
+            binding.dismissedContext.reset();
+        }
         closeBrokerSession(binding);
         clearOwnedPanel(binding);
         const auto appId = binding.state.appId();
-        if (!binding.state.focusIn(*session, focus["target"]["target_id"].get<std::string>(), appId, *salt,
+        if (!binding.state.focusIn(*session, binding.fieldVisitId, appId, *salt,
                                    editTarget, NativeEditPath::Observed)) return;
         binding.observedFocus = focus;
         if (!binding.state.editingAvailable()) {
@@ -702,6 +719,8 @@ private:
     }
 
     void denyEditing(Binding &binding) {
+        binding.fieldVisit = nullptr;
+        binding.fieldVisitId.clear();
         closeBrokerSession(binding);
         ++binding.observationGeneration;
         binding.state.denyEditing();
@@ -714,6 +733,8 @@ private:
     // IME-parity has no manual fallback, so an explicit request says why the
     // observer produced no field: the field's own purpose, or no observer.
     void observerUnavailable(Binding &binding, const Json &error = nullptr) {
+        binding.fieldVisit = nullptr;
+        binding.fieldVisitId.clear();
         // A failed inspection must not keep the previous field's grant.
         if (binding.observed()) retireObservedField(binding);
         if (!imeParityApp(binding.state.appId())) return;
@@ -744,6 +765,8 @@ private:
     }
 
     void stopObserving(Binding &binding) {
+        binding.fieldVisit = nullptr;
+        binding.fieldVisitId.clear();
         ++binding.observationGeneration;
         binding.observedFocus = nullptr;
         binding.waitingForForeignUi = false;
@@ -872,7 +895,7 @@ private:
         if (!authorityPaused_) queryFocusedPolicies();
     }
 
-    void onPolicy(std::string_view session, bool allowed, bool byDefault) {
+    void onPolicy(std::string_view session, bool allowed, bool byDefault, std::string language) {
         auto *binding = bindingFor(session);
         if (!binding || !binding->state.focused() || !binding->state.editingAvailable()) return;
         // The app list mode opens only fields the observer corroborates; the
@@ -882,7 +905,7 @@ private:
             debug_.record("policy", binding->state.appId(), "app_rule_required");
             return;
         }
-        binding->broker.answer(allowed);
+        binding->broker.answer(allowed, std::move(language));
         debug_.record("policy", binding->state.appId(), allowed ? "app_allowed" : "app_disabled");
         if (!allowed) return;
         if (binding->observed()) requestObservedContext(*binding);
@@ -891,7 +914,7 @@ private:
 
     void onSuggestion(Suggestion suggestion) {
         auto *binding = bindingFor(suggestion.coordinates.sessionId);
-        if (!binding || !safeToObserve(*binding)) return;
+        if (!binding || !safeToObserve(*binding) || binding->state.acceptancePending()) return;
         const auto now = monotonicUs();
         if (binding->showAfterUs > now) {
             binding->heldSuggestion = std::move(suggestion);
@@ -912,7 +935,7 @@ private:
     }
 
     void presentSuggestion(Binding &binding, Suggestion suggestion) {
-        if (!safeToObserve(binding)) return;
+        if (!safeToObserve(binding) || binding.state.acceptancePending()) return;
         // SessionState keeps IME-parity apps off this unobserved display path.
         if (!binding.observed()) return displaySuggestion(std::move(suggestion));
         binding.pendingSuggestion = suggestion.suggestionId;
@@ -928,6 +951,7 @@ private:
     }
 
     void previewIfCorroborated(Binding &binding, const Suggestion &suggestion, const Json &focus, const Json &reply) {
+        if (binding.state.acceptancePending()) return;
         if (!observerAnswered(reply) || !reply["focus"].is_object()) {
             return debug_.record("suggestion_blocked", binding.state.appId(), "observer_display_unavailable");
         }
@@ -967,6 +991,7 @@ private:
 
     void previewed(Binding &binding, const Suggestion &suggestion, const Json &focus, const Json &reply,
                    bool verified, bool rendered) {
+        if (binding.state.acceptancePending()) return;
         const bool foreignIme = hasForeignImeUi(observePanel(binding));
         if (!verified || !matchesObservedFocus(focus, reply["focus"], true) ||
             !matchesCapturedContext(binding.state.lastContext(), currentContext(binding)) || foreignIme) {
@@ -981,11 +1006,12 @@ private:
 
     void displaySuggestion(Suggestion suggestion, bool overlay = false) {
         auto *binding = bindingFor(suggestion.coordinates.sessionId);
+        if (binding && binding->state.acceptancePending()) return;
         if (!binding || !binding->inputContext->hasFocus() || hasForeignImeUi(observePanel(*binding)) ||
             !matchesCapturedContext(binding->state.lastContext(), currentContext(*binding)) ||
             !binding->state.showSuggestion(suggestion, transport_.nowMs())) {
             if (overlay) hidePreview();
-            if (binding->state.visibleText().empty()) clearOwnedPanel(*binding);
+            if (binding && binding->state.visibleText().empty()) clearOwnedPanel(*binding);
             return;
         }
         binding->overlayOwned = overlay;
@@ -1053,12 +1079,35 @@ private:
             return applyCommitPrepare(prepare);
         }
         if (!binding->state.editingAvailable() || !safeToObserve(*binding)) return refuseCommit(prepare, binding);
-        corroborateCommit(*binding, prepare);
+        corroborateCommit(*binding, prepare, monotonicUs() + 500'000);
     }
 
     // Re-snapshot immediately before commitString: the observer must still
     // agree with Fcitx's live text and caret for this field.
-    void corroborateCommit(Binding &binding, const CommitPrepare &prepare) {
+    void corroborateCommit(Binding &binding, const CommitPrepare &prepare, std::uint64_t deadline) {
+        if (!binding.state.acceptancePending() || binding.state.coordinates() != prepare.coordinates ||
+            !safeToObserve(binding)) return refuseCommit(prepare, &binding);
+        if (accessibility_->pending()) {
+            // A growing preview may still own the single observer RPC. Wait
+            // for it to finish before sending the one fresh commit snapshot;
+            // never reuse its display check or extend either authority lease.
+            if (monotonicUs() >= deadline) return refuseCommit(prepare, &binding);
+            binding.commitTimer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
+                [this, prepare, deadline](::fcitx::EventSourceTime *timer, std::uint64_t) {
+                    if (accessibility_->pending() && monotonicUs() < deadline) {
+                        timer->setNextInterval(5'000);
+                        timer->setOneShot();
+                        return true;
+                    }
+                    auto *current = bindingFor(prepare.coordinates.sessionId);
+                    if (current) corroborateCommit(*current, prepare, deadline);
+                    else reportStale(prepare);
+                    return true;
+                });
+            binding.commitTimer->setNextInterval(5'000);
+            binding.commitTimer->setOneShot();
+            return;
+        }
         const bool sent = accessibility_->request(snapshotRequest(binding.observedFocus),
             [this, prepare, focus = binding.observedFocus, generation = binding.observationGeneration](const Json &reply) {
                 auto *current = bindingFor(prepare.coordinates.sessionId);
@@ -1166,7 +1215,11 @@ private:
 
     // The observed field's inspect target, or the manual path's app and context.
     std::optional<Json> brokerTarget(const Binding &binding) const {
-        if (binding.observed()) return binding.observedFocus.value("target", Json());
+        if (binding.observed()) {
+            auto target = binding.observedFocus.value("target", Json());
+            target["target_id"] = binding.fieldVisitId;
+            return target;
+        }
         return desktopApplicationTarget(binding.state.appId(), binding.state.targetId());
     }
 
@@ -1230,7 +1283,8 @@ private:
             return std::nullopt;
         }
         auto context = captureContextWindow(surrounding.text(), surrounding.cursor(), surrounding.anchor(),
-            !!(input.capabilityFlags() & ::fcitx::CapabilityFlag::Multiline), inputMethod->languageCode());
+            !!(input.capabilityFlags() & ::fcitx::CapabilityFlag::Multiline),
+            binding.broker.languageOverride.empty() ? inputMethod->languageCode() : binding.broker.languageOverride);
         if (!context) return context;
         context->identityKnown = binding.observed();
         context->explicitRequest = context->identityKnown ? binding.observationExplicit : true;
@@ -1289,6 +1343,7 @@ private:
             hidePreview();
         }
         if (binding.expiryTimer) binding.expiryTimer->setEnabled(false);
+        if (binding.commitTimer) binding.commitTimer->setEnabled(false);
         if (binding.inputContext != nullptr) {
             auto &panel = binding.inputContext->inputPanel();
             bool changed = false;

@@ -287,7 +287,7 @@ class Observer:
         """
         target_id = hashlib.sha256(f"{metadata['bus']}\0{metadata['path']}\0{self.epoch}".encode()).hexdigest()
         if metadata["browser"]:
-            return {"kind": "browser", "app_id": "chromium", "target_id": target_id,
+            return {"kind": "browser", "app_id": app_id, "target_id": target_id,
                     "origin": canonical_origin(metadata["uri"])}
         return {"kind": "desktop_application", "app_id": app_id, "target_id": target_id}
 

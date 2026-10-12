@@ -625,6 +625,7 @@ mod tests {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            language_overrides: std::collections::BTreeMap::new(),
             subjects: vec![SubjectRule {
                 identity: identity("example.com"),
                 permissions: SubjectPermissions {

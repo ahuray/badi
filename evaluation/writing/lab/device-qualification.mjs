@@ -101,24 +101,25 @@ export function candidateMetadata(candidate, gguf = null) {
 }
 
 export class DeviceQualification {
-  constructor({ executable = binary, cacheDirectory, prefillBatch = 16, command = qualificationCommand } = {}) {
-    if (![16, 64].includes(prefillBatch) || typeof command !== 'function') throw new Error('Use the verified Lab prefill batch of 16 or 64.');
+  constructor({ executable = binary, cacheDirectory, prefillBatch = 16, memoryMap = true, command = qualificationCommand } = {}) {
+    if (![16, 64].includes(prefillBatch) || typeof memoryMap !== 'boolean' || typeof command !== 'function') throw new Error('Use the verified Lab prefill batch of 16 or 64 and a boolean memoryMap.');
     this.executable = executable; this.cacheDirectory = cacheDirectory; this.prefillBatch = prefillBatch;
     this.command = command;
+    this.memoryMap = memoryMap;
     this.evidence = new Map(); this.assessments = new Map();
   }
   async inspect(signal) { return this.command('--inspect-device', undefined, { executable: this.executable, cacheDirectory: this.cacheDirectory, signal }); }
-  async settings(config = { mode: 'healed', budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 }, languages = ['en', 'de', 'fa']) {
-    if (!Array.isArray(languages) || !languages.length || languages.length > 3 || new Set(languages).size !== languages.length || languages.some(value => !['en', 'de', 'fa'].includes(value))) throw new Error('Select distinct supported evaluation languages.');
+  async settings(config = { mode: 'healed', budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 }, languages = ['en', 'de', 'fr', 'es', 'fa']) {
+    if (!Array.isArray(languages) || !languages.length || languages.length > 5 || new Set(languages).size !== languages.length || languages.some(value => !['en', 'de', 'fr', 'es', 'fa'].includes(value))) throw new Error('Select distinct supported evaluation languages.');
     const workerSha = digest(await readFile(this.executable));
     // Bind the worker (which embeds its pinned llama.cpp archive) and the local
     // evaluator/HTTP/review implementation. A JS-only change invalidates saved
     // measurements just as a changed model worker does.
     const evaluator = await Promise.all(evaluatorSources.map(async path => [path, digest(await readFile(new URL(path, import.meta.url)))]));
-    return { runtime_identity: digest({ worker_sha256: workerSha, evaluator }), runtime_version: 'b10726', runtime_architecture: 'x86_64', required_cpu_features: ['avx2'], backend: 'cpu', context_tokens: 2048,
+    return { runtime_identity: digest({ worker_sha256: workerSha, evaluator, ...(!this.memoryMap ? { memory_map: false } : {}) }), runtime_version: 'b10726', runtime_architecture: 'x86_64', required_cpu_features: ['avx2'], backend: 'cpu', context_tokens: 2048,
       batch_tokens: this.prefillBatch, threads: 4, parallel_sequences: 1, cache_element_bytes: 2,
       recurrent_snapshots: 0, context_checkpoints: 0, prompt_format: config.mode,
-      generation_settings_sha256: digest(config), languages: [...languages].sort(), evaluation_version: 'badi.prediction-quality.v1' };
+      generation_settings_sha256: digest(config), languages: [...languages].sort(), evaluation_version: 'badi.prediction-quality.v2' };
   }
   async assess(candidate, signal, { artifact, config, evidence, languages } = {}) {
     signal?.throwIfAborted();

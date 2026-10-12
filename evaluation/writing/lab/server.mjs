@@ -75,7 +75,7 @@ async function readJSON(request) {
 
 export async function createLabServer({ worker = new LabWorker(), port = 0, spellingManifests = {},
   spellingWorkerFactory, spellingManifestLoader, contextLookupWorkerFactory, discoveryService, evidenceStore, qualificationDiagnostics,
-  qualification = new DeviceQualification({ prefillBatch: worker.prefillBatch ?? 16 }) } = {}) {
+  qualification = new DeviceQualification({ prefillBatch: worker.prefillBatch ?? 16, memoryMap: worker.memoryMap ?? true }) } = {}) {
   const capability = randomBytes(32).toString('hex');
   let origin;
   let active = null;

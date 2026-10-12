@@ -368,6 +368,7 @@ pub async fn run_with_artifact(
         directory,
         artifact,
         super::PrefillBatch::default(),
+        true,
         input,
         cancellation,
         ready,
@@ -379,6 +380,7 @@ pub async fn run_with_options(
     directory: PathBuf,
     artifact: Option<super::artifact::ModelArtifactOverride>,
     prefill_batch: super::PrefillBatch,
+    memory_map: bool,
     input: ProbeInput,
     cancellation: ProbeCancellation,
     mut ready: impl FnMut(&Ready<'_>) -> Result<(), ()>,
@@ -389,7 +391,7 @@ pub async fn run_with_options(
     let activation = tokio::select! {
         biased;
         () = cancellation.token.cancelled() => Err(cancellation.reason()),
-        result = tokio::time::timeout(STARTUP_BUDGET, super::activate_with_options(directory, artifact, prefill_batch)) => {
+        result = tokio::time::timeout(STARTUP_BUDGET, super::activate_with_options(directory, artifact, prefill_batch, memory_map)) => {
             match result {
                 Ok(Ok(runtime)) => Ok(runtime),
                 Ok(Err(_)) => Err("runtime_start_failed"),
@@ -525,6 +527,7 @@ mod tests {
             gpu_layers: 0,
             batch_size: None,
             ubatch_size: None,
+            memory_map: true,
         };
         let mut result = request.result(&identity);
         result.outcome = "suggestion";

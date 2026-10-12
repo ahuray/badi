@@ -61,8 +61,9 @@ test('CLI parsing keeps generation seed fixed and baseline settings independent 
   assert.equal(parsed.configs[1].max_tokens, 32);
   assert.equal(parsed.configs[1].cache_prompt, false);
   assert.ok(parsed.configs.every(value => value.seed === 42 && value.temperature === 0));
+  assert.equal(parseOptions(['--suite', 'input.json', '--output', 'output/writing/new', '--memory-map', 'false']).memoryMap, false);
   for (const extra of [['--seed', '-1'], ['--seed', '1.5'], ['--budget-ms', '549'], ['--max-tokens', '65'],
-    ['--modes', 'unknown'], ['--modes', 'context,context'], ['--cache-prompt', 'yes'], ['--unknown', 'value']]) {
+    ['--modes', 'unknown'], ['--modes', 'context,context'], ['--cache-prompt', 'yes'], ['--memory-map', '0'], ['--unknown', 'value']]) {
     assert.throws(() => parseOptions(['--suite', 'suite.json', '--output', 'out', ...extra]));
   }
   assert.throws(() => parseOptions([]));

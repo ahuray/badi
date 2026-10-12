@@ -52,6 +52,7 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
         schema: "badi.settings.v2",
         revision: 7,
         paused: false,
+        language_overrides: {"brave-origin": "de"},
         subjects: [
           {
             identity: {
@@ -95,11 +96,14 @@ if [[ ${1:-} == settings && ${2:-} == replace ]]; then
     hang_ignoring_term
   fi
   [[ ${3:-} == --if-revision && ${5:-} == --json && -n ${4:-} && -n ${6:-} ]]
+  [[ $6 == - ]]
+  replacement=$(cat)
+  printf '%s\n' "$replacement" >"${BADI_FAKE_CALL_LOG}.settings"
   jq -e '
     .schema == "badi.settings.v2"
     and any(.subjects[];
       .identity == {kind: "linux_app", adapter: "fcitx", app_id: "omawrite"})
-  ' <<<"$6" >/dev/null
+  ' <<<"$replacement" >/dev/null
   exit 0
 fi
 

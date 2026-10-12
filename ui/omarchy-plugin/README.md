@@ -19,7 +19,7 @@ time the window opens. The window has three views:
 
 - **Writing:** model state, pause, mid-sentence mode, Escape quiet presets
   (until edit, 30 seconds, 5 minutes, 1 hour), editor launch buttons, key
-  help, counters and a short privacy note.
+  help, usage statistics and a short privacy note.
 - **Applications:** the app and website list modes, allow or block per
   supported app, and exact website rules. Blocking revokes context reading,
   suggestions and display; learning stays blocked and retention `none`.
@@ -30,6 +30,8 @@ Settings writes use the broker's compare-and-swap API and fail visibly on a
 conflict instead of retrying over another change. `badi settings` toggles the
 window through the `badi-writing` IPC target. The terminal equivalents are in
 the [README](../../README.md#choose-where-badi-writes).
+Per-app language overrides are currently set from the terminal. Panel writes
+validate and preserve them.
 
 ## Install and update
 
@@ -53,11 +55,31 @@ plugin disable io.github.ahuray.badi` hides the mark.
 ## Client contract
 
 `BadiClient.qml` never reads document text, model state or settings files
-directly. Every command is a fixed argv array through Quickshell `Process`; JSON
-is one non-executable argument. It runs at most one overview read and one
+directly. Every command is a fixed argv array through Quickshell `Process`;
+settings JSON goes through the child's stdin, closed after writing. It runs at most one overview read and one
 settings write, and a write invalidates any older read. Deactivation terminates
 every child (SIGTERM, then SIGKILL), stale exit handlers change nothing, and a
 reactivation during teardown queues exactly one fresh read.
+
+## Statistics
+
+The Writing view reports counters since model start, without storing prose:
+- **Shown:** broker suggestions, excluding growth and type-through remainders.
+- **Accepted:** explicit acceptance requests dispatched to the adapter, not a
+  claim that every edit applied.
+- **Words saved ≈:** word parts in successful results, including native
+  `dispatched-unverified` results. Partial words count; punctuation-only parts,
+  spelling replacements and failed results do not. Native insertions and later
+  undo cannot be verified, so this is an estimate rather than retained words.
+
+An older broker without word counters shows `—`, never a fabricated zero.
+Restarting the model resets these counters. The broker retains verified and
+unverified word counts separately in `word_savings`.
+
+On 2026-10-12 the installed panel was rendered in the real Omarchy session at
+2× scale: the Escape presets and statistics were visible without clipping.
+Selecting 30 seconds passed through QML stdin and advanced the settings revision;
+the previous off setting was restored afterward.
 
 ## Pinned host
 

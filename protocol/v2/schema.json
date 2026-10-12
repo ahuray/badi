@@ -568,7 +568,8 @@
         "display_allowed": { "type": "boolean" },
         "suggestions_allowed": { "type": "boolean" },
         "learning_allowed": { "type": "boolean" },
-        "reason": { "$ref": "#/$defs/policyResolutionReason" }
+        "reason": { "$ref": "#/$defs/policyResolutionReason" },
+        "language_override": { "enum": ["en", "de", "fa"] }
       },
       "allOf": [
         {
@@ -960,7 +961,16 @@
         "commits_applied": { "$ref": "#/$defs/counter" },
         "commit_failures": { "$ref": "#/$defs/counter" },
         "provider_errors": { "$ref": "#/$defs/counter" },
-        "no_suggestion": { "$ref": "#/$defs/noSuggestionMetrics" }
+        "no_suggestion": { "$ref": "#/$defs/noSuggestionMetrics" },
+        "word_savings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["applied", "dispatched_unverified"],
+          "properties": {
+            "applied": { "$ref": "#/$defs/counter" },
+            "dispatched_unverified": { "$ref": "#/$defs/counter" }
+          }
+        }
       }
     },
     "noSuggestionReason": {

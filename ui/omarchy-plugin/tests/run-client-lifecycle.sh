@@ -204,12 +204,14 @@ ipc setPaused true >/dev/null
 wait_for_call_count 3
 wait_until_idle
 [[ $(sed -n '2p' "$call_log" | cut -d' ' -f1-5) == 'settings replace --if-revision 7 --json' ]]
-replacement=$(sed -n '2p' "$call_log" | cut -d' ' -f6-)
+[[ $(sed -n '2p' "$call_log") == 'settings replace --if-revision 7 --json -' ]]
+replacement=$(cat "${call_log}.settings")
 jq -e '
   .schema == "badi.settings.v2"
   and .revision == 8
   and .paused == true
   and .all_web_origins == true
+  and .language_overrides == {"brave-origin": "de"}
   and any(.subjects[];
     .identity == {kind: "linux_app", adapter: "fcitx", app_id: "omawrite"})
   and any(.subjects[];

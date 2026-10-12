@@ -1043,6 +1043,37 @@ def session(root, report):
         checks.append('App blocklist mode opens an unlisted IME-parity app through its observed field and leaves an '
                       'unlisted manual-path app with its own Tab')
 
+        # Timed quiet survives fresh observer epochs of one field visit,
+        # without retaining its retired session or grant.
+        listed = control('settings', 'show', '--json')
+        control('settings', 'replace', '--if-revision', str(listed['revision']), '--json',
+                json.dumps({**listed, 'revision': listed['revision'] + 1, 'escape_quiet_seconds': 60}))
+        open_context('chatgpt')
+        backend.apps.add('chatgpt')
+        change(PREFIX, new_field=True)
+        wait(lambda: context.candidate() == SUFFIX, 'candidate before timed quiet')
+        assert context.key(desktop.ESCAPE)
+        quiet(.1)
+        calls = control('status')['metrics']['provider_calls']
+        for value in (PREFIX + ' f', PREFIX + ' fo'):
+            change(value)
+            quiet(.4)
+            assert context.candidate() is None
+            assert control('status')['metrics']['provider_calls'] == calls
+        change(PREFIX)
+        quiet(.3)
+        assert control('status')['metrics']['provider_calls'] == calls
+        assert context.key(ord(' '), 5)
+        wait(lambda: context.candidate() is not None, 'explicit request ends quiet across the rebind')
+        assert context.key(desktop.ESCAPE)
+        change(PREFIX, new_field=True)
+        wait(lambda: context.candidate() == SUFFIX, 'a different field is not quieted')
+        restored = control('settings', 'show', '--json')
+        control('settings', 'replace', '--if-revision', str(restored['revision']), '--json',
+                json.dumps({**listed, 'revision': restored['revision'] + 1}))
+        checks.append('Timed Escape quiet survives same-field observer rebinds without a model call; '
+                      'an explicit request resumes and another field is not quieted')
+
         # Replacement is not negotiated. A peer that injects one anyway, on an
         # otherwise valid IME-parity observed session, loses the connection.
         broker_metrics = control('status')['metrics']
@@ -1104,6 +1135,37 @@ def session(root, report):
         payload = fake.last('context.changed')['payload']
         assert (payload['before'], payload['after'], payload['selection']['head']) == (PREFIX, '', len(PREFIX)), payload
         checks.append('chatgpt: the broker receives after = "" at the unchanged caret for the normalized paragraph end')
+
+        for changed_field in (False, True):
+            request = fake_request()
+            fake.respond(request, 'suggestion.show', {
+                'suggestion_id': 'first-word', 'text': ' for', 'accept_word': ' for',
+                'ttl_ms': 3000, 'provider': 'phrase_v1'})
+            fake_wait(lambda: context.candidate() == ' for', 'first immutable preview')
+            delayed_preview['enabled'] = True
+            started = delayed_preview['started']
+            fake.respond(request, 'suggestion.show', {
+                'suggestion_id': 'extended-preview', 'text': SUFFIX, 'accept_word': ' for',
+                'ttl_ms': 3000, 'provider': 'phrase_v1'})
+            fake_wait(lambda: delayed_preview['started'] > started, 'extension owns the observer RPC')
+            controls, results, commits = fake.count('control.request'), fake.count('commit.result'), context.commits()
+            assert context.key(desktop.TAB)
+            fake_wait(lambda: fake.count('control.request') > controls, 'accept while extension is pending')
+            acceptance = fake.last('control.request')
+            assert acceptance['payload']['suggestion_id'] == 'first-word'
+            fake.respond(acceptance, 'commit.prepare', {
+                'suggestion_id': 'first-word', 'text': ' for', 'acceptance': 'all'})
+            if changed_field:
+                backend.field += 1  # Silent identity change must be caught by the fresh snapshot.
+            fake_wait(lambda: fake.count('commit.result') > results, 'pending preview finishes before commit snapshot')
+            delayed_preview['enabled'] = False
+            expected = 'stale' if changed_field else 'dispatched-unverified'
+            assert fake.last('commit.result')['payload']['status'] == expected
+            assert context.commits() == (commits if changed_field else [*commits, ' for'])
+            fake_quiet(.1)
+            assert context.candidate() is None, 'the late extension never replaces the accepted version'
+        checks.append('Tab during a delayed growing preview waits for its own snapshot and dispatches the exact '
+                      'first word once; a silent field change instead reports stale without dispatch')
 
         result = {'boundary': 'unavailable apps + IME-parity observed targets + synthetic desktop D-Bus fields '
                               '+ actual Fcitx addon/observer + phrase broker + injected-frame peer',

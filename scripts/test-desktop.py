@@ -63,6 +63,19 @@ class DesktopTests(unittest.TestCase):
                 desktop.main(['ctl', 'pause', 'on'])
             self.assertEqual(command.call_args.args[0][1:], ['--socket', str(endpoint), 'pause', 'on'])
 
+    def test_installed_companions_do_not_mix_package_and_user_local_code(self):
+        library = self.directory / 'lib'
+        library.mkdir()
+        (library / 'badictl').write_text('packaged CLI')
+        observer = library / 'accessibility'
+        observer.mkdir()
+        (observer / 'health.py').write_text(
+            'def probe(endpoint, pid): return {"ready": True, "pid": pid}\n')
+        with patch.object(desktop, 'LIBRARY', library):
+            self.assertEqual(desktop.cli_path(), library / 'badictl')
+            self.assertEqual(desktop.observer_probe(self.directory / 'accessibility.sock', 42),
+                             {'ready': True, 'pid': 42})
+
     def test_overview_adds_desktop_counters_and_activity(self):
         self.desktop_socket()
         metrics = {'provider_calls': 4, 'suggestions_shown': 3, 'provider_errors': 1}
@@ -93,8 +106,8 @@ class DesktopTests(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()):
             desktop.main(['pause'])
         request = command.call_args.args[0]
-        self.assertEqual(request[:5], ['settings', 'replace', '--if-revision', '7', '--json'])
-        document = json.loads(request[5])
+        self.assertEqual(request, ['settings', 'replace', '--if-revision', '7', '--json', '-'])
+        document = json.loads(command.call_args.kwargs['input_text'])
         self.assertEqual(document['revision'], 8)
         self.assertTrue(document['paused'])
 
@@ -169,8 +182,8 @@ class DesktopTests(unittest.TestCase):
                  contextlib.redirect_stdout(io.StringIO()) as output:
                 desktop.main(['site', 'all', mode])
             request = command.call_args.args[0]
-            self.assertEqual(request[:5], ['settings', 'replace', '--if-revision', '7', '--json'])
-            sent = json.loads(request[5])
+            self.assertEqual(request, ['settings', 'replace', '--if-revision', '7', '--json', '-'])
+            sent = json.loads(command.call_args.kwargs['input_text'])
             self.assertEqual(sent['revision'], 8)
             self.assertEqual(sent.get('all_web_origins'), expected)
             self.assertEqual(sent['subjects'], exact)
@@ -188,7 +201,7 @@ class DesktopTests(unittest.TestCase):
                  patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}']) as command, \
                  contextlib.redirect_stdout(io.StringIO()):
                 desktop.main(arguments)
-            sent = json.loads(command.call_args.args[0][5])
+            sent = json.loads(command.call_args.kwargs['input_text'])
             self.assertEqual(sent.get('mid_line'), expected)
             self.assertEqual(sent['subjects'], [])
 
@@ -199,7 +212,7 @@ class DesktopTests(unittest.TestCase):
                  patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}']) as command, \
                  contextlib.redirect_stdout(io.StringIO()):
                 desktop.main(arguments)
-            sent = json.loads(command.call_args.args[0][5])
+            sent = json.loads(command.call_args.kwargs['input_text'])
             self.assertEqual(sent.get('escape_quiet_seconds'), expected)
             self.assertEqual(sent['subjects'], [])
         for invalid in (['escape-quiet', '0'], ['escape-quiet', '3601'], ['escape-quiet', 'soon']):
@@ -209,6 +222,13 @@ class DesktopTests(unittest.TestCase):
 
     def test_list_modes_listing_and_reset(self):
         settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'subjects': []}
+        desktop.set_language(settings, 'brave-origin', 'de')
+        desktop.set_language(settings, 'chromium-browser', 'en')
+        self.assertEqual(settings['language_overrides'], {'brave-origin': 'de', 'chromium': 'en'})
+        desktop.set_language(settings, 'chromium', 'reset')
+        self.assertEqual(settings['language_overrides'], {'brave-origin': 'de'})
+        with self.assertRaisesRegex(RuntimeError, 'Lab-only'):
+            desktop.set_language(settings, 'omawrite', 'fr')
         desktop.set_app(settings, 'discord', False)
         desktop.set_app(settings, 'omawrite', True)
         desktop.set_site(settings, 'https://bank.example', False)
@@ -223,9 +243,10 @@ class DesktopTests(unittest.TestCase):
                  patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}']) as command, \
                  contextlib.redirect_stdout(io.StringIO()):
                 desktop.main(arguments)
-            sent = json.loads(command.call_args.args[0][5])
+            sent = json.loads(command.call_args.kwargs['input_text'])
             self.assertEqual(sent.get(key), expected)
             self.assertEqual(sent['subjects'], exact, 'a mode change keeps every exact rule')
+            self.assertEqual(sent['language_overrides'], {'brave-origin': 'de'})
         listing = {**settings, 'all_linux_apps': True}
         with patch.object(desktop, 'control', return_value=json.dumps(listing)), \
              contextlib.redirect_stdout(io.StringIO()) as output:
@@ -244,7 +265,7 @@ class DesktopTests(unittest.TestCase):
                  patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}']) as command, \
                  contextlib.redirect_stdout(io.StringIO()) as output:
                 desktop.main(arguments)
-            sent = json.loads(command.call_args.args[0][5])
+            sent = json.loads(command.call_args.kwargs['input_text'])
             remaining = [item['identity'].get('app_id') or item['identity'].get('host') for item in sent['subjects']]
             self.assertNotIn(removed, remaining)
             self.assertEqual(len(remaining), len(exact) - 1)
@@ -418,11 +439,23 @@ class DesktopTests(unittest.TestCase):
              patch.object(desktop, 'startup_problem', return_value={'code': 'model_not_installed', 'message': 'Missing model', 'action': 'Provision the pinned model'}), \
              contextlib.redirect_stdout(output):
             with self.assertRaises(SystemExit) as stopped:
-                desktop.main(['doctor'])
+                desktop.main(['doctor', '--json'])
         self.assertEqual(stopped.exception.code, 1)
         report = json.loads(output.getvalue())
         self.assertEqual(report['problems'][0]['code'], 'model_not_installed')
         self.assertIn('service_failed', [problem['code'] for problem in report['problems']])
+        with patch.object(desktop, 'health_report', return_value=report), \
+             contextlib.redirect_stdout(io.StringIO()) as human:
+            with self.assertRaises(SystemExit) as stopped:
+                desktop.main(['doctor'])
+        self.assertEqual(stopped.exception.code, 1)
+        self.assertIn('Model: unreachable', human.getvalue())
+        self.assertIn('Next: Provision the pinned model', human.getvalue())
+        report['problems'] = []
+        with patch.object(desktop, 'health_report', return_value=report), \
+             contextlib.redirect_stdout(io.StringIO()) as human:
+            desktop.main(['doctor'])
+        self.assertIn('no problems found', human.getvalue())
 
     def test_observer_readiness_is_bound_to_a_stable_service_process(self):
         running = {'loaded': True, 'active': 'active', 'process_id': 123}

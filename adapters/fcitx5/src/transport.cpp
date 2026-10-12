@@ -96,11 +96,17 @@ bool validReason(const Json &value) {
 }
 
 bool policyStatus(const Json &value, const Json &payload) {
+    auto permissions = payload;
+    if (permissions.is_object() && permissions.contains("language_override")) {
+        const auto &language = permissions["language_override"];
+        if (language != "en" && language != "de" && language != "fa") return false;
+        permissions.erase("language_override");
+    }
     if (!exactKeys(value, {"v", "id", "type", "mono_ms", "payload"}) ||
         value["v"] != 2 || value["type"] != "policy.status" ||
         !counter(value["mono_ms"]) || !value["id"].is_string() ||
         !validOpaqueId(value["id"].get<std::string>()) ||
-        !exactKeys(payload, {"authority_epoch", "settings_revision", "paused",
+        !exactKeys(permissions, {"authority_epoch", "settings_revision", "paused",
             "activation", "context_allowed", "display_allowed", "suggestions_allowed",
             "learning_allowed", "reason"}) ||
         !counter(payload["authority_epoch"]) || !counter(payload["settings_revision"])) return false;
@@ -910,7 +916,8 @@ private:
         const bool allowed = payload["paused"] == false &&
             payload["activation"] == "always" && payload["context_allowed"] == true &&
             payload["display_allowed"] == true && payload["suggestions_allowed"] == true;
-        if (callbacks_.onPolicy) callbacks_.onPolicy(session, allowed, payload["reason"] == "matched_default");
+        if (callbacks_.onPolicy) callbacks_.onPolicy(session, allowed, payload["reason"] == "matched_default",
+            payload.value("language_override", std::string{}));
         return true;
     }
 

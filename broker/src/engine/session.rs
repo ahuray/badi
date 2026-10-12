@@ -6,7 +6,10 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use super::authority::policy_status;
-use super::{Broker, BrokerError, BrokerEventSink, ContextOutcome, SessionAuthority, SessionState};
+use super::{
+    Broker, BrokerError, BrokerEventSink, BrokerState, ContextOutcome, SessionAuthority,
+    SessionState,
+};
 use crate::metrics::Metrics;
 use crate::policy::{PolicyDecision, PolicyInput, PolicyReason, evaluate};
 use crate::protocol::{
@@ -106,6 +109,15 @@ impl Broker {
         let metrics = &self.inner.metrics;
         let mut state = self.inner.state.lock().await;
         let paused = state.effective_paused();
+        let language = state
+            .sessions
+            .get(&coordinates.session_id)
+            .and_then(|session| {
+                state
+                    .settings
+                    .as_ref()?
+                    .language_override(&session.target.target)
+            });
         let session = state.session_with_data_access(coordinates.session_id)?;
         session.ensure_newer_context(coordinates)?;
         // Apply broker-owned activation before validating content. A restrictive
@@ -125,6 +137,12 @@ impl Broker {
             paused,
         ) {
             PolicyDecision::Allow(_) => {
+                if let Some(language) = language
+                    .map(crate::settings::PredictionLanguage::tag)
+                    .or_else(|| crate::language::detect_field_language(&payload.before))
+                {
+                    payload.language = Some(language.to_owned());
+                }
                 session.context = Some(payload);
                 self.renew_context_authority_lease(session, self.inner.config.generation_timeout);
                 Ok(ContextOutcome::Allowed)
@@ -197,6 +215,15 @@ fn fcitx_append_only_app(app_id: &str) -> bool {
 }
 
 impl SessionState {
+    pub(super) fn observed_quiet_target(&self) -> Option<crate::protocol::TargetDescriptor> {
+        (self.authority.adapter_kind == crate::protocol::AdapterKind::Fcitx
+            && self
+                .context
+                .as_ref()
+                .is_some_and(|context| context.field.identity_known))
+        .then(|| self.target.target.clone())
+    }
+
     fn new(
         coordinates: Coordinates,
         target: SessionOpenPayload,
@@ -355,5 +382,31 @@ const fn restrictive_activation(configured: Activation, claimed: Activation) -> 
         (Activation::Never, _) | (_, Activation::Never) => Activation::Never,
         (Activation::Manual, _) | (_, Activation::Manual) => Activation::Manual,
         (Activation::Always, Activation::Always) => Activation::Always,
+    }
+}
+
+impl BrokerState {
+    pub(super) fn quiet_request(
+        &mut self,
+        coordinates: Coordinates,
+        explicit: bool,
+    ) -> Result<bool, BrokerError> {
+        let now = Instant::now();
+        let session = self.session_with_data_access(coordinates.session_id)?;
+        let local = session.escape_quiet_binds(explicit, coordinates.focus_epoch, now);
+        let target = session.observed_quiet_target();
+        let rebound = self
+            .rebound_quiet
+            .as_ref()
+            .is_some_and(|quiet| target.as_ref() == Some(&quiet.target) && now < quiet.until);
+        if (explicit && rebound)
+            || self
+                .rebound_quiet
+                .as_ref()
+                .is_some_and(|quiet| now >= quiet.until)
+        {
+            self.rebound_quiet = None;
+        }
+        Ok(local || (rebound && !explicit))
     }
 }

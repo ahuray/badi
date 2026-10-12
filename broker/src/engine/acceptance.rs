@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use tokio::time;
 
 use super::{
-    Broker, BrokerError, BrokerEvent, EscapeQuiet, PendingCommit, SessionAuthority, SessionState,
-    VisibleSuggestion,
+    Broker, BrokerError, BrokerEvent, EscapeQuiet, PendingCommit, ReboundQuiet, SessionAuthority,
+    SessionState, VisibleSuggestion,
 };
 use crate::metrics::Metrics;
 use crate::personalization::PersonalizationSignal;
@@ -69,19 +69,28 @@ impl Broker {
             None => self.dismiss(session, visible),
             Some(acceptance) => self.prepare_commit(session, visible, acceptance, request_id)?,
         };
-        if acceptance.is_none() && escape_quiet_seconds > 0 {
+        let rebound_quiet = if acceptance.is_none() && escape_quiet_seconds > 0 {
             // The dismissal arms its timed quiet for this field visit. An
             // explicit request or a new focus epoch ends it early.
+            let until = Instant::now() + Duration::from_secs(escape_quiet_seconds);
             session.escape_quiet = Some(EscapeQuiet {
                 focus_epoch: session.coordinates.focus_epoch,
-                until: Instant::now() + Duration::from_secs(escape_quiet_seconds),
+                until,
             });
-        }
+            session
+                .observed_quiet_target()
+                .map(|target| ReboundQuiet { target, until })
+        } else {
+            None
+        };
         // One Shown funds one outcome. A carried remainder must not record a
         // second one against the same aggregate.
         let recorded = signal.is_some_and(|(event_day, signal)| {
             self.queue_outcome(&session.target.target, settings_revision, event_day, signal)
         });
+        if let Some(quiet) = rebound_quiet {
+            state.rebound_quiet = Some(quiet);
+        }
         if recorded {
             if let Some(carry) = state.type_through.as_mut() {
                 carry.aggregate_day = None;
@@ -137,6 +146,7 @@ impl Broker {
             suggestion_id: shown.suggestion_id.clone(),
             request_id: request_id.clone(),
             expires_at,
+            saved_words: saved_words(&commit),
         };
         let prepare = BrokerEvent::CommitPrepare {
             coordinates,
@@ -198,6 +208,13 @@ impl Broker {
             return Err(BrokerError::CommitLeaseExpired);
         }
         validate_commit_authority(&session.authority, payload.status)?;
+        match payload.status {
+            CommitStatus::Applied => metrics.record_word_savings(pending.saved_words, 0),
+            CommitStatus::DispatchedUnverified => {
+                metrics.record_word_savings(0, pending.saved_words);
+            }
+            CommitStatus::Stale | CommitStatus::Blocked | CommitStatus::Failed => {}
+        }
         session.pending = None;
         retire_committed_context(session, payload.status, metrics);
         Ok(())
@@ -235,11 +252,15 @@ impl SessionState {
         metrics: &Metrics,
     ) -> Result<VisibleSuggestion, BrokerError> {
         let visible = self.visible.as_ref().ok_or(BrokerError::NoSuggestion)?;
-        if visible.payload.suggestion_id != suggestion_id {
+        let earlier = visible
+            .earlier
+            .iter()
+            .position(|payload| payload.suggestion_id == suggestion_id);
+        if visible.payload.suggestion_id != suggestion_id && earlier.is_none() {
             return Err(BrokerError::Stale);
         }
         let expired = visible.expires_at <= Instant::now();
-        let visible = self.visible.take().expect("visible suggestion checked");
+        let mut visible = self.visible.take().expect("visible suggestion checked");
         if expired {
             let _ = self
                 .sink
@@ -247,8 +268,27 @@ impl SessionState {
             metrics.record_suggestion_expired();
             return Err(BrokerError::NoSuggestion);
         }
+        if let Some(index) = earlier {
+            // Accept exactly what the adapter displayed, even if a longer
+            // version crossed its acceptance on the socket. Consuming the
+            // group retires every sibling's authority in the same operation.
+            std::mem::swap(&mut visible.payload, &mut visible.earlier[index]);
+        }
         Ok(visible)
     }
+}
+
+fn saved_words(commit: &CommitPreparePayload) -> u64 {
+    // A spelling replacement saves no new words. Space-delimited word parts
+    // match visible writing units, including Persian ZWNJ and hyphenated words.
+    if commit.replace_before.is_some() {
+        return 0;
+    }
+    commit
+        .text
+        .split_whitespace()
+        .filter(|part| part.chars().any(char::is_alphanumeric))
+        .count() as u64
 }
 
 fn retire_committed_context(session: &mut SessionState, status: CommitStatus, metrics: &Metrics) {

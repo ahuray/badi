@@ -42,8 +42,10 @@ editing works ([coverage](../../README.md#where-it-works)).
   `SENTENCE` boundary and must still equal it. Inspect does not read that sentence.
 
 Browser targets share one browser-origin identity (adapter `chromium`), so one
-`badi site ... on` grant covers Chromium, Brave and Zen; the binding keeps the
-exact app id. Electron apps render web content, so the HTML purpose gates apply
+`badi site ... on` grant covers Chromium, Brave and Zen. The target and binding
+keep the exact app id so per-app language overrides stay separate. Update the
+broker and observer together: older brokers recognize only `chromium` browser
+targets. Electron apps render web content, so the HTML purpose gates apply
 to them too. A missing tag or input type is ineligible, never guessed. Search,
 email and URL inputs, combo boxes and ARIA search boxes (`xml-roles:
 searchbox`) get no suggestions.
@@ -80,11 +82,19 @@ process, its identity rule and exactly one focused editable object. It queries
 only that process and reads no prose. Every binding comes from an `inspect`;
 `snapshot` and `preview` require its unchanged epoch.
 
-Hyprland's active window and monitors come from its IPC socket. The lock check
-runs `qs ipc -n -p $OMARCHY_PATH/shell call -- lock status` as a child process
-while the field is read, joined at most 150 ms later. Unless all five lock flags
-are explicitly false, the lock denial wins, and any error or timeout fails
-closed.
+Hyprland's active window and monitors come from its IPC socket. Each inspection
+asks the running Omarchy shell for fresh `lock.status`, overlapping the field
+inspection and waiting at most 150 ms within its operation budget. Unless all
+five lock flags are explicitly false, the lock denial wins; errors fail closed.
+
+On Quickshell 0.3.1, the observer caches the discovered IPC endpoint and sends
+the query directly. It never caches an unlocked answer. Peer UID and PID must
+match discovery; instance-directory or executable changes invalidate the
+endpoint and an overlapping reply. Other versions use `qs ipc -n -p
+$OMARCHY_PATH/shell call -- lock status` as before. The small wire subset is
+pinned to upstream [command tags](https://github.com/quickshell-mirror/quickshell/blob/v0.3.1/src/ipc/ipccommand.hpp),
+[call replies](https://github.com/quickshell-mirror/quickshell/blob/v0.3.1/src/io/ipccomm.cpp)
+and Qt's length-prefixed UTF-16 `QString`. Unknown replies are denied.
 
 ### Browser fields
 
@@ -172,7 +182,7 @@ Requests carry `schema: "badi.accessibility.v1"`, an ASCII `id` and an `op`:
 
 | Op | Request adds | Reply `focus` adds |
 | --- | --- | --- |
-| `inspect` | `app_id` | `binding` `{epoch,bus,path,process_id,app_id,uri}`, `target` (browser targets use `app_id: "chromium"` and an origin; `target_id` hashes bus, path and epoch), `purpose`, `caret`, `selection_count`, `geometry: null`, optional `quiet` |
+| `inspect` | `app_id` | `binding` `{epoch,bus,path,process_id,app_id,uri}`, `target` (browser targets keep the exact app id and origin; `target_id` hashes bus, path and epoch), `purpose`, `caret`, `selection_count`, `geometry: null`, optional `quiet` |
 | `snapshot` | `binding`, `policy_target` | `before`, `after`, `total_chars`, optional `scope: "block"`, optional `quiet` |
 | `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–160 characters), `ttl_ms` (1–5000), optional `caret_rect` `{x,y,width,height,scale}` | `total_chars`, `rendered`, optional `quiet` |
 
@@ -290,7 +300,30 @@ A file that already has the flag is left alone. A reduced mode or
 before it changes anything. Changed files are backed up, and running windows
 keep their old flags until relaunched. Discord has no reliable mechanism: its
 web client resets its `chromiumSwitches` list after one launch, so the
-installer writes nothing for it.
+installer writes nothing to that file. The desktop-wide alternative is:
+
+```sh
+python3 scripts/install-desktop.py --screen-reader-accessibility
+```
+
+This explicitly enables AT-SPI `ScreenReaderEnabled` and the persistent
+`org.gnome.desktop.a11y.applications screen-reader-enabled` setting. It
+advertises accessibility to all desktop applications, including Discord;
+it does not install a screen reader or change Badi's app/site permissions.
+Applications may need relaunching. Prior values are saved privately in
+`accessibility-screen-reader.json` beside that install's backup, or under
+`install-backups/notes` if no file changed. An already enabled setting leaves
+the original note intact. File rollback does not change desktop settings.
+To undo this opt-in, use the two recorded values, in this order:
+
+```sh
+gsettings set org.gnome.desktop.a11y.applications screen-reader-enabled false
+busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status ScreenReaderEnabled b false
+```
+
+Replace each `false` if its recorded prior value was `true`. This setting
+alone does not prove Discord composer acquisition, suggestions or acceptance;
+those need a disposable private composer trial.
 
 ## Tests
 

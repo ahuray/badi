@@ -38,11 +38,22 @@ interaction, the exact editing authority and the policy around them.
 - Context is the bounded text of the focused field, read only after the exact
   app or site is allowed and the field passes its checks. Password and other
   sensitive fields, foreign IME composition and unknown authority yield nothing.
+- Users may additionally enable bounded accessibility context from the same
+  window and local style learning, with global and per-app opt-outs. These
+  controls are separate from prediction permission. Window context cannot
+  authorize an edit, cross a window or site boundary, or override current
+  draft facts. It is processed on the device, never sent to a remote service.
 - Activation, context, inference, learning and retention are separate
-  decisions; deny wins. Prose is not retained, and typed text and credentials
-  stay out of diagnostics, which record content-free counts and reasons.
+  decisions; deny wins. Ordinary context is ephemeral. Enabled style learning
+  uses only authorized samples, stays encrypted locally, and supports one-step
+  deletion; opting out stops further acquisition and learning. Typed text and
+  credentials stay out of diagnostics, which record content-free counts and reasons.
 - Raw keylogging, clipboard or screen scraping and blind synthetic typing are
   never product integrations.
+
+Language quality work prioritizes English, German, French and Spanish, with
+independent evidence for each language before enabling its behavior. Existing
+Persian support keeps its safety and regression gates.
 
 ## Integration order
 

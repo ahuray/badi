@@ -418,6 +418,8 @@ bool SessionState::showSuggestion(Suggestion suggestion, std::uint64_t nowMs) {
         clearSuggestion();
         return false;
     }
+    // A streamed extension cannot change the exact text already accepted.
+    if (pendingAcceptance_) return false;
     const auto clean = sanitizeSuggestion(suggestion.text);
     if (!focused_ || !clean || suggestion.expiresAtMs <= nowMs ||
         suggestion.expiresAtMs > kMaxSafeCounter ||

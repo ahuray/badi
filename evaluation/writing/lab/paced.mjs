@@ -59,7 +59,7 @@ export function planPacedTrials(rawSuite) {
     groups.get(row.trace_id).push(row);
   }
   for (const rows of groups.values()) {
-    if (rows.length !== 4 || !rows[0].context.trim() || !/^(en|de|fa)(-|$)/iu.test(rows[0].language)
+    if (rows.length !== 4 || !rows[0].context.trim() || !/^(en|de|fr|es|fa)(-|$)/iu.test(rows[0].language)
       || rows.some((row, i) => row.step !== i || row.at_ms !== TIMES[i] || row.language !== rows[0].language
         || row.context !== rows[0].context || row.style !== rows[0].style
         || (i && (!row.prefix.startsWith(rows[i - 1].prefix) || [...row.prefix].length !== [...rows[i - 1].prefix].length + 1)))) {

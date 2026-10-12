@@ -665,6 +665,9 @@ pub struct PolicyStatusPayload {
     pub suggestions_allowed: bool,
     pub learning_allowed: bool,
     pub reason: PolicyResolutionReason,
+    /// Optional v2 quality preference; never grants acquisition or editing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_override: Option<crate::settings::PredictionLanguage>,
 }
 
 impl PolicyStatusPayload {

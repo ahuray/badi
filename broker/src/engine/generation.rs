@@ -157,9 +157,8 @@ impl Broker {
             .settings
             .as_ref()
             .is_some_and(|settings| settings.mid_line);
+        let escape_quiet = state.quiet_request(coordinates, payload.explicit)?;
         let session = state.session_with_data_access(coordinates.session_id)?;
-        let escape_quiet =
-            session.escape_quiet_binds(payload.explicit, coordinates.focus_epoch, Instant::now());
         let binding = GenerationBinding {
             coordinates,
             fingerprint: payload.fingerprint,
@@ -549,8 +548,26 @@ impl Broker {
             expires_at,
             aggregate_day,
         });
+        let earlier = session.visible.take().map_or_else(Vec::new, |previous| {
+            if previous.expires_at == expires_at
+                && previous.payload.fingerprint == payload.fingerprint
+                && previous.payload.replace_before.is_none()
+                && payload.replace_before.is_none()
+                && payload.text.len() > previous.payload.text.len()
+                && payload.text.starts_with(&previous.payload.text)
+            {
+                // Each version adds at least one character, so the protocol's
+                // 64-character suggestion limit also bounds this collection.
+                let mut earlier = previous.earlier;
+                earlier.push(previous.payload);
+                earlier
+            } else {
+                Vec::new()
+            }
+        });
         session.visible = Some(VisibleSuggestion {
             payload,
+            earlier,
             expires_at,
             request_id,
             aggregate_day,
@@ -609,6 +626,7 @@ impl Broker {
             return;
         }
         session.cancellation = None;
+        session.visible = None;
         let _ = session.sink.send(BrokerEvent::generation_withdrawn(
             binding.coordinates,
             binding.fingerprint,

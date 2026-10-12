@@ -12,7 +12,7 @@ const reasonLabels = {
   token_preflight_deadline: 'The time budget expired while checking the prompt.',
   context_overflow: 'The supplied text exceeds the model context. Shorten the draft or examples.',
   runtime_unavailable: 'The local model could not complete this request.',
-  unsupported_language: 'This experiment currently supports English, German and Persian.',
+  unsupported_language: 'This experiment currently supports English, German, French, Spanish and Persian.',
   invalid_request: 'The input exceeds the supported limits or contains unsupported formatting.',
   invalid_model_output: 'The model returned an invalid response.',
 };

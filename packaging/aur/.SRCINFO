@@ -1,0 +1,31 @@
+pkgbase = badi-git
+	pkgdesc = Local writing suggestions for Linux, Omarchy first
+	pkgver = 0.1.0.r125.26eb1d9
+	pkgrel = 1
+	url = https://github.com/ahuray/badi
+	arch = x86_64
+	license = MIT
+	license = LicenseRef-SCOWL
+	makedepends = git
+	makedepends = cargo
+	makedepends = cmake
+	makedepends = ninja
+	makedepends = nlohmann-json
+	depends = gcc-libs
+	depends = glibc
+	depends = python
+	depends = python-gobject
+	depends = at-spi2-core
+	depends = gtk4
+	depends = gtk4-layer-shell
+	depends = glib2
+	depends = systemd
+	depends = fcitx5>=5.1.22
+	depends = hyprland
+	optdepends = curl: download the separately verified writing assets
+	provides = badi
+	conflicts = badi
+	source = badi::git+https://github.com/ahuray/badi.git#branch=main
+	sha256sums = SKIP
+
+pkgname = badi-git

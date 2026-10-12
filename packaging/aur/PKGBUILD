@@ -1,0 +1,73 @@
+pkgname=badi-git
+pkgver=0.1.0.r125.26eb1d9
+pkgrel=1
+pkgdesc='Local writing suggestions for Linux, Omarchy first'
+arch=('x86_64')
+url='https://github.com/ahuray/badi'
+license=('MIT' 'LicenseRef-SCOWL')
+depends=('gcc-libs' 'glibc' 'python' 'python-gobject' 'at-spi2-core'
+         'gtk4' 'gtk4-layer-shell' 'glib2' 'systemd' 'fcitx5>=5.1.22' 'hyprland')
+makedepends=('git' 'cargo' 'cmake' 'ninja' 'nlohmann-json')
+optdepends=('curl: download the separately verified writing assets')
+provides=('badi')
+conflicts=('badi')
+source=('badi::git+https://github.com/ahuray/badi.git#branch=main')
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$srcdir/badi"
+    printf '0.1.0.r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+    cd "$srcdir/badi"
+    # Respect Arch's Rust installation when cargo is a rustup shim; do not
+    # download the repository's CI toolchain during an offline build.
+    RUSTUP_TOOLCHAIN=stable cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+    cd "$srcdir/badi"
+    RUSTUP_TOOLCHAIN=stable cargo build --frozen --release -p badi-broker --bins
+    cmake -S adapters/fcitx5 -B build-fcitx -G Ninja \
+        -DCMAKE_BUILD_TYPE=None -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_TESTING=ON
+    cmake --build build-fcitx
+}
+
+check() {
+    cd "$srcdir/badi"
+    RUSTUP_TOOLCHAIN=stable cargo test --frozen -p badi-broker
+    ctest --test-dir build-fcitx --output-on-failure
+    PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-desktop.py
+}
+
+package() {
+    cd "$srcdir/badi"
+    install -Dm755 target/release/badi-broker "$pkgdir/usr/lib/badi/badi-broker"
+    install -Dm755 target/release/badictl "$pkgdir/usr/lib/badi/badictl"
+    install -Dm755 scripts/badi-desktop.py "$pkgdir/usr/lib/badi/badi-desktop.py"
+    install -Dm644 scripts/badi_install.py "$pkgdir/usr/lib/badi/badi_install.py"
+    install -d "$pkgdir/usr/bin"
+    ln -s ../lib/badi/badi-desktop.py "$pkgdir/usr/bin/badi"
+    ln -s ../lib/badi/badi-desktop.py "$pkgdir/usr/bin/badi-desktop"
+    ln -s ../lib/badi/badictl "$pkgdir/usr/bin/badictl"
+    for file in daemon contract desktop field geometry preview health; do
+        install -Dm644 "adapters/accessibility/$file.py" "$pkgdir/usr/lib/badi/accessibility/$file.py"
+    done
+    DESTDIR="$pkgdir" cmake --install build-fcitx
+    for unit in badi-broker badi-accessibility; do
+        install -Dm644 "packaging/systemd/$unit.service" "$pkgdir/usr/lib/systemd/user/$unit.service"
+        sed -i 's|%h/.local/lib/badi/|/usr/lib/badi/|g' "$pkgdir/usr/lib/systemd/user/$unit.service"
+    done
+    for file in manifest.json BarWidget.qml BadiMark.qml DesktopPanel.qml BadiClient.qml; do
+        install -Dm644 "ui/omarchy-plugin/$file" "$pkgdir/usr/share/badi/omarchy/$file"
+    done
+    install -Dm644 packaging/io.github.ahuray.badi.svg \
+        "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.ahuray.badi.svg"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 broker/data/writing-lexicon/LICENSE "$pkgdir/usr/share/licenses/$pkgname/SCOWL"
+    install -Dm644 broker/data/writing-lexicon/README.md "$pkgdir/usr/share/licenses/$pkgname/SCOWL-README.md"
+    install -Dm644 packaging/aur/README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    # No pacman hook starts services, edits a home directory or downloads a model.
+}

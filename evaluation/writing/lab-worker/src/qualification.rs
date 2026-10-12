@@ -16,7 +16,7 @@ use crate::sha256_hex;
 
 const MIB: u64 = 1_048_576;
 const SCHEMA: &str = "badi.device-qualification.v1";
-pub const EVALUATION_VERSION: &str = "badi.prediction-quality.v1";
+pub const EVALUATION_VERSION: &str = "badi.prediction-quality.v2";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -435,7 +435,7 @@ fn compatibility_reasons(input: &AssessmentInput) -> Vec<String> {
         || settings
             .languages
             .iter()
-            .any(|language| !matches!(language.as_str(), "en" | "de" | "fa"))
+            .any(|language| !matches!(language.as_str(), "en" | "de" | "fr" | "es" | "fa"))
         || settings
             .languages
             .iter()
@@ -443,7 +443,7 @@ fn compatibility_reasons(input: &AssessmentInput) -> Vec<String> {
             .len()
             != settings.languages.len()
     {
-        reasons.push("Request a distinct supported language set (en, de, fa).".to_owned());
+        reasons.push("Request a distinct supported language set (en, de, fr, es, fa).".to_owned());
     }
     if settings.backend != "cpu" {
         reasons.push("GPU execution is not yet qualified by this CPU estimator; detected or shared memory cannot grant acceleration.".to_owned());

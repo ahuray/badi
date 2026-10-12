@@ -14,7 +14,7 @@ const languageOf = row => row.language.toLowerCase().split('-')[0];
 // pass through serde_json::Value and may have alphabetically sorted object keys.
 const RUNTIME_KEYS = ['launch_contract_id', 'binary_sha256', 'runtime_bundle_manifest_sha256',
   'model_sha256', 'model_size', 'model_alias', 'model_origin', 'threads', 'context_size',
-  'gpu_layers', 'batch_size', 'ubatch_size'];
+  'gpu_layers', 'batch_size', 'ubatch_size', 'memory_map'];
 const hash = value => createHash('sha256').update(JSON.stringify(Object.fromEntries(
   RUNTIME_KEYS.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])))).digest('hex');
 const percentile = (values, p) => values.length ? [...values].sort((a, b) => a - b)[Math.ceil(values.length * p) - 1] : null;
@@ -61,14 +61,14 @@ export async function runDiagnostics({ worker, cases, config, makeRequest, signa
   if (!worker || typeof worker.predict !== 'function' || typeof worker.stop !== 'function'
     || typeof worker.beforeStart !== 'function') throw new Error('Diagnostics require a selected artifact with a resource recheck before each load.');
   if (activeWorkers.has(worker) || worker.preparing || worker.session?.pending) throw new Error('Diagnostics are already running or this worker is busy.');
-  if (![30, 300, 1800].includes(durationSeconds) || !Array.isArray(cases) || !cases.length || cases.length > 256
+  if (![30, 300, 1800].includes(durationSeconds) || !Array.isArray(cases) || !cases.length || cases.length > 512
     || typeof makeRequest !== 'function' || !config || !integer(config.budget_ms) || config.budget_ms < 1 || config.budget_ms > 5000) {
-    throw new Error('Use 1–256 explicit cases and a diagnostic duration of 30, 300 or 1800 seconds.');
+    throw new Error('Use 1–512 explicit cases and a diagnostic duration of 30, 300 or 1800 seconds.');
   }
   config = structuredClone(config);
   const inputs = cases.map(validateCase);
   if (new Set(inputs.map(row => row.id)).size !== inputs.length
-    || inputs.some(row => !['en', 'de', 'fa'].includes(languageOf(row)))) throw new Error('Diagnostics need unique English, German or Persian cases.');
+    || inputs.some(row => !['en', 'de', 'fr', 'es', 'fa'].includes(languageOf(row)))) throw new Error('Diagnostics need unique English, German, French, Spanish or Persian cases.');
   const representatives = [...new Map(inputs.map(row => [languageOf(row), row])).values()];
   const controller = new AbortController(), sessions = new Set(), cleanupBySession = new Map();
   const capture = () => { if (worker.session) sessions.add(worker.session); };
