@@ -186,6 +186,17 @@ for value in '"true"' null 1; do
     '{schema: "badi.settings.v2", revision: 1, paused: false, all_linux_apps: $value, subjects: []}')
   [[ $(ipc validateSettings "$document") == false ]]
 done
+# The timed Escape quiet is an optional whole number of seconds, 1 to 3600.
+for value in 1 90 3600; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, escape_quiet_seconds: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == true ]]
+done
+for value in 0 3601 1.5 '"90"' null; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, escape_quiet_seconds: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == false ]]
+done
 
 # A settings write changes only its own field at the next revision and carries
 # every subject and the `badi site all on` flag through unchanged.

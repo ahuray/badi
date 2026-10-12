@@ -110,11 +110,24 @@ bool observerCorroborates(const Json &captured, const Json &observed, const Cont
     return matchesObservedFocus(captured, observed, true) && observerAgrees(observed, context);
 }
 
+std::optional<std::string_view> automaticQuietReason(const Json &observed) {
+    if (!observed.is_object()) return std::nullopt;
+    const auto quiet = observed.value("quiet", Json());
+    if (quiet.is_null()) return std::nullopt;
+    if (quiet == "file_dialog") return "file_dialog";
+    if (quiet == "narrow_field") return "narrow_field";
+    // A quiet fact this build does not name still quiets automatic work.
+    return "quiet_field";
+}
+
 std::optional<std::string_view> observedRequestBlocked(const Json &observed, const ContextWindow &context,
-                                                       bool foreignIme) {
+                                                       bool foreignIme, bool automatic) {
     if (!context.identityKnown) return "field_identity_unknown";
     if (context.before.empty()) return "empty_prefix";
     if (foreignIme) return "foreign_ime_active";
+    if (automatic) {
+        if (const auto quiet = automaticQuietReason(observed)) return quiet;
+    }
     if (!observerAgrees(observed, context)) return "observer_context_mismatch";
     return std::nullopt;
 }

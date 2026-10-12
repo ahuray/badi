@@ -26,6 +26,12 @@
       "type": "boolean",
       "description": "Mid-sentence suggestions. When false or omitted, a word after the caret abstains before any model call. Punctuation after the caret can still complete the word being typed. Producers omit the property when false."
     },
+    "escape_quiet_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600,
+      "description": "Seconds a dismissal (Escape) keeps its field quiet for automatic suggestions, across edits, until the focus epoch ends or an explicit request asks again. When omitted, only the adapters' own until-edit decline applies. Producers omit the property when zero."
+    },
     "subjects": {
       "type": "array",
       "maxItems": 64,

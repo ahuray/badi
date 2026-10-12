@@ -48,6 +48,18 @@ to them too. A missing tag or input type is ineligible, never guessed. Search,
 email and URL inputs, combo boxes and ARIA search boxes (`xml-roles:
 searchbox`) get no suggestions.
 
+Two further facts quiet **automatic** suggestions only; the field stays
+eligible and an explicit request still reads it. A field inside a
+`file chooser` ancestor reports `quiet: "file_dialog"`. A field under twelve
+glyphs wide and no taller than one padded line (three glyph heights), judged
+from its own SCREEN extents against the glyph before the caret, reports
+`quiet: "narrow_field"`. An unreadable fact is unknown and quiets nothing: a
+field narrower than two glyphs is a caret-wide proxy (VS Code), zero glyph
+boxes (Qt) say nothing, and a taller box is not judged narrow. The addon
+honors the fact before any automatic snapshot, so a quiet field's prose is
+not read until the user asks. The manual native Fcitx path has no dialog or
+width signal and cannot honor this; only observed fields are quieted.
+
 ### Sensitive fields
 
 Detection is the toolkit's mark, not the words in the field.
@@ -160,9 +172,9 @@ Requests carry `schema: "badi.accessibility.v1"`, an ASCII `id` and an `op`:
 
 | Op | Request adds | Reply `focus` adds |
 | --- | --- | --- |
-| `inspect` | `app_id` | `binding` `{epoch,bus,path,process_id,app_id,uri}`, `target` (browser targets use `app_id: "chromium"` and an origin; `target_id` hashes bus, path and epoch), `purpose`, `caret`, `selection_count`, `geometry: null` |
-| `snapshot` | `binding`, `policy_target` | `before`, `after`, `total_chars`, optional `scope: "block"` |
-| `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–160 characters), `ttl_ms` (1–5000), optional `caret_rect` `{x,y,width,height,scale}` | `total_chars`, `rendered` |
+| `inspect` | `app_id` | `binding` `{epoch,bus,path,process_id,app_id,uri}`, `target` (browser targets use `app_id: "chromium"` and an origin; `target_id` hashes bus, path and epoch), `purpose`, `caret`, `selection_count`, `geometry: null`, optional `quiet` |
+| `snapshot` | `binding`, `policy_target` | `before`, `after`, `total_chars`, optional `scope: "block"`, optional `quiet` |
+| `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–160 characters), `ttl_ms` (1–5000), optional `caret_rect` `{x,y,width,height,scale}` | `total_chars`, `rendered`, optional `quiet` |
 
 `preview` compares the current caret and length with the expected ones before
 drawing. `hide` returns `hidden:true`; `status` returns readiness without
@@ -287,7 +299,7 @@ npm run accessibility:check         # source tests, no desktop
 npm run accessibility:integration   # private D-Bus and XDG environments
 ```
 
-The source tests cover privacy gates, malformed frames, identity rules, epochs,
+The source tests cover privacy gates, quiet facts, malformed frames, identity rules, epochs,
 stale snapshots, bounded Unicode reads, rich-editor flattening, calibration
 against recorded live extents, the preview lifecycle and the lock query. The
 integration lane proves that other senders and fields cannot deliver events and

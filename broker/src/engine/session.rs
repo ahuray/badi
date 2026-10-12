@@ -1,6 +1,6 @@
 //! Session lifecycle and the context authority each session holds.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -215,8 +215,25 @@ impl SessionState {
             cancellation: None,
             visible: None,
             pending: None,
+            escape_quiet: None,
             sink,
         }
+    }
+
+    /// Whether a dismissal's timed quiet binds this request. Asking
+    /// explicitly ends the quiet at once.
+    pub(super) fn escape_quiet_binds(
+        &mut self,
+        explicit: bool,
+        focus_epoch: u64,
+        now: Instant,
+    ) -> bool {
+        if explicit {
+            self.escape_quiet = None;
+            return false;
+        }
+        self.escape_quiet
+            .is_some_and(|quiet| quiet.active(focus_epoch, now))
     }
 
     pub(super) fn context_fingerprint(&self) -> Option<&str> {

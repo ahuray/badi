@@ -250,7 +250,23 @@ struct SessionState {
     cancellation: Option<CancellationToken>,
     visible: Option<VisibleSuggestion>,
     pending: Option<PendingCommit>,
+    escape_quiet: Option<EscapeQuiet>,
     sink: BrokerEventSink,
+}
+
+/// A dismissal's timed quiet for automatic suggestions in one field visit.
+/// Bound to the focus epoch that was dismissed; an explicit request or a
+/// new focus epoch ends it early.
+#[derive(Clone, Copy)]
+struct EscapeQuiet {
+    focus_epoch: u64,
+    until: Instant,
+}
+
+impl EscapeQuiet {
+    fn active(self, focus_epoch: u64, now: Instant) -> bool {
+        self.focus_epoch == focus_epoch && now < self.until
+    }
 }
 
 struct VisibleSuggestion {

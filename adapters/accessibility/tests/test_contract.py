@@ -74,6 +74,20 @@ class ContractTests(unittest.TestCase):
         self.backend.meta["font"] = {"family": "Iosevka", "size_pt": 13.0, "weight": 400}
         self.assertEqual(self.inspect()["focus"]["font"], {"family": "Iosevka", "size_pt": 13.0, "weight": 400})
 
+    def test_inspect_carries_quiet_facts_without_denying_the_field(self):
+        for reason in ("file_dialog", "narrow_field"):
+            with self.subTest(reason=reason):
+                self.backend.meta["quiet"] = reason
+                focus = self.inspect()["focus"]
+                self.assertEqual(focus["quiet"], reason)
+                # Quiet is a fact for the caller's automatic path; the field
+                # itself stays readable for an explicit request.
+                self.assertTrue(self.snapshot(focus)["ok"])
+        del self.backend.meta["quiet"]
+        self.assertNotIn("quiet", self.inspect()["focus"])
+        self.backend.meta["quiet"] = "something_else"
+        self.assertNotIn("quiet", self.inspect()["focus"], "only the two known facts reach the wire")
+
     def test_status_preserves_authority_and_never_acquires_or_changes_ui(self):
         self.observer.tracked = {"test": "unchanged"}
         def forbidden(*_args):

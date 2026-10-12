@@ -1403,10 +1403,10 @@ void observerRequestsNameTheBoundField() {
 
     auto observedContext = *context;
     observedContext.identityKnown = true;
-    check(!observedRequestBlocked(observed, observedContext, false), "an agreeing end-of-text snapshot requests");
-    check(observedRequestBlocked(observed, *context, false) == "field_identity_unknown" &&
-              observedRequestBlocked(observed, observedContext, true) == "foreign_ime_active" &&
-              observedRequestBlocked(edited, observedContext, false) == "observer_context_mismatch",
+    check(!observedRequestBlocked(observed, observedContext, false, true), "an agreeing end-of-text snapshot requests");
+    check(observedRequestBlocked(observed, *context, false, true) == "field_identity_unknown" &&
+              observedRequestBlocked(observed, observedContext, true, true) == "foreign_ime_active" &&
+              observedRequestBlocked(edited, observedContext, false, true) == "observer_context_mismatch",
           "identity, foreign composition and disagreement block the request");
     auto empty = *captureContextWindow("thank you", 0, 0, true, "en");
     empty.identityKnown = true;
@@ -1416,9 +1416,26 @@ void observerRequestsNameTheBoundField() {
     middleObserved["before"] = "thank";
     middleObserved["after"] = " you";
     middleObserved["caret"] = 5;
-    check(observedRequestBlocked(observed, empty, false) == "empty_prefix" &&
-              !observedRequestBlocked(middleObserved, middle, false),
+    check(observedRequestBlocked(observed, empty, false, true) == "empty_prefix" &&
+              !observedRequestBlocked(middleObserved, middle, false, true),
           "a request needs a prefix; an agreeing caret mid-text requests");
+
+    auto dialog = observed;
+    dialog["quiet"] = "file_dialog";
+    auto narrow = observed;
+    narrow["quiet"] = "narrow_field";
+    auto oddQuiet = observed;
+    oddQuiet["quiet"] = 7;
+    check(observedRequestBlocked(dialog, observedContext, false, true) == "file_dialog" &&
+              observedRequestBlocked(narrow, observedContext, false, true) == "narrow_field" &&
+              observedRequestBlocked(oddQuiet, observedContext, false, true) == "quiet_field",
+          "dialog and narrow facts block automatic requests; an unknown quiet fact fails quiet");
+    check(!observedRequestBlocked(dialog, observedContext, false, false) &&
+              !observedRequestBlocked(narrow, observedContext, false, false),
+          "an explicit request still works in a dialog or narrow field");
+    check(automaticQuietReason(dialog) == "file_dialog" && automaticQuietReason(narrow) == "narrow_field" &&
+              !automaticQuietReason(observed),
+          "the inspected field's quiet fact can stop automatic work before a snapshot");
 
     check(invalidates({{"event", "invalidate"}}, "code") && invalidates({{"app_id", ""}}, "code") &&
               invalidates({{"app_id", "code"}}, "code") && invalidates({{"app_id", 7}}, "code") &&

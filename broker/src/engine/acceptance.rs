@@ -1,11 +1,11 @@
 //! Accepting or dismissing a shown suggestion, and the adapter's commit result.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::time;
 
 use super::{
-    Broker, BrokerError, BrokerEvent, PendingCommit, SessionAuthority, SessionState,
+    Broker, BrokerError, BrokerEvent, EscapeQuiet, PendingCommit, SessionAuthority, SessionState,
     VisibleSuggestion,
 };
 use crate::metrics::Metrics;
@@ -50,6 +50,10 @@ impl Broker {
             return Err(BrokerError::Denied(PolicyReason::Paused));
         }
         let settings_revision = state.settings_revision;
+        let escape_quiet_seconds = state
+            .settings
+            .as_ref()
+            .map_or(0, |settings| settings.escape_quiet_seconds);
         let session = state.session_with_data_access(coordinates.session_id)?;
         session.ensure_coordinates(coordinates)?;
         session.ensure_fingerprint(&payload.fingerprint)?;
@@ -65,6 +69,14 @@ impl Broker {
             None => self.dismiss(session, visible),
             Some(acceptance) => self.prepare_commit(session, visible, acceptance, request_id)?,
         };
+        if acceptance.is_none() && escape_quiet_seconds > 0 {
+            // The dismissal arms its timed quiet for this field visit. An
+            // explicit request or a new focus epoch ends it early.
+            session.escape_quiet = Some(EscapeQuiet {
+                focus_epoch: session.coordinates.focus_epoch,
+                until: Instant::now() + Duration::from_secs(escape_quiet_seconds),
+            });
+        }
         // One Shown funds one outcome. A carried remainder must not record a
         // second one against the same aggregate.
         let recorded = signal.is_some_and(|(event_day, signal)| {

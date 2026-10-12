@@ -1044,6 +1044,7 @@ fn controlled_settings(revision: u64, allowed: bool, learn: bool) -> SettingsV2 
         all_web_origins: false,
         all_linux_apps: false,
         mid_line: false,
+        escape_quiet_seconds: 0,
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,
@@ -1079,6 +1080,7 @@ fn controlled_learning_settings(revision: u64, retention: RetentionPermission) -
         all_web_origins: false,
         all_linux_apps: false,
         mid_line: false,
+        escape_quiet_seconds: 0,
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,
@@ -3111,6 +3113,175 @@ async fn broker_records_only_content_free_shown_and_dismissed_aggregates() {
             .expect("persisted aggregate");
     assert!(!persisted.contains(&private_context.before));
     assert!(!persisted.contains(&suggestion_text));
+}
+
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn escape_quiet_abstains_automatically_across_edits_until_asked() {
+    let temporary = tempdir().expect("temporary directory");
+    let paths = StoragePaths::new(
+        temporary.path().join("config/badi"),
+        temporary.path().join("data/badi"),
+    )
+    .expect("storage paths");
+    let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+    let mut settings = controlled_settings(1, true, false);
+    settings.escape_quiet_seconds = 600;
+    control_plane
+        .replace_settings(0, settings)
+        .expect("allow controlled origin with escape quiet");
+    let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
+    let broker = Broker::with_control_plane(
+        provider.clone(),
+        BrokerConfig {
+            debounce: Duration::ZERO,
+            ..BrokerConfig::default()
+        },
+        std::sync::Arc::clone(&control_plane),
+    )
+    .expect("controlled broker");
+    let session_id = SessionId::new();
+    let (sink, mut events) = mpsc::channel(8);
+    broker
+        .open_session(
+            coordinates(session_id, 0),
+            SessionOpenPayload {
+                target: controlled_target(),
+                activation: Activation::Always,
+            },
+            controlled_authority(),
+            event_sink(sink),
+        )
+        .await
+        .expect("allowed session");
+
+    let first = context(1, FieldPurpose::Normal);
+    broker
+        .update_context(coordinates(session_id, 1), first.clone())
+        .await
+        .expect("allowed context");
+    broker
+        .request_suggestion(
+            coordinates(session_id, 1),
+            SuggestRequestPayload {
+                fingerprint: first.fingerprint.clone(),
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("suggestion request");
+    let shown = timeout(Duration::from_millis(100), events.recv())
+        .await
+        .expect("show timeout")
+        .expect("show event");
+    let BrokerEvent::SuggestionShow { payload, .. } = shown else {
+        panic!("expected suggestion show")
+    };
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 1);
+
+    broker
+        .session_control(
+            coordinates(session_id, 1),
+            SessionControlRequestPayload {
+                action: ControlAction::Dismiss,
+                fingerprint: first.fingerprint,
+                suggestion_id: Some(payload.suggestion_id),
+            },
+            None,
+        )
+        .await
+        .expect("dismiss suggestion");
+    assert!(matches!(
+        events.recv().await,
+        Some(BrokerEvent::SuggestionClear { payload, .. }) if payload.reason == ReasonCode::Dismissed
+    ));
+
+    // An edit ends the adapters' own decline, but the timed quiet holds: the
+    // automatic request abstains without a provider call.
+    let edited = context(2, FieldPurpose::Normal);
+    broker
+        .update_context(coordinates(session_id, 2), edited.clone())
+        .await
+        .expect("edited context");
+    broker
+        .request_suggestion(
+            coordinates(session_id, 2),
+            SuggestRequestPayload {
+                fingerprint: edited.fingerprint.clone(),
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("automatic request during quiet");
+    let cleared = timeout(Duration::from_millis(100), events.recv())
+        .await
+        .expect("clear timeout")
+        .expect("clear event");
+    let BrokerEvent::SuggestionClear { payload, .. } = cleared else {
+        panic!("expected suggestion clear during quiet")
+    };
+    assert_eq!(payload.reason, ReasonCode::NoSuggestion);
+    assert_eq!(
+        provider.calls.load(Ordering::Relaxed),
+        1,
+        "quiet calls no model"
+    );
+
+    // Asking explicitly ends the quiet at once and suggests again.
+    broker
+        .request_suggestion(
+            coordinates(session_id, 2),
+            SuggestRequestPayload {
+                fingerprint: edited.fingerprint.clone(),
+                explicit: true,
+            },
+            None,
+        )
+        .await
+        .expect("explicit request ends quiet");
+    let shown = timeout(Duration::from_millis(100), events.recv())
+        .await
+        .expect("show timeout")
+        .expect("show event");
+    assert!(matches!(shown, BrokerEvent::SuggestionShow { .. }));
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 2);
+
+    // And automatic work flows again afterwards. The context update first
+    // supersedes the still-visible suggestion, so wait past its clear.
+    let third = context(3, FieldPurpose::Normal);
+    broker
+        .update_context(coordinates(session_id, 3), third.clone())
+        .await
+        .expect("third context");
+    broker
+        .request_suggestion(
+            coordinates(session_id, 3),
+            SuggestRequestPayload {
+                fingerprint: third.fingerprint,
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("automatic request after explicit");
+    let shown = timeout(Duration::from_millis(100), async {
+        loop {
+            match events.recv().await {
+                Some(BrokerEvent::SuggestionShow { .. }) => break true,
+                Some(_) => {}
+                None => break false,
+            }
+        }
+    })
+    .await
+    .expect("show timeout");
+    assert!(
+        shown,
+        "automatic work flows again after an explicit request"
+    );
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 3);
 }
 
 #[tokio::test]

@@ -487,6 +487,7 @@ fn personalization_privacy_floor(current: &SettingsV2, next: &SettingsV2) -> Set
         all_web_origins: false,
         all_linux_apps: false,
         mid_line: current.mid_line,
+        escape_quiet_seconds: current.escape_quiet_seconds,
         subjects,
     }
 }
@@ -668,6 +669,7 @@ mod tests {
             all_web_origins: false,
             all_linux_apps: false,
             mid_line: false,
+            escape_quiet_seconds: 0,
             subjects: vec![SubjectRule {
                 identity: identity(),
                 permissions: SubjectPermissions {
@@ -866,6 +868,7 @@ mod tests {
             all_web_origins: false,
             all_linux_apps: false,
             mid_line: false,
+            escape_quiet_seconds: 0,
             subjects: Vec::new(),
         };
         control
@@ -956,6 +959,7 @@ mod tests {
             all_web_origins: false,
             all_linux_apps: false,
             mid_line: false,
+            escape_quiet_seconds: 0,
             subjects: Vec::new(),
         };
         assert!(matches!(
@@ -1026,6 +1030,7 @@ mod tests {
             all_web_origins: false,
             all_linux_apps: false,
             mid_line: false,
+            escape_quiet_seconds: 0,
             subjects,
         };
         assert!(matches!(
@@ -1319,6 +1324,7 @@ mod tests {
             all_web_origins: false,
             all_linux_apps: false,
             mid_line: false,
+            escape_quiet_seconds: 0,
             subjects: vec![SubjectRule {
                 identity: identity(),
                 permissions: SubjectPermissions::deny_all(),

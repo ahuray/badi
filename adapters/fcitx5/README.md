@@ -40,6 +40,12 @@ observer wire details.
   input-method language (English, German or Persian) and a surrounding-text
   update since focus or the last authority change. Until a request, text events
   only invalidate local state.
+- **Quiet fields.** When the observer reports a file dialog or a very narrow
+  field (`quiet` in the [observer contract](../accessibility/README.md#socket-contract)),
+  automatic work stops before a snapshot, so the field's text is not read;
+  Ctrl+Shift+Space still asks there. An unrecognized quiet fact also quiets
+  automatic work. The manual native path sees only Fcitx purposes and has no
+  dialog or width signal, so it is not quieted this way.
 - **Display.** The observer's grey inline preview, or else Badi's own Fcitx
   panel: one candidate under “Badi · Tab to accept · Ctrl+→ next word · Escape
   to dismiss”. Notices expire after five seconds.

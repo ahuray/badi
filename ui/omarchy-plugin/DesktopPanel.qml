@@ -123,6 +123,18 @@ Item {
     client.replaceSettings(document, message)
   }
 
+  function setEscapeQuiet(seconds) {
+    if (!client.canMutateSettings || action.running) return
+    actionMessage = ""
+    var document = client.cloneSettings()
+    if (seconds > 0) document.escape_quiet_seconds = seconds
+    else delete document.escape_quiet_seconds
+    var message = seconds > 0
+      ? "Escape keeps a field quiet for " + seconds + " seconds."
+      : "Escape quiet lasts only until the text changes."
+    client.replaceSettings(document, message)
+  }
+
   function writeRule(identity, decision) {
     var document = client.cloneSettings()
     document.subjects = document.subjects.filter(function(item) { return client.compareIdentities(item.identity, identity) !== 0 })
@@ -323,6 +335,39 @@ Item {
                 }
               }
               Caption { text: "Mid-sentence is off until it can be measured. A word after the caret then asks for nothing. Punctuation can still finish the word you are typing." }
+              SectionTitle { text: "Escape quiet" }
+              RowLayout {
+                Layout.fillWidth: true
+                ActionButton {
+                  Layout.fillWidth: true
+                  text: "Until edit"; selected: !(client.settings.escape_quiet_seconds > 0); bordered: true; focusable: true
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (client.settings.escape_quiet_seconds > 0) root.setEscapeQuiet(0)
+                  Accessible.name: "A dismissal lasts only until the text changes"
+                }
+                ActionButton {
+                  Layout.fillWidth: true
+                  text: "30 sec"; selected: client.settings.escape_quiet_seconds === 30; bordered: true; focusable: true
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (client.settings.escape_quiet_seconds !== 30) root.setEscapeQuiet(30)
+                  Accessible.name: "A dismissal keeps the field quiet for 30 seconds"
+                }
+                ActionButton {
+                  Layout.fillWidth: true
+                  text: "5 min"; selected: client.settings.escape_quiet_seconds === 300; bordered: true; focusable: true
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (client.settings.escape_quiet_seconds !== 300) root.setEscapeQuiet(300)
+                  Accessible.name: "A dismissal keeps the field quiet for 5 minutes"
+                }
+                ActionButton {
+                  Layout.fillWidth: true
+                  text: "1 hour"; selected: client.settings.escape_quiet_seconds === 3600; bordered: true; focusable: true
+                  enabled: client.canMutateSettings && !action.running
+                  onClicked: if (client.settings.escape_quiet_seconds !== 3600) root.setEscapeQuiet(3600)
+                  Accessible.name: "A dismissal keeps the field quiet for 1 hour"
+                }
+              }
+              Caption { text: "After Escape, automatic suggestions stay off in that field for this long, across edits. Asking with Ctrl+Shift+Space ends it sooner. Until edit is the default. Any length up to an hour: badi escape-quiet SECONDS." }
               PanelSeparator { Layout.fillWidth: true; foreground: Color.popups.text }
               SectionTitle { text: "Try a continuation" }
               BodyText { text: "Suggestions appear on their own in supported apps: Tab inserts a visible suggestion, Ctrl+Right inserts its next word, typing its next letters keeps the rest, Escape dismisses, Ctrl+Shift+Space asks explicitly. In a Xournal++ text cell, press Tab to request words and Tab again to insert them. Obsidian: Tab takes one word, Ctrl/Command+Right takes all." }
