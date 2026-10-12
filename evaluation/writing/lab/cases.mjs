@@ -145,9 +145,9 @@ export function scorePrediction(rawCase, rawResult) {
     first_word_match: scorable ? shown && first.complete && first.word !== null && expectedWords.includes(first.word) : null,
     first_word_complete: first.complete, predicted_first_word: first.word,
     matching_reference_graphemes: scorable ? shown ? Math.max(...row.expected.map(value => commonGraphemes(result.text, value))) : 0 : null,
-    // Reference graphemes an acceptance would skip if that reference is what
-    // was meant. This is not an observed acceptance.
-    reference_keystrokes_saved: scorable && shown ? Math.max(...row.expected.map(value => commonGraphemes(result.text, value))) : scorable ? 0 : null,
+    // Whole words of the suggestion that prefix a reference. Shared letters
+    // inside a different word are not keystrokes an acceptance would skip.
+    reference_keystrokes_saved: scorable && shown ? referenceKeystrokes(result.text, row.expected, row.language) : scorable ? 0 : null,
     observed_keystrokes_saved: null,
     meaning: 'Case-sensitive reference agreement only. Alternatives may also be useful; matching graphemes are potential reference text, not observed typing savings.' };
 }
@@ -189,33 +189,55 @@ export function summarizeResults(records) {
   const configs = [...new Set(rows.map(row => row.config_id).filter(value => typeof value === 'string'))].sort();
   return { overall: group(rows), by_language: Object.fromEntries(languages.map(language => [language, group(rows.filter(row => row.case.language === language))])),
     by_config: Object.fromEntries(configs.map(config => [config, group(rows.filter(row => row.config_id === config))])),
-    meaning: 'Development reference agreement, with errors and deadlines in request denominators. Reference keystrokes are the graphemes an acceptance would skip. Observed keystrokes count only when a later trace step shows those characters were typed. No semantic quality or user-acceptance claim.',
+    meaning: 'Development reference agreement, with errors and deadlines in request denominators. Reference keystrokes are whole suggestion words that prefix a reference. Observed keystrokes count only when a later step of the same configuration shows those characters were typed. No semantic quality or user-acceptance claim.',
     paired_first_word: pairedFirstWord(rows) };
+}
+
+function referenceKeystrokes(suggestion, references, language) {
+  let best = 0;
+  for (const reference of references) {
+    const parts = [...new Intl.Segmenter(language, { granularity: 'word' }).segment(suggestion)];
+    let consumed = 0;
+    for (const part of parts) {
+      const end = part.index + part.segment.length;
+      if (!canonical(reference).startsWith(canonical(suggestion.slice(0, end)))) break;
+      if (part.isWordLike) consumed = end;
+    }
+    if (consumed > 0) best = Math.max(best, graphemes(suggestion.slice(0, consumed)).length);
+  }
+  return best;
 }
 
 function observedTraceKeystrokes(rows) {
   const traces = new Map();
   for (const row of rows) {
     if (row.case.trace_id === null) continue;
-    const list = traces.get(row.case.trace_id) ?? [];
+    const key = `${row.config_id ?? ''}\0${row.case.trace_id}`;
+    const list = traces.get(key) ?? [];
     list.push(row);
-    traces.set(row.case.trace_id, list);
+    traces.set(key, list);
   }
   if (!traces.size) return null;
   let saved = 0;
+  let opportunity = false;
   for (const list of traces.values()) {
     list.sort((left, right) => left.case.step - right.case.step);
-    for (let index = 0; index < list.length - 1; index++) {
+    for (let index = 0; index < list.length; index++) {
       const current = list[index];
-      const next = list[index + 1];
       if (!current.score.shown || typeof current.result.text !== 'string') continue;
-      if (!next.case.prefix.startsWith(current.case.prefix)) continue;
-      const typed = next.case.prefix.slice(current.case.prefix.length);
-      if (!typed || !typed.startsWith(current.result.text)) continue;
-      saved += graphemes(current.result.text).length;
+      for (let later = index + 1; later < list.length; later++) {
+        const next = list[later];
+        if (!next.case.prefix.startsWith(current.case.prefix)) continue;
+        opportunity = true;
+        const typed = next.case.prefix.slice(current.case.prefix.length);
+        if (typed.startsWith(current.result.text)) {
+          saved += graphemes(current.result.text).length;
+          break;
+        }
+      }
     }
   }
-  return saved;
+  return opportunity ? saved : null;
 }
 
 // Discordant first-word agreement for the same case under two configurations.
