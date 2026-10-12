@@ -590,6 +590,29 @@ pub(crate) fn completion_plan<'a>(
         .language
         .as_deref()
         .and_then(WritingLanguage::from_tag);
+    let (prompt, echo, max_tokens) =
+        healed_boundary(context, language, healed_languages);
+    CompletionPlan {
+        prompt,
+        echo,
+        max_tokens,
+    }
+}
+
+/// The production echo of `before`: separating spaces plus, for English, the
+/// last healable word. `None` when this language is not healed or the prompt
+/// would be empty.
+#[must_use]
+pub fn production_healed_echo<'a>(before: &'a str, language_tag: &str) -> Option<&'a str> {
+    let language = WritingLanguage::from_tag(language_tag);
+    healed_boundary(before, language, TRAILING_SPACE_HEALING).1
+}
+
+fn healed_boundary<'a>(
+    context: &'a str,
+    language: Option<WritingLanguage>,
+    healed_languages: &[WritingLanguage],
+) -> (&'a str, Option<&'a str>, u16) {
     // A prompt that ends in a space tokenizes unlike the model's own " word"
     // tokens. The echo therefore owns every separating space and, for English,
     // the last healable word, whether or not the user already typed a space
@@ -603,28 +626,24 @@ pub(crate) fn completion_plan<'a>(
             // A field that is only that word would leave an empty prompt, which
             // the client abstains. Keep the word and heal only a trailing space.
             if start > 0 {
-                return CompletionPlan {
-                    prompt: &context[..start],
-                    echo: Some(&context[start..end]),
-                    max_tokens: token_budget(language, 12),
-                };
+                return (
+                    &context[..start],
+                    Some(&context[start..end]),
+                    token_budget(language, 12),
+                );
             }
         }
     }
     if language.is_some_and(|language| healed_languages.contains(&language))
         && context.len() != trimmed.len()
     {
-        return CompletionPlan {
-            prompt: trimmed,
-            echo: Some(&context[trimmed.len()..]),
-            max_tokens: token_budget(language, 8),
-        };
+        return (
+            trimmed,
+            Some(&context[trimmed.len()..]),
+            token_budget(language, 8),
+        );
     }
-    CompletionPlan {
-        prompt: context,
-        echo: None,
-        max_tokens: token_budget(language, 8),
-    }
+    (context, None, token_budget(language, 8))
 }
 
 /// The echo of `word` inside `context`, including the ASCII spaces that
