@@ -212,10 +212,10 @@ test('production-boundary mode requires the production budget, nominal tokens, c
   for (const changed of [{ budget_ms: 551 }, { max_tokens: 9 }, { cache_prompt: false }, { temperature: .1 }, { seed: 43 }]) {
     assert.throws(() => validateConfigs([{ ...boundary, ...changed }]), /fixed production settings/u);
   }
-  const modes = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'framed', 'probability_rejoin'];
+  const modes = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'framed', 'field_context', 'probability_rejoin'];
   const all = modes.map(mode => config({ id: mode, mode }));
-  assert.equal(validateConfigs(all).length, 9);
-  assert.throws(() => validateConfigs([...all, config({ id: 'extra' })]), /9 configurations/u);
+  assert.equal(validateConfigs(all).length, 10);
+  assert.throws(() => validateConfigs([...all, config({ id: 'extra' })]), /10 configurations/u);
   for (const mode of ['instructed_word', 'healed_attested']) {
     assert.throws(() => validateConfigs([config({ mode })]), /supported limits/u);
   }

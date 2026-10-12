@@ -5,12 +5,19 @@ use badi_broker::writing::{self, mid_line_insertion};
 
 use crate::transport::TokenLogprob;
 
-/// Constant frame for the lab `framed` mode. The two examples avoid the
-/// content words of the mid-sentence development suite and contain no names.
-/// The opening sentence is the 2026-10-12 framing prefix; it overlaps the
-/// suite on the word "notes".
+/// Constant frame for the lab `framed` mode, version
+/// `everyday-english-2026-10-12.v1`. The two examples avoid names. A test
+/// checks them against the development suites. The opening sentence is the
+/// measured 2026-10-12 prefix; it overlaps the mid-sentence suite on "notes".
+pub(crate) const FRAME_VERSION: &str = "everyday-english-2026-10-12.v1";
 pub(crate) const FRAME: &str = "Notes, messages and emails typed by one person, in plain everyday English.\n\nThe kettle is boiling. A cup sits on the counter.\n\nA grey notebook rests beside the lamp.\n\n";
 
+pub(crate) fn framed_warning() -> &'static str {
+    match FRAME_VERSION {
+        "everyday-english-2026-10-12.v1" => "framed_prompt_is_lab_only",
+        _ => "framed_prompt_version_unknown",
+    }
+}
 /// Uncalibrated lab cut for the forced two-word check. Not a production threshold.
 pub(crate) const LOGPROB_FLOOR: f64 = -2.0;
 
@@ -149,9 +156,42 @@ mod tests {
 
     #[test]
     fn the_frame_has_no_personal_names() {
+        assert_eq!(FRAME_VERSION, "everyday-english-2026-10-12.v1");
         assert!(FRAME.contains("plain everyday English"));
         assert!(!FRAME.to_ascii_lowercase().contains("maria"));
         assert!(FRAME.ends_with("\n\n"));
+    }
+
+    #[test]
+    fn frame_examples_do_not_reuse_development_suite_content_words() {
+        let examples = FRAME.split("\n\n").skip(1).collect::<Vec<_>>().join(" ");
+        let example_words = content_words(&examples);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../lab/examples");
+        let mut suite_words = std::collections::BTreeSet::new();
+        for name in [
+            "quality-probes.json",
+            "real-text-development.json",
+            "typing-traces.json",
+            "mid-line-development.json",
+        ] {
+            let text = std::fs::read_to_string(root.join(name)).expect(name);
+            suite_words.extend(content_words(&text));
+        }
+        let overlap: Vec<_> = example_words.intersection(&suite_words).collect();
+        assert!(overlap.is_empty(), "frame examples overlap {overlap:?}");
+    }
+
+    fn content_words(text: &str) -> std::collections::BTreeSet<String> {
+        text.split(|character: char| !character.is_alphabetic())
+            .map(str::to_lowercase)
+            .filter(|word| word.chars().count() >= 4)
+            .filter(|word| {
+                !matches!(
+                    word.as_str(),
+                    "that" | "this" | "with" | "from" | "have" | "been" | "were" | "they"
+                )
+            })
+            .collect()
     }
 
     fn token(bytes: &[u8], logprob: f64) -> TokenLogprob {
