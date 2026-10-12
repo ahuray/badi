@@ -240,6 +240,8 @@ class Observer:
         focus = {"binding": binding, "target": target, "purpose": "plain_text",
                  "caret": metadata["caret"], "selection_count": metadata["selection_count"],
                  "geometry": metadata.get("geometry")}
+        if metadata.get("font"):
+            focus["font"] = metadata["font"]
         return metadata, focus
 
     def policy_target(self, metadata, app_id):

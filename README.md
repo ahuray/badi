@@ -28,6 +28,14 @@ follows, the suggestion keeps one space so it does not join that word. Where
 grey text would cover those words, it shows in a small box under the line
 instead, and that box keeps the separating space.
 
+Grey text uses the field's font family, size and weight when accessibility
+exposes them, and otherwise a size taken from the caret's glyph. Fcitx 5.1.22
+on this machine already supplies emoji: QuickPhrase (Super+semicolon, then a
+word such as `smile`) and the Emoji module. They do not expand a colon
+shortcode while you type. Badi does not add one. Replacing `:smile` would
+delete text, which the append-only apps cannot do, and Badi stays out of the
+way while Fcitx is composing.
+
 ## Where it works
 
 Tested on the development workstation (Arch Linux, Hyprland 0.56, Fcitx 5.1.22)

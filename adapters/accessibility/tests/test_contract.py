@@ -68,6 +68,11 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(self.backend.reads, [])
         self.assertNotIn("before", result["focus"])
         self.assertEqual(result["focus"]["target"]["origin"], {"scheme": "https", "host": "example.test"})
+        self.assertNotIn("font", result["focus"])
+
+    def test_inspect_carries_a_reported_host_font(self):
+        self.backend.meta["font"] = {"family": "Iosevka", "size_pt": 13.0, "weight": 400}
+        self.assertEqual(self.inspect()["focus"]["font"], {"family": "Iosevka", "size_pt": 13.0, "weight": 400})
 
     def test_status_preserves_authority_and_never_acquires_or_changes_ui(self):
         self.observer.tracked = {"test": "unchanged"}

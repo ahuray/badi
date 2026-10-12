@@ -12,6 +12,7 @@ from contract import Denied, canonical_origin
 from desktop import Desktop
 from geometry import (calibrated_geometry, gecko_calibrated_geometry, input_method_geometry,
                       native_calibrated_geometry, visual_direction)
+from preview import font_facts
 
 MAX_APPLICATIONS = 64
 MAX_MATCHES = 8
@@ -113,7 +114,8 @@ class FieldBackend:
                 geometry = self.geometry(node, local.text, local.caret, window, app.gecko, caret)
             else:
                 geometry = self.native_geometry(node, local.text, local.caret, window, caret, caret_rect)
-        return {"direction": self.direction(local), "bus": node.app.bus_name, "path": node.path,
+        direction, font = self.caret_appearance(local)
+        result = {"direction": direction, "bus": node.app.bus_name, "path": node.path,
                 "process_id": window["pid"], "app_id": app_id, "uri": uri, "browser": app.browser, "web": app.web,
                 "role": role, "tag": attributes.get("tag", ""), "input_type": attributes.get("text-input-type", ""),
                 "xml_roles": attributes.get("xml-roles", ""),
@@ -121,6 +123,9 @@ class FieldBackend:
                 "geometry": geometry, "node": node, "flatten": flatten, "blocks": rich.blocks if rich else None,
                 "caret_block": rich.caret_block if rich else None,
                 "sentence_bounded": app.sentence_bounded, "sentence_start": 0}
+        if font:
+            result["font"] = font
+        return result
 
     def sentence_start(self, metadata):
         """Where the caret's sentence starts. LibreOffice Writer gives Fcitx only
@@ -161,18 +166,31 @@ class FieldBackend:
                 "showing": flags.contains(state.SHOWING), "visible": flags.contains(state.VISIBLE),
                 "enabled": flags.contains(state.ENABLED)}
 
-    def direction(self, local):
-        """The caret run's direction attribute, else the glyph order before the caret, else ""."""
+    def text_run(self, local):
+        """The attribute map of the glyph before the caret, or {}."""
         text, caret, length = local
-        direction = ""
-        if length and caret >= 0:
-            run = self.atspi.Text.get_attribute_run(text, min(max(caret - 1, 0), length - 1), True)
-            direction = run[0].get("direction", "")
+        if not length or caret < 0:
+            return {}
+        run = self.atspi.Text.get_attribute_run(text, min(max(caret - 1, 0), length - 1), True)
+        attributes = run[0] if isinstance(run, (tuple, list)) else run
+        return attributes if isinstance(attributes, dict) else {}
+
+    def caret_appearance(self, local):
+        """(direction, host font) for the caret's text run.
+
+        Direction falls back to glyph order. The font is only what the run
+        actually reports.
+        """
+        text, caret, length = local
+        attributes = self.text_run(local)
+        direction = attributes.get("direction", "")
+        if not isinstance(direction, str):
+            direction = ""
         if not direction and 2 <= caret <= length:
             screen = self.atspi.CoordType.SCREEN
             direction = visual_direction(text.get_character_extents(caret - 2, screen),
                                          text.get_character_extents(caret - 1, screen))
-        return direction
+        return direction, font_facts(attributes)
 
     def caret_position(self, node, flatten):
         """(caret, length, selections, rich layout or None) in the field's flattened coordinates."""
