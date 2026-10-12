@@ -90,10 +90,15 @@ public:
     }
     void inspecting() { inspectedSerial_ = inputSerial_; }
     [[nodiscard]] bool reinspectAfterInvalidation(bool fieldChanged);
-    [[nodiscard]] std::uint64_t delayUs(bool immediate, bool typedThrough = false, bool busyRetry = false) const {
+    [[nodiscard]] std::uint64_t delayUs(bool immediate, bool typedThrough = false, bool busyRetry = false,
+                                    bool early = false) const {
         if (immediate) return 1;
         if (busyRetry) return kBusyRetryUs;
-        return typedThrough ? kTypeThroughPauseUs : kTypingPauseUs << idleInvalidations_;
+        // A keystroke in a field we already know starts inspection at once.
+        // The suggestion itself stays hidden until the typing pause elapses.
+        if (early) return 1;
+        if (typedThrough) return kTypeThroughPauseUs;
+        return kTypingPauseUs << idleInvalidations_;
     }
     void resetBusyRetries() { busyRetries_ = 0; }
     [[nodiscard]] bool retryWhileBusy() { return busyRetries_++ < kMaxBusyRetries; }

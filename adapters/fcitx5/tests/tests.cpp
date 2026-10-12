@@ -831,6 +831,8 @@ void inspectionBacksOffWithoutInput() {
     InspectionSchedule schedule;
     check(schedule.delayUs(true) == 1 && schedule.delayUs(false) == 120'000,
           "an explicit request inspects at once, typing after a pause");
+    check(schedule.delayUs(false, false, false, true) == 1,
+          "a keystroke in a known field inspects at once");
     check(schedule.delayUs(false, true) == 30'000 && schedule.delayUs(true, true) == 1,
           "typing through a suggestion inspects after a short pause");
     check(schedule.delayUs(false, false, true) == 20'000 && schedule.delayUs(false, true, true) == 20'000,

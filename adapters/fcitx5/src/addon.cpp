@@ -23,6 +23,7 @@
 #include <fcitx/userinterface.h>
 
 #include <sys/random.h>
+#include <time.h>
 
 #include <algorithm>
 #include <array>
@@ -46,6 +47,13 @@ constexpr std::uint64_t kNoticeLifetimeUs = 5'000'000;
 // Fcitx's sd-event loop treats a timer accuracy of 0 as its 250 ms default
 // slack, which delayed the 120 ms typing pause by up to 250 ms.
 constexpr std::uint64_t kTimerAccuracyUs = 1'000;
+
+std::uint64_t monotonicUs() {
+    timespec now{};
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    return static_cast<std::uint64_t>(now.tv_sec) * 1'000'000ULL +
+           static_cast<std::uint64_t>(now.tv_nsec) / 1'000ULL;
+}
 
 std::string uuidString(const ::fcitx::ICUUID &uuid) {
     static constexpr std::array<std::size_t, 4> dashes{4, 6, 8, 10};
@@ -183,6 +191,11 @@ private:
         // The suggestion text not yet typed, until it is shown again: keys
         // typed faster than the remainder returns still count as type-through.
         std::string typeThroughRest;
+        // Show a suggestion that arrives during the typing pause only after
+        // that pause, and only if this keystroke is still the latest.
+        std::uint64_t showAfterUs = 0;
+        std::optional<Suggestion> heldSuggestion;
+        std::unique_ptr<::fcitx::EventSourceTime> holdTimer;
 
         [[nodiscard]] bool observed() const { return !observedFocus.is_null(); }
     };
@@ -315,6 +328,14 @@ private:
         if (digest != binding->surroundingDigest) {
             binding->surroundingDigest = digest;
             binding->inspection.input();
+            const auto now = monotonicUs();
+            if (now != 0) {
+                const auto pause = binding->typedThrough ? InspectionSchedule::kTypeThroughPauseUs
+                                                         : InspectionSchedule::kTypingPauseUs;
+                binding->showAfterUs = now + pause;
+            }
+            binding->heldSuggestion.reset();
+            if (binding->holdTimer) binding->holdTimer->setEnabled(false);
         }
         // Unavailable apps never hold editing context. Toolkit publication must
         // not erase their explicit, timed unavailable notice. Classify the app
@@ -324,7 +345,9 @@ private:
         const bool unchangedObserved = binding->observed() &&
             matchesCapturedContext(binding->state.lastContext(), currentContext(*binding));
         invalidateChangedContext(*binding);
-        if (!unchangedObserved) observeLater(*binding);
+        // A field we already corroborate can start the model on this key.
+        // A suggestion still waits out the typing pause before it is shown.
+        if (!unchangedObserved) observeLater(*binding, false, false, binding->observed());
     }
 
     void capabilityChanged(::fcitx::InputContext &inputContext) {
@@ -554,12 +577,17 @@ private:
 
     // The accessibility observer.
 
-    void observeLater(Binding &binding, bool explicitRequest = false, bool retry = false) {
+    void observeLater(Binding &binding, bool explicitRequest = false, bool retry = false, bool early = false) {
         if (!binding.inputContext->hasFocus() || !binding.state.focused() ||
             !nativeObservationAvailable(binding.state.appId())) return;
         if (!retry) binding.inspection.resetBusyRetries();
         binding.observationExplicit = explicitRequest;
-        if (explicitRequest) binding.dismissedContext.reset();
+        if (explicitRequest) {
+            binding.dismissedContext.reset();
+            binding.showAfterUs = 0;
+            binding.heldSuggestion.reset();
+            if (binding.holdTimer) binding.holdTimer->setEnabled(false);
+        }
         if (!binding.observeTimer) {
             binding.observeTimer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
                 [this, contextId = uuidString(binding.inputContext->uuid())](::fcitx::EventSourceTime *, std::uint64_t) {
@@ -569,7 +597,7 @@ private:
                 });
         }
         binding.observeTimer->setNextInterval(
-            binding.inspection.delayUs(explicitRequest && !retry, binding.typedThrough, retry));
+            binding.inspection.delayUs(explicitRequest && !retry, binding.typedThrough, retry, early && !retry));
         binding.observeTimer->setOneShot();
     }
 
@@ -787,18 +815,39 @@ private:
     void onSuggestion(Suggestion suggestion) {
         auto *binding = bindingFor(suggestion.coordinates.sessionId);
         if (!binding || !safeToObserve(*binding)) return;
+        const auto now = monotonicUs();
+        if (binding->showAfterUs > now) {
+            binding->heldSuggestion = std::move(suggestion);
+            const auto session = binding->heldSuggestion->coordinates.sessionId;
+            const auto id = binding->heldSuggestion->suggestionId;
+            if (binding->holdTimer) binding->holdTimer->setEnabled(false);
+            binding->holdTimer = oneShot(binding->showAfterUs - now, [this, session, id] {
+                auto *current = bindingFor(session);
+                if (!current || !current->heldSuggestion || current->heldSuggestion->suggestionId != id) return;
+                if (monotonicUs() < current->showAfterUs) return;
+                auto held = std::move(*current->heldSuggestion);
+                current->heldSuggestion.reset();
+                presentSuggestion(*current, std::move(held));
+            });
+            return;
+        }
+        presentSuggestion(*binding, std::move(suggestion));
+    }
+
+    void presentSuggestion(Binding &binding, Suggestion suggestion) {
+        if (!safeToObserve(binding)) return;
         // SessionState keeps IME-parity apps off this unobserved display path.
-        if (!binding->observed()) return displaySuggestion(std::move(suggestion));
-        binding->pendingSuggestion = suggestion.suggestionId;
-        const auto generation = binding->observationGeneration;
-        const bool sent = accessibility_->request(snapshotRequest(binding->observedFocus),
-            [this, suggestion, focus = binding->observedFocus, generation](const Json &reply) {
+        if (!binding.observed()) return displaySuggestion(std::move(suggestion));
+        binding.pendingSuggestion = suggestion.suggestionId;
+        const auto generation = binding.observationGeneration;
+        const bool sent = accessibility_->request(snapshotRequest(binding.observedFocus),
+            [this, suggestion, focus = binding.observedFocus, generation](const Json &reply) {
                 auto *current = bindingFor(suggestion.coordinates.sessionId);
                 if (current && safeToObserve(*current) && current->observationGeneration == generation &&
                     current->state.coordinates() == suggestion.coordinates)
                     previewIfCorroborated(*current, suggestion, focus, reply);
             });
-        if (!sent) debug_.record("suggestion_blocked", binding->state.appId(), "observer_display_unavailable");
+        if (!sent) debug_.record("suggestion_blocked", binding.state.appId(), "observer_display_unavailable");
     }
 
     void previewIfCorroborated(Binding &binding, const Suggestion &suggestion, const Json &focus, const Json &reply) {
@@ -1144,6 +1193,8 @@ private:
 
     void clearOwnedPanel(Binding &binding) {
         binding.pendingSuggestion.reset();
+        binding.heldSuggestion.reset();
+        if (binding.holdTimer) binding.holdTimer->setEnabled(false);
         if (binding.overlayOwned) {
             binding.overlayOwned = false;
             hidePreview();
