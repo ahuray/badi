@@ -624,6 +624,7 @@ mod tests {
             all_web_origins: false,
             all_linux_apps: false,
             mid_line: false,
+            escape_quiet_seconds: 0,
             subjects: vec![SubjectRule {
                 identity: identity("example.com"),
                 permissions: SubjectPermissions {

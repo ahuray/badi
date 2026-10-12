@@ -25,6 +25,8 @@ pub const MAX_SETTINGS_BYTES: usize = 65_536;
 // the private settings file, including full-length origin identities.
 pub const MAX_SUBJECTS: usize = 64;
 pub const MAX_RETENTION_DAYS: u16 = 90;
+/// The longest timed Escape quiet a settings document may name.
+pub const MAX_ESCAPE_QUIET_SECONDS: u64 = 3_600;
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const PERSONALIZATION_FILE_NAME: &str = "personalization.json";
@@ -285,7 +287,19 @@ pub struct SettingsV2 {
     /// complete the word being typed. Omitted when off.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mid_line: bool,
+    /// Seconds a dismissal (Escape) keeps its field quiet for automatic
+    /// suggestions, across edits, until the focus epoch ends or an explicit
+    /// request asks again. Zero keeps the adapters' own until-edit decline
+    /// only. Omitted when zero.
+    #[serde(default, skip_serializing_if = "escape_quiet_seconds_is_zero")]
+    pub escape_quiet_seconds: u64,
     pub subjects: Vec<SubjectRule>,
+}
+
+// Serde's skip_serializing_if dictates the by-reference signature.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn escape_quiet_seconds_is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(Deserialize)]
@@ -300,6 +314,8 @@ struct SettingsDocument {
     all_linux_apps: Option<bool>,
     #[serde(default)]
     mid_line: Option<bool>,
+    #[serde(default)]
+    escape_quiet_seconds: Option<u64>,
     subjects: Vec<SubjectRule>,
 }
 
@@ -333,6 +349,11 @@ impl<'de> Deserialize<'de> for SettingsV2 {
         if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.mid_line.is_some() {
             return Err(serde::de::Error::custom("mid_line_requires_settings_v2"));
         }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.escape_quiet_seconds.is_some() {
+            return Err(serde::de::Error::custom(
+                "escape_quiet_seconds_requires_settings_v2",
+            ));
+        }
         Ok(Self {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: decoded.revision,
@@ -340,6 +361,7 @@ impl<'de> Deserialize<'de> for SettingsV2 {
             all_web_origins: decoded.all_web_origins.unwrap_or(false),
             all_linux_apps: decoded.all_linux_apps.unwrap_or(false),
             mid_line: decoded.mid_line.unwrap_or(false),
+            escape_quiet_seconds: decoded.escape_quiet_seconds.unwrap_or(0),
             subjects: decoded.subjects,
         })
     }
@@ -355,6 +377,7 @@ impl SettingsV2 {
             all_web_origins: false,
             all_linux_apps: false,
             mid_line: false,
+            escape_quiet_seconds: 0,
             subjects: Vec::new(),
         }
     }
@@ -365,6 +388,9 @@ impl SettingsV2 {
         }
         if self.revision > MAX_SAFE_COUNTER {
             return Err(SettingsValidationError::RevisionOutOfRange);
+        }
+        if self.escape_quiet_seconds > MAX_ESCAPE_QUIET_SECONDS {
+            return Err(SettingsValidationError::EscapeQuietOutOfRange);
         }
         if self.subjects.len() > MAX_SUBJECTS {
             return Err(SettingsValidationError::TooManySubjects);
@@ -1238,6 +1264,8 @@ pub enum IdentityError {
 pub enum SettingsValidationError {
     #[error("duplicate_identity")]
     DuplicateIdentity,
+    #[error("escape_quiet_out_of_range")]
+    EscapeQuietOutOfRange,
     #[error("identity")]
     Identity(#[from] IdentityError),
     #[error("invalid_retention")]
@@ -1308,11 +1336,11 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ALL_LINUX_APPS_PERMISSIONS, BrowserAdapter, LinuxAdapter, MAX_SETTINGS_BYTES, MAX_SUBJECTS,
-        PRIVATE_FILE_MODE, PermissionDecision, PrivateStorage, PrivateStorageError,
-        RetentionPermission, SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2,
-        StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
-        remove_private_file_with_sync, write_settings,
+        ALL_LINUX_APPS_PERMISSIONS, BrowserAdapter, LinuxAdapter, MAX_ESCAPE_QUIET_SECONDS,
+        MAX_SETTINGS_BYTES, MAX_SUBJECTS, PRIVATE_FILE_MODE, PermissionDecision, PrivateStorage,
+        PrivateStorageError, RetentionPermission, SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1,
+        SettingsStoreError, SettingsV2, SettingsValidationError, StableIdentity, StoragePaths,
+        SubjectPermissions, SubjectRule, WebScheme, remove_private_file_with_sync, write_settings,
     };
     use crate::protocol::{
         MAX_FRAME_BYTES, Origin, OriginScheme, TargetDescriptor, TargetKind, WireEnvelope,
@@ -1343,6 +1371,7 @@ mod tests {
             all_web_origins: false,
             all_linux_apps: false,
             mid_line: false,
+            escape_quiet_seconds: 0,
             subjects: vec![rule],
         }
     }
@@ -1466,6 +1495,41 @@ mod tests {
         assert_eq!(
             current.wire_document(2).expect("v2 wire document")["all_web_origins"],
             true
+        );
+    }
+
+    #[test]
+    fn escape_quiet_seconds_round_trips_bounds_and_rejects_v1() {
+        let mut settings = settings_with(SubjectRule {
+            identity: identity("mail.example"),
+            permissions: allowed(None),
+        });
+        let encoded = serde_json::to_value(&settings).expect("encode settings");
+        assert!(
+            encoded.get("escape_quiet_seconds").is_none(),
+            "zero is omitted"
+        );
+
+        settings.escape_quiet_seconds = 90;
+        settings.validate().expect("90 seconds is in range");
+        let encoded = serde_json::to_value(&settings).expect("encode settings");
+        assert_eq!(encoded["escape_quiet_seconds"], 90);
+        let decoded: SettingsV2 = serde_json::from_value(encoded).expect("decode settings");
+        assert_eq!(decoded, settings);
+
+        settings.escape_quiet_seconds = MAX_ESCAPE_QUIET_SECONDS + 1;
+        assert_eq!(
+            settings.validate(),
+            Err(SettingsValidationError::EscapeQuietOutOfRange)
+        );
+
+        let legacy = serde_json::json!({
+            "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
+            "escape_quiet_seconds": 90, "subjects": [],
+        });
+        assert!(
+            serde_json::from_value::<SettingsV2>(legacy).is_err(),
+            "v1 cannot name it"
         );
     }
 
@@ -1644,6 +1708,7 @@ mod tests {
             all_web_origins: false,
             all_linux_apps: false,
             mid_line: false,
+            escape_quiet_seconds: 0,
             subjects: vec![first.clone(), second.clone()],
         };
         valid.validate().expect("canonical settings");
@@ -1680,6 +1745,7 @@ mod tests {
             all_web_origins: false,
             all_linux_apps: false,
             mid_line: false,
+            escape_quiet_seconds: 0,
             subjects,
         };
         settings.validate().expect("maximum-shape settings");

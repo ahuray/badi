@@ -158,6 +158,8 @@ impl Broker {
             .as_ref()
             .is_some_and(|settings| settings.mid_line);
         let session = state.session_with_data_access(coordinates.session_id)?;
+        let escape_quiet =
+            session.escape_quiet_binds(payload.explicit, coordinates.focus_epoch, Instant::now());
         let binding = GenerationBinding {
             coordinates,
             fingerprint: payload.fingerprint,
@@ -168,6 +170,11 @@ impl Broker {
             after: context.after.clone(),
             language: context.language.clone(),
         };
+        if escape_quiet {
+            self.abstain_admitted(state, binding, generation_timeout)
+                .await;
+            return Ok(None);
+        }
         if let Some((text, expires_at, aggregate_day)) = carried {
             session.generation = binding.generation;
             self.renew_context_authority_lease(session, generation_timeout);
@@ -184,11 +191,7 @@ impl Broker {
             return Ok(None);
         }
         if !mid_line && crate::writing::word_follows_caret(&binding.after) {
-            session.generation = binding.generation;
-            self.renew_context_authority_lease(session, generation_timeout);
-            drop(state);
-            metrics.record_no_suggestion(NoSuggestionReason::RequestAbstained);
-            self.clear_failed_generation(binding, ReasonCode::NoSuggestion)
+            self.abstain_admitted(state, binding, generation_timeout)
                 .await;
             return Ok(None);
         }
@@ -215,6 +218,26 @@ impl Broker {
             cancellation,
             provider_permit,
         }))
+    }
+
+    /// Settles an admitted binding without a provider call: the adapter is
+    /// told there is no suggestion, and the abstention is counted.
+    async fn abstain_admitted(
+        &self,
+        mut state: MutexGuard<'_, BrokerState>,
+        binding: GenerationBinding,
+        generation_timeout: Duration,
+    ) {
+        if let Ok(session) = state.session_with_data_access(binding.coordinates.session_id) {
+            session.generation = binding.generation;
+            self.renew_context_authority_lease(session, generation_timeout);
+        }
+        drop(state);
+        self.inner
+            .metrics
+            .record_no_suggestion(NoSuggestionReason::RequestAbstained);
+        self.clear_failed_generation(binding, ReasonCode::NoSuggestion)
+            .await;
     }
 
     #[allow(clippy::too_many_lines)]
