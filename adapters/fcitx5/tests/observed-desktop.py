@@ -376,8 +376,9 @@ def session(root, report):
                 assert hello['payload']['adapter'] == {
                     'kind': 'fcitx', 'name': 'badi-fcitx5', 'version': '0.1.0'}
                 assert hello['payload']['capabilities'] == [
-                    'context', 'suggestion', 'commit.dispatched_unverified', 'control', 'policy']
-                checks.append('Actual loaded native addon hello omits unsafe text replacement capability')
+                    'context', 'suggestion', 'commit.dispatched_unverified', 'text_replacement',
+                    'control', 'policy']
+                checks.append('Actual loaded native addon hello negotiates exact text replacement')
             finally:
                 if hello_peer is not None:
                     hello_peer.close()
@@ -1067,23 +1068,23 @@ def session(root, report):
             fake.respond(fake_request(), 'suggestion.show', {
                 'suggestion_id': 'injected-show', 'text': SUFFIX, 'accept_word': ' for', 'ttl_ms': 3000,
                 'provider': 'phrase_v1', 'replace_before': 'you'})
-            fake_wait(lambda: fake.client_closes > closes, app + ' closes on an injected replacement suggestion')
             fake_quiet(.2)
-            assert context.candidate() is None and context.commits() == []
+            assert fake.client_closes == closes and context.candidate() is None and context.commits() == []
             fake.respond(fake_request(), 'suggestion.show', {
                 'suggestion_id': 'append-show', 'text': SUFFIX, 'accept_word': ' for', 'ttl_ms': 3000,
                 'provider': 'phrase_v1'})
             fake_wait(lambda: context.candidate() == SUFFIX, app + ' append suggestion from the fake broker')
-            controls, closes = fake.count('control.request'), fake.client_closes
+            controls = fake.count('control.request')
             assert context.key(desktop.TAB)
             fake_wait(lambda: fake.count('control.request') > controls, app + ' acceptance request')
+            results = fake.count('commit.result')
             fake.respond(fake.last('control.request'), 'commit.prepare', {
                 'suggestion_id': 'append-show', 'text': SUFFIX, 'acceptance': 'all', 'replace_before': 'you'})
-            fake_wait(lambda: fake.client_closes > closes, app + ' closes on an injected replacement commit')
+            fake_wait(lambda: fake.count('commit.result') > results, app + ' reports the mismatched replacement stale')
             fake_quiet(.3)
-            assert context.candidate() is None and context.commits() == []
-            assert fake.count('commit.result') == 0
-            checks.append(app + ': injected replacement suggestion and commit grant close the transport; nothing is displayed or committed')
+            assert fake.client_closes == closes and context.commits() == []
+            assert fake.last('commit.result')['payload']['status'] == 'stale'
+            checks.append(app + ': an injected replacement is not shown or applied, and the transport stays open')
 
         backend.browser, backend.uri = False, ALLOWED_URI
         open_context('chatgpt')

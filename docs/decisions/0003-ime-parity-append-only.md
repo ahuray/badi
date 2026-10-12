@@ -1,7 +1,7 @@
 # ADR 0003: extension-free editing accepts one append-only IME commit
 
 - Status: accepted
-- Date: 2026-09-26, extended 2026-10-06 and 2026-10-07
+- Date: 2026-09-26, extended 2026-10-06, 2026-10-07 and 2026-10-12
 - Scope: Fcitx IME-parity apps: Chromium, Brave Origin and its `--app` windows
   (Omarchy web apps), Zen (exact `zen` identity only), Codex desktop, VS Code,
   Cursor, Discord, Grok Bot and LibreOffice Writer
@@ -37,8 +37,11 @@ never claims exact undo or verified field authority there.
 Every other guard stays: sensitive and purpose denial, foreign composition
 yield, exact observer identity with snapshot and caret agreement before display
 and dispatch, revision, fingerprint and expiry binding, one-shot acceptance,
-and no retries or synthetic keys. The native adapter negotiates no
-`text_replacement`, so correction stays editor-owned (Obsidian, Bash).
+and no retries or synthetic keys. These apps stay append-only. The Fcitx connection also serves native exact
+fields, so it advertises `text_replacement`; the broker withholds a correction
+for every app in this decision. Obsidian and Bash keep their own replacement
+channels. A native exact field may delete the exact typed suffix and then
+`commitString` the correction, still reported as `dispatched-unverified`.
 
 Brave web-app windows take their page origin's policy, as a tab does.
 LibreOffice is native, but every module reports one Fcitx program id, so a

@@ -50,9 +50,13 @@ observer wire details.
   times, with backoff capped at five seconds, renewed by a key or focus. Unchanged
   authority lets Tab reread Fcitx's current text; automatic requests wait for
   new text.
-- **No replacement.** The module never negotiates `text_replacement` or sends a
-  deletion: an `input` handler can move focus between a deletion and an
-  insertion ([ADR 0003](../../docs/decisions/0003-ime-parity-append-only.md)).
+- **Replacement.** Native exact fields (`omawrite`, Telegram, Xournal++, and
+  other granted native ids) may delete the exact typed suffix and then
+  `commitString` the correction, still reported as `dispatched-unverified`.
+  The suffix must still be the text before the caret. IME-parity apps stay
+  append-only: a replacement is not shown or applied there
+  ([ADR 0003](../../docs/decisions/0003-ime-parity-append-only.md)). Live undo
+  for the native deletion has not been retried in the graphical session.
 
 ## App classes
 

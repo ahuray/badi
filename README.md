@@ -69,6 +69,13 @@ can redirect it like a keystroke
 identity and caret position before showing a suggestion and again before
 inserting it, and it never reads password fields.
 
+English spelling replaces the mistyped word in Bash, Obsidian, and native exact
+fields such as Omawrite, Telegram and Xournal++. The apps in the section above,
+plus LibreOffice Writer, VS Code, Cursor, Codex, Discord and Grok Bot, stay
+append-only, so a typo there is not deleted. A native Fcitx replacement is
+still one unverified commit after the deletion; its undo has not been retried
+in the graphical session.
+
 Chromium-based apps must start with `--force-renderer-accessibility=complete`.
 `install-desktop.py --observed-app chromium|brave-origin|chatgpt|code|cursor|grok-bot`
 adds it to that app's flags file; Zen needs nothing.

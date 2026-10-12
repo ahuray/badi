@@ -859,6 +859,7 @@ private:
             !matchesCapturedContext(binding->state.lastContext(), currentContext(*binding)) ||
             !binding->state.showSuggestion(suggestion, transport_.nowMs())) {
             if (overlay) hidePreview();
+            if (binding->state.visibleText().empty()) clearOwnedPanel(*binding);
             return;
         }
         binding->overlayOwned = overlay;
@@ -961,11 +962,22 @@ private:
         if (!dispatch) return reportStale(prepare);
         clearOwnedPanel(*binding);
         // The broker may carry the rest after a word (ADR 0004).
-        const bool word = prepare.acceptance == "word" && shown.starts_with(dispatch->text);
+        const bool word = !dispatch->replaceBefore && prepare.acceptance == "word" &&
+                           shown.starts_with(dispatch->text);
         binding->typedThrough = word;
         binding->typeThroughRest = word ? shown.substr(dispatch->text.size()) : std::string();
+        if (dispatch->replaceBefore) {
+            if (imeParityApp(binding->state.appId())) return refuseCommit(prepare, binding);
+            const auto context = currentContext(*binding);
+            const auto count = context ? nativeReplacementChars(
+                                            false, context->before, *dispatch->replaceBefore)
+                                        : std::nullopt;
+            if (!count) return refuseCommit(prepare, binding);
+            binding->inputContext->deleteSurroundingText(-static_cast<int>(*count), *count);
+        }
         // One append, like typed text. Fcitx cannot see the client apply it,
-        // so the result is dispatched-unverified, never applied.
+        // so the result is dispatched-unverified, never applied. A native
+        // replacement deletes the exact suffix first; IME-parity stays append-only.
         binding->inputContext->commitString(dispatch->text);
         debug_.record("commit", binding->state.appId(), "dispatched_unverified");
         transport_.reportCommit(dispatch->coordinates, dispatch->controlId, dispatch->suggestionId,

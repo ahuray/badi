@@ -127,9 +127,12 @@ Persian review where results are ambiguous and the full Lab qualification.
 - [ ] Tell an intended partial word from a completed one before contextual
       lookup: `mire` → `Mirella` must complete, `marin` must not become
       `Marinella`. Dictionary membership is the wrong splitter.
-- [ ] Spelling correction in native fields and Obsidian with exact replacement
-      ranges. The 40-case German/Persian run failed (2 and 4 useful, one
-      unwanted change each); improve names and nearby words first.
+- [ ] Live undo of an English spelling replacement in a native exact Fcitx
+      field (Omawrite, Telegram, Xournal++). The accept path deletes the exact
+      suffix and then inserts the correction; that undo has not been retried.
+      Obsidian already replaces the suffix in one undo step. German and Persian
+      stay off until the Lab spelling gate passes (the 40-case run was 2 and 4
+      useful, with one unwanted change each).
 - [ ] Calibrate token confidence against reviewed full additions per language.
 - [ ] Measure Cotypist parity with the same tasks on a named Cotypist version on
       a Mac.
