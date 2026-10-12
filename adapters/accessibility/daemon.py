@@ -59,6 +59,9 @@ FIELD_EVENTS = ("object:text-changed", "object:text-caret-moved", "object:text-s
                 "object:bounds-changed", "object:visible-data-changed",
                 "object:state-changed:editable", "object:state-changed:showing",
                 "object:state-changed:defunct", "object:property-change:accessible-role")
+# A document scroll usually reports on the scroll pane, not the text field.
+SCROLL_ANCESTOR_ROLES = frozenset({"scroll pane"})
+MAX_SCROLL_ANCESTORS = 3
 
 
 def unique_object(pairs):
@@ -76,6 +79,37 @@ def private(info, kind, mode):
 
 def within_frame_limits(buffer):
     return len(buffer) <= MAX_BUFFER and all(len(part) + 1 <= MAX_FRAME for part in buffer.split(b"\n"))
+
+
+def scroll_ancestor_paths(node):
+    """Object paths of scroll panes above `node`, nearest first.
+
+    A parent that cannot be read ends the walk. The field's own path is not
+    included; that subscription already exists.
+    """
+    paths = []
+    seen = set()
+    current = node
+    for _ in range(12):
+        try:
+            current = current.get_parent()
+        except Exception:
+            break
+        if current is None:
+            break
+        try:
+            role = current.get_role_name()
+            path = current.path
+        except Exception:
+            break
+        if role == "application":
+            break
+        if role in SCROLL_ANCESTOR_ROLES and isinstance(path, str) and path not in seen:
+            seen.add(path)
+            paths.append(path)
+            if len(paths) == MAX_SCROLL_ANCESTORS:
+                break
+    return paths
 
 
 class Daemon:
@@ -102,6 +136,7 @@ class Daemon:
         self.event_bus = None
         self.producer = None
         self.field_subscription = None
+        self.ancestor_subscriptions = []
         self.field_binding = None
 
     def connect_event_bus(self):
@@ -125,7 +160,7 @@ class Daemon:
             # A reply is expected (and discarded) so the bus never rejects it.
             self.event_bus.call(*call, lambda *_result: None, None)
 
-    def arm_field_events(self, binding):
+    def arm_field_events(self, binding, node=None):
         """Receive the granted field's own events until the next invalidation.
 
         Producer interest is first requested after a caller grant in this
@@ -146,6 +181,12 @@ class Daemon:
         self.field_subscription = self.event_bus.signal_subscribe(
             binding["bus"], "org.a11y.atspi.Event.Object", None, binding["path"], None,
             Gio.DBusSignalFlags.NONE, self.field_event, None)
+        for path in scroll_ancestor_paths(node) if node is not None else ():
+            if path == binding["path"]:
+                continue
+            self.ancestor_subscriptions.append(self.event_bus.signal_subscribe(
+                binding["bus"], "org.a11y.atspi.Event.Object", None, path, None,
+                Gio.DBusSignalFlags.NONE, self.ancestor_event, None))
 
     def field_event(self, _connection, _sender, _path, _interface, signal, _parameters, _data):
         # The payload is never unpacked: a text change carries the typed text.
@@ -156,7 +197,17 @@ class Daemon:
             return
         self.observer.invalidate("field_changed")
 
+    def ancestor_event(self, _connection, _sender, _path, _interface, signal, _parameters, _data):
+        # Only a scroll of the container. Other ancestor signals are not the
+        # field's text and must not end the suggestion.
+        if signal in {"BoundsChanged", "VisibleDataChanged"}:
+            self.observer.reposition_preview()
+
     def disarm_field_events(self):
+        if self.event_bus is not None:
+            for subscription in self.ancestor_subscriptions:
+                self.event_bus.signal_unsubscribe(subscription)
+        self.ancestor_subscriptions = []
         if self.field_subscription is not None:
             self.event_bus.signal_unsubscribe(self.field_subscription)
             self.field_subscription = None

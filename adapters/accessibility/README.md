@@ -186,11 +186,11 @@ every failure except a malformed request or `observer_busy` hides the preview:
 | `operation_timeout`, `observer_busy`, `accessibility_unavailable` | Budget exceeded; another owner; AT-SPI failed |
 
 Unsolicited `{schema,event:"invalidate",epoch,reason,app_id}` messages name the
-previous app; a client must drop its candidate and inspect afresh. When the
-armed field reports `object:bounds-changed` or `object:visible-data-changed`,
-the grey preview moves to the caret's new position if the text offset is
-unchanged. If the caret moved or can no longer be drawn, the suggestion ends.
-A scroll reported only on an ancestor does not.
+previous app; a client must drop its candidate and inspect afresh. When the armed field, or a scroll-pane ancestor, reports
+`object:bounds-changed` or `object:visible-data-changed`, the grey preview
+moves to the caret's new position if the text offset is unchanged. If the
+caret moved or can no longer be drawn, the suggestion ends. A scroll the
+toolkit reports on neither the field nor a scroll pane does not.
 
 ## Caret geometry and preview
 
