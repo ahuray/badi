@@ -16,13 +16,14 @@ now true in the [README](README.md) or the affected runbook.
   no model call ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md)).
   The inline preview reaches VS Code, iframe editors, Qt apps (Telegram,
   Omawrite) and LibreOffice Writer.
-- **Speed:** a new suggestion is visible 0.35–0.39 s after the last key in
-  Chromium. That breaks down as:
-  - the 120 ms typing pause;
-  - about 25 ms for inspection and policy;
-  - about 210 ms for the model and display.
-  The KV cache is already reused between keystrokes. Before the timer
-  accuracy fix (2026-10-06), Fcitx's 250 ms timer slack made it 0.40–0.62 s.
+- **Speed:** before inspection moved to the keystroke, a new suggestion was
+  visible 0.35–0.39 s after the last key in Chromium: about 120 ms of pause,
+  25 ms of inspection and policy, and 210 ms of model and display. On
+  2026-10-12, Omawrite 0.5.0 with that keystroke inspection (build `f657f7c`)
+  showed grey text at 266, 329, 347, 350 and 392 ms after the last key on five
+  disposable prefixes (median 347 ms). Chromium has not been remeasured. The
+  KV cache is already reused between keystrokes. Before the timer accuracy
+  fix (2026-10-06), Fcitx's 250 ms timer slack made Chromium 0.40–0.62 s.
 - **GPU:** Vulkan on the Iris Xe is slower per keystroke (13–20 against 19–30
   tokens/s for generation) and faster only for long cold prompts, so Badi stays
   on the CPU.
@@ -78,9 +79,9 @@ Standing user decisions:
 Exit criteria: warm visible p50 ≤ 250 ms and p95 ≤ 500 ms with misses reported,
 resident memory about 1.3 GB, and no quality regression in the Lab.
 
-- [ ] Measure warm visible latency in Chromium and Omawrite after this
-      change: a known field is inspected on the keystroke, and the suggestion
-      stays hidden until the 120 ms pause. A newer key still cancels it.
+- [ ] Warm visible p50 is still above 250 ms. Omawrite 0.5.0 on build
+      `f657f7c` (2026-10-12, five disposable prefixes) showed grey text at
+      266–392 ms, median 347 ms. Chromium has not been remeasured.
 - [ ] Speculative decoding with a small draft model, or fewer generated tokens.
 - [ ] Qualify Qwen3 0.6B and Gemma 4 E2B (with its multi-token drafter) in the
       Lab. Defer hybrid-attention models until llama.cpp reuses their caches.
