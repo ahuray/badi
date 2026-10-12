@@ -105,7 +105,7 @@ class Observer:
         self.notify = lambda _message: None
         self.render = lambda _focus, _text, _ttl: False
         self.hide = lambda: None
-        self.authorize = lambda _binding: None
+        self.authorize = lambda _binding, _node=None: None
         self.disarm = lambda: None
         self.caret_edge = None
         self.text_follows = False
@@ -152,7 +152,7 @@ class Observer:
 
     def snapshot(self, request):
         metadata, focus = self.bound_focus(request)
-        self.authorize(focus["binding"])
+        self.authorize(focus["binding"], metadata.get("node"))
         if metadata.get("sentence_bounded"):
             metadata["sentence_start"] = self.backend.sentence_start(metadata)
         caret = metadata["caret"]

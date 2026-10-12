@@ -384,6 +384,34 @@ class FieldSubscriptionTests(unittest.TestCase):
         self.assertIsNone(self.daemon.producer)
         self.assertEqual(self.bus.subscriptions[-1], None, "invalidation removed the field match")
 
+    def test_a_scroll_pane_ancestor_moves_the_preview(self):
+        class Node:
+            def __init__(self, role, path, parent=None):
+                self.role, self.path, self.parent = role, path, parent
+
+            def get_parent(self):
+                return self.parent
+
+            def get_role_name(self):
+                return self.role
+
+        class Boom:
+            def get_parent(self):
+                raise RuntimeError("atspi")
+
+        self.assertEqual(observer_daemon.scroll_ancestor_paths(Boom()), [])
+        field = Node("entry", "/field", Node("panel", "/panel",
+                     Node("scroll pane", "/scroll", Node("application", "/app"))))
+        self.assertEqual(observer_daemon.scroll_ancestor_paths(field), ["/scroll"])
+        self.daemon.arm_field_events(self.binding(), field)
+        self.assertEqual(self.bus.subscriptions[-1][3], "/scroll")
+        moved = []
+        self.daemon.observer.reposition_preview = lambda: moved.append("move")
+        self.daemon.observer.invalidate = lambda reason: moved.append(reason)
+        self.daemon.ancestor_event(None, None, "/scroll", None, "BoundsChanged", None, None)
+        self.daemon.ancestor_event(None, None, "/scroll", None, "TextChanged", None, None)
+        self.assertEqual(moved, ["move"])
+
 
 class IdentityTests(unittest.TestCase):
     CURSOR = "/usr/share/cursor/resources/app/cursor.mjs"

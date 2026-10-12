@@ -211,10 +211,9 @@ From the 2026-10-11 audit. These are not part of the installed behavior.
       (`adapters/accessibility/desktop.py`).
 - [ ] Browser event cost on large pages (`daemon.py` focus handling and
       `field.py` serialization).
-- [ ] The grey preview does not follow scrolling. A bounds or visible-data
-      change on the armed field moves it when the text offset is unchanged,
-      and ends the suggestion otherwise. A scroll the toolkit reports only on
-      an ancestor leaves the overlay where it was.
+- [x] The grey preview follows a scroll reported on the armed field or a
+      scroll-pane ancestor, when the text offset is unchanged. A scroll the
+      toolkit reports on neither leaves the overlay where it was.
 - [x] Document the limits of sensitive-field detection. A password role or
       password input type is refused. Labels, placeholders, and HTML
       autocomplete hints are not.
