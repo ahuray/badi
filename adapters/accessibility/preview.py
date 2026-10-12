@@ -114,8 +114,8 @@ def font_pixels(caret):
 def place_inline(caret, width, height, baseline):
     """Monitor-local origin for text right after the caret on its baseline.
 
-    The text must end inside the field, window and monitor; otherwise the
-    caller shows it as a chip instead.
+    The text must end inside the field, window and monitor. A field box that
+    ends early is handled by `place_on_caret_line`.
     """
     if not _number(width, 1, 4096) or not _number(height, 1, 256) or not _number(baseline, 1, height):
         return None
@@ -129,14 +129,31 @@ def place_inline(caret, width, height, baseline):
     return round(x - mx), round(y - my)
 
 
-def place_chip(caret, width, height):
-    """Monitor-local origin for a compact chip under the caret's line.
+def place_on_caret_line(caret, width, height, baseline):
+    """Ghost text on the caret's baseline, inside the window.
 
-    Inline text would cover the words after the caret, or overflow the field,
-    so the chip's text starts below the caret instead: inside the field when
-    there is room, else just outside it, and above the line when nothing fits
-    below. It always stays inside the window and monitor; when it cannot, the
-    caller hides it and Fcitx shows its own candidate panel instead.
+    Some editors report a field box that ends before the visible line. A chip
+    under that box lands on the chrome beneath the input and stays there.
+    """
+    if not _number(width, 1, 4096) or not _number(height, 1, 256) or not _number(baseline, 1, height):
+        return None
+    mx, my, mw, mh = caret.monitor
+    wx, wy, ww, wh = caret.window
+    x = caret.x + 1
+    y = caret.y + caret.line_height * baseline / height - baseline
+    left, right = max(mx, wx), min(mx + mw, wx + ww)
+    top, bottom = max(my, wy), min(my + mh, wy + wh)
+    if x < left or x + width > right or y < top or y + height > bottom:
+        return None
+    return round(x - mx), round(y - my)
+
+
+def place_chip(caret, width, height):
+    """Monitor-local origin for a compact chip under the caret, inside the field.
+
+    Inline text would cover the words after the caret. The chip stays in the
+    field: below the line when it fits, above it when it does not. It does not
+    step outside the field onto the window chrome.
     """
     if not _number(width, 1, 4096) or not _number(height, 1, 256):
         return None
@@ -144,17 +161,15 @@ def place_chip(caret, width, height):
     wx, wy, ww, wh = caret.window
     left, right = max(mx, wx), min(mx + mw, wx + ww)
     top, bottom = max(my, wy), min(my + mh, wy + wh)
-    if width > right - left:
-        return None
     field_left, field_right = max(left, caret.field_left), min(right, caret.field_right)
+    field_top, field_bottom = max(top, caret.field_top), min(bottom, caret.field_bottom)
     if width > field_right - field_left:
-        field_left, field_right = left, right
+        return None
     x = min(max(caret.x - CHIP_INSET, field_left), field_right - width)
     below, above = caret.y + caret.line_height + CHIP_GAP, caret.y - CHIP_GAP - height
-    for low, high in ((max(top, caret.field_top), min(bottom, caret.field_bottom)), (top, bottom)):
-        for y in (below, above):
-            if low <= y and y + height <= high:
-                return round(x - mx), round(y - my)
+    for y in (below, above):
+        if field_top <= y and y + height <= field_bottom:
+            return round(x - mx), round(y - my)
     return None
 
 
@@ -287,7 +302,9 @@ class Preview:
         if not caret.text_follows:
             width, height, baseline = self._layout(text, chip=False)
             position = place_inline(caret, width, height, baseline)
-        if position is None:
+            if position is None:
+                position = place_on_caret_line(caret, width, height, baseline)
+        if position is None and caret.text_follows:
             # A leading space would draw over the following words. The trailing
             # space is the separator that acceptance inserts, so the chip keeps it.
             width, height, _baseline = self._layout(text.lstrip(" "), chip=True)

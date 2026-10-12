@@ -5,7 +5,8 @@ import unittest
 from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from preview import Preview, font_pixels, ltr_text, mapped_caret, place_chip, place_inline, valid_preview_text
+from preview import (Preview, font_pixels, ltr_text, mapped_caret, place_chip, place_inline,
+                    place_on_caret_line, valid_preview_text)
 
 
 def focus():
@@ -104,15 +105,18 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertEqual(place_chip(caret, 120, 24), (203, 172))
         # Near the field's right edge it shifts left to stay inside the field.
         self.assertEqual(place_chip(caret, 590, 24), (130, 172))
-        # Wider than the field: inside the window instead.
-        self.assertEqual(place_chip(caret, 800, 24), (200, 172))
+        # Wider than the field, or below a one-line field: not on the chrome.
+        self.assertIsNone(place_chip(caret, 800, 24), "wider than the field")
         self.assertIsNone(place_chip(caret, 901, 24), "wider than the window")
-        # A one-line field: just below it, or above the line at the window's bottom.
         data = focus()
-        self.assertEqual(place_chip(mapped_caret(data), 120, 24), (203, 172))
+        self.assertIsNone(place_chip(mapped_caret(data), 120, 24), "a one-line field has no room under the line")
         data["geometry"]["caret"]["y"] = 610
         data["geometry"]["field"]["y"] = 600
-        self.assertEqual(place_chip(mapped_caret(data), 120, 24), (203, 684))
+        data["geometry"]["field"]["height"] = 20
+        self.assertIsNone(place_chip(mapped_caret(data), 120, 24), "below the field")
+        end = mapped_caret(focus())
+        self.assertIsNone(place_inline(end, 700, 24, 19), "past the field")
+        self.assertEqual(place_on_caret_line(end, 700, 24, 19), (211, 147))
         for size in ((0, 24), (120, 0), (float("nan"), 24)):
             self.assertIsNone(place_chip(caret, *size), size)
 
@@ -173,6 +177,7 @@ class PreviewGeometryTests(unittest.TestCase):
     def test_render_shows_a_chip_when_words_follow_the_caret_or_inline_text_overflows(self):
         data = focus()
         data["geometry"]["text_follows"] = True
+        data["geometry"]["field"]["height"] = 200
         preview, calls, _monitor = self.render_fixture((120, 24))
         self.assertTrue(preview.render(data, " final", 1500))
         self.assertIn(("class", "chip"), calls)
@@ -185,8 +190,9 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertIn(("top", 172), calls)
         preview, calls, _monitor = self.render_fixture((700, 24))
         self.assertTrue(preview.render(focus(), " next", 1500), "past the field's right edge")
-        self.assertEqual([call for call in calls if call[0] in ("class", "unclass")],
-                         [("unclass", "chip"), ("class", "chip")])
+        self.assertNotIn(("class", "chip"), calls, "end-of-line text stays on the caret line")
+        self.assertIn(("left", 211), calls)
+        self.assertIn(("top", 147), calls)
         self.assertEqual(calls[-2:], [("visible", True), ("timer", 1500)])
 
     def test_render_refuses_rtl_unmapped_or_unfitting_text(self):

@@ -219,15 +219,15 @@ takes a paragraph's direction from its first strong character.
 
 The GTK4 layer-shell overlay draws the suggestion as translucent grey text right
 after the caret, with no background, at a size derived from the glyph height.
-When the last snapshot had words after the caret on its line
-(`text_follows`), or the text would pass the field's right edge, it draws a
-compact dark chip instead: the text starts under the caret, just below its line
-(above it when there is no room), inside the field when it fits and always
-inside the window and monitor. Suggestions are at most 64 characters; one that
-fits nowhere returns `rendered: false`. The surface takes no input or
-focus, and any invalidation, new render or expiry hides it. The helper forces
-software rendering and the simple GTK input module, so it never loads a GPU
-driver or connects to an input method.
+A field box that ends before the visible line still keeps that text on the
+caret's baseline inside the window, so it is not dropped onto the chrome under
+the input. When the last snapshot had words after the caret on its line
+(`text_follows`), it draws a compact dark chip under the caret instead, and
+only while that chip fits inside the field. Suggestions are at most 64
+characters; one that fits nowhere returns `rendered: false`. The surface takes
+no input or focus, and any invalidation, new render or expiry hides it. The
+helper forces software rendering and the simple GTK input module, so it never
+loads a GPU driver or connects to an input method.
 
 ## Installation and the renderer flag
 
