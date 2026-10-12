@@ -804,6 +804,14 @@ def session(root, report):
             wait(lambda: context.candidate() is None, label + ' Escape dismissal')
             quiet(.3)
             assert context.candidate() is None, 'A dismissed automatic context stays dismissed'
+            change('')
+            quiet(.2)
+            assert context.candidate() is None, label + ' clearing the field does not revive the dismissed suggestion'
+            change(PREFIX)
+            wait(lambda: context.candidate() == SUFFIX,
+                 label + ' the same words suggest again after the dismissed text is deleted')
+            assert context.key(desktop.ESCAPE)
+            wait(lambda: context.candidate() is None, label + ' the repeated suggestion dismisses again')
             inspections = backend.inspections
             assert not context.key(desktop.TAB), label + ' Tab without a suggestion stays the application Tab'
             assert context.candidate() is None and context.commits() == [SUFFIX]
