@@ -26,6 +26,10 @@ observer wire details.
   | Escape | Dismisses the suggestion or closes a notice. |
   | Ctrl+Shift+Space, Ctrl+Shift+Y | Request or refresh; accept. |
 
+- **Dismissal.** Unchanged native publications keep the context declined.
+  A changed publication ends the local until-edit decline, including a fast
+  delete/retype whose empty intermediate state the observer never reads.
+  Broker-side timed Escape quiet still applies across those edits.
 - **Type-through.** A key that types the suggestion's next characters still
   reaches the app and retires the candidate like any edit. Inspection starts
   at once, and the next suggestion waits 30 ms instead of 120 ms. The request

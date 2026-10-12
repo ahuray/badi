@@ -343,6 +343,10 @@ private:
         const auto digest = surroundingDigest(inputContext.surroundingText());
         if (digest != binding->surroundingDigest) {
             binding->surroundingDigest = digest;
+            // The observer may skip an intermediate edit during a fast
+            // delete/retype. This ends only the local until-edit decline;
+            // the broker still enforces timed quiet and fresh edit authority.
+            binding->dismissedContext.reset();
             binding->inspection.input();
             const auto now = monotonicUs();
             if (now != 0) {
