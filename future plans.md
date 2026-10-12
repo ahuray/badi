@@ -26,9 +26,10 @@ now true in the [README](README.md) or the affected runbook.
 - **GPU:** Vulkan on the Iris Xe is slower per keystroke (13–20 against 19–30
   tokens/s for generation) and faster only for long cold prompts, so Badi stays
   on the CPU.
-- **Quality:** the installed Qwen3-1.7B is weak on independent sets, Persian
-  often misses its 550 ms budget, and no ~350M candidate passed the
-  English/German/Persian gates.
+- **Quality:** the installed Qwen3-1.7B is weak on independent sets, and no
+  ~350M candidate passed the English/German/Persian gates. Persian keeps the
+  8-token automatic budget: on 2026-10-12, 21 tokens missed 550 ms on all 13
+  development cases.
 
 Standing user decisions:
 - IME-parity for Chromium-based apps, Zen and LibreOffice Writer

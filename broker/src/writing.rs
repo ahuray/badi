@@ -590,8 +590,7 @@ pub(crate) fn completion_plan<'a>(
         .language
         .as_deref()
         .and_then(WritingLanguage::from_tag);
-    let (prompt, echo, max_tokens) =
-        healed_boundary(context, language, healed_languages);
+    let (prompt, echo, max_tokens) = healed_boundary(context, language, healed_languages);
     CompletionPlan {
         prompt,
         echo,
@@ -657,14 +656,17 @@ fn healed_echo_span(context: &str, word: &str) -> (usize, usize) {
     (start, context.len())
 }
 
-/// Persian needs about 2.6 times as many tokens as English for the same words.
-fn token_budget(language: Option<WritingLanguage>, english_tokens: u16) -> u16 {
-    if language == Some(WritingLanguage::Persian) {
-        // 2.6×, rounded to the nearest token (8 → 21, 12 → 31).
-        u16::try_from((u32::from(english_tokens) * 26 + 5) / 10).unwrap_or(english_tokens)
-    } else {
-        english_tokens
-    }
+/// Tokens requested for one automatic continuation.
+///
+/// Persian was measured at 2.6× (8 → 21) on 2026-10-12, Lab
+/// `production_boundary`, the 13 Persian development cases, pinned 1.7B.
+/// All 13 missed 550 ms at 21 tokens and four returned no word. Eight tokens
+/// missed twice and still returned a word for every case 21 had answered.
+/// One of those words was shorter (`نظر من` became `نظر`). Neither arm
+/// matched a reference first word. This is that development comparison, not
+/// a held-out score.
+fn token_budget(_language: Option<WritingLanguage>, english_tokens: u16) -> u16 {
+    english_tokens
 }
 
 impl CompletionPlan<'_> {
@@ -1371,8 +1373,7 @@ mod tests {
                 plan.echo,
                 Some(&original[original.trim_end_matches(' ').len()..])
             );
-            let tokens = if language == "fa" { 21 } else { 8 };
-            assert_eq!(plan.max_tokens, tokens);
+            assert_eq!(plan.max_tokens, 8);
             let payload = plan.payload();
             assert_eq!(payload["stop"], serde_json::json!([".", "\n"]));
             assert_eq!(payload["seed"], 42);
@@ -1381,7 +1382,7 @@ mod tests {
             let legacy = super::completion_plan(&request, &[]);
             assert_eq!(legacy.prompt, original);
             assert_eq!(legacy.echo, None);
-            assert_eq!(legacy.max_tokens, tokens);
+            assert_eq!(legacy.max_tokens, 8);
         }
     }
 
@@ -1391,7 +1392,7 @@ mod tests {
             ("en", "Please review the docum", 12),
             ("en", "Please review the", 8),
             ("de", "Bitte lies die Dokum", 8),
-            ("fa", "لطفا این گزار", 21),
+            ("fa", "لطفا این گزار", 8),
             ("en", "Please review the\u{a0}", 8),
             ("en", "Please review the\t", 8),
             ("en", "Please review the\n", 8),
@@ -1406,7 +1407,10 @@ mod tests {
             let candidate = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
             if before == "Please review the docum" {
                 assert_eq!(legacy.prompt, before);
-                assert!(legacy.echo.is_none(), "removing English rolls word healing back");
+                assert!(
+                    legacy.echo.is_none(),
+                    "removing English rolls word healing back"
+                );
                 assert_eq!(candidate.prompt, "Please review the");
                 assert_eq!(candidate.echo, Some(" docum"));
             } else {

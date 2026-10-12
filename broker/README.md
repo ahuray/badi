@@ -128,8 +128,8 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   and Persian suggest whole words only. English healing echoes the last
   unfinished word together with the spaces around it, so the prompt does not
   end on a bare space. English and Persian prompts also echo trailing spaces
-  and require them back (`TRAILING_SPACE_HEALING`). Persian asks for about 2.6
-  times as many tokens as English.
+  and require them back (`TRAILING_SPACE_HEALING`). Persian uses that same
+  token count. A 2.6× Persian budget missed 550 ms on the development cases.
 - **Abstention.** A continuation abstains when it adds a number absent from the
   typed text, and every request when the caret splits a word.
 - **Mid-line.** When words follow the caret on its line, the prompt is still

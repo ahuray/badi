@@ -972,11 +972,7 @@ async fn production_heals_a_trailing_space_and_never_shows_the_echo() -> Result<
                 serde_json::to_string(echo).expect("echo literal")
             )
         );
-        let tokens = if language == "fa" { 21 } else { 8 };
-        assert_eq!(
-            payload["n_predict"], tokens,
-            "healing keeps the token budget"
-        );
+        assert_eq!(payload["n_predict"], 8, "healing keeps the token budget");
         // The typed space stays in the document; the suggestion continues it.
         let text = outcome.into_proposal().map(|proposal| proposal.text);
         assert_eq!(text.as_deref(), shown.strip_prefix(echo), "{before:?}");
@@ -1015,8 +1011,7 @@ async fn production_heals_a_trailing_space_and_never_shows_the_echo() -> Result<
         let (payload, _) = healed_exchange(before, language, &[" Nachricht"]).await?;
         assert_eq!(payload["prompt"], before);
         assert!(payload.get("grammar").is_none(), "{before:?}");
-        let tokens = if language == "fa" { 21 } else { 8 };
-        assert_eq!(payload["n_predict"], tokens);
+        assert_eq!(payload["n_predict"], 8);
     }
     Ok(())
 }
