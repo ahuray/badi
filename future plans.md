@@ -222,7 +222,8 @@ From the 2026-10-11 audit. These are not part of the installed behavior.
 - [x] The settings panel polls only while its window is open. A closed
       window does not ask the broker. The bar mark updates when pause is
       toggled from the bar, and the next time the window opens.
-- [ ] Bash wakes every 100 ms after the first preview (`preview.c`).
+- [x] Bash's Readline timer runs only while a grey preview is held
+      (`preview.c`). An idle prompt does not wake every 100 ms.
 - [ ] `badi doctor` in human-readable text as well as JSON.
 - [ ] Stop passing the settings document on the `badi` command line
       (`badi-desktop.py`).

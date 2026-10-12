@@ -19,6 +19,7 @@ static double expires;
 static int painted;
 static int redisplaying;
 static int displayed;
+static int event_hook_installed;
 static locale_t utf8_locale;
 static rl_voidfunc_t *previous_redisplay;
 static rl_voidfunc_t *previous_deprep;
@@ -45,10 +46,25 @@ static void choose_preview_style(void) {
     }
 }
 
+static int event(void);
+
 static double now_seconds(void) {
     struct timespec now;
     if (clock_gettime(CLOCK_MONOTONIC, &now)) return -1;
     return (double)now.tv_sec + (double)now.tv_nsec / 1000000000.0;
+}
+
+static void disarm_event_hook(void) {
+    if (!event_hook_installed) return;
+    if (rl_event_hook == event) rl_event_hook = previous_event;
+    event_hook_installed = 0;
+}
+
+static void arm_event_hook(void) {
+    if (event_hook_installed) return;
+    previous_event = rl_event_hook;
+    rl_event_hook = event;
+    event_hook_installed = 1;
 }
 
 static void forget(void) {
@@ -115,14 +131,17 @@ static void redisplay(void) {
     if (redisplaying) { previous_redisplay(); return; }
     hide();
     previous_redisplay();
-    if (!current()) { forget(); return; }
-    /* Keep one spare terminal cell: drawing must never trigger wrap/scroll.
-     * Complex, wrapped and multiline commands retain ordinary Readline. */
-    if (!fits(rl_line_buffer, preview)) { forget(); return; }
-    fprintf(rl_outstream, "\0337%s%s%s\0338", preview_style, preview, preview_reset);
-    fflush(rl_outstream);
-    painted = 1;
-    displayed = 1;
+    if (!current() || !preview || !fits(rl_line_buffer, preview)) forget();
+    else {
+        /* Keep one spare terminal cell: drawing must never trigger wrap/scroll.
+         * Complex, wrapped and multiline commands retain ordinary Readline. */
+        fprintf(rl_outstream, "\0337%s%s%s\0338", preview_style, preview, preview_reset);
+        fflush(rl_outstream);
+        painted = 1;
+        displayed = 1;
+    }
+    /* A window-change signal can call this between Readline's hook check and
+     * the call. Leave the timer for event() to drop in normal context. */
 }
 
 static int event(void) {
@@ -132,12 +151,14 @@ static int event(void) {
     QUIT;
     int result = previous_event ? previous_event() : 0;
     if (preview && !current()) { hide(); forget(); }
+    if (!preview) disarm_event_hook();
     return result;
 }
 
 static void deprep(void) {
     hide();
     if (rl_done) forget();
+    if (!preview) disarm_event_hook();
     if (previous_deprep) previous_deprep();
 }
 
@@ -145,7 +166,8 @@ static int badi_preview_builtin(WORD_LIST *list) {
     if (!list) return 2;
     const char *operation = list->word->word;
     list = list->next;
-    if (strcmp(operation, "clear") == 0 && !list) { hide(); forget(); return 0; }
+    if (strcmp(operation, "clear") == 0 && !list) { hide(); forget(); disarm_event_hook(); return 0; }
+    if (strcmp(operation, "watching") == 0 && !list) return event_hook_installed ? 0 : 1;
     if (strcmp(operation, "active") == 0 && list && !list->next) {
         return displayed && current() && strcmp(prefix, list->word->word) == 0 ? 0 : 1;
     }
@@ -163,8 +185,9 @@ static int badi_preview_builtin(WORD_LIST *list) {
      * that separates a mid-sentence insertion from the next word. */
     preview = strdup(text);
     prefix = strdup(before);
-    if (!preview || !prefix) { forget(); return 1; }
+    if (!preview || !prefix) { forget(); disarm_event_hook(); return 1; }
     expires = now + 4.0;
+    arm_event_hook();
     return 0;
 }
 
@@ -180,16 +203,14 @@ int badi_preview_builtin_load(char *name) {
     choose_preview_style();
     previous_redisplay = rl_redisplay_function;
     previous_deprep = rl_deprep_term_function;
-    previous_event = rl_event_hook;
     rl_redisplay_function = redisplay;
     rl_deprep_term_function = deprep;
-    rl_event_hook = event;
     return 1;
 }
 
 void badi_preview_builtin_unload(char *name) {
     (void)name;
-    hide(); forget();
+    hide(); forget(); disarm_event_hook();
     if (rl_redisplay_function == redisplay) rl_redisplay_function = previous_redisplay;
     if (rl_deprep_term_function == deprep) rl_deprep_term_function = previous_deprep;
     if (rl_event_hook == event) rl_event_hook = previous_event;
@@ -200,6 +221,7 @@ static char *const documentation[] = {
     "Render a temporary grey Badi preview without changing the Readline buffer.",
     "show TEXT PREFIX displays only at an unchanged command's end; clear dismisses.",
     "active PREFIX checks a displayed preview; eligible PREFIX checks the caret and byte limit.",
+    "watching reports whether the short-lived display timer is installed.",
     NULL,
 };
 

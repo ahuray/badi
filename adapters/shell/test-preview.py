@@ -76,7 +76,9 @@ class ShellSession:
                       '_probe() { printf "\\nBUFFER:%s\\nPOINT:%s\\n" "$READLINE_LINE" "$READLINE_POINT"; }\n'
                       'bind -x \'"\\C-x\\C-b":_probe\'\n'
                       '_unload() { enable -d badi_preview; }\n'
-                      'bind -x \'"\\C-x\\C-u":_unload\'\n')
+                      'bind -x \'"\\C-x\\C-u":_unload\'\n'
+                      '_hook() { printf "\\nHOOK:%s\\n" "$(badi_preview watching >/dev/null && echo on || echo off)"; }\n'
+                      'bind -x \'"\\C-x\\C-y":_hook\'\n')
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(self.root)
@@ -113,6 +115,11 @@ class ShellSession:
                 raise AssertionError(f'PTY did not emit {needle!r}: {bytes(result)!r}')
             result.extend(self.read_for(.025))
         return bytes(result)
+
+    def watching(self):
+        self.send('\x18\x19')
+        output = self.read_until(b'HOOK:')
+        return output.split(b'HOOK:', 1)[1].startswith(b'on')
 
     def request(self, prefix, display=' ghost words', *, style=GREY):
         self.send('\x15' + prefix + REQUEST)
@@ -199,6 +206,15 @@ class PreviewTests(unittest.TestCase):
         self.assertIn(f'POINT:{point}\r\n'.encode(), output)
         shell.send('\x1f')
         shell.buffer('از همکاری')
+
+    def test_the_display_timer_runs_only_while_a_preview_is_held(self):
+        shell = self.shell()
+        self.assertFalse(shell.watching())
+        shell.request('hello')
+        self.assertTrue(shell.watching())
+        shell.send('\x02')
+        shell.read_for()
+        self.assertFalse(shell.watching())
 
     def test_expiry_clears_preview_and_requires_a_new_request(self):
         shell = self.shell()

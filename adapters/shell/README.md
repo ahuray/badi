@@ -11,7 +11,9 @@ Spelling corrections appear as `original → corrected` and replace only the
 exact suffix the broker authorized.
 
 The preview is mid-grey: `#808080` on truecolor terminals, index 244 on
-256-color ones, and italic in the normal colour on basic terminals. Badi neither
+256-color ones, and italic in the normal colour on basic terminals. Readline's
+timer runs only while that preview is held, so an idle prompt does not wake
+every 100 ms. Badi neither
 queries the terminal nor changes its theme. The preview disappears on editing,
 caret movement, search or completion, dismissal, or after four seconds. It must
 fit beside the command on one row; wrapped commands, control characters and
