@@ -20,13 +20,13 @@ pub struct AuthoritySnapshot {
 }
 
 impl Broker {
-    pub async fn set_paused(&self, paused: bool) -> bool {
+    pub async fn set_paused(&self, paused: bool) -> Result<bool, BrokerError> {
         let mut state = self.inner.state.lock().await;
         let changed = state.set_runtime_pause(paused, &self.inner.metrics);
         self.finish_pause_transition(state, changed).await
     }
 
-    pub async fn toggle_paused(&self) -> bool {
+    pub async fn toggle_paused(&self) -> Result<bool, BrokerError> {
         let mut state = self.inner.state.lock().await;
         let paused = !state.paused;
         let changed = state.set_runtime_pause(paused, &self.inner.metrics);
@@ -41,7 +41,7 @@ impl Broker {
         &self,
         state: MutexGuard<'_, BrokerState>,
         changed: bool,
-    ) -> bool {
+    ) -> Result<bool, BrokerError> {
         let effective_paused = state.effective_paused();
         if changed {
             self.publish_authority_change(state);
@@ -49,9 +49,9 @@ impl Broker {
             drop(state);
         }
         if effective_paused {
-            self.flush_outcomes_before_pause_ack().await;
+            self.flush_outcomes_before_pause_ack().await?;
         }
-        effective_paused
+        Ok(effective_paused)
     }
 
     pub async fn is_paused(&self) -> bool {

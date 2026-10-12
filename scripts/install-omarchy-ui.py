@@ -33,17 +33,26 @@ def panel_ready():
     return isinstance(state, dict) and "page" in state and "service" in state
 
 
+def plugin_directory(home):
+    """The Omarchy plugin directory, honouring XDG_CONFIG_HOME."""
+    return badi_install.config_home(home) / "omarchy/plugins/io.github.ahuray.badi"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wait-for-unlock", type=int, default=0, metavar="SECONDS")
     args = parser.parse_args()
     if not 0 <= args.wait_for_unlock <= 86400:
         parser.error("wait must be between 0 and 86400 seconds")
-    target = Path.home() / ".config/omarchy/plugins/io.github.ahuray.badi"
-    if target.is_symlink() or target.stat().st_uid != os.getuid():
-        raise RuntimeError("Inspect the installed Badi plugin directory before replacing it")
-    if json.loads((target / "manifest.json").read_text())["id"] != "io.github.ahuray.badi":
-        raise RuntimeError("The installed plugin identity does not match Badi")
+    home = Path.home()
+    target = plugin_directory(home)
+    fresh = not target.exists()
+    if not fresh:
+        if target.is_symlink() or not target.is_dir() or target.stat().st_uid != os.getuid():
+            raise RuntimeError("Inspect the installed Badi plugin directory before replacing it")
+        manifest = target / "manifest.json"
+        if manifest.exists() and json.loads(manifest.read_text())["id"] != "io.github.ahuray.badi":
+            raise RuntimeError("The installed plugin identity does not match Badi")
     subprocess.run(["bash", "ui/omarchy-plugin/tests/check-source.sh"], cwd=ROOT,
                    env={**os.environ, "BADI_OMARCHY_REQUIRE_HOST_CHECKS": "1"}, check=True)
     # Stage the validated bytes: a checkout edited while waiting is not installed.
@@ -54,12 +63,19 @@ def main():
             print("Validated UI staged. Waiting for normal desktop unlock; the lock client remains intact.", flush=True)
         if not badi_install.poll(unlocked, args.wait_for_unlock, 2):
             raise RuntimeError("Desktop locked: no UI files changed. Unlock and rerun this command.")
-    installation = badi_install.Installation(Path.home(), "omarchy-ui")
+    installation = badi_install.Installation(home, "omarchy-ui")
+    target.mkdir(parents=True, exist_ok=True)
     for name, (data, mode) in staged.items():
         # Atomic replacement avoids the shell reading a partially written QML
         # file; a development link to a checkout file is replaced (and saved).
         installation.write(target / name, data, mode, replace_link=True)
+    for child in target.iterdir():
+        if child.name not in FILES and child.is_file() and not child.is_symlink():
+            installation.remove(child)
     installation.finish()
+    if fresh:
+        subprocess.run(["omarchy", "plugin", "enable", "io.github.ahuray.badi"], check=True, timeout=30)
+    badi_install.write_receipt(home, "omarchy-ui", badi_install.source_identity(ROOT), installation.current)
     # The supported restart performs its own lock check. It also clears Qt's
     # cached nested components, which a plugin rescan alone may retain.
     subprocess.run(["omarchy", "restart", "shell"], check=True, timeout=30)

@@ -34,9 +34,6 @@ UNOBSERVED_FAMILY_PROGRAMS = {'chrome': 'chrome', 'Google-chrome': 'google-chrom
                               'Zen-Twilight': 'zen-twilight',
                               'FFPWA-01HVY3F0GDT6DCG5V6TTRHK4BT': 'ffpwa-01hvy3f0gdt6dcg5v6ttrhk4bt'}
 IME_PARITY_APPS = ('chromium', 'chromium-browser', 'brave-origin', 'zen', 'chatgpt', 'code', 'cursor', 'discord')
-UNAVAILABLE_NOTICE = 'Badi cannot safely insert suggestions in this app yet'
-OBSERVER_UNAVAILABLE_NOTICE = 'Badi cannot see this text field — check badi doctor'
-FIELD_DENIED_NOTICE = 'Badi cannot read this text field — run badi debug status'
 RIGHT, CONTROL = 0xff53, 1 << 2
 PANEL_HINT = 'Badi · Tab to accept · Ctrl+→ next word · Escape to dismiss'
 # Chromium's text-input-v3 path adds UppercaseWords (0x80072 in total).
@@ -399,20 +396,18 @@ def session(root, report):
             inspections = backend.inspections
             context = desktop.InputContext(app)
             assert not context.key(desktop.TAB), app + ' must retain Tab without surrounding text'
-            assert context.key(ord(' '), 5), app + ' explicit notice must not require surrounding text'
-            wait(lambda: auxiliary() == UNAVAILABLE_NOTICE, app + ' current auxiliary notice')
+            assert not context.key(ord(' '), 5), app + ' Ctrl+Shift+Space reaches an app Badi cannot edit'
+            quiet(.05)
+            assert auxiliary() == '', app + ' shows no unavailable notice'
             for _ in range(3):
                 context.text(PREFIX)
                 quiet(.06)
-                assert auxiliary() == UNAVAILABLE_NOTICE, app + ' republishing must preserve the current notice'
+                assert auxiliary() == '', app + ' republishing stays quiet'
             assert not context.key(desktop.TAB), app + ' must retain ordinary Tab'
-            wait(lambda: auxiliary() == '', app + ' original Tab clears the notice')
             assert not context.key(0xff51) and not context.key(0xff57), app + ' must retain navigation'
-            assert context.key(ord(' '), 5), app + ' supports an explicit unavailable notice'
-            wait(lambda: auxiliary() == UNAVAILABLE_NOTICE, app + ' refreshed auxiliary notice')
-            assert 'Tab to accept' not in json.dumps(context.events)
             assert not context.key(ord('Y'), 5), app + ' cannot accept unsupported native editing'
-            wait(lambda: auxiliary() == '', app + ' ordinary input clears the notice')
+            assert auxiliary() == '', app + ' still shows no notice'
+            assert 'Tab to accept' not in json.dumps(context.events)
             assert backend.reads == reads and backend.inspections == inspections
             assert context.candidate() is None and context.commits() == []
             assert control('status')['metrics']['context_updates'] == 0
@@ -423,38 +418,26 @@ def session(root, report):
         checks.append('Allowed non-Zen Gecko/Obsidian identities acquire no prose, publish no context and preserve Tab/navigation')
         checks.append('Granted Chrome and Brave aliases, Chromium web-app, Flatpak, Vivaldi and Code-OSS identities, '
                       'Zen Twilight and a PWAsForFirefox window without an observer rule never take the manual path')
-        checks.append('Current unavailable notice survives repeated surrounding publication and clears on original keys')
+        checks.append('Ctrl+Shift+Space in an app Badi cannot edit reaches the app and publishes nothing')
 
         context = desktop.InputContext('firefox')
-        assert context.key(ord(' '), 5)
-        wait(lambda: auxiliary() == UNAVAILABLE_NOTICE, 'notice before focus loss')
+        assert not context.key(ord(' '), 5)
+        quiet(.05)
+        assert auxiliary() == '', 'ungranted Firefox keeps Ctrl+Shift+Space'
         context.ic('FocusOut')
-        wait(lambda: auxiliary() == '', 'focus loss clears the unavailable notice')
         context.ic('FocusIn')
         quiet(.1)
-        assert auxiliary() == '', 'Focus recovery must not restore an old notice'
-        assert context.key(ord(' '), 5)
-        wait(lambda: auxiliary() == UNAVAILABLE_NOTICE, 'notice before foreign composition')
+        assert auxiliary() == '', 'Focus recovery must not invent a notice'
         assert context.key(ord('U'), 5)
         assert context.key(ord('4'))
         wait(lambda: preedit() == 'U+4', 'unavailable app real Unicode preedit')
-        assert auxiliary() != UNAVAILABLE_NOTICE, 'Foreign composition must own the panel'
+        assert auxiliary() == '', 'Foreign composition owns the panel'
         assert context.key(desktop.ESCAPE)
-        wait(lambda: preedit() == '' and auxiliary() == '', 'foreign composition clears without restoring notice')
-        assert context.key(ord(' '), 5)
-        wait(lambda: auxiliary() == UNAVAILABLE_NOTICE, 'notice before five-second expiry')
-        notice_started = time.monotonic()
-        for _ in range(4):
-            quiet(.9)
-            context.text(PREFIX)
-            quiet(.03)
-            assert auxiliary() == UNAVAILABLE_NOTICE, 'Surrounding publication must not shorten the notice lease'
-        wait(lambda: auxiliary() == '', 'five-second notice expiry despite surrounding publication', timeout=2)
-        assert 4.8 <= time.monotonic() - notice_started < 5.8, 'Publication must not renew or defeat notice expiry'
+        wait(lambda: preedit() == '' and auxiliary() == '', 'foreign composition clears')
         assert context.commits() == [] and control('status')['metrics']['context_updates'] == 0
         context.close()
         context = None
-        checks.append('Unavailable notice clears on focus loss, foreign Unicode composition and its original five-second expiry')
+        checks.append('Ungranted Firefox leaves Ctrl+Shift+Space to the app and still yields to Unicode composition')
 
         context = desktop.InputContext(FIXTURE_APP)
         context.text(PREFIX)
@@ -464,14 +447,15 @@ def session(root, report):
         assert context.candidate() is None
         checks.append('Browser-origin target is unavailable even for an unrecognized program alias')
 
-        assert context.key(ord(' '), 5)
-        wait(lambda: auxiliary() == UNAVAILABLE_NOTICE, 'observed browser unavailable notice')
+        assert not context.key(ord(' '), 5)
+        quiet(.05)
+        assert auxiliary() == '', 'ungranted browser keeps Ctrl+Shift+Space'
         inspections = backend.inspections
         context.text(PREFIX)
-        wait(lambda: auxiliary() == '' and backend.inspections > inspections,
-             'unknown-alias browser republishing invalidates and reinspects authority')
+        wait(lambda: backend.inspections > inspections,
+             'unknown-alias browser republishing reinspects authority')
         assert backend.reads == 0 and control('status')['metrics']['context_updates'] == 0
-        checks.append('Unknown-alias observed browser notices do not exempt surrounding publication from authority reinspection')
+        checks.append('Ctrl+Shift+Space in an ungranted browser reaches the app; surrounding publication still reinspects')
 
         backend.uri = 'https://allowed.example.test/document'
         daemon.observer.invalidate('fixture_field_changed')
@@ -746,8 +730,9 @@ def session(root, report):
             assert not context.key(desktop.TAB), label + ' Tab must pass through without an observed field'
             quiet(.3)
             assert context.candidate() is None and context.commits() == []
-            assert context.key(ord(' '), 5), label + ' explicit chord requests an observed field'
-            wait(lambda: auxiliary() == OBSERVER_UNAVAILABLE_NOTICE, label + ' observer-unavailable notice')
+            assert not context.key(ord(' '), 5), label + ' Ctrl+Shift+Space reaches the app without an edit path'
+            quiet(.05)
+            assert auxiliary() == '', label + ' explains the declined field in badi debug, not a notice'
             assert reason_count('ime_parity_observer_unavailable') > unavailable
             assert updates() == start_updates and backend.reads == reads, \
                 label + ' must never send unknown-identity manual context'
@@ -762,13 +747,14 @@ def session(root, report):
                 for descriptor in list(daemon.clients):
                     daemon.close_client(descriptor)
                 assert not context.key(desktop.ESCAPE)
-                wait(lambda: auxiliary() == '', label + ' notice cleared by ordinary input')
+                assert auxiliary() == '', label + ' no notice to clear'
                 unavailable = reason_count('ime_parity_observer_unavailable')
                 context.text(PREFIX)
                 quiet(.3)
                 assert not context.key(desktop.TAB)
-                assert context.key(ord(' '), 5)
-                wait(lambda: auxiliary() == OBSERVER_UNAVAILABLE_NOTICE, label + ' absent-observer notice')
+                assert not context.key(ord(' '), 5)
+                quiet(.05)
+                assert auxiliary() == '', label + ' absent observer leaves the chord to the app'
                 assert reason_count('ime_parity_observer_unavailable') > unavailable
                 assert updates() == start_updates and backend.reads == reads and context.commits() == []
             finally:
@@ -792,8 +778,9 @@ def session(root, report):
             change(PREFIX, new_field=True)
             quiet(.3)
             assert not context.key(desktop.TAB)
-            assert context.key(ord(' '), 5)
-            wait(lambda: auxiliary() == FIELD_DENIED_NOTICE, label + ' sensitive-field notice')
+            assert not context.key(ord(' '), 5)
+            quiet(.05)
+            assert auxiliary() == '', label + ' a denied field leaves the chord to the app'
             assert reason_count('ime_parity_field_denied') > denied
             assert updates() == start_updates and backend.reads == reads and context.candidate() is None
             backend.role = 'text'
@@ -927,8 +914,9 @@ def session(root, report):
         change(PREFIX, new_field=True)
         quiet(.3)
         assert not context.key(desktop.TAB), 'Tab passes through in a denied Zen urlbar'
-        assert context.key(ord(' '), 5)
-        wait(lambda: auxiliary() == FIELD_DENIED_NOTICE, 'Zen urlbar field-denied notice')
+        assert not context.key(ord(' '), 5), 'Ctrl+Shift+Space passes through in a denied Zen urlbar'
+        quiet(.05)
+        assert auxiliary() == '', 'a denied urlbar leaves the chord to the app'
         assert reason_count('ime_parity_field_denied') > denied
         assert updates() == start_updates and backend.reads == reads
         assert context.candidate() is None and context.commits() == commits
@@ -963,20 +951,30 @@ def session(root, report):
         assert context.commits() == [SUFFIX] and context.candidate() is None
         checks.append('IME-parity desktop (chatgpt): a paragraph end "\\n\\n" agreed by the observer is end of '
                       'field; the suggestion displays and Tab dispatches one exact append')
-        for observed_after, fcitx_after, reason in (('', '\n\n', 'observer_context_mismatch'),
-                                                    ('\n', '\n\n', 'observer_context_mismatch'),
-                                                    ('\n\n\n', '\n\n\n', 'caret_not_at_end'),
-                                                    ('\n\nmore', '\n\nmore', 'caret_not_at_end')):
-            unchanged, count = updates(), reason_count(reason)
+        for observed_after, fcitx_after in (('', '\n\n'), ('\n', '\n\n')):
+            unchanged, count = updates(), reason_count('observer_context_mismatch')
             paragraph_end(observed_after, fcitx_after)
-            wait(lambda: reason_count(reason) > count, 'chatgpt ' + reason + ' for ' + repr(fcitx_after))
+            wait(lambda: reason_count('observer_context_mismatch') > count,
+                 'chatgpt observer_context_mismatch for ' + repr(fcitx_after))
             quiet(.2)
             assert updates() == unchanged and context.candidate() is None, repr((observed_after, fcitx_after))
             assert not context.key(desktop.TAB), repr((observed_after, fcitx_after))
             quiet(.3)
             assert updates() == unchanged and context.candidate() is None and context.commits() == [SUFFIX]
-        checks.append('IME-parity desktop (chatgpt): observer disagreement about the paragraph end, three line '
-                      'breaks and text after it fail closed and keep the application Tab')
+        checks.append('IME-parity desktop (chatgpt): observer disagreement about the paragraph end fails closed '
+                      'and keeps the application Tab')
+        # Agreed text after the caret is a request; the phrase fixture abstains
+        # there, so nothing shows and Tab stays the application's.
+        for after in ('\n\n\n', '\n\nmore'):
+            unchanged = updates()
+            paragraph_end(after, after)
+            wait(lambda: updates() > unchanged, 'chatgpt request with text after the caret ' + repr(after))
+            quiet(.3)
+            assert context.candidate() is None and not context.key(desktop.TAB), repr(after)
+            quiet(.3)
+            assert context.candidate() is None and context.commits() == [SUFFIX]
+        checks.append('IME-parity desktop (chatgpt): agreed text after the caret requests; the fixture abstains '
+                      'and Tab stays the application\'s')
         # A <div> line ends with one break; an EditContext editor sends none while the DOM shows one.
         for observed_after, fcitx_after in (('\n', '\n'), ('\n', '')):
             paragraph_end(observed_after, fcitx_after, new_field=True)

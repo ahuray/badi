@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { hasUnsafeText, validCorrection } from './text-safety.mjs';
+import { hasIsolatedSpaces, hasUnsafeText, validCorrection } from './text-safety.mjs';
 import { validSuggestion } from './broker-client.mjs';
 
 test('all editor text guards share the exact Persian orthographic joiner contract', async () => {
@@ -13,6 +13,11 @@ test('all editor text guards share the exact Persian orthographic joiner contrac
   assert.equal(hasUnsafeText('normal\ncontext\ttext', true), false);
   assert.equal(hasUnsafeText('normal\ncontext\ttext'), true);
   assert.equal(hasUnsafeText('unsafe\u202econtext', true), true);
+  assert.equal(hasIsolatedSpaces('final '), true);
+  assert.equal(validSuggestion('final '), true);
+  assert.equal(hasIsolatedSpaces('final  '), false);
+  assert.equal(validSuggestion('final  '), false);
+  assert.equal(validSuggestion('final\u00a0'), false);
 });
 
 test('corrections preserve one exact whole-word suffix and its optional space', () => {

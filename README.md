@@ -15,9 +15,18 @@ machine. Badi is pre-release software.
 | **Escape** | Dismiss. |
 | **Ctrl+Shift+Space** | Ask for a suggestion. |
 
-Obsidian swaps the first two: Tab takes a word and Ctrl/Command+→ takes all.
+Obsidian accepts one word with Tab only while a suggestion is visible, and
+takes all of it with Ctrl/Command+→. Ctrl+Shift+Space asks for one. Tab with
+nothing showing stays Tab.
 Bash uses Ctrl-X then Tab to request and accept. In a Xournal++ text cell, Tab
 requests and Tab again accepts. A suggestion lasts up to five seconds.
+
+In the middle of a sentence Badi suggests only what fits before the next word:
+the rest of a word you are typing, or words the model would write right before
+the text that follows. When the caret is already after a space and a word
+follows, the suggestion keeps one space so it does not join that word. Where
+grey text would cover those words, it shows in a small box under the line
+instead, and that box keeps the separating space.
 
 ## Where it works
 
@@ -35,7 +44,7 @@ Linux in general.
 | Telegram | | Telegram desktop (Qt) |
 | Omawrite | | 0.5.0 |
 | Xournal++ text tool | Tab requests, exact native undo | 1.3.7 |
-| Obsidian | Badi plugin; caret at the end of a note | 1.13.7 |
+| Obsidian | Badi plugin | 1.13.7 |
 | Bash | Grey Readline preview and narrow English spelling fixes | Bash 5.3.15 in Ghostty 1.3.1 |
 | Grok Bot | Ready, but its composer is untested | 0.35 |
 
@@ -75,15 +84,25 @@ python3 scripts/install-omarchy-ui.py   # bar mark and settings panel
 python3 scripts/install-editors.py --vault /path/to/vault --bash   # optional: Obsidian, Bash
 ```
 
+Prerequisites on the machine: Rust, Node.js, cmake, ninja, a C++20 compiler,
+Fcitx 5 headers, PyGObject, GTK 4 and gtk4-layer-shell, plus a network path
+for the pinned Fcitx compatibility source.
+
 The installers build user-local files, back up everything they replace and
-restart Badi's services and Fcitx. The newest three backups are kept, and
-`python3 scripts/badi_install.py restore DIR` rolls one back. The desktop
-install needs an unlocked desktop; `--broker-only` updates only the model
-service while locked. On Fcitx 5.1.22 it also installs a
+restart Badi's services and Fcitx. The newest three backups of each installer
+are kept, and the first backup — the files as they were before Badi — is kept
+as well. `python3 scripts/badi_install.py restore DIR` rolls one back, reloads
+user units when a service file was restored, and updates the install receipt
+to those restored bytes. The desktop install needs an unlocked desktop;
+`--broker-only` updates only the model service while locked. On Fcitx 5.1.22
+it also installs a
 [backported Fcitx frontend](packaging/fcitx5-wayland-compat/README.md) so
 Chromium-based apps keep sending their text (`--no-wayland-compat` skips it).
-The model files must already be present (`badictl models writing` prints the
-pinned download plan).
+The model files must already be present. `badictl models writing` prints
+`hf download` with `--local-dir ~/.local/share/badi/models`. The pinned
+llama.cpp runtime is `~/.local/share/badi/runtimes/llama-b10726`, with its
+archive in `runtimes/downloads/`. `install-desktop.py` checks those pinned
+hashes before it builds, and the broker checks them again before it starts.
 
 ## Choose where Badi writes
 
@@ -127,9 +146,9 @@ what you typed:
 | Reason | Meaning |
 | --- | --- |
 | `app_disabled` | The app or site has no grant. |
-| `request_abstained` | Unsupported language, text after the caret, or a lone unfinished word. |
+| `request_abstained` | Unsupported language, a caret inside a word, or a lone unfinished word. |
 | `budget_prefill`, `budget_stream` | The time budget ran out: 550 ms while typing, 1.2 s after an explicit request. |
-| `model_abstained`, `output_rejected` | The model declined, or its words failed a language, dictionary, number or safety check. |
+| `model_abstained`, `output_rejected` | The model declined, or its words failed a language, dictionary, number or safety check, or did not fit before the text after the caret. |
 | `stale`, `timeout`, `provider_error` | The text changed first, or the model was late or failed. |
 
 Debug mode expires after 15 minutes. A crashed model service restarts with

@@ -122,6 +122,9 @@ void fingerprintBindsExactCaptureAndSalt() {
 }
 
 void sanitizerAndIdentifiers() {
+    check(sanitizeSuggestion("final ") == "final ",
+          "one trailing space is the mid-sentence separator");
+    check(!sanitizeSuggestion("final  "), "two trailing spaces must fail");
     check(sanitizeSuggestion(" for your time") == " for your time",
           "ordinary suggestion should pass");
     check(!sanitizeSuggestion(""), "empty suggestion must fail");
@@ -559,6 +562,11 @@ void foreignImeAndManualKeysYieldCooperatively() {
     check(!hasForeignImeUi(ownedCandidates), "owned panel must not self-yield");
     check(decideLocalAction(true, false, false, false, {}) == LocalAction::Invoke,
           "sole invoke chord should request explicitly");
+    check(claimInvokeChord(true, true, false),
+          "a granted field Badi can edit still takes Ctrl+Shift+Space");
+    check(!claimInvokeChord(false, true, false) && !claimInvokeChord(true, false, false) &&
+              !claimInvokeChord(false, false, false) && !claimInvokeChord(true, true, true),
+          "without a grant, without an edit path, or under a foreign IME the chord reaches the app");
     check(decideLocalAction(false, true, false, true, ownedCandidates) ==
               LocalAction::Accept,
           "accept chord should act only on owned live candidate");
@@ -634,7 +642,7 @@ void preInputKeysConsumeOnlyBadiUi() {
     check(decide(tab, false, true, owned) == PreKeyAction::Tab && decide(tab, false, false, foreign) == PreKeyAction::Tab,
           "plain Tab is decided by decideTabAction");
     check(decide(escape, true, false, {}) == PreKeyAction::CloseNotice,
-          "Escape closes Badi's own notice");
+          "Escape closes Badi's own notice and still reaches the application");
     check(decide(escape, true, false, foreign) == PreKeyAction::CancelDeclining,
           "a foreign input method keeps Escape even over Badi's notice");
     check(decide(escape, true, true, owned) == PreKeyAction::Dismiss &&
@@ -702,6 +710,21 @@ void wordAcceptanceGrantsOnlyTheNextWord() {
     const auto fallback = other.requestAcceptance(100, kOwnedPanel, true);
     check(fallback && fallback->expectedText == " for your time",
           "a next word that is not the text's start falls back to the whole text");
+
+    auto pending = focusedState();
+    const auto shown = explicitContext(pending);
+    check(pending.showSuggestion(suggestionFor(shown), 100), "a suggestion displays");
+    const auto first = pending.requestAcceptance(100, kOwnedPanel);
+    check(first && pending.acceptancePending() && pending.suggestionVisible(),
+          "the first acceptance stays pending");
+    check(!pending.requestAcceptance(101, kOwnedPanel) && !pending.requestAcceptance(102, kOwnedPanel, true),
+          "a second Tab or Ctrl+Right does not queue another acceptance");
+    check(pending.suggestionVisible() && pending.acceptancePending(),
+          "the in-flight acceptance is not cleared by the second key");
+    const CommitPrepare stillFirst{first->coordinates, first->controlId, first->suggestionId,
+                                   first->expectedText, "all"};
+    check(pending.authorizeCommit(stillFirst, 103, kOwnedPanel).has_value(),
+          "the first grant still dispatches");
 }
 
 void invokeRoutesByEditPathAndExplainsWaits() {
@@ -1287,7 +1310,7 @@ void observerRepliesFailClosed() {
           "an observed block end and an empty Fcitx after both name the end of the field, and nothing else does");
     const auto quoted = captureContextWindow("Quoted list\n\nThanks for the", 27, 27, true, "en");
     check(quoted && observerAgrees({{"before", "Thanks for the"}, {"after", ""}, {"scope", "block"}}, *quoted) &&
-              observerAgrees({{"before", ""}, {"after", ""}, {"scope", "block"}}, *captureContextWindow("Above\n", 6, 6, true, "en")) &&
+              !observerAgrees({{"before", ""}, {"after", ""}, {"scope", "block"}}, *captureContextWindow("Above\n", 6, 6, true, "en")) &&
               !observerAgrees({{"before", "Thanks for the"}, {"after", ""}}, *quoted) &&
               !observerAgrees({{"before", "for the"}, {"after", ""}, {"scope", "block"}}, *quoted) &&
               !observerAgrees({{"before", "Thanks for the"}, {"after", ""}, {"scope", "field"}}, *quoted) &&
@@ -1353,9 +1376,13 @@ void observerRequestsNameTheBoundField() {
     empty.identityKnown = true;
     auto middle = *captureContextWindow("thank you", 5, 5, true, "en");
     middle.identityKnown = true;
+    auto middleObserved = observed;
+    middleObserved["before"] = "thank";
+    middleObserved["after"] = " you";
+    middleObserved["caret"] = 5;
     check(observedRequestBlocked(observed, empty, false) == "empty_prefix" &&
-              observedRequestBlocked(observed, middle, false) == "caret_not_at_end",
-          "a request needs a prefix and an end-of-text caret");
+              !observedRequestBlocked(middleObserved, middle, false),
+          "a request needs a prefix; an agreeing caret mid-text requests");
 
     check(invalidates({{"event", "invalidate"}}, "code") && invalidates({{"app_id", ""}}, "code") &&
               invalidates({{"app_id", "code"}}, "code") && invalidates({{"app_id", 7}}, "code") &&

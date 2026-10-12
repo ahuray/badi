@@ -11,7 +11,7 @@ fn hardware_report_is_local_json_without_a_runtime_directory() {
         .expect("hardware command");
 
     assert!(output.status.success());
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr, [] as [u8; 0]);
     let report: Value = serde_json::from_slice(&output.stdout).expect("hardware JSON");
     assert_eq!(report["schema"], "badi.hardware.v1");
     assert!(report["architecture"].is_string());
@@ -36,7 +36,7 @@ fn model_report_is_pinned_and_never_claims_runtime_readiness() {
         .expect("models command");
 
     assert!(output.status.success());
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr, [] as [u8; 0]);
     let report: Value = serde_json::from_slice(&output.stdout).expect("models JSON");
     assert_eq!(report["schema"], "badi.model-advice.v2");
     assert_eq!(report["hardware"]["schema"], "badi.hardware.v1");

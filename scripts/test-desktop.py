@@ -363,6 +363,15 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(native['inspection_error'], 'native_process_uninspectable')
             self.assertNotIn('private maps detail', json.dumps(native))
 
+    def test_corrupt_settings_stop_the_service_instead_of_restarting(self):
+        with patch.object(desktop.subprocess, 'run', side_effect=[
+            subprocess.CompletedProcess([], 0, 'c' * 32 + '\n', ''),
+            subprocess.CompletedProcess([], 0, 'settings path\nerror_code=control_plane: unsafe_file\n', ''),
+        ]):
+            problem = desktop.startup_problem()
+            self.assertEqual(problem['code'], 'settings_unsafe_file')
+            self.assertNotIn('settings path', json.dumps(problem))
+
     def test_startup_diagnosis_does_not_reuse_logs_without_an_invocation(self):
         with patch.object(desktop.subprocess, 'run') as command:
             command.return_value = subprocess.CompletedProcess([], 0, '\n', '')

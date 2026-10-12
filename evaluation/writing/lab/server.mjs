@@ -11,7 +11,7 @@ import { DeviceQualification } from './device-qualification.mjs';
 import { createQualificationHandler, isQualificationRoute } from './qualification-server.mjs';
 import { validateSuite, modelInputForCase, planComparison, scorePrediction, summarizeResults } from './cases.mjs';
 
-const MODES = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'instructed_word', 'healed_attested', 'native_instructed'];
+const MODES = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed'];
 
 export function labOptions(args) {
   const { values } = parseArgs({ args, strict: true, options: {
@@ -205,7 +205,7 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
       if (suite.cases.length > 300) throw new Error('Run up to 300 cases at a time.');
       const configs = validateConfigs(body.configs);
       if (selectedModel) {
-        const legacyQwenModes = ['instructed', 'instructed_healed', 'instructed_word'];
+        const legacyQwenModes = ['instructed', 'instructed_healed'];
         if (selectedModel.candidate.sha256 !== 'd2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5'
           && configs.some(config => legacyQwenModes.includes(config.mode))) throw new Error('These legacy instruction experiments use a pinned Qwen template. Choose Selected model instructions for this model.');
         if (selectedModel.assessment.prompt_profile === 'base_continuation' && configs.some(config => config.mode === 'native_instructed')) throw new Error('This base model has no embedded instruction template. Choose full context or word-boundary continuation.');

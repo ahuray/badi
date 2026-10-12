@@ -35,9 +35,9 @@ pub fn sanitize_suggestion(raw: &str) -> Result<String, OutputError> {
     {
         return Err(OutputError::TooLong);
     }
-    if raw.ends_with(char::is_whitespace) {
-        return Err(OutputError::InvalidShape);
-    }
+    // One trailing ASCII space is the mid-sentence separator. Every other
+    // trailing whitespace, including a second space, stays invalid here;
+    // `validate_completion_shape` decides when that one space may be shown.
     Ok(raw.to_owned())
 }
 
@@ -128,6 +128,18 @@ pub(crate) fn validate_completion_shape(
     if repeats_before_token || repeats_after_token {
         return Err(OutputError::InvalidShape);
     }
+    // The space belongs to the suggestion only when it keeps the insertion
+    // from joining the next word. Typing into that word may continue it.
+    if last == ' ' {
+        let next_is_word = after_first.is_some_and(char::is_alphanumeric);
+        let caret_follows_whitespace = before_last.is_some_and(char::is_whitespace);
+        let continues_typed_word = allow_word_suffix
+            && before_last.is_some_and(char::is_alphanumeric)
+            && first.is_alphanumeric();
+        if !(next_is_word && (caret_follows_whitespace || continues_typed_word)) {
+            return Err(OutputError::InvalidShape);
+        }
+    }
     Ok(())
 }
 
@@ -208,7 +220,12 @@ pub fn accept_word(text: &str) -> AcceptedParts {
             .next()
             .map(|(index, grapheme)| index + grapheme.len())
     });
-    let end = leading_bytes + part_end.unwrap_or(0);
+    let mut end = leading_bytes + part_end.unwrap_or(0);
+    // Ctrl+→ on the last word includes the one space that separates it from
+    // the text after the caret. A space before a later word stays with that word.
+    if &text[end..] == " " {
+        end += 1;
+    }
     AcceptedParts {
         accepted: text[..end].to_owned(),
         remainder: text[end..].to_owned(),
@@ -273,7 +290,7 @@ mod tests {
         assert_eq!(fixtures.v, 1);
         assert_eq!(
             fixtures.algorithm,
-            "leading_whitespace_plus_first_unicode_word_or_grapheme_v1"
+            "leading_whitespace_plus_first_unicode_word_or_grapheme_then_terminal_space_v2"
         );
         assert!(fixtures.cases.len() >= 7);
         for fixture in fixtures.cases {
@@ -325,12 +342,29 @@ mod tests {
     }
 
     #[test]
-    fn output_rejects_trailing_whitespace_instead_of_trimming_it() {
+    fn output_keeps_one_trailing_space_and_rejects_any_other_trailing_whitespace() {
+        assert_eq!(sanitize_suggestion(" valid "), Ok(" valid ".to_owned()));
         assert_eq!(
-            sanitize_suggestion(" valid "),
+            sanitize_suggestion(" valid  "),
             Err(OutputError::InvalidShape)
         );
         assert_eq!(sanitize_suggestion("   "), Err(OutputError::Empty));
+        assert_eq!(
+            validate_suggestion_shape("Please find the ", "report today", "final "),
+            Ok(())
+        );
+        for (before, after, suggestion) in [
+            ("Please find the ", "", "final "),
+            ("Thanks ", ", John", "a lot "),
+            ("hello", "world", "final "),
+            ("hello ", " report", "final "),
+        ] {
+            assert_eq!(
+                validate_suggestion_shape(before, after, suggestion),
+                Err(OutputError::InvalidShape),
+                "{before:?} | {suggestion:?} | {after:?}"
+            );
+        }
     }
 
     #[test]

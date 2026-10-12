@@ -59,6 +59,9 @@ Standing user decisions:
 - [ ] No automatic suggestions in file dialogs or very narrow fields, and a
       setting for how long Escape keeps a field quiet (today: until the text
       changes).
+- [ ] Mid-sentence suggestions see only the text before the caret and keep
+      what rejoins the next word, so whole-word insertions are rare. Try a
+      prompt that also carries the text after the caret, measured in the Lab.
 - [ ] Match the host's font in the inline preview. It draws its own sans font
       sized from the caret height, so it sits about 2 px high next to
       Omawrite's monospace text.
@@ -93,8 +96,8 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       keybindings and theme colours for the preview.
 - [ ] Support [omarchy#12139](https://github.com/omacom/omarchy/pull/12139)
       (`--enable-wayland-ime` by default); keep the per-app flags until it lands.
-- [ ] Sandbox the broker (`PrivateNetwork=yes`, read-only model directory) so
-      the absence of network access is provable; signed updates.
+- [ ] Signed updates. The broker service is already sandboxed: `PrivateNetwork=yes`,
+      a Unix-only runtime socket, and a read-only model directory.
 - [ ] Retire the [Fcitx 5.1.22 frontend backport](packaging/fcitx5-wayland-compat/README.md)
       once Omarchy ships Fcitx 5.1.23.
 - [ ] An installed-flow matrix with zero wrong-field or stale edits: service
@@ -127,6 +130,27 @@ Persian review where results are ambiguous and the full Lab qualification.
 - [ ] Calibrate token confidence against reviewed full additions per language.
 - [ ] Measure Cotypist parity with the same tasks on a named Cotypist version on
       a Mac.
+
+## Audit follow-ups
+
+From the 2026-10-11 audit. These are not part of the installed behavior.
+
+- [ ] The observer spawns `qs ipc` on every inspection
+      (`adapters/accessibility/desktop.py`).
+- [ ] Browser event cost on large pages (`daemon.py` focus handling and
+      `field.py` serialization).
+- [ ] The grey preview does not follow scrolling.
+- [ ] Document the limits of sensitive-field detection.
+- [ ] An ADR retiring protocol v1.
+- [ ] Enforce `authority.ack`, or delete it if nothing consumes it.
+- [ ] The panel keeps polling while it is hidden, once per monitor
+      (`DesktopPanel.qml`).
+- [ ] Bash wakes every 100 ms after the first preview (`preview.c`).
+- [ ] `badi doctor` in human-readable text as well as JSON.
+- [ ] Stop passing the settings document on the `badi` command line
+      (`badi-desktop.py`).
+- [ ] Split `broker/src/settings.rs`, `broker/src/engine/tests.rs` and
+      `adapters/fcitx5/addon.cpp`.
 
 ## Remaining surfaces
 

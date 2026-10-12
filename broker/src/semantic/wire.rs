@@ -1,22 +1,26 @@
-//! The owned llama.cpp runtime's loopback HTTP/1.1 exchange and the framing
-//! of its native replies.
+//! The owned llama.cpp runtime's HTTP/1.1 exchange and the framing of its
+//! native replies.
 //!
-//! Each request opens its own connection to the loopback runtime, asks it to
-//! close afterwards, and is never pooled or retried. Dropping a pending
-//! exchange or its [`Response`] closes the connection at once, which is how
-//! the runtime learns that a request was abandoned. Response heads, chunk
-//! metadata and read buffers are bounded here, and every read ends at the
-//! request's deadline. The body and event readers enforce a byte limit
-//! before they keep any response data.
+//! Production connects to the runtime's Unix socket. Tests and the Lab's
+//! stand-in servers still use a loopback TCP port. Each request opens its
+//! own connection, asks the runtime to close afterwards, and is never pooled
+//! or retried. Dropping a pending exchange or its [`Response`] closes the
+//! connection at once, which is how the runtime learns that a request was
+//! abandoned. Response heads, chunk metadata and read buffers are bounded
+//! here, and every read ends at the request's deadline. The body and event
+//! readers enforce a byte limit before they keep any response data.
 
 use std::fmt;
 use std::io;
 use std::net::SocketAddr;
+use std::path::Path;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use serde::Deserialize;
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, ReadBuf};
+use tokio::net::{TcpStream, UnixStream};
 use tokio::time::{Instant, timeout_at};
 
 use super::client::ClientError;
@@ -67,7 +71,7 @@ pub(crate) struct Request<'a> {
 
 impl Request<'_> {
     /// The whole request, with lowercase header names.
-    fn encode(&self, endpoint: SocketAddr) -> Vec<u8> {
+    fn encode(&self, host: &str) -> Vec<u8> {
         let method = match self.method {
             Method::Get => "GET",
             Method::Post => "POST",
@@ -80,7 +84,7 @@ impl Request<'_> {
             )
         });
         let mut bytes = format!(
-            "{method} {} HTTP/1.1\r\nhost: {endpoint}\r\nauthorization: {}\r\n{body_headers}connection: close\r\n\r\n",
+            "{method} {} HTTP/1.1\r\nhost: {host}\r\nauthorization: {}\r\n{body_headers}connection: close\r\n\r\n",
             self.path, self.authorization
         )
         .into_bytes();
@@ -107,6 +111,39 @@ pub(crate) async fn exchange(
         .map_err(|_| ClientError::Timeout)?
         .map_err(ClientError::Transport)?;
     stream.set_nodelay(true).map_err(ClientError::Transport)?;
+    finish_exchange(
+        Stream::Tcp(stream),
+        request,
+        &endpoint.to_string(),
+        deadline,
+    )
+    .await
+}
+
+/// The production exchange: the bearer token stays on this Unix socket.
+pub(crate) async fn exchange_unix(
+    path: &Path,
+    request: Request<'_>,
+    connect_timeout: Duration,
+    deadline: Instant,
+) -> Result<Response, ClientError> {
+    if !path.is_absolute() {
+        return Err(ClientError::InvalidConfig("endpoint"));
+    }
+    let connect_deadline = deadline.min(Instant::now() + connect_timeout);
+    let stream = timeout_at(connect_deadline, UnixStream::connect(path))
+        .await
+        .map_err(|_| ClientError::Timeout)?
+        .map_err(ClientError::Transport)?;
+    finish_exchange(Stream::Unix(stream), request, "localhost", deadline).await
+}
+
+async fn finish_exchange(
+    stream: Stream,
+    request: Request<'_>,
+    host: &str,
+    deadline: Instant,
+) -> Result<Response, ClientError> {
     let mut connection = Connection {
         stream,
         buffered: Vec::new(),
@@ -114,8 +151,54 @@ pub(crate) async fn exchange(
     };
     // One write for the head and body. The request side is never shut down:
     // the runtime may read end of input as an abandoned request.
-    connection.write_all(&request.encode(endpoint)).await?;
+    connection.write_all(&request.encode(host)).await?;
     connection.read_head().await
+}
+
+/// Either transport. The framing above this enum does not care which it is.
+enum Stream {
+    Tcp(TcpStream),
+    Unix(UnixStream),
+}
+
+impl AsyncRead for Stream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::Unix(stream) => Pin::new(stream).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for Stream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            Self::Tcp(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::Unix(stream) => Pin::new(stream).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(stream) => Pin::new(stream).poll_flush(cx),
+            Self::Unix(stream) => Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Unix(stream) => Pin::new(stream).poll_shutdown(cx),
+        }
+    }
 }
 
 /// A runtime reply whose head has been read. [`Response::chunk`] reads the
@@ -234,7 +317,7 @@ enum Framing {
 
 /// One connection and the bytes read from it but not yet consumed.
 struct Connection {
-    stream: TcpStream,
+    stream: Stream,
     buffered: Vec<u8>,
     deadline: Instant,
 }
@@ -625,7 +708,7 @@ mod tests {
             body: Some(b"{\"a\":1}"),
         };
         assert_eq!(
-            post.encode("127.0.0.1:8080".parse().expect("endpoint")),
+            post.encode("127.0.0.1:8080"),
             b"POST /completion HTTP/1.1\r\nhost: 127.0.0.1:8080\r\nauthorization: Bearer token\r\n\
               content-type: application/json\r\ncontent-length: 7\r\nconnection: close\r\n\r\n{\"a\":1}"
         );
@@ -636,7 +719,7 @@ mod tests {
             ..post
         };
         assert_eq!(
-            get.encode("[::1]:9".parse().expect("endpoint")),
+            get.encode("[::1]:9"),
             b"GET /health HTTP/1.1\r\nhost: [::1]:9\r\nauthorization: Bearer token\r\nconnection: close\r\n\r\n"
         );
     }

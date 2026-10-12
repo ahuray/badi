@@ -92,15 +92,22 @@ impl Broker {
         })
     }
 
-    pub(super) async fn flush_outcomes_before_pause_ack(&self) {
+    pub(super) async fn flush_outcomes_before_pause_ack(&self) -> Result<(), BrokerError> {
         let Some(recorder) = self.inner.outcome_recorder.as_ref() else {
-            return;
+            return Ok(());
         };
-        if let Err(error) = recorder.flush().await {
-            // A disconnected recorder cannot perform later writes. Keep the
-            // pause effective and report the operational loss without logging
-            // any context or suggestion content.
-            eprintln!("badi-broker: outcome recorder pause fence failed: {error}");
+        // Same bound as shutdown. A hung recorder must not hold the pause
+        // acknowledgement open, and a failed fence is not success.
+        match time::timeout(OUTCOME_FLUSH_TIMEOUT, recorder.flush()).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
+                eprintln!("badi-broker: outcome recorder pause fence failed: {error}");
+                Err(error)
+            }
+            Err(_) => {
+                eprintln!("badi-broker: outcome recorder pause fence timed out");
+                Err(BrokerError::ControlPlaneTimeout)
+            }
         }
     }
 

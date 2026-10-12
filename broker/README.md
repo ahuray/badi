@@ -36,7 +36,10 @@ and whether they were dirty (`--version` prints both; packagers may set
     suggestion, the broker answers with the remainder and no model call.
   - The remainder is a new suggestion that keeps the original deadline.
   - Escape, a whole acceptance, pause or an authority change ends the carry; a
-    word acceptance keeps it.
+    word acceptance keeps it. Editors send `dismiss` for Escape. Closing the
+    session, which Fcitx does on every edit, does not end the carry. A carried
+    remainder is not another shown suggestion and does not record a second
+    outcome on the original aggregate.
 - **Settings** (`badi.settings.v2`) are replaced by compare-and-swap on their
   revision; while a replacement's outcome is unknown, suggestions pause.
   `badi pause` persists in settings; `badictl pause` is runtime only.
@@ -92,12 +95,20 @@ prints pinned download advice and downloads nothing
   exits 1; the [service unit](../packaging/systemd/badi-broker.service) restarts
   it with backoff, except after exit 78 (missing, unsupported or too-large
   model), which waits for `badi doctor`.
-- **Transport.** HTTP/1.1 to loopback only, with a bearer token, never proxied,
-  retried or pooled. Dropping a request closes its connection, which cancels it.
-- **Launch.** One 512-token slot reuses the common prompt prefix (KV cache);
-  prefill batches are 16 tokens so cancellation lands quickly; up to four
-  threads. The GPU is not used: Vulkan on the Iris Xe was slower for these
-  short requests.
+- **Transport.** HTTP/1.1 over a Unix socket in the `0700` runtime directory
+  (`$XDG_RUNTIME_DIR/badi/llama-<pid>.sock`, mode `0600`), with a bearer token
+  that does not cross TCP. The pid in the name keeps another process from
+  replacing the running service's socket. The service unit has no network
+  namespace address.
+  Requests are never proxied, retried or pooled. Dropping a request closes
+  its connection, which cancels it.
+- **Launch.** One 512-token slot reuses the common prompt prefix (KV cache).
+  A 128 MiB host cache keeps the previous sentence when the prompt anchor
+  moves, and a matching run of at least 16 tokens is shifted instead of
+  recomputed. A second slot would split that 512-token context in half, so
+  the server stays at one slot. Prefill batches are 16 tokens so cancellation
+  lands quickly; up to four threads. The GPU is not used: Vulkan on the Iris
+  Xe was slower for these short requests.
 
 ## Suggestion limits
 
@@ -114,13 +125,26 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   [the joiner fixtures](../protocol/orthographic-joiner-fixtures.json).
 - **Partial words.** An English suffix that continues the typed word must form
   a word in the pinned [SCOWL lexicon](data/writing-lexicon/README.md); German
-  and Persian suggest whole words only. English and Persian prompts drop
-  trailing spaces and require them back (`TRAILING_SPACE_HEALING`).
+  and Persian suggest whole words only. English healing echoes the last
+  unfinished word together with the spaces around it, so the prompt does not
+  end on a bare space. English and Persian prompts also echo trailing spaces
+  and require them back (`TRAILING_SPACE_HEALING`). Persian asks for about 2.6
+  times as many tokens as English.
 - **Abstention.** A continuation abstains when it adds a number absent from the
-  typed text.
+  typed text, and every request when the caret splits a word.
+- **Mid-line.** When words follow the caret on its line, the prompt is still
+  the text before the caret, and `mid_line_insertion()` keeps only what fits:
+  the words before the point where the continuation reproduces the line's
+  first word or mark, a phrase the model closes with a clause mark before the
+  line's own mark, or else the rest of the word being typed. Anything else is
+  `output_rejected`. If the caret already follows whitespace and the next
+  character is a letter or digit, the insertion may end in one ASCII space so
+  it does not join that word. End of text, punctuation, and a repeated space
+  stay rejected. Ctrl+→ on that last word includes the space, and typing its
+  first letters carries the space with the remainder.
 - **Spelling** is English only and needs negotiated exact replacement of the
-  word before the caret; a single dictionary candidate is proposed without
-  inference.
+  word before the caret at the end of the field; a single dictionary candidate
+  is proposed without inference.
 
 ## Shutdown and tests
 

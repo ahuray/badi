@@ -382,8 +382,15 @@ fn only_negotiated_spelling_payloads_may_preserve_a_trailing_space() {
             .expect("payload")
             .remove("replace_before");
         assert!(
-            !validator.is_valid(&continuation),
-            "ordinary continuation still rejects trailing space"
+            validator.is_valid(&continuation),
+            "one trailing ASCII space is ordinary safe suggestion text"
+        );
+        let mut repeated = continuation;
+        repeated["payload"]["text"] = "the  ".into();
+        repeated["payload"]["accept_word"] = "the  ".into();
+        assert!(
+            !validator.is_valid(&repeated),
+            "a repeated trailing space stays off the wire"
         );
     }
 }

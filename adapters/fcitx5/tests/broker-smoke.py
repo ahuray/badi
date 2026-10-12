@@ -89,9 +89,14 @@ def run(args):
                         [args.cli, "status"], env=environment, check=True,
                         capture_output=True, text=True, timeout=5,
                     ).stdout)
-                    # Only the first of its three suggestions was generated.
-                    if (status["metrics"]["provider_calls"], status["metrics"]["suggestions_shown"]) != (5, 7):
-                        raise RuntimeError("type-through generated instead of carrying")
+                    # Only the first of its three suggestions was generated. The
+                    # two carried remainders are the same show, not new ones.
+                    calls = status["metrics"]["provider_calls"]
+                    shown = status["metrics"]["suggestions_shown"]
+                    if (calls, shown) != (5, 5):
+                        raise RuntimeError(
+                            f"type-through generated instead of carrying: calls={calls} shown={shown}"
+                        )
                     recovery = subprocess.Popen(
                         [args.client, "--reconnect", str(socket), "omawrite"],
                         env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,

@@ -69,6 +69,8 @@ fn assert_semantic_invariants(advice: &ModelAdvice) {
                     recommended.filename,
                     "--revision",
                     recommended.revision,
+                    "--local-dir",
+                    badi_broker::MODEL_DOWNLOAD_DIRECTORY,
                 ]
             );
             for alternative in &advice.alternatives {
@@ -83,7 +85,7 @@ fn assert_semantic_invariants(advice: &ModelAdvice) {
         AdviceStatus::NoFit => {
             assert!(advice.tier.is_none());
             assert!(advice.recommended.is_none());
-            assert!(advice.alternatives.is_empty());
+            assert_eq!(advice.alternatives, [] as [badi_broker::ModelArtifact; 0]);
             assert!(advice.fit.is_none());
             assert!(advice.download.is_none());
         }

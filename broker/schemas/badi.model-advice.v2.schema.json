@@ -170,14 +170,16 @@
         "tool": { "const": "hf" },
         "arguments": {
           "type": "array",
-          "minItems": 5,
-          "maxItems": 5,
+          "minItems": 7,
+          "maxItems": 7,
           "prefixItems": [
             { "const": "download" },
             { "type": "string", "minLength": 1 },
             { "type": "string", "minLength": 1 },
             { "const": "--revision" },
-            { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+            { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            { "const": "--local-dir" },
+            { "const": "~/.local/share/badi/models" }
           ],
           "items": false
         },

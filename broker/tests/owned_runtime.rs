@@ -7,6 +7,7 @@
 use std::error::Error;
 use std::fs;
 use std::future::Future;
+use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::ExitCode;
@@ -62,7 +63,16 @@ async fn owned_runtime_keeps_its_token_private_and_is_reaped() -> TestResult {
     let fixture = OwnedFixture::new()?;
     let runtime = fixture.launch(FixtureBehavior::Ready)?.spawn().await?;
     assert_eq!(CompletionProvider::kind(&runtime), ProviderKind::LocalModel);
-    assert!(runtime.endpoint().ip().is_loopback());
+    let badi_broker::semantic::client::RuntimeAddress::Unix(socket) = runtime.address() else {
+        return Err("the owned runtime must use its private socket".into());
+    };
+    let name = socket
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    assert_eq!(name, format!("llama-{}.sock", std::process::id()));
+    let mode = fs::symlink_metadata(socket)?.permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
     let process_id = runtime.process_id().expect("owned child process");
     let cmdline = fs::read(format!("/proc/{process_id}/cmdline"))?;
     assert!(
@@ -253,7 +263,15 @@ impl OwnedFixture {
     }
 
     fn launch(&self, behavior: FixtureBehavior) -> Result<LlamaCppLaunch, RuntimeError> {
-        LlamaCppLaunch::for_fixture(self.binary.clone(), self.model.clone(), behavior)
+        let directory = self.directory.path().join("runtime");
+        fs::create_dir_all(&directory).map_err(RuntimeError::Endpoint)?;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+            .map_err(RuntimeError::Endpoint)?;
+        let directory = fs::canonicalize(&directory).map_err(RuntimeError::Endpoint)?;
+        Ok(
+            LlamaCppLaunch::for_fixture(self.binary.clone(), self.model.clone(), behavior)?
+                .with_runtime_directory(directory),
+        )
     }
 }
 

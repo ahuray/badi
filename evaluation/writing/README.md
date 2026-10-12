@@ -88,9 +88,9 @@ or automatic files.
 | `instructed` | ChatML instructions with context and style |
 | `healed` | Word-boundary healing: the boundary is removed from the prompt, echoed by the model and stripped |
 | `instructed_healed` | `instructed` with `healed` boundaries |
-| `instructed_word` | `instructed_healed` limited by grammar to one word and a confirmed final space |
-| `healed_attested` | `healed`, plus German and Persian mid-word completion attested by an exact word in the context or style |
 | `native_instructed` | The model's own chat template with exact word boundaries |
+
+`instructed_word` and `healed_attested` are not selectable. The 2026-09-09 next-word study had no useful `instructed_word` result in 30 opportunities and one harmful result. `healed_attested` added harmful suggestions on top of `healed`.
 
 - **Runtime.** The Lab uses a 2,048-token runtime, installed Badi 512; budgets
   from 550 ms to ten seconds are diagnostic only.
@@ -146,8 +146,9 @@ private directory under the ignored `output/writing/`:
 
 Progress prints counts, not prose. The
 [development set](lab/examples/quality-probes.json) has 16 boundary, context and
-style cases, and the [trace set](lab/examples/typing-traces.json) has six typing
-steps.
+style cases, the [longer prose set](lab/examples/real-text-development.json)
+has 19 email and note prefixes, and the [trace set](lab/examples/typing-traces.json)
+has six typing steps.
 
 A model artifact descriptor selects weights for the Lab only (bounded to 16 KiB
 and 8 GiB; it cannot supply an executable or flags):

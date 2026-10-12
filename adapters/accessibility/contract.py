@@ -107,6 +107,7 @@ class Observer:
         self.authorize = lambda _binding: None
         self.disarm = lambda: None
         self.caret_edge = None
+        self.text_follows = False
         self.operations = {"status": self.status, "hide": self.hide_preview, "inspect": self.inspect,
                            "snapshot": self.snapshot, "preview": self.preview}
 
@@ -119,10 +120,11 @@ class Observer:
                      "reason": reason, "app_id": previous["app_id"] if previous else ""})
 
     def withdraw(self):
-        """Clear the preview, the field's event match and the verified caret edge."""
+        """Clear the preview, the field's event match and the verified caret line."""
         self.hide()
         self.disarm()
         self.caret_edge = None
+        self.text_follows = False
 
     def request(self, request):
         request_id = request.get("id") if isinstance(request, dict) else None
@@ -148,6 +150,8 @@ class Observer:
     def snapshot(self, request):
         metadata, focus = self.bound_focus(request)
         self.authorize(focus["binding"])
+        if metadata.get("sentence_bounded"):
+            metadata["sentence_start"] = self.backend.sentence_start(metadata)
         caret = metadata["caret"]
         # Chromium may send a rich editor's text one line break shorter per block.
         margin = len(metadata.get("blocks") or ())
@@ -166,8 +170,10 @@ class Observer:
             focus["scope"] = "block"
         native = not metadata.get("web")
         self.caret_edge = "right" if ltr_caret_line(metadata.get("direction"), before, native) else None
+        # Words after the caret on its line: inline text would cover them.
+        self.text_follows = bool(after.split("\n", 1)[0].strip())
         if focus["geometry"] and self.caret_edge:
-            focus["geometry"]["caret_edge"] = self.caret_edge
+            focus["geometry"].update(caret_edge=self.caret_edge, text_follows=self.text_follows)
         focus.update(before=before, after=after, total_chars=metadata["total_chars"])
         return {"focus": focus}
 
@@ -230,7 +236,7 @@ class Observer:
         binding = {"epoch": self.epoch, **key}
         target = self.policy_target(metadata, app_id)
         if metadata.get("geometry") and self.caret_edge:
-            metadata["geometry"]["caret_edge"] = self.caret_edge
+            metadata["geometry"].update(caret_edge=self.caret_edge, text_follows=self.text_follows)
         focus = {"binding": binding, "target": target, "purpose": "plain_text",
                  "caret": metadata["caret"], "selection_count": metadata["selection_count"],
                  "geometry": metadata.get("geometry")}
@@ -287,10 +293,15 @@ def caret_rectangle(value):
     return type(scale) in (int, float) and math.isfinite(scale) and .5 <= scale <= 4
 
 
+# Same isolated-space rule as v2 safeSuggestionText, including one trailing space.
+_SUGGESTION_SPACING = re.compile(r"^ ?\S(?: ?\S)* ?$")
+
+
 def suggestion_text(text):
     """1–160 characters, none a control or format character except a
-    zero-width non-joiner between two letters."""
-    if not isinstance(text, str) or not 1 <= len(text) <= 160 or not text.strip():
+    zero-width non-joiner between two letters. One trailing ASCII space is
+    the mid-sentence separator; repeated spaces are not."""
+    if not isinstance(text, str) or not 1 <= len(text) <= 160 or _SUGGESTION_SPACING.fullmatch(text) is None:
         return False
     return all(not unicodedata.category(char).startswith("C") or joins_letters(text, index)
                for index, char in enumerate(text))

@@ -224,6 +224,54 @@ def write_receipt(home, installer, source, files, now=None):
     return path
 
 
+def refresh_restored_receipts(home, keys):
+    """Point receipt entries at bytes a restore just put back.
+
+    A rolled-back broker whose receipt still names the newer build makes
+    `badi doctor` report broker_build_mismatch after the service next starts.
+    A removed file drops out of the receipt. Other entries stay.
+    """
+    home = Path(home)
+    keys = list(dict.fromkeys(keys))
+    if not keys:
+        return
+    for installer in BACKUP_DIRECTORIES:
+        path = receipt_path(home, installer)
+        try:
+            receipt = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(receipt, dict) or receipt.get("schema") != SCHEMA or not isinstance(receipt.get("files"), dict):
+            continue
+        files = receipt["files"]
+        changed = False
+        for key in keys:
+            entry = files.get(key)
+            if not isinstance(entry, dict):
+                continue
+            target = home / key
+            if not target.is_file() or target.is_symlink():
+                del files[key]
+            else:
+                entry["sha256"] = file_sha256(target)
+                if target.name in VERSIONED:
+                    entry["version"] = binary_version(target)
+                    entry.update(version_identity(entry.get("version")))
+            changed = True
+        if changed:
+            store(path, receipt)
+
+
+def announce_stopped(installation):
+    """Name the backup and the restore command once, after a failed install."""
+    directory = getattr(installation, "directory", None)
+    if directory is None or getattr(installation, "_announced", False):
+        return
+    installation._announced = True
+    print(f"Install stopped after replacing files. Backup: {directory}", file=sys.stderr, flush=True)
+    print(f"Restore with: python3 scripts/badi_install.py restore {directory}", file=sys.stderr, flush=True)
+
+
 def forget(home, installer, files):
     """Drop the entries of removed files, keeping the receipt's other entries
     and its own install time and source identity. A missing or invalid receipt
@@ -263,6 +311,18 @@ def backup_time(name):
     return None
 
 
+def backup_is_pinned(entry):
+    """Whether this backup is the installer's original, pre-Badi snapshot."""
+    marker = entry / "pinned"
+    if marker.is_file() and not marker.is_symlink():
+        return True
+    try:
+        document = json.loads((entry / BACKUP_MAP).read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(document, dict) and document.get("pinned") is True
+
+
 def prune_backups(home, installer, keep=KEEP_BACKUPS):
     """Delete all but the newest `keep` backups of one installer; returns what was deleted.
 
@@ -283,7 +343,10 @@ def prune_backups(home, installer, keep=KEEP_BACKUPS):
         if stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid():
             backups.append((created, entry.name, entry))
     backups.sort()
-    doomed = [entry for _created, _name, entry in backups[:max(0, len(backups) - keep)]]
+    # The first pre-Badi backup is pinned, so keeping the newest three never
+    # deletes the original .bashrc or Chromium flags.
+    ordinary = [item for item in backups if not backup_is_pinned(item[2])]
+    doomed = [entry for _created, _name, entry in ordinary[:max(0, len(ordinary) - keep)]]
     for entry in doomed:
         notes = [path for path in entry.glob(KEPT_NOTES) if path.is_file() and not path.is_symlink()]
         if notes:
@@ -313,6 +376,8 @@ class Installation:
         self.changes = []
         self.current = []
         self._created_at = None
+        self._pinned = False
+        self._announced = False
 
     def copy(self, source, target, mode=None):
         """Install a file's bytes, with its own permissions unless `mode` is given."""
@@ -353,11 +418,18 @@ class Installation:
         path.unlink()
 
     def note(self, name, document):
-        """Keep a private JSON record beside the changes, such as a prior setting."""
-        path = self._backup_directory() / name
-        with path.open("x") as stream:
-            os.chmod(path, 0o600)
-            json.dump(document, stream)
+        """Keep a private JSON record, such as a prior setting.
+
+        A note alone is not a backup: it lives under notes/ until this run has
+        replaced a file, and then it is stored beside that backup's changes.
+        """
+        if self.changes:
+            directory = self._backup_directory()
+        else:
+            directory = self.home / STATE_DIRECTORY / BACKUP_DIRECTORIES[self.installer] / "notes"
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = directory / name
+        atomic_write(path, (json.dumps(document) + "\n").encode(), 0o600)
         return path
 
     def finish(self, keep=KEEP_BACKUPS):
@@ -403,6 +475,8 @@ class Installation:
             root.mkdir(parents=True, exist_ok=True, mode=0o700)
             if root.is_symlink():
                 raise RuntimeError(f"Inspect the symlinked backup directory {root}")
+            first = not any(backup_time(entry.name) is not None and entry.is_dir() and not entry.is_symlink()
+                            for entry in root.iterdir()) if root.is_dir() else True
             while self.directory is None:
                 moment = time.time_ns()
                 candidate = root / (time.strftime("%Y%m%dT%H%M%S", time.gmtime(moment // 10**9))
@@ -412,14 +486,17 @@ class Installation:
                 except FileExistsError:
                     continue
                 self.directory = candidate
+                self._pinned = first
                 self._created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(moment // 10**9))
+                if first:
+                    atomic_write(candidate / "pinned", b"")
             self._store_map()
         return self.directory
 
     def _store_map(self):
         atomic_write(self.directory / BACKUP_MAP, (json.dumps(
             {"schema": BACKUP_SCHEMA, "installer": self.installer, "home": str(self.home),
-             "created_at": self._created_at, "changes": self.changes}, indent=2) + "\n").encode())
+             "created_at": self._created_at, "pinned": self._pinned, "changes": self.changes}, indent=2) + "\n").encode())
 
 
 def _replace_with_link(target, destination):
@@ -465,6 +542,8 @@ def restore(backup, only=()):
     home = Path(document["home"])
     prefixes = [item.rstrip("/") for item in only]
     changed = []
+    restored = []
+    reload_units = False
     for entry in reversed(document["changes"]):
         path = entry["path"]
         if prefixes and not any(path == prefix or path.startswith(prefix + "/") for prefix in prefixes):
@@ -480,10 +559,14 @@ def restore(backup, only=()):
         if saved is None:
             target.unlink()
             print(f"Removed {target}", flush=True)
+            restored.append(path)
+            reload_units = reload_units or path.startswith(".config/systemd/user/")
         elif saved.is_symlink():
             target.parent.mkdir(parents=True, exist_ok=True)
             _replace_with_link(target, os.readlink(saved))
             print(f"Restored {target}", flush=True)
+            restored.append(path)
+            reload_units = reload_units or path.startswith(".config/systemd/user/")
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(dir=target.parent, prefix=f".{target.name}.", delete=False) as stream:
@@ -494,6 +577,12 @@ def restore(backup, only=()):
             finally:
                 staged.unlink(missing_ok=True)
             print(f"Restored {target}", flush=True)
+            restored.append(path)
+            reload_units = reload_units or path.startswith(".config/systemd/user/")
+    refresh_restored_receipts(home, restored)
+    if reload_units:
+        subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, timeout=15)
+        print("Reloaded user units so restored service files are what systemd reads.", flush=True)
     return changed
 
 

@@ -77,6 +77,8 @@ bool beforeAgrees(const Json &observed, const std::string &before) {
     const auto scope = observed.value("scope", Json());
     if (!text.is_string() || !(scope.is_null() || scope == "block")) return false;
     const auto &block = text.get_ref<const std::string &>();
+    // An empty block agrees with almost any line end. That is not corroboration.
+    if (scope == "block" && block.empty()) return false;
     if (block == before) return true;
     return scope == "block" && before.size() > block.size() && before.ends_with(block) &&
            before[before.size() - block.size() - 1] == '\n';
@@ -100,7 +102,6 @@ std::optional<std::string_view> observedRequestBlocked(const Json &observed, con
                                                        bool foreignIme) {
     if (!context.identityKnown) return "field_identity_unknown";
     if (context.before.empty()) return "empty_prefix";
-    if (!context.after.empty()) return "caret_not_at_end";
     if (foreignIme) return "foreign_ime_active";
     if (!observerAgrees(observed, context)) return "observer_context_mismatch";
     return std::nullopt;

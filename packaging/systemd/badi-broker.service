@@ -14,13 +14,28 @@ Restart=on-failure
 RestartSec=2
 RestartSteps=5
 RestartMaxDelaySec=60
-# 78: the model or runtime is missing, unsupported, or larger than this host.
-# Retrying cannot help, so the unit stays failed for badi doctor to report.
+# 78: the model or runtime is missing, unsupported, or larger than this host,
+# or private settings are corrupt or unsafe. Retrying cannot help, so the
+# unit stays failed for badi doctor to report.
 RestartPreventExitStatus=78
 UMask=0077
 RuntimeDirectory=badi
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
+# The model runtime listens on a Unix socket in this directory. Nothing in
+# this service, including llama-server, gets an IP address.
+PrivateNetwork=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+# The model directory is read at startup and never written.
+ReadOnlyPaths=%h/.local/share/badi/models
+# Balanced Qwen3-1.7B Q4 is about 2298 MiB in the fit (1224 MiB of weights
+# plus 1074 MiB of runtime headroom). The measured working set is about
+# 1.2 GB. High throttles above that set; Max is the fit so a runaway
+# cannot eat the host reserve.
+MemoryHigh=2G
+MemoryMax=2560M
 # The broker owns graceful runtime shutdown. Sending TERM to both processes
 # makes the runtime receive a second TERM from the broker during cleanup.
 # Keep the final forced-kill fallback scoped to the entire service cgroup.

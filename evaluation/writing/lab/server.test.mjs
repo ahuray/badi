@@ -212,10 +212,13 @@ test('production-boundary mode requires the production budget, nominal tokens, c
   for (const changed of [{ budget_ms: 551 }, { max_tokens: 9 }, { cache_prompt: false }, { temperature: .1 }, { seed: 43 }]) {
     assert.throws(() => validateConfigs([{ ...boundary, ...changed }]), /fixed production settings/u);
   }
-  const modes = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'instructed_word', 'healed_attested', 'native_instructed'];
+  const modes = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed'];
   const all = modes.map(mode => config({ id: mode, mode }));
-  assert.equal(validateConfigs(all).length, 9);
-  assert.throws(() => validateConfigs([...all, config({ id: 'extra' })]), /9 configurations/u);
+  assert.equal(validateConfigs(all).length, 7);
+  assert.throws(() => validateConfigs([...all, config({ id: 'extra' })]), /7 configurations/u);
+  for (const mode of ['instructed_word', 'healed_attested']) {
+    assert.throws(() => validateConfigs([config({ mode })]), /supported limits/u);
+  }
   // The historical unhealed baseline is retired; production is the only baseline.
   assert.throws(() => validateConfigs([config({ mode: 'production_baseline' })]), /supported limits/u);
 });
@@ -234,25 +237,10 @@ test('the served UI offers production as "Current Badi logic" and no retired bas
   assert.doesNotMatch(app, /production_baseline/u);
 });
 
-test('one-word mode is explicit, preserves input and cannot supply a custom grammar', async t => {
+test('retired one-word and attested modes are absent from the served UI', async t => {
   const lab = await setup(t);
   const html = await (await fetch(lab.origin)).text();
-  const choice = [...html.matchAll(/<input\b[^>]*name="mode"[^>]*>/gu)]
-    .map(match => match[0]).filter(value => value.includes('value="instructed_word"'));
-  assert.equal(choice.length, 1);
-  assert.doesNotMatch(choice[0], /\bchecked\b/u);
-  const selected = config({ id: 'one', mode: 'instructed_word' });
-  const sample = testCase({ prefix: 'We still need proofr', context: 'Check the report before sending it.',
-    style: 'Keep the report brief.', expected: ['PRIVATE_ONE_WORD_REFERENCE'] });
-  const result = await events(await lab.post(payload({ suite: { ...payload().suite, cases: [sample] }, configs: [selected] })));
-  assert.equal(result.at(-1).type, 'complete');
-  const request = lab.worker.calls[0].request;
-  assert.equal(request.config.mode, 'instructed_word');
-  assert.equal(request.before, sample.prefix);
-  assert.equal(request.context, sample.context);
-  assert.deepEqual(request.style_examples, [sample.style]);
-  assert.equal(JSON.stringify(request).includes('PRIVATE_ONE_WORD_REFERENCE'), false);
-  assert.throws(() => validateConfigs([{ ...selected, grammar: 'root ::= "answer"' }]));
+  assert.doesNotMatch(html, /instructed_word|healed_attested|One complete word|Complete words from context/u);
 });
 
 test('instructed healing is unchecked in the served UI and forwards only explicit model input', async t => {
@@ -280,35 +268,10 @@ test('instructed healing is unchecked in the served UI and forwards only explici
   assert.equal(JSON.stringify(request).includes('INSTRUCTED_REFERENCE_NEVER_FORWARD'), false);
 });
 
-test('contextual word completion is unchecked and forwards only bounded explicit sources', async t => {
-  const lab = await setup(t);
-  const html = await (await fetch(lab.origin)).text();
-  const choices = [...html.matchAll(/<input\b[^>]*name="mode"[^>]*>/gu)].map(match => match[0]);
-  const attested = choices.filter(choice => choice.includes('value="healed_attested"'));
-  assert.equal(attested.length, 1);
-  assert.doesNotMatch(attested[0], /\bchecked\b/u);
-  assert.match(html, /Complete words from context/u);
-  assert.deepEqual(choices.filter(choice => /\bchecked\b/u.test(choice))
-    .map(choice => choice.match(/value="([^"]+)"/u)[1]), ['production_boundary', 'healed']);
-  const selected = config({ id: 'healed_attested', mode: 'healed_attested', budget_ms: 5000, max_tokens: 32 });
-  const sample = testCase({ prefix: 'Die Tagesord', language: 'de', context: 'Die Tagesordnung liegt bereit.',
-    style: 'Ich ergänze die Tagesordnung.', expected: ['ATTESTED_REFERENCE_NEVER_FORWARD'] });
-  const output = await events(await lab.post(payload({ suite: { ...payload().suite, cases: [sample] }, configs: [selected] })));
-  assert.equal(output.at(-1).type, 'complete');
-  assert.equal(lab.worker.calls.length, 1);
-  const request = lab.worker.calls[0].request;
-  assert.equal(request.config.mode, 'healed_attested');
-  assert.equal(request.before, sample.prefix);
-  assert.equal(request.context, sample.context);
-  assert.deepEqual(request.style_examples, [sample.style]);
-  assert.equal(JSON.stringify(request).includes('ATTESTED_REFERENCE_NEVER_FORWARD'), false);
-  assert.throws(() => validateConfigs([{ ...selected, expected: ['nung'] }]));
-});
-
-test('clearing an attested request prevents a late suffix from using its former context', async t => {
+test('clearing a request prevents a late result from using its former context', async t => {
   const entered = deferred(); const pending = deferred();
   const lab = await setup(t, new FakeWorker(async () => { entered.resolve(); return pending.promise; }));
-  const selected = config({ id: 'healed_attested', mode: 'healed_attested' });
+  const selected = config({ id: 'healed', mode: 'healed' });
   const sample = testCase({ language: 'de', prefix: 'Die Tagesord', context: 'Die Tagesordnung liegt bereit.', expected: ['nung'] });
   const request = payload({ suite: { ...payload().suite, cases: [sample] }, configs: [selected] });
   const first = await lab.post(request);

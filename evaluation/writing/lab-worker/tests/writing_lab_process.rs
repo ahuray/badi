@@ -21,8 +21,8 @@ fn lab_binary_exec_helper_runs_before_model_or_tokio_startup() -> Result<(), Box
         "helper failed: {:?}",
         output.stderr
     );
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stdout, [] as [u8; 0]);
+    assert_eq!(output.stderr, [] as [u8; 0]);
     Ok(())
 }
 
@@ -55,7 +55,7 @@ fn lab_binary_exec_helper_refuses_parent_mismatch_and_invalid_arguments()
             .process_group(0)
             .output()?;
         assert!(!output.status.success());
-        assert!(output.stdout.is_empty());
+        assert_eq!(output.stdout, [] as [u8; 0]);
         assert_eq!(output.stderr, b"runtime_helper_failed\n");
     }
     Ok(())

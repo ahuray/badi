@@ -217,12 +217,12 @@ async fn stream_outcome_until(
                 serde_json::from_slice(&bytes[end + 4..]).expect("request JSON");
             assert_eq!(payload["cache_prompt"], true);
             if healing {
-                assert_eq!(payload["prompt"], "Please review the ");
+                assert_eq!(payload["prompt"], "Please review the");
                 assert!(
                     payload["grammar"]
                         .as_str()
                         .expect("grammar")
-                        .starts_with("root ::= \"docum\"")
+                        .starts_with("root ::= \" docum\"")
                 );
             }
             break;
@@ -350,7 +350,7 @@ async fn token_healing_never_displays_echoes_or_different_stems() -> Result<(), 
         stream_probe(
             before,
             "en",
-            &["doc", "ument and provide a "],
+            &[" doc", "ument and provide a "],
             false,
             CancellationToken::new()
         )
@@ -374,7 +374,7 @@ async fn slow_stream_salvages_only_complete_words_and_respects_cancellation()
         stream_probe(
             before,
             "en",
-            &["document and prov"],
+            &[" document and prov"],
             true,
             CancellationToken::new()
         )
@@ -388,7 +388,7 @@ async fn slow_stream_salvages_only_complete_words_and_respects_cancellation()
         cancel.cancel();
     });
     assert!(
-        stream_probe(before, "en", &["document and prov"], true, cancellation)
+        stream_probe(before, "en", &[" document and prov"], true, cancellation)
             .await
             .is_err()
     );
@@ -400,7 +400,7 @@ async fn spelling_and_continuation_share_one_deadline() -> Result<(), Box<dyn Er
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let endpoint = listener.local_addr()?;
     let server = tokio::spawn(async move {
-        for (text, delay, terminal) in [("teh", 250, true), ("teh next word parti", 0, false)] {
+        for (text, delay, terminal) in [(" teh", 250, true), (" teh next word parti", 0, false)] {
             let (mut socket, _) = listener.accept().await.expect("HTTP connection");
             let mut data = Vec::new();
             let mut buffer = [0; 4096];
@@ -972,7 +972,11 @@ async fn production_heals_a_trailing_space_and_never_shows_the_echo() -> Result<
                 serde_json::to_string(echo).expect("echo literal")
             )
         );
-        assert_eq!(payload["n_predict"], 8, "healing keeps the token budget");
+        let tokens = if language == "fa" { 21 } else { 8 };
+        assert_eq!(
+            payload["n_predict"], tokens,
+            "healing keeps the token budget"
+        );
         // The typed space stays in the document; the suggestion continues it.
         let text = outcome.into_proposal().map(|proposal| proposal.text);
         assert_eq!(text.as_deref(), shown.strip_prefix(echo), "{before:?}");
@@ -1011,7 +1015,8 @@ async fn production_heals_a_trailing_space_and_never_shows_the_echo() -> Result<
         let (payload, _) = healed_exchange(before, language, &[" Nachricht"]).await?;
         assert_eq!(payload["prompt"], before);
         assert!(payload.get("grammar").is_none(), "{before:?}");
-        assert_eq!(payload["n_predict"], 8);
+        let tokens = if language == "fa" { 21 } else { 8 };
+        assert_eq!(payload["n_predict"], tokens);
     }
     Ok(())
 }

@@ -556,6 +556,52 @@ pub enum ControlPlaneError {
     },
 }
 
+impl ControlPlaneError {
+    /// A stable, content-free name for startup diagnostics.
+    #[must_use]
+    pub fn startup_name(&self) -> String {
+        match self {
+            Self::ClockBeforeUnixEpoch => "clock_before_unix_epoch".to_owned(),
+            Self::LockPoisoned => "lock_poisoned".to_owned(),
+            Self::PersonalizationUnavailable => "personalization_unavailable".to_owned(),
+            Self::Personalization(error) => error.to_string(),
+            Self::Storage(error) => error.to_string(),
+            Self::Settings(error) => error.to_string(),
+            Self::SettingsCommittedReconciliation { .. } => {
+                "settings_committed_reconciliation".to_owned()
+            }
+        }
+    }
+
+    /// Corrupt or unsafe settings will not improve by restarting the process.
+    #[must_use]
+    pub fn restart_cannot_help(&self) -> bool {
+        match self {
+            Self::Settings(SettingsStoreError::Json(_) | SettingsStoreError::Validation(_))
+            | Self::Personalization(
+                PersonalizationStoreError::Json(_) | PersonalizationStoreError::Validation(_),
+            ) => true,
+            Self::Settings(SettingsStoreError::Storage(error))
+            | Self::Storage(error)
+            | Self::Personalization(PersonalizationStoreError::Storage(error)) => {
+                storage_restart_cannot_help(error)
+            }
+            _ => false,
+        }
+    }
+}
+
+fn storage_restart_cannot_help(error: &PrivateStorageError) -> bool {
+    matches!(
+        error,
+        PrivateStorageError::UnsafeDirectory
+            | PrivateStorageError::UnsafeFile
+            | PrivateStorageError::MissingHome(_)
+            | PrivateStorageError::PathNotAbsolute
+            | PrivateStorageError::InvalidFileName
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -566,7 +612,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{ControlPlane, ControlPlaneError, strictly_reduces_authority, unix_day};
-    use crate::personalization::{PersonalizationProvider, PersonalizationSignal};
+    use crate::personalization::{DailyAggregate, PersonalizationProvider, PersonalizationSignal};
     use crate::settings::{
         ALL_WEB_ORIGINS_PERMISSIONS, BrowserAdapter, PermissionDecision, PrivateStorage,
         PrivateStorageError, RetentionPermission, SETTINGS_SCHEMA, SettingsStoreError, SettingsV2,
@@ -596,6 +642,21 @@ mod tests {
             None,
         )
         .expect("other identity")
+    }
+
+    #[test]
+    fn unsafe_settings_are_named_and_do_not_restart() {
+        let unsafe_file = ControlPlaneError::Storage(PrivateStorageError::UnsafeFile);
+        assert_eq!(unsafe_file.startup_name(), "unsafe_file");
+        assert!(unsafe_file.restart_cannot_help());
+        let locked = ControlPlaneError::Storage(PrivateStorageError::LockUnavailable);
+        assert_eq!(locked.startup_name(), "lock_unavailable");
+        assert!(!locked.restart_cannot_help());
+        let corrupt = ControlPlaneError::Settings(SettingsStoreError::Validation(
+            SettingsValidationError::UnsupportedSchema,
+        ));
+        assert_eq!(corrupt.startup_name(), "validation");
+        assert!(corrupt.restart_cannot_help());
     }
 
     fn learning_settings(revision: u64, retention: RetentionPermission) -> SettingsV2 {
@@ -765,7 +826,7 @@ mod tests {
         let control = ControlPlane::open(storage_paths.clone()).expect("control plane");
         let snapshot = control.snapshot().expect("snapshot");
         assert_eq!(snapshot.settings, SettingsV2::deny_by_default());
-        assert!(snapshot.personalization.records.is_empty());
+        assert_eq!(snapshot.personalization.records, [] as [DailyAggregate; 0]);
         assert_eq!(snapshot.persisted_personalization_bytes, 0);
         assert!(matches!(
             PrivateStorage::open(storage_paths),
@@ -808,7 +869,7 @@ mod tests {
             .replace_settings(1, denied)
             .expect("revoke settings");
         let snapshot = control.snapshot().expect("reconciled snapshot");
-        assert!(snapshot.personalization.records.is_empty());
+        assert_eq!(snapshot.personalization.records, [] as [DailyAggregate; 0]);
         assert_eq!(snapshot.persisted_personalization_bytes, 0);
         assert!(!storage_paths.personalization_path().exists());
     }
@@ -846,7 +907,10 @@ mod tests {
             )
             .expect("grant bounded retention");
         let after_grant = control.snapshot().expect("post-grant snapshot");
-        assert!(after_grant.personalization.records.is_empty());
+        assert_eq!(
+            after_grant.personalization.records,
+            [] as [DailyAggregate; 0]
+        );
         assert_eq!(after_grant.persisted_personalization_bytes, 0);
         assert!(!storage_paths.personalization_path().exists());
 
@@ -1017,13 +1081,13 @@ mod tests {
 
         let cleared = control.clear_personalization().expect("clear");
         assert!(cleared.changed);
-        assert!(
+        assert_eq!(
             control
                 .snapshot()
                 .expect("cleared snapshot")
                 .personalization
-                .records
-                .is_empty()
+                .records,
+            [] as [DailyAggregate; 0]
         );
     }
 
@@ -1109,13 +1173,13 @@ mod tests {
             .expect("stale signal is ignored");
         assert!(!stale.signal_recorded);
         assert!(stale.signal_dropped);
-        assert!(
+        assert_eq!(
             control
                 .snapshot()
                 .expect("snapshot")
                 .personalization
-                .records
-                .is_empty()
+                .records,
+            [] as [DailyAggregate; 0]
         );
 
         let current = control
@@ -1159,13 +1223,13 @@ mod tests {
             .expect("store available");
         assert!(expired.changed);
         assert!(!durable_paths.personalization_path().exists());
-        assert!(
+        assert_eq!(
             durable
                 .snapshot()
                 .expect("expired durable snapshot")
                 .personalization
-                .records
-                .is_empty()
+                .records,
+            [] as [DailyAggregate; 0]
         );
 
         let ephemeral_paths = paths(&temporary.path().join("ephemeral"));
@@ -1189,13 +1253,13 @@ mod tests {
             .expect("store available");
         assert!(expired.changed);
         assert!(!ephemeral_paths.personalization_path().exists());
-        assert!(
+        assert_eq!(
             ephemeral
                 .snapshot()
                 .expect("expired ephemeral snapshot")
                 .personalization
-                .records
-                .is_empty()
+                .records,
+            [] as [DailyAggregate; 0]
         );
     }
 
@@ -1225,7 +1289,10 @@ mod tests {
         let control = ControlPlane::open(storage_paths.clone()).expect("degraded control plane");
         let unavailable = control.snapshot().expect("unavailable snapshot");
         assert!(!unavailable.personalization_store_available);
-        assert!(unavailable.personalization.records.is_empty());
+        assert_eq!(
+            unavailable.personalization.records,
+            [] as [DailyAggregate; 0]
+        );
         assert_eq!(unavailable.persisted_personalization_bytes, 0);
         assert_eq!(
             fs::read(&personalization_path).expect("preserved corrupt store"),
@@ -1312,7 +1379,7 @@ mod tests {
         assert!(cleared.changed);
         let recovered = control.snapshot().expect("recovered snapshot");
         assert!(recovered.personalization_store_available);
-        assert!(recovered.personalization.records.is_empty());
+        assert_eq!(recovered.personalization.records, [] as [DailyAggregate; 0]);
         assert_eq!(recovered.persisted_personalization_bytes, 0);
         assert!(!personalization_path.exists());
         assert!(!orphaned_temporary.exists());

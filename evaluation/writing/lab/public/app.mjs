@@ -4,7 +4,7 @@ import { confidenceCoverage } from './confidence.mjs';
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="badi-lab-token"]').content;
 const headers = { 'Content-Type': 'application/json', 'X-Badi-Lab-Token': token };
-const names = { production_boundary: 'Current Badi logic', context: 'Full context', context_confidence: 'Full context + token confidence', instructed: 'Context + style', healed: 'Word-boundary experiment', instructed_healed: 'Instructions + word boundary', instructed_word: 'One complete word', healed_attested: 'Complete words from context', native_instructed: 'Selected model instructions' };
+const names = { production_boundary: 'Current Badi logic', context: 'Full context', context_confidence: 'Full context + token confidence', instructed: 'Context + style', healed: 'Word-boundary experiment', instructed_healed: 'Instructions + word boundary', native_instructed: 'Selected model instructions' };
 const fixedProductionMode = mode => mode === 'production_boundary';
 const reasonLabels = {
   constrained_complete_word: 'The model finished one word with a separator and a completion response. Its decoding was constrained to this shape.',

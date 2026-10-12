@@ -13,7 +13,7 @@ use super::{
 };
 use crate::control_plane::ControlPlane;
 use crate::metrics::NoSuggestionReason;
-use crate::personalization::PersonalizationSignal;
+use crate::personalization::{DailyAggregate, PersonalizationSignal};
 use crate::protocol::{
     Activation, AdapterKind, Capability, CommitResultPayload, CommitStatus, ContextChangedPayload,
     ControlAction, Coordinates, FieldDescriptor, FieldPurpose, OffsetUnit, Origin, OriginScheme,
@@ -1636,12 +1636,12 @@ async fn pause_and_dismiss_cancel_eligibility() {
         )
         .await
         .expect("request");
-    assert!(broker.set_paused(true).await);
+    assert!(broker.set_paused(true).await.expect("pause"));
     sleep(Duration::from_millis(20)).await;
     assert!(events.try_recv().is_err());
     assert!(broker.active_locator().await.is_none());
 
-    assert!(!broker.set_paused(false).await);
+    assert!(!broker.set_paused(false).await.expect("resume"));
     let second = context(2, FieldPurpose::Normal);
     broker
         .update_context(coordinates(session_id, 2), second.clone())
@@ -1714,8 +1714,8 @@ async fn concurrent_pair_of_pause_toggles_is_linearizable() {
 
     barrier.wait().await;
     let (first, second) = tokio::join!(first, second);
-    let first = first.expect("first toggle task");
-    let second = second.expect("second toggle task");
+    let first = first.expect("first toggle task").expect("pause");
+    let second = second.expect("second toggle task").expect("pause");
 
     assert_ne!(first, second, "each toggle must observe one transition");
     assert_eq!(broker.is_paused().await, initial);
@@ -1763,7 +1763,7 @@ async fn paused_and_stale_addressed_accepts_emit_no_commit_prepare() {
         suggestion_id: Some(payload.suggestion_id.clone()),
     };
 
-    assert!(broker.set_paused(true).await);
+    assert!(broker.set_paused(true).await.expect("pause"));
     assert!(matches!(
         broker
             .session_control(coordinates(session_id, 1), control.clone(), None)
@@ -1773,7 +1773,7 @@ async fn paused_and_stale_addressed_accepts_emit_no_commit_prepare() {
     while events.try_recv().is_ok() {}
     assert!(events.try_recv().is_err());
 
-    assert!(!broker.set_paused(false).await);
+    assert!(!broker.set_paused(false).await.expect("resume"));
     let second = context(2, FieldPurpose::Normal);
     broker
         .update_context(coordinates(session_id, 2), second)
@@ -2300,7 +2300,7 @@ async fn pause_revokes_a_pending_commit_and_rejects_its_result() {
             if request_id.as_deref() == Some("accept-before-pause")
     ));
 
-    assert!(broker.set_paused(true).await);
+    assert!(broker.set_paused(true).await.expect("pause"));
     assert!(matches!(
         events.recv().await,
         Some(BrokerEvent::SuggestionClear { payload, request_id, .. })
@@ -2876,7 +2876,7 @@ async fn memory_clear_detaches_live_suggestions_from_deleted_aggregates() {
         .await
         .expect("clear personalization");
     assert!(changed);
-    assert!(cleared.personalization.records.is_empty());
+    assert_eq!(cleared.personalization.records, [] as [DailyAggregate; 0]);
     broker
         .session_control(
             coordinates(session_id, 1),
@@ -2894,7 +2894,10 @@ async fn memory_clear_detaches_live_suggestions_from_deleted_aggregates() {
         .control_plane_snapshot()
         .await
         .expect("flush aggregate queue");
-    assert!(after_dismiss.personalization.records.is_empty());
+    assert_eq!(
+        after_dismiss.personalization.records,
+        [] as [DailyAggregate; 0]
+    );
     assert_eq!(broker.outcome_recorder_health().write_failures, 0);
 }
 
@@ -2954,7 +2957,7 @@ async fn runtime_pause_ack_fences_pre_pause_outcome_writes() {
         Ok(Some(BrokerEvent::SuggestionShow { .. }))
     ));
 
-    assert!(broker.set_paused(true).await);
+    assert!(broker.set_paused(true).await.expect("pause"));
     let fenced = control_plane.snapshot().expect("direct aggregate snapshot");
     assert_eq!(fenced.personalization.records[0].shown, 1);
     assert_eq!(broker.outcome_recorder_health().write_failures, 0);
@@ -3019,7 +3022,10 @@ async fn retention_grant_scrubs_pre_consent_memory_without_post_commit_persisten
     std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700))
         .expect("restore aggregate directory");
     assert_eq!(replacement.settings.revision, 2);
-    assert!(replacement.personalization.records.is_empty());
+    assert_eq!(
+        replacement.personalization.records,
+        [] as [DailyAggregate; 0]
+    );
     assert_eq!(broker.session_count().await, 0);
     assert!(!broker.is_paused().await);
     let policy = broker.resolve_policy(&controlled_target()).await;
@@ -3271,7 +3277,7 @@ async fn probe_uses_the_provider_and_display_checks_without_session_or_counters(
     assert_eq!(broker.session_count().await, 0);
     assert!(broker.active_locator().await.is_none());
 
-    broker.set_paused(true).await;
+    broker.set_paused(true).await.expect("pause");
     let paused = broker
         .probe(probe_request("Thank you", "en", false))
         .await
@@ -3396,13 +3402,13 @@ async fn probe_withholds_its_result_when_a_pause_arrives_during_inference() {
     // Runtime pause (`badictl pause`) acknowledged while the provider runs.
     let pending = start();
     provider.entered.notified().await;
-    assert!(broker.set_paused(true).await);
+    assert!(broker.set_paused(true).await.expect("pause"));
     provider.release.notify_one();
     let paused = pending.await.expect("probe task").expect("probe");
     assert_eq!(paused.outcome, ProbeOutcome::Paused);
     assert_eq!((paused.text.as_deref(), paused.reason), (None, None));
     paused.validate().expect("valid paused result");
-    assert!(!broker.set_paused(false).await);
+    assert!(!broker.set_paused(false).await.expect("resume"));
 
     // Persisted pause (`badi pause`) committed while the provider runs.
     let pending = start();
@@ -3743,8 +3749,8 @@ async fn escape_whole_acceptance_and_pause_end_type_through() {
                 .await
                 .expect("control");
         } else {
-            assert!(broker.set_paused(true).await);
-            assert!(!broker.set_paused(false).await);
+            assert!(broker.set_paused(true).await.expect("pause"));
+            assert!(!broker.set_paused(false).await.expect("resume"));
         }
         let (second, mut second_events) = open_observed_session(&broker, "field-epoch-2").await;
         let next = shown_after(&broker, second, &mut second_events, "Hello rev")
@@ -3786,4 +3792,61 @@ async fn the_remainder_after_a_word_acceptance_carries() {
         .expect("carried remainder");
     assert_eq!(carried.text, " Hello");
     assert_eq!(provider.calls.load(Ordering::Relaxed), 1);
+}
+
+#[cfg(feature = "local-model")]
+#[test]
+fn mid_sentence_space_before_a_word_survives_checked_proposal() {
+    let before = "Please find the ";
+    let after = "report today";
+    let continuation = "final report for";
+    let line = crate::writing::line_rest(after).expect("words follow the caret");
+    let inserted = crate::writing::mid_line_insertion(before, line, continuation)
+        .expect("the continuation rejoins the next word");
+    assert_eq!(inserted, "final ");
+    assert!(
+        crate::writing::validate_proposal(before, after, &inserted, Some("en")).is_ok(),
+        "the provider accepts the insertion before the broker's display check"
+    );
+
+    let shown = super::generation::checked_proposal(
+        ProviderKind::LocalModel,
+        before,
+        after,
+        crate::provider::WritingProposal {
+            text: inserted,
+            replace_before: None,
+        },
+    );
+    let shown = shown.expect("the separating space is part of the suggestion");
+    assert_eq!(shown.text, "final ");
+    let parts = crate::segment::accept_word(&shown.text);
+    assert_eq!(
+        parts.accepted, "final ",
+        "Ctrl+→ takes the last word and its space"
+    );
+    assert_eq!(parts.remainder, "");
+
+    for (before, after, text) in [
+        ("Please find the ", "", "final "),
+        ("Thanks ", ", John", "a lot "),
+        ("Please find the ", "report today", "final  "),
+        ("hello", "world", "final "),
+        ("hello ", " report", "final "),
+        ("hello ", "report", "final\u{00a0}"),
+    ] {
+        assert!(
+            super::generation::checked_proposal(
+                ProviderKind::LocalModel,
+                before,
+                after,
+                crate::provider::WritingProposal {
+                    text: text.to_owned(),
+                    replace_before: None,
+                },
+            )
+            .is_none(),
+            "rejected {before:?} | {text:?} | {after:?}"
+        );
+    }
 }

@@ -23,6 +23,7 @@ class InstallEditorsTests(unittest.TestCase):
             rc = home / '.bashrc'
             original = '# My shell\n[[ $- == *i* ]] || return\nalias mine="echo local"\n'
             rc.write_text(original)
+            rc.chmod(0o600)
             backups = home / '.local/state/badi/editor-backups'
             with patch.object(installer.Path, 'home', return_value=home), \
                  patch.object(installer, 'build_shell_preview', return_value=b'test display builtin') as build, \
@@ -37,6 +38,7 @@ class InstallEditorsTests(unittest.TestCase):
             module = home / '.local/lib/badi/editors/shell/badi-preview.so'
             self.assertEqual(module.read_bytes(), b'test display builtin')
             self.assertEqual(module.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(rc.stat().st_mode & 0o777, 0o600)
             self.assertTrue(first.startswith(original))
             self.assertEqual(first, rc.read_text())
             self.assertEqual(first.count('source "$HOME/.local/lib/badi/editors/shell/badi.bash"'), 1)

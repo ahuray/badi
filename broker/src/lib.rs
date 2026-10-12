@@ -24,8 +24,8 @@ pub use control_plane::{ControlPlane, ControlPlaneError, ControlPlaneSnapshot};
 pub use engine::{Broker, BrokerConfig, BrokerError, BrokerEvent, BrokerEventSink, ContextOutcome};
 pub use metrics::{Metrics, MetricsSnapshot, NoSuggestionReason, NoSuggestionSnapshot};
 pub use model_selection::{
-    HardwareProfile, ModelAdvice, ModelArtifact, ModelTier, ModelUseCase, detect_hardware,
-    recommend_model,
+    HardwareProfile, MODEL_DOWNLOAD_DIRECTORY, ModelAdvice, ModelArtifact, ModelTier, ModelUseCase,
+    detect_hardware, recommend_model,
 };
 pub use policy::{PolicyDecision, PolicyReason};
 pub use provider::{

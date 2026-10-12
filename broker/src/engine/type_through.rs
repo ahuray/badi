@@ -150,6 +150,20 @@ mod tests {
     }
 
     #[test]
+    fn typing_into_a_mid_sentence_word_keeps_its_separating_space() {
+        let mut shown = carry("Please find the ", "final ", Duration::from_secs(5));
+        shown.after = "report today".to_owned();
+        let mut next = context("Please find the f");
+        next.after = "report today".to_owned();
+        assert_eq!(
+            shown
+                .remainder(&scope("org.telegram.desktop"), &next, Instant::now())
+                .as_deref(),
+            Some("inal ")
+        );
+    }
+
+    #[test]
     fn typed_characters_of_the_suggestion_carry_its_remainder() {
         let shown = carry(
             "Please find attached the",

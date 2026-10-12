@@ -4,7 +4,7 @@ import { lstatSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { recordActivity } from './activity.mjs';
-import { hasUnsafeText, validCorrection } from './text-safety.mjs';
+import { hasIsolatedSpaces, hasUnsafeText, validCorrection } from './text-safety.mjs';
 
 const PROFILES = Object.freeze({
   obsidian: { kind: 'obsidian', app_id: 'obsidian' },
@@ -15,7 +15,7 @@ const FRAME_LIMIT = 65536;
 const counter = value => Number.isSafeInteger(value) && value >= 0;
 const words = new Intl.Segmenter('en', { granularity: 'word' });
 export const validSuggestion = value => typeof value === 'string' && [...value].length <= 64 &&
-  value.trim().length > 0 && !hasUnsafeText(value) &&
+  hasIsolatedSpaces(value) && !hasUnsafeText(value) &&
   [...words.segment(value)].filter(part => part.isWordLike).length <= 4;
 
 export class BrokerClient extends EventEmitter {
@@ -117,7 +117,7 @@ export class BrokerClient extends EventEmitter {
     this.emit('state', this.allowed ? 'ready' : policy.paused ? 'paused' : 'app_disabled');
   }
 
-  async suggest(before, { language = 'en', explicit = true } = {}) {
+  async suggest(before, { language = 'en', explicit = true, after = '' } = {}) {
     if (!this.allowed) throw new Error('App disabled or model paused');
     if (typeof explicit !== 'boolean' || (!explicit && !this.automaticAllowed)) throw new Error('Manual invocation required');
     if (typeof language !== 'string' || language.length < 2 || language.length > 35 ||
@@ -125,7 +125,8 @@ export class BrokerClient extends EventEmitter {
       throw new Error('Invalid writing language');
     }
     if (typeof before !== 'string' || !before.trim() || [...before].length > 512 ||
-        hasUnsafeText(before, true)) {
+        hasUnsafeText(before, true) || typeof after !== 'string' || [...after].length > 128 ||
+        hasUnsafeText(after, true)) {
       throw new Error('Invalid writing context');
     }
     this.cancel();
@@ -135,7 +136,7 @@ export class BrokerClient extends EventEmitter {
       fingerprint: createHash('sha256').update(randomUUID()).update(before).digest('hex') };
     this.#session = session;
     this.#send('session.open', { target: this.#target(id), activation: 'always' }, randomUUID(), { ...session, revision: 0 });
-    this.#send('context.changed', { fingerprint: session.fingerprint, before, after: '', language,
+    this.#send('context.changed', { fingerprint: session.fingerprint, before, after, language,
       selection: { anchor: [...before].length, head: [...before].length, unit: 'unicode_scalar_values' },
       field: { purpose: this.#profile.kind === 'terminal' ? 'terminal' : 'normal', editable: true,
         multiline: this.#profile.kind !== 'terminal', composing: false, sensitive: false,
@@ -188,6 +189,20 @@ export class BrokerClient extends EventEmitter {
       grant.control_id, grant);
     this.cancel();
     this.emit('state', status);
+  }
+
+  // Escape ends the carried remainder (ADR 0004). Closing the session does not:
+  // Fcitx closes one on every edit and the next key still needs the carry.
+  dismiss() {
+    const candidate = this.#candidate;
+    if (candidate && this.#session && !this.#closed) {
+      try {
+        this.#send('control.request', {
+          action: 'dismiss', fingerprint: candidate.fingerprint, suggestion_id: candidate.suggestion_id,
+        }, randomUUID(), candidate);
+      } catch { /* The local preview still goes away. */ }
+    }
+    this.cancel();
   }
 
   cancel(closeSession = true) {

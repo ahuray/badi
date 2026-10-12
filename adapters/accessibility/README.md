@@ -38,7 +38,8 @@ editing works ([coverage](../../README.md#where-it-works)).
 - **Brave web apps** take their page origin's policy, as a tab does.
 - **LibreOffice** reports one program id for every module, so only Writer's
   `paragraph` fields qualify. Writer gives Fcitx only the caret's sentence, so
-  the snapshot starts at the AT-SPI `SENTENCE` boundary and must still equal it.
+  the snapshot, after the binding is authorized, starts at the AT-SPI
+  `SENTENCE` boundary and must still equal it. Inspect does not read that sentence.
 
 Browser targets share one browser-origin identity (adapter `chromium`), so one
 `badi site ... on` grant covers Chromium, Brave and Zen; the binding keeps the
@@ -205,22 +206,28 @@ its monitor.
   places the caret: Qt's Fcitx module declares `RelativeRect` and reports the
   caret relative to its window in physical pixels, so the caret is
   `x = rect.x/s`, `y = rect.y/s` with line height `rect.height/s`, and
-  `rect.scale` must equal the monitor scale. The field bounds are unknown, so
-  the window bounds the drawing; a rectangle outside the visible window (a
-  clipped tile) yields nothing.
+  `rect.scale` must equal the monitor scale. The field's `WINDOW` extents bound
+  the drawing when its frame spans the window and the field holds the caret;
+  otherwise the window does. A rectangle outside the visible window (a clipped
+  tile) yields nothing.
 
 Geometry is offered only for left-to-right text: the caret's line must hold
 no right-to-left character and the field must report the `lr` direction or
 glyphs ordered left to right. Qt reports neither; a native field without a
 direction needs a strong left-to-right letter on the caret's line, because Qt
-takes a paragraph's direction from its first strong character. The GTK4 layer-shell overlay
-draws the suggestion as translucent grey text right after the caret, with no
-background, at a size derived from the glyph height. It draws only suggestions
-of at most 64 characters that fit inside the field, window and monitor;
-otherwise it returns `rendered: false`. The surface takes no input or
-focus, and any invalidation, new render or expiry hides it. The helper forces
-software rendering and the simple GTK input module, so it never loads a GPU
-driver or connects to an input method.
+takes a paragraph's direction from its first strong character.
+
+The GTK4 layer-shell overlay draws the suggestion as translucent grey text right
+after the caret, with no background, at a size derived from the glyph height.
+A field box that ends before the visible line still keeps that text on the
+caret's baseline inside the window, so it is not dropped onto the chrome under
+the input. When the last snapshot had words after the caret on its line
+(`text_follows`), it draws a compact dark chip under the caret instead, and
+only while that chip fits inside the field. Suggestions are at most 64
+characters; one that fits nowhere returns `rendered: false`. The surface takes
+no input or focus, and any invalidation, new render or expiry hides it. The
+helper forces software rendering and the simple GTK input module, so it never
+loads a GPU driver or connects to an input method.
 
 ## Installation and the renderer flag
 

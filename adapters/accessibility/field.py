@@ -104,16 +104,15 @@ class FieldBackend:
         flatten = app.web and not app.gecko
         caret, count, selections, rich = self.caret_position(node, flatten)
         local = rich.caret_text if rich else CaretText(node.get_text_iface(), caret, count)
-        sentence_start = self.sentence_start(local) if app.sentence_bounded else 0
+        # The sentence boundary is prose. Inspect stops at metadata; snapshot
+        # asks for it only after the binding is authorized.
         geometry = None
         if (calibrate and 1 <= local.caret <= local.length and flags.contains(self.atspi.StateType.SHOWING) and
                 window.get("xwayland") is False):
             if app.web:
                 geometry = self.geometry(node, local.text, local.caret, window, app.gecko, caret)
             else:
-                geometry = self.native_geometry(node, local.text, local.caret, window, caret)
-            if geometry is None and caret_rect is not None:
-                geometry = self.input_method_geometry(caret_rect, window, caret)
+                geometry = self.native_geometry(node, local.text, local.caret, window, caret, caret_rect)
         return {"direction": self.direction(local), "bus": node.app.bus_name, "path": node.path,
                 "process_id": window["pid"], "app_id": app_id, "uri": uri, "browser": app.browser, "web": app.web,
                 "role": role, "tag": attributes.get("tag", ""), "input_type": attributes.get("text-input-type", ""),
@@ -121,15 +120,22 @@ class FieldBackend:
                 **self.states(flags), "caret": caret, "total_chars": count, "selection_count": selections,
                 "geometry": geometry, "node": node, "flatten": flatten, "blocks": rich.blocks if rich else None,
                 "caret_block": rich.caret_block if rich else None,
-                "sentence_start": sentence_start}
+                "sentence_bounded": app.sentence_bounded, "sentence_start": 0}
 
-    def sentence_start(self, local):
+    def sentence_start(self, metadata):
         """Where the caret's sentence starts. LibreOffice Writer gives Fcitx only
-        that sentence as surrounding text, so a snapshot must begin there to agree."""
-        text, caret, _length = local
+        that sentence as surrounding text, so a snapshot must begin there to agree.
+
+        Call this only from snapshot, after authorize. The lookup returns the
+        sentence text; inspect must not call it.
+        """
+        if not metadata.get("sentence_bounded"):
+            return 0
+        caret = metadata["caret"]
         if caret < 1:
             return 0
         self.budget()
+        text = metadata["node"].get_text_iface()
         sentence = self.atspi.Text.get_string_at_offset(text, caret - 1, self.atspi.TextGranularity.SENTENCE)
         if sentence is None or not 0 <= sentence.start_offset <= caret - 1 < sentence.end_offset:
             raise Denied("invalid_caret")
@@ -390,8 +396,27 @@ class FieldBackend:
         return calibrated_geometry(rects["frame"], rects["document"], rects["field"], rects["glyph"],
                                    window, monitors, offset, rects.get("container"), rects.get("page"))
 
-    def native_geometry(self, node, text, caret, window, reported):
-        """Calibrate a native toolkit field from WINDOW extents; None lets Fcitx show its panel."""
+    def native_geometry(self, node, text, caret, window, reported, caret_rect):
+        """Calibrate a native toolkit field from WINDOW extents, else from the app's
+        input-method caret rectangle (`caret_rect`); None lets Fcitx show its panel."""
+        try:
+            monitors = self.desktop.monitors()
+        except Denied as error:
+            if error.timed_out:
+                raise
+            return None
+        except Exception:
+            return None
+        rects = self.window_extents(node, text, caret)
+        geometry = rects and native_calibrated_geometry(rects["frame"], rects["field"], rects["glyph"],
+                                                        window, monitors, reported)
+        if geometry is None and caret_rect is not None:
+            geometry = input_method_geometry(caret_rect, window, monitors, reported,
+                                             *((rects["frame"], rects["field"]) if rects else ()))
+        return geometry
+
+    def window_extents(self, node, text, caret):
+        """WINDOW extents of the toplevel frame, the field and the glyph before the caret, or None."""
         try:
             frame = self.frame_documents(node)[0]
             if frame is None:
@@ -405,28 +430,14 @@ class FieldBackend:
                 extents[name] = item.get_component_iface().get_extents(window_coordinates)
             self.budget()
             extents["glyph"] = text.get_character_extents(caret - 1, window_coordinates)
-            monitors = self.desktop.monitors()
         except Denied as error:
             if error.timed_out:
                 raise
             return None
         except Exception:
             return None
-        rects = {name: {"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}
-                 for name, rect in extents.items()}
-        return native_calibrated_geometry(rects["frame"], rects["field"], rects["glyph"], window, monitors, reported)
-
-    def input_method_geometry(self, rect, window, reported):
-        """Calibrate from the app's input-method caret rectangle; None lets Fcitx show its panel."""
-        try:
-            monitors = self.desktop.monitors()
-        except Denied as error:
-            if error.timed_out:
-                raise
-            return None
-        except Exception:
-            return None
-        return input_method_geometry(rect, window, monitors, reported)
+        return {name: {"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}
+                for name, rect in extents.items()}
 
     def screen_extents(self, node, text, caret):
         """SCREEN extents of the outermost frame, nearest web document, field, glyph before the

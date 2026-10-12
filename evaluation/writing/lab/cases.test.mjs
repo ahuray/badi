@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
-import { validateCase, validateSuite, modelInputForCase, scorePrediction, scoreCompleteWordPrefixes, summarizeResults, planComparison } from './cases.mjs';
+import { validateCase, validateSuite, modelInputForCase, scorePrediction, scoreCompleteWordPrefixes, summarizeResults, planComparison, pairedFirstWord } from './cases.mjs';
 
 const row = (overrides = {}) => ({ id: 'case-1', language: 'en', prefix: 'Please review the docum', expected: ['ent'], ...overrides });
 const result = (overrides = {}) => ({ outcome: 'suggestion', text: 'ent', latency_ms: 100, word_complete: true, ...overrides });
@@ -209,6 +210,45 @@ test('three-way counterbalancing gives each configuration every position across 
     const positions = [0, 1, 2].map(position => plan.filter((entry, i) => i % 3 === position && entry.config_id === config.id).length);
     assert.deepEqual(positions, [2, 2, 2]);
   }
+});
+
+test('reference keystrokes are the matched graphemes and observed savings need a later typed step', () => {
+  const scored = scorePrediction(row({ prefix: 'Go to the', expected: [' station', ' market'] }), result({ text: ' market square' }));
+  assert.equal(scored.reference_keystrokes_saved, 7);
+  assert.equal(scored.observed_keystrokes_saved, null);
+  const records = [
+    { case: row({ id: 't0', prefix: 'Go to the', expected: [' market'], trace_id: 'walk', step: 0, at_ms: 0 }), result: result({ text: ' market' }), config_id: 'baseline' },
+    { case: row({ id: 't1', prefix: 'Go to the market', expected: [' square'], trace_id: 'walk', step: 1, at_ms: 200 }), result: result({ text: ' square' }), config_id: 'baseline' },
+    { case: row({ id: 'miss', prefix: 'Go to the', expected: [' station'] }), result: result({ text: ' library' }), config_id: 'baseline' },
+  ];
+  const summary = summarizeResults(records);
+  assert.equal(summary.overall.observed_keystrokes_saved, ' market'.length);
+  assert.equal(summary.overall.reference_keystrokes_saved, ' market'.length + ' square'.length + 1);
+  assert.equal(summary.by_config.baseline.observed_keystrokes_saved, ' market'.length);
+});
+
+test('paired first-word counts keep discordant cases in the same denominator', () => {
+  const records = [
+    { case: row({ id: 'both' }), result: result(), config_id: 'left' },
+    { case: row({ id: 'both' }), result: result(), config_id: 'right' },
+    { case: row({ id: 'left' }), result: result(), config_id: 'left' },
+    { case: row({ id: 'left' }), result: result({ text: 'other' }), config_id: 'right' },
+    { case: row({ id: 'neither' }), result: result({ outcome: 'abstention', text: null }), config_id: 'left' },
+    { case: row({ id: 'neither' }), result: result({ outcome: 'abstention', text: null }), config_id: 'right' },
+    { case: row({ id: 'gap', expected: [] }), result: result(), config_id: 'left' },
+    { case: row({ id: 'gap', expected: [] }), result: result(), config_id: 'right' },
+  ];
+  const [pair] = pairedFirstWord(records.map(record => ({ ...record, case: validateCase(record.case), result: record.result, score: scorePrediction(record.case, record.result) })));
+  assert.deepEqual(pair, { left: 'left', right: 'right', cases: 4, both: 1, left_only: 1, right_only: 0, neither: 1, unscored: 1 });
+  assert.equal(pair.both + pair.left_only + pair.right_only + pair.neither + pair.unscored, pair.cases);
+});
+
+test('the longer development prose suite stays inside the case contract', async () => {
+  const raw = JSON.parse(await readFile(new URL('./examples/real-text-development.json', import.meta.url), 'utf8'));
+  const suite = validateSuite(raw);
+  assert.equal(suite.cases.length, 19);
+  assert.ok(suite.cases.every(row => [...row.prefix].length > 40));
+  assert.deepEqual([...new Set(suite.cases.map(row => row.language))].sort(), ['de', 'en', 'fa']);
 });
 
 test('a single configuration produces an ordinary run plan with every input exactly once', () => {

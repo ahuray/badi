@@ -86,6 +86,20 @@ test('editor identities, native reading lease, revocation and one-shot commits a
     assert.equal(health.metrics.commits_applied, 2);
     assert.equal(health.metrics.provider_calls, 8);
     assert.equal(health.metrics.provider_errors, 0);
+    {
+      const client = new BrokerClient('obsidian');
+      clients.push(client);
+      assert.equal(await client.connect(endpoint), true);
+      assert.equal(await client.suggest('thank you'), ' for your time');
+      client.dismiss();
+      await delay(40);
+      assert.equal(await client.suggest('thank you f'), null, 'Escape dismisses the carry');
+      assert.equal(await client.suggest('thank you'), ' for your time');
+      client.cancel();
+      await delay(20);
+      assert.equal(await client.suggest('thank you f'), 'or your time', 'a session close still carries the remainder');
+      client.close();
+    }
     const readline = await promisify(execFile)('python3', [join(ROOT, 'adapters/shell/test.py')], {
       env: environment, timeout: 15000,
     });

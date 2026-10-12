@@ -62,8 +62,8 @@ fn assert_graceful_shutdown(signal: Signal) {
         .expect("captured stderr")
         .read_to_end(&mut stderr)
         .expect("read stderr");
-    assert!(stdout.is_empty());
-    assert!(stderr.is_empty());
+    assert_eq!(stdout, [] as [u8; 0]);
+    assert_eq!(stderr, [] as [u8; 0]);
 }
 
 fn wait_for_socket(child: &mut Child, socket_path: &Path) {

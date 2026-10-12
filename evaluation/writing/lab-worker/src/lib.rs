@@ -24,8 +24,6 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
-use unicode_segmentation::UnicodeSegmentation;
-
 use badi_broker::model_selection::current_memory;
 use badi_broker::provider::{CompletionProvider, ProviderRequest};
 use badi_broker::semantic::client::ClientError;
@@ -89,8 +87,6 @@ pub enum Mode {
     Instructed,
     Healed,
     InstructedHealed,
-    InstructedWord,
-    HealedAttested,
     NativeInstructed,
 }
 
@@ -312,17 +308,10 @@ impl Request {
     }
 
     fn result(&self, identity: &StableRuntimeIdentity) -> ResultRecord {
-        let mut warnings = vec![
+        let warnings = vec![
             "lab_runtime_2048_differs_from_installed_512",
             "no_application_edit_or_user_acceptance_measured",
         ];
-        if self.config.mode == Mode::InstructedWord {
-            warnings.extend([
-                "constrained_terminal_is_not_natural_model_choice",
-                "constrained_word_readiness_timing_unavailable",
-                "constrained_lexical_alphabet_is_bounded",
-            ]);
-        }
         ResultRecord {
             r#type: "result",
             id: self.id.clone(),
@@ -375,11 +364,7 @@ pub fn prepare_prompt(request: &Request) -> PreparedPrompt {
     let mut echo = String::new();
     if matches!(
         request.config.mode,
-        Mode::Healed
-            | Mode::InstructedHealed
-            | Mode::InstructedWord
-            | Mode::HealedAttested
-            | Mode::NativeInstructed
+        Mode::Healed | Mode::InstructedHealed | Mode::NativeInstructed
     ) {
         let without_spaces = before.trim_end_matches(' ');
         if without_spaces.len() != before.len() {
@@ -393,7 +378,7 @@ pub fn prepare_prompt(request: &Request) -> PreparedPrompt {
     let context = context_prefix(&request.context, &request.style_examples);
     let prompt = if matches!(
         request.config.mode,
-        Mode::Instructed | Mode::InstructedHealed | Mode::InstructedWord
+        Mode::Instructed | Mode::InstructedHealed
     ) {
         // Qwen3 non-thinking ChatML template, with the exact draft prefilled as
         // assistant text so generation continues it instead of answering it.
@@ -412,81 +397,11 @@ pub fn prepare_prompt(request: &Request) -> PreparedPrompt {
         payload["n_probs"] = json!(1);
         payload["post_sampling_probs"] = json!(false);
     }
-    if request.config.mode == Mode::InstructedWord {
-        payload["grammar"] = json!(word_grammar(
-            &echo,
-            request.before.ends_with(' '),
-            &request.language
-        ));
-    } else if !echo.is_empty() {
+    if !echo.is_empty() {
         let literal = serde_json::to_string(&echo).expect("string serialization");
         payload["grammar"] = json!(format!("root ::= {literal} [^<>\\n\\r`]*"));
     }
     PreparedPrompt { payload, echo }
-}
-
-const LATIN_LETTERS: &[(char, char)] = &[
-    ('A', 'Z'),
-    ('a', 'z'),
-    ('\u{00c0}', '\u{00d6}'),
-    ('\u{00d8}', '\u{00f6}'),
-    ('\u{00f8}', '\u{024f}'),
-    ('\u{1e00}', '\u{1eff}'),
-];
-// Match the existing orthographic joiner base ranges. The normal sanitizer
-// remains authoritative; this Lab grammar must never broaden its joiner rules.
-const ARABIC_LETTERS: &[(char, char)] = &[
-    ('\u{0620}', '\u{063f}'),
-    ('\u{0641}', '\u{064a}'),
-    ('\u{066e}', '\u{066f}'),
-    ('\u{0671}', '\u{06d3}'),
-    ('\u{06d5}', '\u{06d5}'),
-    ('\u{06e5}', '\u{06e6}'),
-    ('\u{06ee}', '\u{06ef}'),
-    ('\u{06fa}', '\u{06fc}'),
-    ('\u{06ff}', '\u{06ff}'),
-];
-
-fn lexical_letters(persian: bool) -> &'static [(char, char)] {
-    if persian {
-        ARABIC_LETTERS
-    } else {
-        LATIN_LETTERS
-    }
-}
-
-fn word_grammar(echo: &str, after_space: bool, language: &str) -> String {
-    let literal = serde_json::to_string(echo).expect("string serialization");
-    let leading_space = if after_space { "" } else { " \" \"?" };
-    let persian = WritingLanguage::from_tag(language) == Some(WritingLanguage::Persian);
-    let letters: String = lexical_letters(persian)
-        .iter()
-        .map(|&(start, end)| {
-            if start == end {
-                format!("\\u{:04x}", u32::from(start))
-            } else {
-                format!("\\u{:04x}-\\u{:04x}", u32::from(start), u32::from(end))
-            }
-        })
-        .collect();
-    let (punctuation, rules) = if persian {
-        (
-            r"[.,;:!?\u2026\u060c\u061b\u061f]",
-            format!(
-                "word ::= letter (marks? letter | \"\\u200c\" letter)* marks?\nletter ::= [{letters}]\nmarks ::= [\\u064b-\\u065f\\u0670]+"
-            ),
-        )
-    } else {
-        (
-            r"[.,;:!?\u2026]",
-            format!(
-                "word ::= letter+ (['\\u2019] letter+)*\nletter ::= [{letters}] [\\u0300-\\u036f]*"
-            ),
-        )
-    };
-    // Completion requires an emitted separator. Grammar exhaustion permits the
-    // runtime's real EOS; it does not prove the model would naturally stop here.
-    format!("root ::= {literal}{leading_space} word {punctuation}? \" \"\n{rules}")
 }
 
 // The paced primer receives only this stable prefix. Accepting draft text here
@@ -687,28 +602,16 @@ fn apply_observation(
     observed: LabStream,
     echo: &str,
 ) {
-    record_observation_metrics(result, request, &observed);
+    record_observation_metrics(result, &observed);
     let continuation = observed.raw.strip_prefix(echo);
     let echo_matched = continuation.is_some();
-    let candidate = if request.config.mode == Mode::InstructedWord {
-        continuation.ok_or("echo_mismatch").and_then(|text| {
-            complete_constrained_word(
-                text,
-                request.before.ends_with(' '),
-                &request.language,
-                observed.terminal_received,
-                observed.deadline,
-            )
-        })
-    } else {
-        continuation
-            .and_then(|text| complete_output(text, observed.stopped))
-            .ok_or(if echo_matched {
-                "no_complete_word"
-            } else {
-                "echo_mismatch"
-            })
-    };
+    let candidate = continuation
+        .and_then(|text| complete_output(text, observed.stopped))
+        .ok_or(if echo_matched {
+            "no_complete_word"
+        } else {
+            "echo_mismatch"
+        });
     result.raw = Some(observed.raw);
     if !echo.is_empty() {
         result.warnings.push("ttft_includes_forced_boundary_echo");
@@ -731,14 +634,6 @@ fn apply_observation(
         writing::validate_proposal(&request.before, "", &candidate, Some(&request.language))
             .is_ok();
     if !language_valid || !seam_valid {
-        if language_valid && request.config.mode == Mode::HealedAttested {
-            if let Some(recovered) =
-                attestation::recover_from_complete_candidate(request, echo, &candidate)
-            {
-                apply_attested_suffix(result, &recovered, observed.deadline);
-                return;
-            }
-        }
         result.outcome = "abstention";
         result.reason = if language_valid {
             "output_seam"
@@ -761,9 +656,7 @@ fn apply_observation(
         &candidate,
     );
     result.outcome = "suggestion";
-    result.reason = if request.config.mode == Mode::InstructedWord {
-        "constrained_complete_word"
-    } else if observed.deadline {
+    result.reason = if observed.deadline {
         "complete_prefix_at_deadline"
     } else {
         "complete_prefix"
@@ -773,18 +666,11 @@ fn apply_observation(
     result.text = Some(candidate);
 }
 
-fn record_observation_metrics(result: &mut ResultRecord, request: &Request, observed: &LabStream) {
+fn record_observation_metrics(result: &mut ResultRecord, observed: &LabStream) {
     result.inference_ms = Some(observed.latency_ms);
     result.ttft_ms = observed.ttft_ms;
     result.first_word_ms = observed.first_word_ms;
     result.first_four_words_ms = observed.first_four_words_ms;
-    if request.config.mode == Mode::InstructedWord {
-        // The shared observer does not apply this mode's terminal and exact
-        // one-word checks. Preserve measured request latency, not that earlier
-        // observation as evidence this stricter candidate was ready to display.
-        result.first_word_ms = None;
-        result.first_four_words_ms = None;
-    }
     result.tokens_predicted = observed.tokens_predicted;
     result.tokens_evaluated = observed.tokens_evaluated;
     result.slot_tokens_cached = observed.slot_tokens_cached;
@@ -849,120 +735,6 @@ fn candidate_token_logprob(
         return None;
     }
     Some((total / f64::from(u16::try_from(count).ok()?), count))
-}
-
-fn complete_constrained_word(
-    text: &str,
-    after_space: bool,
-    language: &str,
-    terminal_received: bool,
-    deadline: bool,
-) -> Result<String, &'static str> {
-    if !terminal_received || deadline {
-        return Err("word_terminal_missing");
-    }
-    // A token limit is sufficient only when the runtime really finished and
-    // the generated bytes already contain the required ASCII separator.
-    let candidate = text.strip_suffix(' ').ok_or("word_separator_missing")?;
-    let word = if after_space {
-        candidate
-    } else {
-        candidate.strip_prefix(' ').unwrap_or(candidate)
-    };
-    if word.chars().any(char::is_whitespace) {
-        return Err("word_spacing");
-    }
-    if word.contains(['<', '>', '`']) || word.chars().any(char::is_control) {
-        return Err("word_grammar_shape");
-    }
-    match word.unicode_words().count() {
-        0 => Err("word_count"),
-        1 => {
-            let candidate = badi_broker::segment::sanitize_suggestion(candidate)
-                .map_err(|_| "output_language_or_shape")?;
-            if !WritingLanguage::from_tag(language)
-                .is_some_and(|value| value.accepts_output(&candidate))
-            {
-                return Err("output_language_or_shape");
-            }
-            if !valid_lexical_word(word, language) {
-                return Err("word_grammar_shape");
-            }
-            Ok(candidate)
-        }
-        // Compound segmentation is intentionally unsupported in this bounded
-        // experiment; do not silently retain only its first component.
-        _ => Err("unsupported_compound"),
-    }
-}
-
-fn valid_lexical_word(word: &str, language: &str) -> bool {
-    let persian = WritingLanguage::from_tag(language) == Some(WritingLanguage::Persian);
-    let punctuation = |ch| {
-        matches!(ch, '.' | ',' | ';' | ':' | '!' | '?' | '\u{2026}')
-            || (persian && matches!(ch, '\u{060c}' | '\u{061b}' | '\u{061f}'))
-    };
-    let word = word
-        .char_indices()
-        .next_back()
-        .filter(|&(_, ch)| punctuation(ch))
-        .map_or(word, |(end, _)| &word[..end]);
-    let mut needs_letter = true;
-    let mut previous_letter = false;
-    for ch in word.chars() {
-        if lexical_letters(persian)
-            .iter()
-            .any(|&(start, end)| (start..=end).contains(&ch))
-        {
-            needs_letter = false;
-            previous_letter = true;
-        } else if !needs_letter
-            && if persian {
-                matches!(ch, '\u{064b}'..='\u{065f}' | '\u{0670}')
-            } else {
-                matches!(ch, '\u{0300}'..='\u{036f}')
-            }
-        {
-            previous_letter = false;
-        } else if (!persian && !needs_letter && matches!(ch, '\'' | '\u{2019}'))
-            || (persian && previous_letter && ch == '\u{200c}')
-        {
-            needs_letter = true;
-            previous_letter = false;
-        } else {
-            return false;
-        }
-    }
-    !needs_letter
-}
-
-fn apply_attested_suffix(
-    result: &mut ResultRecord,
-    recovered: &attestation::AttestedSuffix<'_>,
-    deadline: bool,
-) {
-    result.outcome = "suggestion";
-    result.reason = match recovered.source {
-        attestation::Source::Context => "attested_context_word_suffix",
-        attestation::Source::Style => "attested_style_word_suffix",
-    };
-    result.text = Some(recovered.suffix.to_owned());
-    result.replace_before = None;
-    result.word_complete = true;
-    result.shape_valid = true;
-    // The unchanged stream observer applies the legacy seam rule. It cannot
-    // measure when this experimental recovery first became eligible.
-    result.first_word_ms = None;
-    result.first_four_words_ms = None;
-    result.warnings.extend([
-        "attested_word_is_contextual_reuse_not_spelling_validation",
-        "attested_word_readiness_timing_unavailable",
-    ]);
-    if deadline {
-        result
-            .warnings
-            .push("attested_word_from_complete_prefix_at_deadline");
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1202,12 +974,12 @@ mod tests {
                 );
             } else {
                 assert!(prompt.ends_with(&value.before));
-                assert!(prepared.echo.is_empty());
+                assert_eq!(prepared.echo, "");
             }
         }
         let mut value = request(Mode::Healed);
         value.before = "Hello\u{a0}".to_owned();
-        assert!(prepare_prompt(&value).echo.is_empty());
+        assert_eq!(prepare_prompt(&value).echo, "");
         value.before = "Please review the docum".to_owned();
         assert_eq!(prepare_prompt(&value).echo, "docum");
     }
@@ -1384,284 +1156,6 @@ mod tests {
     }
 
     #[test]
-    fn instructed_word_changes_only_grammar_and_preserves_exact_prompt_and_echo() {
-        for (before, language, echo) in [
-            ("Please review the", "en", ""),
-            ("Please review the  ", "en", "  "),
-            ("Please review the docum", "en", "docum"),
-            ("Bitte lies das Dokument", "de", "Dokument"),
-            ("Bitte lies das ", "de", " "),
-            ("لطفا این گزارش را ", "fa", " "),
-            ("او می‌تواند", "fa", "می‌تواند"),
-            ("Please review\u{a0}", "en", ""),
-            ("Please review\t", "en", ""),
-            ("Please review\n", "en", ""),
-        ] {
-            let mut value = request(Mode::InstructedHealed);
-            before.clone_into(&mut value.before);
-            language.clone_into(&mut value.language);
-            value.config.budget_ms = 550;
-            value.config.max_tokens = 8;
-            let original = prepare_prompt(&value);
-            value.config.mode = Mode::InstructedWord;
-            value.validate().unwrap();
-            let actual = prepare_prompt(&value);
-            assert_eq!(original.echo, echo);
-            assert_eq!(actual.echo, echo);
-            let mut expected = original.payload;
-            let literal = serde_json::to_string(echo).unwrap();
-            let prefix = if before.ends_with(' ') {
-                format!("root ::= {literal}")
-            } else {
-                format!("root ::= {literal} \" \"?")
-            };
-            let (punctuation, rules) = if language == "fa" {
-                (
-                    r"[.,;:!?\u2026\u060c\u061b\u061f]",
-                    concat!(
-                        "word ::= letter (marks? letter | \"\\u200c\" letter)* marks?\n",
-                        "letter ::= [\\u0620-\\u063f\\u0641-\\u064a\\u066e-\\u066f\\u0671-\\u06d3\\u06d5\\u06e5-\\u06e6\\u06ee-\\u06ef\\u06fa-\\u06fc\\u06ff]\n",
-                        "marks ::= [\\u064b-\\u065f\\u0670]+"
-                    ),
-                )
-            } else {
-                (
-                    r"[.,;:!?\u2026]",
-                    concat!(
-                        "word ::= letter+ (['\\u2019] letter+)*\n",
-                        "letter ::= [\\u0041-\\u005a\\u0061-\\u007a\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u024f\\u1e00-\\u1eff] [\\u0300-\\u036f]*"
-                    ),
-                )
-            };
-            expected["grammar"] = json!(format!("{prefix} word {punctuation}? \" \"\n{rules}"));
-            assert_eq!(actual.payload, expected, "{before}");
-            assert_eq!(
-                serde_json::to_value(value.config.mode).unwrap(),
-                "instructed_word"
-            );
-            let decoded: Mode = serde_json::from_value(json!("instructed_word")).unwrap();
-            assert_eq!(decoded, Mode::InstructedWord);
-            value.config.budget_ms = 549;
-            assert!(value.validate().is_err());
-            value.config.budget_ms = 550;
-            value.config.max_tokens = 7;
-            assert!(value.validate().is_err());
-        }
-    }
-
-    #[test]
-    fn instructed_word_requires_a_real_terminal_and_exact_separator_even_after_eos() {
-        let value = request(Mode::InstructedWord);
-        let prepared = prepare_prompt(&value);
-        for (raw, stopped, terminal, deadline, reason) in [
-            (" report", true, true, false, "word_separator_missing"),
-            (" report", false, true, false, "word_separator_missing"),
-            (" report\u{a0}", true, true, false, "word_separator_missing"),
-            (" report ", true, false, false, "word_terminal_missing"),
-            (" report ", false, false, true, "word_terminal_missing"),
-            (" report ", true, true, true, "word_terminal_missing"),
-            (" report  ", true, true, false, "word_spacing"),
-            ("  report ", true, true, false, "word_spacing"),
-            (" report next ", true, true, false, "word_spacing"),
-            (" report\t ", true, true, false, "word_spacing"),
-            (" report\u{2009} ", true, true, false, "word_spacing"),
-            (" rep\0ort ", true, true, false, "word_grammar_shape"),
-            (" <report> ", true, true, false, "word_grammar_shape"),
-            (" `report` ", true, true, false, "word_grammar_shape"),
-            ("  ", true, true, false, "word_count"),
-            (" --- ", true, true, false, "word_count"),
-            (" city-tour ", true, true, false, "unsupported_compound"),
-        ] {
-            let mut result = value.result(&fixture_identity());
-            apply_observation(
-                &mut result,
-                &value,
-                LabStream {
-                    raw: raw.to_owned(),
-                    stopped,
-                    terminal_received: terminal,
-                    deadline,
-                    first_word_ms: Some(60.0),
-                    first_four_words_ms: Some(210.0),
-                    ..LabStream::default()
-                },
-                &prepared.echo,
-            );
-            assert_eq!(result.reason, reason, "{raw:?}");
-            assert_eq!(
-                result.outcome,
-                if deadline { "deadline" } else { "abstention" }
-            );
-            assert_eq!(result.terminal_received, Some(terminal));
-            assert!(result.text.is_none() && !result.word_complete && !result.shape_valid);
-            assert!(result.first_word_ms.is_none() && result.first_four_words_ms.is_none());
-        }
-    }
-
-    #[test]
-    fn instructed_word_returns_exact_single_word_continuations_with_honest_timing() {
-        for (before, language, raw, expected) in [
-            ("Please review the  ", "en", "  report ", "report"),
-            ("Please review the", "en", " report. ", " report."),
-            ("Please review the docum", "en", "documents ", "ents"),
-            ("I ", "en", " don't ", "don't"),
-            ("Bitte lies das ", "de", " Dokument ", "Dokument"),
-            (
-                "Bitte lies das Dokument",
-                "de",
-                "Dokument sorgfältig ",
-                " sorgfältig",
-            ),
-            ("لطفا این گزارش را ", "fa", " بخوانید ", "بخوانید"),
-            ("او می‌تواند", "fa", "می‌تواند بنویسد ", " بنویسد"),
-            ("او ", "fa", " می‌نویسد ", "می‌نویسد"),
-        ] {
-            let mut value = request(Mode::InstructedWord);
-            before.clone_into(&mut value.before);
-            language.clone_into(&mut value.language);
-            value.validate().unwrap();
-            for stopped in [true, false] {
-                // Both natural EOS and a token limit must have supplied the
-                // same explicit separator and actual terminal record.
-                let result = observation_result(&value, raw, stopped, false);
-                assert_eq!(result.outcome, "suggestion", "{before}: {}", result.reason);
-                assert_eq!(result.reason, "constrained_complete_word");
-                assert_eq!(result.text.as_deref(), Some(expected));
-                assert!(result.word_complete && result.shape_valid);
-                assert_eq!(result.terminal_received, Some(true));
-                assert!(result.replace_before.is_none());
-                assert!(result.first_word_ms.is_none() && result.first_four_words_ms.is_none());
-                assert_eq!(result.inference_ms, Some(321.0));
-                assert_eq!(result.ttft_ms, Some(17.0));
-                assert_eq!(result.raw.as_deref(), Some(raw));
-                assert!(
-                    result
-                        .warnings
-                        .contains(&"constrained_terminal_is_not_natural_model_choice")
-                );
-                assert!(
-                    result
-                        .warnings
-                        .contains(&"constrained_word_readiness_timing_unavailable")
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn instructed_word_preserves_echo_language_seam_and_output_safety_guards() {
-        for (before, language, raw, reason) in [
-            ("Please review the  ", "en", " report ", "echo_mismatch"),
-            ("او می‌تواند", "fa", "میتواند بنویسد ", "echo_mismatch"),
-            ("Please review the docum", "en", "documzzzz ", "output_seam"),
-            ("Bitte lies das Dokum", "de", "Dokument ", "output_seam"),
-            ("من می‌ر", "fa", "می‌روم ", "output_seam"),
-            ("Please review the", "en", "the ", "output_seam"),
-            (
-                "لطفا این گزارش را ",
-                "fa",
-                " report ",
-                "output_language_or_shape",
-            ),
-            (
-                "Please review the ",
-                "en",
-                " گزارش ",
-                "output_language_or_shape",
-            ),
-            (
-                "Please review the ",
-                "en",
-                " \u{202e}report ",
-                "output_language_or_shape",
-            ),
-            ("او ", "fa", " می‌ ", "output_language_or_shape"),
-        ] {
-            let mut value = request(Mode::InstructedWord);
-            before.clone_into(&mut value.before);
-            language.clone_into(&mut value.language);
-            value.validate().unwrap();
-            let result = observation_result(&value, raw, true, false);
-            assert_eq!(result.reason, reason, "{before}: {raw}");
-            assert_eq!(result.outcome, "abstention");
-            assert!(result.text.is_none() && !result.word_complete && !result.shape_valid);
-        }
-        let long_word = format!(" {} ", "a".repeat(65));
-        let result = observation_result(&request(Mode::InstructedWord), &long_word, true, false);
-        assert_eq!(result.reason, "output_language_or_shape");
-        assert!(result.text.is_none());
-        let result = request(Mode::InstructedWord).result(&fixture_identity());
-        assert!(
-            result
-                .warnings
-                .contains(&"constrained_terminal_is_not_natural_model_choice")
-        );
-        assert!(
-            result
-                .warnings
-                .contains(&"constrained_word_readiness_timing_unavailable")
-        );
-    }
-
-    #[test]
-    fn instructed_word_lexical_grammar_rejects_joined_words_and_foreign_scripts() {
-        for (word, language) in [
-            ("water,散发着aromatic清香,", "en"),
-            ("water,aromatic", "en"),
-            ("water,,", "en"),
-            ("water散发", "en"),
-            ("report2", "en"),
-            ("city-tour", "en"),
-            ("'tis", "en"),
-            ("dogs'", "en"),
-            ("don''t", "en"),
-            ("\u{0308}fur", "de"),
-            ("\u{2c60}rger", "de"),
-            ("گزارش،بعد", "fa"),
-            ("گزارشEnglish", "fa"),
-            ("می\u{064e}‌روم", "fa"),
-            ("می‌\u{064e}روم", "fa"),
-            ("می‌", "fa"),
-            ("\u{064e}روم", "fa"),
-        ] {
-            assert!(!valid_lexical_word(word, language), "{word}");
-        }
-        for (word, language) in [
-            ("water", "en"),
-            ("water,", "en"),
-            ("don't", "en"),
-            ("don’t", "en"),
-            ("für", "de"),
-            ("fu\u{0308}r", "de"),
-            ("Ärger!", "de"),
-            ("Straße", "de"),
-            ("می‌روم", "fa"),
-            ("گزارش،", "fa"),
-            ("آماد\u{064e}ه", "fa"),
-        ] {
-            assert!(valid_lexical_word(word, language), "{word}");
-        }
-        for raw in [" water,, ", " report2 ", " 'tis "] {
-            let result = observation_result(&request(Mode::InstructedWord), raw, true, false);
-            assert_eq!(result.reason, "word_grammar_shape", "{raw}");
-            assert!(result.text.is_none());
-        }
-        let result = observation_result(
-            &request(Mode::InstructedWord),
-            " water,散发着aromatic清香, ",
-            true,
-            false,
-        );
-        assert_eq!(result.reason, "unsupported_compound");
-        assert!(result.text.is_none());
-        assert!(
-            result
-                .warnings
-                .contains(&"constrained_lexical_alphabet_is_bounded")
-        );
-    }
-
-    #[test]
     fn instructed_healed_preserves_exact_echo_language_seam_and_completion_guards() {
         for (before, language, raw, natural, deadline, reason) in [
             (
@@ -1767,7 +1261,7 @@ mod tests {
             .unwrap()
             .validate()
             .unwrap();
-        for mode in ["instructed_healed", "instructed_word"] {
+        for mode in ["instructed_healed"] {
             for event in wire["events"].as_array_mut().unwrap() {
                 event["request"]["config"]["mode"] = json!(mode);
             }
@@ -1777,256 +1271,6 @@ mod tests {
                     .validate()
                     .is_err()
             );
-        }
-    }
-
-    #[test]
-    fn attested_mode_preserves_healed_payloads_and_remains_outside_paced_replay() {
-        for (before, language) in [
-            ("Please review the docum", "en"),
-            ("Bitte lies die Tagesord", "de"),
-            ("Wir möchten jetzt lad", "de"),
-            ("Bitte lies das  ", "de"),
-            ("من هر روز می‌ر", "fa"),
-            ("این گزارش را ", "fa"),
-            ("Bitte lies das\u{a0}", "de"),
-        ] {
-            let mut value = request(Mode::Healed);
-            before.clone_into(&mut value.before);
-            language.clone_into(&mut value.language);
-            value.validate().unwrap();
-            let expected = prepare_prompt(&value);
-            value.config.mode = Mode::HealedAttested;
-            value.validate().unwrap();
-            let actual = prepare_prompt(&value);
-            assert_eq!(actual.payload, expected.payload);
-            assert_eq!(actual.echo, expected.echo);
-            assert_eq!(
-                serde_json::to_value(value.config.mode).unwrap(),
-                "healed_attested"
-            );
-        }
-        let events: Vec<_> = [0, 100, 250, 500]
-            .into_iter()
-            .enumerate()
-            .map(|(index, at_ms)| {
-                json!({"at_ms":at_ms,"request":{"schema":REQUEST_SCHEMA,
-                "id":uuid::Uuid::new_v4(),"before":format!("Draft {}", &"abc"[..index]),
-                "language":"en","context":"Stable context.","style_examples":[],
-                "config":{"mode":"healed_attested","budget_ms":550,"max_tokens":8,
-                    "cache_prompt":true,"temperature":0,"seed":42}}})
-            })
-            .collect();
-        let wire = json!({"schema":"badi.paced-probe.request.v1","arm":"cold",
-            "prelude_ms":1500,"events":events});
-        assert!(
-            serde_json::from_value::<paced_probe::ProbeInput>(wire)
-                .unwrap()
-                .validate()
-                .is_err()
-        );
-    }
-
-    fn observation_result(
-        value: &Request,
-        raw: &str,
-        stopped: bool,
-        deadline: bool,
-    ) -> ResultRecord {
-        let prepared = prepare_prompt(value);
-        let mut result = value.result(&fixture_identity());
-        apply_observation(
-            &mut result,
-            value,
-            LabStream {
-                raw: raw.to_owned(),
-                latency_ms: 321.0,
-                ttft_ms: Some(17.0),
-                first_word_ms: Some(60.0),
-                first_four_words_ms: Some(210.0),
-                stopped,
-                deadline,
-                terminal_received: !deadline,
-                ..LabStream::default()
-            },
-            &prepared.echo,
-        );
-        result
-    }
-
-    #[test]
-    fn attested_observations_recover_only_bound_suffixes_with_honest_provenance_and_timing() {
-        for (before, language, source, continuation, suffix, style) in [
-            (
-                "Die Tagesord",
-                "de",
-                "Die Tagesordnung liegt bereit.",
-                "nung liegt bereit.",
-                "nung",
-                false,
-            ),
-            (
-                "Wir möchten jetzt lad",
-                "de",
-                "Wir können jetzt laden.",
-                "en und weiterfahren",
-                "en",
-                false,
-            ),
-            (
-                "من هر روز می‌ر",
-                "fa",
-                "من هر روز می‌روم.",
-                "وم و بازمی‌گردم",
-                "وم",
-                false,
-            ),
-            (
-                "Die Nachricht geht an Marl",
-                "de",
-                "Marlene erhält eine Nachricht.",
-                "ene und weitere Gäste",
-                "ene",
-                true,
-            ),
-        ] {
-            let mut value = request(Mode::Healed);
-            before.clone_into(&mut value.before);
-            language.clone_into(&mut value.language);
-            value.context.clear();
-            value.style_examples.clear();
-            if style {
-                value.style_examples.push(source.to_owned());
-            } else {
-                source.clone_into(&mut value.context);
-            }
-            let raw = format!("{}{continuation}", prepare_prompt(&value).echo);
-            assert_eq!(
-                observation_result(&value, &raw, true, false).reason,
-                "output_seam"
-            );
-            value.config.mode = Mode::HealedAttested;
-            let result = observation_result(&value, &raw, true, false);
-            assert_eq!(result.outcome, "suggestion", "{before}: {}", result.reason);
-            assert_eq!(result.text.as_deref(), Some(suffix));
-            assert_eq!(
-                result.reason,
-                if style {
-                    "attested_style_word_suffix"
-                } else {
-                    "attested_context_word_suffix"
-                }
-            );
-            assert!(result.word_complete && result.shape_valid);
-            assert!(result.replace_before.is_none());
-            assert!(result.first_word_ms.is_none() && result.first_four_words_ms.is_none());
-            assert_eq!(result.raw.as_deref(), Some(raw.as_str()));
-            assert_eq!(result.inference_ms, Some(321.0));
-            assert_eq!(result.ttft_ms, Some(17.0));
-            assert_eq!(result.terminal_received, Some(true));
-            for warning in [
-                "attested_word_is_contextual_reuse_not_spelling_validation",
-                "attested_word_readiness_timing_unavailable",
-            ] {
-                assert!(result.warnings.contains(&warning));
-            }
-        }
-    }
-
-    #[test]
-    fn attested_observations_require_exact_echo_and_generated_word_completion() {
-        let mut value = request(Mode::HealedAttested);
-        "Die Tagesord".clone_into(&mut value.before);
-        "de".clone_into(&mut value.language);
-        "Die Tagesordnung liegt bereit.".clone_into(&mut value.context);
-        value.style_examples.clear();
-        for (raw, stopped, deadline, reason, outcome) in [
-            (
-                "Tagesordnung",
-                false,
-                false,
-                "no_complete_word",
-                "abstention",
-            ),
-            ("Tagesordnung", false, true, "no_complete_word", "deadline"),
-            ("Tagesornu", true, false, "echo_mismatch", "abstention"),
-            ("Tagesordnu ", false, true, "output_seam", "abstention"),
-            (
-                "Tagesordnung-spezifisch",
-                true,
-                false,
-                "output_seam",
-                "abstention",
-            ),
-        ] {
-            let result = observation_result(&value, raw, stopped, deadline);
-            assert_eq!((result.reason, result.outcome), (reason, outcome));
-            assert!(result.text.is_none() && !result.word_complete && !result.shape_valid);
-        }
-        let result = observation_result(&value, "Tagesordnung jetzt", false, true);
-        assert_eq!(result.text.as_deref(), Some("nung"));
-        assert_eq!(result.reason, "attested_context_word_suffix");
-        assert!(
-            result
-                .warnings
-                .contains(&"attested_word_from_complete_prefix_at_deadline")
-        );
-        assert_eq!(result.terminal_received, Some(false));
-        assert!(result.first_word_ms.is_none() && result.first_four_words_ms.is_none());
-        value.context.clear();
-        assert!(
-            observation_result(&value, "Tagesordnung", true, false)
-                .text
-                .is_none()
-        );
-        "Tagesordnung".clone_into(&mut value.context);
-        assert!(
-            observation_result(&value, "Tagesordnung", true, false)
-                .text
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn attested_mode_does_not_change_legacy_accepted_or_nonrecoverable_outputs() {
-        for (before, language, context, raw) in [
-            (
-                "Please review the docum",
-                "en",
-                "The document is ready.",
-                "document and report",
-            ),
-            (
-                "Bitte lies das ",
-                "de",
-                "Das Dokument liegt bereit.",
-                " Dokument sorgfältig",
-            ),
-            ("این گزارش را ", "fa", "گزارش آماده است.", " بررسی کنید"),
-            (
-                "Please review the docum",
-                "en",
-                "The documzzzz is ready.",
-                "documzzzz",
-            ),
-            (
-                "Die Tagesord",
-                "de",
-                "Die Tagesordnung liegt bereit.",
-                "Tagesordnung بررسی",
-            ),
-        ] {
-            let mut value = request(Mode::Healed);
-            before.clone_into(&mut value.before);
-            language.clone_into(&mut value.language);
-            context.clone_into(&mut value.context);
-            let mut legacy =
-                serde_json::to_value(observation_result(&value, raw, true, false)).unwrap();
-            value.config.mode = Mode::HealedAttested;
-            let actual =
-                serde_json::to_value(observation_result(&value, raw, true, false)).unwrap();
-            legacy["config"]["mode"] = json!("healed_attested");
-            assert_eq!(actual, legacy);
         }
     }
 
@@ -2058,11 +1302,7 @@ mod tests {
         value.context = context.to_owned();
         value.style_examples = style.iter().map(|example| (*example).to_owned()).collect();
         let prepared = prepare_prompt(&value);
-        let raw = if mode == Mode::InstructedWord {
-            format!("{}{continuation} ", prepared.echo)
-        } else {
-            format!("{}{continuation}", prepared.echo)
-        };
+        let raw = format!("{}{continuation}", prepared.echo);
         let mut result = value.result(&fixture_identity());
         apply_observation(
             &mut result,
@@ -2081,7 +1321,7 @@ mod tests {
     #[test]
     fn style_examples_cannot_introduce_calendar_or_numeric_facts() {
         let conflict = observe_continuation(
-            Mode::InstructedWord,
+            Mode::Healed,
             "We agreed on ",
             "en",
             "The meeting stays on Tuesday.",
@@ -2093,7 +1333,7 @@ mod tests {
         assert!(conflict.text.is_none());
 
         let current_day = observe_continuation(
-            Mode::InstructedWord,
+            Mode::Healed,
             "We agreed on ",
             "en",
             "The meeting stays on Tuesday.",
@@ -2126,7 +1366,7 @@ mod tests {
         assert_eq!(no_style.text.as_deref(), Some("Friday"));
 
         let persian_conflict = observe_continuation(
-            Mode::InstructedWord,
+            Mode::Healed,
             "جلسه ",
             "fa",
             "برنامه هفته بعد است.",
@@ -2138,7 +1378,7 @@ mod tests {
         assert!(persian_conflict.text.is_none());
 
         let persian_current = observe_continuation(
-            Mode::InstructedWord,
+            Mode::Healed,
             "جلسه ",
             "fa",
             "جلسه جمعه برقرار است.",

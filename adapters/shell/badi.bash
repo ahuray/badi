@@ -58,7 +58,7 @@ _badi_start() {
   _badi_stop
   local badi_bridge=${BADI_EDITOR_DIR:-$HOME/.local/lib/badi/editors}/shell/bridge.mjs
   if [[ ! -f $badi_bridge ]]; then
-    printf '\nBadi: editor bridge is missing; run the desktop installer.\n'
+    printf '\nBadi: editor bridge is missing; run python3 scripts/install-editors.py --bash.\n'
     return 1
   fi
   { coproc BADI_WORKER { exec node "$badi_bridge" 2>&3 3>&-; }; } 3>&2 2>/dev/null

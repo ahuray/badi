@@ -72,11 +72,12 @@ IME-parity apps follow [ADR 0003](../../docs/decisions/0003-ime-parity-append-on
 In this module that means:
 - **No manual path.** They never use the unknown-identity manual path, even
   with an app grant.
-- **Ctrl+Shift+Space without an observed field** asks the observer instead and
-  explains a failure: "Badi cannot see this text field — check badi doctor"
-  (`ime_parity_observer_unavailable`), or, for a denied password, purpose or
-  selection field, "Badi cannot read this text field — run badi debug status"
-  (`ime_parity_field_denied`).
+- **Ctrl+Shift+Space** requests only after the field has an edit path and a
+  grant. Before that, and in an app with no grant, the chord reaches the app
+  (LibreOffice's non-breaking space, VS Code's parameter hints). Focus still
+  asks the observer. `badi debug` records `no_edit_path` or `app_disabled`.
+  A denied password, purpose or selection field is `ime_parity_field_denied`;
+  an observer the broker cannot reach is `ime_parity_observer_unavailable`.
 - **Tab on an observed field** only accepts; without a suggestion it stays the
   app's Tab.
 - **Target kind** must match the class (`ime_parity_target_mismatch`,
@@ -92,8 +93,8 @@ In this module that means:
   `observer_display_mismatch`, `observer_display_unavailable`,
   `observer_dispatch_mismatch` or `observer_dispatch_unavailable`.
 
-Unavailable apps are never read or inspected. Ctrl+Shift+Space there shows
-“Badi cannot safely insert suggestions in this app yet”.
+Unavailable apps are never read or inspected. Ctrl+Shift+Space there reaches
+the app; `badi debug` records `no_edit_path`.
 
 ### Observed fields
 
@@ -121,6 +122,10 @@ Chromium's surrounding text current. Neither provides an editor transaction.
   field only, `normalizeObservedParagraphEnd()` treats exactly that suffix as
   end of field: Tab and the broker see `after: ""`, while the fingerprint and
   every observer check use the raw text (`observedAfter()`).
+- **Mid-text.** An observed field requests with text after the caret too; the
+  broker suggests only what fits before it, and Tab inserts at the caret. The
+  manual Tab-request path still requires the end of the field, so Tab keeps its
+  meaning inside native text.
 - **Agreement** is exact with two equivalences: an empty Fcitx `after` matches
   an observed block end alone, and a `scope: "block"` snapshot (an opaque list,
   quote or table in the window) matches when Fcitx's `before` ends with it

@@ -940,7 +940,7 @@ mod tests {
         assert!(!path.exists());
         let exported: PersonalizationV1 =
             serde_json::from_slice(&store.export().expect("export")).expect("strict export");
-        assert!(exported.records.is_empty());
+        assert_eq!(exported.records, [] as [DailyAggregate; 0]);
         assert_eq!(exported.revision, cleared.revision);
     }
 

@@ -100,7 +100,6 @@ class WritingView {
     if (completionStatus(this.view.state) !== null) return 'editor_completion_active';
     if (readOnly) return 'read_only';
     if (selection.ranges.length !== 1 || !selection.main.empty) return 'selection_active';
-    if (selection.main.head !== doc.length) return 'caret_not_at_note_end';
     return doc.length ? null : 'empty_note';
   }
 
@@ -130,6 +129,8 @@ class WritingView {
     const snapshot = { doc: this.view.state.doc, selection: this.view.state.selection };
     const end = snapshot.selection.main.head;
     const before = [...snapshot.doc.sliceString(Math.max(0, end - 1024), end)].slice(-512).join('');
+    // Text after the caret lets the broker suggest only what fits before it.
+    const after = [...snapshot.doc.sliceString(end, end + 256)].slice(0, 128).join('');
     if (!before.trim()) return;
     this.pending = true;
     this.owner.session = this;
@@ -137,7 +138,7 @@ class WritingView {
     try {
       const language = writingLanguage(before, this.owner.language === 'auto' ? navigator.language : this.owner.language);
       if (!language) throw new Error('Writing language unavailable');
-      const text = await this.client.suggest(before, { explicit, language });
+      const text = await this.client.suggest(before, { explicit, language, after });
       if (generation !== this.generation || !this.matches(snapshot) || !text) return;
       const replaceBefore = this.client.replacementBefore;
       if (replaceBefore !== undefined && !validCorrection(before, replaceBefore, text)) return;
@@ -148,7 +149,7 @@ class WritingView {
       this.decorations = Decoration.set([Decoration.widget({ widget: new SuggestionWidget(preview), side: 1 }).range(end)]);
       this.render();
     } catch {
-      if (generation === this.generation && this.view.hasFocus) this.owner.status.setText('Badi · no suggestion · Tab retries');
+      if (generation === this.generation && this.view.hasFocus) this.owner.status.setText('Badi · no suggestion · Ctrl+Shift+Space retries');
     } finally {
       if (generation === this.generation) this.pending = false;
     }
@@ -173,13 +174,14 @@ class WritingView {
       try {
         this.view.dispatch({ changes: { from, to: end, insert: grant.text }, selection: { anchor: from + grant.text.length },
           annotations: [Transaction.userEvent.of('input.complete'), isolateHistory.of('full')] });
-        const applied = this.view.state.doc.toString() === snapshot.doc.sliceString(0, from) + grant.text &&
+        const applied = this.view.state.doc.toString() ===
+            snapshot.doc.sliceString(0, from) + grant.text + snapshot.doc.sliceString(end) &&
           this.view.state.selection.main.head === from + grant.text.length;
         this.client.report(grant, applied ? 'applied' : 'failed');
         inserted = applied;
       } finally { this.applying = false; }
     } catch {
-      if (generation === this.generation) this.owner.status.setText('Badi · suggestion changed · Tab retries');
+      if (generation === this.generation) this.owner.status.setText('Badi · suggestion changed · Ctrl+Shift+Space retries');
     } finally {
       if (generation === this.generation) {
         this.invalidate();
@@ -192,23 +194,39 @@ class WritingView {
     if (this.destroyed || event.key !== 'Escape' || !event.isTrusted || event.isComposing || this.view.composing ||
         event.altKey || event.shiftKey || event.ctrlKey || event.metaKey ||
         !this.view.hasFocus || !this.view.dom.ownerDocument.hasFocus()) return;
-    if (this.text || this.pending) this.invalidate();
+    if (this.text) {
+      this.client.dismiss();
+      this.generation++;
+      clearTimeout(this.timer);
+      this.pending = false;
+      this.snapshot = null;
+      this.clearPreview();
+      return;
+    }
+    if (this.pending) this.invalidate();
   }
 
   key(event) {
-    if (!event.isTrusted || event.isComposing || event.altKey || event.shiftKey) return false;
+    if (!event.isTrusted || event.isComposing || event.altKey) return false;
+    if (event.ctrlKey && event.shiftKey && !event.metaKey && event.key === ' ') {
+      if (event.repeat || this.pending || this.text) return true;
+      void this.request();
+      return true;
+    }
+    if (event.shiftKey) return false;
     if ((event.ctrlKey || event.metaKey) && event.key === 'ArrowRight' && this.text && this.eligible()) {
       if (!event.repeat) void this.accept('all');
       return true;
     }
     if (event.ctrlKey || event.metaKey) return false;
     if (event.key !== 'Tab') return false;
+    if (!this.text) return false;
     if (!this.client.connected) void this.client.connect().catch(() => undefined);
     const reason = this.blockedReason();
     recordActivity('obsidian', 'tab', reason ?? 'eligible');
     if (reason) { this.owner.status.setText(`Badi · ${reason.replaceAll('_', ' ')}`); return false; }
     if (event.repeat || this.pending) return true;
-    if (this.text) void this.accept(); else void this.request();
+    void this.accept();
     return true;
   }
 
@@ -273,7 +291,7 @@ export default class BadiPlugin extends Plugin {
     this.addCommand({ id: 'request-or-accept', name: 'Request or accept words', editorCallback: (_editor, markdown) => {
       // Obsidian exposes its CodeMirror view at editor.cm outside its typed Editor API.
       const controller = this.views.get(markdown.editor.cm);
-      if (!controller?.eligible()) { new Notice('Badi: enable Obsidian with badi app obsidian on, then place the caret at the end of the note.'); return; }
+      if (!controller?.eligible()) { new Notice('Badi: enable Obsidian with badi app obsidian on, then place the caret in a note.'); return; }
       if (controller.text) void controller.accept(); else void controller.request();
     } });
     this.addCommand({ id: 'retry-connection', name: 'Reconnect local model', callback: () => this.reconnect() });
