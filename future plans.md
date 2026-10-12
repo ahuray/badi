@@ -219,8 +219,9 @@ From the 2026-10-11 audit. These are not part of the installed behavior.
       autocomplete hints are not.
 - [ ] An ADR retiring protocol v1.
 - [ ] Enforce `authority.ack`, or delete it if nothing consumes it.
-- [ ] The panel keeps polling while it is hidden, once per monitor
-      (`DesktopPanel.qml`).
+- [x] The settings panel polls only while its window is open. A closed
+      window does not ask the broker. The bar mark updates when pause is
+      toggled from the bar, and the next time the window opens.
 - [ ] Bash wakes every 100 ms after the first preview (`preview.c`).
 - [ ] `badi doctor` in human-readable text as well as JSON.
 - [ ] Stop passing the settings document on the `badi` command line
