@@ -1059,6 +1059,27 @@ mod tests {
     }
 
     #[test]
+    fn broker_service_cap_holds_the_quality_writing_tier() {
+        let quality = super::WRITING_MODELS
+            .iter()
+            .find(|model| model.tier == ModelTier::Quality)
+            .expect("quality writing tier");
+        let fit = super::memory_fit(*quality, 16_000);
+        let unit = include_str!("../../packaging/systemd/badi-broker.service");
+        assert!(unit.contains("ReadOnlyPaths=-%h/.local/share/badi/models"));
+        let max = unit
+            .lines()
+            .find_map(|line| line.strip_prefix("MemoryMax="))
+            .expect("memory cap");
+        let max_mib: u64 = max.trim_end_matches('M').parse().expect("mebibytes");
+        assert!(
+            fit.required_host_memory_mib <= max_mib,
+            "quality fit {} MiB exceeds MemoryMax {max_mib}",
+            fit.required_host_memory_mib
+        );
+    }
+
+    #[test]
     fn power_status_parser_is_exact_and_tri_state() {
         assert_eq!(parse_battery_status("Discharging\n"), Some(true));
         for status in ["Charging", "Full", "Not charging"] {

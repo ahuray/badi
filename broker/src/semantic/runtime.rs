@@ -151,7 +151,7 @@ pub struct LlamaCppLaunch {
     fixture_behavior: Option<FixtureBehavior>,
     profile: WritingProfile,
     launcher: Launcher,
-    /// Private directory that will hold `llama.sock`. `None` uses
+    /// Private directory that will hold `llama-<pid>.sock`. `None` uses
     /// `$XDG_RUNTIME_DIR/badi`, which the service unit creates mode 0700.
     runtime_directory: Option<PathBuf>,
 }
