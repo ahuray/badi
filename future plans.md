@@ -237,7 +237,10 @@ From the 2026-10-11 audit. These are not part of the installed behavior.
       password input type is refused. Labels, placeholders, and HTML
       autocomplete hints are not.
 - [ ] An ADR retiring protocol v1.
-- [ ] Enforce `authority.ack`, or delete it if nothing consumes it.
+- [x] Enforce `authority.ack`, or delete it if nothing consumes it. The broker
+      now fails session, context and suggestion messages closed until the
+      connection acknowledges the current epoch
+      ([broker runbook](broker/README.md#protocol-and-authority)).
 - [x] The settings panel polls only while its window is open. A closed
       window does not ask the broker. The bar mark updates when pause is
       toggled from the bar, and the next time the window opens.

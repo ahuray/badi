@@ -95,6 +95,22 @@ impl Broker {
         Ok(())
     }
 
+    /// Fails closed while a registered policy connection has not yet
+    /// acknowledged the current authority epoch. Connections that never
+    /// registered for policy are not gated here; capability checks govern
+    /// what they may do.
+    pub async fn require_current_authority_ack(
+        &self,
+        connection_id: &str,
+    ) -> Result<(), BrokerError> {
+        let state = self.inner.state.lock().await;
+        match state.policy_clients.get(connection_id) {
+            None => Ok(()),
+            Some(Some(epoch)) if *epoch == state.authority_epoch => Ok(()),
+            Some(_) => Err(BrokerError::Stale),
+        }
+    }
+
     pub async fn authority_snapshot(&self) -> AuthoritySnapshot {
         let state = self.inner.state.lock().await;
         AuthoritySnapshot {

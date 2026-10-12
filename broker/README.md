@@ -26,6 +26,14 @@ and whether they were dirty (`--version` prints both; packagers may set
   policy, control, health and settings.
 - **Binding.** A suggestion is bound to its session, focus epoch, revision,
   fingerprint and expiry, and acceptance is one-shot.
+- **Authority acknowledgement.** A policy-capable connection must answer
+  `authority.changed` with `authority.ack` for the current epoch before the
+  broker opens a session, admits context or serves a suggestion request on
+  that connection. Until then those messages fail closed with a stale error
+  and the connection stays open so the client can still acknowledge. Acking
+  an older epoch never admits; acking a future epoch is rejected. Every epoch
+  advance (pause, settings install or control-plane change) re-blocks the
+  data plane until the new epoch is acknowledged.
 - **Leases.** An adapter must report a granted commit within 1.5 s; retained
   context is revoked after 3 s of silence; v2 native and editor suggestions
   stay readable for 5 s. Anything stale, foreign or unknown fails closed.

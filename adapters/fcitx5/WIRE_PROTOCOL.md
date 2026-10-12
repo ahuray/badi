@@ -24,7 +24,9 @@ The first frame is `hello` with `v: 2`, `min_v: 2`, `max_v: 2`, adapter
 `control`, and `policy`. `text_replacement` is applied only for native exact
 fields; IME-parity sessions stay append-only.
 The adapter waits for `hello.ack` and the initial `authority.changed`, queues an
-`authority.ack`, and only then opens sessions. Later authority epochs retire
+`authority.ack`, and only then opens sessions. The broker enforces this order:
+session, context and suggestion messages from a connection that has not
+acknowledged the current epoch fail closed with a stale error. Later authority epochs retire
 local candidate/context authority before reopening eligible focused sessions.
 A closed connection retires the same authority. A reconnect's initial snapshot
 counts as a new authority when its epoch, settings revision or pause state
