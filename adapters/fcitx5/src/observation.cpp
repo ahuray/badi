@@ -59,6 +59,10 @@ bool sameObservedField(const Json &captured, const Json &observed) {
            observed.value("selection_count", Json()) == 0;
 }
 
+bool continuedFieldSnapshot(const Json &previous, const Json &observed) {
+    return sameObservedField(previous, observed) && matchesObservedFocus(observed, observed, true);
+}
+
 std::optional<NativeEditTarget> inspectedEditTarget(const Json &focus, std::string_view appId) {
     const std::string app(appId);
     if (!focus.is_object() || !focus.contains("binding") || !focus.contains("target") ||

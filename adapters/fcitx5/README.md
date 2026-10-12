@@ -116,10 +116,11 @@ Chromium's surrounding text current. Neither provides an editor transaction.
   the field but reports `rendered:false` (no calibrated geometry), Badi shows
   its Fcitx panel, which Hyprland places at the app's text-input caret
   rectangle.
-- **Inspection.** A keystroke in a field already under observation inspects
-  at once and reuses that field's session, so the model can run during the
-  pause. The suggestion stays hidden until 120 ms after that keystroke, or
-  30 ms after a typed-through key. The first look at a field, and an idle
+- **Inspection.** A keystroke in a field already under observation re-reads
+  that field and reuses its session, so the model can run during the pause.
+  It does not inspect again unless that read says the accessible changed.
+  The suggestion stays hidden until 120 ms after that keystroke, or 30 ms
+  after a typed-through key. The first look at a field, and an idle
   invalidation, still wait (120 ms, then 240, 480 and 960 ms). A busy observer
   is retried every 20 ms. Badi's timers ask for 1 ms accuracy, because Fcitx's
   sd-event loop otherwise allows 250 ms of slack. With debug on,

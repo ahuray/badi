@@ -1277,8 +1277,13 @@ void observerRepliesFailClosed() {
     auto typed = field;
     typed["caret"] = 12;
     typed["total_chars"] = 12;
-    check(!matchesObservedFocus(field, typed) && sameObservedField(field, typed),
-          "typing keeps the same observed field");
+    check(!matchesObservedFocus(field, typed) && sameObservedField(field, typed) &&
+              continuedFieldSnapshot(field, typed),
+          "typing keeps the same observed field and its snapshot can be published");
+    auto brokenCaret = typed;
+    brokenCaret["caret"] = -1;
+    check(!continuedFieldSnapshot(field, brokenCaret),
+          "a snapshot with no caret does not continue the field");
     check(!sameObservedField(field, [&] {
               auto denied = field;
               denied["purpose"] = "password";

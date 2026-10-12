@@ -97,7 +97,9 @@ resident memory about 1.3 GB, and no quality regression in the Lab.
       batch 16, context 512; the live process already loads
       `libggml-cpu-alderlake.so`) reached four words in 206–248 ms on those
       prefixes. Six threads produced the same greedy text and were not faster,
-      so the thread cap stays 4.
+      so the thread cap stays 4. A keystroke in a field already under
+      observation re-reads that field without a second inspection. Visible
+      time on that build has not been measured.
 - [ ] Speculative decoding with a small draft model, or fewer generated tokens.
 - [ ] Qualify Qwen3 0.6B and Gemma 4 E2B (with its multi-token drafter) in the
       Lab. Defer hybrid-attention models until llama.cpp reuses their caches.

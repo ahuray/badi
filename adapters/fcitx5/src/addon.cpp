@@ -346,8 +346,19 @@ private:
             matchesCapturedContext(binding->state.lastContext(), currentContext(*binding));
         invalidateChangedContext(*binding);
         // A field we already corroborate can start the model on this key.
-        // A suggestion still waits out the typing pause before it is shown.
-        if (!unchangedObserved) observeLater(*binding, false, false, binding->observed());
+        // Re-read that field directly; a second inspection would only repeat
+        // the round trip. A suggestion still waits out the typing pause.
+        if (!unchangedObserved) {
+            // Foreign preedit must go through inspection, which yields and
+            // resumes when the composition clears. A direct read would skip that.
+            if (binding->observed() && binding->broker.opened && binding->broker.policyAllowed &&
+                safeToObserve(*binding)) {
+                debug_.record("observer", binding->state.appId(), "same_field_snapshot");
+                requestObservedContext(*binding, true);
+            } else {
+                observeLater(*binding, false, false, binding->observed());
+            }
+        }
     }
 
     void capabilityChanged(::fcitx::InputContext &inputContext) {
@@ -720,7 +731,7 @@ private:
         if (binding.observeTimer) binding.observeTimer->setEnabled(false);
     }
 
-    void requestObservedContext(Binding &binding) {
+    void requestObservedContext(Binding &binding, bool rediscover = false) {
         const auto &app = binding.state.appId();
         if (!binding.observed() || !safeToObserve(binding)) {
             debug_.record("request_blocked", app, "observer_not_ready");
@@ -734,28 +745,45 @@ private:
         const auto session = binding.state.coordinates().sessionId;
         const auto generation = binding.observationGeneration;
         const bool sent = accessibility_->request(snapshotRequest(binding.observedFocus),
-            [this, session, generation, focus = binding.observedFocus](const Json &reply) {
+            [this, session, generation, rediscover, focus = binding.observedFocus](const Json &reply) {
                 auto *current = bindingFor(session);
                 if (!current || !current->inputContext->hasFocus() || current->observationGeneration != generation ||
                     !current->broker.policyAllowed) {
                     debug_.record("request_blocked", "unidentified", "observer_authority_changed");
                     return;
                 }
-                publishObservedContext(*current, focus, reply);
+                if (!observerAnswered(reply)) {
+                    const auto error = reply.value("error", Json());
+                    debug_.record("request_blocked", current->state.appId(), snapshotFailureReason(error));
+                    // The accessible changed under a keystroke. Inspect once to
+                    // bind whatever is focused now; do not loop on a timeout.
+                    if (rediscover && (error == "stale_binding" || error == "target_mismatch"))
+                        observeLater(*current, false, false, true);
+                    return;
+                }
+                publishObservedContext(*current, focus, reply, rediscover);
             });
         if (!sent) {
             debug_.record("request_blocked", app, "observer_busy");
-            if (binding.observationExplicit) observerUnavailable(binding);
+            if (rediscover) observeLater(binding, false, true, true);
+            else if (binding.observationExplicit) observerUnavailable(binding);
         }
     }
 
-    void publishObservedContext(Binding &binding, const Json &focus, const Json &reply) {
+    void publishObservedContext(Binding &binding, const Json &focus, const Json &reply,
+                                bool caretMayMove = false) {
         const auto &app = binding.state.appId();
         if (!observerAnswered(reply)) {
             return debug_.record("request_blocked", app, snapshotFailureReason(reply.value("error", Json())));
         }
         const auto &observed = reply["focus"];
-        if (!matchesObservedFocus(focus, observed, true)) {
+        // After an inspection, the snapshot must still be that caret and length:
+        // a repeated window can hide an absolute move. A keystroke in a field we
+        // already hold has no newer inspection, so the snapshot's own caret is
+        // the position, and its text still has to match Fcitx.
+        const bool samePosition = caretMayMove ? continuedFieldSnapshot(focus, observed)
+                                               : matchesObservedFocus(focus, observed, true);
+        if (!samePosition) {
             return debug_.record("request_blocked", app, "observer_context_mismatch");
         }
         const auto context = currentContext(binding);
