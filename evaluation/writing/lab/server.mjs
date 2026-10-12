@@ -11,7 +11,7 @@ import { DeviceQualification } from './device-qualification.mjs';
 import { createQualificationHandler, isQualificationRoute } from './qualification-server.mjs';
 import { validateSuite, modelInputForCase, planComparison, scorePrediction, summarizeResults } from './cases.mjs';
 
-const MODES = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed'];
+const MODES = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'framed', 'probability_rejoin'];
 
 export function labOptions(args) {
   const { values } = parseArgs({ args, strict: true, options: {
