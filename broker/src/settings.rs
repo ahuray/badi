@@ -264,6 +264,8 @@ pub struct SubjectRule {
 /// canonical settings v2 in memory and on disk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+// Independent persisted flags, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 pub struct SettingsV2 {
     pub schema: String,
     pub revision: u64,
@@ -278,6 +280,11 @@ pub struct SettingsV2 {
     /// open only fields they can corroborate. Omitted when off.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub all_linux_apps: bool,
+    /// Mid-sentence suggestions. Off by default: a word after the caret
+    /// abstains before any model call. Punctuation after the caret can still
+    /// complete the word being typed. Omitted when off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mid_line: bool,
     pub subjects: Vec<SubjectRule>,
 }
 
@@ -291,6 +298,8 @@ struct SettingsDocument {
     all_web_origins: Option<bool>,
     #[serde(default)]
     all_linux_apps: Option<bool>,
+    #[serde(default)]
+    mid_line: Option<bool>,
     subjects: Vec<SubjectRule>,
 }
 
@@ -321,12 +330,16 @@ impl<'de> Deserialize<'de> for SettingsV2 {
                 "all_linux_apps_requires_settings_v2",
             ));
         }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.mid_line.is_some() {
+            return Err(serde::de::Error::custom("mid_line_requires_settings_v2"));
+        }
         Ok(Self {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: decoded.revision,
             paused: decoded.paused,
             all_web_origins: decoded.all_web_origins.unwrap_or(false),
             all_linux_apps: decoded.all_linux_apps.unwrap_or(false),
+            mid_line: decoded.mid_line.unwrap_or(false),
             subjects: decoded.subjects,
         })
     }
@@ -341,6 +354,7 @@ impl SettingsV2 {
             paused: true,
             all_web_origins: false,
             all_linux_apps: false,
+            mid_line: false,
             subjects: Vec::new(),
         }
     }
@@ -1328,6 +1342,7 @@ mod tests {
             paused: false,
             all_web_origins: false,
             all_linux_apps: false,
+            mid_line: false,
             subjects: vec![rule],
         }
     }
@@ -1628,6 +1643,7 @@ mod tests {
             paused: false,
             all_web_origins: false,
             all_linux_apps: false,
+            mid_line: false,
             subjects: vec![first.clone(), second.clone()],
         };
         valid.validate().expect("canonical settings");
@@ -1663,6 +1679,7 @@ mod tests {
             paused: true,
             all_web_origins: false,
             all_linux_apps: false,
+            mid_line: false,
             subjects,
         };
         settings.validate().expect("maximum-shape settings");

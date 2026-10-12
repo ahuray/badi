@@ -486,6 +486,7 @@ fn personalization_privacy_floor(current: &SettingsV2, next: &SettingsV2) -> Set
         paused: current.paused || next.paused,
         all_web_origins: false,
         all_linux_apps: false,
+        mid_line: current.mid_line,
         subjects,
     }
 }
@@ -666,6 +667,7 @@ mod tests {
             paused: false,
             all_web_origins: false,
             all_linux_apps: false,
+            mid_line: false,
             subjects: vec![SubjectRule {
                 identity: identity(),
                 permissions: SubjectPermissions {
@@ -863,6 +865,7 @@ mod tests {
             paused: false,
             all_web_origins: false,
             all_linux_apps: false,
+            mid_line: false,
             subjects: Vec::new(),
         };
         control
@@ -952,6 +955,7 @@ mod tests {
             paused: true,
             all_web_origins: false,
             all_linux_apps: false,
+            mid_line: false,
             subjects: Vec::new(),
         };
         assert!(matches!(
@@ -1021,6 +1025,7 @@ mod tests {
             paused: true,
             all_web_origins: false,
             all_linux_apps: false,
+            mid_line: false,
             subjects,
         };
         assert!(matches!(
@@ -1313,6 +1318,7 @@ mod tests {
             paused: false,
             all_web_origins: false,
             all_linux_apps: false,
+            mid_line: false,
             subjects: vec![SubjectRule {
                 identity: identity(),
                 permissions: SubjectPermissions::deny_all(),

@@ -2,7 +2,7 @@
 // never model context; keep modelInputForCase as the inference boundary.
 const SCHEMA = 'badi.prediction-suite.v1';
 const identifier = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$/u;
-const caseKeys = new Set(['id', 'language', 'prefix', 'expected', 'context', 'style', 'trace_id', 'step', 'at_ms']);
+const caseKeys = new Set(['id', 'language', 'prefix', 'after', 'expected', 'context', 'style', 'trace_id', 'step', 'at_ms']);
 const outcomes = new Set(['suggestion', 'abstention', 'deadline', 'error']);
 
 function object(value, label) {
@@ -42,6 +42,7 @@ export function validateCase(raw) {
     throw new Error('Trace cases require trace_id, a nonnegative integer step and nonnegative at_ms together');
   }
   return { id: id(raw.id, 'case id'), language, prefix: text(raw.prefix, 'prefix', 2048, false),
+    after: text(raw.after ?? '', 'after', 128),
     context: text(raw.context ?? '', 'context', 4096), style,
     expected: alternatives, trace_id: traceId, step, at_ms: at };
 }
@@ -67,7 +68,7 @@ export function validateSuite(raw) {
 
 export function modelInputForCase(raw) {
   const row = validateCase(raw);
-  return { language: row.language, prefix: row.prefix, context: row.context, style: row.style };
+  return { language: row.language, prefix: row.prefix, after: row.after, context: row.context, style: row.style };
 }
 
 function validateResult(raw) {

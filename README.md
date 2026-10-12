@@ -109,6 +109,7 @@ hashes before it builds, and the broker checks them again before it starts.
 ```sh
 badi status
 badi pause                          # persists across restarts; badi resume
+badi mid-line on                    # suggestions when a word follows the caret; off by default
 badi app telegram on                # allow an app
 badi site https://example.com on    # allow a website (Chromium, Brave and Zen share it)
 badi autostart on
@@ -146,7 +147,7 @@ what you typed:
 | Reason | Meaning |
 | --- | --- |
 | `app_disabled` | The app or site has no grant. |
-| `request_abstained` | Unsupported language, a caret inside a word, or a lone unfinished word. |
+| `request_abstained` | Unsupported language, a caret inside a word, a word after the caret while mid-sentence suggestions are off, or a lone unfinished word. |
 | `budget_prefill`, `budget_stream` | The time budget ran out: 550 ms while typing, 1.2 s after an explicit request. |
 | `model_abstained`, `output_rejected` | The model declined, or its words failed a language, dictionary, number or safety check, or did not fit before the text after the caret. |
 | `stale`, `timeout`, `provider_error` | The text changed first, or the model was late or failed. |

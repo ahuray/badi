@@ -11,7 +11,7 @@ import { DeviceQualification } from './device-qualification.mjs';
 import { createQualificationHandler, isQualificationRoute } from './qualification-server.mjs';
 import { validateSuite, modelInputForCase, planComparison, scorePrediction, summarizeResults } from './cases.mjs';
 
-const MODES = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed'];
+const MODES = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'framed', 'probability_rejoin'];
 
 export function labOptions(args) {
   const { values } = parseArgs({ args, strict: true, options: {
@@ -58,7 +58,7 @@ export function workerRequest(testCase, config) {
   const parameters = { ...config }; delete parameters.id;
   const input = modelInputForCase(testCase);
   return { schema: 'badi.prediction-lab.request.v1', id: randomUUID(), before: input.prefix,
-    language: input.language, context: input.context,
+    after: input.after, language: input.language, context: input.context,
     style_examples: input.style.split(/\n\s*\n/u).filter(value => value.trim()), config: parameters };
 }
 

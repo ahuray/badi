@@ -181,6 +181,17 @@ class DesktopTests(unittest.TestCase):
                 desktop.main(invalid)
             command.assert_not_called()
 
+    def test_mid_line_is_omitted_when_off(self):
+        settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'subjects': []}
+        for arguments, expected in ((['mid-line', 'on'], True), (['mid-line', 'off'], None)):
+            with self.subTest(arguments=arguments), \
+                 patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}']) as command, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                desktop.main(arguments)
+            sent = json.loads(command.call_args.args[0][5])
+            self.assertEqual(sent.get('mid_line'), expected)
+            self.assertEqual(sent['subjects'], [])
+
     def test_list_modes_listing_and_reset(self):
         settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'subjects': []}
         desktop.set_app(settings, 'discord', False)

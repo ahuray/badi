@@ -29,7 +29,8 @@ now true in the [README](README.md) or the affected runbook.
 - **Quality:** the installed Qwen3-1.7B is weak on independent sets, and no
   ~350M candidate passed the English/German/Persian gates. Persian keeps the
   8-token automatic budget: on 2026-10-12, 21 tokens missed 550 ms on all 13
-  development cases.
+  development cases. Mid-sentence stays off: the same day's 41-case Lab
+  comparison did not justify a rejoin change.
 
 Standing user decisions:
 - IME-parity for Chromium-based apps, Zen and LibreOffice Writer

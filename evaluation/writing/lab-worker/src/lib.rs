@@ -9,6 +9,7 @@
 pub mod artifact;
 mod attestation;
 pub mod context_lookup;
+mod midline;
 pub mod paced_probe;
 pub mod prefill_probe;
 pub mod qualification;
@@ -88,6 +89,11 @@ pub enum Mode {
     Healed,
     InstructedHealed,
     NativeInstructed,
+    /// Lab-only: production healing and rejoin, with the constant frame in front.
+    Framed,
+    /// Lab-only: force the next one or two words, then keep a prefix only when
+    /// those words are not unlikely. The floor is uncalibrated.
+    ProbabilityRejoin,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -107,6 +113,10 @@ pub struct Request {
     pub schema: String,
     pub id: String,
     pub before: String,
+    /// Text after the caret. Empty for end-of-text cases. Production boundary
+    /// passes it to the provider so mid-line insertion can be measured.
+    #[serde(default)]
+    pub after: String,
     pub language: String,
     pub context: String,
     pub style_examples: Vec<String>,
@@ -271,6 +281,7 @@ impl Request {
             || self.id.chars().any(char::is_control)
             || self.before.trim().is_empty()
             || !valid_text(&self.before, 2048)
+            || !valid_text(&self.after, 128)
             || !valid_text(&self.context, 4096)
             || self.style_examples.len() > 8
             || self
@@ -302,7 +313,7 @@ impl Request {
     fn provider_request(&self) -> ProviderRequest {
         ProviderRequest {
             before: self.before.clone(),
-            after: String::new(),
+            after: self.after.clone(),
             language: Some(self.language.clone()),
         }
     }
@@ -434,6 +445,9 @@ pub async fn run(
     let started = Instant::now();
     if request.config.mode == Mode::ProductionBoundary {
         return baseline(runtime, &request, cancellation, started).await;
+    }
+    if matches!(request.config.mode, Mode::Framed | Mode::ProbabilityRejoin) {
+        return lab_rejoin(runtime, &request, cancellation, started).await;
     }
     let mut prepared = prepare_prompt(&request);
     let mut result = request.result(runtime.identity());
@@ -590,6 +604,221 @@ async fn baseline(
     }
     result.within_production_budget = result.latency_ms <= 550.0;
     Ok(result)
+}
+
+fn framed_parts(before: &str, language: &str) -> (String, String) {
+    let echo = writing::production_healed_echo(before, language).unwrap_or("");
+    let stem = before.strip_suffix(echo).unwrap_or(before);
+    (format!("{}{stem}", midline::FRAME), echo.to_owned())
+}
+
+fn lab_completion_payload(
+    prompt: &str,
+    echo: &str,
+    grammar: Option<String>,
+    n_predict: u16,
+    probs: bool,
+) -> Value {
+    let mut payload = json!({"prompt":prompt,"n_predict":n_predict,"temperature":0.0,"seed":42,
+        "stop":[".","\n"],"stream":true,"cache_prompt":true});
+    if probs {
+        payload["n_probs"] = json!(1);
+        payload["post_sampling_probs"] = json!(false);
+    }
+    if let Some(grammar) = grammar {
+        payload["grammar"] = json!(grammar);
+    } else if !echo.is_empty() {
+        let literal = serde_json::to_string(echo).expect("echo is serializable");
+        payload["grammar"] = json!(format!("root ::= {literal} [^<>\\n\\r`]*"));
+    }
+    payload
+}
+
+struct RejoinJob {
+    payload: Value,
+    echo: String,
+    forced: bool,
+}
+
+async fn lab_rejoin(
+    runtime: &OwnedRuntime,
+    request: &Request,
+    cancellation: CancellationToken,
+    started: Instant,
+) -> Result<ResultRecord, LabError> {
+    if request.config.mode == Mode::ProbabilityRejoin {
+        return probability_rejoin(runtime, request, cancellation, started).await;
+    }
+    let mut result = request.result(runtime.identity());
+    result.warnings.push("framed_prompt_is_lab_only");
+    result
+        .warnings
+        .push("experimental_output_not_qualified_for_production");
+    let (prompt, echo) = framed_parts(&request.before, &request.language);
+    let payload = lab_completion_payload(&prompt, &echo, None, request.config.max_tokens, false);
+    finish_lab_rejoin(
+        runtime,
+        request,
+        cancellation,
+        started,
+        result,
+        RejoinJob {
+            payload,
+            echo,
+            forced: false,
+        },
+    )
+    .await
+}
+
+async fn probability_rejoin(
+    runtime: &OwnedRuntime,
+    request: &Request,
+    cancellation: CancellationToken,
+    started: Instant,
+) -> Result<ResultRecord, LabError> {
+    let Some(words) = midline::following_words(&request.after) else {
+        let mut result = baseline(runtime, request, cancellation, started).await?;
+        result.warnings.push("two_word_check_not_applicable");
+        return Ok(result);
+    };
+    let Some(forced) = midline::forced_word_grammar(&words) else {
+        return Err(LabError::InvalidRequest);
+    };
+    let echo = writing::production_healed_echo(&request.before, &request.language).unwrap_or("");
+    let stem = request.before.strip_suffix(echo).unwrap_or(&request.before);
+    let grammar = if echo.is_empty() {
+        forced
+    } else {
+        let literal = serde_json::to_string(echo).expect("echo is serializable");
+        format!(
+            "root ::= {literal} {}",
+            forced.trim_start_matches("root ::= ")
+        )
+    };
+    let mut result = request.result(runtime.identity());
+    result
+        .warnings
+        .push("rejoin_logprob_floor_minus_2_is_uncalibrated");
+    result
+        .warnings
+        .push("experimental_output_not_qualified_for_production");
+    // Room for a short prefix plus the forced words. The deadline stays the
+    // request budget, so a longer token cap can still miss 550 ms.
+    let tokens = request.config.max_tokens.max(24);
+    let payload = lab_completion_payload(stem, echo, Some(grammar), tokens, true);
+    finish_lab_rejoin(
+        runtime,
+        request,
+        cancellation,
+        started,
+        result,
+        RejoinJob {
+            payload,
+            echo: echo.to_owned(),
+            forced: true,
+        },
+    )
+    .await
+}
+
+async fn finish_lab_rejoin(
+    runtime: &OwnedRuntime,
+    request: &Request,
+    cancellation: CancellationToken,
+    started: Instant,
+    mut result: ResultRecord,
+    job: RejoinJob,
+) -> Result<ResultRecord, LabError> {
+    result.effective_prompt = job.payload["prompt"].as_str().map(str::to_owned);
+    result.model_requests.push(job.payload.clone());
+    let remaining = request
+        .config
+        .budget_ms
+        .saturating_sub(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+    let observed = transport::stream(
+        runtime.client(),
+        job.payload,
+        remaining,
+        cancellation,
+        Some(LabObservation {
+            before: &request.before,
+            language: &request.language,
+            echo: &job.echo,
+            started,
+        }),
+    )
+    .await?;
+    record_observation_metrics(&mut result, &observed);
+    let continuation = observed
+        .raw
+        .strip_prefix(job.echo.as_str())
+        .unwrap_or(observed.raw.as_str());
+    result.raw = Some(observed.raw.clone());
+    let insertion = if job.forced {
+        forced_insertion(
+            request,
+            &observed.raw,
+            &job.echo,
+            observed.token_logprobs.as_deref(),
+        )
+    } else {
+        midline::rejoin(&request.before, &request.after, continuation)
+    };
+    let Some(insertion) = insertion else {
+        result.outcome = if observed.deadline {
+            "deadline"
+        } else {
+            "abstention"
+        };
+        result.reason = if job.forced {
+            "forced_words_unlikely"
+        } else if observed.deadline {
+            "no_complete_word"
+        } else {
+            "rejoin_rejected"
+        };
+        result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+        result.within_production_budget = result.latency_ms <= 550.0;
+        return Ok(result);
+    };
+    if writing::validate_proposal(
+        &request.before,
+        &request.after,
+        &insertion,
+        Some(&request.language),
+    )
+    .is_err()
+        || !WritingLanguage::from_tag(&request.language)
+            .is_some_and(|language| language.accepts_output(&insertion))
+    {
+        result.outcome = "abstention";
+        result.reason = "output_seam";
+    } else {
+        result.outcome = "suggestion";
+        result.reason = "lab_rejoin";
+        result.word_complete = true;
+        result.shape_valid = true;
+        result.text = Some(insertion);
+    }
+    result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+    result.within_production_budget = result.latency_ms <= 550.0;
+    Ok(result)
+}
+
+fn forced_insertion(
+    request: &Request,
+    raw: &str,
+    echo: &str,
+    tokens: Option<&[TokenLogprob]>,
+) -> Option<String> {
+    let continuation = raw.strip_prefix(echo).unwrap_or(raw);
+    let words = midline::following_words(&request.after)?;
+    let prefix = midline::prefix_before_forced(continuation, &words)?;
+    let suffix = format!(" {}", words.join(" "));
+    let mean = midline::suffix_mean_logprob(raw, &suffix, tokens?)?;
+    midline::accept_forced_prefix(prefix, mean)?;
+    midline::rejoin(&request.before, &request.after, continuation)
 }
 
 fn apply_observation(
@@ -867,6 +1096,7 @@ mod tests {
             schema: REQUEST_SCHEMA.to_owned(),
             id: "case-1".to_owned(),
             before: "Please review the ".to_owned(),
+            after: String::new(),
             language: "en".to_owned(),
             context: "We are editing a city guide.".to_owned(),
             style_examples: vec!["Keep directions brief.".to_owned()],

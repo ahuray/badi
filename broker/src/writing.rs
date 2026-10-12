@@ -183,6 +183,13 @@ pub fn line_rest(after: &str) -> Option<&str> {
     (!line.trim().is_empty()).then_some(line)
 }
 
+/// A separate word follows the caret on its line. Punctuation there is not a
+/// word: the word being typed may still be completed.
+#[must_use]
+pub fn word_follows_caret(after: &str) -> bool {
+    line_rest(after).is_some_and(|line| line.trim_start().starts_with(char::is_alphanumeric))
+}
+
 /// What a continuation inserts before `line`, the text after the caret.
 ///
 /// The model continues from the caret. Where its continuation reproduces the
@@ -986,8 +993,18 @@ mod tests {
     use super::{
         ENGLISH_LEXICON, caret_inside_word, complete_word_prefix, correction_word,
         english_word_prefix, known_english_word, line_rest, memory_retry_delay, mid_line_insertion,
-        valid_correction, validate_proposal,
+        valid_correction, validate_proposal, word_follows_caret,
     };
+
+    #[test]
+    fn a_word_after_the_caret_is_not_punctuation() {
+        assert!(word_follows_caret("report today"));
+        assert!(word_follows_caret(" report today"));
+        assert!(!word_follows_caret("."));
+        assert!(!word_follows_caret(" ."));
+        assert!(!word_follows_caret(""));
+        assert!(!word_follows_caret("\nreport"));
+    }
 
     #[test]
     fn mid_line_insertions_end_where_the_continuation_rejoins_the_line() {

@@ -329,6 +329,73 @@ async fn request_side_abstention_is_counted_separately_from_the_model() {
 }
 
 #[tokio::test]
+async fn a_word_after_the_caret_abstains_before_the_model() {
+    let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
+    let broker = Broker::new(provider.clone(), BrokerConfig::default());
+    let (session_id, mut events) = open_observed_session(&broker, "mid-line-off").await;
+    let mut update = context(1, FieldPurpose::Normal);
+    update.before = "Please find the ".to_owned();
+    update.after = "report today".to_owned();
+    broker
+        .update_context(coordinates(session_id, 1), update.clone())
+        .await
+        .expect("context");
+    broker
+        .request_suggestion(
+            coordinates(session_id, 1),
+            SuggestRequestPayload {
+                fingerprint: update.fingerprint,
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("request");
+    let BrokerEvent::SuggestionClear { payload, .. } =
+        timeout(Duration::from_millis(100), events.recv())
+            .await
+            .expect("deadline")
+            .expect("event")
+    else {
+        panic!("expected an abstention");
+    };
+    assert_eq!(payload.reason, ReasonCode::NoSuggestion);
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 0);
+    let breakdown = broker
+        .metrics()
+        .snapshot()
+        .no_suggestion
+        .expect("breakdown");
+    assert_eq!(breakdown.request_abstained, 1);
+
+    let mut punctuated = context(2, FieldPurpose::Normal);
+    punctuated.before = "Please review the docum".to_owned();
+    punctuated.after = ".".to_owned();
+    broker
+        .update_context(coordinates(session_id, 2), punctuated.clone())
+        .await
+        .expect("punctuation context");
+    broker
+        .request_suggestion(
+            coordinates(session_id, 2),
+            SuggestRequestPayload {
+                fingerprint: punctuated.fingerprint,
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("punctuation request");
+    timeout(Duration::from_millis(100), async {
+        while provider.calls.load(Ordering::Relaxed) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("punctuation still reaches the model");
+}
+
+#[tokio::test]
 async fn superseded_provider_work_is_counted_as_stale_once() {
     let provider = std::sync::Arc::new(PendingProvider::new());
     let provider_view = std::sync::Arc::clone(&provider);
@@ -564,11 +631,16 @@ async fn correction_cannot_change_spacing_or_replace_an_unbound_suffix() {
         else {
             panic!("unbound spelling preview for {before:?}")
         };
-        assert_eq!(payload.reason, ReasonCode::InvalidOutput, "{before:?}");
         let metrics = broker.metrics().snapshot();
         assert_eq!(metrics.commits_prepared, 0);
         let breakdown = metrics.no_suggestion.expect("breakdown");
-        assert_eq!(breakdown.output_rejected, 1, "{before:?}");
+        if after == "later" {
+            assert_eq!(payload.reason, ReasonCode::NoSuggestion, "{before:?}");
+            assert_eq!(breakdown.request_abstained, 1, "{before:?}");
+        } else {
+            assert_eq!(payload.reason, ReasonCode::InvalidOutput, "{before:?}");
+            assert_eq!(breakdown.output_rejected, 1, "{before:?}");
+        }
         assert_eq!(breakdown.total(), 1, "{before:?}");
     }
 }
@@ -744,6 +816,7 @@ fn controlled_settings(revision: u64, allowed: bool, learn: bool) -> SettingsV2 
         paused: false,
         all_web_origins: false,
         all_linux_apps: false,
+        mid_line: false,
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,
@@ -778,6 +851,7 @@ fn controlled_learning_settings(revision: u64, retention: RetentionPermission) -
         paused: false,
         all_web_origins: false,
         all_linux_apps: false,
+        mid_line: false,
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,

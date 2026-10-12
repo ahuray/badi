@@ -151,6 +151,10 @@ impl Broker {
             let remainder = carry.remainder(&scope, &context, Instant::now())?;
             Some((remainder, carry.expires_at, carry.aggregate_day))
         });
+        let mid_line = state
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.mid_line);
         let session = state.session_with_data_access(coordinates.session_id)?;
         let binding = GenerationBinding {
             coordinates,
@@ -175,6 +179,15 @@ impl Broker {
             };
             let cancellation = CancellationToken::new();
             self.show_if_current(state, binding, &cancellation, proposal, Some(carried));
+            return Ok(None);
+        }
+        if !mid_line && crate::writing::word_follows_caret(&binding.after) {
+            session.generation = binding.generation;
+            self.renew_context_authority_lease(session, generation_timeout);
+            drop(state);
+            metrics.record_no_suggestion(NoSuggestionReason::RequestAbstained);
+            self.clear_failed_generation(binding, ReasonCode::NoSuggestion)
+                .await;
             return Ok(None);
         }
         let provider_permit = Arc::clone(&self.inner.provider_admissions)
