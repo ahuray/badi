@@ -3,7 +3,9 @@
 The only backlog. Goal: the best local replacement for Cotypist on Linux,
 Omarchy first, meaning useful suggestions that appear fast, stay quiet and
 never edit the wrong place. Delete an item when it is done, and record what is
-now true in the [README](README.md) or the affected runbook.
+now true in the [README](README.md) or the affected runbook. A dated
+snapshot of the parity work is in
+[docs/parity-status.md](docs/parity-status.md).
 
 ## Where Badi stands
 
