@@ -31,6 +31,9 @@ HELP = """Badi — local writing controls
   badi pause | resume          Persistently pause or resume predictions
   badi mid-line on|off         Suggestions with a word after the caret (off
                                by default). Punctuation can still finish a word
+  badi escape-quiet SECONDS|off How long a dismissal keeps its field quiet
+                               (1-3600 seconds, across edits; off keeps quiet
+                               only until the text changes, the default)
   badi apps allowlist|blocklist  Apps: only allowed apps (default), or every
                                supported app except blocked ones
   badi sites allowlist|blocklist Sites: only allowed sites (default), or every
@@ -468,6 +471,8 @@ def status_text(health, settings=None):
         misses = f"No suggestion: {summary['total']} (last: {summary['last']})"
     else:
         misses = "No suggestion: 0"
+    quiet = (settings or {}).get("escape_quiet_seconds")
+    quiet_text = f"{quiet}s" if type(quiet) is int and quiet > 0 else "until edit"
     return (f"Badi: {state} · {health['provider']}\n"
             f"Requests: {counters['provider_calls']} · Suggestions: {counters['suggestions_shown']} · Errors: {counters['provider_errors']} · {misses}\n"
             "Native Fcitx: automatic in Omawrite; Tab request/accept in the Xournal++ Text tool\n"
@@ -475,7 +480,7 @@ def status_text(health, settings=None):
             f"Observed fields: automatic for Omawrite, Telegram and IME-parity apps ({IME_APPS}); Tab accepts a visible suggestion, otherwise stays Tab; Ctrl+Right its next word; Ctrl+Shift+Space requests\n"
             + f"Apps: {mode_text((settings or {}).get('all_linux_apps'), 'app')}\n"
             + f"Web sites: {mode_text((settings or {}).get('all_web_origins'), 'site')}\n"
-            + "Escape: dismiss · Why nothing appeared: badi doctor; badi debug on; badi debug watch")
+            + f"Escape: dismiss (quiet: {quiet_text}) · Why nothing appeared: badi doctor; badi debug on; badi debug watch")
 
 
 def update_settings(change):
@@ -504,6 +509,14 @@ def set_mode(document, key, blocklist):
         document[key] = True
     else:
         document.pop(key, None)
+
+
+def set_escape_quiet(document, seconds):
+    # Absent is the canonical until-edit state; exact rules are left untouched.
+    if seconds:
+        document["escape_quiet_seconds"] = seconds
+    else:
+        document.pop("escape_quiet_seconds", None)
 
 
 def mode_text(blocklist, kind):
@@ -717,6 +730,19 @@ def main(arguments):
         update_settings(lambda document: set_mode(document, "mid_line", enabled))
         print("Mid-sentence suggestions are on." if enabled
               else "Mid-sentence suggestions are off. A word after the caret asks for nothing.")
+        return
+    if len(arguments) == 2 and arguments[0] == "escape-quiet":
+        value = arguments[1]
+        if value == "off":
+            seconds = 0
+        elif value.isascii() and value.isdigit() and 1 <= int(value) <= 3600:
+            seconds = int(value)
+        else:
+            raise RuntimeError("Usage: badi escape-quiet SECONDS|off (SECONDS is 1-3600)")
+        update_settings(lambda document: set_escape_quiet(document, seconds))
+        print(f"Escape keeps a field quiet for {seconds} seconds after a dismissal. "
+              "Asking explicitly ends it sooner." if seconds
+              else "Escape quiet is off. A dismissal lasts only until the text changes.")
         return
     modes = {("apps", "allowlist"): ("all_linux_apps", False), ("apps", "blocklist"): ("all_linux_apps", True),
              ("sites", "allowlist"): ("all_web_origins", False), ("sites", "blocklist"): ("all_web_origins", True),

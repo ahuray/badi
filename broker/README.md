@@ -151,6 +151,17 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   it does not join that word. End of text, punctuation, and a repeated space
   stay rejected. Ctrl+→ on that last word includes the space, and typing its
   first letters carries the space with the remainder.
+- **Escape quiet.** Off by default (`badi escape-quiet off`; omit
+  `escape_quiet_seconds` in settings), so a dismissal lasts only until the
+  text changes, as the adapters decline it. With `badi escape-quiet SECONDS`
+  (1–3600) or the panel presets, a dismissal arms a broker-side quiet bound
+  to its session and focus epoch: automatic generation abstains across edits
+  with no provider call, counted as `request_abstained`, until the time runs
+  out, the focus epoch ends, or an explicit request asks again, which ends
+  the quiet at once. Every context and request already carries `explicit`,
+  so no protocol change was needed and every adapter inherits it. During the
+  quiet, adapters still inspect and publish context under their existing
+  grants; the model is never called.
 - **Spelling** is English only and needs negotiated exact replacement of the
   word before the caret at the end of the field; a single dictionary candidate
   is proposed without inference.

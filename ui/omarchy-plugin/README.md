@@ -17,8 +17,9 @@ Left-click the mark to open or close settings; right-click pauses or resumes
 the broker. The mark updates when you toggle pause from the bar, and the next
 time the window opens. The window has three views:
 
-- **Writing:** model state, pause, editor launch buttons, key help, counters and
-  a short privacy note.
+- **Writing:** model state, pause, mid-sentence mode, Escape quiet presets
+  (until edit, 30 seconds, 5 minutes, 1 hour), editor launch buttons, key
+  help, counters and a short privacy note.
 - **Applications:** the app and website list modes, allow or block per
   supported app, and exact website rules. Blocking revokes context reading,
   suggestions and display; learning stays blocked and retention `none`.

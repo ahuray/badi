@@ -72,11 +72,11 @@ Standing user decisions:
       trial still made a second model call, and the wait did not run: the
       field already contained the space when the request went out. A fresh Zen
       profile exposed only the window frame, so its page was not typed in.
-- [ ] A setting for how long Escape keeps a field quiet (today: until the text
-      changes). Observed fields already stay automatic-quiet in file dialogs
-      and very narrow fields, with explicit requests unaffected
-      ([observer runbook](adapters/accessibility/README.md)); the manual
-      native path still has no dialog or width signal.
+- [ ] The manual native path has no dialog or width signal, so its file
+      dialogs and very narrow fields are not automatic-quiet the way observed
+      fields are ([observer runbook](adapters/accessibility/README.md)).
+      Escape quiet is a broker setting (`escape_quiet_seconds`), covered in
+      the [broker runbook](broker/README.md).
 - [x] Mid-sentence suggestions see only the text before the caret and keep
       what rejoins the next word. Naming the following line in the prompt
       (`following_text`, lab only) does not change that. On 2026-10-12, the

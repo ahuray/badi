@@ -175,6 +175,13 @@ Scope {
         keys.push(modes[mode])
       }
     }
+    // The timed Escape quiet is an optional whole number of seconds;
+    // producers omit it at zero.
+    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "escape_quiet_seconds")) {
+      if (!Number.isSafeInteger(value.escape_quiet_seconds)
+          || value.escape_quiet_seconds < 1 || value.escape_quiet_seconds > 3600) return false
+      keys.push("escape_quiet_seconds")
+    }
     if (!hasExactKeys(value, keys)
         || value.schema !== "badi.settings.v2"
         || !Number.isSafeInteger(value.revision)

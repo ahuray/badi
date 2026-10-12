@@ -22,7 +22,9 @@ nothing showing stays Tab.
 Bash uses Ctrl-X then Tab to request and accept. In a Xournal++ text cell, Tab
 requests and Tab again accepts. A suggestion lasts up to five seconds. In the
 observed apps below, Badi stays quiet on its own in file dialogs and very
-narrow fields; Ctrl+Shift+Space still asks there.
+narrow fields; Ctrl+Shift+Space still asks there. `badi escape-quiet 60` (or
+the settings panel) also keeps a dismissed field quiet for a minute across
+edits; asking explicitly ends that sooner.
 
 In the middle of a sentence Badi suggests only what fits before the next word:
 the rest of a word you are typing, or words the model would write right before
@@ -128,6 +130,7 @@ hashes before it builds, and the broker checks them again before it starts.
 badi status
 badi pause                          # persists across restarts; badi resume
 badi mid-line on                    # suggestions when a word follows the caret; off by default
+badi escape-quiet 60                # a dismissal keeps its field quiet for a minute; off by default
 badi app telegram on                # allow an app
 badi site https://example.com on    # allow a website (Chromium, Brave and Zen share it)
 badi autostart on
