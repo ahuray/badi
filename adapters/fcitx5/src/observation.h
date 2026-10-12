@@ -59,11 +59,18 @@ bool observerAgrees(const nlohmann::json &observed, const ContextWindow &context
 bool observerCorroborates(const nlohmann::json &captured, const nlohmann::json &observed,
                           const ContextWindow &context);
 
+// The observer's quiet fact for this field ("file_dialog", "narrow_field", or
+// "quiet_field" for a fact this build does not name), or nullopt. Quiet binds
+// automatic requests only; an explicit request is the user's own action.
+std::optional<std::string_view> automaticQuietReason(const nlohmann::json &observed);
+
 // Why an observed snapshot cannot become a request for this Fcitx context;
 // nullopt when both agree on a nonempty prefix. Text may follow the caret: the
-// broker suggests only what fits before it.
+// broker suggests only what fits before it. A quiet field blocks only an
+// automatic request.
 std::optional<std::string_view> observedRequestBlocked(const nlohmann::json &observed,
-                                                       const ContextWindow &context, bool foreignIme);
+                                                       const ContextWindow &context, bool foreignIme,
+                                                       bool automatic);
 
 // The field itself was declined (password, purpose, selection), as opposed
 // to an absent or blind observer.

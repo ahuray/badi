@@ -57,6 +57,24 @@ class RichLayout:
     caret_block: int
 
 
+def narrow_field(field, glyph):
+    """Whether a field is very narrow, judged in its own reported units.
+
+    Both rectangles come from the same SCREEN extents, so scale and font size
+    cancel: the field must be under twelve glyphs wide and no taller than one
+    padded line (three glyph heights). Anything unreadable or degenerate is
+    unknown, not narrow: a field narrower than two glyphs is a caret-wide
+    proxy (VS Code's input textarea), and zero glyph boxes (Qt) say nothing.
+    """
+    if field is None or glyph is None:
+        return False
+    if min(field.width, field.height, glyph.width, glyph.height) <= 0:
+        return False
+    if field.width < 2 * glyph.width or field.height > 3 * glyph.height:
+        return False
+    return field.width < 12 * glyph.width
+
+
 class FieldBackend:
     """The Observer's backend: the one focused field of the verified active window.
 
@@ -115,7 +133,8 @@ class FieldBackend:
             else:
                 geometry = self.native_geometry(node, local.text, local.caret, window, caret, caret_rect)
         direction, font = self.caret_appearance(local)
-        result = {"direction": direction, "bus": node.app.bus_name, "path": node.path,
+        result = {"quiet": self.quiet_reason(node, local),
+                "direction": direction, "bus": node.app.bus_name, "path": node.path,
                 "process_id": window["pid"], "app_id": app_id, "uri": uri, "browser": app.browser, "web": app.web,
                 "role": role, "tag": attributes.get("tag", ""), "input_type": attributes.get("text-input-type", ""),
                 "xml_roles": attributes.get("xml-roles", ""),
@@ -191,6 +210,57 @@ class FieldBackend:
             direction = visual_direction(text.get_character_extents(caret - 2, screen),
                                          text.get_character_extents(caret - 1, screen))
         return direction, font_facts(attributes)
+
+    def quiet_reason(self, node, local):
+        """Why automatic suggestions stay off in this field, or None.
+
+        A fact for the caller's automatic path, never a denial: the field
+        stays eligible and an explicit request still reads it. An unreadable
+        fact is unknown and quiets nothing.
+        """
+        if self.in_file_dialog(node):
+            return "file_dialog"
+        if self.narrow(node, local):
+            return "narrow_field"
+        return None
+
+    def in_file_dialog(self, node):
+        """The field or an ancestor is a file chooser; an unreadable parent ends the walk."""
+        current = node
+        for _ in range(12):
+            self.budget()
+            if current is None:
+                return False
+            try:
+                role = current.get_role_name()
+                if role == "file chooser":
+                    return True
+                if role in ("frame", "application"):
+                    return False
+                current = current.get_parent()
+            except Exception:
+                return False
+        return False
+
+    def narrow(self, node, local):
+        """The field is very narrow for its own glyph size (`narrow_field`)."""
+        text, caret, _length = local
+        if caret < 1:
+            return False
+        try:
+            if "Component" not in node.get_interfaces():
+                return False
+            self.budget()
+            field = node.get_component_iface().get_extents(self.atspi.CoordType.SCREEN)
+            self.budget()
+            glyph = text.get_character_extents(caret - 1, self.atspi.CoordType.SCREEN)
+            return narrow_field(field, glyph)
+        except Denied as error:
+            if error.timed_out:
+                raise
+            return False
+        except Exception:
+            return False
 
     def caret_position(self, node, flatten):
         """(caret, length, selections, rich layout or None) in the field's flattened coordinates."""

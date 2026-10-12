@@ -18,7 +18,7 @@ import daemon as observer_daemon
 import desktop as observer_desktop
 from daemon import APPS, Daemon, unique_object
 from desktop import WindowEvents, application_entry, per_user_executable, verify_process
-from field import MAX_RICH_BLOCKS, FieldBackend, browser_interface, chromium_text, rich_text
+from field import MAX_RICH_BLOCKS, CaretText, FieldBackend, browser_interface, chromium_text, rich_text
 from geometry import (CALIBRATED, calibrated_geometry, gecko_calibrated_geometry, input_method_geometry,
                       native_calibrated_geometry, visual_direction)
 from test_contract import FakeBackend
@@ -1366,6 +1366,56 @@ class GeckoCalibrationTests(unittest.TestCase):
                 self.assertIsNone(self.calibrate(**change))
         self.assertIsNotNone(self.calibrate(field=rect(26, 360, 635, 55), glyph=rect(477, 740, 22, 46)),
                              "a caret that ends exactly at the tile's edge is still visible")
+
+
+class QuietFieldTests(unittest.TestCase):
+    def backend(self):
+        atspi = SimpleNamespace(CoordType=SimpleNamespace(SCREEN="screen"),
+                                StateType=SimpleNamespace(FOCUSED="focused", EDITABLE="editable", SHOWING="showing"))
+        backend = FieldBackend(atspi, APPS)
+        backend.budget = lambda: None
+        return backend
+
+    def field(self, parent=None, width=600, height=40, glyph=(10, 20), caret=5):
+        node = FakeNode(role="entry", parent=parent, interfaces=["Component", "Text"])
+        node.get_component_iface = lambda: SimpleNamespace(
+            get_extents=lambda kind: SimpleNamespace(x=0, y=0, width=width, height=height))
+        text = SimpleNamespace(get_character_extents=lambda offset, kind: SimpleNamespace(
+            x=0, y=0, width=glyph[0], height=glyph[1]))
+        return node, CaretText(text, caret, 20)
+
+    def test_a_file_chooser_ancestor_quiets(self):
+        backend = self.backend()
+        dialog = FakeNode(role="file chooser", parent=FakeNode(role="frame"))
+        node, local = self.field(parent=FakeNode(role="panel", parent=dialog))
+        self.assertEqual(backend.quiet_reason(node, local), "file_dialog")
+        node, local = self.field(parent=FakeNode(role="frame"))
+        self.assertIsNone(backend.quiet_reason(node, local))
+
+    def test_an_unreadable_ancestor_is_not_quiet(self):
+        backend = self.backend()
+
+        class Boom(FakeNode):
+            def get_parent(self):
+                raise RuntimeError("atspi")
+
+        node, local = self.field(parent=Boom(role="panel"))
+        self.assertIsNone(backend.quiet_reason(node, local), "an unreadable fact is unknown, never a denial")
+
+    def test_only_a_very_narrow_single_line_field_quiets(self):
+        backend = self.backend()
+        node, local = self.field(width=100, height=40, glyph=(10, 20))
+        self.assertEqual(backend.quiet_reason(node, local), "narrow_field", "ten glyphs wide, one line tall")
+        node, local = self.field(width=600, height=40, glyph=(10, 20))
+        self.assertIsNone(backend.quiet_reason(node, local), "a normal field")
+        node, local = self.field(width=100, height=200, glyph=(10, 20))
+        self.assertIsNone(backend.quiet_reason(node, local), "taller than one padded line: not judged narrow")
+        node, local = self.field(width=10, height=40, glyph=(10, 20))
+        self.assertIsNone(backend.quiet_reason(node, local), "a caret-wide proxy field (VS Code) is not judged")
+        node, local = self.field(width=100, height=40, glyph=(0, 0))
+        self.assertIsNone(backend.quiet_reason(node, local), "zero glyph boxes (Qt): unknown, not quiet")
+        node, local = self.field(width=100, height=40, glyph=(10, 20), caret=0)
+        self.assertIsNone(backend.quiet_reason(node, local), "no glyph before the caret: unknown, not quiet")
 
 
 class GeometryWiringTests(unittest.TestCase):

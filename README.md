@@ -20,7 +20,9 @@ Obsidian accepts one word with Tab only while a suggestion is visible, and
 takes all of it with Ctrl/Command+→. Ctrl+Shift+Space asks for one. Tab with
 nothing showing stays Tab.
 Bash uses Ctrl-X then Tab to request and accept. In a Xournal++ text cell, Tab
-requests and Tab again accepts. A suggestion lasts up to five seconds.
+requests and Tab again accepts. A suggestion lasts up to five seconds. In the
+observed apps below, Badi stays quiet on its own in file dialogs and very
+narrow fields; Ctrl+Shift+Space still asks there.
 
 In the middle of a sentence Badi suggests only what fits before the next word:
 the rest of a word you are typing, or words the model would write right before

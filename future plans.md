@@ -72,9 +72,11 @@ Standing user decisions:
       trial still made a second model call, and the wait did not run: the
       field already contained the space when the request went out. A fresh Zen
       profile exposed only the window frame, so its page was not typed in.
-- [ ] No automatic suggestions in file dialogs or very narrow fields, and a
-      setting for how long Escape keeps a field quiet (today: until the text
-      changes).
+- [ ] A setting for how long Escape keeps a field quiet (today: until the text
+      changes). Observed fields already stay automatic-quiet in file dialogs
+      and very narrow fields, with explicit requests unaffected
+      ([observer runbook](adapters/accessibility/README.md)); the manual
+      native path still has no dialog or width signal.
 - [x] Mid-sentence suggestions see only the text before the caret and keep
       what rejoins the next word. Naming the following line in the prompt
       (`following_text`, lab only) does not change that. On 2026-10-12, the

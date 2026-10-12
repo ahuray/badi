@@ -30,6 +30,10 @@ BINDING_FIELDS = frozenset({"epoch", *IDENTITY})
 POSITION = ("caret", "total_chars", "selection_count")
 # A malformed request changes no field state; every other denial withdraws it.
 MALFORMED = frozenset({"invalid_request", "invalid_preview"})
+# Facts that quiet automatic suggestions only; the field stays eligible and an
+# explicit request is the caller's decision. Reported by the backend, carried
+# on every focus reply, never a denial.
+QUIET_REASONS = frozenset({"file_dialog", "narrow_field"})
 RIGHT_TO_LEFT = frozenset({"R", "AL", "AN"})
 
 
@@ -271,6 +275,8 @@ class Observer:
                  "geometry": metadata.get("geometry")}
         if metadata.get("font"):
             focus["font"] = metadata["font"]
+        if metadata.get("quiet") in QUIET_REASONS:
+            focus["quiet"] = metadata["quiet"]
         return metadata, focus
 
     def policy_target(self, metadata, app_id):

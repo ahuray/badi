@@ -761,6 +761,14 @@ private:
             debug_.record("request_blocked", app, "observer_awaiting_input");
             return;
         }
+        if (!binding.observationExplicit) {
+            // A dialog or very narrow field gets no automatic snapshot either:
+            // its prose is not read until the user asks explicitly.
+            if (const auto quiet = automaticQuietReason(binding.observedFocus)) {
+                debug_.record("request_blocked", app, *quiet);
+                return;
+            }
+        }
         const auto session = binding.state.coordinates().sessionId;
         const auto generation = binding.observationGeneration;
         const bool sent = accessibility_->request(snapshotRequest(binding.observedFocus),
@@ -811,7 +819,8 @@ private:
         // the field, ends the decline. An empty field still does not request.
         if (binding.dismissedContext == *context) return;
         binding.dismissedContext.reset();
-        if (const auto blocked = observedRequestBlocked(observed, *context, hasForeignImeUi(observePanel(binding)))) {
+        if (const auto blocked = observedRequestBlocked(observed, *context, hasForeignImeUi(observePanel(binding)),
+                                                        !binding.observationExplicit)) {
             return debug_.record("request_blocked", app, *blocked, context->before.size(),
                                  observedAfter(*context).size());
         }
