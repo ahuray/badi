@@ -641,7 +641,16 @@ private:
         const bool unchanged = !binding.observationExplicit && binding.observed() &&
             matchesObservedFocus(binding.observedFocus, focus) &&
             matchesCapturedContext(binding.state.lastContext(), currentContext(binding));
-        if (!unchanged) bindObservedField(binding, focus, *editTarget);
+        if (unchanged) return;
+        // Typing in the field we already authorized is a context update, not a
+        // new session or a new policy query.
+        if (binding.broker.opened && binding.broker.policyAllowed &&
+            sameObservedField(binding.observedFocus, focus)) {
+            binding.observedFocus = focus;
+            debug_.record("observer", binding.state.appId(), "same_field_request");
+            return requestObservedContext(binding);
+        }
+        bindObservedField(binding, focus, *editTarget);
     }
 
     // A newly observed field gets its own session, and policy for its exact target.

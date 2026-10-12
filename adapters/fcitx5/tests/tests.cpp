@@ -1274,6 +1274,17 @@ void observerRepliesFailClosed() {
         changed[key] = value;
         check(!matchesObservedFocus(field, changed), "a moved caret, other field, purpose or selection never matches");
     }
+    auto typed = field;
+    typed["caret"] = 12;
+    typed["total_chars"] = 12;
+    check(!matchesObservedFocus(field, typed) && sameObservedField(field, typed),
+          "typing keeps the same observed field");
+    check(!sameObservedField(field, [&] {
+              auto denied = field;
+              denied["purpose"] = "password";
+              return denied;
+          }()),
+          "a sensitive purpose is not the same field");
     auto cropped = field;
     cropped["total_chars"] = 12;
     check(matchesObservedFocus(field, cropped) && !matchesObservedFocus(field, cropped, true),

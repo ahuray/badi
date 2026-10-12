@@ -51,6 +51,14 @@ bool matchesObservedFocus(const Json &captured, const Json &observed, bool requi
            (!captured.contains("total_chars") || captured["total_chars"] == total);
 }
 
+bool sameObservedField(const Json &captured, const Json &observed) {
+    return captured.is_object() && observed.is_object() &&
+           observed.value("binding", Json()) == captured.value("binding", Json()) &&
+           observed.value("target", Json()) == captured.value("target", Json()) &&
+           observed.value("purpose", Json()) == "plain_text" &&
+           observed.value("selection_count", Json()) == 0;
+}
+
 std::optional<NativeEditTarget> inspectedEditTarget(const Json &focus, std::string_view appId) {
     const std::string app(appId);
     if (!focus.is_object() || !focus.contains("binding") || !focus.contains("target") ||
