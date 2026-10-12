@@ -322,3 +322,18 @@ export function planComparison(rawCases, configs, seed) {
   }
   return schedule;
 }
+
+/** One configuration at a time, keeping each configuration's original order. */
+export function warmSchedule(plan) {
+  if (!Array.isArray(plan)) throw new Error('Warm schedule requires a comparison plan');
+  const order = [];
+  const groups = new Map();
+  for (const item of plan) {
+    if (!groups.has(item.config_id)) {
+      groups.set(item.config_id, []);
+      order.push(item.config_id);
+    }
+    groups.get(item.config_id).push(item);
+  }
+  return order.flatMap(config => groups.get(config));
+}

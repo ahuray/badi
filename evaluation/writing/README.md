@@ -91,7 +91,8 @@ or automatic files.
 | `healed` | Word-boundary healing: the boundary is removed from the prompt, echoed by the model and stripped |
 | `instructed_healed` | `instructed` with `healed` boundaries |
 | `native_instructed` | The model's own chat template with exact word boundaries |
-| `framed` | Lab only: a constant everyday-English frame plus today's rejoin |
+| `framed` | Lab only: version `everyday-english-2026-10-12.v1`, production healing, and the constant everyday-English frame |
+| `field_context` | Lab only: earlier text of the same field, kept to about 200 tokens and moved only in jumps of about 64 so the prefix cache can hold |
 | `probability_rejoin` | Lab only: force the next words and keep a prefix only when they are not unlikely. The cut is uncalibrated and is not installed |
 
 `instructed_word` and `healed_attested` are not selectable. The 2026-09-09 next-word study had no useful `instructed_word` result in 30 opportunities and one harmful result. `healed_attested` added harmful suggestions on top of `healed`.
@@ -141,6 +142,8 @@ node evaluation/writing/lab/run.mjs \
 
 Options: `--modes` (default `production_boundary,context`), `--budget-ms`
 550–10000, `--max-tokens` 8–64, `--seed`, `--cache-prompt true|false`,
+`--warm-prefix true` (one runtime per configuration, so a repeated prompt
+prefix can stay cached; not a counterbalanced cold comparison),
 `--prefill-batch 16|64`, `--model-artifact DESCRIPTOR`. Each run writes a new
 private directory under the ignored `output/writing/`:
 - `run.json` freezes the inputs before inference;

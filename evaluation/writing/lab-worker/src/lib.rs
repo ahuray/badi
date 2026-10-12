@@ -9,6 +9,7 @@
 pub mod artifact;
 mod attestation;
 pub mod context_lookup;
+mod field_context;
 mod midline;
 pub mod paced_probe;
 pub mod prefill_probe;
@@ -91,6 +92,8 @@ pub enum Mode {
     NativeInstructed,
     /// Lab-only: production healing and rejoin, with the constant frame in front.
     Framed,
+    /// Lab-only: earlier text of the same field, cut on a stable character grid.
+    FieldContext,
     /// Lab-only: force the next one or two words, then keep a prefix only when
     /// those words are not unlikely. The floor is uncalibrated.
     ProbabilityRejoin,
@@ -433,6 +436,7 @@ fn native_instruction_messages(request: &Request) -> Value {
     ])
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn run(
     runtime: &OwnedRuntime,
     request: Request,
@@ -446,7 +450,10 @@ pub async fn run(
     if request.config.mode == Mode::ProductionBoundary {
         return baseline(runtime, &request, cancellation, started).await;
     }
-    if matches!(request.config.mode, Mode::Framed | Mode::ProbabilityRejoin) {
+    if matches!(
+        request.config.mode,
+        Mode::Framed | Mode::FieldContext | Mode::ProbabilityRejoin
+    ) {
         return lab_rejoin(runtime, &request, cancellation, started).await;
     }
     let mut prepared = prepare_prompt(&request);
@@ -606,10 +613,20 @@ async fn baseline(
     Ok(result)
 }
 
-fn framed_parts(before: &str, language: &str) -> (String, String) {
-    let echo = writing::production_healed_echo(before, language).unwrap_or("");
-    let stem = before.strip_suffix(echo).unwrap_or(before);
-    (format!("{}{stem}", midline::FRAME), echo.to_owned())
+fn quality_parts(request: &Request) -> (String, String) {
+    let echo = writing::production_healed_echo(&request.before, &request.language).unwrap_or("");
+    let stem = request.before.strip_suffix(echo).unwrap_or(&request.before);
+    let prefix = if request.config.mode == Mode::FieldContext {
+        let earlier = field_context::stable_prefix(&request.context);
+        if earlier.is_empty() {
+            String::new()
+        } else {
+            format!("{earlier}\n\n")
+        }
+    } else {
+        midline::FRAME.to_owned()
+    };
+    (format!("{prefix}{stem}"), echo.to_owned())
 }
 
 fn lab_completion_payload(
@@ -650,12 +667,23 @@ async fn lab_rejoin(
         return probability_rejoin(runtime, request, cancellation, started).await;
     }
     let mut result = request.result(runtime.identity());
-    result.warnings.push("framed_prompt_is_lab_only");
+    let lab_only = if request.config.mode == Mode::FieldContext {
+        "field_context_is_lab_only"
+    } else {
+        midline::framed_warning()
+    };
+    result.warnings.push(lab_only);
     result
         .warnings
         .push("experimental_output_not_qualified_for_production");
-    let (prompt, echo) = framed_parts(&request.before, &request.language);
-    let payload = lab_completion_payload(&prompt, &echo, None, request.config.max_tokens, false);
+    result.used_context = request.config.mode == Mode::FieldContext && !request.context.is_empty();
+    result.config.budget_ms = 550;
+    result.config.max_tokens = 8;
+    result.config.cache_prompt = true;
+    result.config.temperature = 0.0;
+    result.config.seed = 42;
+    let (prompt, echo) = quality_parts(request);
+    let payload = lab_completion_payload(&prompt, &echo, None, 8, false);
     finish_lab_rejoin(
         runtime,
         request,
@@ -732,10 +760,13 @@ async fn finish_lab_rejoin(
 ) -> Result<ResultRecord, LabError> {
     result.effective_prompt = job.payload["prompt"].as_str().map(str::to_owned);
     result.model_requests.push(job.payload.clone());
-    let remaining = request
-        .config
-        .budget_ms
-        .saturating_sub(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+    let budget_ms = if matches!(request.config.mode, Mode::Framed | Mode::FieldContext) {
+        550
+    } else {
+        request.config.budget_ms
+    };
+    let remaining =
+        budget_ms.saturating_sub(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
     let observed = transport::stream(
         runtime.client(),
         job.payload,
@@ -764,6 +795,7 @@ async fn finish_lab_rejoin(
         )
     } else {
         midline::rejoin(&request.before, &request.after, continuation)
+            .or_else(|| end_of_text_continuation(&request.after, continuation))
     };
     let Some(insertion) = insertion else {
         result.outcome = if observed.deadline {
@@ -804,6 +836,13 @@ async fn finish_lab_rejoin(
     result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
     result.within_production_budget = result.latency_ms <= 550.0;
     Ok(result)
+}
+
+fn end_of_text_continuation(after: &str, continuation: &str) -> Option<String> {
+    if writing::line_rest(after).is_some() {
+        return None;
+    }
+    writing::complete_word_prefix(continuation, 4, true)
 }
 
 fn forced_insertion(

@@ -9,9 +9,9 @@ import { createContextLookupHandler, isContextLookupRoute } from './context-look
 import { createDiscoveryHandler, isDiscoveryRoute } from './discovery-server.mjs';
 import { DeviceQualification } from './device-qualification.mjs';
 import { createQualificationHandler, isQualificationRoute } from './qualification-server.mjs';
-import { validateSuite, modelInputForCase, planComparison, scorePrediction, summarizeResults } from './cases.mjs';
+import { validateSuite, modelInputForCase, planComparison, warmSchedule, scorePrediction, summarizeResults } from './cases.mjs';
 
-const MODES = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'framed', 'probability_rejoin'];
+const MODES = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'framed', 'field_context', 'probability_rejoin'];
 
 export function labOptions(args) {
   const { values } = parseArgs({ args, strict: true, options: {
@@ -47,8 +47,8 @@ export function validateConfigs(configs) {
       || !Number.isInteger(config.max_tokens) || config.max_tokens < 8 || config.max_tokens > 64
       || typeof config.cache_prompt !== 'boolean' || !Number.isFinite(config.temperature) || config.temperature < 0 || config.temperature > 1
       || !Number.isInteger(config.seed) || config.seed < 0 || config.seed > 2147483647) throw new Error('Configuration is outside the supported limits.');
-    if (config.mode === 'production_boundary'
-      && (config.budget_ms !== 550 || config.max_tokens !== 8 || !config.cache_prompt || config.temperature !== 0 || config.seed !== 42)) throw new Error('The production mode uses fixed production settings.');
+    if (['production_boundary', 'framed', 'field_context'].includes(config.mode)
+      && (config.budget_ms !== 550 || config.max_tokens !== 8 || !config.cache_prompt || config.temperature !== 0 || config.seed !== 42)) throw new Error('This mode uses fixed production settings.');
     return { ...config };
   });
 }
@@ -212,7 +212,11 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
       }
       const seed = body.seed ?? 42;
       if (!Number.isInteger(seed) || seed < 0 || seed > 2147483647) throw new Error('Use a nonnegative integer order seed.');
-      const plan = planComparison(suite.cases, configs, seed);
+      if (body.warm_prefix !== undefined && body.warm_prefix !== true) throw new Error('warm_prefix must be true when present.');
+      const warmPrefix = body.warm_prefix === true;
+      if (warmPrefix && body.confirmation) throw new Error('A confirmation run starts each case in an empty runtime.');
+      const compared = planComparison(suite.cases, configs, seed);
+      const plan = warmPrefix ? warmSchedule(compared) : compared;
       // readJSON yields: another request may have claimed the worker meanwhile.
       if (active || resetsInFlight || spelling.busy || contextLookup.busy || discovery.busy || deviceInspection || qualificationReview?.busy) return fail(409, 'A comparison is already running.');
       const cancellation = new AbortController();
@@ -228,7 +232,9 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
       response.once('close', () => { if (!response.writableEnded) cancellation.abort(); });
       send({ type: 'plan', schema: 'badi.prediction-lab.run.v1', run_id: runId, created_at: new Date().toISOString(), suite, configs, seed, plan,
         selected_model: selectedModel?.candidate ?? null, assessment: selectedModel?.assessment ?? null,
-        measurement: 'Sequential snapshot replay. Each case/trace/config begins in an empty owned runtime; only steps within a trace reuse context. Trace event times are metadata, not paced keystrokes or cancellation replay. Model startup is excluded from result latency. Runtime size may differ from installed Badi; inspect identity.' });
+        measurement: warmPrefix
+          ? 'One configuration at a time in one owned runtime, so a repeated prompt prefix can stay cached. This is not a counterbalanced cold comparison. Model startup is excluded from result latency.'
+          : 'Sequential snapshot replay. Each case/trace/config begins in an empty owned runtime; only steps within a trace reuse context. Trace event times are metadata, not paced keystrokes or cancellation replay. Model startup is excluded from result latency. Runtime size may differ from installed Badi; inspect identity.' });
       try {
         const qualificationPlan = await qualificationReview.beginRun({ runId, suite, configs, selection: selectedModel, signal: cancellation.signal, confirmation: body.confirmation });
         send({ type: 'qualification_plan', ...qualificationPlan });
@@ -239,7 +245,7 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
           const config = configs.find(value => value.id === item.config_id);
           // Each case/trace/config starts from an empty owned slot. Only successive
           // steps of the same explicit typing trace share cached context.
-          const group = `${item.group_id}:${item.config_id}`;
+          const group = warmPrefix ? `warm:${item.config_id}` : `${item.group_id}:${item.config_id}`;
           if (previousGroup !== null && previousGroup !== group) {
             let cleanup;
             try { cleanup = await worker.stop(); } catch (error) { cleanupVerified = false; throw error; }

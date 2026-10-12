@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createLabServer, validateConfigs } from './server.mjs';
 import { LabWorker } from './worker.mjs';
-import { validateSuite, planComparison, summarizeResults } from './cases.mjs';
+import { validateSuite, planComparison, warmSchedule, summarizeResults } from './cases.mjs';
 import { modelArtifactPath, readModelArtifact, modelArtifactProvenance, modelArtifactArgs,
   assertModelArtifactUnchanged, assertModelArtifactIdentity } from './model-artifact.mjs';
 
@@ -37,6 +37,7 @@ export function parseOptions(args, cwd = process.cwd()) {
     modes: { type: 'string', default: 'production_boundary,context' },
     'budget-ms': { type: 'string', default: '550' }, 'max-tokens': { type: 'string', default: '8' },
     seed: { type: 'string', default: '42' }, 'cache-prompt': { type: 'string', default: 'true' },
+    'warm-prefix': { type: 'string' },
     'model-artifact': { type: 'string' }, 'prefill-batch': { type: 'string' },
   } });
   if (!values.suite || !values.output) throw new Error('Supply --suite PATH and --output NEWDIR under output/writing.');
@@ -50,12 +51,14 @@ export function parseOptions(args, cwd = process.cwd()) {
   const seed = integer('seed', 0, 2147483647);
   if (!['true', 'false'].includes(values['cache-prompt'])) throw new Error('--cache-prompt must be true or false.');
   if (values['prefill-batch'] !== undefined && !['16', '64'].includes(values['prefill-batch'])) throw new Error('Use --prefill-batch 16 or 64.');
+  if (values['warm-prefix'] !== undefined && values['warm-prefix'] !== 'true') throw new Error('--warm-prefix must be true when present.');
+  const warmPrefix = values['warm-prefix'] === 'true';
   const configs = validateConfigs(values.modes.split(',').map(mode => {
-    const fixed = mode === 'production_boundary';
+    const fixed = mode === 'production_boundary' || mode === 'framed' || mode === 'field_context';
     return { id: mode, mode, budget_ms: fixed ? 550 : budget, max_tokens: fixed ? 8 : tokens,
       cache_prompt: fixed || values['cache-prompt'] === 'true', temperature: 0, seed: 42 };
   }));
-  return { suitePath: resolve(cwd, values.suite), outputPath: resolve(cwd, values.output), configs, seed,
+  return { suitePath: resolve(cwd, values.suite), outputPath: resolve(cwd, values.output), configs, seed, warmPrefix,
     ...(values['prefill-batch'] !== undefined ? { prefillBatch: Number(values['prefill-batch']) } : {}),
     ...(values['model-artifact'] !== undefined ? { modelArtifactPath: modelArtifactPath(values['model-artifact']) } : {}) };
 }
@@ -205,8 +208,9 @@ export async function runSuite(options, { worker: suppliedWorker, outputRoot = O
   const suite = validateSuite(document.schema === 'badi.prediction-lab.session.v1' ? document.suite : document);
   if (suite.cases.length > 300) throw new Error('Run at most 300 cases at a time.');
   const configs = validateConfigs(options.configs);
-  const plan = planComparison(suite.cases, configs, options.seed);
-  const body = JSON.stringify({ suite, configs, seed: options.seed });
+  const compared = planComparison(suite.cases, configs, options.seed);
+  const plan = options.warmPrefix ? warmSchedule(compared) : compared;
+  const body = JSON.stringify({ suite, configs, seed: options.seed, ...(options.warmPrefix ? { warm_prefix: true } : {}) });
   if (Buffer.byteLength(body) > 512 * 1024) throw new Error('The normalized lab request exceeds 512 KiB.');
   const artifact = options.modelArtifactPath ? await readModelArtifact(options.modelArtifactPath) : null;
   const output = await prepareOutput(options.outputPath, outputRoot);
