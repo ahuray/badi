@@ -292,6 +292,10 @@ PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeS
 bool tabEligibleContext(const std::optional<ContextWindow> &context);
 // `typed` (a key's text) is a non-empty proper prefix of `suggestion`.
 bool typesSuggestionStart(std::string_view typed, std::string_view suggestion);
+// The field text includes the characters typed through a suggestion whose
+// context was `base`. A shorter window may keep only the last 128 bytes of
+// `base`, matching the broker's type-through slide rule.
+bool typeThroughContextReady(std::string_view base, std::string_view typed, std::string_view before);
 // The bounded window around a collapsed caret. The caller has already denied
 // sensitive, special-purpose and composing contexts.
 std::optional<ContextWindow> captureContextWindow(std::string_view text,

@@ -191,6 +191,13 @@ private:
         // The suggestion text not yet typed, until it is shown again: keys
         // typed faster than the remainder returns still count as type-through.
         std::string typeThroughRest;
+        // The field text the suggestion was shown for, plus the characters
+        // typed since. A snapshot from before those characters land must not
+        // ask the model; the broker can carry the remainder only once they
+        // are in the field.
+        std::string typeThroughBase;
+        std::string typeThroughTyped;
+        unsigned int typeThroughWaits = 0;
         // Show a suggestion that arrives during the typing pause only after
         // that pause, and only if this keystroke is still the latest.
         std::uint64_t showAfterUs = 0;
@@ -287,6 +294,9 @@ private:
         binding.dismissedContext.reset();
         binding.typedThrough = false;
         binding.typeThroughRest.clear();
+        binding.typeThroughBase.clear();
+        binding.typeThroughTyped.clear();
+        binding.typeThroughWaits = 0;
         binding.inspection.input();
         binding.surroundingFreshness.focusIn();
         if (!binding.state.focusIn(*sessionId, contextId, appId, *salt)) {
@@ -428,14 +438,23 @@ private:
         case PreKeyAction::Cancel:
             binding->typedThrough = false;
             binding->typeThroughRest.clear();
+            binding->typeThroughBase.clear();
+            binding->typeThroughTyped.clear();
+            binding->typeThroughWaits = 0;
             cancelForInput(*binding);
             return;
-        case PreKeyAction::CancelTypingThrough:
+        case PreKeyAction::CancelTypingThrough: {
+            if (binding->typeThroughBase.empty()) {
+                if (const auto previous = binding->state.lastContext())
+                    binding->typeThroughBase = previous->context.before;
+            }
             cancelForInput(*binding);
             binding->typedThrough = true;
+            binding->typeThroughTyped += std::string(typed);
             binding->typeThroughRest = expected.substr(typed.size());
             debug_.record("input", app, "typed_through");
             return;
+        }
         case PreKeyAction::Tab:
             tabKey(event, *binding, panel);
             return;
@@ -796,6 +815,16 @@ private:
             return debug_.record("request_blocked", app, *blocked, context->before.size(),
                                  observedAfter(*context).size());
         }
+        if (binding.typedThrough &&
+            !typeThroughContextReady(binding.typeThroughBase, binding.typeThroughTyped, context->before)) {
+            if (binding.typeThroughWaits < 10) {
+                ++binding.typeThroughWaits;
+                debug_.record("request_blocked", app, "type_through_pending");
+                observeLater(binding, false, true);
+                return;
+            }
+        }
+        binding.typeThroughWaits = 0;
         binding.observedFocus = observed;
         const auto update = binding.state.updateContext(*context);
         if (update && open(binding) && transport_.publishContext(*update)) {
@@ -954,6 +983,9 @@ private:
         binding->pendingSuggestion.reset();
         binding->typedThrough = false;
         binding->typeThroughRest.clear();
+        binding->typeThroughBase.clear();
+        binding->typeThroughTyped.clear();
+        binding->typeThroughWaits = 0;
         if (!overlay) showCandidate(*binding, suggestion);
         // The local lease must also hide UI if the broker stalls before its
         // suggestion.clear arrives. Only this exact candidate may be retired.
@@ -1054,6 +1086,15 @@ private:
                            shown.starts_with(dispatch->text);
         binding->typedThrough = word;
         binding->typeThroughRest = word ? shown.substr(dispatch->text.size()) : std::string();
+        binding->typeThroughWaits = 0;
+        if (word) {
+            if (const auto previous = binding->state.lastContext())
+                binding->typeThroughBase = previous->context.before;
+            binding->typeThroughTyped = dispatch->text;
+        } else {
+            binding->typeThroughBase.clear();
+            binding->typeThroughTyped.clear();
+        }
         if (dispatch->replaceBefore) {
             if (imeParityApp(binding->state.appId())) return refuseCommit(prepare, binding);
             const auto context = currentContext(*binding);
