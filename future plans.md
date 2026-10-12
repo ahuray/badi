@@ -64,11 +64,10 @@ Standing user decisions:
 - [ ] Mid-sentence suggestions see only the text before the caret and keep
       what rejoins the next word, so whole-word insertions are rare. Try a
       prompt that also carries the text after the caret, measured in the Lab.
-- [ ] Confirm live that the inline preview matches the host font in Omawrite
-      (monospace), Chromium and Telegram. The overlay uses the caret run's
-      AT-SPI family, size and weight when those attributes exist, and otherwise
-      the caret's glyph height. That live comparison has not been repeated
-      since the attributes were wired up.
+- [ ] Confirm live that the inline preview matches the host font in Chromium
+      and Telegram. Omawrite 0.5.0 (2026-10-12) reports no AT-SPI font
+      attributes and a zero glyph box for the focused text, so the overlay
+      cannot copy that face and keeps its caret-size fallback.
 - [ ] The headless Obsidian live lane (`adapters/obsidian/live.mjs
       --headless`) leaves Electron SIGTRAP core dumps when it signals the
       process group at teardown, and each dump makes Omarchy open a
