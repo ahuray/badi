@@ -1112,7 +1112,12 @@ mod tests {
     fn instructed_healed_returns_only_exact_multilingual_continuations() {
         for (before, language, raw, expected) in [
             ("Please review the  ", "en", "  report", "report"),
-            ("Please review the docum", "en", " documents and", "ents and"),
+            (
+                "Please review the docum",
+                "en",
+                " documents and",
+                "ents and",
+            ),
             (
                 "Bitte lies das ",
                 "de",
