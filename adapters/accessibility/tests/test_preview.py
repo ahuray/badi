@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from preview import (Preview, disable_preview_animation, field_box_ends_before_caret, font_facts,
-                    font_pixels, ltr_text, mapped_caret, place_chip, place_inline,
+                    font_pixels, ltr_text, mapped_caret, place_chip, place_edge_panel, place_inline,
                     place_on_caret_line, valid_preview_text)
 
 
@@ -146,6 +146,17 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertEqual(fractional.scale, 1.5)
         # 146.83 logical: 146 lands on an exact physical pixel, 147 does not.
         self.assertEqual(place_inline(fractional, 200, 24, 19), (211, 146))
+
+    def test_edge_panel_stays_outside_the_field_and_inside_the_window(self):
+        data = focus()
+        caret = mapped_caret(data)
+        self.assertEqual(place_edge_panel(caret, 120, 24), (203, 182))
+        self.assertEqual(place_edge_panel(caret, 800, 24), (200, 182))
+        self.assertIsNone(place_edge_panel(caret, 901, 24))
+        data["geometry"]["field"]["height"] = 610
+        self.assertEqual(place_edge_panel(mapped_caret(data), 120, 24), (203, 114), 'falls above a field at the bottom')
+        data["geometry"]["field"] = {"x": 0, "y": 0, "width": 900, "height": 650}
+        self.assertIsNone(place_edge_panel(mapped_caret(data), 120, 24), 'no room outside a full-window editor')
 
     def test_following_glyph_bounds_inline_text_before_the_next_word(self):
         data = focus()
@@ -319,8 +330,9 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertIn(("left", 203), calls)
         self.assertIn(("top", 172), calls)
         preview, calls, _monitor = self.render_fixture((700, 24))
-        self.assertFalse(preview.render(focus(), " next", 1500), "past a field that still holds the caret")
-        self.assertNotIn(("visible", True), calls)
+        self.assertTrue(preview.render(focus(), " next", 1500), "overflow uses a quiet panel outside the field")
+        self.assertIn(("class", "chip"), calls)
+        self.assertIn(("top", 182), calls)
         short = focus()
         short["geometry"]["field"]["width"] = 89
         preview, calls, _monitor = self.render_fixture((200, 24))
@@ -336,6 +348,15 @@ class PreviewGeometryTests(unittest.TestCase):
             self.assertFalse(preview.render(data, text, 1500))
             self.assertNotIn(("visible", True), calls)
             self.assertFalse(any(call[0] == "timer" for call in calls))
+
+    def test_long_reading_window_keeps_a_bounded_local_expiry(self):
+        preview, calls, _monitor = self.render_fixture()
+        self.assertTrue(preview.render(focus(), " next words", 15000))
+        self.assertIn(("timer", 15000), calls)
+        for ttl in (15001, 0, True):
+            calls.clear()
+            self.assertFalse(preview.render(focus(), " next words", ttl))
+            self.assertNotIn(("visible", True), calls)
 
     def test_warming_lays_out_text_without_showing_it(self):
         preview, calls, _monitor = self.render_fixture()

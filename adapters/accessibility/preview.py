@@ -9,7 +9,7 @@ from threading import Thread
 import time
 import unicodedata
 
-from contract import RIGHT_TO_LEFT
+from contract import MAX_PREVIEW_TTL_MS, RIGHT_TO_LEFT
 from geometry import CALIBRATED
 
 
@@ -317,6 +317,32 @@ def place_chip(caret, width, height):
     return None
 
 
+def place_edge_panel(caret, width, height):
+    """A quiet overflow panel outside the field, bounded by window and monitor.
+
+    Keep the whole surface below or above the field so it cannot cover the
+    field's neighboring button or be mistaken for inserted inline text.
+    """
+    if not _number(width, 1, 4096) or not _number(height, 1, 256):
+        return None
+    mx, my, mw, mh = caret.monitor
+    wx, wy, ww, wh = caret.window
+    left, right = max(mx, wx), min(mx + mw, wx + ww)
+    top, bottom = max(my, wy), min(my + mh, wy + wh)
+    if width > right - left:
+        return None
+    x = min(max(caret.x - CHIP_INSET, left), right - width)
+    x = mx + _snap(x - mx, caret.scale)
+    if x < left or x + width > right:
+        return None
+    for proposed in (caret.field_bottom + CHIP_GAP, caret.field_top - CHIP_GAP - height):
+        y = my + _snap(proposed - my, caret.scale)
+        outside = y >= caret.field_bottom + CHIP_GAP or y + height <= caret.field_top - CHIP_GAP
+        if outside and top <= y and y + height <= bottom:
+            return round(x - mx), round(y - my)
+    return None
+
+
 LAYER_NAMESPACE = "badi-writing-preview"
 # Hyprland (Omarchy) animates layer surfaces in by default; a ghost that
 # fades/slides reads as hovering and arrives late. The rule is best-effort:
@@ -389,11 +415,11 @@ class Preview:
                 font-weight: 400;
             }
             window.badi-writing-preview.chip label {
-                color: rgba(232, 232, 236, 0.96);
-                background-color: rgba(34, 36, 44, 0.94);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 6px;
-                padding: 1px 6px;
+                color: rgba(176, 176, 176, 0.96);
+                background-color: rgba(28, 30, 35, 0.94);
+                border: none;
+                border-radius: 3px;
+                padding: 2px 6px;
             }
         """)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), self.css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
@@ -495,7 +521,7 @@ class Preview:
 
     def render(self, focus, text, ttl_ms):
         self.hide()
-        if not valid_preview_text(text) or type(ttl_ms) is not int or not 1 <= ttl_ms <= 5000:
+        if not valid_preview_text(text) or type(ttl_ms) is not int or not 1 <= ttl_ms <= MAX_PREVIEW_TTL_MS:
             return False
         caret = mapped_caret(focus)
         if caret is None or not ltr_text(text):
@@ -535,6 +561,9 @@ class Preview:
             # space is the separator that acceptance inserts, so the chip keeps it.
             width, height, _baseline = self._layout(text.lstrip(" "), chip=True)
             position = place_chip(caret, width, height)
+        if position is None:
+            width, height, _baseline = self._layout(text.lstrip(" "), chip=True)
+            position = place_edge_panel(caret, width, height)
         if position is None:
             self.label.set_text("")
             return False

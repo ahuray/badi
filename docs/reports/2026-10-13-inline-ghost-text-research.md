@@ -151,9 +151,12 @@ scale 2), and `hyprctl layers` showed the `badi-writing-preview` surface
 with `hyprctl configerrors` empty. Two live-diagnosis notes: an oversized
 test field wider than its window correctly failed calibration to the panel
 (field outside the document viewport), and Omawrite's ghost face remains
-the overlay's own because Qt reports no font attributes. Step 5 (restyling
-the native Fcitx panel fallback) was not done; native non-observed fields
-still show the candidate panel.
+the overlay's own because Qt reports no font attributes. A subsequent
+follow-up adds compact grey overflow below or above the field and reduces
+the native fallback to a single unhighlighted candidate without a key banner
+([current preview contract](../../adapters/accessibility/README.md#caret-geometry-and-preview)).
+Its separate disposable renderer trial is recorded in that runbook; these
+earlier application captures do not verify the later fallback styling.
 
 ## Sources
 

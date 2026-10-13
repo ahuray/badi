@@ -791,8 +791,7 @@ void invokeRoutesByEditPathAndExplainsWaits() {
           "a stale or denied field explains why nothing is inspected");
     check(notice::kUnavailableApp == "Badi cannot safely insert suggestions in this app yet" &&
               notice::kObserverUnavailable == "Badi cannot see this text field — check badi doctor" &&
-              notice::kFieldUnreadable == "Badi cannot read this text field — run badi debug status" &&
-              notice::kSuggestionKeys == "Badi · Tab to accept · Ctrl+→ next word · Escape to dismiss",
+              notice::kFieldUnreadable == "Badi cannot read this text field — run badi debug status",
           "notices keep the wording the desktop lane and runbook name");
 }
 

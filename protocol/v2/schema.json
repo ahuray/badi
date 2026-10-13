@@ -318,13 +318,14 @@
         "health",
         "policy",
         "settings",
-        "text_replacement"
+        "text_replacement",
+        "long_reading_window"
       ]
     },
     "capabilities": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 9,
+      "maxItems": 10,
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/capability" }
     },
@@ -819,7 +820,7 @@
         "replace_before": { "type": "string", "pattern": "^[a-z]{3,24} ?$", "description": "Exact suffix replaced only by adapters negotiating text_replacement; bound to the original context and commit grant." },
         "text": { "type": "string" },
         "accept_word": { "type": "string" },
-        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 5000, "description": "Relative receiver-local lifetime starting when this frame is received. Native panels receive up to five seconds; browser leases remain 600 ms." },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 15000, "description": "Relative receiver-local lifetime starting when this frame is received. Native and editor clients negotiating long_reading_window receive up to 15 seconds; other native and editor clients retain five seconds, and browser leases remain 600 ms. Extensions and type-through never renew the original expiry." },
         "provider": { "enum": ["phrase_v1", "local_model"] }
       },
       "if": { "required": ["replace_before"] },

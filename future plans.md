@@ -68,13 +68,9 @@ Standing user decisions:
       rejoin showed 2 suggestions and 1 reference match, with no deadline
       misses; the following-line prompt showed 1 suggestion and 1 reference
       match, and missed 550 ms on 34 of 41 because that line is not cached.
-- [ ] Evaluate a longer acceptance lease or explicit renewal while the
-      suggestion remains fresh, preserving every field, revision, fingerprint,
-      focus and expiry check. The current five-second lease remains unchanged.
-- [ ] Measure fallback frequency per app and restyle the Fcitx candidate panel
-      at field edges. Inline font-metric placement and animation suppression
-      are implemented ([preview contract](adapters/accessibility/README.md#caret-geometry-and-preview));
-      fractional-scale and multi-monitor live trials remain open.
+- [ ] Measure overflow frequency per app; fractional-scale and multi-monitor
+      live trials remain open. The implemented placement and fallback behavior
+      is in the [preview contract](adapters/accessibility/README.md#caret-geometry-and-preview).
 - [ ] Confirm live that the grey preview uses the host font in Telegram.
       A disposable Chromium textarea (2026-10-12, build `7957f16`) set to
       JetBrainsMono NF at 20px reports `family-name` JetBrainsMono NF and

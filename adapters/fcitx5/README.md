@@ -50,9 +50,11 @@ observer wire details.
   Ctrl+Shift+Space still asks there. An unrecognized quiet fact also quiets
   automatic work. The manual native path sees only Fcitx purposes and has no
   dialog or width signal, so it is not quieted this way.
-- **Display.** The observer's grey inline preview, or else Badi's own Fcitx
-  panel: one candidate under “Badi · Tab to accept · Ctrl+→ next word · Escape
-  to dismiss”. Notices expire after five seconds.
+- **Display.** The observer's grey inline preview, with a compact grey overflow
+  panel below or above the field when needed. If neither fits or geometry is
+  unavailable, Badi's Fcitx panel contains one unhighlighted candidate, no
+  numeric label and no keyboard-help banner. It keeps the user's Fcitx theme.
+  Suggestions expire after at most 15 seconds; notices still expire after five.
 - **Acceptance.** The broker authorizes first. A matching `commit.prepare`
   causes exactly one `commitString`, reported as `dispatched-unverified`. The
   candidate must still be present and owned at dispatch, and a local timer

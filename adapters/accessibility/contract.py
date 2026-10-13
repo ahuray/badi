@@ -13,6 +13,7 @@ SCHEMA = "badi.accessibility.v1"
 MAX_FRAME = 16 * 1024
 MAX_BEFORE = 512
 MAX_AFTER = 128
+MAX_PREVIEW_TTL_MS = 15_000
 MAX_POSITION = 2**31 - 1
 ID = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 APP_ID = re.compile(r"[a-zA-Z0-9_.-]{1,128}")
@@ -315,7 +316,7 @@ def checked_app_id(app_id):
 def well_formed_preview(request):
     """Valid suggestion text, lifetime and last-snapshot position."""
     ttl, caret, total = request["ttl_ms"], request["expected_caret"], request["expected_total_chars"]
-    return (suggestion_text(request["text"]) and type(ttl) is int and 1 <= ttl <= 5000
+    return (suggestion_text(request["text"]) and type(ttl) is int and 1 <= ttl <= MAX_PREVIEW_TTL_MS
             and type(caret) is int and type(total) is int and 0 <= caret <= total <= MAX_POSITION
             and ("caret_rect" not in request or caret_rectangle(request["caret_rect"])))
 

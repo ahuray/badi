@@ -23,7 +23,7 @@ and whether they were dirty (`--version` prints both; packagers may set
   documents in [schemas/](schemas/).
 - **Negotiation.** `hello` negotiates protocol v1 or v2 and the capabilities a
   connection may use: context, suggestion, commit kinds, text replacement,
-  policy, control, health and settings.
+  policy, control, health, settings and an optional `long_reading_window`.
 - **Binding.** A suggestion is bound to its session, focus epoch, revision,
   fingerprint and expiry, and acceptance is one-shot.
 - **Authority acknowledgement.** A policy-capable connection must answer
@@ -34,9 +34,16 @@ and whether they were dirty (`--version` prints both; packagers may set
   an older epoch never admits; acking a future epoch is rejected. Every epoch
   advance (pause, settings install or control-plane change) re-blocks the
   data plane until the new epoch is acknowledged.
-- **Leases.** An adapter must report a granted commit within 1.5 s; retained
-  context is revoked after 3 s of silence; v2 native and editor suggestions
-  stay readable for 5 s. Anything stale, foreign or unknown fails closed.
+- **Leases.** An adapter must report a granted commit within 1.5 s. Retained
+  context normally expires after 3 s of silence. V2 native/editor clients
+  negotiating `long_reading_window` get 15 s to read a suggestion; other v2
+  native/editor clients retain 5 s, and v1/browser clients retain 600 ms.
+  Native/editor context lasts at least the generation budget plus that reading
+  window (up to 16.25 s for an explicit extended request). Growing previews
+  and type-through keep the original expiry; there is no periodic renewal.
+  Every field, revision, fingerprint, focus, policy and one-shot guard remains.
+  Update the broker before clients advertising the new capability; an older
+  broker rejects it. Fcitx and Obsidian opt in; Bash keeps its existing lease.
 - **Growing previews.** Each extension has an immutable id and text. Earlier
   versions remain acceptable only within the same generation, exact field
   revision and original expiry, so a new word crossing Tab on the socket

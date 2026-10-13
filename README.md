@@ -20,7 +20,9 @@ Obsidian accepts one word with Tab only while a suggestion is visible, and
 takes all of it with Ctrl/Command+→. Ctrl+Shift+Space asks for one. Tab with
 nothing showing stays Tab.
 Bash uses Ctrl-X then Tab to request and accept. In a Xournal++ text cell, Tab
-requests and Tab again accepts. A suggestion lasts up to five seconds. In the
+requests and Tab again accepts. Fcitx and Obsidian suggestions last up to
+15 seconds; edits, focus changes and dismissal still remove them immediately.
+Bash keeps its four-second preview. In the
 observed apps below, Badi stays quiet on its own in file dialogs and very
 narrow fields; Ctrl+Shift+Space still asks there. `badi escape-quiet 60` (or
 the settings panel) also keeps a dismissed field quiet for a minute across
@@ -36,8 +38,10 @@ instead, and that box keeps the separating space.
 Grey text uses the field's font family, size and weight when accessibility
 exposes them, and otherwise a size taken from the caret's glyph. The observer
 aligns it using font metrics and disables the Hyprland preview entrance
-animation. If it cannot fit safely at the field edge, Fcitx uses its candidate
-panel ([preview contract](adapters/accessibility/README.md#caret-geometry-and-preview)).
+animation. At a field edge, overflow appears as a compact grey line just below
+or above the field. If that cannot fit either, Fcitx uses one unhighlighted
+candidate without the help banner
+([preview contract](adapters/accessibility/README.md#caret-geometry-and-preview)).
 Fcitx 5.1.22
 on this machine already supplies emoji: QuickPhrase (Super+semicolon, then a
 word such as `smile`) and the Emoji module. They do not expand a colon

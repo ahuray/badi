@@ -7,6 +7,11 @@ expiring one-shot broker grant, and retain no typed text. Password and
 sensitive fields, foreign composition, selections and stale context are
 excluded.
 
+Obsidian negotiates a 15-second reading window with the updated broker.
+Expiry still clears the preview and prevents acceptance; it is never renewed
+just because the preview remains visible. Bash keeps its existing lease and
+four-second local display timer. Update the broker before the editor plugin.
+
 | Integration | Keys | Tested with |
 | --- | --- | --- |
 | Obsidian | Automatic, or Ctrl+Shift+Space to request. Tab accepts one word only while a suggestion is visible; otherwise it stays Tab. Ctrl/Command+Right accepts all, Escape dismisses. Mid-note, only what fits before the next word. | Obsidian 1.13.7 / Electron 43, real app and model: English, German and Persian display, acceptance, undo, Escape, broker restart |

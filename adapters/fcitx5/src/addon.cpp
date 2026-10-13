@@ -133,7 +133,9 @@ public:
     BadiCandidate(std::string text,
                   std::function<void(::fcitx::InputContext *)> selected)
         : CandidateWord(::fcitx::Text(std::move(text))),
-          selected_(std::move(selected)) {}
+          selected_(std::move(selected)) {
+        setCustomLabel(::fcitx::Text());
+    }
 
     void select(::fcitx::InputContext *inputContext) const override {
         selected_(inputContext);
@@ -1038,7 +1040,7 @@ private:
         debug_.record("suggestion", binding->state.appId(), overlay ? "display_overlay" : "display_dispatched");
     }
 
-    // Badi's own Fcitx panel: the suggestion as its single candidate, with the keys.
+    // Keep the last-resort panel to one quiet line; key help lives in the runbook.
     void showCandidate(Binding &binding, const Suggestion &suggestion) {
         auto list = std::make_unique<::fcitx::CommonCandidateList>();
         list->setPageSize(1);
@@ -1048,8 +1050,9 @@ private:
                 auto *current = bindingFor(sessionId);
                 if (current && current->inputContext == selected && selected->hasFocus()) requestAcceptance(*current);
             }));
+        list->setGlobalCursorIndex(-1);
         auto &panel = binding.inputContext->inputPanel();
-        binding.ownedAuxiliary = notice::kSuggestionKeys;
+        binding.ownedAuxiliary.clear();
         panel.setAuxUp(::fcitx::Text(binding.ownedAuxiliary));
         panel.setCandidateList(std::move(list));
         binding.ownedCandidates = panel.candidateList();

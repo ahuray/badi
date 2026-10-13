@@ -21,7 +21,7 @@ pub const MAX_SUGGESTION_CHARS: usize = 64;
 pub const MAX_SUGGESTION_WORDS: usize = 8;
 pub const MAX_ID_CHARS: usize = 128;
 pub const DEFAULT_SUGGESTION_TTL_MS: u64 = 600;
-pub const CAPABILITY_COUNT: usize = 9;
+pub const CAPABILITY_COUNT: usize = 10;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SessionId(Uuid);
@@ -93,6 +93,8 @@ pub enum AdapterKind {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Capability {
+    #[serde(rename = "long_reading_window")]
+    LongReadingWindow,
     #[serde(rename = "text_replacement")]
     TextReplacement,
     #[serde(rename = "context")]
@@ -502,6 +504,11 @@ impl HelloPayload {
 
     pub fn validate_for_frame(&self, frame_version: u8) -> Result<(), ProtocolError> {
         self.validate()?;
+        if self.capabilities.contains(&Capability::LongReadingWindow)
+            && frame_version != CURRENT_PROTOCOL_VERSION
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
         if self.adapter.kind == AdapterKind::Terminal && frame_version != CURRENT_PROTOCOL_VERSION {
             return Err(ProtocolError::InvalidPayload);
         }
@@ -1367,6 +1374,24 @@ mod tests {
             ],
         };
         hello.validate().expect("all schema capabilities");
+    }
+
+    #[test]
+    fn long_reading_window_requires_v2_negotiation() {
+        let mut hello = HelloPayload {
+            min_v: 1,
+            max_v: 1,
+            adapter: AdapterDescriptor {
+                kind: AdapterKind::Fcitx,
+                name: "reading-window-test".to_owned(),
+                version: "1".to_owned(),
+            },
+            capabilities: vec![Capability::Context, Capability::LongReadingWindow],
+        };
+        assert!(hello.validate_for_frame(1).is_err());
+        hello.min_v = 2;
+        hello.max_v = 2;
+        hello.validate_for_frame(2).expect("v2 opt-in");
     }
 
     #[test]

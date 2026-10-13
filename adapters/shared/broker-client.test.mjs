@@ -63,7 +63,7 @@ test('editor identities, native reading lease, revocation and one-shot commits a
         await assert.rejects(client.suggest('thank you', { language }), /Invalid writing language/);
       }
       assert.equal(await client.suggest('thank you', { language: 'en-US' }), ' for your time');
-      await delay(800);
+      await delay(profile === 'obsidian' ? 5500 : 800);
       const grant = await client.authorize();
       assert.equal(grant.text, ' for your time');
       await assert.rejects(client.authorize(), /expired/);
@@ -86,6 +86,15 @@ test('editor identities, native reading lease, revocation and one-shot commits a
     assert.equal(health.metrics.commits_applied, 2);
     assert.equal(health.metrics.provider_calls, 8);
     assert.equal(health.metrics.provider_errors, 0);
+    {
+      const client = new BrokerClient('obsidian');
+      clients.push(client);
+      assert.equal(await client.connect(endpoint), true);
+      assert.equal(await client.suggest('thank you'), ' for your time');
+      await delay(15100);
+      await assert.rejects(client.authorize(), /expired/);
+      client.close();
+    }
     {
       const client = new BrokerClient('obsidian');
       clients.push(client);

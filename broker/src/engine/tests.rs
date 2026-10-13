@@ -4248,6 +4248,49 @@ impl CompletionProvider for TriggerProvider {
 }
 
 #[test]
+fn long_reading_window_is_opt_in_and_keeps_context_until_the_original_expiry() {
+    let config = BrokerConfig::default().clamped();
+    for adapter_kind in [
+        AdapterKind::Fcitx,
+        AdapterKind::Obsidian,
+        AdapterKind::Terminal,
+    ] {
+        let mut authority = SessionAuthority {
+            protocol_version: 2,
+            adapter_kind,
+            capabilities: vec![Capability::Context, Capability::Suggestion],
+        };
+        assert_eq!(
+            config.suggestion_ttl_for(&authority),
+            Duration::from_secs(5)
+        );
+        authority.capabilities.push(Capability::LongReadingWindow);
+        assert_eq!(
+            config.suggestion_ttl_for(&authority),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            config.context_authority_lease_for(&authority, config.explicit_generation_timeout),
+            Duration::from_millis(16_250)
+        );
+        authority.protocol_version = 1;
+        assert_eq!(
+            config.suggestion_ttl_for(&authority),
+            Duration::from_millis(600)
+        );
+    }
+    let browser = SessionAuthority {
+        protocol_version: 2,
+        adapter_kind: AdapterKind::Browser,
+        capabilities: vec![Capability::LongReadingWindow],
+    };
+    assert_eq!(
+        config.suggestion_ttl_for(&browser),
+        Duration::from_millis(600)
+    );
+}
+
+#[test]
 fn explicit_generation_limit_stays_between_the_automatic_limit_and_its_ceiling() {
     let broker = |generation: u64, explicit: u64| {
         let broker = Broker::new(

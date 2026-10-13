@@ -184,7 +184,7 @@ Requests carry `schema: "badi.accessibility.v1"`, an ASCII `id` and an `op`:
 | --- | --- | --- |
 | `inspect` | `app_id` | `binding` `{epoch,bus,path,process_id,app_id,uri}`, `target` (browser targets keep the exact app id and origin; `target_id` hashes bus, path and epoch), `purpose`, `caret`, `selection_count`, `geometry: null`, optional `quiet` |
 | `snapshot` | `binding`, `policy_target` | `before`, `after`, `total_chars`, optional `scope: "block"`, optional `quiet` |
-| `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–160 characters), `ttl_ms` (1–5000), optional `caret_rect` `{x,y,width,height,scale}` | `total_chars`, `rendered`, optional `quiet` |
+| `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–160 characters), `ttl_ms` (1–15000), optional `caret_rect` `{x,y,width,height,scale}` | `total_chars`, `rendered`, optional `quiet` |
 
 `preview` compares the current caret and length with the expected ones before
 drawing. `hide` returns `hidden:true`; `status` returns readiness without
@@ -280,10 +280,15 @@ pass it is not drawn over the controls beside the field. When the last
 snapshot had words after the caret on its line
 (`text_follows`), the glyph after the caret bounds the inline room: text
 that ends before it still draws inline, and only text that would cover it
-draws a compact dark chip under the caret instead, and
-only while that chip fits inside the field. Suggestions are at most 64
-characters; one that fits nowhere returns `rendered: false`. The surface takes
+draws a compact grey chip under the caret instead while it fits inside the
+field. Overflow uses the same borderless grey surface wholly below or above
+the field, bounded by the window and monitor, so it does not cover controls
+beside the field. There is no title, key banner or selection highlight.
+Suggestions are at most 64 characters; one that fits nowhere returns
+`rendered: false` for the native single-candidate fallback. The surface takes
 no input or focus, and any invalidation, new render or expiry hides it. The
+preview accepts the broker's remaining lease up to 15 seconds; scrolling
+repositions it with only the remaining time and never renews it. The
 helper forces software rendering and the simple GTK input module, so it never
 loads a GPU driver or connects to an input method.
 
@@ -352,3 +357,10 @@ stale snapshots, bounded Unicode reads, rich-editor flattening, calibration
 against recorded live extents, the preview lifecycle and the lock query. The
 integration lane proves that other senders and fields cannot deliver events and
 that invalidation unsubscribes the authorized field.
+
+On 2026-10-13 a disposable GTK layer-shell fixture on this workstation at
+scale 2 rendered both inline and field-edge overflow previews. Captures showed
+the grey overflow wholly below the field without covering its neighboring
+button; it stayed visible beyond six seconds and hid after its 15-second
+lease without renewal. This checks the real renderer, not application editing
+or fractional-scale behavior.
