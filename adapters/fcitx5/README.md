@@ -197,6 +197,17 @@ pixels between typed and ghost glyph-bottom modes at scale 2
 ([measurement](../../docs/reports/2026-10-13-inline-ghost-text-research.md#implementation-outcome-2026-10-13-same-day)).
 These are prior live observations, separate from the merge's automated checks.
 
+The merged `25fde96` build was installed on 2026-10-13 and exercised through
+the running local model, observer and addon in Chromium 152.0.7977.82 on native
+Wayland. Two disposable fields retained their grey suggestion for six seconds
+before Tab: a textarea accepted inline text, and a 280 CSS px input accepted
+the quiet overflow panel shown above the field. Neither edited the second
+field. Undo merged with preceding typing in both cases. A horizontally scrolled
+100 CSS px input showed no suggestion in two explicit-request attempts, so
+that boundary remains unverified. These are acceptance samples, not latency
+or language-quality scores. The disposable browser profile was removed; the
+installed settings and keyboard profile remained byte-identical.
+
 | Application | Reaches Fcitx through | Boundary |
 | --- | --- | --- |
 | Omawrite 0.5.0 (Qt 6) | `QT_IM_MODULE=fcitx` | 20/20 trials; one native undo restores the exact prefix |

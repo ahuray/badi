@@ -71,6 +71,9 @@ Standing user decisions:
 - [ ] Measure overflow frequency per app; fractional-scale and multi-monitor
       live trials remain open. The implemented placement and fallback behavior
       is in the [preview contract](adapters/accessibility/README.md#caret-geometry-and-preview).
+      Investigate explicit requests in horizontally scrolled, very narrow
+      inputs: the installed Chromium trial at 100 CSS px did not establish
+      coverage ([tested boundary](adapters/fcitx5/README.md#tested-with)).
 - [ ] Confirm live that the grey preview uses the host font in Telegram.
       A disposable Chromium textarea (2026-10-12, build `7957f16`) set to
       JetBrainsMono NF at 20px reports `family-name` JetBrainsMono NF and
@@ -144,7 +147,21 @@ resident memory about 1.3 GB, and no quality regression in the Lab.
 - [ ] Fewer generated tokens, only after a held-out quality comparison.
 - [ ] Qualify Qwen3 0.6B and Gemma 4 E2B (with its multi-token drafter) in the
       Lab. Defer hybrid-attention models until llama.cpp reuses their caches.
-- [ ] Battery mode: a longer pause and a smaller model on battery.
+- [ ] **Linux research priority 1: battery and load-aware scheduling.** Observe
+      [UPower `OnBattery`](https://upower.freedesktop.org/docs/UPower.html) and
+      [power profiles](https://upower.pages.freedesktop.org/power-profiles-daemon/gdbus-org.freedesktop.UPower.PowerProfiles.html)
+      to offer a quieter automatic mode while keeping explicit requests responsive.
+      Keep the current model resident; a smaller model still needs independent
+      qualification. Adapt the existing prefetch and cancellation behavior to
+      battery state without changing the user's system power profile. Compare energy
+      per useful accepted word, 550 ms misses and full additions on AC and battery.
+      Read-only discovery on 2026-10-13 found UPower 1.91.3 and
+      power-profiles-daemon 0.30 running here.
+- [ ] Use [Linux pressure signals](https://www.kernel.org/doc/html/latest/accounting/psi.html)
+      to reduce speculative requests while the machine is contended. PSI files
+      are available here; `CPUWeight=1000`, `MemoryHigh=3G` and resident-model
+      protection already exist. Measure foreground responsiveness and deadline
+      misses before changing those controls; do not add automatic model eviction.
 - [ ] Lower-memory hardware: cold start, RAM, sustained latency, power and
       crash recovery.
 
@@ -161,6 +178,14 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       (`omarchy-done ensure`, `omarchy-notification-send --exec`), a
       floating-terminal installer, menu entries for settings and removal,
       keybindings and theme colours for the preview.
+- [ ] **Linux research priority 3: desktop controls through the
+      [GlobalShortcuts portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html).**
+      Offer configurable pause/resume and open-settings shortcuts. This desktop
+      exposes interface version 1 through the Hyprland backend; negotiate the
+      installed version rather than assuming version 2's configuration method.
+      A request shortcut would still require a currently admitted adapter field.
+      Verify conflicts, cancellation, session restart and cleanup. Registering a
+      shortcut provides no authority to acquire or edit arbitrary applications.
 - [ ] Support [omarchy#12139](https://github.com/omacom/omarchy/pull/12139)
       (`--enable-wayland-ime` by default); keep the per-app flags until it lands.
 - [ ] Signed updates. The broker service is already sandboxed: `PrivateNetwork=yes`,
@@ -170,6 +195,14 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] An installed-flow matrix with zero wrong-field or stale edits: service
       restart, suspend and resume, undo, pause, composition, stale focus,
       fractional scaling and several monitors.
+- [ ] Add a session lifecycle observer using
+      [logind sleep and session events](https://github.com/systemd/systemd/blob/main/man/org.freedesktop.login1.xml).
+      Revoke context, pending inference and visible grants on suspend or session
+      deactivation; reacquire after resume. Keep the existing fresh Omarchy lock
+      checks: logind's `LockedHint` is a hint, not proof of unlock. Test resume
+      after expiry, lost D-Bus ownership, service restart and a Tab pressed before
+      fresh acquisition. logind is available here; these flows were not exercised
+      by the 2026-10-13 installation trial.
 
 ## Better suggestions
 
@@ -182,9 +215,22 @@ gates. The [context firewall](VISION.md#context-firewall) owns this contract.
       global and per-app controls, sensitive-node and cross-origin exclusion,
       ephemeral storage and cancellation on scope or focus changes. No extra
       context reaches production inference before independent Lab evidence.
+      [AT-SPI Text](https://gnome.pages.gitlab.gnome.org/at-spi2-core/libatspi/iface.Text.html)
+      offers bounded text ranges, attributes and geometry. Start with an allowed
+      nearby heading or preceding paragraph, reject nodes whose origin or scope
+      cannot be established, and compare full additions against the current
+      focused-field baseline. API availability alone establishes neither privacy
+      nor improved prediction quality.
 - [ ] Implement local style learning from authorized samples, encrypted
       storage, global and per-app opt-outs, and one-step deletion; verify
       that disabling it stops reads and writes and that draft facts win.
+      Use [Secret Service through libsecret](https://gnome.pages.gitlab.gnome.org/libsecret/)
+      for a dedicated encryption key, with the encrypted learning data stored
+      separately. GNOME Keyring's service and libsecret 0.21.7 are available here.
+      Do not put prose in keyring labels or lookup attributes. Verify locked or
+      missing keyring behavior, restart, key loss and deletion before retention
+      is enabled. This is protection for stored data, not isolation from a
+      compromised logged-in desktop.
 - [ ] Qualify French and Spanish before enabling them. Gather independently
       reviewed confirmation prefixes and full-addition reviews for both,
       alongside the existing English, German and Persian confirmation gate.
@@ -257,10 +303,28 @@ From the 2026-10-11 audit. These are not part of the installed behavior.
       typing shows an indicator.
 - [ ] Grok Bot composer trial in the signed-in app after a relaunch with
       `grok-bot-flags.conf`.
-- [ ] More native toolkits through measured integrations. LibreOffice
-      paragraphs expose `EditableText`, a possible route to exact replacement.
-- [ ] Fish, Zsh and Neovim through their own buffers, never by running a
-      generated command.
+- [ ] More native toolkits through measured integrations. For LibreOffice,
+      investigate an editor-owned UNO extension using
+      [text ranges](https://api.libreoffice.org/docs/idl/ref/interfacecom_1_1sun_1_1star_1_1text_1_1XText.html)
+      and [undo contexts](https://api.libreoffice.org/docs/idl/ref/interfacecom_1_1sun_1_1star_1_1document_1_1XUndoManager.html)
+      for suffix replacement and one-step undo. Bind the exact document, view,
+      caret and revision and verify mutation in the editor. AT-SPI `EditableText`
+      exposure alone does not prove atomic replacement or native undo. Keep the
+      existing append-only IME-parity route until the extension passes those gates.
+- [ ] **Linux research priority 2: native Neovim integration.** Its
+      [buffer events and inline virtual text](https://neovim.io/doc/user/api/)
+      can supply exact revisions and a preview owned by the editor. Neovim 0.12.5
+      is installed here. Start with prose buffers, bind window/buffer identity,
+      `changedtick` and caret, then revalidate and edit within an editor callback.
+      Prove UTF-8 offsets, completion-menu coexistence, stale-result rejection,
+      read-only and terminal-buffer denial, one-step undo and disconnect cleanup.
+- [ ] Extend shell support using
+      [Zsh ZLE buffers and `POSTDISPLAY`](https://zsh.sourceforge.io/Doc/Release/Zsh-Line-Editor.html)
+      and [Fish's command-line API](https://fishshell.com/docs/current/cmds/commandline.html).
+      Zsh has a documented preview surface; Fish buffer access still needs a
+      measured preview integration compatible with its own autosuggestions.
+      Neither shell is installed here. Acceptance must only edit the buffer,
+      preserve native undo and never execute a generated command.
 - [ ] Terminal agent prompts (Claude Code, Codex): terminals send no
       surrounding text, so each needs its own channel or stays unsupported.
 - [ ] Later: other Linux desktops, a standard tray and personal snippets.
