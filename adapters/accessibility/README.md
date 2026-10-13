@@ -259,13 +259,23 @@ takes a paragraph's direction from its first strong character.
 The GTK4 layer-shell overlay draws the suggestion as translucent grey text right
 after the caret, with no background. When the caret's text run reports a font
 family, a size (`size` in points, or `font-size` in px) or a weight, the
-overlay uses those. Otherwise the size comes from the glyph height and the
-face stays the overlay's own. A field box that ends before the caret still
+overlay uses those, and the baseline is anchored at that font's real Pango
+ascent below the glyph box top; without a reported family the size comes
+from the glyph height, the face stays the overlay's own and the baseline
+falls back to the layout-ratio heuristic. Layer margins snap to the
+monitor's physical pixel grid, so fractional scales do not shift or blur
+the ghost against the field's text. On Hyprland the observer asks the
+compositor not to animate its layer (`no_anim` rule for the
+`badi-writing-preview` namespace, re-applied periodically since a config
+reload drops runtime rules); the desktop installer persists the same rule
+as `~/.config/hypr/badi.lua`, loaded from `hyprland.lua`. A field box that ends before the caret still
 keeps that text on the caret's baseline inside the window, so it is not dropped onto the chrome under the
 input. A box that still contains the caret is a real edge: text that would
 pass it is not drawn over the controls beside the field. When the last
 snapshot had words after the caret on its line
-(`text_follows`), it draws a compact dark chip under the caret instead, and
+(`text_follows`), the glyph after the caret bounds the inline room: text
+that ends before it still draws inline, and only text that would cover it
+draws a compact dark chip under the caret instead, and
 only while that chip fits inside the field. Suggestions are at most 64
 characters; one that fits nowhere returns `rendered: false`. The surface takes
 no input or focus, and any invalidation, new render or expiry hides it. The

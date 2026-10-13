@@ -1441,9 +1441,11 @@ class GeometryWiringTests(unittest.TestCase):
     def test_every_request_reads_live_extents_and_calibrates(self):
         result = self.backend.geometry(self.field, self.text, 12, self.window)
         self.assertEqual(result["caret"], {"x": 210, "y": 110, "height": 20})
-        self.assertEqual(self.offsets, [(11, "screen")])
+        # The glyph before the caret calibrates; the one after it bounds inline room.
+        self.assertEqual(self.offsets, [(11, "screen"), (12, "screen")])
+        self.assertNotIn("following_x", result, "a following glyph at the caret glyph proves nothing")
         self.backend.geometry(self.field, self.text, 12, self.window)
-        self.assertEqual(len(self.offsets), 2, "no cached calibration")
+        self.assertEqual(len(self.offsets), 4, "no cached calibration")
 
     def test_unavailable_geometry_is_not_a_request_failure(self):
         self.frame.interfaces = []

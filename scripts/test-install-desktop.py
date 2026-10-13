@@ -26,7 +26,7 @@ NATIVE_SOURCES = ('target/release/badi-broker', 'target/release/badictl', 'scrip
                   'packaging/systemd/badi-broker.service', 'broker/data/writing-lexicon/LICENSE',
                   'broker/data/writing-lexicon/README.md', 'adapters/fcitx5/build/libbadi-fcitx5.so',
                   'adapters/fcitx5/build/badi.conf', 'packaging/systemd/fcitx-badi.conf',
-                  'packaging/systemd/badi-accessibility.service') + tuple(
+                  'packaging/systemd/badi-accessibility.service', 'packaging/hypr/badi.lua') + tuple(
                   'adapters/accessibility/' + name for name in installer.OBSERVER_MODULES)
 STOCK = '{ path=/usr/bin/fcitx5 ; argv[]=%s ; ignore_errors=no ; start_time=[n/a] ; pid=0 }\n'
 
@@ -129,6 +129,30 @@ class DesktopInstallTests(unittest.TestCase):
             flags.write_text('# mine\n# edited while building\n')
             with patch.object(installer, 'ROOT', project), \
                  self.assertRaisesRegex(RuntimeError, 'changed during the build'):
+                installer.install_files(plan)
+            self.assertFalse((home / '.local/lib/badi/badi-broker').exists())
+
+    def test_hyprland_layer_rule_is_added_once_and_changed_config_aborts(self):
+        original = '-- mine\nrequire("hypr.monitors")\n'
+        updated = installer.hyprland_with_badi(original)
+        self.assertTrue(updated.endswith(installer.HYPR_REQUIRE + '\n'))
+        self.assertIsNone(installer.hyprland_with_badi(updated), 'idempotent')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home, project = root / 'home', root / 'project'
+            native_project(project)
+            hyprland = home / '.config/hypr/hyprland.lua'
+            hyprland.parent.mkdir(parents=True)
+            hyprland.write_text(original)
+            plan = installer.Plan(
+                args=SimpleNamespace(broker_only=False, observed_app=[]),
+                home=home, config_home=home / '.config', runtime=root / 'runtime',
+                flag_updates={}, flags_present=[], broker_updating=True,
+                accessibility_enabled=True, compat=None,
+                hypr_update=(hyprland, original, updated))
+            hyprland.write_text(original + '-- edited while building\n')
+            with patch.object(installer, 'ROOT', project), \
+                 self.assertRaisesRegex(RuntimeError, 'Hyprland configuration changed'):
                 installer.install_files(plan)
             self.assertFalse((home / '.local/lib/badi/badi-broker').exists())
 

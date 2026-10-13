@@ -476,13 +476,14 @@ class FieldBackend:
         except Exception:
             return None
         rects = {name: {"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}
-                 for name, rect in extents.items()}
+                 for name, rect in extents.items() if rect is not None}
         offset = caret if reported is None else reported
         if gecko:
             return gecko_calibrated_geometry(rects["frame"], rects["document"], rects["field"], rects["glyph"],
-                                             window, monitors, offset)
+                                             window, monitors, offset, rects.get("following"))
         return calibrated_geometry(rects["frame"], rects["document"], rects["field"], rects["glyph"],
-                                   window, monitors, offset, rects.get("container"), rects.get("page"))
+                                   window, monitors, offset, rects.get("container"), rects.get("page"),
+                                   rects.get("following"))
 
     def native_geometry(self, node, text, caret, window, reported, caret_rect):
         """Calibrate a native toolkit field from WINDOW extents, else from the app's
@@ -497,7 +498,7 @@ class FieldBackend:
             return None
         rects = self.window_extents(node, text, caret)
         geometry = rects and native_calibrated_geometry(rects["frame"], rects["field"], rects["glyph"],
-                                                        window, monitors, reported)
+                                                        window, monitors, reported, rects.get("following"))
         if geometry is None and caret_rect is not None:
             geometry = input_method_geometry(caret_rect, window, monitors, reported,
                                              *((rects["frame"], rects["field"]) if rects else ()))
@@ -518,6 +519,7 @@ class FieldBackend:
                 extents[name] = item.get_component_iface().get_extents(window_coordinates)
             self.budget()
             extents["glyph"] = text.get_character_extents(caret - 1, window_coordinates)
+            extents["following"] = self.following_extents(text, caret, window_coordinates)
         except Denied as error:
             if error.timed_out:
                 raise
@@ -525,7 +527,7 @@ class FieldBackend:
         except Exception:
             return None
         return {name: {"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}
-                for name, rect in extents.items()}
+                for name, rect in extents.items() if rect is not None}
 
     def screen_extents(self, node, text, caret):
         """SCREEN extents of the outermost frame, nearest web document, field, glyph before the
@@ -545,11 +547,24 @@ class FieldBackend:
             extents[name] = item.get_component_iface().get_extents(self.atspi.CoordType.SCREEN)
         self.budget()
         extents["glyph"] = text.get_character_extents(caret - 1, self.atspi.CoordType.SCREEN)
+        extents["following"] = self.following_extents(text, caret, self.atspi.CoordType.SCREEN)
         parent = node.get_parent()
         if parent is not None and "Component" in parent.get_interfaces():
             self.budget()
             extents["container"] = parent.get_component_iface().get_extents(self.atspi.CoordType.SCREEN)
         return extents
+
+    def following_extents(self, text, caret, coordinates):
+        """Extents of the glyph after the caret, or None; never fatal.
+
+        At the end of the text there is no such glyph, and some toolkits
+        raise instead of answering. Missing proof only keeps the chip.
+        """
+        try:
+            self.budget()
+            return text.get_character_extents(caret, coordinates)
+        except Exception:
+            return None
 
     def frame_documents(self, node):
         """The outermost frame, the nearest web document and the outermost web document."""

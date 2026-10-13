@@ -5,8 +5,9 @@ import unittest
 from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from preview import (Preview, field_box_ends_before_caret, font_facts, font_pixels, ltr_text, mapped_caret,
-                    place_chip, place_inline, place_on_caret_line, valid_preview_text)
+from preview import (Preview, disable_preview_animation, field_box_ends_before_caret, font_facts,
+                    font_pixels, ltr_text, mapped_caret, place_chip, place_inline,
+                    place_on_caret_line, valid_preview_text)
 
 
 def focus():
@@ -124,6 +125,58 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertEqual(place_on_caret_line(early, 200, 24, 19), (211, 147))
         for size in ((0, 24), (120, 0), (float("nan"), 24)):
             self.assertIsNone(place_chip(caret, *size), size)
+
+    def test_field_ascent_anchors_the_baseline_and_fractional_scale_snaps_to_physical_pixels(self):
+        caret = mapped_caret(focus())
+        # Ghost top = glyph top + field ascent - layout baseline.
+        self.assertEqual(place_inline(caret, 200, 24, 19, 14.0), (211, 145))
+        self.assertEqual(place_on_caret_line(caret, 200, 24, 19, 14.0), (211, 145))
+        # An unusable ascent falls back to the line-height ratio.
+        self.assertEqual(place_inline(caret, 200, 24, 19, float("nan")), (211, 147))
+        data = focus()
+        data["geometry"]["scale"] = 1.5
+        data["geometry"]["monitor"]["scale"] = 1.5
+        fractional = mapped_caret(data)
+        self.assertEqual(fractional.scale, 1.5)
+        # 146.83 logical: 146 lands on an exact physical pixel, 147 does not.
+        self.assertEqual(place_inline(fractional, 200, 24, 19), (211, 146))
+
+    def test_following_glyph_bounds_inline_text_before_the_next_word(self):
+        data = focus()
+        data["geometry"]["text_follows"] = True
+        data["geometry"]["following_x"] = 420
+        caret = mapped_caret(data)
+        self.assertEqual(caret.following_x, 520)
+        # Caret at x=210: 300 wide ends at 511, before the next glyph at 520.
+        self.assertEqual(place_inline(caret, 300, 24, 19), (211, 147))
+        self.assertIsNone(place_inline(caret, 310, 24, 19), "would cover the following glyph")
+        for bad in (110, 901, float("nan"), "420", True):
+            data["geometry"]["following_x"] = bad
+            self.assertIsNone(mapped_caret(data).following_x, bad)
+        # Render: with room before the next word the ghost goes inline, no chip.
+        data["geometry"]["following_x"] = 420
+        data["geometry"]["field"]["height"] = 200
+        preview, calls, _monitor = self.render_fixture((200, 24))
+        self.assertTrue(preview.render(data, " next", 1500))
+        self.assertNotIn(("class", "chip"), calls)
+        self.assertIn(("left", 211), calls)
+        # Without room it falls back to the chip, never over the words.
+        preview, calls, _monitor = self.render_fixture((400, 24))
+        self.assertTrue(preview.render(data, " next", 1500))
+        self.assertIn(("class", "chip"), calls)
+
+    def test_preview_animation_is_disabled_best_effort_via_hyprctl(self):
+        calls = []
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            return SimpleNamespace(returncode=0)
+        self.assertTrue(disable_preview_animation(run=fake_run))
+        self.assertIn("badi-writing-preview", calls[0][-1])
+        self.assertIn("no_anim", calls[0][-1])
+        def missing(*_args, **_kwargs):
+            raise FileNotFoundError("hyprctl")
+        self.assertFalse(disable_preview_animation(run=missing))
+        self.assertFalse(disable_preview_animation(run=lambda *_a, **_k: SimpleNamespace(returncode=1)))
 
     def test_font_follows_the_caret_glyph_and_text_is_ltr_only(self):
         self.assertAlmostEqual(font_pixels(mapped_caret(focus())), 17.2)

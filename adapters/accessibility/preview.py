@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import re
+import subprocess
+import time
 import unicodedata
 
 from contract import RIGHT_TO_LEFT
@@ -57,6 +59,8 @@ class CaretGeometry:
     field_right: float
     field_bottom: float
     text_follows: bool
+    scale: float = 1.0
+    following_x: float | None = None
 
 
 def ltr_text(text):
@@ -90,6 +94,9 @@ def mapped_caret(focus):
                 or not 0 <= local["x"] <= size[0] or local["y"] < 0 or local["y"] + local["height"] > size[1]
                 or not field["x"] <= local["x"] <= field["x"] + field["width"] + 1):
             return None
+        following = geometry.get("following_x")
+        if following is not None and not (_number(following) and local["x"] < following <= size[0]):
+            following = None
         result = CaretGeometry(monitor["name"],
             (monitor["x"], monitor["y"], monitor["width"] / scale, monitor["height"] / scale),
             (at[0], at[1], size[0], size[1]),
@@ -97,7 +104,8 @@ def mapped_caret(focus):
             at[0] + max(field["x"], 0), at[1] + max(field["y"], 0),
             at[0] + min(field["x"] + field["width"], size[0]),
             at[1] + min(field["y"] + field["height"], size[1]),
-            geometry.get("text_follows") is True)
+            geometry.get("text_follows") is True, float(scale),
+            None if following is None else at[0] + following)
         mx, my, mw, mh = result.monitor
         if not (mx <= result.x <= mx + mw and my <= result.y < my + mh):
             return None
@@ -203,7 +211,33 @@ def font_pixels(caret, font=None):
     return fallback
 
 
-def place_inline(caret, width, height, baseline):
+def _snap(value, scale):
+    """Nearest integer logical coordinate on the physical pixel grid.
+
+    Layer margins are logical integers; at a fractional scale most of them
+    land between physical pixels and the ghost renders shifted or blurred
+    against the field's own text. Prefer the integer whose physical
+    position is exact, breaking ties toward the true float position.
+    """
+    if not _number(scale, .5, 4) or scale == 1:
+        return round(value)
+    candidates = {math.floor(value), math.ceil(value), round(value)}
+    return min(candidates, key=lambda c: (abs(c * scale - round(c * scale)), abs(c - value)))
+
+
+def _baseline_y(caret, height, baseline, field_ascent):
+    """Ghost top so its baseline lands on the field's baseline.
+
+    With the field font's real ascent, the field baseline sits that far
+    below the glyph box top. Without it, scale the layout's own baseline
+    ratio onto the glyph box (the earlier heuristic).
+    """
+    if field_ascent is not None and _number(field_ascent, 1, 256):
+        return caret.y + field_ascent - baseline
+    return caret.y + caret.line_height * baseline / height - baseline
+
+
+def place_inline(caret, width, height, baseline, field_ascent=None):
     """Monitor-local origin for text right after the caret on its baseline.
 
     The text must end inside the field, window and monitor. A field box that
@@ -214,11 +248,14 @@ def place_inline(caret, width, height, baseline):
     mx, my, mw, mh = caret.monitor
     wx, wy, ww, wh = caret.window
     x = caret.x + 1
-    y = caret.y + caret.line_height * baseline / height - baseline
-    if (x < max(mx, wx) or x + width > min(caret.field_right, wx + ww, mx + mw)
+    y = _baseline_y(caret, height, baseline, field_ascent)
+    right = min(caret.field_right, wx + ww, mx + mw)
+    if caret.following_x is not None:
+        right = min(right, caret.following_x)
+    if (x < max(mx, wx) or x + width > right
             or y < max(my, wy) or y + height > min(my + mh, wy + wh)):
         return None
-    return round(x - mx), round(y - my)
+    return _snap(x, caret.scale) - round(mx), _snap(y, caret.scale) - round(my)
 
 
 def field_box_ends_before_caret(caret):
@@ -230,7 +267,7 @@ def field_box_ends_before_caret(caret):
     return caret.x + 1 > caret.field_right
 
 
-def place_on_caret_line(caret, width, height, baseline):
+def place_on_caret_line(caret, width, height, baseline, field_ascent=None):
     """Ghost text on the caret's baseline, inside the window.
 
     Only for a field box that ends before the caret. A chip under that box
@@ -241,12 +278,12 @@ def place_on_caret_line(caret, width, height, baseline):
     mx, my, mw, mh = caret.monitor
     wx, wy, ww, wh = caret.window
     x = caret.x + 1
-    y = caret.y + caret.line_height * baseline / height - baseline
+    y = _baseline_y(caret, height, baseline, field_ascent)
     left, right = max(mx, wx), min(mx + mw, wx + ww)
     top, bottom = max(my, wy), min(my + mh, wy + wh)
     if x < left or x + width > right or y < top or y + height > bottom:
         return None
-    return round(x - mx), round(y - my)
+    return _snap(x, caret.scale) - round(mx), _snap(y, caret.scale) - round(my)
 
 
 def place_chip(caret, width, height):
@@ -270,8 +307,29 @@ def place_chip(caret, width, height):
     below, above = caret.y + caret.line_height + CHIP_GAP, caret.y - CHIP_GAP - height
     for y in (below, above):
         if field_top <= y and y + height <= field_bottom:
-            return round(x - mx), round(y - my)
+            return _snap(x, caret.scale) - round(mx), _snap(y, caret.scale) - round(my)
     return None
+
+
+LAYER_NAMESPACE = "badi-writing-preview"
+# Hyprland (Omarchy) animates layer surfaces in by default; a ghost that
+# fades/slides reads as hovering and arrives late. The rule is best-effort:
+# other compositors simply have no hyprctl. Re-applied at most this often,
+# since a compositor config reload drops runtime rules.
+RULE_REFRESH_SECONDS = 30.0
+
+
+def disable_preview_animation(run=subprocess.run):
+    """Ask Hyprland not to animate the preview layer; True when it agreed."""
+    try:
+        result = run(
+            ["hyprctl", "eval",
+             'hl.layer_rule({ name = "badi-preview-noanim", '
+             f'match = {{ namespace = "^{LAYER_NAMESPACE}$" }}, no_anim = true }})'],
+            capture_output=True, timeout=2, check=False)
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 class Preview:
@@ -334,7 +392,9 @@ class Preview:
         """)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), self.css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         Gtk4LayerShell.init_for_window(self.window)
-        Gtk4LayerShell.set_namespace(self.window, "badi-writing-preview")
+        Gtk4LayerShell.set_namespace(self.window, LAYER_NAMESPACE)
+        self._rule_applied_at = 0.0
+        self._refresh_layer_rule()
         Gtk4LayerShell.set_layer(self.window, Gtk4LayerShell.Layer.OVERLAY)
         Gtk4LayerShell.set_keyboard_mode(self.window, Gtk4LayerShell.KeyboardMode.NONE)
         Gtk4LayerShell.set_exclusive_zone(self.window, -1)
@@ -342,6 +402,34 @@ class Preview:
         Gtk4LayerShell.set_anchor(self.window, Gtk4LayerShell.Edge.TOP, True)
         self.window.connect("realize", self._input_transparent)
         self.window.connect("map", self._input_transparent)
+
+    def _refresh_layer_rule(self):
+        now = time.monotonic()
+        if now - getattr(self, "_rule_applied_at", 0.0) < RULE_REFRESH_SECONDS:
+            return
+        self._rule_applied_at = now
+        disable_preview_animation()
+
+    def _field_ascent(self, font, pixels):
+        """Ascent of the field's font at the ghost size, or None.
+
+        Only a reported family qualifies: metrics for the overlay's own
+        face would pretend to know the field's baseline.
+        """
+        try:
+            if not isinstance(font, dict) or not isinstance(font.get("family"), str):
+                return None
+            description = self.Pango.FontDescription()
+            description.set_family(font["family"])
+            description.set_absolute_size(round(pixels * self.Pango.SCALE))
+            weight = font.get("weight")
+            if isinstance(weight, int) and not isinstance(weight, bool):
+                description.set_weight(weight)
+            metrics = self.label.get_pango_context().get_metrics(description, None)
+            ascent = metrics.get_ascent() / self.Pango.SCALE
+            return ascent if _number(ascent, 1, 256) else None
+        except (AttributeError, TypeError, ValueError):
+            return None
 
     def _input_transparent(self, *_args):
         surface = self.window.get_surface()
@@ -407,12 +495,14 @@ class Preview:
             if isinstance(weight, int) and not isinstance(weight, bool):
                 attributes.insert(self.Pango.attr_weight_new(weight))
         self.label.set_attributes(attributes)
+        self._refresh_layer_rule()
         position = None
-        if not caret.text_follows:
+        if not caret.text_follows or caret.following_x is not None:
             width, height, baseline = self._layout(text, chip=False)
-            position = place_inline(caret, width, height, baseline)
-            if position is None and field_box_ends_before_caret(caret):
-                position = place_on_caret_line(caret, width, height, baseline)
+            ascent = self._field_ascent(font, font_pixels(caret, font))
+            position = place_inline(caret, width, height, baseline, ascent)
+            if position is None and not caret.text_follows and field_box_ends_before_caret(caret):
+                position = place_on_caret_line(caret, width, height, baseline, ascent)
         if position is None and caret.text_follows:
             # A leading space would draw over the following words. The trailing
             # space is the separator that acceptance inserts, so the chip keeps it.
