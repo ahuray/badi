@@ -136,6 +136,25 @@ this order. Each step is independently shippable and screenshot-verifiable.
   animation), at scale 2 and one fractional-scale monitor if available.
   Report fixture, real-broker and live evidence separately, per AGENTS.md.
 
+## Implementation outcome (2026-10-13, same day)
+
+Option B steps 1–4 and 6 shipped (`9b202d8` plus the Qt-fallback ascent
+fix): the `no_anim` layer rule (observer-applied and installer-persisted as
+`~/.config/hypr/badi.lua`), Pango-ascent baseline anchoring with a
+font-metric-proportion fallback for fields reporting no font, physical-pixel
+snapping, and the following-glyph bound that lets mid-line suggestions draw
+inline when they end before the next word. Live on this desktop after
+install: a disposable Chromium textarea and Omawrite both rendered the ghost
+inline on the caret line with a measured baseline delta of **0 physical px**
+(pixel-row mode of typed vs ghost glyph bottoms, full-res captures, eDP-1
+scale 2), and `hyprctl layers` showed the `badi-writing-preview` surface
+with `hyprctl configerrors` empty. Two live-diagnosis notes: an oversized
+test field wider than its window correctly failed calibration to the panel
+(field outside the document viewport), and Omawrite's ghost face remains
+the overlay's own because Qt reports no font attributes. Step 5 (restyling
+the native Fcitx panel fallback) was not done; native non-observed fields
+still show the candidate panel.
+
 ## Sources
 
 - Fcitx5/Wayland preedit and per-app capability model: ArchWiki "Fcitx5";

@@ -68,14 +68,19 @@ Standing user decisions:
       rejoin showed 2 suggestions and 1 reference match, with no deadline
       misses; the following-line prompt showed 1 suggestion and 1 reference
       match, and missed 550 ms on 34 of 41 because that line is not cached.
-- [ ] Make the grey preview read as in-field text, Cotypist-grade
+- [x] Make the grey preview read as in-field text, Cotypist-grade
       ([research](docs/reports/2026-10-13-inline-ghost-text-research.md)):
       ship a Hyprland `noanim` layer rule for `badi-writing-preview`, anchor
       the baseline from real font metrics (≤ 1 physical px on the Chromium
       and Omawrite lanes), snap margins to the physical pixel grid, and
       measure then reduce the chip/Fcitx-panel fallback rate per app. Client
       preedit stays rejected: no styling in text-input-v3 and composition
-      side effects break explicit acceptance.
+      side effects break explicit acceptance. On 2026-10-13, disposable
+      Chromium and Omawrite on this machine both showed the ghost inline on
+      the caret line with a measured baseline delta of 0 physical px; the
+      following glyph now bounds mid-line inline room, so the chip only
+      remains where inline text would cover the next words. Native
+      non-observed fields still use the Fcitx candidate panel.
 - [ ] Confirm live that the grey preview uses the host font in Telegram.
       A disposable Chromium textarea (2026-10-12, build `7957f16`) set to
       JetBrainsMono NF at 20px reports `family-name` JetBrainsMono NF and

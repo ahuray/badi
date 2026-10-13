@@ -410,24 +410,39 @@ class Preview:
         self._rule_applied_at = now
         disable_preview_animation()
 
-    def _field_ascent(self, font, pixels):
-        """Ascent of the field's font at the ghost size, or None.
+    def _field_ascent(self, font, pixels, line_height=None):
+        """Ascent anchoring the field's baseline at the ghost size, or None.
 
-        Only a reported family qualifies: metrics for the overlay's own
-        face would pretend to know the field's baseline.
+        With a reported family this is that font's real ascent. Without one
+        (Qt fields report no font attributes), scale the overlay face's own
+        ascent fraction of its ascent+descent onto the field's line height:
+        the caret glyph box is one em line, so its baseline sits at that
+        fraction — closer than the layout height ratio, which leading skews.
         """
         try:
-            if not isinstance(font, dict) or not isinstance(font.get("family"), str):
+            context = self.label.get_pango_context()
+            if isinstance(font, dict) and isinstance(font.get("family"), str):
+                description = self.Pango.FontDescription()
+                description.set_family(font["family"])
+                weight = font.get("weight")
+                if isinstance(weight, int) and not isinstance(weight, bool):
+                    description.set_weight(weight)
+            elif _number(line_height, 4, 128):
+                description = context.get_font_description().copy()
+            else:
                 return None
-            description = self.Pango.FontDescription()
-            description.set_family(font["family"])
             description.set_absolute_size(round(pixels * self.Pango.SCALE))
-            weight = font.get("weight")
-            if isinstance(weight, int) and not isinstance(weight, bool):
-                description.set_weight(weight)
-            metrics = self.label.get_pango_context().get_metrics(description, None)
+            metrics = context.get_metrics(description, None)
             ascent = metrics.get_ascent() / self.Pango.SCALE
-            return ascent if _number(ascent, 1, 256) else None
+            if not _number(ascent, 1, 256):
+                return None
+            if isinstance(font, dict) and isinstance(font.get("family"), str):
+                return ascent
+            descent = metrics.get_descent() / self.Pango.SCALE
+            if not _number(descent, 0, 256) or ascent + descent <= 0:
+                return None
+            scaled = ascent * line_height / (ascent + descent)
+            return scaled if _number(scaled, 1, 256) else None
         except (AttributeError, TypeError, ValueError):
             return None
 
@@ -499,7 +514,7 @@ class Preview:
         position = None
         if not caret.text_follows or caret.following_x is not None:
             width, height, baseline = self._layout(text, chip=False)
-            ascent = self._field_ascent(font, font_pixels(caret, font))
+            ascent = self._field_ascent(font, font_pixels(caret, font), caret.line_height)
             position = place_inline(caret, width, height, baseline, ascent)
             if position is None and not caret.text_follows and field_box_ends_before_caret(caret):
                 position = place_on_caret_line(caret, width, height, baseline, ascent)
