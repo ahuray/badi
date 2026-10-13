@@ -184,7 +184,7 @@ Requests carry `schema: "badi.accessibility.v1"`, an ASCII `id` and an `op`:
 | --- | --- | --- |
 | `inspect` | `app_id` | `binding` `{epoch,bus,path,process_id,app_id,uri}`, `target` (browser targets keep the exact app id and origin; `target_id` hashes bus, path and epoch), `purpose`, `caret`, `selection_count`, `geometry: null`, optional `quiet` |
 | `snapshot` | `binding`, `policy_target` | `before`, `after`, `total_chars`, optional `scope: "block"`, optional `quiet` |
-| `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–160 characters), `ttl_ms` (1–5000), optional `caret_rect` `{x,y,width,height,scale}` | `total_chars`, `rendered`, optional `quiet` |
+| `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–160 characters), `ttl_ms` (1–15000), optional `caret_rect` `{x,y,width,height,scale}` | `total_chars`, `rendered`, optional `quiet` |
 
 `preview` compares the current caret and length with the expected ones before
 drawing. `hide` returns `hidden:true`; `status` returns readiness without
@@ -259,16 +259,36 @@ takes a paragraph's direction from its first strong character.
 The GTK4 layer-shell overlay draws the suggestion as translucent grey text right
 after the caret, with no background. When the caret's text run reports a font
 family, a size (`size` in points, or `font-size` in px) or a weight, the
-overlay uses those. Otherwise the size comes from the glyph height and the
-face stays the overlay's own. A field box that ends before the caret still
+overlay uses those, and the baseline is anchored at that font's real Pango
+ascent below the glyph box top; without a reported family the size comes
+from the glyph height, the face stays the overlay's own and its ascent as a
+fraction of ascent plus descent places the baseline within the caret height.
+If those metrics are unavailable, the layout-ratio heuristic remains.
+Integer layer margins favor the monitor's physical pixel grid and are checked
+after snapping against the drawing bounds, including the following glyph.
+Some fractional scales cannot put every margin on an exact physical pixel.
+On Hyprland the observer asks the
+compositor not to animate its layer (`no_anim` rule for the
+`badi-writing-preview` namespace, re-applied at most every 30 seconds since a
+config reload drops runtime rules). Refreshes run outside the rendering
+thread so compositor IPC cannot delay expiry or field invalidation; the
+desktop installer persists the same rule
+as `~/.config/hypr/badi.lua`, loaded from `hyprland.lua`. A field box that ends before the caret still
 keeps that text on the caret's baseline inside the window, so it is not dropped onto the chrome under the
 input. A box that still contains the caret is a real edge: text that would
 pass it is not drawn over the controls beside the field. When the last
 snapshot had words after the caret on its line
-(`text_follows`), it draws a compact dark chip under the caret instead, and
-only while that chip fits inside the field. Suggestions are at most 64
-characters; one that fits nowhere returns `rendered: false`. The surface takes
+(`text_follows`), the glyph after the caret bounds the inline room: text
+that ends before it still draws inline, and only text that would cover it
+draws a compact grey chip under the caret instead while it fits inside the
+field. Overflow uses the same borderless grey surface wholly below or above
+the field, bounded by the window and monitor, so it does not cover controls
+beside the field. There is no title, key banner or selection highlight.
+Suggestions are at most 64 characters; one that fits nowhere returns
+`rendered: false` for the native single-candidate fallback. The surface takes
 no input or focus, and any invalidation, new render or expiry hides it. The
+preview accepts the broker's remaining lease up to 15 seconds; scrolling
+repositions it with only the remaining time and never renews it. The
 helper forces software rendering and the simple GTK input module, so it never
 loads a GPU driver or connects to an input method.
 
@@ -337,3 +357,10 @@ stale snapshots, bounded Unicode reads, rich-editor flattening, calibration
 against recorded live extents, the preview lifecycle and the lock query. The
 integration lane proves that other senders and fields cannot deliver events and
 that invalidation unsubscribes the authorized field.
+
+On 2026-10-13 a disposable GTK layer-shell fixture on this workstation at
+scale 2 rendered both inline and field-edge overflow previews. Captures showed
+the grey overflow wholly below the field without covering its neighboring
+button; it stayed visible beyond six seconds and hid after its 15-second
+lease without renewal. This checks the real renderer, not application editing
+or fractional-scale behavior.

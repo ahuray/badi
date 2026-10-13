@@ -35,7 +35,6 @@ UNOBSERVED_FAMILY_PROGRAMS = {'chrome': 'chrome', 'Google-chrome': 'google-chrom
                               'FFPWA-01HVY3F0GDT6DCG5V6TTRHK4BT': 'ffpwa-01hvy3f0gdt6dcg5v6ttrhk4bt'}
 IME_PARITY_APPS = ('chromium', 'chromium-browser', 'brave-origin', 'zen', 'chatgpt', 'code', 'cursor', 'discord')
 RIGHT, CONTROL = 0xff53, 1 << 2
-PANEL_HINT = 'Badi · Tab to accept · Ctrl+→ next word · Escape to dismiss'
 # Chromium's text-input-v3 path adds UppercaseWords (0x80072 in total).
 CHROMIUM_HINT = 1 << 19
 ALLOWED_URI = 'https://allowed.example.test/document'
@@ -377,7 +376,7 @@ def session(root, report):
                     'kind': 'fcitx', 'name': 'badi-fcitx5', 'version': '0.1.0'}
                 assert hello['payload']['capabilities'] == [
                     'context', 'suggestion', 'commit.dispatched_unverified', 'text_replacement',
-                    'control', 'policy']
+                    'control', 'policy', 'long_reading_window']
                 checks.append('Actual loaded native addon hello negotiates exact text replacement')
             finally:
                 if hello_peer is not None:
@@ -789,13 +788,19 @@ def session(root, report):
 
             change(PREFIX, new_field=True)
             wait(lambda: context.candidate() == SUFFIX, label + ' automatic observed suggestion')
-            assert auxiliary() == PANEL_HINT, label + ' unavailable preview falls back to the owned Fcitx panel'
+            assert auxiliary() == '', label + ' fallback panel omits the keyboard-help banner'
+            panel_event = next(values for name, values in reversed(context.events) if name == 'UpdateClientSideUI')
+            assert panel_event[4][0][0] == '', label + ' fallback candidate has no numeric label'
+            assert panel_event[5] == -1, label + ' fallback candidate has no selection highlight'
             assert updates() == start_updates + 1 and backend.reads > reads
+            if app == 'brave-origin':
+                quiet(5.5)
+                assert context.candidate() == SUFFIX, 'the negotiated native reading window survives five seconds'
             assert context.key(desktop.TAB)
             wait(lambda: context.commits() == [SUFFIX], label + ' Tab dispatch after observed verification')
             quiet(.3)
             assert context.commits() == [SUFFIX] and context.candidate() is None, label + ' exactly one CommitString'
-            checks.append(label + ': automatic observed suggestion in the Fcitx panel with its Tab/Escape hint; '
+            checks.append(label + ': automatic observed suggestion in the single-line Fcitx panel; '
                           'Tab dispatches one exact append')
 
             change(PREFIX)
@@ -895,7 +900,7 @@ def session(root, report):
         wait(lambda: context.candidate() == SUFFIX, 'browser candidate before foreign preedit')
         assert context.key(ord('U'), 5) and context.key(ord('4'))
         wait(lambda: preedit() == 'U+4', 'IME-parity field real Unicode preedit')
-        wait(lambda: context.candidate() != SUFFIX and auxiliary() != PANEL_HINT, 'foreign preedit owns the panel')
+        wait(lambda: context.candidate() != SUFFIX, 'foreign preedit owns the panel')
         reads = backend.reads
         context.text(PREFIX)
         quiet(.3)

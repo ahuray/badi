@@ -189,7 +189,6 @@ inline constexpr std::string_view kDisabled = "Badi is disabled for this applica
 inline constexpr std::string_view kModelNotConnected = "Badi model is not connected";
 inline constexpr std::string_view kThinking = "Badi is thinking…";
 inline constexpr std::string_view kRequestFailed = "Badi request failed — check the tray status";
-inline constexpr std::string_view kSuggestionKeys = "Badi · Tab to accept · Ctrl+→ next word · Escape to dismiss";
 } // namespace notice
 
 // How an explicit request (the invoke chord, or Tab on the manual path) proceeds.

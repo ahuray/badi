@@ -21,10 +21,15 @@ observer's (`badi.accessibility.v1`) requests and reply checks are in
 The first frame is `hello` with `v: 2`, `min_v: 2`, `max_v: 2`, adapter
 `{kind:"fcitx",name:"badi-fcitx5",version:"0.1.0"}`, and the exact capabilities
 `context`, `suggestion`, `commit.dispatched_unverified`, `text_replacement`,
-`control`, and `policy`. `text_replacement` is applied only for native exact
+`control`, `policy`, and `long_reading_window`. `text_replacement` is applied only for native exact
 fields; IME-parity sessions stay append-only.
+`long_reading_window` admits suggestion TTLs up to 15,000 ms. It needs an
+updated broker; older clients without it keep the five-second ceiling.
+Commit-result deadlines and every acceptance binding remain unchanged.
 The adapter waits for `hello.ack` and the initial `authority.changed`, queues an
-`authority.ack`, and only then opens sessions. Later authority epochs retire
+`authority.ack`, and only then opens sessions. The broker enforces this order:
+session, context and suggestion messages from a connection that has not
+acknowledged the current epoch fail closed with a stale error. Later authority epochs retire
 local candidate/context authority before reopening eligible focused sessions.
 A closed connection retires the same authority. A reconnect's initial snapshot
 counts as a new authority when its epoch, settings revision or pause state

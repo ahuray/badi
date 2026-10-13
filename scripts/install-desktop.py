@@ -512,6 +512,8 @@ class Plan:
     accessibility_enabled: bool
     compat: dict | None
     checkout: dict | None = None
+    # hyprland.lua change that loads Badi's layer rule: (target, original, new).
+    hypr_update: tuple | None = None
 
     @property
     def native(self):
@@ -520,6 +522,16 @@ class Plan:
     @property
     def installs_compat(self):
         return bool(self.compat and self.compat["install"])
+
+
+HYPR_REQUIRE = 'require("hypr.badi")'
+
+
+def hyprland_with_badi(text):
+    """hyprland.lua loading Badi's layer rule, or None when it already does."""
+    if HYPR_REQUIRE in text:
+        return None
+    return text.rstrip() + "\n\n-- Badi writing preview layer rule (no entrance animation).\n" + HYPR_REQUIRE + "\n"
 
 
 def parse_arguments():
@@ -564,14 +576,20 @@ def preflight(args):
             flag_updates[target] = (original, text)
     runtime = session_runtime()
     broker_updating = service_installed()
-    accessibility_enabled, compat = False, None
+    accessibility_enabled, compat, hypr_update = False, None, None
     if not args.broker_only:
         accessibility_enabled = unit_enabled("badi-accessibility.service")
         run(["systemctl", "--user", "is-active", "omarchy-fcitx5.service"], capture_output=True)
         if not args.no_wayland_compat:
             compat = plan_wayland_compat(home, args.wayland_compat_build)
+        hyprland = config_home / "hypr/hyprland.lua"
+        if hyprland.exists() and not hyprland.is_symlink():
+            original = hyprland.read_text()
+            updated = hyprland_with_badi(original)
+            if updated is not None:
+                hypr_update = (hyprland, original, updated)
     return Plan(args, home, config_home, runtime, flag_updates, flags_present,
-                broker_updating, accessibility_enabled, compat)
+                broker_updating, accessibility_enabled, compat, hypr_update=hypr_update)
 
 
 def unit_enabled(unit):
@@ -663,6 +681,10 @@ def flags_still_match(plan):
     for target, (original, _text) in plan.flag_updates.items():
         if target.parent.resolve() != target.parent or target.is_symlink() or (target.read_text() if target.exists() else None) != original:
             raise RuntimeError("App startup configuration changed during the build; newer user settings were preserved.")
+    if plan.hypr_update is not None:
+        target, original, _text = plan.hypr_update
+        if target.is_symlink() or not target.exists() or target.read_text() != original:
+            raise RuntimeError("Hyprland configuration changed during the build; newer user settings were preserved.")
 
 
 def install_files(plan):
@@ -713,6 +735,12 @@ def install_prepared_files(plan, installation):
             install(ROOT / "adapters/accessibility" / name, library / "accessibility" / name)
         install(ROOT / "packaging/systemd/badi-accessibility.service",
                 home / ".config/systemd/user/badi-accessibility.service")
+        install(ROOT / "packaging/hypr/badi.lua", plan.config_home / "hypr/badi.lua")
+        if plan.hypr_update is not None:
+            target, original, text = plan.hypr_update
+            if target.is_symlink() or not target.exists() or target.read_text() != original:
+                raise RuntimeError("Hyprland configuration changed during the build; newer user settings were preserved.")
+            installation.write(target, text.encode(), stat.S_IMODE(target.stat().st_mode))
         for target, (original, text) in plan.flag_updates.items():
             if target.parent.resolve() != target.parent or target.is_symlink() or (target.read_text() if target.exists() else None) != original:
                 raise RuntimeError("App startup configuration changed during the build; newer user settings were preserved.")

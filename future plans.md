@@ -68,6 +68,9 @@ Standing user decisions:
       rejoin showed 2 suggestions and 1 reference match, with no deadline
       misses; the following-line prompt showed 1 suggestion and 1 reference
       match, and missed 550 ms on 34 of 41 because that line is not cached.
+- [ ] Measure overflow frequency per app; fractional-scale and multi-monitor
+      live trials remain open. The implemented placement and fallback behavior
+      is in the [preview contract](adapters/accessibility/README.md#caret-geometry-and-preview).
 - [ ] Confirm live that the grey preview uses the host font in Telegram.
       A disposable Chromium textarea (2026-10-12, build `7957f16`) set to
       JetBrainsMono NF at 20px reports `family-name` JetBrainsMono NF and
@@ -237,7 +240,6 @@ From the 2026-10-11 audit. These are not part of the installed behavior.
       password input type is refused. Labels, placeholders, and HTML
       autocomplete hints are not.
 - [ ] An ADR retiring protocol v1.
-- [ ] Enforce `authority.ack`, or delete it if nothing consumes it.
 - [x] The settings panel polls only while its window is open. A closed
       window does not ask the broker. The bar mark updates when pause is
       toggled from the bar, and the next time the window opens.

@@ -122,8 +122,13 @@ test('malformed, excess, foreign, incomplete and unsuccessful frames never becom
 
 test('timeout, abort and output-without-exit await direct child cleanup, including forced termination', async t => {
   for (const mode of ['hang', 'hold', 'forced']) {
-    const { worker, calls } = setup(t, mode, { timeoutMs: 1000 });
+    // Keep the normal fixture deadline: verifying the large Node executable
+    // twice can exceed one second before the child receives any input. This
+    // case must reach the hung child to exercise cleanup and forced termination.
+    const { worker, calls } = setup(t, mode);
     await assert.rejects(worker.check(input()), /context_lookup_deadline/u);
+    assert.equal(calls.length, 1, 'the deadline must exercise a spawned child');
+    assert.equal(calls[0].frames.length, 1, 'the child must receive the request before timeout');
     assert.equal(await processIdentity(calls[0].pid), null);
     assert.equal(worker.lastCleanup.forced, mode === 'forced');
   }

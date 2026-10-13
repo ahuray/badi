@@ -26,7 +26,7 @@ NATIVE_SOURCES = ('target/release/badi-broker', 'target/release/badictl', 'scrip
                   'packaging/systemd/badi-broker.service', 'broker/data/writing-lexicon/LICENSE',
                   'broker/data/writing-lexicon/README.md', 'adapters/fcitx5/build/libbadi-fcitx5.so',
                   'adapters/fcitx5/build/badi.conf', 'packaging/systemd/fcitx-badi.conf',
-                  'packaging/systemd/badi-accessibility.service') + tuple(
+                  'packaging/systemd/badi-accessibility.service', 'packaging/hypr/badi.lua') + tuple(
                   'adapters/accessibility/' + name for name in installer.OBSERVER_MODULES)
 STOCK = '{ path=/usr/bin/fcitx5 ; argv[]=%s ; ignore_errors=no ; start_time=[n/a] ; pid=0 }\n'
 
@@ -131,6 +131,62 @@ class DesktopInstallTests(unittest.TestCase):
                  self.assertRaisesRegex(RuntimeError, 'changed during the build'):
                 installer.install_files(plan)
             self.assertFalse((home / '.local/lib/badi/badi-broker').exists())
+
+    def test_hyprland_layer_rule_is_added_once_and_changed_config_aborts(self):
+        original = '-- mine\nrequire("hypr.monitors")\n'
+        updated = installer.hyprland_with_badi(original)
+        self.assertTrue(updated.endswith(installer.HYPR_REQUIRE + '\n'))
+        self.assertIsNone(installer.hyprland_with_badi(updated), 'idempotent')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home, project = root / 'home', root / 'project'
+            native_project(project)
+            hyprland = home / '.config/hypr/hyprland.lua'
+            hyprland.parent.mkdir(parents=True)
+            hyprland.write_text(original)
+            plan = installer.Plan(
+                args=SimpleNamespace(broker_only=False, observed_app=[]),
+                home=home, config_home=home / '.config', runtime=root / 'runtime',
+                flag_updates={}, flags_present=[], broker_updating=True,
+                accessibility_enabled=True, compat=None,
+                hypr_update=(hyprland, original, updated))
+            hyprland.write_text(original + '-- edited while building\n')
+            with patch.object(installer, 'ROOT', project), \
+                 self.assertRaisesRegex(RuntimeError, 'Hyprland configuration changed'):
+                installer.install_files(plan)
+            self.assertFalse((home / '.local/lib/badi/badi-broker').exists())
+
+    def test_hyprland_layer_rule_install_has_a_scoped_rollback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home, project = root / 'home', root / 'project'
+            native_project(project)
+            hyprland = home / '.config/hypr/hyprland.lua'
+            hyprland.parent.mkdir(parents=True)
+            original = '-- user configuration\nrequire("hypr.monitors")\n'
+            hyprland.write_text(original)
+            hyprland.chmod(0o640)
+            updated = installer.hyprland_with_badi(original)
+            plan = installer.Plan(
+                args=SimpleNamespace(broker_only=False, observed_app=[]),
+                home=home, config_home=home / '.config', runtime=root / 'runtime',
+                flag_updates={}, flags_present=[], broker_updating=True,
+                accessibility_enabled=True, compat=None,
+                checkout={'commit': '0' * 40, 'dirty': False},
+                hypr_update=(hyprland, original, updated))
+            with patch.object(installer, 'ROOT', project), \
+                 patch.object(installer, 'xournal_launcher', return_value=None), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                installation = installer.install_files(plan)
+                self.assertEqual(hyprland.read_text(), updated)
+                self.assertEqual(hyprland.stat().st_mode & 0o777, 0o640)
+                self.assertEqual((hyprland.parent / 'badi.lua').read_bytes(),
+                                 (project / 'packaging/hypr/badi.lua').read_bytes())
+                self.assertEqual(receipts.restore(installation.directory, only=['.config/hypr']), [])
+            self.assertEqual(hyprland.read_text(), original)
+            self.assertEqual(hyprland.stat().st_mode & 0o777, 0o640)
+            self.assertFalse((hyprland.parent / 'badi.lua').exists())
+            self.assertTrue((home / '.local/lib/badi/badi-broker').exists(), 'rollback was scoped to Hyprland')
 
     def test_a_failed_install_names_the_backup_and_the_restore_command(self):
         with tempfile.TemporaryDirectory() as temporary:

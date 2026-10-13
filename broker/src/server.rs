@@ -547,6 +547,9 @@ impl MessageHandler<'_> {
     }
 
     async fn open_session(&mut self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        self.broker
+            .require_current_authority_ack(self.connection_id)
+            .await?;
         require_capability(self.authority, Capability::Context)?;
         require_capability(self.authority, Capability::Suggestion)?;
         require_capability(self.authority, Capability::Policy)?;
@@ -579,6 +582,9 @@ impl MessageHandler<'_> {
     }
 
     async fn update_context(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        self.broker
+            .require_current_authority_ack(self.connection_id)
+            .await?;
         require_capability(self.authority, Capability::Context)?;
         let coordinates = envelope.coordinates()?;
         ensure_owned(self.owned_sessions, coordinates.session_id)?;
@@ -589,6 +595,9 @@ impl MessageHandler<'_> {
     }
 
     async fn request_suggestion(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        self.broker
+            .require_current_authority_ack(self.connection_id)
+            .await?;
         require_capability(self.authority, Capability::Suggestion)?;
         let coordinates = envelope.coordinates()?;
         ensure_owned(self.owned_sessions, coordinates.session_id)?;
@@ -1214,6 +1223,91 @@ mod tests {
             .expect("connection task")
             .expect("clean shutdown");
         assert_eq!(broker.session_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn unacknowledged_authority_cannot_open_a_session() {
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let broker = broker();
+        let task_broker = broker.clone();
+        let shutdown = CancellationToken::new();
+        let task_shutdown = shutdown.clone();
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                task_broker,
+                task_shutdown,
+                Duration::from_secs(1),
+                Duration::from_secs(5),
+            )
+            .await
+        });
+        let mut hello = WireEnvelope::global(
+            MessageType::Hello,
+            0,
+            &HelloPayload {
+                min_v: PROTOCOL_VERSION,
+                max_v: PROTOCOL_VERSION,
+                adapter: AdapterDescriptor {
+                    kind: AdapterKind::Test,
+                    name: "server-test".to_owned(),
+                    version: "1".to_owned(),
+                },
+                capabilities: vec![
+                    Capability::Context,
+                    Capability::Suggestion,
+                    Capability::Health,
+                    Capability::Policy,
+                ],
+            },
+        )
+        .expect("hello");
+        hello.id = Some("test:hello".to_owned());
+        write_envelope(&mut client, &hello)
+            .await
+            .expect("write hello");
+        let hello_ack = read_envelope(&mut client)
+            .await
+            .expect("read hello acknowledgment")
+            .expect("hello acknowledgment");
+        assert_eq!(hello_ack.message_type, MessageType::HelloAck);
+        let authority = read_envelope(&mut client)
+            .await
+            .expect("read initial authority")
+            .expect("initial authority");
+        let authority: AuthorityChangedPayload = authority
+            .decode_payload()
+            .expect("initial authority payload");
+
+        // Without authority.ack the data plane stays closed, but the
+        // connection itself survives so the client can still ack.
+        let session_id = SessionId::new();
+        reopen_test_session(&mut client, session_id).await;
+        let denied = timeout(Duration::from_secs(1), read_envelope(&mut client))
+            .await
+            .expect("denial deadline")
+            .expect("read denial")
+            .expect("denial event");
+        assert_eq!(denied.message_type, MessageType::Error);
+        assert_eq!(broker.session_count().await, 0);
+
+        let ack = WireEnvelope::global(
+            MessageType::AuthorityAck,
+            1,
+            &AuthorityAckPayload {
+                authority_epoch: authority.authority_epoch,
+            },
+        )
+        .expect("authority acknowledgment");
+        write_envelope(&mut client, &ack).await.expect("write ack");
+        reopen_test_session(&mut client, session_id).await;
+        wait_for_sessions(&broker, 1).await;
+
+        shutdown.cancel();
+        connection
+            .await
+            .expect("connection task")
+            .expect("clean shutdown");
     }
 
     #[test]

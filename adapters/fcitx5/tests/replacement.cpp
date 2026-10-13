@@ -40,7 +40,7 @@ struct Runtime {
 };
 
 const Json capabilities = Json::array({"context", "suggestion",
-    "commit.dispatched_unverified", "text_replacement", "control", "policy"});
+    "commit.dispatched_unverified", "text_replacement", "control", "policy", "long_reading_window"});
 
 Json message(const char *type) {
     Json payload{{"fingerprint", "0123456789abcdef0123456789abcdef"},
@@ -65,6 +65,12 @@ public:
               .onAuthority = [](const AuthoritySnapshot &) {},
               .onSuggestion = [this](Suggestion suggestion) {
                   ++suggestions_;
+                  if (scenario_ == "suggestion-long") {
+                      require(suggestion.expiresAtMs > client_.nowMs() + 14'000,
+                              "long reading window was truncated");
+                      loop_.exit();
+                      return;
+                  }
                   if (scenario_ != "suggestion") return;
                   require(suggestion.replaceBefore && *suggestion.replaceBefore == "adress",
                           "replacement suffix was not delivered");
@@ -140,10 +146,10 @@ public:
         } else if (scenario_ == "extra-capability") {
             require(!ready_ && disconnected_ && !finished_ && suggestions_ == 0 && commits_ == 0,
                     "an extra capability reached the ready transport");
-        } else if (scenario_.ends_with("empty")) {
+        } else if (scenario_.ends_with("empty") || scenario_ == "suggestion-overlong") {
             require(ready_ && disconnected_ && !finished_ && suggestions_ == 0 && commits_ == 0,
                     "empty replacement was not rejected before callbacks");
-        } else if (scenario_ == "suggestion") {
+        } else if (scenario_ == "suggestion" || scenario_ == "suggestion-long") {
             require(ready_ && !disconnected_ && !finished_ && suggestions_ == 1 && commits_ == 0,
                     "valid replacement suggestion was not delivered");
         } else {
@@ -190,6 +196,11 @@ private:
         }
         const bool suggestion = scenario_.starts_with("suggestion");
         auto response = message(suggestion ? "suggestion.show" : "commit.prepare");
+        if (scenario_ == "suggestion-long" || scenario_ == "suggestion-overlong") {
+            response["payload"]["ttl_ms"] = scenario_ == "suggestion-long" ? 15000 : 15001;
+            send(response);
+            return;
+        }
         response["payload"]["replace_before"] = scenario_.ends_with("empty") ? "" : "adress";
         // A real suffix is delivered. An empty suffix fails suggestion
         // sanitization and must not reach a callback.
@@ -217,7 +228,7 @@ private:
 int main() {
     try {
         for (const auto *scenario : {"append", "extra-capability", "suggestion", "commit",
-                                    "suggestion-empty", "commit-empty"}) {
+                                    "suggestion-empty", "commit-empty", "suggestion-long", "suggestion-overlong"}) {
             Harness(scenario).run();
             std::cout << "ok - native replacement boundary: " << scenario << '\n';
         }

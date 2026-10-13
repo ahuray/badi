@@ -35,8 +35,8 @@ constexpr std::size_t kMaxPendingPolicies = 64;
 constexpr std::size_t kMaxTargetBytes = 4096;
 constexpr std::uint64_t kPolicyReplyMs = 2'000;
 constexpr std::uint64_t kMaxSafeCounter = (std::uint64_t{1} << 53U) - 1U;
-constexpr std::array<std::string_view, 5> kRequiredCapabilities{
-    "context", "suggestion", "commit.dispatched_unverified", "control", "policy"};
+constexpr std::array<std::string_view, 6> kRequiredCapabilities{
+    "context", "suggestion", "commit.dispatched_unverified", "control", "policy", "long_reading_window"};
 
 bool exactKeys(const Json &value,
                std::initializer_list<std::string_view> keys) {
@@ -717,7 +717,7 @@ private:
                               {"version", "0.1.0"}}},
             {"capabilities", Json::array({"context", "suggestion",
                                            "commit.dispatched_unverified",
-                                           "text_replacement", "control", "policy"})},
+                                           "text_replacement", "control", "policy", "long_reading_window"})},
         };
         if (!queue(envelope("hello", "fcitx.hello", nowMs(), helloPayload))) {
             return false;
@@ -933,7 +933,7 @@ private:
             !payload["text"].is_string() || !payload["accept_word"].is_string() ||
             !payload["ttl_ms"].is_number_unsigned() ||
             payload["ttl_ms"].get<std::uint64_t>() < 1 ||
-            payload["ttl_ms"].get<std::uint64_t>() > 5000 ||
+            payload["ttl_ms"].get<std::uint64_t>() > 15000 ||
             !payload["provider"].is_string() ||
             (payload["provider"] != "phrase_v1" &&
              payload["provider"] != "local_model")) {

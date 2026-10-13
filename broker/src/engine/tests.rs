@@ -259,6 +259,66 @@ async fn setup_with_capabilities(
 }
 
 #[tokio::test]
+async fn authority_ack_gate_tracks_the_current_epoch() {
+    let broker = Broker::new(
+        std::sync::Arc::new(crate::provider::DeterministicPhraseProvider::default()),
+        BrokerConfig::default(),
+    );
+    // Connections without policy registration are governed by capabilities.
+    broker
+        .require_current_authority_ack("unregistered")
+        .await
+        .expect("unregistered connection is not ack-gated");
+
+    broker.register_policy_client("conn".to_owned()).await;
+    assert!(matches!(
+        broker.require_current_authority_ack("conn").await,
+        Err(BrokerError::Stale)
+    ));
+    let epoch = broker.authority_snapshot().await.authority_epoch;
+    // A future epoch can never be acknowledged.
+    assert!(
+        broker
+            .acknowledge_authority("conn", epoch + 1)
+            .await
+            .is_err()
+    );
+    broker
+        .acknowledge_authority("conn", epoch)
+        .await
+        .expect("current epoch acknowledgement");
+    broker
+        .require_current_authority_ack("conn")
+        .await
+        .expect("acknowledged connection is admitted");
+
+    // Advancing the epoch re-blocks until the new epoch is acknowledged;
+    // re-acking the stale epoch does not admit.
+    broker.set_paused(true).await.expect("pause");
+    assert!(matches!(
+        broker.require_current_authority_ack("conn").await,
+        Err(BrokerError::Stale)
+    ));
+    broker
+        .acknowledge_authority("conn", epoch)
+        .await
+        .expect("stale acknowledgement is recorded but insufficient");
+    assert!(matches!(
+        broker.require_current_authority_ack("conn").await,
+        Err(BrokerError::Stale)
+    ));
+    let advanced = broker.authority_snapshot().await.authority_epoch;
+    broker
+        .acknowledge_authority("conn", advanced)
+        .await
+        .expect("advanced epoch acknowledgement");
+    broker
+        .require_current_authority_ack("conn")
+        .await
+        .expect("re-acknowledged connection is admitted");
+}
+
+#[tokio::test]
 async fn normal_provider_abstention_clears_without_recording_a_failure() {
     let (broker, id, mut events) = setup(
         std::sync::Arc::new(crate::provider::DeterministicPhraseProvider::default()),
@@ -4185,6 +4245,49 @@ impl CompletionProvider for TriggerProvider {
             },
         ))
     }
+}
+
+#[test]
+fn long_reading_window_is_opt_in_and_keeps_context_until_the_original_expiry() {
+    let config = BrokerConfig::default().clamped();
+    for adapter_kind in [
+        AdapterKind::Fcitx,
+        AdapterKind::Obsidian,
+        AdapterKind::Terminal,
+    ] {
+        let mut authority = SessionAuthority {
+            protocol_version: 2,
+            adapter_kind,
+            capabilities: vec![Capability::Context, Capability::Suggestion],
+        };
+        assert_eq!(
+            config.suggestion_ttl_for(&authority),
+            Duration::from_secs(5)
+        );
+        authority.capabilities.push(Capability::LongReadingWindow);
+        assert_eq!(
+            config.suggestion_ttl_for(&authority),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            config.context_authority_lease_for(&authority, config.explicit_generation_timeout),
+            Duration::from_millis(16_250)
+        );
+        authority.protocol_version = 1;
+        assert_eq!(
+            config.suggestion_ttl_for(&authority),
+            Duration::from_millis(600)
+        );
+    }
+    let browser = SessionAuthority {
+        protocol_version: 2,
+        adapter_kind: AdapterKind::Browser,
+        capabilities: vec![Capability::LongReadingWindow],
+    };
+    assert_eq!(
+        config.suggestion_ttl_for(&browser),
+        Duration::from_millis(600)
+    );
 }
 
 #[test]

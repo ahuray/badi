@@ -50,9 +50,11 @@ observer wire details.
   Ctrl+Shift+Space still asks there. An unrecognized quiet fact also quiets
   automatic work. The manual native path sees only Fcitx purposes and has no
   dialog or width signal, so it is not quieted this way.
-- **Display.** The observer's grey inline preview, or else Badi's own Fcitx
-  panel: one candidate under “Badi · Tab to accept · Ctrl+→ next word · Escape
-  to dismiss”. Notices expire after five seconds.
+- **Display.** The observer's grey inline preview, with a compact grey overflow
+  panel below or above the field when needed. If neither fits or geometry is
+  unavailable, Badi's Fcitx panel contains one unhighlighted candidate, no
+  numeric label and no keyboard-help banner. It keeps the user's Fcitx theme.
+  Suggestions expire after at most 15 seconds; notices still expire after five.
 - **Acceptance.** The broker authorizes first. A matching `commit.prepare`
   causes exactly one `commitString`, reported as `dispatched-unverified`. The
   candidate must still be present and owned at dispatch, and a local timer
@@ -184,6 +186,16 @@ commit. Native undo could merge acceptance with preceding typing, as permitted
 by IME-parity. These are live samples, not held-out language quality evidence;
 Omawrite 0.5.0’s native Open File location field also reported `file_dialog`,
 made no automatic model call after typing, and displayed an explicit request.
+
+The 2026-10-13 inline-preview handoff reports grey text and Tab acceptance in
+Brave Origin's DuckDuckGo box and a disposable local textarea. Zen's
+DuckDuckGo box showed inline text on Ctrl+Shift+Space; automatic suggestions
+stayed quiet, and acceptance was not established in that trial. Google was
+not tested because of its consent wall; no Google result is inferred from
+DuckDuckGo. The earlier Chromium and Omawrite captures recorded zero physical
+pixels between typed and ghost glyph-bottom modes at scale 2
+([measurement](../../docs/reports/2026-10-13-inline-ghost-text-research.md#implementation-outcome-2026-10-13-same-day)).
+These are prior live observations, separate from the merge's automated checks.
 
 | Application | Reaches Fcitx through | Boundary |
 | --- | --- | --- |

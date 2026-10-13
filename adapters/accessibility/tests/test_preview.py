@@ -2,11 +2,12 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from preview import (Preview, field_box_ends_before_caret, font_facts, font_pixels, ltr_text, mapped_caret,
-                    place_chip, place_inline, place_on_caret_line, valid_preview_text)
+from preview import (Preview, disable_preview_animation, field_box_ends_before_caret, font_facts,
+                    font_pixels, ltr_text, mapped_caret, place_chip, place_edge_panel, place_inline,
+                    place_on_caret_line, valid_preview_text)
 
 
 def focus():
@@ -21,6 +22,12 @@ def focus():
 
 
 class PreviewGeometryTests(unittest.TestCase):
+    def setUp(self):
+        # Unit rendering must never change the user's running compositor.
+        rule = patch("preview.disable_preview_animation", return_value=True)
+        self.disable_animation = rule.start()
+        self.addCleanup(rule.stop)
+
     def test_window_local_caret_maps_once_into_global_logical_coordinates(self):
         caret = mapped_caret(focus())
         self.assertEqual((caret.x, caret.y, caret.line_height, caret.field_right), (210, 150, 20, 720))
@@ -125,6 +132,113 @@ class PreviewGeometryTests(unittest.TestCase):
         for size in ((0, 24), (120, 0), (float("nan"), 24)):
             self.assertIsNone(place_chip(caret, *size), size)
 
+    def test_field_ascent_anchors_the_baseline_and_fractional_scale_snaps_to_physical_pixels(self):
+        caret = mapped_caret(focus())
+        # Ghost top = glyph top + field ascent - layout baseline.
+        self.assertEqual(place_inline(caret, 200, 24, 19, 14.0), (211, 145))
+        self.assertEqual(place_on_caret_line(caret, 200, 24, 19, 14.0), (211, 145))
+        # An unusable ascent falls back to the line-height ratio.
+        self.assertEqual(place_inline(caret, 200, 24, 19, float("nan")), (211, 147))
+        data = focus()
+        data["geometry"]["scale"] = 1.5
+        data["geometry"]["monitor"]["scale"] = 1.5
+        fractional = mapped_caret(data)
+        self.assertEqual(fractional.scale, 1.5)
+        # 146.83 logical: 146 lands on an exact physical pixel, 147 does not.
+        self.assertEqual(place_inline(fractional, 200, 24, 19), (211, 146))
+
+    def test_edge_panel_stays_outside_the_field_and_inside_the_window(self):
+        data = focus()
+        caret = mapped_caret(data)
+        self.assertEqual(place_edge_panel(caret, 120, 24), (203, 182))
+        self.assertEqual(place_edge_panel(caret, 800, 24), (200, 182))
+        self.assertIsNone(place_edge_panel(caret, 901, 24))
+        data["geometry"]["field"]["height"] = 610
+        self.assertEqual(place_edge_panel(mapped_caret(data), 120, 24), (203, 114), 'falls above a field at the bottom')
+        data["geometry"]["field"] = {"x": 0, "y": 0, "width": 900, "height": 650}
+        self.assertIsNone(place_edge_panel(mapped_caret(data), 120, 24), 'no room outside a full-window editor')
+
+    def test_following_glyph_bounds_inline_text_before_the_next_word(self):
+        data = focus()
+        data["geometry"]["text_follows"] = True
+        data["geometry"]["following_x"] = 420
+        caret = mapped_caret(data)
+        self.assertEqual(caret.following_x, 520)
+        # Caret at x=210: 300 wide ends at 511, before the next glyph at 520.
+        self.assertEqual(place_inline(caret, 300, 24, 19), (211, 147))
+        self.assertIsNone(place_inline(caret, 310, 24, 19), "would cover the following glyph")
+        for bad in (110, 901, float("nan"), "420", True):
+            data["geometry"]["following_x"] = bad
+            self.assertIsNone(mapped_caret(data).following_x, bad)
+        # Render: with room before the next word the ghost goes inline, no chip.
+        data["geometry"]["following_x"] = 420
+        data["geometry"]["field"]["height"] = 200
+        preview, calls, _monitor = self.render_fixture((200, 24))
+        self.assertTrue(preview.render(data, " next", 1500))
+        self.assertNotIn(("class", "chip"), calls)
+        self.assertIn(("left", 211), calls)
+        # Without room it falls back to the chip, never over the words.
+        preview, calls, _monitor = self.render_fixture((400, 24))
+        self.assertTrue(preview.render(data, " next", 1500))
+        self.assertIn(("class", "chip"), calls)
+
+    def test_snapping_cannot_move_text_past_the_following_glyph_or_field(self):
+        data = focus()
+        data["geometry"]["scale"] = 1.5
+        data["geometry"]["monitor"]["scale"] = 1.5
+        data["geometry"]["caret"]["x"] = 110.6
+        data["geometry"]["following_x"] = 311.8
+        self.assertIsNone(place_inline(mapped_caret(data), 200, 24, 19),
+                          "snapping right would cover the following glyph")
+        del data["geometry"]["following_x"]
+        data["geometry"]["field"]["width"] = 291.8
+        self.assertIsNone(place_inline(mapped_caret(data), 200, 24, 19),
+                          "snapping right would cross the field edge")
+        data["geometry"]["field"] = {"x": 20.4, "y": 40, "width": 600, "height": 200}
+        self.assertIsNone(place_chip(mapped_caret(data), 600, 24),
+                          "a full-width chip cannot round outside its field")
+
+    def test_font_metrics_anchor_reported_and_fallback_faces(self):
+        preview, _calls, _monitor = self.render_fixture()
+        description = Mock()
+        metrics = SimpleNamespace(get_ascent=lambda: 15 * 1024, get_descent=lambda: 5 * 1024)
+        context = Mock()
+        context.get_metrics.return_value = metrics
+        preview.label.get_pango_context = lambda: context
+        preview.Pango.FontDescription = lambda: description
+        self.assertEqual(preview._field_ascent({"family": "Iosevka", "weight": 700}, 18, 30), 15)
+        description.set_family.assert_called_once_with("Iosevka")
+        description.set_absolute_size.assert_called_once_with(18 * 1024)
+        self.assertEqual(preview._field_ascent({}, 18, 30), 22.5)
+        self.assertIsNone(preview._field_ascent({}, 18, None))
+
+    def test_preview_animation_is_disabled_best_effort_via_hyprctl(self):
+        calls = []
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            return SimpleNamespace(returncode=0)
+        self.assertTrue(disable_preview_animation(run=fake_run))
+        self.assertIn("badi-writing-preview", calls[0][-1])
+        self.assertIn("no_anim", calls[0][-1])
+        def missing(*_args, **_kwargs):
+            raise FileNotFoundError("hyprctl")
+        self.assertFalse(disable_preview_animation(run=missing))
+        self.assertFalse(disable_preview_animation(run=lambda *_a, **_k: SimpleNamespace(returncode=1)))
+
+    def test_rule_refresh_runs_off_the_render_path_and_is_rate_limited(self):
+        preview = object.__new__(Preview)
+        with patch("preview.time.monotonic", side_effect=[1, 2, 31, 32]), patch("preview.Thread") as worker:
+            preview._refresh_layer_rule(background=False)
+            self.disable_animation.assert_called_once_with()
+            worker.assert_not_called()
+            preview._refresh_layer_rule()
+            worker.assert_not_called()
+            preview._refresh_layer_rule()
+            worker.assert_called_once_with(target=self.disable_animation, daemon=True)
+            worker.return_value.start.assert_called_once_with()
+            preview._refresh_layer_rule()
+            self.assertEqual(worker.call_count, 1)
+
     def test_font_follows_the_caret_glyph_and_text_is_ltr_only(self):
         self.assertAlmostEqual(font_pixels(mapped_caret(focus())), 17.2)
         data = focus()
@@ -155,6 +269,7 @@ class PreviewGeometryTests(unittest.TestCase):
 
     def render_fixture(self, natural=(200, 24), baseline=19):
         preview = object.__new__(Preview)
+        preview._refresh_layer_rule = Mock()
         calls = []
         monitor = SimpleNamespace(get_connector=lambda: "eDP-1",
                                   get_geometry=lambda: SimpleNamespace(x=0, y=0, width=1440, height=900))
@@ -215,8 +330,9 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertIn(("left", 203), calls)
         self.assertIn(("top", 172), calls)
         preview, calls, _monitor = self.render_fixture((700, 24))
-        self.assertFalse(preview.render(focus(), " next", 1500), "past a field that still holds the caret")
-        self.assertNotIn(("visible", True), calls)
+        self.assertTrue(preview.render(focus(), " next", 1500), "overflow uses a quiet panel outside the field")
+        self.assertIn(("class", "chip"), calls)
+        self.assertIn(("top", 182), calls)
         short = focus()
         short["geometry"]["field"]["width"] = 89
         preview, calls, _monitor = self.render_fixture((200, 24))
@@ -232,6 +348,15 @@ class PreviewGeometryTests(unittest.TestCase):
             self.assertFalse(preview.render(data, text, 1500))
             self.assertNotIn(("visible", True), calls)
             self.assertFalse(any(call[0] == "timer" for call in calls))
+
+    def test_long_reading_window_keeps_a_bounded_local_expiry(self):
+        preview, calls, _monitor = self.render_fixture()
+        self.assertTrue(preview.render(focus(), " next words", 15000))
+        self.assertIn(("timer", 15000), calls)
+        for ttl in (15001, 0, True):
+            calls.clear()
+            self.assertFalse(preview.render(focus(), " next words", ttl))
+            self.assertNotIn(("visible", True), calls)
 
     def test_warming_lays_out_text_without_showing_it(self):
         preview, calls, _monitor = self.render_fixture()

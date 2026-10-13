@@ -19,7 +19,25 @@ MAX_COORDINATE = 10**7
 CARET_MARK_WIDTH = 2
 
 
-def calibrated_geometry(frame, document, field, glyph, window, monitors, caret, container=None, page=None):
+def _following_x(glyph, following, to_local_x, bound_right):
+    """Window-local left edge of the glyph after the caret, or None.
+
+    Only a glyph on the caret's own line, starting no earlier than where
+    the caret glyph ends and inside the drawing bound, proves how much
+    inline room the line has before the following words.
+    """
+    if not _is_rect(following):
+        return None
+    if abs(following["y"] - glyph["y"]) > glyph["height"] / 2:
+        return None
+    if following["x"] < glyph["x"] + glyph["width"] - EDGE_TOLERANCE:
+        return None
+    value = to_local_x(following["x"])
+    return value if value <= bound_right + EDGE_TOLERANCE else None
+
+
+def calibrated_geometry(frame, document, field, glyph, window, monitors, caret, container=None, page=None,
+                        following=None):
     """Window-local logical caret geometry for this request, or None.
 
     Chromium and Electron report document, field and glyph SCREEN extents in
@@ -56,11 +74,12 @@ def calibrated_geometry(frame, document, field, glyph, window, monitors, caret, 
         def local(value, origin):
             return round((value - origin) / scale, 2)
 
+        bound_local = {"x": local(bound["x"], left), "y": local(bound["y"], top),
+                       "width": round(bound["width"] / scale, 2), "height": round(bound["height"] / scale, 2)}
         return _reply(output, caret, local(glyph["x"] + glyph["width"], left), local(glyph["y"], top),
-                      round(glyph["height"] / scale, 2),
-                      {"x": local(bound["x"], left), "y": local(bound["y"], top),
-                       "width": round(bound["width"] / scale, 2), "height": round(bound["height"] / scale, 2)},
-                      window)
+                      round(glyph["height"] / scale, 2), bound_local, window,
+                      _following_x(glyph, following, lambda value: local(value, left),
+                                   bound_local["x"] + bound_local["width"]))
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return None
 
@@ -73,7 +92,7 @@ def _marks_caret(field, glyph, scale):
             and glyph["y"] + glyph["height"] <= field["y"] + field["height"] + EDGE_TOLERANCE)
 
 
-def gecko_calibrated_geometry(frame, document, field, glyph, window, monitors, caret):
+def gecko_calibrated_geometry(frame, document, field, glyph, window, monitors, caret, following=None):
     """Window-local logical caret geometry for a Gecko field, or None.
 
     Gecko on Wayland reports SCREEN extents relative to its own window: the
@@ -98,12 +117,14 @@ def gecko_calibrated_geometry(frame, document, field, glyph, window, monitors, c
         if not _inside(document, frame) or not _inside(field, document) or not _inside(logical, field):
             return None
         return _reply(output, caret, round(logical["x"] + logical["width"], 2), round(logical["y"], 2),
-                      round(logical["height"], 2), {key: round(field[key], 2) for key in RECT_KEYS}, window)
+                      round(logical["height"], 2), {key: round(field[key], 2) for key in RECT_KEYS}, window,
+                      _following_x(glyph, following, lambda value: round(value / scale, 2),
+                                   field["x"] + field["width"]))
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return None
 
 
-def native_calibrated_geometry(frame, field, glyph, window, monitors, caret):
+def native_calibrated_geometry(frame, field, glyph, window, monitors, caret, following=None):
     """Window-local logical caret geometry for a native toolkit field, or None.
 
     LibreOffice (VCL on Wayland) reports WINDOW extents in logical pixels
@@ -120,7 +141,9 @@ def native_calibrated_geometry(frame, field, glyph, window, monitors, caret):
         if not _spans_window(frame, width, height) or not _inside(field, frame) or not _inside(glyph, field):
             return None
         return _reply(output, caret, round(glyph["x"] + glyph["width"], 2), round(glyph["y"], 2),
-                      round(glyph["height"], 2), {key: round(field[key], 2) for key in RECT_KEYS}, window)
+                      round(glyph["height"], 2), {key: round(field[key], 2) for key in RECT_KEYS}, window,
+                      _following_x(glyph, following, lambda value: round(value, 2),
+                                   field["x"] + field["width"]))
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return None
 
@@ -188,15 +211,18 @@ def _output(frame, document, field, glyph, window, monitors, caret):
     return monitor, scale, width, height
 
 
-def _reply(output, caret, x, y, line, field, window):
+def _reply(output, caret, x, y, line, field, window, following_x=None):
     """The geometry reply; the caret must lie inside Hyprland's window size."""
     monitor, scale, width, height = output
     if not (0 <= x <= width and 0 <= y and y + line <= height):
         return None
-    return {"coordinate_convention": CALIBRATED, "scale": scale, "character_offset": caret - 1,
-            "caret": {"x": x, "y": y, "height": line}, "field": field,
-            "window": {key: window[key] for key in ("pid", "address", "at", "size", "monitor", "xwayland")},
-            "monitor": {key: monitor[key] for key in ("name", "x", "y", "width", "height", "scale", "transform")}}
+    reply = {"coordinate_convention": CALIBRATED, "scale": scale, "character_offset": caret - 1,
+             "caret": {"x": x, "y": y, "height": line}, "field": field,
+             "window": {key: window[key] for key in ("pid", "address", "at", "size", "monitor", "xwayland")},
+             "monitor": {key: monitor[key] for key in ("name", "x", "y", "width", "height", "scale", "transform")}}
+    if following_x is not None and x < following_x <= width:
+        reply["following_x"] = following_x
+    return reply
 
 
 def _is_rect(value):

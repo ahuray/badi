@@ -302,7 +302,8 @@ class ContractTests(unittest.TestCase):
         hidden = []
         self.observer.hide = lambda: hidden.append(True)
         base = self.preview_request(focus)
-        for patch in ({"text": "\n"}, {"text": ""}, {"text": "x"*161}, {"text": "a\u202eb"}, {"ttl_ms": 5001}, {"ttl_ms": True},
+        self.assertTrue(self.observer.request({**base, "ttl_ms": 15000})["ok"])
+        for patch in ({"text": "\n"}, {"text": ""}, {"text": "x"*161}, {"text": "a\u202eb"}, {"ttl_ms": 15001}, {"ttl_ms": True},
                       {"expected_caret": -1}, {"expected_caret": True}, {"expected_caret": 9.0}, {"expected_caret": "9"},
                       {"expected_total_chars": 8}, {"expected_total_chars": True}, {"expected_total_chars": 2**31}):
             self.assertEqual(self.observer.request({**base, **patch})["error"], "invalid_preview")

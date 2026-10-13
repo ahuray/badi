@@ -1441,9 +1441,11 @@ class GeometryWiringTests(unittest.TestCase):
     def test_every_request_reads_live_extents_and_calibrates(self):
         result = self.backend.geometry(self.field, self.text, 12, self.window)
         self.assertEqual(result["caret"], {"x": 210, "y": 110, "height": 20})
-        self.assertEqual(self.offsets, [(11, "screen")])
+        # The glyph before the caret calibrates; the one after it bounds inline room.
+        self.assertEqual(self.offsets, [(11, "screen"), (12, "screen")])
+        self.assertNotIn("following_x", result, "a following glyph at the caret glyph proves nothing")
         self.backend.geometry(self.field, self.text, 12, self.window)
-        self.assertEqual(len(self.offsets), 2, "no cached calibration")
+        self.assertEqual(len(self.offsets), 4, "no cached calibration")
 
     def test_unavailable_geometry_is_not_a_request_failure(self):
         self.frame.interfaces = []
@@ -1483,6 +1485,19 @@ class GeometryWiringTests(unittest.TestCase):
         self.backend.budget = expired
         with self.assertRaisesRegex(Denied, "operation_timeout"):
             self.backend.geometry(self.field, self.text, 12, self.window)
+
+    def test_following_glyph_lookup_preserves_the_operation_deadline(self):
+        def expired():
+            raise Denied("operation_timeout")
+        self.backend.budget = expired
+        with self.assertRaisesRegex(Denied, "operation_timeout"):
+            self.backend.following_extents(self.text, 12, "screen")
+        self.assertEqual(self.offsets, [], "expired requests make no more AT-SPI calls")
+        self.backend.budget = lambda: None
+        def missing(*_args):
+            raise RuntimeError("no glyph at end of field")
+        self.text.get_character_extents = missing
+        self.assertIsNone(self.backend.following_extents(self.text, 12, "screen"))
 
 
 class VisualDirectionTests(unittest.TestCase):

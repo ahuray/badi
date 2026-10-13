@@ -62,6 +62,8 @@ pub const MAX_GENERATION_TIMEOUT_MS: u64 = 600;
 pub const MAX_EXPLICIT_GENERATION_TIMEOUT_MS: u64 = 1_250;
 /// Native panels need enough time to read and accept a continuation.
 pub const NATIVE_SUGGESTION_TTL_MS: u64 = 5_000;
+/// Opt-in reading window; older v2 clients retain their five-second ceiling.
+pub const LONG_READING_WINDOW_MS: u64 = 15_000;
 const MAX_CONFIGURED_SUGGESTION_TTL_MS: u64 = 600;
 
 #[derive(Clone, Copy, Debug)]
@@ -91,7 +93,11 @@ impl BrokerConfig {
 
     fn suggestion_ttl_for(&self, authority: &SessionAuthority) -> Duration {
         if authority.has_reading_window() {
-            Duration::from_millis(NATIVE_SUGGESTION_TTL_MS)
+            Duration::from_millis(if authority.grants(Capability::LongReadingWindow) {
+                LONG_READING_WINDOW_MS
+            } else {
+                NATIVE_SUGGESTION_TTL_MS
+            })
         } else {
             self.suggestion_ttl
         }
@@ -106,7 +112,7 @@ impl BrokerConfig {
     ) -> Duration {
         if authority.has_reading_window() {
             self.context_authority_lease
-                .max(Duration::from_millis(NATIVE_SUGGESTION_TTL_MS) + generation_timeout)
+                .max(self.suggestion_ttl_for(authority) + generation_timeout)
         } else {
             self.context_authority_lease
         }
