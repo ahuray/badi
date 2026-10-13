@@ -11,12 +11,17 @@ Preserve exact editing authority and prove the affected user flow.
   | --- | --- |
   | [README.md](README.md) | What users can do: keys, coverage, install, commands |
   | [VISION.md](VISION.md) | The durable product contract |
-  | [future plans.md](<future plans.md>) | The only backlog: open work and open decisions |
+  | [future plans.md](<future plans.md>) | The only backlog: where Badi stands, the ordered next steps, open work and decisions |
+  | [CHANGELOG.md](CHANGELOG.md) | What shipped, by merged pull request |
   | [docs/decisions](docs/decisions/) | Durable architecture decisions (ADRs) |
   | Component `README.md` files | That component's contract, tests and boundaries |
 
   Link to a fact instead of repeating it. Delete stale material instead of
   archiving it, and never add parallel planning or handoff documents.
+- New to the repository: read "Where Badi stands" and "Next steps" in
+  [future plans.md](<future plans.md>), the top of [CHANGELOG.md](CHANGELOG.md),
+  then the runbook of the area you will touch. When work finishes, delete its
+  backlog item, record the result in the runbook and add a changelog line.
 - Inspect Git status before editing; preserve existing changes, untracked files
   and deletions. Work on the requested outcome, not the rest of the backlog.
 - For implementation requests, carry the change through code, tests and the
@@ -31,10 +36,35 @@ Preserve exact editing authority and prove the affected user flow.
 | `protocol/`, `broker/schemas/` | Wire and control schemas. Keep validators, producers, consumers and tests consistent when a contract changes. |
 | `adapters/fcitx5/` | C++20 cooperative Fcitx module: native fields, IME-parity, keys, display, commit. [Runbook](adapters/fcitx5/README.md), [wire](adapters/fcitx5/WIRE_PROTOCOL.md). |
 | `adapters/accessibility/` | Python AT-SPI observer: app identity, lock state, field acquisition, rich-editor serialization, caret calibration, grey preview. [Runbook](adapters/accessibility/README.md). |
-| `adapters/obsidian/`, `adapters/shell/`, `adapters/shared/` | Editor-owned clients with exact acquisition, mutation and native undo. [Editors](adapters/shared/README.md), [Bash](adapters/shell/README.md). |
+| `adapters/session/` | Python session helper: logind sleep and session state, UPower and power-profile state, GlobalShortcuts portal, and delivery of the keyring's style-learning key; reports to the broker and only withholds authority. [Runbook](adapters/session/README.md). |
+| `adapters/obsidian/`, `adapters/shell/`, `adapters/neovim/`, `adapters/shared/` | Editor-owned clients with exact acquisition, mutation and native undo. [Editors](adapters/shared/README.md), [Bash](adapters/shell/README.md), [Neovim](adapters/neovim/README.md). |
+| `adapters/libreoffice/` | Python UNO Writer extension: explicit English spelling replacement in one undo context, verified by reading back. [Runbook](adapters/libreoffice/README.md). |
 | `ui/omarchy-plugin/` | Omarchy bar mark and settings panel. [Runbook](ui/omarchy-plugin/README.md). |
 | `scripts/`, `packaging/` | `badi` desktop controller, user-local installers, service units, [Fcitx frontend backport](packaging/fcitx5-wayland-compat/README.md). |
-| `evaluation/` | Prediction Lab and its worker crate `badi-writing-lab`, which uses only the broker's public API. The broker never references the Lab. [Runbook](evaluation/writing/README.md), [model fit](docs/architecture/model-selection.md). |
+| `evaluation/` | Prediction Lab and its worker crate `badi-writing-lab`, which uses only the broker's public API. The broker never references the Lab. [Runbook](evaluation/writing/README.md), [model fit](docs/architecture/model-selection.md). `evaluation/power/` holds the paced battery trial. |
+
+Where code lives inside the larger components:
+
+- **Broker** (`broker/src/`): `server.rs` decodes wire frames and runs one
+  handler per message; `engine/` owns sessions, authority epochs, generation,
+  acceptance, type-through and desktop holds, with its tests in
+  `engine/tests/` by topic; `settings/` is the private settings document
+  (identity, permissions, policy, paths, private files, the compare-and-swap
+  store); `writing.rs` and `semantic/` run the local model; `style.rs`,
+  `personalization.rs`, `model_selection.rs` and `control_plane.rs` are what
+  their names say; `bin/badictl/` is the control CLI. A module's unit tests
+  live beside it in `<module>/tests.rs`.
+- **Fcitx addon** (`adapters/fcitx5/src/`): `addon.h` declares the addon;
+  `addon.cpp` (lifecycle and input-context events), `addon_keys.cpp`,
+  `addon_observer.cpp`, `addon_broker.cpp` (broker events and display) and
+  `addon_session.cpp` implement it over the tested core in `state`,
+  `observation`, `transport`, `accessibility`, `sanitizer` and `debug`.
+- **Observer** (`adapters/accessibility/`): `daemon.py` (the private D-Bus
+  service and AT-SPI events), `desktop.py` (active window, Omarchy lock and
+  process identity), `field.py` (acquisition, serialization and Lab-only
+  window context), `contract.py` (the acquisition contract), `geometry.py`
+  and `preview.py` (caret calibration and the overlay), `health.py`
+  (readiness probe).
 
 ## Editing and privacy invariants
 
@@ -64,6 +94,8 @@ Preserve exact editing authority and prove the affected user flow.
   alone denies its urlbar.
 - **Type-through** ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md))
   carries suggestion text, never authority, into the next admitted request.
+- **Desktop signals** ([ADR 0005](docs/decisions/0005-desktop-signals-withhold-authority.md))
+  from the session helper may hold or quiet suggestions; they never grant.
 - Spelling replacement needs negotiated `text_replacement`, an exactly bound
   suffix or range and explicit acceptance; test stale replacement and undo.
 - No raw keylogging, clipboard replacement or blind synthetic typing as product
@@ -90,8 +122,10 @@ changed surface:
 | Rust broker, model, policy | Targeted tests, then the Rust gate below; real-broker adapter lanes for wire or authority changes |
 | Fcitx module | `npm run fcitx5:check`; `npm run fcitx5:integration` for transport or broker changes |
 | Accessibility observer | `npm run accessibility:check`; `npm run accessibility:integration` for bus or event changes |
+| Session helper | `npm run session:check`; `npm run session:integration` for broker, bus or portal changes |
 | Observer and addon together | `PYTHONDONTWRITEBYTECODE=1 python3 adapters/fcitx5/tests/observed-desktop.py` |
-| Obsidian, Bash, shared clients | `npm run editors:check`, `npm run editors:integration` |
+| Obsidian, Bash, Neovim, shared clients | `npm run editors:check`, `npm run editors:integration` |
+| LibreOffice Writer extension | `npm run libreoffice:check`, `npm run libreoffice:integration` |
 | Desktop controller, installers | `npm run desktop:check` |
 | Prediction Lab | `npm run writing:check`, `cargo test --locked -p badi-writing-lab`; a real-model `run.mjs` comparison when inference changes |
 | Omarchy panel | `npm run omarchy:check`; the host and lifecycle lanes in its runbook for QML or runtime changes |
@@ -106,7 +140,7 @@ cargo +1.85.0 check --workspace --all-targets --all-features --locked
 ```
 
 `npm run check` ([run-checks.mjs](scripts/run-checks.mjs)) runs the docs,
-editor, desktop, accessibility, Omarchy and writing checks and summarizes;
+editor, LibreOffice, desktop, accessibility, Omarchy and writing checks and summarizes;
 `node scripts/run-checks.mjs NAME...` runs a subset. No source check proves
 native app behavior: claims about a real app need a live trial in the graphical
 session, and missing prerequisites must be reported with the exact unverified

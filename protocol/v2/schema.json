@@ -37,7 +37,15 @@
         "memory.status",
         "probe.request",
         "probe.result",
-        "error"
+        "error",
+        "desktop.state",
+        "desktop.status",
+        "style.key",
+        "style.query",
+        "style.forget",
+        "style.export",
+        "style.status",
+        "style.samples"
       ]
     },
     "session_id": { "$ref": "#/$defs/sessionId" },
@@ -283,6 +291,78 @@
         "revision": false,
         "payload": { "$ref": "#/$defs/errorPayload" }
       }
+    },
+    {
+      "properties": {
+        "type": { "const": "desktop.state" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/desktopStatePayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "desktop.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/desktopStatusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "style.key" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/styleKeyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "style.query" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "style.forget" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "style.export" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "style.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/styleStatusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "style.samples" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/styleSamplesPayload" }
+      }
     }
   ],
   "$defs": {
@@ -319,13 +399,15 @@
         "policy",
         "settings",
         "text_replacement",
-        "long_reading_window"
+        "long_reading_window",
+        "desktop_signals",
+        "style_key"
       ]
     },
     "capabilities": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 10,
+      "maxItems": 12,
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/capability" }
     },
@@ -334,7 +416,7 @@
       "additionalProperties": false,
       "required": ["kind", "name", "version"],
       "properties": {
-        "kind": { "enum": ["browser", "obsidian", "fcitx", "cli", "test", "terminal"] },
+        "kind": { "enum": ["browser", "obsidian", "fcitx", "cli", "test", "terminal", "session", "neovim", "libreoffice"] },
         "name": { "type": "string", "minLength": 1, "maxLength": 64 },
         "version": { "type": "string", "minLength": 1, "maxLength": 32 }
       }
@@ -383,10 +465,23 @@
           "additionalProperties": false,
           "required": ["kind", "app_id", "target_id"],
           "properties": {
-            "kind": { "enum": ["obsidian", "terminal", "fixture"] },
+            "kind": { "enum": ["obsidian", "terminal", "fixture", "neovim"] },
             "app_id": { "type": "string", "minLength": 1, "maxLength": 128 },
             "target_id": { "$ref": "#/$defs/opaqueId" },
             "origin": { "$ref": "#/$defs/origin" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "app_id", "target_id"],
+          "properties": {
+            "kind": { "const": "libreoffice" },
+            "app_id": {
+              "const": "libreoffice-writer",
+              "description": "The LibreOffice Writer extension's only identity; its settings subject is linux_app/libreoffice."
+            },
+            "target_id": { "$ref": "#/$defs/opaqueId" }
           }
         }
       ]
@@ -1108,7 +1203,8 @@
         "socket_mode": { "const": "0600" },
         "max_frame_bytes": { "const": 65536 },
         "metrics": { "$ref": "#/$defs/metrics" },
-        "active": { "$ref": "#/$defs/activeLocator" }
+        "active": { "$ref": "#/$defs/activeLocator" },
+        "desktop": { "$ref": "#/$defs/desktopStatusPayload" }
       },
       "allOf": [
         {
@@ -1119,6 +1215,88 @@
           "then": { "properties": { "paused": { "const": true } } }
         }
       ]
+    },
+    "desktopSession": {
+      "enum": ["active", "inactive", "sleeping"],
+      "description": "The login session as logind reports it. Inactive (another session or VT in the foreground) and sleeping hold every grant until the helper reports active again or disconnects."
+    },
+    "desktopStatePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Content-free report from the desktop session helper (capability desktop_signals). It never grants authority. Unknown power state is reported as false.",
+      "required": ["session", "on_battery", "power_saver"],
+      "properties": {
+        "session": { "$ref": "#/$defs/desktopSession" },
+        "on_battery": { "type": "boolean" },
+        "power_saver": { "type": "boolean" }
+      }
+    },
+    "desktopStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The broker's combined view of every connected helper's report. automatic is normal unless low_power is true and settings choose a battery mode.",
+      "required": ["observed", "session", "low_power", "automatic"],
+      "properties": {
+        "observed": { "type": "boolean" },
+        "session": { "$ref": "#/$defs/desktopSession" },
+        "low_power": { "type": "boolean" },
+        "automatic": { "enum": ["normal", "deferred", "explicit_only"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "observed": { "const": false } }, "required": ["observed"] },
+          "then": { "properties": { "session": { "const": "active" }, "low_power": { "const": false } } }
+        },
+        {
+          "if": { "properties": { "low_power": { "const": false } }, "required": ["low_power"] },
+          "then": { "properties": { "automatic": { "const": "normal" } } }
+        }
+      ]
+    },
+    "styleKeyPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The keyring's style-learning key (capability style_key). Never logged or stored by the broker.",
+      "required": ["key_id", "key"],
+      "properties": {
+        "key_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "key": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "styleStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Content-free style-learning state.",
+      "required": ["enabled", "available", "key", "samples", "subjects"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "available": { "type": "boolean" },
+        "key": { "enum": ["absent", "ready", "mismatch"] },
+        "samples": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "subjects": { "type": "integer", "minimum": 0, "maximum": 64 }
+      }
+    },
+    "styleSamplesPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An explicit export of decrypted style samples (settings capability, CLI only).",
+      "required": ["samples"],
+      "properties": {
+        "samples": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["identity", "day", "text"],
+            "properties": {
+              "identity": { "type": "object" },
+              "day": { "$ref": "#/$defs/counter" },
+              "text": { "type": "string", "minLength": 24, "maxLength": 240 }
+            }
+          }
+        }
+      }
     },
     "errorPayload": {
       "type": "object",

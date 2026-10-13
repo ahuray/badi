@@ -37,6 +37,14 @@ BLOCK_ENDS = {"paragraph": "\n\n", "heading": "\n\n", "section": "\n"}
 INLINE_ROLES = frozenset({"static", "link", "mark", "subscript", "superscript"})
 MAX_INLINE_OBJECTS = 64
 MAX_INLINE_DEPTH = 4
+# Same-window context (Lab only until qualified): the nearest heading above
+# the field and the end of the paragraph just before it, from the field's own
+# web document. Each part is bounded, and the walk visits few nodes.
+WINDOW_HEADING_CHARS = 120
+WINDOW_PARAGRAPH_CHARS = 240
+MAX_WINDOW_NODES = 96
+MAX_WINDOW_DEPTH = 12
+WINDOW_ROLES = frozenset({"heading", "paragraph"})
 
 
 class CaretText(NamedTuple):
@@ -441,6 +449,77 @@ class FieldBackend:
                 return url
         raise Denied("origin_unavailable")
 
+    def window_context(self, metadata):
+        """The nearest heading above the field and the end of the paragraph
+        just before it, from the field's own web document, or None.
+
+        The walk goes backwards from the field: each ancestor's earlier
+        siblings, last first, down to the nearest `document web`. It never
+        reads another field (anything editable), a password, a hidden node or
+        a nested document (another frame, possibly another origin), and it
+        gives up rather than guess when the document cannot be found or its
+        address differs from the field's binding. Native apps get None.
+        """
+        if not metadata.get("web") or not metadata.get("uri"):
+            return None
+        node = metadata["node"]
+        if self.nearest_document_uri(node) != metadata["uri"]:
+            return None
+        found = {"heading": None, "paragraph": None}
+        visits = [0]
+        child, done = node, False
+        # Text found on the way counts only once a `document web` ancestor
+        # confirms it is inside the field's own document.
+        for ancestor in self.ancestors(node.get_parent()):
+            index = child.get_index_in_parent()
+            for sibling_index in range(min(index, MAX_CHILDREN) - 1, -1, -1):
+                if done:
+                    break
+                sibling = ancestor.get_child_at_index(sibling_index)
+                done = sibling is not None and self.window_walk(sibling, found, visits, 0)
+            if ancestor.get_role_name() == "document web":
+                return self.window_result(found)
+            child = ancestor
+        return None
+
+    def window_walk(self, node, found, visits, depth):
+        """Fills `found` from `node`'s subtree, last node first; True once
+        both parts are found or the visit budget is spent."""
+        visits[0] += 1
+        if visits[0] > MAX_WINDOW_NODES:
+            return True
+        self.budget()
+        role = node.get_role_name()
+        if role == "document web" or depth > MAX_WINDOW_DEPTH:
+            return False
+        flags = node.get_state_set()
+        state = self.atspi.StateType
+        if flags.contains(state.EDITABLE) or not flags.contains(state.SHOWING) or role == "password text":
+            return False
+        if role in WINDOW_ROLES:
+            part = "heading" if role == "heading" else "paragraph"
+            if found[part] is None and "Text" in node.get_interfaces():
+                text = node.get_text_iface()
+                count = text.get_character_count()
+                limit = WINDOW_HEADING_CHARS if part == "heading" else WINDOW_PARAGRAPH_CHARS
+                start = 0 if part == "heading" else max(0, count - 4 * limit)
+                value = window_text(self.atspi.Text.get_text(text, start, min(count, start + 4 * limit)),
+                                    limit, tail=part == "paragraph")
+                # A heading always closes the search: prose above it belongs
+                # to an earlier section.
+                if value:
+                    found[part] = value
+            return found["heading"] is not None
+        for index in range(min(node.get_child_count(), MAX_CHILDREN) - 1, -1, -1):
+            child = node.get_child_at_index(index)
+            if child is not None and self.window_walk(child, found, visits, depth + 1):
+                return True
+        return False
+
+    def window_result(self, found):
+        parts = {name: value for name, value in found.items() if value}
+        return parts or None
+
     def ancestors(self, node):
         """`node` and its ancestors, nearest first; origin_unavailable past MAX_DOCUMENT_DEPTH."""
         for _ in range(MAX_DOCUMENT_DEPTH):
@@ -685,6 +764,21 @@ class FieldBackend:
         if EMBEDDED_OBJECT in value:
             raise Denied("unsupported_field")
         return value
+
+
+def window_text(value, limit, tail):
+    """Prose from one heading or paragraph: embedded objects dropped, spacing
+    collapsed, and cut at a word boundary to `limit` characters."""
+    text = " ".join(value.replace(EMBEDDED_OBJECT, " ").split())
+    if len(text) <= limit:
+        return text
+    if tail:
+        cut = text[-limit:]
+        space = cut.find(" ")
+        return cut[space + 1:] if 0 <= space < limit // 2 else cut
+    cut = text[:limit]
+    space = cut.rfind(" ")
+    return cut[:space] if space > limit // 2 else cut
 
 
 def only_field(fields, pid):

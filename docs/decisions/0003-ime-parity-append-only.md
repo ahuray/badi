@@ -39,8 +39,10 @@ yield, exact observer identity with snapshot and caret agreement before display
 and dispatch, revision, fingerprint and expiry binding, one-shot acceptance,
 and no retries or synthetic keys. These apps stay append-only. The Fcitx connection also serves native exact
 fields, so it advertises `text_replacement`; the broker withholds a correction
-for every app in this decision. Obsidian and Bash keep their own replacement
-channels. A native exact field may delete the exact typed suffix and then
+for every app in this decision. Obsidian, Bash and the
+[LibreOffice Writer extension](../../adapters/libreoffice/README.md) (its own
+`libreoffice-writer` grant, never the Fcitx `libreoffice` one) keep their own
+replacement channels. A native exact field may delete the exact typed suffix and then
 `commitString` the correction, still reported as `dispatched-unverified`.
 
 Brave web-app windows take their page origin's policy, as a tab does.

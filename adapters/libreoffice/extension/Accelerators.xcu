@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Alt+F7 in Writer only, beside F7 (spelling dialog) and Shift+F7 (online
+     spelling). Fcitx keeps Ctrl+Shift+Space; Ctrl+Alt+F7 is a VT switch. -->
+<oor:component-data xmlns:oor="http://openoffice.org/2001/registry"
+                    xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                    oor:name="Accelerators" oor:package="org.openoffice.Office">
+  <node oor:name="PrimaryKeys">
+    <node oor:name="Modules">
+      <node oor:name="com.sun.star.text.TextDocument">
+        <node oor:name="F7_MOD2" oor:op="replace">
+          <prop oor:name="Command">
+            <value xml:lang="en-US">vnd.badi.libreoffice:correct</value>
+          </prop>
+        </node>
+      </node>
+    </node>
+  </node>
+</oor:component-data>

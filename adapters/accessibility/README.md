@@ -162,6 +162,31 @@ selection, editable, showing, defunct, role) are subscribed on a separate
 D-Bus connection, matched to that exact sender and path, so other fields'
 events never arrive. Their payloads, including typed text, are never unpacked.
 
+## Same-window context (Lab only)
+
+`FieldBackend.window_context()` finds the nearest heading above a web field and
+the end of the paragraph just before it, in the field's own document. It is
+not part of the socket contract and no snapshot carries it: production
+prompts use no window context until the Lab shows it helps without harm
+([backlog](<../../future plans.md>)).
+
+- **Scope.** Web fields only. The binding's address must equal the field's
+  nearest document address, and the result counts only once a `document web`
+  ancestor confirms the walk stayed in that document. Native apps get nothing.
+- **Walk.** Backwards from the field: each ancestor's earlier siblings, last
+  first, at most 96 nodes and 12 levels. The first heading ends the search;
+  the paragraph must be nearer than that heading.
+- **Never read:** anything editable (another field or editor), a password
+  node, a node that is not showing, or a nested `document web` (another
+  frame, possibly another origin).
+- **Bounds.** A heading of at most 120 and a paragraph tail of at most 240
+  characters, cut at a word, embedded objects dropped and spacing collapsed.
+
+`python3 evaluation/writing/window-context.py APP_ID --delay 3` prints, for
+the focused field of an allowed web app, the window context and the text
+before the caret as JSON, under the observer's identity and lock rules. It is
+a capture aid for Lab cases from disposable pages; it writes no file.
+
 ## Socket contract
 
 `python3 adapters/accessibility/daemon.py` serves

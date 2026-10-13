@@ -9,7 +9,8 @@ depends=('gcc-libs' 'glibc' 'python' 'python-gobject' 'python-cairo' 'at-spi2-co
          'gtk4' 'gtk4-layer-shell' 'glib2' 'pango' 'systemd' 'fcitx5>=5.1.22'
          'hyprland' 'quickshell' 'qt6-declarative' 'hicolor-icon-theme')
 makedepends=('git' 'cargo' 'cmake' 'ninja' 'nlohmann-json')
-optdepends=('curl: download the separately verified writing assets')
+optdepends=('curl: download the separately verified writing assets'
+            'libsecret: keep the opt-in style-learning key in the desktop keyring')
 provides=('badi')
 conflicts=('badi')
 # The repository's release profile strips Rust symbols; do not emit an empty
@@ -59,8 +60,11 @@ package() {
     for file in daemon contract desktop field geometry preview health; do
         install -Dm644 "adapters/accessibility/$file.py" "$pkgdir/usr/lib/badi/accessibility/$file.py"
     done
+    for file in daemon link style_key; do
+        install -Dm644 "adapters/session/$file.py" "$pkgdir/usr/lib/badi/session/$file.py"
+    done
     DESTDIR="$pkgdir" cmake --install build-fcitx
-    for unit in badi-broker badi-accessibility; do
+    for unit in badi-broker badi-accessibility badi-session; do
         install -Dm644 "packaging/systemd/$unit.service" "$pkgdir/usr/lib/systemd/user/$unit.service"
         sed -i 's|%h/.local/lib/badi/|/usr/lib/badi/|g' "$pkgdir/usr/lib/systemd/user/$unit.service"
     done

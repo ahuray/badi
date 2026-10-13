@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -38,6 +39,10 @@ class DesktopTests(unittest.TestCase):
         editors = patch.object(desktop, 'vscode_edit_context_note', return_value=None)
         editors.start()
         self.addCleanup(editors.stop)
+        # Nor on whether this machine runs the session helper.
+        helper = patch.object(desktop, 'session_helper_state', return_value={'loaded': True, 'active': 'active'})
+        helper.start()
+        self.addCleanup(helper.stop)
 
     def desktop_socket(self, mode=0o600):
         endpoint = self.directory / 'broker.sock'
@@ -111,6 +116,156 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(document['revision'], 8)
         self.assertTrue(document['paused'])
 
+    def test_pause_toggle_flips_the_persisted_state_with_compare_and_swap(self):
+        for paused, message in ((False, 'Predictions paused.'), (True, 'Predictions resumed.')):
+            settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': paused, 'subjects': []}
+            with self.subTest(paused=paused), \
+                 patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}']) as command, \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                desktop.main(['pause', 'toggle'])
+            self.assertEqual(command.call_args.args[0], ['settings', 'replace', '--if-revision', '7', '--json', '-'])
+            document = json.loads(command.call_args.kwargs['input_text'])
+            self.assertEqual((document['revision'], document['paused']), (8, not paused))
+            self.assertEqual(output.getvalue().strip(), message)
+        settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'subjects': []}
+        with patch.object(desktop, 'control', side_effect=[json.dumps(settings), RuntimeError('settings_conflict')]), \
+             self.assertRaisesRegex(RuntimeError, 'settings_conflict'):
+            desktop.main(['pause', 'toggle'])
+
+    def test_battery_mode_is_omitted_when_quiet(self):
+        settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'battery_mode': 'normal',
+                    'subjects': []}
+        for arguments, expected in ((['battery', 'normal'], 'normal'), (['battery', 'explicit'], 'explicit'),
+                                    (['battery', 'quiet'], None)):
+            with self.subTest(arguments=arguments), \
+                 patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}']) as command, \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                desktop.main(arguments)
+            sent = json.loads(command.call_args.kwargs['input_text'])
+            self.assertEqual(sent.get('battery_mode'), expected)
+            self.assertEqual(sent['subjects'], [])
+            self.assertIn('as on mains power' if expected == 'normal' else 'Explicit requests are unchanged',
+                          output.getvalue())
+        for invalid in (['battery', 'off'], ['battery'], ['battery', 'quiet', 'now']):
+            with patch.object(desktop, 'control') as command, self.assertRaises(RuntimeError):
+                desktop.main(invalid)
+            command.assert_not_called()
+
+    def test_status_and_doctor_report_the_desktop_session_helper(self):
+        metrics = {'provider_calls': 1, 'suggestions_shown': 1, 'provider_errors': 0, 'no_suggestion': BREAKDOWN}
+        settings = {'schema': 'badi.settings.v2', 'revision': 2, 'paused': False, 'battery_mode': 'quiet',
+                    'subjects': []}
+        deferred = {'observed': True, 'session': 'active', 'low_power': True, 'automatic': 'deferred'}
+        health = {'paused': False, 'provider': 'local_model', 'metrics': metrics, 'desktop': deferred}
+        self.assertIn('Desktop: session active · on battery or power saver · battery mode quiet · '
+                      'automatic after the typing pause', desktop.status_text(health, settings))
+        absent = {**health, 'desktop': {'observed': False, 'session': 'active', 'low_power': False,
+                                        'automatic': 'normal'}}
+        self.assertIn('Desktop: no session helper', desktop.status_text(absent, settings))
+        self.assertNotIn('Desktop:', desktop.status_text({**health, 'desktop': None}))
+        service = {'loaded': True, 'active': 'active', 'state': 'running', 'autostart': True}
+        cases = (
+            (health, {'loaded': True, 'active': 'active'}, 'automatic suggestions start after the typing pause'),
+            ({**health, 'paused': True, 'desktop': {**deferred, 'session': 'sleeping'}},
+             {'loaded': True, 'active': 'active'}, 'every grant is held'),
+            (absent, {'loaded': False, 'active': 'inactive'}, 'badi-session) is not installed'),
+        )
+        for broker_health, helper, note in cases:
+            def control(arguments, endpoint=None, health=broker_health):
+                return json.dumps(settings if arguments[0] == 'settings' else health)
+            with self.subTest(note=note), \
+                 patch.object(desktop, 'service_state', return_value=service), \
+                 patch.object(desktop, 'session_helper_state', return_value=helper), \
+                 patch.object(desktop, 'accessibility_state', return_value={'loaded': False, 'ready': False}), \
+                 patch.object(desktop, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+                 patch.object(desktop, 'control', side_effect=control):
+                report = desktop.health_report()
+            self.assertTrue(any(note in line for line in report['notes']), report['notes'])
+            self.assertEqual(report['problems'], [])
+            text = desktop.doctor_text(report)
+            self.assertIn('Session helper: ' + ('active' if helper['loaded'] else 'not installed'), text)
+
+    def test_style_learning_keeps_the_key_out_of_argv_and_is_opt_in(self):
+        key = ('ab' * 16, 'cd' * 32)
+        keyring = SimpleNamespace(ensure=lambda: key, delete=lambda: True)
+        settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'subjects': [
+            {'identity': desktop.site_identity('https://mail.example'), 'permissions': {
+                'context_read': 'allow', 'display': 'allow', 'suggest': 'allow', 'learn': 'block',
+                'retention': {'mode': 'none'}}}]}
+        calls = []
+
+        def control(arguments, endpoint=None, *, input_text=None):
+            calls.append((arguments, input_text))
+            if arguments[:2] == ['settings', 'show']:
+                return json.dumps(settings)
+            if arguments == ['style', 'status']:
+                return json.dumps({'enabled': True, 'available': True, 'key': 'ready', 'samples': 2, 'subjects': 1})
+            if arguments == ['style', 'export']:
+                return '{"samples": []}\n'
+            return '{}'
+
+        with patch.object(desktop, 'style_keyring', return_value=keyring), \
+             patch.object(desktop, 'control', side_effect=control), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['style', 'on'])
+        delivery, = [call for call in calls if call[0] == ['style', 'key', '-']]
+        self.assertEqual(delivery[1], f'{key[0]} {key[1]}\n')
+        self.assertFalse(any(key[1] in ' '.join(arguments) for arguments, _ in calls), 'never in argv')
+        self.assertLess(calls.index(delivery), len(calls) - 1, 'the key arrives before learning is enabled')
+        self.assertTrue(json.loads(calls[-1][1])['style_learning'])
+        self.assertIn('badi style site ORIGIN on', output.getvalue())
+
+        for arguments, learn, retention in ((['style', 'site', 'https://mail.example', 'on'], 'allow', 30),
+                                            (['style', 'site', 'https://mail.example', 'on', '7'], 'allow', 7),
+                                            (['style', 'site', 'https://mail.example', 'off'], 'block', None)):
+            calls.clear()
+            with self.subTest(arguments=arguments), patch.object(desktop, 'control', side_effect=control), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                desktop.main(arguments)
+            permissions = json.loads(calls[-1][1])['subjects'][0]['permissions']
+            self.assertEqual(permissions['learn'], learn)
+            self.assertEqual(permissions['retention'], {'mode': 'bounded', 'days': retention} if retention
+                             else {'mode': 'none'})
+        for invalid in (['style', 'site', 'https://other.example', 'on'], ['style', 'site', 'https://mail.example', 'on', '91'],
+                        ['style', 'site', 'https://mail.example/path', 'on'], ['style', 'maybe']):
+            with self.subTest(invalid=invalid), patch.object(desktop, 'control', side_effect=control), \
+                 self.assertRaises(RuntimeError):
+                desktop.main(invalid)
+
+        calls.clear()
+        with patch.object(desktop, 'style_keyring', return_value=keyring), \
+             patch.object(desktop, 'control', side_effect=control), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['style', 'forget'])
+        self.assertEqual(calls[0][0], ['style', 'forget'])
+        self.assertIn('keyring key removed', output.getvalue())
+
+        def keyless(arguments, endpoint=None, *, input_text=None):
+            return json.dumps({'enabled': True, 'available': True, 'key': 'absent', 'samples': 0, 'subjects': 0})
+        with patch.object(desktop, 'control', side_effect=keyless), self.assertRaisesRegex(RuntimeError, 'badi style on'):
+            desktop.main(['style', 'export'])
+
+    def test_doctor_notes_style_learning_without_a_usable_key(self):
+        health = {'paused': False, 'provider': 'local_model',
+                  'metrics': {'provider_calls': 1, 'suggestions_shown': 1, 'provider_errors': 0, 'no_suggestion': BREAKDOWN}}
+        service = {'loaded': True, 'active': 'active', 'state': 'running', 'autostart': True}
+        for key, noted in (('absent', True), ('mismatch', True), ('ready', False)):
+            settings = {'schema': 'badi.settings.v2', 'revision': 2, 'paused': False, 'style_learning': True,
+                        'subjects': []}
+
+            def control(arguments, endpoint=None, key=key):
+                if arguments[0] == 'settings':
+                    return json.dumps(settings)
+                if arguments[0] == 'style':
+                    return json.dumps({'enabled': True, 'available': True, 'key': key, 'samples': 0, 'subjects': 0})
+                return json.dumps(health)
+            with self.subTest(key=key), patch.object(desktop, 'service_state', return_value=service), \
+                 patch.object(desktop, 'accessibility_state', return_value={'loaded': False, 'ready': False}), \
+                 patch.object(desktop, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+                 patch.object(desktop, 'control', side_effect=control):
+                report = desktop.health_report()
+            self.assertEqual(any('cannot seal samples' in note for note in report['notes']), noted)
+
     def test_conflicts_are_not_retried_or_overwritten(self):
         settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'subjects': []}
         with patch.object(desktop, 'control', side_effect=[json.dumps(settings), RuntimeError('settings_conflict')]) as command:
@@ -151,7 +306,13 @@ class DesktopTests(unittest.TestCase):
         document = {'subjects': []}
         desktop.set_app(document, 'obsidian', True)
         desktop.set_app(document, 'bash', True)
-        self.assertEqual([item['identity']['adapter'] for item in document['subjects']], ['obsidian', 'shell'])
+        desktop.set_app(document, 'nvim', True)
+        desktop.set_app(document, 'libreoffice-writer', True)
+        desktop.set_app(document, 'libreoffice', True)
+        # Adapter names sort alphabetically, as the broker's canonical order requires.
+        self.assertEqual([(item['identity']['adapter'], item['identity']['app_id']) for item in document['subjects']],
+                         [('fcitx', 'libreoffice'), ('libreoffice', 'libreoffice-writer'), ('neovim', 'nvim'),
+                          ('obsidian', 'obsidian'), ('shell', 'bash')])
 
     def test_site_grants_preserve_native_settings_and_exact_ports(self):
         document = {'subjects': []}

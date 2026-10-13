@@ -6,7 +6,10 @@ authority, the local writing model and content-free metrics. It speaks only on
 a Unix socket and never drives a keyboard, clipboard or accessibility API.
 
 - `badi-broker` serves the socket. `--provider phrase` selects the
-  deterministic test fixture instead of the writing model.
+  deterministic test fixture instead of the writing model. Where a session
+  negotiated replacement, the fixture also offers the model provider's
+  inference-free dictionary correction (one unambiguous single edit, such as
+  `adress` → `address`), so editors can test exact replacement.
 - `badictl` sends control, health, settings and probe requests and prints
   offline hardware and model advice.
 
@@ -23,7 +26,8 @@ and whether they were dirty (`--version` prints both; packagers may set
   documents in [schemas/](schemas/).
 - **Negotiation.** `hello` negotiates protocol v1 or v2 and the capabilities a
   connection may use: context, suggestion, commit kinds, text replacement,
-  policy, control, health, settings and an optional `long_reading_window`.
+  policy, control, health, settings, an optional `long_reading_window` and,
+  for the session helper only, `desktop_signals` (v2).
 - **Binding.** A suggestion is bound to its session, focus epoch, revision,
   fingerprint and expiry, and acceptance is one-shot.
 - **Authority acknowledgement.** A policy-capable connection must answer
@@ -43,7 +47,8 @@ and whether they were dirty (`--version` prints both; packagers may set
   and type-through keep the original expiry; there is no periodic renewal.
   Every field, revision, fingerprint, focus, policy and one-shot guard remains.
   Update the broker before clients advertising the new capability; an older
-  broker rejects it. Fcitx and Obsidian opt in; Bash keeps its existing lease.
+  broker rejects it. Fcitx, Obsidian, Neovim and the LibreOffice Writer
+  extension opt in; Bash keeps its existing lease.
 - **Growing previews.** Each extension has an immutable id and text. Earlier
   versions remain acceptable only within the same generation, exact field
   revision and original expiry, so a new word crossing Tab on the socket
@@ -71,8 +76,68 @@ and whether they were dirty (`--version` prints both; packagers may set
   distinguished. An app allowed this way gets policy reason `matched_default`,
   so the Fcitx addon opens only observed fields for it. While the memory store
   is unavailable, only strict authority reductions are accepted.
-- **Connections.** Policy connections stay open while idle; control and health
-  clients close after 300 s without a request.
+- **Connections.** Policy and desktop-signal connections stay open while
+  idle; control and health clients close after 300 s without a request.
+
+## Desktop session signals
+
+([ADR 0005](../docs/decisions/0005-desktop-signals-withhold-authority.md)) The [session helper](../adapters/session/README.md) reports
+`desktop.state {session: active|inactive|sleeping, on_battery, power_saver}`
+on a `desktop_signals` connection and receives `desktop.status
+{observed, session, low_power, automatic}`, the combined view of every
+connected helper. Each report belongs to its connection and disappears when
+the connection closes.
+
+- **Hold.** While any helper reports an inactive or sleeping session, the
+  broker is runtime-paused like `badictl pause`: entering the hold advances
+  the authority epoch, revokes every session's context, cancels pending
+  inference, withdraws visible suggestions and pending commits, ends the
+  type-through carry and fences queued outcome writes before it replies.
+  Leaving it advances the epoch again, so adapters reacquire their fields;
+  nothing from before the hold can be accepted. `health.status` reports
+  `paused: true` during a hold. A report never grants anything.
+- **Low power.** Battery power or the power-saver profile from any helper
+  makes `low_power` true. That changes no authority and advances no epoch; it
+  selects automatic scheduling from `battery_mode` (below).
+- v2 `health.status` (and `badictl status`) includes `desktop`; protocol v1
+  health omits it.
+
+## Style learning (opt-in)
+
+Off by default (`style_learning` omitted). With `badi style on` and a site
+whose rule allows learning with bounded retention (`badi style site ORIGIN
+on [DAYS]`), each accepted suggestion that the adapter reports `applied` or
+`dispatched_unverified` keeps the most recent complete sentence the user
+wrote before it ([src/style.rs](src/style.rs)): at most 240 characters,
+earlier sentences of the same line added only while it is shorter than 24,
+and nothing with a digit, an at sign or a web address. The suggestion itself
+is never kept.
+
+- **Sealed.** `style.json` in the private data directory holds each record's
+  subject and day in the clear and its text sealed with XChaCha20-Poly1305.
+  The associated data binds the text to its key id, subject and day. The
+  32-byte key lives in the desktop keyring (Secret Service); the session
+  helper or `badi style on` delivers it (`style.key`, capability
+  `style_key`), and the broker holds it in memory only. Without a key,
+  samples are dropped, never kept in the clear.
+- **Bounded.** 16 samples per site and 64 in all, oldest first out;
+  duplicates are skipped. A complete export fits one frame.
+- **Purged without the key.** A settings change that revokes a site's
+  learning or retention purges its samples before the settings commit, as
+  for the personalization aggregates; expiry runs at startup and with the
+  periodic sweep. Turning `style_learning` off stops collection and keeps
+  existing samples until they expire or are forgotten.
+- **Explicit reads only.** `style.query` (content-free counts), `style.export`
+  (decrypted samples) and `style.forget` (delete the file and the in-memory
+  key) need the CLI settings capability; the session helper cannot read
+  samples. A store sealed under another key reports `key: "mismatch"` and
+  stays unreadable until `forget`.
+- **Not used by prompts.** No production prompt reads these samples. They
+  exist so the Lab can measure, on the user's own text, whether style examples
+  help without the `style_fact_conflict` harm before any prompt uses them.
+
+This protects stored text at rest; a process running as the same user can
+still ask the keyring or the broker ([ADR 0001](../docs/decisions/0001-same-uid-trust-boundary.md)).
 
 ## badictl
 
@@ -85,6 +150,7 @@ badictl overview          # broker, settings, privacy and model readiness
 badictl settings show
 badictl settings replace --if-revision N --json -   # read the document from stdin
 badictl memory clear      # text-free origin and day aggregates
+badictl style status|forget|export   # style learning; style key - reads the key from stdin
 badictl pause [on|off|toggle]
 badictl request | accept-word | accept-all | dismiss   # the sole active session
 badictl probe [--language TAG] [--after TEXT] [--replace] [--explicit] [--] TEXT|-
@@ -140,6 +206,24 @@ prints pinned download advice and downloads nothing
   the server stays at one slot. Prefill batches are 16 tokens so cancellation
   lands quickly; up to four threads. The GPU is not used: Vulkan on the Iris
   Xe was slower for these short requests.
+- **Measured and not adopted** (2026-10-12, this machine, five disposable
+  prefixes): six threads produced the same greedy text and were not faster.
+  Bartowski's Q4_0 of Qwen3-1.7B
+  (`c470091d31c4ada174ee5c2547daa020e930593cbca5ca8ca385ce8ff59a2fdf`, not a
+  re-quant of the pinned file) was slightly faster in four of six paired
+  8-token decodes, slower in one, and changed greedy text on four prefixes
+  ("Thank" → " youngster"); production stays on Q4_K_M. N-gram speculation
+  was no faster, and a Qwen3-0.6B Q4_K_M draft
+  (`9acfc1e001311f34b4252001b626f2e466d592a42065f66571bff3790d4e1b14`, two
+  tokens ahead) took 0.5–1.8 s to the first word against 0.15–0.47 s without
+  it, so no draft model is loaded.
+- **Speed sample.** Build `5faafcf` (2026-10-12; the same five prefixes four
+  times each, predictions on): first grey word in Omawrite 0.5.0 20/20 at
+  209–250 ms, middle 220–223 ms, 19th of 20 at 244 ms; in a Chromium
+  textarea 20/20 at 227–371 ms, middle 246–249 ms, 19th at 314 ms. A known
+  field starts the model on the key, so the 120 ms typing pause runs inside
+  the generation wait ([Fcitx runbook](../adapters/fcitx5/README.md)). One
+  machine and these prefixes, not a universal latency.
 - **Memory.** CPU weights are copied instead of mapped, allowing repacking to
   release the original allocation. A frozen 260-case UD r2.16 confirmation
   comparison on 2026-10-13 produced identical raw and displayed output for
@@ -209,6 +293,17 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   An admitted v2 `policy.status` includes the optional `language_override`
   so Fcitx manual Tab eligibility also uses this preference. Protocol v1
   responses omit it; broker-side context handling still applies it.
+- **Battery mode.** `battery_mode` in settings (`badi battery
+  quiet|normal|explicit`; omitted when `quiet`, the default) applies only
+  while a session helper reports low power. `quiet` delays the model's start for an automatic
+  request by 300 ms, cancelled by any newer request or edit, and extends that
+  request's deadline and context lease by the same 300 ms so the writing
+  budget is unchanged. `explicit` abstains automatic requests before the model
+  (`request_abstained`). Explicit requests and type-through remainders are
+  never delayed or refused, and the model stays resident. With no helper
+  connected, every mode behaves like `normal`. The default and the 300 ms
+  wait come from the paced trial in the
+  [session runbook](../adapters/session/README.md#battery).
 - **Escape quiet.** Off by default (`badi escape-quiet off`; omit
   `escape_quiet_seconds` in settings), so a dismissal lasts only until the
   text changes, as the adapters decline it. With `badi escape-quiet SECONDS`
@@ -226,7 +321,12 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   grants; the model is never called.
 - **Spelling** is English only and needs negotiated exact replacement of the
   word before the caret at the end of the field; a single dictionary candidate
-  is proposed without inference.
+  is proposed without inference. The
+  [LibreOffice Writer extension](../adapters/libreoffice/README.md) (adapter and
+  target kind `libreoffice`, app id `libreoffice-writer`, settings adapter
+  `libreoffice`) is explicit-only, like Bash, and reports `applied` only after
+  reading the edit back. Settings order Linux app rules by adapter name, as
+  the desktop CLI and panel sort them.
 
 ## Shutdown and tests
 

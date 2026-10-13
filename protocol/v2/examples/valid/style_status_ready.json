@@ -1,0 +1,13 @@
+{
+  "v": 2,
+  "id": "ctl:style",
+  "type": "style.status",
+  "mono_ms": 51,
+  "payload": {
+    "enabled": true,
+    "available": true,
+    "key": "ready",
+    "samples": 3,
+    "subjects": 1
+  }
+}

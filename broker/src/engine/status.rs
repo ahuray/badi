@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use super::{Broker, BrokerState};
 use crate::metrics::MetricsSnapshot;
-use crate::protocol::{ActiveLocator, MAX_FRAME_BYTES, ProviderKind};
+use crate::protocol::{ActiveLocator, DesktopStatusPayload, MAX_FRAME_BYTES, ProviderKind};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HealthSnapshot {
@@ -15,6 +15,7 @@ pub struct HealthSnapshot {
     pub max_frame_bytes: usize,
     pub metrics: MetricsSnapshot,
     pub active: Option<ActiveLocator>,
+    pub desktop: DesktopStatusPayload,
 }
 
 impl Broker {
@@ -38,6 +39,7 @@ impl Broker {
             max_frame_bytes: MAX_FRAME_BYTES,
             metrics: self.inner.metrics.snapshot(),
             active: state.active_locator(),
+            desktop: state.desktop_status(),
         }
     }
 }

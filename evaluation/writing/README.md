@@ -169,8 +169,13 @@ Progress prints counts, not prose. The
 [development set](lab/examples/quality-probes.json) has 16 boundary, context and
 style cases, the [mid-sentence set](lab/examples/mid-line-development.json) has
 40 English cases with text after the caret, the [longer prose set](lab/examples/real-text-development.json)
-has 19 email and note prefixes, and the [trace set](lab/examples/typing-traces.json)
-has six typing steps.
+has 19 email and note prefixes, the [trace set](lab/examples/typing-traces.json)
+has six typing steps, and the [window-context set](lab/examples/window-context-development.json)
+has 24 reply prefixes whose `context` is the nearby heading and paragraph the
+observer would read (16 where it names the next words, 8 controls).
+`python3 evaluation/writing/window-context.py APP_ID --delay 3` prints that
+context for a disposable page's focused field
+([observer rules](../../adapters/accessibility/README.md#same-window-context-lab-only)).
 
 A model artifact descriptor selects weights for the Lab only (bounded to 16 KiB
 and 8 GiB; it cannot supply an executable or flags):

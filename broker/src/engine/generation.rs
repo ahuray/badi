@@ -36,6 +36,8 @@ struct AdmittedGeneration {
     binding: GenerationBinding,
     cancellation: CancellationToken,
     provider_permit: OwnedSemaphorePermit,
+    /// Quiet battery scheduling: the model starts only after this wait.
+    start_delay: Duration,
 }
 
 /// What a finished generation must still match before it may be shown.
@@ -127,22 +129,15 @@ impl Broker {
         if context.fingerprint != payload.fingerprint {
             return Err(BrokerError::Stale);
         }
-        match evaluate_context(
-            &context,
-            payload.explicit,
-            session.target.target.kind,
-            paused,
-        ) {
-            PolicyDecision::Allow(_) => {}
-            PolicyDecision::ManualRequired(_) => {
-                metrics.record_manual_required();
-                return Err(BrokerError::ManualRequired);
-            }
-            PolicyDecision::Deny(reason) => {
-                metrics.record_denied();
-                return Err(BrokerError::Denied(reason));
-            }
-        }
+        admit_policy(
+            metrics,
+            evaluate_context(
+                &context,
+                payload.explicit,
+                session.target.target.kind,
+                paused,
+            ),
+        )?;
 
         // Supersession cancels any older generation before capacity is
         // tested. A saturated broker therefore fails closed without
@@ -158,8 +153,9 @@ impl Broker {
             .as_ref()
             .is_some_and(|settings| settings.mid_line);
         let escape_quiet = state.quiet_request(coordinates, payload.explicit)?;
+        let power_start_delay = state.power_start_delay(trigger);
         let session = state.session_with_data_access(coordinates.session_id)?;
-        let binding = GenerationBinding {
+        let mut binding = GenerationBinding {
             coordinates,
             fingerprint: payload.fingerprint,
             generation: session.generation.wrapping_add(1),
@@ -189,11 +185,17 @@ impl Broker {
             self.show_if_current(state, binding, &cancellation, proposal, Some(carried), true);
             return Ok(None);
         }
-        if !mid_line && crate::writing::word_follows_caret(&binding.after) {
+        // A carried remainder above needs no model call, so power never
+        // delays or refuses it. A deferral extends the deadline so the model
+        // keeps its whole writing budget once it starts.
+        let word_follows = !mid_line && crate::writing::word_follows_caret(&binding.after);
+        let Some(start_delay) = power_start_delay.filter(|_| !word_follows) else {
             self.abstain_admitted(state, binding, generation_timeout)
                 .await;
             return Ok(None);
-        }
+        };
+        binding.deadline += start_delay;
+        let generation_timeout = generation_timeout + start_delay;
         let provider_permit = Arc::clone(&self.inner.provider_admissions)
             .try_acquire_owned()
             .map_err(|_| {
@@ -216,6 +218,7 @@ impl Broker {
             trigger,
             cancellation,
             provider_permit,
+            start_delay,
         }))
     }
 
@@ -248,15 +251,17 @@ impl Broker {
             binding,
             cancellation,
             provider_permit,
+            start_delay,
         } = admitted;
         // Admission occurs before spawning, so there can never be more
         // generation tasks than permits. The permit is released on every
         // return path, including cancellation and timeout.
         let _provider_permit = provider_permit;
         let shutdown = &self.inner.shutdown;
-        if self.inner.config.debounce != Duration::ZERO {
+        let delay = self.inner.config.debounce + start_delay;
+        if delay != Duration::ZERO {
             tokio::select! {
-                () = time::sleep(self.inner.config.debounce) => {}
+                () = time::sleep(delay) => {}
                 () = cancellation.cancelled() => {
                     self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
                     return;
@@ -737,4 +742,22 @@ fn continuation_shape_valid(
     text: &str,
 ) -> bool {
     validate_suggestion_shape(before, after, text).is_ok()
+}
+
+/// Counts and maps a request's policy decision; only `Allow` admits it.
+fn admit_policy(
+    metrics: &crate::metrics::Metrics,
+    decision: PolicyDecision,
+) -> Result<(), BrokerError> {
+    match decision {
+        PolicyDecision::Allow(_) => Ok(()),
+        PolicyDecision::ManualRequired(_) => {
+            metrics.record_manual_required();
+            Err(BrokerError::ManualRequired)
+        }
+        PolicyDecision::Deny(reason) => {
+            metrics.record_denied();
+            Err(BrokerError::Denied(reason))
+        }
+    }
 }

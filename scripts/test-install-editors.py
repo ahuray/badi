@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('install_editors', Path(__file__).with_name('install-editors.py'))
@@ -81,6 +82,80 @@ class InstallEditorsTests(unittest.TestCase):
             self.assertEqual(rc.read_text(), '# keep\n')
             self.assertFalse((home / '.local').exists())
 
+    def test_neovim_installs_a_start_package_and_a_runnable_bridge(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in ('XDG_DATA_HOME', 'NVIM_APPNAME')}
+            with patch.object(installer.Path, 'home', return_value=home), \
+                 patch.dict(os.environ, environment, clear=True), \
+                 patch('sys.argv', ['install-editors.py', '--neovim']), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                installer.main()
+                installed = {path: path.stat().st_mtime_ns for root in ('.local/lib', '.local/share')
+                             for path in (home / root).rglob('*') if path.is_file()}
+                installer.main()
+            package = home / '.local/share/nvim/site/pack/badi/start/badi'
+            for path in installer.NEOVIM_PLUGIN:
+                self.assertEqual((package / path).read_bytes(),
+                                 (installer.ROOT / 'adapters/neovim' / path).read_bytes())
+                self.assertEqual((package / path).stat().st_mode & 0o777, 0o644)
+            self.assertIn('badi app nvim on', output.getvalue())
+            self.assertIn('already current; no backup was needed', output.getvalue())
+            self.assertEqual({path: path.stat().st_mtime_ns for path in installed}, installed,
+                             'Identical files are not rewritten')
+            receipt = json.loads((home / '.local/state/badi/receipts/editors.json').read_text())
+            self.assertIn('.local/share/nvim/site/pack/badi/start/badi/lua/badi/init.lua', receipt['files'])
+            self.assertIn('.local/lib/badi/editors/neovim/bridge.mjs', receipt['files'])
+            # The installed bridge resolves its imports outside the checkout.
+            bridge = home / '.local/lib/badi/editors/neovim/bridge.mjs'
+            result = subprocess.run(['node', str(bridge)], input='{"id":1,"op":"status"}\n', capture_output=True,
+                                    text=True, env={**os.environ, 'XDG_RUNTIME_DIR': str(home / 'no-broker')},
+                                    timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stderr, '')
+            replies = [json.loads(line) for line in result.stdout.splitlines()]
+            self.assertIn({'id': 1, 'ok': True, 'connected': False, 'allowed': False, 'automatic': False}, replies)
+
+    def test_neovim_follows_xdg_data_home_and_refuses_linked_or_foreign_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / 'home'
+            data = Path(temporary) / 'data'
+            home.mkdir()
+            with patch.object(installer.Path, 'home', return_value=home), \
+                 patch.dict(os.environ, {'XDG_DATA_HOME': str(data), 'NVIM_APPNAME': 'writer'}), \
+                 patch('sys.argv', ['install-editors.py', '--neovim']), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                installer.main()
+            self.assertTrue((data / 'writer/site/pack/badi/start/badi/plugin/badi.lua').is_file())
+            for appname in ('../escape', 'a/b', '..'):
+                with patch.dict(os.environ, {'NVIM_APPNAME': appname}), \
+                     self.assertRaisesRegex(RuntimeError, 'NVIM_APPNAME'):
+                    installer.neovim_package(home)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            checkout = home / 'checkout'
+            checkout.mkdir()
+            start = home / '.local/share/nvim/site/pack/badi/start'
+            start.mkdir(parents=True)
+            (start / 'badi').symlink_to(checkout)
+            with patch.object(installer.Path, 'home', return_value=home), \
+                 patch.dict(os.environ, {'NVIM_APPNAME': '', 'XDG_DATA_HOME': ''}), \
+                 patch('sys.argv', ['install-editors.py', '--neovim']):
+                with self.assertRaisesRegex(RuntimeError, 'symlink'):
+                    installer.main()
+            self.assertEqual(list(checkout.iterdir()), [], 'Nothing is written through the link')
+            (start / 'badi').unlink()
+            (start / 'badi').mkdir()
+            (start / 'badi/README').write_text('someone else\n')
+            with patch.object(installer.Path, 'home', return_value=home), \
+                 patch.dict(os.environ, {'NVIM_APPNAME': '', 'XDG_DATA_HOME': ''}), \
+                 patch('sys.argv', ['install-editors.py', '--neovim']):
+                with self.assertRaisesRegex(RuntimeError, 'unexpected package'):
+                    installer.main()
+            self.assertEqual(sorted(path.name for path in (start / 'badi').iterdir()), ['README'])
+
     def test_existing_bashrc_symlink_is_not_replaced(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
@@ -94,6 +169,51 @@ class InstallEditorsTests(unittest.TestCase):
                     installer.main()
             self.assertTrue((home / '.bashrc').is_symlink())
             self.assertEqual(original.read_text(), 'echo keep\n')
+
+    def test_libreoffice_install_builds_records_and_registers_once_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            package = home / installer.LIBREOFFICE_PACKAGE
+            with patch.object(installer.Path, 'home', return_value=home), \
+                 patch.object(installer.shutil, 'which', return_value='/usr/bin/unopkg'), \
+                 patch.object(installer, 'libreoffice_running', return_value=False), \
+                 patch.object(installer, 'register_libreoffice_extension') as register, \
+                 patch('sys.argv', ['install-editors.py', '--libreoffice']), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                installer.main()
+                built = package.read_bytes()
+                installer.main()
+            # The real build: a reproducible archive of the extension source.
+            self.assertEqual(built[:2], b'PK')
+            self.assertEqual(package.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(register.call_args_list, [unittest.mock.call('/usr/bin/unopkg', package)] * 2)
+            self.assertIn('badi app libreoffice-writer on', output.getvalue())
+            self.assertIn('already current; no backup was needed', output.getvalue())
+            receipt = json.loads((home / '.local/state/badi/receipts/editors.json').read_text())
+            entry = receipt['files'][installer.LIBREOFFICE_PACKAGE]
+            self.assertEqual(entry['sha256'], hashlib.sha256(built).hexdigest())
+            # The first run's backup keeps the removal note; an unchanged rerun files it under notes/.
+            [backup] = (entry for entry in (home / '.local/state/badi/editor-backups').iterdir()
+                        if entry.name != 'notes')
+            note = json.loads((backup / 'libreoffice-extension.json').read_text())
+            self.assertEqual(note['remove'], 'unopkg remove io.github.ahuray.badi.libreoffice')
+
+    def test_libreoffice_install_refuses_while_libreoffice_runs_or_is_missing(self):
+        for running, which, message in ((True, '/usr/bin/unopkg', 'Close LibreOffice'),
+                                        (False, None, 'unopkg was not found')):
+            with tempfile.TemporaryDirectory() as temporary:
+                home = Path(temporary)
+                with patch.object(installer.Path, 'home', return_value=home), \
+                     patch.object(installer.shutil, 'which', return_value=which), \
+                     patch.object(installer, 'libreoffice_running', return_value=running), \
+                     patch.object(installer, 'build_libreoffice_extension') as build, \
+                     patch.object(installer, 'register_libreoffice_extension') as register, \
+                     patch('sys.argv', ['install-editors.py', '--libreoffice']):
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        installer.main()
+                build.assert_not_called()
+                register.assert_not_called()
+                self.assertFalse((home / '.local').exists())
 
 
 if __name__ == '__main__':

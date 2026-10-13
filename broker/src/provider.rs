@@ -225,11 +225,16 @@ impl CompletionProvider for DeterministicPhraseProvider {
         &self,
         request: ProviderRequest,
         cancellation: CancellationToken,
-        _allow_replacement: bool,
+        allow_replacement: bool,
         _trigger: RequestTrigger,
     ) -> Result<ProviderOutcome, ProviderError> {
         if cancellation.is_cancelled() {
             return Err(ProviderError::Cancelled);
+        }
+        if allow_replacement {
+            if let Some(proposal) = dictionary_correction(&request) {
+                return Ok(ProviderOutcome::Proposal(proposal));
+            }
         }
         Ok(match self.phrase(&request) {
             Ok(text) => ProviderOutcome::Proposal(WritingProposal {
@@ -239,6 +244,34 @@ impl CompletionProvider for DeterministicPhraseProvider {
             Err(reason) => ProviderOutcome::NoSuggestion(reason),
         })
     }
+}
+
+/// The fixture shares the writing model's inference-free dictionary path: an
+/// English word before the caret, at the end of the field, with exactly one
+/// single-edit dictionary candidate. Editor integrations can then test exact
+/// replacement deterministically; ambiguous words stay a model decision.
+#[cfg(feature = "local-model")]
+fn dictionary_correction(request: &ProviderRequest) -> Option<WritingProposal> {
+    let english = request.language.as_deref().is_some_and(|language| {
+        language
+            .split('-')
+            .next()
+            .is_some_and(|primary| primary.eq_ignore_ascii_case("en"))
+    });
+    if !english || !request.after.is_empty() {
+        return None;
+    }
+    let target = crate::writing::correction_target(&request.before)?;
+    let corrected = crate::writing::unambiguous_correction(target.word)?;
+    Some(WritingProposal {
+        text: format!("{corrected}{}", target.delimiter),
+        replace_before: Some(target.suffix.to_owned()),
+    })
+}
+
+#[cfg(not(feature = "local-model"))]
+fn dictionary_correction(_request: &ProviderRequest) -> Option<WritingProposal> {
+    None
 }
 
 impl DeterministicPhraseProvider {
@@ -477,5 +510,56 @@ mod tests {
                 .await,
             Err(super::ProviderError::Cancelled)
         ));
+    }
+
+    #[cfg(feature = "local-model")]
+    #[tokio::test]
+    async fn phrase_fixture_offers_only_negotiated_unambiguous_dictionary_corrections() {
+        use super::{ProviderOutcome, RequestTrigger, WritingProposal};
+        let provider = DeterministicPhraseProvider::default();
+        let propose = |before: &str, after: &str, language: &str, allow_replacement: bool| {
+            provider.propose_outcome(
+                ProviderRequest {
+                    before: before.to_owned(),
+                    after: after.to_owned(),
+                    language: Some(language.to_owned()),
+                },
+                CancellationToken::new(),
+                allow_replacement,
+                RequestTrigger::Explicit,
+            )
+        };
+        assert_eq!(
+            propose("We need an adress ", "", "en-US", true)
+                .await
+                .unwrap(),
+            ProviderOutcome::Proposal(WritingProposal {
+                text: "address ".to_owned(),
+                replace_before: Some("adress ".to_owned()),
+            })
+        );
+        assert_eq!(
+            propose("We need an adress", "", "en", true).await.unwrap(),
+            ProviderOutcome::Proposal(WritingProposal {
+                text: "address".to_owned(),
+                replace_before: Some("adress".to_owned()),
+            })
+        );
+        // No negotiated replacement, text after the caret, another language
+        // or an ambiguous word (teh: the/ten/tea...) never yields an edit.
+        for (before, after, language, allow) in [
+            ("We need an adress ", "", "en", false),
+            ("We need an adress", " here", "en", true),
+            ("We need an adress", "", "de", true),
+            ("This is teh", "", "en", true),
+        ] {
+            let outcome = propose(before, after, language, allow).await.unwrap();
+            assert!(
+                outcome
+                    .into_proposal()
+                    .is_none_or(|proposal| proposal.replace_before.is_none()),
+                "{before:?} {after:?} {language} {allow}"
+            );
+        }
     }
 }

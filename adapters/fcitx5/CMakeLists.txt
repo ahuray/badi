@@ -20,7 +20,13 @@ target_include_directories(badi-fcitx5-core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/
 target_link_libraries(badi-fcitx5-core PUBLIC Fcitx5::Core nlohmann_json::nlohmann_json)
 target_compile_options(badi-fcitx5-core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
-add_fcitx5_addon(badi-fcitx5 src/addon.cpp)
+add_fcitx5_addon(badi-fcitx5
+    src/addon.cpp
+    src/addon_broker.cpp
+    src/addon_keys.cpp
+    src/addon_observer.cpp
+    src/addon_session.cpp
+)
 target_compile_features(badi-fcitx5 PRIVATE cxx_std_20)
 target_link_libraries(badi-fcitx5 PRIVATE badi-fcitx5-core Fcitx5::Core)
 target_compile_options(badi-fcitx5 PRIVATE -Wall -Wextra -Wpedantic -Werror)

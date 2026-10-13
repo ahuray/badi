@@ -4,6 +4,7 @@
 
 mod acceptance;
 mod authority;
+mod desktop;
 mod error;
 mod events;
 mod generation;
@@ -30,13 +31,14 @@ use crate::metrics::Metrics;
 use crate::policy::PolicyReason;
 use crate::protocol::{
     AdapterKind, AuthorityChangedPayload, Capability, ContextChangedPayload, Coordinates,
-    DEFAULT_SUGGESTION_TTL_MS, MAX_SAFE_COUNTER, ProviderKind, ReasonCode, SessionId,
-    SessionOpenPayload, SuggestionShowPayload,
+    DEFAULT_SUGGESTION_TTL_MS, DesktopStatePayload, MAX_SAFE_COUNTER, ProviderKind, ReasonCode,
+    SessionId, SessionOpenPayload, SuggestionShowPayload,
 };
 use crate::provider::{CompletionProvider, RequestTrigger};
 use crate::settings::SettingsV2;
 
 pub use authority::AuthoritySnapshot;
+pub use desktop::QUIET_START_DELAY;
 pub use error::BrokerError;
 pub use events::{BrokerEvent, BrokerEventSink};
 pub use outcomes::OutcomeRecorderHealth;
@@ -182,7 +184,11 @@ impl SessionAuthority {
         self.protocol_version == 2
             && matches!(
                 self.adapter_kind,
-                AdapterKind::Fcitx | AdapterKind::Obsidian | AdapterKind::Terminal
+                AdapterKind::Fcitx
+                    | AdapterKind::Obsidian
+                    | AdapterKind::Terminal
+                    | AdapterKind::Neovim
+                    | AdapterKind::Libreoffice
             )
     }
 }
@@ -231,6 +237,8 @@ struct BrokerState {
     /// A denial only: a freshly authorized observed session may inherit this
     /// field visit's dismissal, never context or a suggestion/commit grant.
     rebound_quiet: Option<ReboundQuiet>,
+    /// Each connected desktop helper's latest report, by connection.
+    desktop: HashMap<String, DesktopStatePayload>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -410,11 +418,13 @@ impl Broker {
 }
 
 impl BrokerState {
-    /// Paused by the user, or while the control plane is degraded or mid-mutation.
+    /// Paused by the user, while the control plane is degraded or
+    /// mid-mutation, or while the login session is inactive or asleep.
     fn runtime_paused(&self) -> bool {
         self.paused
             || self.control_plane_condition.is_degraded()
             || self.control_plane_mutation_in_progress
+            || self.desktop_hold()
     }
 
     fn effective_paused(&self) -> bool {

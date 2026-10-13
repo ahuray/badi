@@ -45,6 +45,8 @@ ACCESSIBILITY_SWITCH = "--force-renderer-accessibility"
 COMPLETE_ACCESSIBILITY = (ACCESSIBILITY_SWITCH, OBSERVED_FLAG)
 # Every module the installed observer imports, beside its daemon.
 OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geometry.py", "preview.py", "health.py")
+SESSION_MODULES = ("daemon.py", "link.py", "style_key.py")
+SESSION_SERVICE = "badi-session.service"
 COMPAT_LIBRARY = Path(".local/lib/badi/compat")
 COMPAT_DROPIN = Path(".config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf")
 COMPAT_MODULE = "addons/libwaylandim.so"
@@ -231,6 +233,20 @@ def wait_model(cli, endpoint):
         raise RuntimeError("Model startup failed: inspect journalctl --user -u badi-broker.service")
     require_model_health(probe)
     return probe
+
+
+def wait_session_helper(cli, endpoint):
+    """Whether the broker hears from the session helper within a few seconds.
+    A missing report is reported, not fatal: the model and adapters still work."""
+    def observed():
+        try:
+            status = subprocess.run([str(cli), "--socket", str(endpoint), "status"], capture_output=True,
+                                    text=True, timeout=3)
+            desktop = json.loads(status.stdout).get("desktop") if status.returncode == 0 else None
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
+        return isinstance(desktop, dict) and desktop.get("observed") is True
+    return bool(badi_install.poll(observed, 6))
 
 
 def require_model_health(probe):
@@ -514,6 +530,9 @@ class Plan:
     checkout: dict | None = None
     # hyprland.lua change that loads Badi's layer rule: (target, original, new).
     hypr_update: tuple | None = None
+    # The user disabled the session helper; it is updated but stays disabled.
+    session_disabled: bool = False
+    session_ready: bool | None = None
 
     @property
     def native(self):
@@ -588,8 +607,10 @@ def preflight(args):
             updated = hyprland_with_badi(original)
             if updated is not None:
                 hypr_update = (hyprland, original, updated)
+    session_disabled = badi_install.unit_value(SESSION_SERVICE, "UnitFileState", timeout=4) == "disabled"
     return Plan(args, home, config_home, runtime, flag_updates, flags_present,
-                broker_updating, accessibility_enabled, compat, hypr_update=hypr_update)
+                broker_updating, accessibility_enabled, compat, hypr_update=hypr_update,
+                session_disabled=session_disabled)
 
 
 def unit_enabled(unit):
@@ -755,6 +776,11 @@ def install_prepared_files(plan, installation):
                 # The installed copy and its receipt replace the ~40 MB build tree.
                 shutil.rmtree(plan.compat["work"])
     install(ROOT / "packaging/systemd/badi-broker.service", home / ".config/systemd/user/badi-broker.service")
+    # The session helper reports suspend, session and power state to the
+    # broker and reads no text, so it updates with the broker on both paths.
+    for name in SESSION_MODULES:
+        install(ROOT / "adapters/session" / name, library / "session" / name)
+    install(ROOT / "packaging/systemd" / SESSION_SERVICE, home / ".config/systemd/user" / SESSION_SERVICE)
     if native:
         install(ROOT / "packaging/systemd/fcitx-badi.conf",
                 home / ".config/systemd/user/omarchy-fcitx5.service.d/50-badi.conf")
@@ -778,6 +804,7 @@ def restart(plan, installation):
     home, runtime = plan.home, plan.runtime
     units = home / ".config/systemd/user"
     run(["systemd-analyze", "--user", "verify", str(units / "badi-broker.service")])
+    run(["systemd-analyze", "--user", "verify", str(units / SESSION_SERVICE)])
     if plan.native:
         run(["systemd-analyze", "--user", "verify", str(units / "badi-accessibility.service")])
     if plan.installs_compat:
@@ -788,6 +815,11 @@ def restart(plan, installation):
     run(["systemctl", "--user", "reset-failed", "badi-broker.service"])
     run(["systemctl", "--user", "restart", "badi-broker.service"])
     probe = wait_model(home / ".local/lib/badi/badictl", runtime / "badi/broker.sock")
+    if not plan.session_disabled:
+        run(["systemctl", "--user", "enable", SESSION_SERVICE])
+        run(["systemctl", "--user", "reset-failed", SESSION_SERVICE])
+        run(["systemctl", "--user", "restart", SESSION_SERVICE])
+        plan.session_ready = wait_session_helper(home / ".local/lib/badi/badictl", runtime / "badi/broker.sock")
     if not plan.native:
         return probe
     require_unlocked()
@@ -814,6 +846,15 @@ def restart(plan, installation):
 
 
 def report(plan, probe):
+    if plan.session_disabled:
+        print("The session helper is disabled (systemctl --user enable --now badi-session.service turns it on); "
+              "suspend, session switches and battery modes are not reported to the broker.")
+    elif plan.session_ready:
+        print("Session helper reporting: sleep and session switches withdraw suggestions; "
+              "battery behavior follows badi battery; shortcuts are offered through the desktop portal.")
+    else:
+        print("The session helper did not report to the broker. Inspect badi doctor and "
+              "journalctl --user -u badi-session.service; predictions still work without it.")
     pause_note = " Predictions remain paused; use badi resume when wanted." if probe["paused"] else ""
     if not plan.native:
         print("Local model ready. Broker and controls updated; native input addon was not restarted." + pause_note)

@@ -197,6 +197,20 @@ for value in 0 3601 1.5 '"90"' null; do
     '{schema: "badi.settings.v2", revision: 1, paused: false, escape_quiet_seconds: $value, subjects: []}')
   [[ $(ipc validateSettings "$document") == false ]]
 done
+# Battery scheduling and opt-in style learning are optional settings keys.
+for value in '"normal"' '"quiet"' '"explicit"'; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, battery_mode: $value, style_learning: true, subjects: []}')
+  [[ $(ipc validateSettings "$document") == true ]]
+done
+for value in '"off"' null true; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, battery_mode: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == false ]]
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, style_learning: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == $([[ $value == true ]] && echo true || echo false) ]]
+done
 
 # A settings write changes only its own field at the next revision and carries
 # every subject and the `badi site all on` flag through unchanged.

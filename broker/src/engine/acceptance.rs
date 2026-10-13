@@ -185,6 +185,11 @@ impl Broker {
         payload.validate()?;
         let metrics = &self.inner.metrics;
         let mut state = self.inner.state.lock().await;
+        let style_revision = state
+            .settings
+            .as_ref()
+            .filter(|settings| settings.style_learning)
+            .map(|settings| settings.revision);
         let session = state
             .sessions
             .get_mut(&coordinates.session_id)
@@ -215,8 +220,25 @@ impl Broker {
             }
             CommitStatus::Stale | CommitStatus::Blocked | CommitStatus::Failed => {}
         }
+        // Style learning keeps only what the user wrote before the accepted
+        // text, and only after the adapter reports the edit landed.
+        let style_sample = style_revision
+            .filter(|_| {
+                matches!(
+                    payload.status,
+                    CommitStatus::Applied | CommitStatus::DispatchedUnverified
+                )
+            })
+            .and_then(|revision| {
+                let context = session.context.as_ref()?;
+                let text = crate::style::authored_sample(&context.before)?;
+                Some((session.target.target.clone(), revision, text))
+            });
         session.pending = None;
         retire_committed_context(session, payload.status, metrics);
+        if let Some((target, revision, text)) = style_sample {
+            self.queue_style_sample(&target, revision, text);
+        }
         Ok(())
     }
 
@@ -327,7 +349,11 @@ fn validate_commit_authority(
         CommitStatus::Applied => {
             matches!(
                 authority.adapter_kind,
-                AdapterKind::Browser | AdapterKind::Obsidian | AdapterKind::Terminal
+                AdapterKind::Browser
+                    | AdapterKind::Obsidian
+                    | AdapterKind::Terminal
+                    | AdapterKind::Neovim
+                    | AdapterKind::Libreoffice
             ) && authority.grants(Capability::CommitApplied)
         }
         CommitStatus::DispatchedUnverified => {
@@ -386,6 +412,17 @@ mod tests {
         };
         assert!(matches!(
             validate_commit_authority(&obsidian_wrong_status, CommitStatus::DispatchedUnverified,),
+            Err(BrokerError::InvalidCapability)
+        ));
+
+        let neovim_applied = SessionAuthority {
+            protocol_version: 2,
+            adapter_kind: AdapterKind::Neovim,
+            capabilities: vec![Capability::CommitApplied],
+        };
+        assert!(validate_commit_authority(&neovim_applied, CommitStatus::Applied).is_ok());
+        assert!(matches!(
+            validate_commit_authority(&neovim_applied, CommitStatus::DispatchedUnverified),
             Err(BrokerError::InvalidCapability)
         ));
 

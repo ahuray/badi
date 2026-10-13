@@ -194,7 +194,7 @@ stayed quiet, and acceptance was not established in that trial. Google was
 not tested because of its consent wall; no Google result is inferred from
 DuckDuckGo. The earlier Chromium and Omawrite captures recorded zero physical
 pixels between typed and ghost glyph-bottom modes at scale 2
-([measurement](../../docs/reports/2026-10-13-inline-ghost-text-research.md#implementation-outcome-2026-10-13-same-day)).
+([ADR 0006](../../docs/decisions/0006-grey-preview-is-an-overlay.md)).
 These are prior live observations, separate from the merge's automated checks.
 
 The merged `25fde96` build was installed on 2026-10-13 and exercised through

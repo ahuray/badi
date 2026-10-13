@@ -15,8 +15,10 @@ Item {
     {name: "Xournal++", appId: "com.github.xournalpp.xournalpp", detail: "Text tool · Tab requests, Tab again accepts", manual: true},
     {name: "Obsidian", appId: "obsidian", detail: "Badi plugin · Tab accepts a word · Ctrl/Command+Right accepts all"},
     {name: "Bash", appId: "bash", detail: "Ctrl-X Tab requests / accepts"},
+    {name: "Neovim", appId: "nvim", detail: "Badi plugin · prose buffers · Tab accepts, Ctrl+Right a word"},
     {name: "Telegram", appId: "telegram", detail: "Message fields · Fcitx panel"},
     {name: "LibreOffice Writer", appId: "libreoffice", detail: "Document paragraphs · Fcitx panel"},
+    {name: "Writer spelling", appId: "libreoffice-writer", detail: "Badi extension · Alt+F7 shows, Alt+F7 again replaces"},
     {name: "Codex", appId: "chatgpt", detail: "Composer"},
     {name: "VS Code", appId: "code", detail: "Editor · needs \"editor.editContext\": false"},
     {name: "Cursor", appId: "cursor", detail: "Editor"},
@@ -180,7 +182,8 @@ Item {
   }
 
   function appAdapter(appId) {
-    return appId === "obsidian" ? "obsidian" : appId === "bash" ? "shell" : "fcitx"
+    return appId === "obsidian" ? "obsidian" : appId === "bash" ? "shell" : appId === "nvim" ? "neovim"
+      : appId === "libreoffice-writer" ? "libreoffice" : "fcitx"
   }
 
   function toggleApp(appId) {
