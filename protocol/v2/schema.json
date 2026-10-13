@@ -1058,6 +1058,7 @@
         "commit_failures": { "$ref": "#/$defs/counter" },
         "provider_errors": { "$ref": "#/$defs/counter" },
         "no_suggestion": { "$ref": "#/$defs/noSuggestionMetrics" },
+        "type_through": { "$ref": "#/$defs/typeThroughMetrics" },
         "word_savings": {
           "type": "object",
           "additionalProperties": false,
@@ -1080,6 +1081,40 @@
         "timeout",
         "provider_error"
       ]
+    },
+    "carryMiss": {
+      "enum": [
+        "scope",
+        "after_changed",
+        "language_changed",
+        "deadline_tight",
+        "prefix_mismatch",
+        "shape_rejected"
+      ]
+    },
+    "typeThroughMetrics": {
+      "type": "object",
+      "description": "Content-free type-through outcomes (ADR 0004): requests answered from the carry, and admitted requests that reached the provider although a carry existed, by the gate that declined it. Optional for brokers that predate the breakdown.",
+      "additionalProperties": false,
+      "required": [
+        "carried",
+        "scope",
+        "after_changed",
+        "language_changed",
+        "deadline_tight",
+        "prefix_mismatch",
+        "shape_rejected"
+      ],
+      "properties": {
+        "carried": { "$ref": "#/$defs/counter" },
+        "scope": { "$ref": "#/$defs/counter" },
+        "after_changed": { "$ref": "#/$defs/counter" },
+        "language_changed": { "$ref": "#/$defs/counter" },
+        "deadline_tight": { "$ref": "#/$defs/counter" },
+        "prefix_mismatch": { "$ref": "#/$defs/counter" },
+        "shape_rejected": { "$ref": "#/$defs/counter" },
+        "last_miss": { "$ref": "#/$defs/carryMiss" }
+      }
     },
     "noSuggestionMetrics": {
       "type": "object",

@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#76](https://github.com/ahuray/badi/pull/76) `badictl status` counts
+  type-through carry outcomes by declining gate (`type_through`), and a
+  browser-scoped single-space carry is regression-tested; the live
+  Brave/Zen gate identification stays open in the plan.
 - [#75](https://github.com/ahuray/badi/pull/75)
   [ADR 0007](docs/decisions/0007-retire-protocol-v1.md) retiring protocol
   v1: what keeps it alive and the removal order. Every shipped client

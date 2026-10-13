@@ -10,6 +10,7 @@
 use std::time::{Duration, Instant};
 
 use super::SessionState;
+use crate::metrics::CarryMiss;
 use crate::protocol::{AdapterKind, ContextChangedPayload, Origin, TargetKind};
 use crate::segment::{sanitize_suggestion, validate_completion_shape};
 
@@ -56,27 +57,35 @@ pub(super) struct TypeThrough {
 impl TypeThrough {
     /// The rest of the suggestion when `context` is this carry's context plus
     /// a typed, non-empty proper prefix of its text, in the same app or site,
-    /// with enough reading time left and a valid continuation shape.
+    /// with enough reading time left and a valid continuation shape. The
+    /// error names the first gate that declined, for content-free metrics.
     pub(super) fn remainder(
         &self,
         scope: &CarryScope,
         context: &ContextChangedPayload,
         now: Instant,
-    ) -> Option<String> {
-        if *scope != self.scope
-            || context.after != self.after
-            || context.language != self.language
-            || self.expires_at < now + MIN_CARRIED_TTL
-        {
-            return None;
+    ) -> Result<String, CarryMiss> {
+        if *scope != self.scope {
+            return Err(CarryMiss::Scope);
         }
-        let typed = typed_prefix(&self.before, &context.before, &self.text)?;
+        if context.after != self.after {
+            return Err(CarryMiss::AfterChanged);
+        }
+        if context.language != self.language {
+            return Err(CarryMiss::LanguageChanged);
+        }
+        if self.expires_at < now + MIN_CARRIED_TTL {
+            return Err(CarryMiss::DeadlineTight);
+        }
+        let typed = typed_prefix(&self.before, &context.before, &self.text)
+            .ok_or(CarryMiss::PrefixMismatch)?;
         let remainder = &self.text[typed..];
-        let remainder = sanitize_suggestion(remainder).ok()?;
+        let remainder = sanitize_suggestion(remainder).map_err(|_| CarryMiss::ShapeRejected)?;
         // The user typed the start of the word themselves, so the remainder
         // may continue it; every other spacing and overlap check applies.
-        validate_completion_shape(&context.before, &context.after, &remainder, true).ok()?;
-        Some(remainder)
+        validate_completion_shape(&context.before, &context.after, &remainder, true)
+            .map_err(|_| CarryMiss::ShapeRejected)?;
+        Ok(remainder)
     }
 }
 
@@ -96,6 +105,7 @@ fn typed_prefix(then_before: &str, now_before: &str, text: &str) -> Option<usize
 #[cfg(test)]
 mod tests {
     use super::{CarryScope, MIN_SLID_SHARED_BYTES, TypeThrough, typed_prefix};
+    use crate::metrics::CarryMiss;
     use crate::protocol::{
         Activation, AdapterKind, ContextChangedPayload, FieldDescriptor, FieldPurpose, OffsetUnit,
         Selection, TargetKind,
@@ -159,7 +169,7 @@ mod tests {
             shown
                 .remainder(&scope("org.telegram.desktop"), &next, Instant::now())
                 .as_deref(),
-            Some("inal ")
+            Ok("inal ")
         );
     }
 
@@ -179,7 +189,7 @@ mod tests {
             (" report f", "or"),
         ] {
             let context = context(&format!("Please find attached the{typed}"));
-            assert_eq!(shown.remainder(&here, &context, now).as_deref(), Some(rest));
+            assert_eq!(shown.remainder(&here, &context, now).as_deref(), Ok(rest));
         }
     }
 
@@ -202,24 +212,46 @@ mod tests {
         ] {
             assert_eq!(
                 shown.remainder(&here, &context(before), now),
-                None,
+                Err(CarryMiss::PrefixMismatch),
                 "{before:?}"
             );
         }
 
         let mut after_changed = context("Please find attached the re");
         after_changed.after = "x".to_owned();
-        assert_eq!(shown.remainder(&here, &after_changed, now), None);
+        assert_eq!(
+            shown.remainder(&here, &after_changed, now),
+            Err(CarryMiss::AfterChanged)
+        );
         let mut language_changed = context("Please find attached the re");
         language_changed.language = Some("de".to_owned());
-        assert_eq!(shown.remainder(&here, &language_changed, now), None);
+        assert_eq!(
+            shown.remainder(&here, &language_changed, now),
+            Err(CarryMiss::LanguageChanged)
+        );
         assert_eq!(
             shown.remainder(
                 &scope("org.other.app"),
                 &context("Please find attached the re"),
                 now
             ),
-            None
+            Err(CarryMiss::Scope)
+        );
+    }
+
+    #[test]
+    fn a_remainder_colliding_with_following_text_is_shape_rejected() {
+        let mut shown = carry(
+            "Please find attached the",
+            " report",
+            Duration::from_secs(5),
+        );
+        shown.after = "report today".to_owned();
+        let mut next = context("Please find attached the ");
+        next.after = "report today".to_owned();
+        assert_eq!(
+            shown.remainder(&scope("org.telegram.desktop"), &next, Instant::now()),
+            Err(CarryMiss::ShapeRejected)
         );
     }
 
@@ -232,7 +264,7 @@ mod tests {
                 &context("Thanks for the up"),
                 Instant::now()
             ),
-            None
+            Err(CarryMiss::DeadlineTight)
         );
     }
 

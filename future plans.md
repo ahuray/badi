@@ -94,9 +94,15 @@ publish need the user's go-ahead first; the rest can start at once.
    a second call, and the wait did not run: the field already contained the
    space when the request went out. A fresh Zen profile exposed only the
    window frame, so its page was not typed in; tab mode needs the user's
-   running browser. *Done when* typing the suggestion's next characters,
-   including a space, returns the remainder without a model call in Brave
-   Origin and Zen.
+   running browser. At broker level a single typed space in a
+   browser-scoped session already carries (engine regression tests), so the
+   live wire context differs in one gated field or no carry existed;
+   `badictl status` now counts each declining gate under `type_through`
+   (latest in `last_miss`, [broker runbook](broker/README.md#badictl)). The
+   next live trial reads that counter to name the gate, then the fix lands
+   at that gate with its own test. *Done when* typing the suggestion's next
+   characters, including a space, returns the remainder without a model
+   call in Brave Origin and Zen.
 4. **Qualify on the frozen confirmation set.** The user-approved public set
    (UD r2.16 test, 100 English and 40 each German, French, Spanish and
    Persian prefixes) is frozen privately at

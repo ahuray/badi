@@ -164,6 +164,11 @@ badictl models writing --json
 `status` counts each call that showed nothing once under `no_suggestion`
 (`request_abstained`, `budget_prefill`, `budget_stream`, `model_abstained`,
 `output_rejected`, `stale`, `timeout`, `provider_error`) and names the latest.
+Its `type_through` counts requests answered from the carry (`carried`) and,
+for admitted requests that reached the provider although a carry existed,
+the gate that declined it (`scope`, `after_changed`, `language_changed`,
+`deadline_tight`, `prefix_mismatch`, `shape_rejected`, latest in `last_miss`);
+no counter moving while `provider_calls` rises means no carry existed.
 Its optional v2 `word_savings` counts space-delimited word parts after a valid
 commit result, separately for `applied` and `dispatched_unverified`. Spelling
 replacements, failed, stale and expired results add nothing. Partial words

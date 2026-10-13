@@ -14,7 +14,7 @@ use super::type_through::{CarryScope, TypeThrough};
 use super::{
     Broker, BrokerError, BrokerEvent, BrokerState, SessionState, VisibleSuggestion, duration_millis,
 };
-use crate::metrics::NoSuggestionReason;
+use crate::metrics::{CarryMiss, NoSuggestionReason};
 use crate::personalization::PersonalizationSignal;
 use crate::policy::PolicyDecision;
 use crate::protocol::{
@@ -27,6 +27,8 @@ use crate::provider::{
 use crate::segment::{accept_word, sanitize_suggestion, validate_suggestion_shape};
 
 type ProviderResult = Result<Result<ProviderOutcome, ProviderError>, time::error::Elapsed>;
+/// A carried remainder with its deadline and outcome day, or its declining gate.
+type CarryOutcome = (Option<(String, Instant, Option<u64>)>, Option<CarryMiss>);
 
 /// A provider call admitted for one session generation.
 struct AdmittedGeneration {
@@ -144,10 +146,7 @@ impl Broker {
         // allowing an obsolete suggestion to remain eligible.
         session.retire_generation(metrics, ReasonCode::Superseded);
         let scope = CarryScope::of(session);
-        let carried = state.type_through.as_ref().and_then(|carry| {
-            let remainder = carry.remainder(&scope, &context, Instant::now())?;
-            Some((remainder, carry.expires_at, carry.aggregate_day))
-        });
+        let (carried, carry_miss) = consult_carry(state.type_through.as_ref(), &scope, &context);
         let mid_line = state
             .settings
             .as_ref()
@@ -181,6 +180,7 @@ impl Broker {
                 expires_at,
                 aggregate_day,
             };
+            metrics.record_type_through_carried();
             let cancellation = CancellationToken::new();
             self.show_if_current(state, binding, &cancellation, proposal, Some(carried), true);
             return Ok(None);
@@ -203,6 +203,12 @@ impl Broker {
                 metrics.record_no_suggestion(NoSuggestionReason::ProviderError);
                 BrokerError::ProviderBusy
             })?;
+        // The request reaches the provider although a carry existed; count
+        // the gate that declined it. An abstention above calls no provider
+        // and records nothing.
+        if let Some(miss) = carry_miss {
+            metrics.record_carry_miss(miss);
+        }
         session.generation = binding.generation;
         let cancellation = CancellationToken::new();
         session.cancellation = Some(cancellation.clone());
@@ -662,6 +668,28 @@ impl Broker {
             .sink
             .send(visible.into_clear(coordinates, ReasonCode::Expired));
         self.inner.metrics.record_suggestion_expired();
+    }
+}
+
+/// The carried remainder for this admitted request (ADR 0004), or the gate
+/// that declined the carry. Both are `None` when no carry exists.
+fn consult_carry(
+    carry: Option<&TypeThrough>,
+    scope: &CarryScope,
+    context: &crate::protocol::ContextChangedPayload,
+) -> CarryOutcome {
+    match carry.map(|carry| {
+        (
+            carry.remainder(scope, context, Instant::now()),
+            carry.expires_at,
+            carry.aggregate_day,
+        )
+    }) {
+        Some((Ok(text), expires_at, aggregate_day)) => {
+            (Some((text, expires_at, aggregate_day)), None)
+        }
+        Some((Err(miss), _, _)) => (None, Some(miss)),
+        None => (None, None),
     }
 }
 
