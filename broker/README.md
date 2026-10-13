@@ -27,7 +27,10 @@ and whether they were dirty (`--version` prints both; packagers may set
 - **Negotiation.** `hello` negotiates protocol v1 or v2 and the capabilities a
   connection may use: context, suggestion, commit kinds, text replacement,
   policy, control, health, settings, an optional `long_reading_window` and,
-  for the session helper only, `desktop_signals` (v2).
+  for the session helper only, `desktop_signals` (v2). Every shipped client
+  negotiates v2 only; retiring v1, including what keeps it alive and the
+  removal order, is decided in
+  [ADR 0007](../docs/decisions/0007-retire-protocol-v1.md).
 - **Binding.** A suggestion is bound to its session, focus epoch, revision,
   fingerprint and expiry, and acceptance is one-shot.
 - **Authority acknowledgement.** A policy-capable connection must answer

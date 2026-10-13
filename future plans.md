@@ -148,10 +148,6 @@ publish need the user's go-ahead first; the rest can start at once.
    a separate pinned, hash-verified download. *Done when* install, update and
    removal leave nothing behind; publication waits for the naming and licence
    review.
-8. **Write the ADR retiring protocol v1.** v1 is still accepted, including the
-   [v1 settings schema](broker/schemas/badi.settings.v1.schema.json). *Done
-   when* the ADR names what keeps v1 alive and the removal order.
-
 ## Later, by area
 
 ### Interaction

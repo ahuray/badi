@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#75](https://github.com/ahuray/badi/pull/75)
+  [ADR 0007](docs/decisions/0007-retire-protocol-v1.md) retiring protocol
+  v1: what keeps it alive and the removal order. Every shipped client
+  already negotiates v2 only.
 - [#74](https://github.com/ahuray/badi/pull/74) The `badi-session` helper
   (logind sleep and session state, UPower and power-profile state,
   GlobalShortcuts portal, keyring delivery of the style key) and
