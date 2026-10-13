@@ -14,6 +14,7 @@ use crate::control_plane::{ControlPlane, ControlPlaneError, ControlPlaneSnapshot
 use crate::personalization::{PersonalizationProvider, PersonalizationSignal};
 use crate::protocol::TargetDescriptor;
 use crate::settings::StableIdentity;
+use crate::style::{StyleKey, StyleSample, StyleStatus};
 
 const OUTCOME_QUEUE_CAPACITY: usize = 256;
 const OUTCOME_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
@@ -53,6 +54,20 @@ pub(super) enum OutcomeCommand {
     Flush {
         response: oneshot::Sender<()>,
     },
+    /// One authored sentence to seal, if the settings it was admitted under
+    /// are still current.
+    Style {
+        expected_settings_revision: u64,
+        identity: StableIdentity,
+        text: String,
+    },
+    /// Ordered behind every queued sample, so none is sealed after a forget.
+    StyleForget {
+        response: oneshot::Sender<Result<StyleStatus, ControlPlaneError>>,
+    },
+    StyleExport {
+        response: oneshot::Sender<Result<Vec<StyleSample>, ControlPlaneError>>,
+    },
 }
 
 impl Broker {
@@ -90,6 +105,80 @@ impl Broker {
             provider: PersonalizationProvider::from(self.inner.provider_kind),
             signal,
         })
+    }
+
+    /// Must be called under the broker state lock, like [`Self::queue_outcome`].
+    pub(super) fn queue_style_sample(
+        &self,
+        target: &TargetDescriptor,
+        expected_settings_revision: u64,
+        text: String,
+    ) -> bool {
+        let Some(recorder) = self.inner.outcome_recorder.as_ref() else {
+            return false;
+        };
+        let Ok(identity) = StableIdentity::from_target(target) else {
+            return false;
+        };
+        recorder.try_signal(OutcomeCommand::Style {
+            expected_settings_revision,
+            identity,
+            text,
+        })
+    }
+
+    /// Holds the keyring's style key; it is never written anywhere.
+    pub fn deliver_style_key(&self, key: StyleKey) -> Result<StyleStatus, BrokerError> {
+        let control_plane = self
+            .inner
+            .control_plane
+            .as_ref()
+            .ok_or(BrokerError::ControlPlaneUnavailable)?;
+        Ok(control_plane.deliver_style_key(key)?)
+    }
+
+    /// Content-free style counts; `None` without a control plane or while the
+    /// sealed store is unreadable.
+    #[must_use]
+    pub fn style_status(&self) -> Option<StyleStatus> {
+        self.inner
+            .control_plane
+            .as_ref()?
+            .style_status()
+            .ok()
+            .flatten()
+    }
+
+    pub async fn forget_style(&self) -> Result<StyleStatus, BrokerError> {
+        let recorder = self
+            .inner
+            .outcome_recorder
+            .as_ref()
+            .ok_or(BrokerError::ControlPlaneUnavailable)?;
+        let (response, receiver) = oneshot::channel();
+        recorder
+            .send_waiting(OutcomeCommand::StyleForget { response })
+            .await?;
+        receiver
+            .await
+            .map_err(|_| BrokerError::ControlPlaneTask)?
+            .map_err(BrokerError::from)
+    }
+
+    pub async fn export_style(&self) -> Result<Vec<StyleSample>, BrokerError> {
+        let recorder = self
+            .inner
+            .outcome_recorder
+            .as_ref()
+            .ok_or(BrokerError::ControlPlaneUnavailable)?;
+        let (response, receiver) = oneshot::channel();
+        recorder
+            .send_waiting(OutcomeCommand::StyleExport { response })
+            .await?;
+        receiver
+            .await
+            .map_err(|_| BrokerError::ControlPlaneTask)?
+            .map_err(BrokerError::from)
     }
 
     pub(super) async fn flush_outcomes_before_pause_ack(&self) -> Result<(), BrokerError> {
@@ -297,6 +386,28 @@ impl OutcomeWorker {
             }
             OutcomeCommand::Flush { response } => {
                 let _ = response.send(());
+            }
+            OutcomeCommand::Style {
+                expected_settings_revision,
+                identity,
+                text,
+            } => {
+                if let Err(error) = self.control_plane.record_style_at_settings_revision(
+                    expected_settings_revision,
+                    &identity,
+                    &text,
+                ) {
+                    // No key yet, a replaced key or a corrupt store: the
+                    // sample is dropped and the reason is content-free.
+                    self.dropped_signals.fetch_add(1, Ordering::Relaxed);
+                    eprintln!("badi-broker: style sample not kept: {error}");
+                }
+            }
+            OutcomeCommand::StyleForget { response } => {
+                let _ = response.send(self.control_plane.forget_style());
+            }
+            OutcomeCommand::StyleExport { response } => {
+                let _ = response.send(self.control_plane.export_style());
             }
         }
     }

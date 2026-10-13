@@ -1223,6 +1223,8 @@ fn controlled_settings(revision: u64, allowed: bool, learn: bool) -> SettingsV2 
         all_linux_apps: false,
         mid_line: false,
         escape_quiet_seconds: 0,
+        battery_mode: crate::settings::BatteryMode::Normal,
+        style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
@@ -1260,6 +1262,8 @@ fn controlled_learning_settings(revision: u64, retention: RetentionPermission) -
         all_linux_apps: false,
         mid_line: false,
         escape_quiet_seconds: 0,
+        battery_mode: crate::settings::BatteryMode::Normal,
+        style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(

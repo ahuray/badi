@@ -6,8 +6,8 @@
 in `prepare()`, then builds and tests run offline. The active Arch stable Rust
 must satisfy the repository's 1.85 MSRV. This package targets x86-64 only.
 
-The package installs the broker, controls and observer in `/usr/lib/badi`,
-the Fcitx addon in `/usr/lib/fcitx5`, and user units in
+The package installs the broker, controls, observer and session helper in
+`/usr/lib/badi`, the Fcitx addon in `/usr/lib/fcitx5`, and user units in
 `/usr/lib/systemd/user`. It includes the MIT and complete modified SCOWL
 notices. It does not contain model weights, llama.cpp, the Prediction Lab or
 editor plugins. No install hook starts a service, changes accessibility,
@@ -61,7 +61,7 @@ mv --no-clobber "$badi_stage/llama-b10726-bin-ubuntu-x64.tar.gz" "$badi_data/run
 ## User activation and removal
 
 Inspect existing user-local installations first: `command -v badi` and
-`systemctl --user cat badi-broker badi-accessibility`. User-local command links,
+`systemctl --user cat badi-broker badi-accessibility badi-session`. User-local command links,
 addon copies and service overrides take precedence over package files. Keep
 their installer backups; migrate deliberately instead of mixing two builds.
 The package does not delete or rewrite them.
@@ -70,7 +70,7 @@ On a fresh unlocked Omarchy session with the assets installed:
 
 ```sh
 systemctl --user daemon-reload
-systemctl --user enable --now badi-broker.service badi-accessibility.service
+systemctl --user enable --now badi-broker.service badi-accessibility.service badi-session.service
 systemctl --user restart omarchy-fcitx5.service
 badi doctor
 badi app omawrite on
@@ -90,8 +90,8 @@ those five files, run `omarchy plugin validate` on it, then
 [panel installer](https://github.com/ahuray/badi/blob/main/ui/omarchy-plugin/README.md)
 from the matching checkout. The package does not overwrite a personal panel.
 
-Before removing the package, disable the panel and stop/disable both Badi user
-units. Remove the package with pacman, then restart Fcitx while unlocked.
+Before removing the package, disable the panel and stop/disable the three Badi
+user units. Remove the package with pacman, then restart Fcitx while unlocked.
 Settings and writing assets in the home directory remain available for a
 later installation; delete them separately only when desired. Restore any
 accessibility choice using its recorded prior values.

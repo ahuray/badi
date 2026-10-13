@@ -21,20 +21,46 @@ LIBRARY = Path(__file__).resolve().parent
 ROOT = LIBRARY.parent
 APPS = ("xournalpp", "omawrite")
 APP_IDS = {"omawrite": "omawrite", "xournalpp": "com.github.xournalpp.xournalpp"}
-APP_ADAPTERS = {"obsidian": "obsidian", "bash": "shell"}
+APP_ADAPTERS = {"obsidian": "obsidian", "bash": "shell", "nvim": "neovim", "libreoffice-writer": "libreoffice"}
 SERVICE = "badi-broker.service"
 ACCESSIBILITY_SERVICE = "badi-accessibility.service"
+SESSION_SERVICE = "badi-session.service"
+BATTERY_TEXT = {
+    "normal": "On battery, automatic suggestions behave as on mains power.",
+    "quiet": ("On battery or in the power-saver profile, the model starts only after a typing pause. "
+              "Explicit requests are unchanged."),
+    "explicit": ("On battery or in the power-saver profile, suggestions appear only when you ask "
+                 "(Ctrl+Shift+Space, Tab in manual fields). Explicit requests are unchanged."),
+}
+DESKTOP_AUTOMATIC = {"normal": "as on mains", "deferred": "after the typing pause",
+                     "explicit_only": "only when asked"}
 HELP = """Badi — local writing controls
 
   badi status [--json]          Model health and counters
   badi settings                Open the Omarchy settings panel
   badi settings --json          Read the current settings document
   badi pause | resume          Persistently pause or resume predictions
+  badi pause toggle            Pause if running, resume if paused (the
+                               badi-session shortcut runs this)
+  badi battery quiet|normal|explicit
+                               Automatic suggestions on battery or in the
+                               power-saver profile: start the model only
+                               after a typing pause (default), as on mains,
+                               or only when asked. Needs badi-session
   badi mid-line on|off         Suggestions with a word after the caret (off
                                by default). Punctuation can still finish a word
   badi escape-quiet SECONDS|off How long a dismissal keeps its field quiet
                                (1-3600 seconds, across edits; off keeps quiet
                                only until the text changes, the default)
+  badi style on|off|status      Opt-in style learning: keep the sentences you
+                               write before accepting a suggestion, sealed
+                               with a key in your keyring; no prompt uses
+                               them yet
+  badi style site ORIGIN on [DAYS]|off
+                               Learn on one allowed site, kept DAYS (1-90,
+                               default 30)
+  badi style export | forget   Print the samples as JSON, or delete them and
+                               the keyring key
   badi language APP en|de|fa|reset
                                Override one app's writing language; reset
                                restores automatic language selection
@@ -69,6 +95,11 @@ earlier typing.
 Xournal++ text cells: Tab requests, Tab again accepts.
 Obsidian: Tab accepts a word, Ctrl/Command+Right all.
 Bash: Ctrl-X then Tab requests/accepts, Ctrl-X then Escape dismisses.
+Neovim (badi app nvim on): prose buffers suggest after a typing pause; Tab
+accepts, Ctrl+Right accepts a word, leaving Insert mode dismisses.
+LibreOffice Writer spelling extension (badi app libreoffice-writer on): Alt+F7
+shows a correction for the word before the caret, Alt+F7 again replaces it in
+one undo step, Escape dismisses. badi app libreoffice covers the grey preview.
 For protocol commands: badictl --help
 """
 # Apps whose fields work today. Discord still needs a private composer trial
@@ -239,6 +270,27 @@ def accessibility_state():
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
         result.update(ready=False, error="observer_uninspectable")
     return result
+
+
+def session_helper_state():
+    """The desktop session helper's unit; it reports to the broker itself."""
+    try:
+        fields = badi_install.unit_properties(SESSION_SERVICE, "LoadState", "ActiveState", timeout=4)
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        return {"loaded": None, "active": "unknown"}
+    return {"loaded": fields.get("LoadState") == "loaded", "active": fields.get("ActiveState", "unknown")}
+
+
+def desktop_text(desktop, settings=None):
+    """One content-free line about the session helper's report, or None."""
+    if not isinstance(desktop, dict):
+        return None
+    if not desktop.get("observed"):
+        return "Desktop: no session helper (suspend and battery modes need badi-session)"
+    mode = (settings or {}).get("battery_mode", "quiet")
+    power = "on battery or power saver" if desktop.get("low_power") else "on mains power"
+    automatic = DESKTOP_AUTOMATIC.get(desktop.get("automatic"), "unknown")
+    return f"Desktop: session {desktop.get('session', 'unknown')} · {power} · battery mode {mode} · automatic {automatic}"
 
 
 def no_suggestion_summary(metrics):
@@ -434,6 +486,17 @@ def health_report():
         problems.append({"code": "broker_build_mismatch", "message": "The running broker is not the build recorded by the last desktop installation.",
                          "action": "Run badi service restart after an installation; otherwise reinstall with scripts/install-desktop.py."})
     broker = report.get("broker", {})
+    helper = report["session_helper"] = session_helper_state()
+    desktop = broker.get("desktop") if broker else None
+    if broker and helper.get("loaded") is False:
+        report["notes"].append("The desktop session helper (badi-session) is not installed, so suspend, session switches and "
+                               "battery modes are not reported to the broker. Adapters keep their own focus, lock and expiry checks.")
+    elif isinstance(desktop, dict) and desktop.get("session") in ("inactive", "sleeping"):
+        report["notes"].append("The session helper reports this login session as not in the foreground, so every grant is held "
+                               "until it returns.")
+    elif isinstance(desktop, dict) and desktop.get("automatic") in ("deferred", "explicit_only"):
+        report["notes"].append("On battery or in the power-saver profile, automatic suggestions start "
+                               + DESKTOP_AUTOMATIC[desktop["automatic"]] + " (badi battery normal restores mains behavior).")
     if report["native"].get("addon_update_pending"):
         report["notes"].append("Fcitx is still using the previous addon build. Apply the native update after normal desktop unlock.")
     if broker.get("paused"):
@@ -443,6 +506,15 @@ def health_report():
     settings = web_settings() if broker else {}
     if settings.get("all_web_origins") is True:
         report["notes"].append(ALL_SITES_NOTE)
+    if settings.get("style_learning") is True:
+        try:
+            style = json.loads(control(["style", "status"]))
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+            style = {}
+        if style.get("key") != "ready" or style.get("available") is not True:
+            report["notes"].append("Style learning is on, but the broker cannot seal samples (its keyring key is "
+                                   "missing, locked or different, or the store is unreadable), so nothing is kept. "
+                                   "Unlock the keyring or run badi style on; badi style status explains which.")
     if settings.get("all_linux_apps") is True:
         report["notes"].append(ALL_APPS_NOTE)
     editor = vscode_edit_context_note()
@@ -472,7 +544,9 @@ def doctor_text(report):
              f"  Service: {service.get('active', 'unknown')} ({service.get('state', 'unknown')})",
              f"  Model: {model}" + (f" · {broker['provider']}" if broker.get("provider") else ""),
              f"  Fcitx addon: {addon}",
-             "  Field observer: " + ("ready" if observer.get("ready") else "unavailable")]
+             "  Field observer: " + ("ready" if observer.get("ready") else "unavailable"),
+             "  Session helper: " + {True: report.get("session_helper", {}).get("active", "unknown"),
+                                      False: "not installed"}.get(report.get("session_helper", {}).get("loaded"), "unknown")]
     installed = report.get("install", {}).get("desktop") or {}
     if installed.get("commit"):
         lines.append(f"  Installed source: {installed['commit']}" + (" (modified)" if installed.get("dirty") else ""))
@@ -511,7 +585,8 @@ def status_text(health, settings=None):
             f"Observed fields: automatic for Omawrite, Telegram and IME-parity apps ({IME_APPS}); Tab accepts a visible suggestion, otherwise stays Tab; Ctrl+Right its next word; Ctrl+Shift+Space requests\n"
             + f"Apps: {mode_text((settings or {}).get('all_linux_apps'), 'app')}\n"
             + f"Web sites: {mode_text((settings or {}).get('all_web_origins'), 'site')}\n"
-            + f"Escape: dismiss (quiet: {quiet_text}) · Why nothing appeared: badi doctor; badi debug on; badi debug watch")
+            + f"Escape: dismiss (quiet: {quiet_text}) · Why nothing appeared: badi doctor; badi debug on; badi debug watch"
+            + "".join(f"\n{line}" for line in [desktop_text(health.get("desktop"), settings)] if line))
 
 
 def update_settings(change):
@@ -548,6 +623,105 @@ def set_escape_quiet(document, seconds):
         document["escape_quiet_seconds"] = seconds
     else:
         document.pop("escape_quiet_seconds", None)
+
+
+STYLE_ON = ("Style learning is on. Badi keeps the sentence you wrote before each accepted suggestion, "
+            "only on sites you allow with: badi style site ORIGIN on. Samples are sealed with a key in your "
+            "keyring and no prompt uses them yet; badi style export shows them, badi style forget deletes them.")
+
+
+def style_keyring():
+    """The session helper's keyring module, installed beside it or in the checkout."""
+    path = next((candidate for candidate in (LIBRARY / "session/style_key.py",
+                                              ROOT / "adapters/session/style_key.py") if candidate.is_file()), None)
+    if path is None:
+        raise RuntimeError("The keyring module is not installed. Run scripts/install-desktop.py.")
+    spec = importlib.util.spec_from_file_location("badi_style_key", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def set_style_learning(document, enabled):
+    # Absent is the canonical off state.
+    if enabled:
+        document["style_learning"] = True
+    else:
+        document.pop("style_learning", None)
+
+
+def set_site_learning(document, value, days):
+    """Learning for one site that is already allowed; `days` None turns it off."""
+    identity = site_identity(value)
+    subject = next((item for item in document["subjects"] if item["identity"] == identity), None)
+    if days is not None and (subject is None or subject["permissions"]["suggest"] != "allow"):
+        raise RuntimeError(f"Allow the site first: badi site {value} on")
+    if subject is None:
+        return
+    permissions = subject["permissions"]
+    if days is None:
+        permissions.update(learn="block", retention={"mode": "none"})
+    else:
+        permissions.update(learn="allow", retention={"mode": "bounded", "days": days})
+
+
+def style_command(arguments):
+    if arguments == ["on"]:
+        try:
+            key_id, key = style_keyring().ensure()
+        except Exception as error:  # the module's KeyringError, or no Secret Service
+            raise RuntimeError(f"The keyring could not provide a style key ({error}); style learning stays off.") from None
+        control(["style", "key", "-"], input_text=f"{key_id} {key}\n")
+        update_settings(lambda document: set_style_learning(document, True))
+        print(STYLE_ON)
+    elif arguments == ["off"]:
+        update_settings(lambda document: set_style_learning(document, False))
+        print("Style learning is off; nothing new is kept. Kept samples expire with each site's retention, "
+              "or delete them now with badi style forget.")
+    elif arguments == ["status"]:
+        status = json.loads(control(["style", "status"]))
+        document = json.loads(control(["settings", "show", "--json"]))
+        sites = [origin_text(item["identity"]) + f" ({item['permissions']['retention']['days']} days)"
+                 for item in document["subjects"] if item["permissions"].get("learn") == "allow"]
+        key = {"ready": "ready", "absent": "not delivered (badi style on)",
+               "mismatch": "different from the one that sealed the samples (badi style forget)"}[status["key"]]
+        print(f"Style learning: {'on' if status['enabled'] else 'off'} · samples: {status['samples']} "
+              f"from {status['subjects']} site(s) · key: {key}"
+              + ("" if status["available"] else " · store unreadable (badi style forget)")
+              + f"\nLearning sites: {', '.join(sites) if sites else 'none'}")
+    elif len(arguments) in (3, 4) and arguments[0] == "site" and arguments[2] in ("on", "off"):
+        origin = arguments[1]
+        if arguments[2] == "off" and len(arguments) == 3:
+            days = None
+        elif arguments[2] == "on" and (len(arguments) == 3 or (arguments[3].isascii() and arguments[3].isdigit()
+                                                                and 1 <= int(arguments[3]) <= 90)):
+            days = int(arguments[3]) if len(arguments) == 4 else 30
+        else:
+            raise RuntimeError("Usage: badi style site ORIGIN on [DAYS]|off (DAYS is 1-90)")
+        update_settings(lambda document: set_site_learning(document, origin, days))
+        print(f"{origin}: style samples kept for {days} days." if days else
+              f"{origin}: no style samples; any kept from it are deleted.")
+    elif arguments == ["export"]:
+        if json.loads(control(["style", "status"]))["key"] != "ready":
+            raise RuntimeError("The style key is not available to the broker. Run badi style on, or badi style status.")
+        print(control(["style", "export"]), end="")
+    elif arguments == ["forget"]:
+        control(["style", "forget"])
+        try:
+            removed = style_keyring().delete()
+        except Exception as error:
+            raise RuntimeError(f"Samples were deleted, but the keyring key was not ({error}).") from None
+        print("All style samples were deleted" + (" and the keyring key removed." if removed else "."))
+    else:
+        raise RuntimeError("Usage: badi style on|off|status|export|forget, or badi style site ORIGIN on [DAYS]|off")
+
+
+def set_battery_mode(document, mode):
+    # Absent is the canonical quiet state, the default.
+    if mode == "quiet":
+        document.pop("battery_mode", None)
+    else:
+        document["battery_mode"] = mode
 
 
 def set_language(document, app, language):
@@ -660,7 +834,7 @@ def debug_activity():
             return report
         report.update(enabled=True, expires_at=control["expires_at"], reason="no_input_events")
         report["editors"] = {}
-        for adapter in ("obsidian", "terminal"):
+        for adapter in ("obsidian", "terminal", "neovim"):
             try:
                 editor = private_json(directory / f"debug-{adapter}.json")
                 if editor.get("id") == control["id"] and editor.get("schema") == "badi.editor-activity.v1":
@@ -765,6 +939,21 @@ def main(arguments):
             print(json.dumps(health))
         else:
             print(status_text(health, web_settings()))
+        return
+    if arguments == ["pause", "toggle"]:
+        outcome = {}
+
+        def toggle(document):
+            document["paused"] = outcome["paused"] = not document["paused"]
+        update_settings(toggle)
+        print("Predictions paused." if outcome["paused"] else "Predictions resumed.")
+        return
+    if arguments[:1] == ["style"]:
+        style_command(arguments[1:])
+        return
+    if len(arguments) == 2 and arguments[0] == "battery" and arguments[1] in BATTERY_TEXT:
+        update_settings(lambda document: set_battery_mode(document, arguments[1]))
+        print(BATTERY_TEXT[arguments[1]])
         return
     if arguments in (["pause"], ["resume"]):
         paused = arguments == ["pause"]

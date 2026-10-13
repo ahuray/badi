@@ -19,10 +19,12 @@ machine. Badi is pre-release software.
 Obsidian accepts one word with Tab only while a suggestion is visible, and
 takes all of it with Ctrl/Command+→. Ctrl+Shift+Space asks for one. Tab with
 nothing showing stays Tab.
-Bash uses Ctrl-X then Tab to request and accept. In a Xournal++ text cell, Tab
-requests and Tab again accepts. Fcitx and Obsidian suggestions last up to
-15 seconds; edits, focus changes and dismissal still remove them immediately.
-Bash keeps its four-second preview. In the
+Bash uses Ctrl-X then Tab to request and accept. Neovim suggests in prose
+buffers after a typing pause: Tab accepts all and Ctrl+→ one word only while a
+suggestion is visible, and leaving Insert mode dismisses it. In a Xournal++
+text cell, Tab requests and Tab again accepts. Fcitx, Obsidian and Neovim
+suggestions last up to 15 seconds; edits, focus changes and dismissal still
+remove them immediately. Bash keeps its four-second preview. In the
 observed apps below, Badi stays quiet on its own in file dialogs and very
 narrow fields; Ctrl+Shift+Space still asks there. `badi escape-quiet 60` (or
 the settings panel) also keeps a dismissed field quiet for a minute across
@@ -61,12 +63,13 @@ Linux in general.
 | Zen | Grey preview; Ctrl+Z undoes an acceptance alone | Zen 1.23b |
 | VS Code, Cursor | Needs `"editor.editContext": false` in VS Code | VS Code 1.140, Cursor 3.21 |
 | Codex desktop | Composer | 26.930 |
-| LibreOffice Writer | Document paragraphs; Calc gets nothing | 26.8 |
+| LibreOffice Writer | Document paragraphs; Calc gets nothing. English spelling: the [Badi extension](adapters/libreoffice/README.md), Alt+F7 shows and Alt+F7 again replaces in one undo step (headless trial) | 26.8 |
 | Telegram | | Telegram desktop (Qt) |
 | Omawrite | | 0.5.0 |
 | Xournal++ text tool | Tab requests, exact native undo | 1.3.7 |
 | Obsidian | Badi plugin; the 1.14.4 handoff reports inline preview and Tab acceptance | 1.13.7, 1.14.4 |
 | Bash | Grey Readline preview and narrow English spelling fixes | Bash 5.3.15 in Ghostty 1.3.1 |
+| Neovim | Badi plugin; prose buffers, inline preview, one-step undo; no spelling fixes yet. Tested headless with the deterministic phrase provider, not yet with the real model in a terminal | 0.12.5 |
 | Grok Bot | Ready, but its composer is untested | 0.35 |
 
 **Not yet:**
@@ -75,7 +78,7 @@ Linux in general.
 - Editors built on Chromium's EditContext (VS Code's default, CodeMirror on
   recent Chromium).
 - A caret inside a list or quote.
-- Terminals and TUIs other than Bash, and Fish/Zsh.
+- Terminals and TUIs other than Bash and Neovim, and Fish/Zsh.
 
 See [future plans](<future plans.md>).
 
@@ -91,9 +94,12 @@ identity and caret position before showing a suggestion and again before
 inserting it, and it never reads a field the toolkit marks as a password.
 
 English spelling replaces the mistyped word in Bash, Obsidian, and native exact
-fields such as Omawrite, Telegram and Xournal++. The apps in the section above,
-plus LibreOffice Writer, VS Code, Cursor, Codex, Discord and Grok Bot, stay
-append-only, so a typo there is not deleted. In Omawrite 0.5.0 a spelling
+fields such as Omawrite, Telegram and Xournal++. In LibreOffice Writer the
+[Badi extension](adapters/libreoffice/README.md) does it on request (Alt+F7),
+through Writer's own text and undo APIs, at the end of a body-text paragraph;
+one Ctrl+Z restores the typo. The apps in the section above, plus Writer's
+grey preview, VS Code, Cursor, Codex, Discord and Grok Bot, stay append-only,
+so a typo there is not deleted. In Omawrite 0.5.0 a spelling
 replacement is two native undos: the first removes the correction and the
 second restores the mistyped word. Telegram and Xournal++ have not been retried.
 
@@ -113,9 +119,10 @@ On Omarchy with Fcitx 5, from this checkout:
 
 ```sh
 npm ci
-python3 scripts/install-desktop.py      # model service, Fcitx addon, observer, `badi` command
+python3 scripts/install-desktop.py      # model service, Fcitx addon, observer, session helper, `badi` command
 python3 scripts/install-omarchy-ui.py   # bar mark and settings panel
-python3 scripts/install-editors.py --vault /path/to/vault --bash   # optional: Obsidian, Bash
+python3 scripts/install-editors.py --vault /path/to/vault --bash --neovim   # optional: Obsidian, Bash, Neovim
+python3 scripts/install-editors.py --libreoffice   # optional: Writer spelling; close LibreOffice first
 ```
 
 Prerequisites on the machine: Rust, Node.js, cmake, ninja, a C++20 compiler,
@@ -143,6 +150,8 @@ hashes before it builds, and the broker checks them again before it starts.
 ```sh
 badi status
 badi pause                          # persists across restarts; badi resume
+badi pause toggle                   # what the session helper's shortcut runs
+badi battery normal                 # on battery: keep mains scheduling (default: quiet)
 badi mid-line on                    # suggestions when a word follows the caret; off by default
 badi escape-quiet 60                # a dismissal keeps its field quiet for a minute; off by default
 badi language brave-origin de      # use German in Brave; en, de, fa, or reset
@@ -178,6 +187,34 @@ restores automatic selection. For longer text, Badi conservatively detects
 English, German or Persian from the authorized field; short or uncertain
 text keeps the app or keyboard hint. French and Spanish generation remain
 in the Lab until qualified.
+
+### Sleep, session switches, battery and shortcuts
+
+The `badi-session` user service, installed with the desktop installer,
+withdraws every suggestion and grant before the machine sleeps and while
+another session or VT is in the foreground; after resume, each field is
+acquired afresh. On battery or in the power-saver profile, Badi by default
+starts the model only once you pause typing for 300 ms instead of on every
+key; `badi battery explicit` shows suggestions only when you ask and `badi
+battery normal` keeps mains behavior. The model stays loaded in every mode.
+The service also offers **Pause or resume** and **Open settings** shortcuts
+through the desktop portal; bind them in Hyprland with `hl.dsp.global("io.github.ahuray.badi:pause-toggle")`
+and `...:open-settings` ([session helper](adapters/session/README.md)).
+
+### Style learning (opt-in)
+
+```sh
+badi style on                              # keyring key; nothing is kept yet
+badi style site https://mail.example on 30 # keep samples from this allowed site for 30 days
+badi style status | export | forget
+```
+
+When on, each accepted suggestion on a learning site keeps the sentence you
+wrote before it, sealed with a key in your desktop keyring; sentences with
+digits, email addresses or links are skipped. No suggestion uses the samples
+yet: they are for measuring, in the Lab, whether your own style helps.
+`badi style forget` deletes them and the key. Apps other than websites cannot
+learn ([details](broker/README.md#style-learning-opt-in)).
 
 ## When nothing appears
 
@@ -221,7 +258,7 @@ languages remain Lab-only until their independent qualification passes.
 | [VISION.md](VISION.md) | The product contract |
 | [future plans.md](<future plans.md>) | The only backlog |
 | [docs/decisions](docs/decisions/) | Durable architecture decisions |
-| Component runbooks | [broker](broker/README.md), [Fcitx addon](adapters/fcitx5/README.md), [observer](adapters/accessibility/README.md), [editors](adapters/shared/README.md), [Bash](adapters/shell/README.md), [Omarchy panel](ui/omarchy-plugin/README.md), [Fcitx frontend backport](packaging/fcitx5-wayland-compat/README.md), [Prediction Lab](evaluation/writing/README.md) |
+| Component runbooks | [broker](broker/README.md), [Fcitx addon](adapters/fcitx5/README.md), [observer](adapters/accessibility/README.md), [session helper](adapters/session/README.md), [editors](adapters/shared/README.md), [Bash](adapters/shell/README.md), [Neovim](adapters/neovim/README.md), [LibreOffice Writer](adapters/libreoffice/README.md), [Omarchy panel](ui/omarchy-plugin/README.md), [Fcitx frontend backport](packaging/fcitx5-wayland-compat/README.md), [Prediction Lab](evaluation/writing/README.md) |
 
 ```sh
 npm ci

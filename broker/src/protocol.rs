@@ -21,7 +21,9 @@ pub const MAX_SUGGESTION_CHARS: usize = 64;
 pub const MAX_SUGGESTION_WORDS: usize = 8;
 pub const MAX_ID_CHARS: usize = 128;
 pub const DEFAULT_SUGGESTION_TTL_MS: u64 = 600;
-pub const CAPABILITY_COUNT: usize = 10;
+pub const CAPABILITY_COUNT: usize = 12;
+/// The only app id the Writer extension target may claim.
+pub const LIBREOFFICE_WRITER_APP_ID: &str = "libreoffice-writer";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SessionId(Uuid);
@@ -89,6 +91,12 @@ pub enum AdapterKind {
     Cli,
     Test,
     Terminal,
+    /// The desktop session helper: logind, power and portal signals only.
+    Session,
+    Neovim,
+    /// The Writer UNO extension: explicit, editor-owned spelling
+    /// replacement verified in the document with one native undo step.
+    Libreoffice,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -113,6 +121,12 @@ pub enum Capability {
     Policy,
     #[serde(rename = "settings")]
     Settings,
+    /// Content-free desktop session and power state from the session helper.
+    #[serde(rename = "desktop_signals")]
+    DesktopSignals,
+    /// Delivers the keyring's style-learning key (session helper, CLI).
+    #[serde(rename = "style_key")]
+    StyleKey,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -123,6 +137,9 @@ pub enum TargetKind {
     Obsidian,
     Terminal,
     Fixture,
+    Neovim,
+    /// The Writer extension's exact app identity.
+    Libreoffice,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -285,6 +302,22 @@ pub enum MessageType {
     ProbeResult,
     #[serde(rename = "error")]
     Error,
+    #[serde(rename = "desktop.state")]
+    DesktopState,
+    #[serde(rename = "desktop.status")]
+    DesktopStatus,
+    #[serde(rename = "style.key")]
+    StyleKey,
+    #[serde(rename = "style.query")]
+    StyleQuery,
+    #[serde(rename = "style.forget")]
+    StyleForget,
+    #[serde(rename = "style.export")]
+    StyleExport,
+    #[serde(rename = "style.status")]
+    StyleStatus,
+    #[serde(rename = "style.samples")]
+    StyleSamples,
 }
 
 impl MessageType {
@@ -509,7 +542,20 @@ impl HelloPayload {
         {
             return Err(ProtocolError::InvalidPayload);
         }
-        if self.adapter.kind == AdapterKind::Terminal && frame_version != CURRENT_PROTOCOL_VERSION {
+        if matches!(
+            self.adapter.kind,
+            AdapterKind::Terminal
+                | AdapterKind::Session
+                | AdapterKind::Neovim
+                | AdapterKind::Libreoffice
+        ) && frame_version != CURRENT_PROTOCOL_VERSION
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        if (self.capabilities.contains(&Capability::DesktopSignals)
+            || self.capabilities.contains(&Capability::StyleKey))
+            && frame_version != CURRENT_PROTOCOL_VERSION
+        {
             return Err(ProtocolError::InvalidPayload);
         }
         if self.min_v != frame_version || self.max_v != frame_version {
@@ -605,17 +651,28 @@ impl TargetDescriptor {
                     return Err(ProtocolError::InvalidPayload);
                 }
             }
+            TargetKind::Libreoffice => {
+                if self.origin.is_some() || self.app_id != LIBREOFFICE_WRITER_APP_ID {
+                    return Err(ProtocolError::InvalidPayload);
+                }
+            }
             TargetKind::Browser
             | TargetKind::Obsidian
             | TargetKind::Terminal
-            | TargetKind::Fixture => {}
+            | TargetKind::Fixture
+            | TargetKind::Neovim => {}
         }
         Ok(())
     }
 
     pub fn validate_for_version(&self, version: u8) -> Result<(), ProtocolError> {
         self.validate()?;
-        if version == PROTOCOL_VERSION && self.kind == TargetKind::DesktopApplication {
+        if version == PROTOCOL_VERSION
+            && matches!(
+                self.kind,
+                TargetKind::DesktopApplication | TargetKind::Neovim | TargetKind::Libreoffice
+            )
+        {
             return Err(ProtocolError::InvalidPayload);
         }
         if version == CURRENT_PROTOCOL_VERSION
@@ -1051,6 +1108,9 @@ pub struct HealthStatusPayload {
     pub metrics: MetricsSnapshot,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active: Option<ActiveLocator>,
+    /// Protocol v2 only: what the desktop session helper reported, if anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop: Option<DesktopStatusPayload>,
 }
 
 impl HealthStatusPayload {
@@ -1066,6 +1126,116 @@ impl HealthStatusPayload {
             Ok(())
         }
     }
+}
+
+/// The login session as the desktop helper observes it through logind.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopSession {
+    /// The user's graphical session is in the foreground.
+    #[default]
+    Active,
+    /// Another session or VT is in the foreground.
+    Inactive,
+    /// The machine is preparing to sleep or is asleep.
+    Sleeping,
+}
+
+impl DesktopSession {
+    /// Inactive and sleeping sessions hold every grant until they return.
+    #[must_use]
+    pub const fn holds(self) -> bool {
+        !matches!(self, Self::Active)
+    }
+}
+
+/// How automatic (typing-driven) requests are scheduled right now.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomaticScheduling {
+    /// The model starts on the request, as on mains power.
+    #[default]
+    Normal,
+    /// The model starts only once the field has been still for the typing pause.
+    Deferred,
+    /// Automatic requests abstain; explicit requests are unchanged.
+    ExplicitOnly,
+}
+
+/// The session helper's content-free report: login session and power state.
+/// It never grants authority; holding the session only removes it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopStatePayload {
+    pub session: DesktopSession,
+    /// The `UPower` `OnBattery` property; false when unknown.
+    pub on_battery: bool,
+    /// The power-saver profile is active; false when unknown.
+    pub power_saver: bool,
+}
+
+/// The broker's combined view after a report: every reporting connection's
+/// session hold and low-power state, and the scheduling that results.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopStatusPayload {
+    /// At least one desktop helper is connected and reporting.
+    pub observed: bool,
+    pub session: DesktopSession,
+    pub low_power: bool,
+    pub automatic: AutomaticScheduling,
+}
+
+impl DesktopStatusPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let unobserved_default = !self.session.holds()
+            && !self.low_power
+            && self.automatic == AutomaticScheduling::Normal;
+        if (!self.observed && !unobserved_default)
+            || (!self.low_power && self.automatic != AutomaticScheduling::Normal)
+        {
+            Err(ProtocolError::InvalidPayload)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// The keyring's style key: a random 16-byte id and 32-byte key, lowercase hex.
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StyleKeyPayload {
+    pub key_id: String,
+    pub key: String,
+}
+
+impl std::fmt::Debug for StyleKeyPayload {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StyleKeyPayload")
+            .field("key_id", &self.key_id)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Content-free style-learning state.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StyleStatusPayload {
+    /// The `style_learning` setting.
+    pub enabled: bool,
+    /// The sealed store is readable; false until `style.forget` repairs it.
+    pub available: bool,
+    pub key: crate::style::StyleKeyState,
+    pub samples: u64,
+    pub subjects: u64,
+}
+
+/// An explicit export, bounded by the store to fit one frame.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StyleSamplesPayload {
+    pub samples: Vec<crate::style::StyleSample>,
 }
 
 /// Private same-UID diagnostic request (protocol v2 CLI only). It opens no
@@ -1348,8 +1518,9 @@ mod tests {
 
     use super::{
         AdapterDescriptor, AdapterKind, CURRENT_PROTOCOL_VERSION, Capability, HelloPayload,
-        MAX_SAFE_COUNTER, MessageType, PROTOCOL_VERSION, PolicyQueryPayload, ProtocolError,
-        SessionId, TargetDescriptor, TargetKind, WireEnvelope, valid_language_tag,
+        LIBREOFFICE_WRITER_APP_ID, MAX_SAFE_COUNTER, MessageType, Origin, OriginScheme,
+        PROTOCOL_VERSION, PolicyQueryPayload, ProtocolError, SessionId, TargetDescriptor,
+        TargetKind, WireEnvelope, valid_language_tag,
     };
 
     #[test]
@@ -1414,6 +1585,83 @@ mod tests {
         hello.min_v = 2;
         hello.max_v = 2;
         hello.validate_for_frame(2).expect("v2 shell adapter");
+    }
+
+    #[test]
+    fn neovim_adapter_and_targets_require_v2_negotiation() {
+        let mut hello = HelloPayload {
+            min_v: 1,
+            max_v: 1,
+            adapter: AdapterDescriptor {
+                kind: AdapterKind::Neovim,
+                name: "badi-neovim".to_owned(),
+                version: "0.1.0".to_owned(),
+            },
+            capabilities: vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::CommitApplied,
+                Capability::LongReadingWindow,
+            ],
+        };
+        assert!(hello.validate_for_frame(1).is_err());
+        hello.min_v = 2;
+        hello.max_v = 2;
+        hello.validate_for_frame(2).expect("v2 Neovim adapter");
+
+        let query = PolicyQueryPayload {
+            target: TargetDescriptor {
+                kind: TargetKind::Neovim,
+                app_id: "nvim".to_owned(),
+                target_id: "buffer-1".to_owned(),
+                origin: None,
+            },
+        };
+        assert!(query.validate_for_version(PROTOCOL_VERSION).is_err());
+        query
+            .validate_for_version(CURRENT_PROTOCOL_VERSION)
+            .expect("a Neovim target is a v2 contract");
+    }
+
+    #[test]
+    fn libreoffice_writer_extension_is_v2_only_with_its_exact_app_id() {
+        let mut hello = HelloPayload {
+            min_v: 1,
+            max_v: 1,
+            adapter: AdapterDescriptor {
+                kind: AdapterKind::Libreoffice,
+                name: "badi-libreoffice".to_owned(),
+                version: "1".to_owned(),
+            },
+            capabilities: vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::CommitApplied,
+                Capability::TextReplacement,
+            ],
+        };
+        assert!(hello.validate_for_frame(1).is_err());
+        hello.min_v = 2;
+        hello.max_v = 2;
+        hello.validate_for_frame(2).expect("v2 LibreOffice adapter");
+
+        let mut target = TargetDescriptor {
+            kind: TargetKind::Libreoffice,
+            app_id: LIBREOFFICE_WRITER_APP_ID.to_owned(),
+            target_id: "document".to_owned(),
+            origin: None,
+        };
+        target.validate_for_version(2).expect("exact Writer target");
+        assert!(target.validate_for_version(1).is_err());
+        target.app_id = "libreoffice".to_owned();
+        assert!(target.validate().is_err());
+        target.app_id = LIBREOFFICE_WRITER_APP_ID.to_owned();
+        target.origin = Some(Origin {
+            scheme: OriginScheme::File,
+            host: "localhost".to_owned(),
+            port: None,
+        });
+        assert!(target.validate().is_err());
     }
 
     #[test]

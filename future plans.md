@@ -147,16 +147,23 @@ resident memory about 1.3 GB, and no quality regression in the Lab.
 - [ ] Fewer generated tokens, only after a held-out quality comparison.
 - [ ] Qualify Qwen3 0.6B and Gemma 4 E2B (with its multi-token drafter) in the
       Lab. Defer hybrid-attention models until llama.cpp reuses their caches.
-- [ ] **Linux research priority 1: battery and load-aware scheduling.** Observe
-      [UPower `OnBattery`](https://upower.freedesktop.org/docs/UPower.html) and
-      [power profiles](https://upower.pages.freedesktop.org/power-profiles-daemon/gdbus-org.freedesktop.UPower.PowerProfiles.html)
-      to offer a quieter automatic mode while keeping explicit requests responsive.
-      Keep the current model resident; a smaller model still needs independent
-      qualification. Adapt the existing prefetch and cancellation behavior to
-      battery state without changing the user's system power profile. Compare energy
-      per useful accepted word, 550 ms misses and full additions on AC and battery.
-      Read-only discovery on 2026-10-13 found UPower 1.91.3 and
-      power-profiles-daemon 0.30 running here.
+- [ ] Battery scheduling is in place ([session helper](adapters/session/README.md#battery)):
+      on battery or in the power-saver profile an automatic request waits
+      300 ms, so keys typed closer together never start the model. On
+      2026-10-13 (this laptop on battery with power-saver, release build,
+      [paced trial](evaluation/power/battery-trial.py): 752 disposable keys per
+      mode at 150 ms per key, 450 ms after words and 1.5 s after sentences)
+      `quiet` made 122 model calls against 586, used 182 against 464 runtime
+      CPU seconds, showed 313 against 257 suggestions with 211 against 190
+      matching the reference, and had visible p95 latency of 550 against
+      525 ms. The same trial later that day with the laptop charging in the
+      performance profile (the trial still reports battery, one repeat, 376
+      keys per mode) shows the cost on a fast CPU: 45 against 220 calls and 50
+      against 148 runtime CPU seconds, but 27 against 31 distinct reference
+      words covered and p95 456 against 211 ms. Still open: the balanced
+      profile on battery, real typing intervals, energy from a privileged
+      power counter rather than runtime CPU time, and a reviewed count of
+      fully accepted additions.
 - [ ] Use [Linux pressure signals](https://www.kernel.org/doc/html/latest/accounting/psi.html)
       to reduce speculative requests while the machine is contended. PSI files
       are available here; `CPUWeight=1000`, `MemoryHigh=3G` and resident-model
@@ -177,15 +184,8 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Omarchy integration in the style of Voxtype's: a first-run invitation
       (`omarchy-done ensure`, `omarchy-notification-send --exec`), a
       floating-terminal installer, menu entries for settings and removal,
-      keybindings and theme colours for the preview.
-- [ ] **Linux research priority 3: desktop controls through the
-      [GlobalShortcuts portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html).**
-      Offer configurable pause/resume and open-settings shortcuts. This desktop
-      exposes interface version 1 through the Hyprland backend; negotiate the
-      installed version rather than assuming version 2's configuration method.
-      A request shortcut would still require a currently admitted adapter field.
-      Verify conflicts, cancellation, session restart and cleanup. Registering a
-      shortcut provides no authority to acquire or edit arbitrary applications.
+      default keys for the session helper's `pause-toggle` and
+      `open-settings` portal shortcuts, and theme colours for the preview.
 - [ ] Support [omarchy#12139](https://github.com/omacom/omarchy/pull/12139)
       (`--enable-wayland-ime` by default); keep the per-app flags until it lands.
 - [ ] Signed updates. The broker service is already sandboxed: `PrivateNetwork=yes`,
@@ -194,15 +194,11 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       once Omarchy ships Fcitx 5.1.23.
 - [ ] An installed-flow matrix with zero wrong-field or stale edits: service
       restart, suspend and resume, undo, pause, composition, stale focus,
-      fractional scaling and several monitors.
-- [ ] Add a session lifecycle observer using
-      [logind sleep and session events](https://github.com/systemd/systemd/blob/main/man/org.freedesktop.login1.xml).
-      Revoke context, pending inference and visible grants on suspend or session
-      deactivation; reacquire after resume. Keep the existing fresh Omarchy lock
-      checks: logind's `LockedHint` is a hint, not proof of unlock. Test resume
-      after expiry, lost D-Bus ownership, service restart and a Tab pressed before
-      fresh acquisition. logind is available here; these flows were not exercised
-      by the 2026-10-13 installation trial.
+      fractional scaling and several monitors. The
+      [session helper](adapters/session/README.md) now holds every grant across
+      sleep and session switches; its fake-bus lane covers resume, a restarted
+      logind and a broker restart, but a real suspend, VT switch and a Tab
+      pressed right after resume have not been tried on the installed desktop.
 
 ## Better suggestions
 
@@ -211,26 +207,37 @@ device, with global and per-app opt-outs. Language work prioritizes English,
 German, French and Spanish; existing Persian behavior keeps its regression
 gates. The [context firewall](VISION.md#context-firewall) owns this contract.
 
-- [ ] Implement bounded same-window accessibility context with separate
-      global and per-app controls, sensitive-node and cross-origin exclusion,
-      ephemeral storage and cancellation on scope or focus changes. No extra
-      context reaches production inference before independent Lab evidence.
-      [AT-SPI Text](https://gnome.pages.gitlab.gnome.org/at-spi2-core/libatspi/iface.Text.html)
-      offers bounded text ranges, attributes and geometry. Start with an allowed
-      nearby heading or preceding paragraph, reject nodes whose origin or scope
-      cannot be established, and compare full additions against the current
-      focused-field baseline. API availability alone establishes neither privacy
-      nor improved prediction quality.
-- [ ] Implement local style learning from authorized samples, encrypted
-      storage, global and per-app opt-outs, and one-step deletion; verify
-      that disabling it stops reads and writes and that draft facts win.
-      Use [Secret Service through libsecret](https://gnome.pages.gitlab.gnome.org/libsecret/)
-      for a dedicated encryption key, with the encrypted learning data stored
-      separately. GNOME Keyring's service and libsecret 0.21.7 are available here.
-      Do not put prose in keyring labels or lookup attributes. Verify locked or
-      missing keyring behavior, restart, key loss and deletion before retention
-      is enabled. This is protection for stored data, not isolation from a
-      compromised logged-in desktop.
+- [ ] Same-window context is extracted but not used. The observer's
+      [`window_context()`](adapters/accessibility/README.md#same-window-context-lab-only)
+      reads the nearest heading and preceding paragraph of the field's own web
+      document and never another field, a password, a hidden node or another
+      frame; it is unit-tested on fake trees only. A live check was not run:
+      the desktop was locked, and a headless Chromium on a private bus exposed
+      no field. On 2026-10-13 the
+      [development set](evaluation/writing/lab/examples/window-context-development.json)
+      (24 cases written for this, so not independent; `healed`, 8 tokens,
+      pinned 1.7B on battery with power-saver) gave the expected next words
+      in 15 of 16 informative cases with the context and 4 of 16 without,
+      with a 3 s diagnostic budget. In 3 of the 8 controls the context pulled
+      the continuation onto the page's topic ("I have attached the chapter
+      three"), and several additions answered for the user ("November? Yes,
+      it's available"). At 550 ms both arms missed the deadline on 23 or 24
+      cold prompts. Before any production use: independent cases with
+      full-addition review, a fence like `style_fact_conflict` for context
+      facts, a cache-stable prompt layout that meets 550 ms, and only then
+      the global and per-app controls, wire field and cancellation on focus
+      changes.
+- [ ] Style learning stores but does not use. `badi style on` keeps the
+      sentence written before each accepted suggestion on sites that allow
+      learning, sealed with a keyring key; revocation, expiry, key loss,
+      forgetting and the locked keyring are tested
+      ([broker runbook](broker/README.md#style-learning-opt-in)). Next: feed an
+      explicit `badi style export` into a Lab suite's `style` field and compare
+      against no style on the user's own held-out drafts, with the
+      `style_fact_conflict` fence and native review, before any prompt reads
+      samples. Linux apps cannot learn under the settings schema
+      (`linux_app` subjects force `learn: block`); lifting that is a separate
+      privacy decision. Not yet tried with the installed desktop keyring.
 - [ ] Qualify French and Spanish before enabling them. Gather independently
       reviewed confirmation prefixes and full-addition reviews for both,
       alongside the existing English, German and Persian confirmation gate.
@@ -303,21 +310,19 @@ From the 2026-10-11 audit. These are not part of the installed behavior.
       typing shows an indicator.
 - [ ] Grok Bot composer trial in the signed-in app after a relaunch with
       `grok-bot-flags.conf`.
-- [ ] More native toolkits through measured integrations. For LibreOffice,
-      investigate an editor-owned UNO extension using
-      [text ranges](https://api.libreoffice.org/docs/idl/ref/interfacecom_1_1sun_1_1star_1_1text_1_1XText.html)
-      and [undo contexts](https://api.libreoffice.org/docs/idl/ref/interfacecom_1_1sun_1_1star_1_1document_1_1XUndoManager.html)
-      for suffix replacement and one-step undo. Bind the exact document, view,
-      caret and revision and verify mutation in the editor. AT-SPI `EditableText`
-      exposure alone does not prove atomic replacement or native undo. Keep the
-      existing append-only IME-parity route until the extension passes those gates.
-- [ ] **Linux research priority 2: native Neovim integration.** Its
-      [buffer events and inline virtual text](https://neovim.io/doc/user/api/)
-      can supply exact revisions and a preview owned by the editor. Neovim 0.12.5
-      is installed here. Start with prose buffers, bind window/buffer identity,
-      `changedtick` and caret, then revalidate and edit within an editor callback.
-      Prove UTF-8 offsets, completion-menu coexistence, stale-result rejection,
-      read-only and terminal-buffer denial, one-step undo and disconnect cleanup.
+- [ ] More native toolkits through measured integrations.
+- [ ] LibreOffice Writer spelling extension: a live trial in the interactive
+      Writer window under Wayland with Fcitx beside it (infobar look and focus,
+      Alt+F7, one Ctrl+Z) and a model-backed correction of an ambiguous word.
+      The [extension](adapters/libreoffice/README.md) passes its headless gates
+      (LibreOffice 26.8, phrase fixture); the grey preview stays IME-parity.
+      Mid-paragraph corrections need a broker contract beyond end-of-field
+      replacement.
+- [ ] Neovim: try the real model in an interactive terminal Neovim (display,
+      Tab, Ctrl+→, undo, and whether Ctrl+Shift+Space arrives), then add
+      spelling replacement through `text_replacement` with stale-replacement
+      and undo tests. The plugin and its headless phrase-broker lanes are in
+      the [Neovim runbook](adapters/neovim/README.md).
 - [ ] Extend shell support using
       [Zsh ZLE buffers and `POSTDISPLAY`](https://zsh.sourceforge.io/Doc/Release/Zsh-Line-Editor.html)
       and [Fish's command-line API](https://fishshell.com/docs/current/cmds/commandline.html).

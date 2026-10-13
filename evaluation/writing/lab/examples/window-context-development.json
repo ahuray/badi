@@ -1,0 +1,257 @@
+{
+ "schema": "badi.prediction-suite.v1",
+ "name": "Window context: nearby heading and paragraph, 16 informative and 8 control cases (development only)",
+ "cases": [
+  {
+   "id": "en-window-invoice-reply",
+   "language": "en",
+   "prefix": "Hi Anna, sorry about that. I will send a corrected ",
+   "context": "Re: Invoice 4821 for September\n\nHi Sam, the invoice you sent lists the wrong project code. Could you resend it?",
+   "style": "",
+   "expected": [
+    "invoice",
+    "version"
+   ]
+  },
+  {
+   "id": "en-window-standup-moved",
+   "language": "en",
+   "prefix": "Thanks for the heads up. I will join the standup on ",
+   "context": "Standup moved to Thursday\n\nBecause of the release, this week's standup is on Thursday at 9:30.",
+   "style": "",
+   "expected": [
+    "Thursday"
+   ]
+  },
+  {
+   "id": "en-window-library-hours",
+   "language": "en",
+   "prefix": "Can we meet at the ",
+   "context": "Library opening hours\n\nThe city library is closed on Mondays and open late on Wednesdays.",
+   "style": "",
+   "expected": [
+    "library"
+   ]
+  },
+  {
+   "id": "en-window-bug-crash",
+   "language": "en",
+   "prefix": "I can reproduce the crash when I export the report as a ",
+   "context": "App crashes when exporting a PDF\n\nSteps: open any report, choose Export, select PDF. The app closes without an error.",
+   "style": "",
+   "expected": [
+    "PDF"
+   ]
+  },
+  {
+   "id": "en-window-recipe-question",
+   "language": "en",
+   "prefix": "Could I use hazelnuts instead of ",
+   "context": "Lemon tart with almond crust\n\nThe crust uses ground almonds instead of flour, so it is gluten free.",
+   "style": "",
+   "expected": [
+    "almonds",
+    "ground almonds"
+   ]
+  },
+  {
+   "id": "en-window-hiking-trip",
+   "language": "en",
+   "prefix": "I would love to join the hiking trip to the ",
+   "context": "Weekend hiking trip to the Black Forest\n\nWe leave Saturday morning by train and stay two nights in a cabin.",
+   "style": "",
+   "expected": [
+    "Black Forest"
+   ]
+  },
+  {
+   "id": "en-window-review-request",
+   "language": "en",
+   "prefix": "I read through the onboarding ",
+   "context": "Please review the onboarding guide\n\nThe new onboarding guide covers accounts, laptops and the first week.",
+   "style": "",
+   "expected": [
+    "guide"
+   ]
+  },
+  {
+   "id": "en-window-apartment",
+   "language": "en",
+   "prefix": "Is the apartment still available from ",
+   "context": "Two-room apartment near the river\n\nBright apartment with a balcony, available from November.",
+   "style": "",
+   "expected": [
+    "November"
+   ]
+  },
+  {
+   "id": "en-window-conference",
+   "language": "en",
+   "prefix": "I would like to submit a talk to the Linux ",
+   "context": "Call for talks: Linux Desktop Summit\n\nSubmissions close on 30 June. Talks are 25 minutes.",
+   "style": "",
+   "expected": [
+    "Desktop Summit",
+    "Desktop"
+   ]
+  },
+  {
+   "id": "en-window-thesis-feedback",
+   "language": "en",
+   "prefix": "Thank you for the feedback on chapter ",
+   "context": "Feedback on chapter three\n\nChapter three needs a clearer research question and fewer citations in the introduction.",
+   "style": "",
+   "expected": [
+    "three"
+   ]
+  },
+  {
+   "id": "en-window-garden-club",
+   "language": "en",
+   "prefix": "I would be happy to take a few tomato ",
+   "context": "Garden club: tomato seedlings\n\nWe have extra tomato seedlings for anyone who wants them this spring.",
+   "style": "",
+   "expected": [
+    "seedlings"
+   ]
+  },
+  {
+   "id": "en-window-password-reset",
+   "language": "en",
+   "prefix": "I did not request a password ",
+   "context": "Your password reset request\n\nUse the link below within one hour to choose a new password.",
+   "style": "",
+   "expected": [
+    "reset"
+   ]
+  },
+  {
+   "id": "en-window-bike-repair",
+   "language": "en",
+   "prefix": "Can I bring my bike to the repair ",
+   "context": "Bike repair workshop on Saturday\n\nBring your bike and we will help you fix brakes, chains and flat tires.",
+   "style": "",
+   "expected": [
+    "workshop"
+   ]
+  },
+  {
+   "id": "en-window-vacation-coverage",
+   "language": "en",
+   "prefix": "I can cover support for Maria in the first two weeks of ",
+   "context": "Vacation coverage for August\n\nMaria is away for the first two weeks of August and needs someone to cover support.",
+   "style": "",
+   "expected": [
+    "August"
+   ]
+  },
+  {
+   "id": "en-window-piano-lessons",
+   "language": "en",
+   "prefix": "My daughter would like to start piano ",
+   "context": "Piano lessons for beginners\n\nLessons are on Tuesday evenings at the community center.",
+   "style": "",
+   "expected": [
+    "lessons"
+   ]
+  },
+  {
+   "id": "en-window-data-migration",
+   "language": "en",
+   "prefix": "Will the customer database be read only during the ",
+   "context": "Database migration this weekend\n\nThe customer database will be read only from Saturday 8:00 to Sunday 20:00.",
+   "style": "",
+   "expected": [
+    "migration",
+    "weekend"
+   ]
+  },
+  {
+   "id": "en-window-control-thanks",
+   "language": "en",
+   "prefix": "Thank you for your ",
+   "context": "Re: Invoice 4821 for September\n\nHi Sam, the invoice you sent lists the wrong project code.",
+   "style": "",
+   "expected": [
+    "help",
+    "message",
+    "email"
+   ]
+  },
+  {
+   "id": "en-window-control-time",
+   "language": "en",
+   "prefix": "The meeting starts at nine in the ",
+   "context": "Library opening hours\n\nThe city library is closed on Mondays.",
+   "style": "",
+   "expected": [
+    "morning"
+   ]
+  },
+  {
+   "id": "en-window-control-weather",
+   "language": "en",
+   "prefix": "It has been raining all ",
+   "context": "Two-room apartment near the river\n\nBright apartment with a balcony.",
+   "style": "",
+   "expected": [
+    "day",
+    "week"
+   ]
+  },
+  {
+   "id": "en-window-control-coffee",
+   "language": "en",
+   "prefix": "Would you like a cup of ",
+   "context": "Call for talks: Linux Desktop Summit\n\nSubmissions close on 30 June.",
+   "style": "",
+   "expected": [
+    "coffee",
+    "tea"
+   ]
+  },
+  {
+   "id": "en-window-control-weekend",
+   "language": "en",
+   "prefix": "I hope you have a nice ",
+   "context": "App crashes when exporting a PDF\n\nSteps: open any report, choose Export, select PDF.",
+   "style": "",
+   "expected": [
+    "weekend",
+    "day"
+   ]
+  },
+  {
+   "id": "en-window-control-question",
+   "language": "en",
+   "prefix": "Please let me know if you have any ",
+   "context": "Garden club: tomato seedlings\n\nWe have extra tomato seedlings.",
+   "style": "",
+   "expected": [
+    "questions"
+   ]
+  },
+  {
+   "id": "en-window-control-attached",
+   "language": "en",
+   "prefix": "I have attached the ",
+   "context": "Feedback on chapter three\n\nChapter three needs a clearer research question.",
+   "style": "",
+   "expected": [
+    "file",
+    "document",
+    "revised"
+   ]
+  },
+  {
+   "id": "en-window-control-soon",
+   "language": "en",
+   "prefix": "I look forward to hearing from you ",
+   "context": "Piano lessons for beginners\n\nLessons are on Tuesday evenings.",
+   "style": "",
+   "expected": [
+    "soon"
+   ]
+  }
+ ]
+}

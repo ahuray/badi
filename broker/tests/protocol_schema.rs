@@ -3,13 +3,14 @@ use std::path::{Path, PathBuf};
 
 use badi_broker::protocol::{
     AuthorityAckPayload, AuthorityChangedPayload, CommitPreparePayload, CommitResultPayload,
-    ContextChangedPayload, ControlAction, ControlResultPayload, EmptyPayload, ErrorPayload,
-    GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
-    MemoryStatusPayload, MessageType, PolicyQueryPayload, PolicyStatusPayload, ProbeRequestPayload,
-    ProbeResultPayload, ProviderKind, SessionClosePayload, SessionControlRequestPayload,
-    SessionOpenPayload, SettingsReplacePayload, SettingsStatusPayload, SuggestCancelPayload,
-    SuggestRequestPayload, SuggestionClearPayload, SuggestionShowPayload, WireEnvelope,
-    valid_opaque_id, validate_fingerprint,
+    ContextChangedPayload, ControlAction, ControlResultPayload, DesktopStatePayload,
+    DesktopStatusPayload, EmptyPayload, ErrorPayload, GlobalControlRequestPayload,
+    HealthStatusPayload, HelloAckPayload, HelloPayload, MemoryStatusPayload, MessageType,
+    PolicyQueryPayload, PolicyStatusPayload, ProbeRequestPayload, ProbeResultPayload, ProviderKind,
+    SessionClosePayload, SessionControlRequestPayload, SessionOpenPayload, SettingsReplacePayload,
+    SettingsStatusPayload, StyleKeyPayload, StyleSamplesPayload, StyleStatusPayload,
+    SuggestCancelPayload, SuggestRequestPayload, SuggestionClearPayload, SuggestionShowPayload,
+    WireEnvelope, valid_opaque_id, validate_fingerprint,
 };
 use badi_broker::segment::{accept_word, sanitize_suggestion};
 use badi_broker::{Metrics, NoSuggestionReason};
@@ -200,7 +201,12 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         MessageType::CommitResult => decode::<CommitResultPayload>(envelope)
             .validate()
             .expect("valid commit result"),
-        MessageType::HealthRequest | MessageType::SettingsGet | MessageType::MemoryClear => {
+        MessageType::HealthRequest
+        | MessageType::SettingsGet
+        | MessageType::MemoryClear
+        | MessageType::StyleQuery
+        | MessageType::StyleForget
+        | MessageType::StyleExport => {
             let _: EmptyPayload = decode(envelope);
         }
         MessageType::HealthStatus => {
@@ -235,6 +241,24 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
             .expect("valid probe result"),
         MessageType::Error => {
             let _: ErrorPayload = decode(envelope);
+        }
+        MessageType::DesktopState => {
+            let _: DesktopStatePayload = decode(envelope);
+        }
+        MessageType::DesktopStatus => decode::<DesktopStatusPayload>(envelope)
+            .validate()
+            .expect("valid desktop status"),
+        MessageType::StyleKey => {
+            let payload: StyleKeyPayload = decode(envelope);
+            badi_broker::style::StyleKey::from_hex(&payload.key_id, &payload.key)
+                .expect("valid style key");
+        }
+        MessageType::StyleStatus => {
+            let _: StyleStatusPayload = decode(envelope);
+        }
+        MessageType::StyleSamples => {
+            let payload: StyleSamplesPayload = decode(envelope);
+            assert!(payload.samples.len() <= badi_broker::style::MAX_STYLE_SAMPLES);
         }
     }
 }
@@ -419,6 +443,18 @@ fn protocol_versions_keep_offset_and_target_semantics_disjoint() {
     .expect("desktop JSON");
     assert!(v2.is_valid(&desktop));
     assert!(!v1.is_valid(&desktop));
+
+    for fixture in ["session_open_neovim.json", "hello_neovim.json"] {
+        let neovim: Value = serde_json::from_str(
+            &fs::read_to_string(protocol_v2_root().join("examples/valid").join(fixture))
+                .expect("Neovim fixture"),
+        )
+        .expect("Neovim JSON");
+        assert!(v2.is_valid(&neovim), "{fixture}");
+        let mut legacy = neovim;
+        legacy["v"] = 1.into();
+        assert!(!v1.is_valid(&legacy), "{fixture} is a v2-only identity");
+    }
 
     let scalar: Value = serde_json::from_str(
         &fs::read_to_string(protocol_v2_root().join("examples/valid/context_changed_scalar.json"))

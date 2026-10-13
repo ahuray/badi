@@ -1,13 +1,13 @@
 # Editor integrations
 
-Obsidian and Bash own their text: Badi reads and edits through the editor
-itself, with native undo. Both check exact app policy before reading anything,
+Obsidian, Bash and Neovim own their text: Badi reads and edits through the
+editor itself, with native undo. Both check exact app policy before reading anything,
 bind each acceptance to the document, caret, revision, fingerprint and an
 expiring one-shot broker grant, and retain no typed text. Password and
 sensitive fields, foreign composition, selections and stale context are
 excluded.
 
-Obsidian negotiates a 15-second reading window with the updated broker.
+Obsidian and Neovim negotiate a 15-second reading window with the updated broker.
 Expiry still clears the preview and prevents acceptance; it is never renewed
 just because the preview remains visible. Bash keeps its existing lease and
 four-second local display timer. Update the broker before the editor plugin.
@@ -16,6 +16,8 @@ four-second local display timer. Update the broker before the editor plugin.
 | --- | --- | --- |
 | Obsidian | Automatic, or Ctrl+Shift+Space to request. Tab accepts one word only while a suggestion is visible; otherwise it stays Tab. Ctrl/Command+Right accepts all, Escape dismisses. Mid-note, only what fits before the next word. | Obsidian 1.13.7 / Electron 43, real app and model: English, German and Persian display, acceptance, undo, Escape, broker restart |
 | Bash | Ctrl-X then Tab requests and accepts, Ctrl-X then Escape dismisses; never submits ([details](../shell/README.md)) | Bash 5.3.15, Readline 8.3, Ghostty 1.3.1 |
+| Neovim | Prose buffers, automatic after a 120 ms pause, or Ctrl+Shift+Space. Tab accepts all and Ctrl+Right one word only while a suggestion is visible; leaving Insert mode dismisses ([details](../neovim/README.md)) | Neovim 0.12.5 headless, scripted bridge and real phrase broker; not yet with the real model in a terminal |
+| LibreOffice Writer (spelling) | Alt+F7 shows a correction of the word before the caret, Alt+F7 again replaces it in one undo step, Escape dismisses ([details](../libreoffice/README.md)) | LibreOffice 26.8 headless, phrase fixture; not yet the interactive window |
 
 Browser fields use the [IME-parity path](../../README.md#how-badi-edits-chromium-based-apps-and-zen)
 instead.
@@ -30,9 +32,10 @@ not repeat the full 1.13.7 matrix above.
 After the desktop model is provisioned:
 
 ```sh
-python3 scripts/install-editors.py --vault /path/to/vault --bash
+python3 scripts/install-editors.py --vault /path/to/vault --bash --neovim
 badi app obsidian on
 badi app bash on
+badi app nvim on
 ```
 
 The installer keeps existing plugin enablement and Bash configuration, skips
@@ -50,6 +53,9 @@ restricted mode or edits a note.
   `~/.local/lib/badi/editors/shell/badi.bash`); Node must be on PATH.
   `BADI_LANGUAGE=de` or `fa` overrides the locale. The Node bridge exits after
   ten idle minutes, and the next Ctrl-X Tab starts a new one.
+- **Neovim.** Restart it. The plugin is a start package under
+  `stdpath('data')/site/pack/badi`; Node must be on PATH, and its bridge exits
+  after ten idle minutes like Bash's ([details](../neovim/README.md)).
 
 Language: an Arabic-script letter nearest the caret selects Persian; otherwise
 the app's language hint applies. Persian half-spaces (U+200C) are kept only

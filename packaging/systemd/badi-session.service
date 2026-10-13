@@ -1,0 +1,25 @@
+[Unit]
+Description=Badi desktop session helper (suspend, session, power and shortcuts)
+After=graphical-session.target badi-broker.service
+PartOf=graphical-session.target
+ConditionEnvironment=XDG_RUNTIME_DIR
+# Keep retrying a transient bus or broker failure; RestartSteps bounds the delay.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -B %h/.local/lib/badi/session/daemon.py
+Restart=on-failure
+RestartSec=3
+RestartSteps=5
+RestartMaxDelaySec=60
+UMask=0077
+NoNewPrivileges=yes
+LockPersonality=yes
+# logind, UPower, the portal and the broker are all local Unix sockets.
+RestrictAddressFamilies=AF_UNIX
+KillMode=control-group
+TimeoutStopSec=5
+
+[Install]
+WantedBy=graphical-session.target

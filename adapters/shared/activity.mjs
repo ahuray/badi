@@ -9,9 +9,10 @@ import { randomUUID } from 'node:crypto';
 const DISABLED_RECHECK_MS = 1000;
 const runs = new Map();
 let disabledSince = null;
+const APP_IDS = Object.freeze({ obsidian: 'obsidian', terminal: 'bash', neovim: 'nvim' });
 
 export function recordActivity(adapter, event, reason) {
-  if (!['obsidian', 'terminal'].includes(adapter) || !/^[a-z_. ]{1,64}$/.test(event) ||
+  if (!Object.hasOwn(APP_IDS, adapter) || !/^[a-z_. ]{1,64}$/.test(event) ||
       !/^[a-z_. ]{1,64}$/.test(reason)) return;
   const now = Date.now();
   if (disabledSince !== null && now >= disabledSince && now - disabledSince < DISABLED_RECHECK_MS) return;
@@ -41,7 +42,7 @@ export function recordActivity(adapter, event, reason) {
     run.reason_counts[reason] = (run.reason_counts[reason] ?? 0) + 1;
     temporary = join(directory, `debug-${adapter}.${randomUUID()}.tmp`);
     writeFileSync(temporary, JSON.stringify({ schema: 'badi.editor-activity.v1', ...run, at: seconds,
-      event, reason, app_id: adapter === 'obsidian' ? 'obsidian' : 'bash', pid: process.pid }), { mode: 0o600, flag: 'wx' });
+      event, reason, app_id: APP_IDS[adapter], pid: process.pid }), { mode: 0o600, flag: 'wx' });
     renameSync(temporary, join(directory, `debug-${adapter}.json`));
     temporary = null;
   } catch (error) {

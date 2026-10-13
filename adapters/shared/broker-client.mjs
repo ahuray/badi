@@ -9,7 +9,11 @@ import { hasIsolatedSpaces, hasUnsafeText, validCorrection } from './text-safety
 const PROFILES = Object.freeze({
   obsidian: { kind: 'obsidian', app_id: 'obsidian' },
   terminal: { kind: 'terminal', app_id: 'bash' },
+  neovim: { kind: 'neovim', app_id: 'nvim' },
 });
+// Editors whose preview stays until an edit or dismissal negotiate the
+// broker's 15-second reading window; Readline keeps its own short hold.
+const READING_WINDOW = new Set(['obsidian', 'neovim']);
 const CAPABILITIES = ['context', 'suggestion', 'commit.applied', 'control', 'policy'];
 const FRAME_LIMIT = 65536;
 const counter = value => Number.isSafeInteger(value) && value >= 0;
@@ -76,7 +80,7 @@ export class BrokerClient extends EventEmitter {
     try {
       // Readline's display has its own four-second hold; keep its existing lease.
       const capabilities = [...CAPABILITIES, ...(this.#textReplacement ? ['text_replacement'] : []),
-        ...(this.#profile.kind === 'obsidian' ? ['long_reading_window'] : [])];
+        ...(READING_WINDOW.has(this.#profile.kind) ? ['long_reading_window'] : [])];
       const hello = await this.#rpc('hello', { min_v: 2, max_v: 2,
         adapter: { kind: this.#profile.kind, name: `badi-${this.#profile.kind}`, version: '0.1.0' },
         capabilities }, 'hello.ack');
@@ -155,7 +159,7 @@ export class BrokerClient extends EventEmitter {
       ? this.#textReplacement && validCorrection(before, value.replace_before, value.text) && value.accept_word === value.text
       : validSuggestion(value.text) && validSuggestion(value.accept_word) && value.text.startsWith(value.accept_word);
     if (!validText ||
-        !counter(value.ttl_ms) || value.ttl_ms < 1 || value.ttl_ms > (this.#profile.kind === 'obsidian' ? 15000 : 5000) ||
+        !counter(value.ttl_ms) || value.ttl_ms < 1 || value.ttl_ms > (READING_WINDOW.has(this.#profile.kind) ? 15000 : 5000) ||
         typeof value.suggestion_id !== 'string' || value.fingerprint !== session.fingerprint) {
       this.cancel(); throw new Error(`Invalid model suggestion (text=${validSuggestion(value.text)}, words=${typeof value.text === 'string' ? value.text.trim().split(/\s+/u).length : 0}, ttl=${value.ttl_ms}, binding=${value.fingerprint === session.fingerprint})`);
     }

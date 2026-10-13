@@ -21,14 +21,17 @@ use crate::policy::PolicyReason;
 use crate::protocol::{
     AdapterKind, AuthorityAckPayload, AuthorityChangedPayload, CURRENT_PROTOCOL_VERSION,
     Capability, CommitResultPayload, ContextChangedPayload, ControlAction, ControlResultPayload,
-    EmptyPayload, ErrorPayload, GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload,
-    HelloPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SAFE_COUNTER,
-    MAX_SUGGESTION_CHARS, MAX_SUGGESTION_WORDS, MemoryStatusPayload, MessageType, PROTOCOL_VERSION,
-    PolicyQueryPayload, ProbeRequestPayload, ProtocolError, ReasonCode, SessionClosePayload,
-    SessionControlRequestPayload, SessionId, SessionOpenPayload, SettingsReplacePayload,
-    SettingsStatusPayload, SuggestCancelPayload, SuggestRequestPayload, WireEnvelope,
+    DesktopStatePayload, EmptyPayload, ErrorPayload, GlobalControlRequestPayload,
+    HealthStatusPayload, HelloAckPayload, HelloPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS,
+    MAX_FRAME_BYTES, MAX_SAFE_COUNTER, MAX_SUGGESTION_CHARS, MAX_SUGGESTION_WORDS,
+    MemoryStatusPayload, MessageType, PROTOCOL_VERSION, PolicyQueryPayload, ProbeRequestPayload,
+    ProtocolError, ReasonCode, SessionClosePayload, SessionControlRequestPayload, SessionId,
+    SessionOpenPayload, SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload,
+    StyleSamplesPayload, StyleStatusPayload, SuggestCancelPayload, SuggestRequestPayload,
+    WireEnvelope,
 };
 use crate::settings::{SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2};
+use crate::style::{StyleKey, StyleKeyState};
 
 const MAX_CONNECTIONS: usize = 32;
 const MAX_SESSIONS_PER_CONNECTION: usize = 64;
@@ -343,6 +346,10 @@ async fn serve_connection_with_timeouts(
         return Ok(());
     };
     let selected_version = authority.protocol_version;
+    // A desktop helper reports only on change, so it stays connected while
+    // idle like a policy subscriber; its report lasts as long as it does.
+    let desktop_enabled = authority.capabilities.contains(&Capability::DesktopSignals);
+    let stays_open = policy_enabled || desktop_enabled;
 
     let (mut reader, mut writer) = stream.into_split();
     // Keep frame decoding in one owned task. Cancelling read_envelope after it
@@ -379,7 +386,7 @@ async fn serve_connection_with_timeouts(
             () = shutdown.cancelled() => break Ok(()),
             () = connection_lifetime.cancelled() => break Ok(()),
             () = wire_tx.closed() => break Ok(()),
-            () = &mut idle_deadline, if !policy_enabled => break Ok(()),
+            () = &mut idle_deadline, if !stays_open => break Ok(()),
             event = event_rx.recv() => {
                 let Some(event) = event else {
                     break Ok(());
@@ -475,6 +482,9 @@ async fn serve_connection_with_timeouts(
     if policy_enabled {
         broker.unregister_policy_client(&connection_id).await;
     }
+    if desktop_enabled {
+        broker.forget_desktop_state(&connection_id).await;
+    }
     reader_task.abort();
     let _ = reader_task.await;
     drop(event_sink);
@@ -517,6 +527,11 @@ impl MessageHandler<'_> {
             MessageType::SettingsReplace => self.settings_replace(envelope).await,
             MessageType::MemoryClear => self.memory_clear(envelope).await,
             MessageType::ProbeRequest => self.probe(envelope).await,
+            MessageType::DesktopState => self.desktop_state(envelope).await,
+            MessageType::StyleKey => self.style_key(envelope).await,
+            MessageType::StyleQuery => self.style_query(envelope).await,
+            MessageType::StyleForget => self.style_forget(envelope).await,
+            MessageType::StyleExport => self.style_export(envelope).await,
             MessageType::Hello
             | MessageType::HelloAck
             | MessageType::SuggestionShow
@@ -529,6 +544,9 @@ impl MessageHandler<'_> {
             | MessageType::SettingsStatus
             | MessageType::MemoryStatus
             | MessageType::ProbeResult
+            | MessageType::DesktopStatus
+            | MessageType::StyleStatus
+            | MessageType::StyleSamples
             | MessageType::Error => Err(ServerError::InvalidMessage),
         }
     }
@@ -689,8 +707,71 @@ impl MessageHandler<'_> {
                 health.metrics.for_protocol_v1()
             },
             active: health.active,
+            desktop: (self.protocol_version() == CURRENT_PROTOCOL_VERSION)
+                .then_some(health.desktop),
         };
         self.reply(MessageType::HealthStatus, envelope.id, &status)
+    }
+
+    async fn style_key(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_capability(self.authority, Capability::StyleKey)?;
+        let payload: StyleKeyPayload = envelope.decode_payload()?;
+        let key = StyleKey::from_hex(&payload.key_id, &payload.key)
+            .map_err(|_| ProtocolError::InvalidPayload)?;
+        self.broker.deliver_style_key(key)?;
+        self.reply_style_status(envelope.id).await
+    }
+
+    async fn style_query(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_settings_authority(self.authority)?;
+        let _: EmptyPayload = envelope.decode_payload()?;
+        self.reply_style_status(envelope.id).await
+    }
+
+    async fn style_forget(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_settings_authority(self.authority)?;
+        let _: EmptyPayload = envelope.decode_payload()?;
+        self.broker.forget_style().await?;
+        self.reply_style_status(envelope.id).await
+    }
+
+    async fn style_export(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_settings_authority(self.authority)?;
+        let _: EmptyPayload = envelope.decode_payload()?;
+        let samples = self.broker.export_style().await?;
+        self.reply(
+            MessageType::StyleSamples,
+            envelope.id,
+            &StyleSamplesPayload { samples },
+        )
+    }
+
+    async fn reply_style_status(&self, request_id: Option<String>) -> Result<(), ServerError> {
+        let enabled = self
+            .broker
+            .control_plane_snapshot()
+            .await?
+            .settings
+            .style_learning;
+        let status = self.broker.style_status();
+        let payload = StyleStatusPayload {
+            enabled,
+            available: status.is_some(),
+            key: status.map_or(StyleKeyState::Absent, |status| status.key),
+            samples: status.map_or(0, |status| status.samples),
+            subjects: status.map_or(0, |status| status.subjects),
+        };
+        self.reply(MessageType::StyleStatus, request_id, &payload)
+    }
+
+    async fn desktop_state(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_capability(self.authority, Capability::DesktopSignals)?;
+        let report: DesktopStatePayload = envelope.decode_payload()?;
+        let status = self
+            .broker
+            .report_desktop_state(self.connection_id, report)
+            .await?;
+        self.reply(MessageType::DesktopStatus, envelope.id, &status)
     }
 
     async fn resolve_policy(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
@@ -1057,11 +1138,12 @@ mod tests {
     use crate::ipc::{read_envelope, write_envelope};
     use crate::protocol::{
         Activation, AdapterDescriptor, AdapterKind, AuthorityAckPayload, AuthorityChangedPayload,
-        CURRENT_PROTOCOL_VERSION, Capability, ContextChangedPayload, Coordinates, EmptyPayload,
-        FieldDescriptor, FieldPurpose, HealthStatusPayload, HelloAckPayload, HelloPayload,
-        MessageType, OffsetUnit, PROTOCOL_VERSION, ProbeOutcome, ProbeRequestPayload,
-        ProbeResultPayload, Selection, SessionId, SessionOpenPayload, SettingsReplacePayload,
-        SettingsStatusPayload, SuggestRequestPayload, TargetDescriptor, TargetKind, WireEnvelope,
+        CURRENT_PROTOCOL_VERSION, Capability, ContextChangedPayload, Coordinates, DesktopSession,
+        DesktopStatePayload, DesktopStatusPayload, EmptyPayload, FieldDescriptor, FieldPurpose,
+        HealthStatusPayload, HelloAckPayload, HelloPayload, MessageType, OffsetUnit,
+        PROTOCOL_VERSION, ProbeOutcome, ProbeRequestPayload, ProbeResultPayload, Selection,
+        SessionId, SessionOpenPayload, SettingsReplacePayload, SettingsStatusPayload,
+        StyleKeyPayload, SuggestRequestPayload, TargetDescriptor, TargetKind, WireEnvelope,
     };
     use crate::provider::DeterministicPhraseProvider;
     use crate::settings::{
@@ -1491,6 +1573,8 @@ mod tests {
                     all_linux_apps: false,
                     mid_line: false,
                     escape_quiet_seconds: 0,
+                    battery_mode: crate::settings::BatteryMode::Normal,
+                    style_learning: false,
                     language_overrides: std::collections::BTreeMap::new(),
                     subjects: vec![
                         SubjectRule {
@@ -1967,6 +2051,202 @@ mod tests {
             .await
             .expect("connection task")
             .expect("connection shutdown");
+    }
+
+    #[tokio::test]
+    async fn desktop_helper_hold_lasts_until_it_reports_active_or_disconnects() {
+        let broker = broker();
+        let (server, mut helper) = UnixStream::pair().expect("Unix stream pair");
+        let mut connection = tokio::spawn(serve_connection_with_timeouts(
+            server,
+            broker.clone(),
+            CancellationToken::new(),
+            Duration::from_secs(1),
+            Duration::from_millis(50),
+        ));
+        let hello = WireEnvelope::global(
+            MessageType::Hello,
+            0,
+            &HelloPayload {
+                min_v: CURRENT_PROTOCOL_VERSION,
+                max_v: CURRENT_PROTOCOL_VERSION,
+                adapter: AdapterDescriptor {
+                    kind: AdapterKind::Session,
+                    name: "badi-session".to_owned(),
+                    version: "1".to_owned(),
+                },
+                capabilities: vec![Capability::DesktopSignals],
+            },
+        )
+        .expect("hello")
+        .at_version(CURRENT_PROTOCOL_VERSION)
+        .expect("v2 hello");
+        write_envelope(&mut helper, &hello)
+            .await
+            .expect("write hello");
+        let acknowledgment = read_envelope(&mut helper)
+            .await
+            .expect("read acknowledgment")
+            .expect("acknowledgment");
+        assert_eq!(acknowledgment.message_type, MessageType::HelloAck);
+        // Reports arrive only on change, so the idle deadline spares the helper.
+        assert!(
+            timeout(Duration::from_millis(200), &mut connection)
+                .await
+                .is_err(),
+            "a desktop helper outlives the idle deadline"
+        );
+
+        let reply = exchange(
+            &mut helper,
+            MessageType::DesktopState,
+            CURRENT_PROTOCOL_VERSION,
+            &DesktopStatePayload {
+                session: DesktopSession::Sleeping,
+                on_battery: true,
+                power_saver: false,
+            },
+        )
+        .await;
+        assert_eq!(reply.message_type, MessageType::DesktopStatus);
+        assert_eq!(reply.id.as_deref(), Some("ctl:diagnostic"));
+        let status: DesktopStatusPayload = reply.decode_payload().expect("desktop status");
+        status.validate().expect("valid status");
+        assert!(status.observed && status.low_power);
+        assert_eq!(status.session, DesktopSession::Sleeping);
+        assert!(broker.is_paused().await, "sleep holds every grant");
+
+        drop(helper);
+        connection
+            .await
+            .expect("connection task")
+            .expect("helper shutdown");
+        assert!(
+            !broker.is_paused().await,
+            "a closed helper releases its hold"
+        );
+        assert!(!broker.desktop_status().await.observed);
+    }
+
+    #[tokio::test]
+    async fn desktop_reports_need_the_negotiated_capability_and_protocol_v2() {
+        let (mut client, connection) = connect_test_client(
+            AdapterKind::Cli,
+            CURRENT_PROTOCOL_VERSION,
+            vec![Capability::Health],
+        )
+        .await;
+        let reply = exchange(
+            &mut client,
+            MessageType::DesktopState,
+            CURRENT_PROTOCOL_VERSION,
+            &DesktopStatePayload {
+                session: DesktopSession::Inactive,
+                on_battery: false,
+                power_saver: false,
+            },
+        )
+        .await;
+        assert_eq!(reply.message_type, MessageType::Error);
+        drop(client);
+        let _ = connection.await;
+
+        let v1 = HelloPayload {
+            min_v: PROTOCOL_VERSION,
+            max_v: PROTOCOL_VERSION,
+            adapter: AdapterDescriptor {
+                kind: AdapterKind::Test,
+                name: "legacy".to_owned(),
+                version: "1".to_owned(),
+            },
+            capabilities: vec![Capability::DesktopSignals],
+        };
+        assert!(v1.validate_for_frame(PROTOCOL_VERSION).is_err());
+
+        let (mut client, connection) = connect_test_client(
+            AdapterKind::Cli,
+            CURRENT_PROTOCOL_VERSION,
+            vec![Capability::Health],
+        )
+        .await;
+        let health = exchange(
+            &mut client,
+            MessageType::HealthRequest,
+            CURRENT_PROTOCOL_VERSION,
+            &EmptyPayload {},
+        )
+        .await;
+        let health: HealthStatusPayload = health.decode_payload().expect("health");
+        let desktop = health.desktop.expect("v2 health reports the desktop state");
+        assert!(!desktop.observed);
+        drop(client);
+        let _ = connection.await;
+        let (mut client, connection) =
+            connect_test_client(AdapterKind::Cli, PROTOCOL_VERSION, vec![Capability::Health]).await;
+        let health = exchange(
+            &mut client,
+            MessageType::HealthRequest,
+            PROTOCOL_VERSION,
+            &EmptyPayload {},
+        )
+        .await;
+        assert!(
+            health.payload.get("desktop").is_none(),
+            "the frozen v1 health omits it"
+        );
+        drop(client);
+        let _ = connection.await;
+    }
+
+    #[tokio::test]
+    async fn only_the_cli_reads_style_samples_and_only_style_key_delivers_a_key() {
+        let key = StyleKeyPayload {
+            key_id: "5a".repeat(16),
+            key: "c3".repeat(32),
+        };
+        // The session helper may deliver a key, but never read samples. A
+        // capability refusal closes the connection, so each gets its own.
+        for message_type in [
+            MessageType::StyleExport,
+            MessageType::StyleQuery,
+            MessageType::StyleForget,
+        ] {
+            let (mut helper, connection) = connect_test_client(
+                AdapterKind::Session,
+                CURRENT_PROTOCOL_VERSION,
+                vec![Capability::DesktopSignals, Capability::StyleKey],
+            )
+            .await;
+            let reply = exchange(
+                &mut helper,
+                message_type,
+                CURRENT_PROTOCOL_VERSION,
+                &EmptyPayload {},
+            )
+            .await;
+            assert_eq!(reply.message_type, MessageType::Error, "{message_type:?}");
+            assert_eq!(reply.payload["code"], "invalid_capability");
+            drop(helper);
+            let _ = connection.await;
+        }
+        // A health client cannot hand over a key.
+        let (mut client, connection) = connect_test_client(
+            AdapterKind::Cli,
+            CURRENT_PROTOCOL_VERSION,
+            vec![Capability::Health],
+        )
+        .await;
+        let reply = exchange(
+            &mut client,
+            MessageType::StyleKey,
+            CURRENT_PROTOCOL_VERSION,
+            &key,
+        )
+        .await;
+        assert_eq!(reply.message_type, MessageType::Error);
+        assert_eq!(reply.payload["code"], "invalid_capability");
+        drop(client);
+        let _ = connection.await;
     }
 
     #[tokio::test]

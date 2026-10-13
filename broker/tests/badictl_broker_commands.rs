@@ -51,6 +51,7 @@ fn broker_commands_print_their_replies_and_refusals() {
             "active",
             "authority_epoch",
             "control_plane_degraded",
+            "desktop",
             "max_frame_bytes",
             "metrics",
             "paused",
@@ -66,6 +67,10 @@ fn broker_commands_print_their_replies_and_refusals() {
     assert_eq!(
         status["active"],
         json!({"present": false, "has_suggestion": false})
+    );
+    assert_eq!(
+        status["desktop"],
+        json!({"observed": false, "session": "active", "low_power": false, "automatic": "normal"})
     );
 
     let overview = broker.succeeds(&["overview", "--json"]);
@@ -113,6 +118,37 @@ fn broker_commands_print_their_replies_and_refusals() {
     assert_eq!(probe["provider"], "phrase_v1");
     assert_eq!(probe["text"], " for your time");
     assert!(probe["round_trip_ms"].is_u64());
+}
+
+#[test]
+fn style_commands_keep_the_key_out_of_argv_and_output() {
+    let broker = PhraseBroker::start();
+    // The key arrives on stdin, never in argv, and is never printed.
+    let absent =
+        "{\"enabled\":false,\"available\":true,\"key\":\"absent\",\"samples\":0,\"subjects\":0}\n";
+    assert_eq!(broker.succeeds(&["style", "status"]), absent);
+    // Without a key the export is refused; `style status` names why.
+    broker.fails(
+        &["style", "export"],
+        "error_code=rejected:invalid_message\n",
+    );
+    let key = format!("{} {}\n", "5a".repeat(16), "c3".repeat(32));
+    let ready = broker.succeeds_with_stdin(&["style", "key", "-"], &key);
+    assert_eq!(
+        ready,
+        "{\"enabled\":false,\"available\":true,\"key\":\"ready\",\"samples\":0,\"subjects\":0}\n"
+    );
+    assert!(!ready.contains(&"c3".repeat(32)));
+    assert_eq!(
+        broker.succeeds(&["style", "export"]),
+        "{\n  \"samples\": []\n}\n"
+    );
+    assert_eq!(broker.succeeds(&["style", "forget"]), absent);
+    broker.fails(&["style", "key", "-"], "error_code=arguments\n");
+    broker.fails(
+        &["style", "key", &"5a".repeat(16)],
+        "error_code=arguments\n",
+    );
 }
 
 fn object_keys(value: &Value) -> Vec<&str> {

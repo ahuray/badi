@@ -16,7 +16,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
 use crate::protocol::{
-    MAX_SAFE_COUNTER, OriginScheme, TargetDescriptor, TargetKind, valid_linux_app_id,
+    LIBREOFFICE_WRITER_APP_ID, MAX_SAFE_COUNTER, OriginScheme, TargetDescriptor, TargetKind,
+    valid_linux_app_id,
 };
 
 pub const SETTINGS_SCHEMA_V1: &str = "badi.settings.v1";
@@ -42,12 +43,41 @@ pub enum BrowserAdapter {
     Chromium,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+/// Canonical subject order compares adapters by their wire name, as the
+/// desktop CLI and settings panel sort them, independent of declaration order.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LinuxAdapter {
     Fcitx,
+    Neovim,
     Obsidian,
     Shell,
+    Libreoffice,
+}
+
+impl LinuxAdapter {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fcitx => "fcitx",
+            Self::Neovim => "neovim",
+            Self::Obsidian => "obsidian",
+            Self::Shell => "shell",
+            Self::Libreoffice => "libreoffice",
+        }
+    }
+}
+
+impl Ord for LinuxAdapter {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl PartialOrd for LinuxAdapter {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -136,6 +166,14 @@ impl StableIdentity {
             }
             TargetKind::Terminal if target.origin.is_none() && target.app_id == "bash" => {
                 Self::linux_app(LinuxAdapter::Shell, &target.app_id)
+            }
+            TargetKind::Neovim if target.origin.is_none() && target.app_id == "nvim" => {
+                Self::linux_app(LinuxAdapter::Neovim, &target.app_id)
+            }
+            TargetKind::Libreoffice
+                if target.origin.is_none() && target.app_id == LIBREOFFICE_WRITER_APP_ID =>
+            {
+                Self::linux_app(LinuxAdapter::Libreoffice, &target.app_id)
             }
             _ => Err(IdentityError::UnsupportedTarget),
         }
@@ -291,6 +329,32 @@ impl PredictionLanguage {
     }
 }
 
+/// How automatic suggestions behave while the desktop helper reports battery
+/// power or the power-saver profile. Explicit requests are never changed, and
+/// the model stays resident in every mode.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum BatteryMode {
+    /// The same scheduling as on mains power.
+    #[serde(rename = "normal")]
+    Normal,
+    /// The default, omitted from documents: the model starts only after a
+    /// typing pause, so keys typed in quick succession never start a
+    /// generation that the next key cancels.
+    #[default]
+    #[serde(rename = "quiet")]
+    Quiet,
+    /// Automatic suggestions abstain; explicit requests still ask the model.
+    #[serde(rename = "explicit")]
+    ExplicitOnly,
+}
+
+impl BatteryMode {
+    #[must_use]
+    pub const fn is_quiet(&self) -> bool {
+        matches!(self, Self::Quiet)
+    }
+}
+
 /// Settings v1 documents deserialize into this type, but it is always
 /// canonical settings v2 in memory and on disk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -322,6 +386,15 @@ pub struct SettingsV2 {
     /// only. Omitted when zero.
     #[serde(default, skip_serializing_if = "escape_quiet_seconds_is_zero")]
     pub escape_quiet_seconds: u64,
+    /// Automatic scheduling on battery or in the power-saver profile.
+    /// Omitted when quiet, the default.
+    #[serde(default, skip_serializing_if = "BatteryMode::is_quiet")]
+    pub battery_mode: BatteryMode,
+    /// Opt-in style learning: encrypted samples of the user's own sentences
+    /// from subjects that allow learning with bounded retention. Omitted when
+    /// off. Turning it off stops collection; forgetting is a separate step.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub style_learning: bool,
     /// Per-app quality hints, independent of app/site acquisition permission.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub language_overrides: BTreeMap<String, PredictionLanguage>,
@@ -348,6 +421,10 @@ struct SettingsDocument {
     mid_line: Option<bool>,
     #[serde(default)]
     escape_quiet_seconds: Option<u64>,
+    #[serde(default)]
+    battery_mode: Option<BatteryMode>,
+    #[serde(default)]
+    style_learning: Option<bool>,
     #[serde(default, deserialize_with = "present_language_overrides")]
     language_overrides: Option<BTreeMap<String, PredictionLanguage>>,
     subjects: Vec<SubjectRule>,
@@ -394,6 +471,16 @@ impl<'de> Deserialize<'de> for SettingsV2 {
                 "escape_quiet_seconds_requires_settings_v2",
             ));
         }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.battery_mode.is_some() {
+            return Err(serde::de::Error::custom(
+                "battery_mode_requires_settings_v2",
+            ));
+        }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.style_learning.is_some() {
+            return Err(serde::de::Error::custom(
+                "style_learning_requires_settings_v2",
+            ));
+        }
         if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.language_overrides.is_some() {
             return Err(serde::de::Error::custom(
                 "language_overrides_requires_settings_v2",
@@ -407,6 +494,8 @@ impl<'de> Deserialize<'de> for SettingsV2 {
             all_linux_apps: decoded.all_linux_apps.unwrap_or(false),
             mid_line: decoded.mid_line.unwrap_or(false),
             escape_quiet_seconds: decoded.escape_quiet_seconds.unwrap_or(0),
+            battery_mode: decoded.battery_mode.unwrap_or_default(),
+            style_learning: decoded.style_learning.unwrap_or(false),
             language_overrides: decoded.language_overrides.unwrap_or_default(),
             subjects: decoded.subjects,
         })
@@ -436,6 +525,8 @@ impl SettingsV2 {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            battery_mode: BatteryMode::Quiet,
+            style_learning: false,
             language_overrides: BTreeMap::new(),
             subjects: Vec::new(),
         }
@@ -586,6 +677,8 @@ impl SettingsV2 {
         self.all_linux_apps = current.all_linux_apps;
         self.mid_line = current.mid_line;
         self.escape_quiet_seconds = current.escape_quiet_seconds;
+        self.battery_mode = current.battery_mode;
+        self.style_learning = current.style_learning;
         self.language_overrides
             .clone_from(&current.language_overrides);
         self.subjects.extend(
@@ -1409,11 +1502,12 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ALL_LINUX_APPS_PERMISSIONS, BrowserAdapter, LinuxAdapter, MAX_ESCAPE_QUIET_SECONDS,
-        MAX_SETTINGS_BYTES, MAX_SUBJECTS, PRIVATE_FILE_MODE, PermissionDecision, PrivateStorage,
-        PrivateStorageError, RetentionPermission, SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1,
-        SettingsStoreError, SettingsV2, SettingsValidationError, StableIdentity, StoragePaths,
-        SubjectPermissions, SubjectRule, WebScheme, remove_private_file_with_sync, write_settings,
+        ALL_LINUX_APPS_PERMISSIONS, BatteryMode, BrowserAdapter, LinuxAdapter,
+        MAX_ESCAPE_QUIET_SECONDS, MAX_SETTINGS_BYTES, MAX_SUBJECTS, PRIVATE_FILE_MODE,
+        PermissionDecision, PrivateStorage, PrivateStorageError, RetentionPermission,
+        SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2,
+        SettingsValidationError, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule,
+        WebScheme, remove_private_file_with_sync, write_settings,
     };
     use crate::protocol::{
         MAX_FRAME_BYTES, Origin, OriginScheme, TargetDescriptor, TargetKind, WireEnvelope,
@@ -1445,6 +1539,8 @@ mod tests {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            battery_mode: BatteryMode::Normal,
+            style_learning: false,
             language_overrides: std::collections::BTreeMap::new(),
             subjects: vec![rule],
         }
@@ -1616,6 +1712,48 @@ mod tests {
     }
 
     #[test]
+    fn battery_mode_round_trips_omits_quiet_and_rejects_v1() {
+        let mut settings = settings_with(SubjectRule {
+            identity: identity("mail.example"),
+            permissions: allowed(None),
+        });
+        settings.battery_mode = BatteryMode::default();
+        assert_eq!(settings.battery_mode, BatteryMode::Quiet);
+        let encoded = serde_json::to_value(&settings).expect("encode settings");
+        assert!(encoded.get("battery_mode").is_none(), "quiet is omitted");
+        let decoded: SettingsV2 = serde_json::from_value(encoded).expect("decode settings");
+        assert_eq!(decoded.battery_mode, BatteryMode::Quiet);
+        for (mode, wire) in [
+            (BatteryMode::Normal, "normal"),
+            (BatteryMode::ExplicitOnly, "explicit"),
+        ] {
+            settings.battery_mode = mode;
+            let encoded = serde_json::to_value(&settings).expect("encode settings");
+            assert_eq!(encoded["battery_mode"], wire);
+            let decoded: SettingsV2 = serde_json::from_value(encoded).expect("decode settings");
+            assert_eq!(decoded, settings);
+        }
+        let mut explicit_quiet = serde_json::to_value(&settings).expect("encode settings");
+        explicit_quiet["battery_mode"] = serde_json::json!("quiet");
+        let decoded: SettingsV2 = serde_json::from_value(explicit_quiet).expect("quiet");
+        assert_eq!(decoded.battery_mode, BatteryMode::Quiet);
+
+        let legacy = serde_json::json!({
+            "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
+            "battery_mode": "quiet", "subjects": [],
+        });
+        assert!(
+            serde_json::from_value::<SettingsV2>(legacy).is_err(),
+            "v1 cannot name it"
+        );
+        let unknown = serde_json::json!({
+            "schema": SETTINGS_SCHEMA, "revision": 1, "paused": false,
+            "battery_mode": "off", "subjects": [],
+        });
+        assert!(serde_json::from_value::<SettingsV2>(unknown).is_err());
+    }
+
+    #[test]
     fn browser_target_resolution_is_exact_and_canonical() {
         let target = TargetDescriptor {
             kind: TargetKind::Browser,
@@ -1708,6 +1846,12 @@ mod tests {
         for (kind, adapter, app) in [
             (TargetKind::Obsidian, LinuxAdapter::Obsidian, "obsidian"),
             (TargetKind::Terminal, LinuxAdapter::Shell, "bash"),
+            (TargetKind::Neovim, LinuxAdapter::Neovim, "nvim"),
+            (
+                TargetKind::Libreoffice,
+                LinuxAdapter::Libreoffice,
+                "libreoffice-writer",
+            ),
         ] {
             let mut target = TargetDescriptor {
                 kind,
@@ -1784,6 +1928,61 @@ mod tests {
     }
 
     #[test]
+    fn linux_adapters_sort_by_wire_name_like_the_desktop_clients() {
+        // The desktop CLI and panel sort subjects by adapter string. A newer
+        // adapter must not make their canonical documents unacceptable.
+        let adapters = [
+            LinuxAdapter::Fcitx,
+            LinuxAdapter::Neovim,
+            LinuxAdapter::Obsidian,
+            LinuxAdapter::Shell,
+            LinuxAdapter::Libreoffice,
+        ];
+        for adapter in adapters {
+            assert_eq!(
+                serde_json::to_value(adapter).unwrap(),
+                serde_json::Value::String(adapter.as_str().to_owned())
+            );
+        }
+        let mut sorted = adapters;
+        sorted.sort();
+        let names = sorted.map(LinuxAdapter::as_str);
+        assert_eq!(
+            names,
+            ["fcitx", "libreoffice", "neovim", "obsidian", "shell"]
+        );
+
+        let rule = |adapter, app_id: &str| SubjectRule {
+            identity: StableIdentity::linux_app(adapter, app_id).unwrap(),
+            permissions: SubjectPermissions {
+                learn: PermissionDecision::Block,
+                retention: RetentionPermission::None,
+                ..allowed(None)
+            },
+        };
+        let document = SettingsV2 {
+            schema: SETTINGS_SCHEMA.to_owned(),
+            revision: 1,
+            paused: false,
+            all_web_origins: false,
+            all_linux_apps: false,
+            mid_line: false,
+            escape_quiet_seconds: 0,
+            battery_mode: BatteryMode::Normal,
+            style_learning: false,
+            language_overrides: std::collections::BTreeMap::new(),
+            subjects: vec![
+                rule(LinuxAdapter::Fcitx, "libreoffice"),
+                rule(LinuxAdapter::Libreoffice, "libreoffice-writer"),
+                rule(LinuxAdapter::Obsidian, "obsidian"),
+            ],
+        };
+        document
+            .validate()
+            .expect("alphabetical adapter order is canonical");
+    }
+
+    #[test]
     fn settings_require_sorted_unique_subjects() {
         let first = SubjectRule {
             identity: identity("a.example"),
@@ -1801,6 +2000,8 @@ mod tests {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            battery_mode: BatteryMode::Normal,
+            style_learning: false,
             language_overrides: std::collections::BTreeMap::new(),
             subjects: vec![first.clone(), second.clone()],
         };
@@ -1839,6 +2040,8 @@ mod tests {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            battery_mode: BatteryMode::Normal,
+            style_learning: false,
             language_overrides: (0..MAX_SUBJECTS)
                 .map(|index| {
                     (

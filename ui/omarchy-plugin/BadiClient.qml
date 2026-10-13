@@ -115,7 +115,8 @@ Scope {
   function isLinuxIdentity(value) {
     return hasExactKeys(value, ["kind", "adapter", "app_id"])
       && value.kind === "linux_app"
-      && (value.adapter === "fcitx" || value.adapter === "obsidian" || value.adapter === "shell")
+      && (value.adapter === "fcitx" || value.adapter === "obsidian" || value.adapter === "shell"
+        || value.adapter === "neovim" || value.adapter === "libreoffice")
       && typeof value.app_id === "string"
       && /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/.test(value.app_id)
       && value.app_id.length <= 128
@@ -169,7 +170,7 @@ Scope {
     // The blocklist modes add all_web_origins and all_linux_apps; producers
     // omit them when false.
     var keys = ["schema", "revision", "paused", "subjects"]
-    var modes = ["all_web_origins", "all_linux_apps", "mid_line"]
+    var modes = ["all_web_origins", "all_linux_apps", "mid_line", "style_learning"]
     for (var mode = 0; mode < modes.length; mode += 1) {
       if (isObject(value) && Object.prototype.hasOwnProperty.call(value, modes[mode])) {
         if (typeof value[modes[mode]] !== "boolean") return false
@@ -182,6 +183,11 @@ Scope {
       if (!Number.isSafeInteger(value.escape_quiet_seconds)
           || value.escape_quiet_seconds < 1 || value.escape_quiet_seconds > 3600) return false
       keys.push("escape_quiet_seconds")
+    }
+    // Battery scheduling: producers omit the default, quiet.
+    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "battery_mode")) {
+      if (["normal", "quiet", "explicit"].indexOf(value.battery_mode) < 0) return false
+      keys.push("battery_mode")
     }
     if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "language_overrides")) {
       if (!isObject(value.language_overrides)) return false

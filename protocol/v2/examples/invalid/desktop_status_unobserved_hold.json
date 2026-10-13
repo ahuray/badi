@@ -1,0 +1,12 @@
+{
+  "v": 2,
+  "id": "session.state.5",
+  "type": "desktop.status",
+  "mono_ms": 42,
+  "payload": {
+    "observed": false,
+    "session": "sleeping",
+    "low_power": false,
+    "automatic": "normal"
+  }
+}

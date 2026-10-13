@@ -32,6 +32,14 @@
       "maximum": 3600,
       "description": "Seconds a dismissal (Escape) keeps its field quiet for automatic suggestions, across edits, until the focus epoch ends or an explicit request asks again. When omitted, only the adapters' own until-edit decline applies. Producers omit the property when zero."
     },
+    "battery_mode": {
+      "enum": ["normal", "quiet", "explicit"],
+      "description": "Automatic suggestions while the desktop session helper reports battery power or the power-saver profile. quiet (the default) starts the model only after a 300 ms typing pause; normal keeps mains scheduling; explicit leaves only explicit requests. Explicit requests and the resident model are never changed. Producers omit the property when quiet."
+    },
+    "style_learning": {
+      "type": "boolean",
+      "description": "Opt-in style learning: sentences the user wrote before an accepted suggestion, in subjects that allow learning with bounded retention, sealed with a key held in the desktop keyring. No production prompt uses them yet. Producers omit the property when false."
+    },
     "language_overrides": {
       "type": "object",
       "maxProperties": 64,
@@ -84,7 +92,7 @@
           "required": ["kind", "adapter", "app_id"],
           "properties": {
             "kind": { "const": "linux_app" },
-            "adapter": { "enum": ["fcitx", "obsidian", "shell"] },
+            "adapter": { "enum": ["fcitx", "obsidian", "shell", "neovim", "libreoffice"] },
             "app_id": {
               "type": "string",
               "minLength": 1,

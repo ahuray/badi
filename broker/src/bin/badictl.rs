@@ -8,11 +8,12 @@ use badi_broker::metrics::MetricsSnapshot;
 use badi_broker::model_selection::{ModelAdvice, ModelUseCase, detect_hardware, recommend_model};
 use badi_broker::protocol::{
     ActiveLocator, AdapterDescriptor, AdapterKind, CURRENT_PROTOCOL_VERSION, Capability,
-    ControlAction, ControlResultPayload, Coordinates, ErrorPayload, GlobalControlRequestPayload,
-    HealthStatusPayload, HelloAckPayload, HelloPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS,
-    MAX_SAFE_COUNTER, MemoryStatusPayload, MessageType, ProbeRequestPayload, ProbeResultPayload,
-    ProtocolError, ProviderKind, ReasonCode, SessionControlRequestPayload, SettingsReplacePayload,
-    SettingsStatusPayload, WireEnvelope,
+    ControlAction, ControlResultPayload, Coordinates, DesktopStatusPayload, ErrorPayload,
+    GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
+    MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_SAFE_COUNTER, MemoryStatusPayload, MessageType,
+    ProbeRequestPayload, ProbeResultPayload, ProtocolError, ProviderKind, ReasonCode,
+    SessionControlRequestPayload, SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload,
+    StyleSamplesPayload, StyleStatusPayload, WireEnvelope,
 };
 use badi_broker::settings::{
     MAX_SETTINGS_BYTES, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV2,
@@ -22,10 +23,11 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::net::UnixStream;
 
-const CLI_CAPABILITIES: [Capability; 3] = [
+const CLI_CAPABILITIES: [Capability; 4] = [
     Capability::Control,
     Capability::Health,
     Capability::Settings,
+    Capability::StyleKey,
 ];
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -95,7 +97,9 @@ async fn broker_report(stream: &mut UnixStream, command: Command) -> Result<Stri
             let status = exchange(stream, request, validate_settings_response).await?;
             serde_json::to_string_pretty(&status.document)?
         }
-        Command::SettingsReplaceStdin { .. } => return Err(CliError::Arguments),
+        Command::SettingsReplaceStdin { .. } | Command::Style(StyleCommand::Key(None)) => {
+            return Err(CliError::Arguments);
+        }
         Command::MemoryClear => {
             let request = cli_global(MessageType::MemoryClear, &serde_json::json!({}))?;
             let memory = exchange(stream, request, validate_memory_response).await?;
@@ -114,12 +118,71 @@ async fn broker_report(stream: &mut UnixStream, command: Command) -> Result<Stri
         Command::Probe { payload, .. } => {
             serde_json::to_string(&request_probe(stream, &payload).await?)?
         }
+        Command::Style(StyleCommand::Status) => {
+            let request = cli_global(MessageType::StyleQuery, &serde_json::json!({}))?;
+            serde_json::to_string(&exchange(stream, request, validate_style_status).await?)?
+        }
+        Command::Style(StyleCommand::Forget) => {
+            let request = cli_global(MessageType::StyleForget, &serde_json::json!({}))?;
+            serde_json::to_string(&exchange(stream, request, validate_style_status).await?)?
+        }
+        Command::Style(StyleCommand::Export) => {
+            let request = cli_global(MessageType::StyleExport, &serde_json::json!({}))?;
+            serde_json::to_string_pretty(&exchange(stream, request, validate_style_samples).await?)?
+        }
+        Command::Style(StyleCommand::Key(Some(payload))) => {
+            let request = cli_global(MessageType::StyleKey, &payload)?;
+            serde_json::to_string(&exchange(stream, request, validate_style_status).await?)?
+        }
+    })
+}
+
+fn validate_style_status(
+    response: &WireEnvelope,
+    request_id: &str,
+) -> Result<StyleStatusPayload, CliError> {
+    decode_reply(response, request_id, MessageType::StyleStatus, |_| Ok(()))
+}
+
+fn validate_style_samples(
+    response: &WireEnvelope,
+    request_id: &str,
+) -> Result<StyleSamplesPayload, CliError> {
+    decode_reply(response, request_id, MessageType::StyleSamples, |payload| {
+        if payload.samples.len() <= badi_broker::style::MAX_STYLE_SAMPLES {
+            Ok(())
+        } else {
+            Err(ProtocolError::InvalidPayload)
+        }
+    })
+}
+
+/// Reads `KEY_ID KEY` (lowercase hex) from stdin, never from argv.
+async fn read_style_key<R: tokio::io::AsyncRead + Unpin>(
+    reader: R,
+) -> Result<StyleKeyPayload, CliError> {
+    use tokio::io::AsyncReadExt as _;
+    let mut bytes = Vec::new();
+    reader.take(256).read_to_end(&mut bytes).await?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| CliError::Arguments)?;
+    let mut parts = text.split_whitespace();
+    let (Some(key_id), Some(key), None) = (parts.next(), parts.next(), parts.next()) else {
+        return Err(CliError::Arguments);
+    };
+    badi_broker::style::StyleKey::from_hex(key_id, key).map_err(|_| CliError::Arguments)?;
+    Ok(StyleKeyPayload {
+        key_id: key_id.to_owned(),
+        key: key.to_owned(),
     })
 }
 
 async fn with_stdin(command: Command) -> Result<Command, CliError> {
     if let Command::SettingsReplaceStdin { expected_revision } = command {
         return read_settings_stdin(tokio::io::stdin(), expected_revision).await;
+    }
+    if command == Command::Style(StyleCommand::Key(None)) {
+        let payload = read_style_key(tokio::io::stdin()).await?;
+        return Ok(Command::Style(StyleCommand::Key(Some(payload))));
     }
     let Command::Probe {
         mut payload,
@@ -230,6 +293,9 @@ struct RedactedHealthStatus<'a> {
     max_frame_bytes: usize,
     metrics: MetricsSnapshot,
     active: RedactedActiveStatus,
+    /// The session helper's content-free report, when the broker sends one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    desktop: Option<DesktopStatusPayload>,
 }
 
 #[derive(Debug, Serialize)]
@@ -302,6 +368,7 @@ fn redact_health_status(status: &HealthStatusPayload) -> RedactedHealthStatus<'_
                 .as_ref()
                 .is_some_and(|active| active.suggestion_id.is_some()),
         },
+        desktop: status.desktop,
     }
 }
 
@@ -678,6 +745,10 @@ const CLI_USAGE: &str = "Usage: badictl [--socket ABSOLUTE] COMMAND\n\
 Local commands:\n  hardware [--json]       Inspect content-free hardware capabilities\n  models [USE] [--json]   Recommend pinned local models; USE is writing or code\n\
 Broker commands:\n  status [--json]  Show content-free broker status as JSON\n  request          Request a suggestion for the sole active session\n  accept-word      Accept the authorized first word-part\n  accept-all       Accept the authorized full suggestion\n  dismiss          Dismiss the current suggestion\n  pause [MODE]     MODE is on, off, or toggle (default)\n\
   overview [--json]  Show broker, policy, privacy, and model readiness\n  settings show [--json]\n                    Show the strict badi.settings.v2 document\n  settings replace --if-revision N --json DOCUMENT|-\n                    Replace settings with compare-and-swap protection; - reads\n                    a bounded document from stdin, keeping it out of argv\n  memory clear      Clear local text-free origin/day interaction aggregates\n\
+  style status      Show content-free style-learning state\n\
+  style forget      Delete every style sample and forget the key in memory\n\
+  style export      Print decrypted style samples as JSON (explicit; for the Lab)\n\
+  style key -       Deliver the keyring key, read as \"KEY_ID KEY\" hex from stdin\n\
   probe [--language TAG] [--after TEXT] [--replace] [--explicit] [--] TEXT|-\n                    Run TEXT (before the caret) through the live provider and\n                    display checks; print JSON. The broker opens no session or\n                    commit and stores nothing. Arguments stay in shell history\n                    and the process list; - reads TEXT from stdin instead.\n                    TAG defaults to en; --replace allows spelling replacement;\n                    --explicit uses the Tab-request budget (1200 ms, not 550 ms)\n\
 Options:\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n  --version          Print the version and embedded source commit\n";
 
@@ -762,6 +833,7 @@ where
         Some("settings") => parse_settings_command(&rest)?,
         Some("probe") => parse_probe_command(rest)?,
         Some("memory") if rest == ["clear"] => Command::MemoryClear,
+        Some("style") => parse_style_command(&rest)?,
         Some("request") if rest.is_empty() => Command::Session(ControlAction::Request),
         Some("accept-word") if rest.is_empty() => Command::Session(ControlAction::AcceptWord),
         Some("accept-all") if rest.is_empty() => Command::Session(ControlAction::AcceptAll),
@@ -780,6 +852,16 @@ where
         socket_path,
         command,
     })
+}
+
+fn parse_style_command(arguments: &[String]) -> Result<Command, CliError> {
+    Ok(Command::Style(match arguments {
+        [value] if value == "status" => StyleCommand::Status,
+        [value] if value == "forget" => StyleCommand::Forget,
+        [value] if value == "export" => StyleCommand::Export,
+        [value, from] if value == "key" && from == "-" => StyleCommand::Key(None),
+        _ => return Err(CliError::Arguments),
+    }))
 }
 
 fn parse_probe_command(arguments: Vec<String>) -> Result<Command, CliError> {
@@ -897,6 +979,16 @@ enum Command {
     },
     SettingsShow,
     Status,
+    Style(StyleCommand),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum StyleCommand {
+    Status,
+    Forget,
+    Export,
+    /// `None` until stdin supplies the key.
+    Key(Option<StyleKeyPayload>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1022,6 +1114,7 @@ mod tests {
             max_frame_bytes: MAX_FRAME_BYTES,
             metrics: MetricsSnapshot::default(),
             active: None,
+            desktop: None,
         };
         let settings = SettingsV2::deny_by_default();
         let status = SettingsStatusPayload {
@@ -1095,6 +1188,7 @@ mod tests {
             max_frame_bytes: MAX_FRAME_BYTES,
             metrics: MetricsSnapshot::default(),
             active: None,
+            desktop: None,
         };
         assert!(build_overview(health.clone(), status.clone()).is_ok());
 
@@ -1290,6 +1384,7 @@ mod tests {
                 max_frame_bytes: MAX_FRAME_BYTES,
                 metrics: MetricsSnapshot::default(),
                 active: None,
+                desktop: None,
             },
         )
         .expect("health response")
@@ -1461,6 +1556,7 @@ mod tests {
                 fingerprint: "fingerprint_000000000001".to_owned(),
                 suggestion_id: Some("s:secret".to_owned()),
             }),
+            desktop: None,
         };
 
         let value = serde_json::to_value(redact_health_status(&status)).expect("redacted JSON");

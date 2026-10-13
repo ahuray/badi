@@ -1,0 +1,18 @@
+{
+  "v": 2,
+  "id": "hello-session",
+  "type": "hello",
+  "mono_ms": 1,
+  "payload": {
+    "min_v": 2,
+    "max_v": 2,
+    "adapter": {
+      "kind": "session",
+      "name": "badi-session",
+      "version": "0.1.0"
+    },
+    "capabilities": [
+      "desktop_signals"
+    ]
+  }
+}

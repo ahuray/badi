@@ -59,6 +59,21 @@ test('while debugging is off, the control file is looked for at most once a seco
   assert.equal(existsSync(snapshot), false);
 });
 
+test('each editor records under its own exact app id; unknown adapters record nothing', context => {
+  const { dir, marker, later } = debugRuntime(context);
+  writeFileSync(marker, JSON.stringify({ id: randomUUID(), expires_at: Math.floor(Date.now() / 1000) + 60 }), { mode: 0o600 });
+  // The module remembers the previous test's mocked lookup time; move past it.
+  later(); later();
+  for (const [adapter, appId] of [['obsidian', 'obsidian'], ['terminal', 'bash'], ['neovim', 'nvim']]) {
+    recordActivity(adapter, 'decision', 'eligible');
+    assert.equal(JSON.parse(readFileSync(join(dir, `debug-${adapter}.json`), 'utf8')).app_id, appId);
+  }
+  for (const adapter of ['nvim', 'toString', '__proto__']) {
+    recordActivity(adapter, 'decision', 'eligible');
+    assert.equal(existsSync(join(dir, `debug-${adapter}.json`)), false, adapter);
+  }
+});
+
 test('punctuation does not count as an extra predicted word', () => {
   assert.equal(validSuggestion(' — the connection is lost'), true);
   assert.equal(validSuggestion(' one two three four five'), false);

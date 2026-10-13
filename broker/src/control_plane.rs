@@ -12,6 +12,7 @@ use crate::settings::{
     SettingsStoreError, SettingsV2, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule,
     read_private_limited, remove_private_file, remove_private_temporary_files,
 };
+use crate::style::{STYLE_FILE_NAME, StyleError, StyleKey, StyleSample, StyleStatus, StyleStore};
 
 const SECONDS_PER_DAY: u64 = 86_400;
 
@@ -36,6 +37,9 @@ struct ControlPlaneState {
     settings_store: SettingsStore,
     settings: SettingsV2,
     personalization: Option<PersonalizationStore>,
+    /// `None` when the sealed file is unreadable: it is preserved, nothing
+    /// is learned, and only `forget_style` repairs it.
+    style: Option<StyleStore>,
 }
 
 impl ControlPlane {
@@ -64,14 +68,90 @@ impl ControlPlane {
                 None
             }
         };
+        let style = match StyleStore::open(storage.paths().data_dir().join(STYLE_FILE_NAME))
+            .and_then(|mut store| store.reconcile(&settings, today).map(|_| store))
+        {
+            Ok(store) => Some(store),
+            Err(error) => {
+                eprintln!(
+                    "badi-broker: style store unavailable and preserved; badi style forget required: {error}"
+                );
+                None
+            }
+        };
         Ok(Self {
             storage,
             state: Mutex::new(ControlPlaneState {
                 settings_store,
                 settings,
                 personalization,
+                style,
             }),
         })
+    }
+
+    /// Holds the keyring's style key for this broker's lifetime.
+    pub fn deliver_style_key(&self, key: StyleKey) -> Result<StyleStatus, ControlPlaneError> {
+        let mut state = self.lock_state()?;
+        let store = state
+            .style
+            .as_mut()
+            .ok_or(ControlPlaneError::StyleUnavailable)?;
+        store.set_key(key);
+        Ok(store.status())
+    }
+
+    pub fn style_status(&self) -> Result<Option<StyleStatus>, ControlPlaneError> {
+        Ok(self.lock_state()?.style.as_ref().map(StyleStore::status))
+    }
+
+    /// Seals one authored sample when the settings the event was admitted
+    /// under are still current and still allow it.
+    pub fn record_style_at_settings_revision(
+        &self,
+        expected_settings_revision: u64,
+        identity: &StableIdentity,
+        text: &str,
+    ) -> Result<bool, ControlPlaneError> {
+        let today = unix_day_now()?;
+        let mut state = self.lock_state()?;
+        if state.settings.revision != expected_settings_revision {
+            return Ok(false);
+        }
+        let ControlPlaneState {
+            settings, style, ..
+        } = &mut *state;
+        let store = style.as_mut().ok_or(ControlPlaneError::StyleUnavailable)?;
+        Ok(store.record(settings, today, identity, text)?)
+    }
+
+    /// Every decrypted sample, for an explicit export.
+    pub fn export_style(&self) -> Result<Vec<StyleSample>, ControlPlaneError> {
+        let today = unix_day_now()?;
+        let mut state = self.lock_state()?;
+        let ControlPlaneState {
+            settings, style, ..
+        } = &mut *state;
+        let store = style.as_mut().ok_or(ControlPlaneError::StyleUnavailable)?;
+        store.reconcile(settings, today)?;
+        Ok(store.export()?)
+    }
+
+    /// Deletes every sample and forgets the key, repairing an unreadable
+    /// store. The keyring item belongs to the caller.
+    pub fn forget_style(&self) -> Result<StyleStatus, ControlPlaneError> {
+        let mut state = self.lock_state()?;
+        let path = self.storage.paths().data_dir().join(STYLE_FILE_NAME);
+        if let Some(store) = state.style.as_mut() {
+            store.forget()?;
+            return Ok(store.status());
+        }
+        remove_private_temporary_files(&path)?;
+        remove_private_file(&path)?;
+        let store = StyleStore::open(path)?;
+        let status = store.status();
+        state.style = Some(store);
+        Ok(status)
     }
 
     pub fn snapshot(&self) -> Result<ControlPlaneSnapshot, ControlPlaneError> {
@@ -168,6 +248,7 @@ impl ControlPlane {
             if !strictly_reduces_authority(&state.settings, &next) {
                 return Err(ControlPlaneError::PersonalizationUnavailable);
             }
+            reconcile_style_locked(&mut state, &next, today);
             let replaced = state
                 .settings_store
                 .compare_and_replace(expected_revision, next)?;
@@ -185,6 +266,7 @@ impl ControlPlane {
             .snapshot()?
             .revision;
         let privacy_floor = personalization_privacy_floor(&state.settings, &next);
+        reconcile_style_locked(&mut state, &privacy_floor, today);
         let privacy_result = state
             .personalization
             .as_ref()
@@ -200,6 +282,7 @@ impl ControlPlane {
             .settings_store
             .compare_and_replace(expected_revision, next)?;
         state.settings = replaced.clone();
+        reconcile_style_locked(&mut state, &replaced, today);
         let personalization_revision = state
             .personalization
             .as_ref()
@@ -365,10 +448,11 @@ fn strictly_reduces_authority(current: &SettingsV2, next: &SettingsV2) -> bool {
         return false;
     }
     // The all-web and all-app defaults are authority over every unlisted
-    // http(s) origin or Linux app.
+    // http(s) origin or Linux app; style learning is authority to keep text.
     for (was, is) in [
         (current.all_web_origins, next.all_web_origins),
         (current.all_linux_apps, next.all_linux_apps),
+        (current.style_learning, next.style_learning),
     ] {
         match (was, is) {
             (false, true) => return false,
@@ -488,6 +572,8 @@ fn personalization_privacy_floor(current: &SettingsV2, next: &SettingsV2) -> Set
         all_linux_apps: false,
         mid_line: current.mid_line,
         escape_quiet_seconds: current.escape_quiet_seconds,
+        battery_mode: current.battery_mode,
+        style_learning: current.style_learning && next.style_learning,
         language_overrides: current.language_overrides.clone(),
         subjects,
     }
@@ -500,10 +586,25 @@ fn personalization_commit_state_unknown(error: &PersonalizationStoreError) -> bo
     )
 }
 
+/// Drops style samples the given settings no longer allow. A failure leaves
+/// the sealed file preserved and the store unavailable until `forget_style`.
+fn reconcile_style_locked(state: &mut ControlPlaneState, settings: &SettingsV2, today: u64) {
+    if let Some(store) = state.style.as_mut() {
+        if let Err(error) = store.reconcile(settings, today) {
+            eprintln!(
+                "badi-broker: style reconciliation failed; store preserved and disabled until badi style forget: {error}"
+            );
+            state.style = None;
+        }
+    }
+}
+
 fn reconcile_personalization_locked(
     state: &mut ControlPlaneState,
     today: u64,
 ) -> Result<Option<PersonalizationMutation>, PersonalizationStoreError> {
+    let settings = state.settings.clone();
+    reconcile_style_locked(state, &settings, today);
     let Some(store) = state.personalization.as_ref() else {
         return Ok(None);
     };
@@ -545,6 +646,10 @@ pub enum ControlPlaneError {
     PersonalizationUnavailable,
     #[error("personalization store: {0}")]
     Personalization(#[from] PersonalizationStoreError),
+    #[error("style store is unavailable; badi style forget repairs it")]
+    StyleUnavailable,
+    #[error("style store: {0}")]
+    Style(#[from] StyleError),
     #[error("private storage: {0}")]
     Storage(#[from] PrivateStorageError),
     #[error("settings store: {0}")]
@@ -567,6 +672,8 @@ impl ControlPlaneError {
             Self::ClockBeforeUnixEpoch => "clock_before_unix_epoch".to_owned(),
             Self::LockPoisoned => "lock_poisoned".to_owned(),
             Self::PersonalizationUnavailable => "personalization_unavailable".to_owned(),
+            Self::StyleUnavailable => "style_unavailable".to_owned(),
+            Self::Style(error) => error.to_string(),
             Self::Personalization(error) => error.to_string(),
             Self::Storage(error) => error.to_string(),
             Self::Settings(error) => error.to_string(),
@@ -671,6 +778,8 @@ mod tests {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            battery_mode: crate::settings::BatteryMode::Normal,
+            style_learning: false,
             language_overrides: std::collections::BTreeMap::new(),
             subjects: vec![SubjectRule {
                 identity: identity(),
@@ -871,6 +980,8 @@ mod tests {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            battery_mode: crate::settings::BatteryMode::Normal,
+            style_learning: false,
             language_overrides: std::collections::BTreeMap::new(),
             subjects: Vec::new(),
         };
@@ -963,6 +1074,8 @@ mod tests {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            battery_mode: crate::settings::BatteryMode::Normal,
+            style_learning: false,
             language_overrides: std::collections::BTreeMap::new(),
             subjects: Vec::new(),
         };
@@ -1035,6 +1148,8 @@ mod tests {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            battery_mode: crate::settings::BatteryMode::Normal,
+            style_learning: false,
             language_overrides: std::collections::BTreeMap::new(),
             subjects,
         };
@@ -1330,6 +1445,8 @@ mod tests {
             all_linux_apps: false,
             mid_line: false,
             escape_quiet_seconds: 0,
+            battery_mode: crate::settings::BatteryMode::Normal,
+            style_learning: false,
             language_overrides: std::collections::BTreeMap::new(),
             subjects: vec![SubjectRule {
                 identity: identity(),

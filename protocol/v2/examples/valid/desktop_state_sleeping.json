@@ -1,0 +1,11 @@
+{
+  "v": 2,
+  "id": "session.state.3",
+  "type": "desktop.state",
+  "mono_ms": 40,
+  "payload": {
+    "session": "sleeping",
+    "on_battery": true,
+    "power_saver": false
+  }
+}

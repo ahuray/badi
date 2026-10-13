@@ -26,8 +26,10 @@ NATIVE_SOURCES = ('target/release/badi-broker', 'target/release/badictl', 'scrip
                   'packaging/systemd/badi-broker.service', 'broker/data/writing-lexicon/LICENSE',
                   'broker/data/writing-lexicon/README.md', 'adapters/fcitx5/build/libbadi-fcitx5.so',
                   'adapters/fcitx5/build/badi.conf', 'packaging/systemd/fcitx-badi.conf',
-                  'packaging/systemd/badi-accessibility.service', 'packaging/hypr/badi.lua') + tuple(
-                  'adapters/accessibility/' + name for name in installer.OBSERVER_MODULES)
+                  'packaging/systemd/badi-accessibility.service', 'packaging/hypr/badi.lua',
+                  'packaging/systemd/badi-session.service') + tuple(
+                  'adapters/accessibility/' + name for name in installer.OBSERVER_MODULES) + tuple(
+                  'adapters/session/' + name for name in installer.SESSION_MODULES)
 STOCK = '{ path=/usr/bin/fcitx5 ; argv[]=%s ; ignore_errors=no ; start_time=[n/a] ; pid=0 }\n'
 
 
@@ -92,6 +94,7 @@ def broker_only_install(root):
          patch.object(installer.Path, 'home', return_value=home), \
          patch.object(installer.subprocess, 'run', side_effect=execute), \
          patch.object(installer, 'require_writing_assets'), \
+         patch.object(installer, 'wait_session_helper', return_value=True), \
          patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
          patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(root / 'runtime'),
                                  'XDG_CONFIG_HOME': str(home / '.config')}), \
@@ -448,7 +451,9 @@ class DesktopInstallTests(unittest.TestCase):
             sources = ('target/release/badi-broker', 'target/release/badictl', 'scripts/badi-desktop.py', 'scripts/badi_install.py',
                        'packaging/io.github.ahuray.badi.desktop', 'packaging/io.github.ahuray.badi.svg',
                        'packaging/systemd/badi-broker.service', 'broker/data/writing-lexicon/LICENSE',
-                       'broker/data/writing-lexicon/README.md')
+                       'broker/data/writing-lexicon/README.md', 'packaging/systemd/badi-session.service',
+                       'adapters/session/daemon.py', 'adapters/session/link.py',
+                       'adapters/session/style_key.py')
             for name in sources:
                 source = project / name
                 source.parent.mkdir(parents=True, exist_ok=True)
@@ -482,6 +487,7 @@ class DesktopInstallTests(unittest.TestCase):
                  patch.object(installer.Path, 'home', return_value=home), \
                  patch.object(installer.subprocess, 'run', side_effect=execute), \
                  patch.object(installer, 'require_writing_assets'), \
+                 patch.object(installer, 'wait_session_helper', return_value=True), \
                  patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': True, 'control_plane_degraded': False}), \
                  patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(root / 'runtime'),
                                          'XDG_CONFIG_HOME': str(home / '.config')}), \
@@ -740,6 +746,50 @@ class DesktopInstallTests(unittest.TestCase):
                 installer.wait_accessibility(Path('/helper'), Path('/endpoint'))
             sleep.assert_not_called()
 
+    def test_session_helper_follows_the_broker_and_a_disabled_unit_stays_disabled(self):
+        for state in ('enabled', 'disabled', ''):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                home, project = root / 'home', root / 'project'
+                native_project(project)
+                calls = []
+
+                def execute(command, **kwargs):
+                    calls.append(command)
+                    if command[0] == 'loginctl':
+                        return subprocess.CompletedProcess(command, 0, str(root / 'runtime'), '')
+                    if '--property=UnitFileState' in command and 'badi-session.service' in command:
+                        return subprocess.CompletedProcess(command, 0, state, '')
+                    output = 'loaded' if '--property=LoadState' in command else '{}'
+                    return subprocess.CompletedProcess(command, 0, output, '')
+
+                with patch.object(installer, 'ROOT', project), \
+                     patch.object(installer.Path, 'home', return_value=home), \
+                     patch.object(installer.subprocess, 'run', side_effect=execute), \
+                     patch.object(installer, 'require_writing_assets'), \
+                     patch.object(installer, 'wait_session_helper', return_value=True) as helper, \
+                     patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
+                     patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(root / 'runtime'),
+                                             'XDG_CONFIG_HOME': str(home / '.config')}), \
+                     patch('sys.argv', ['install-desktop.py', '--broker-only']), \
+                     contextlib.redirect_stdout(io.StringIO()) as output:
+                    installer.main()
+                for name in installer.SESSION_MODULES:
+                    self.assertEqual((home / '.local/lib/badi/session' / name).read_text(), 'new adapters/session/' + name)
+                self.assertTrue((home / '.config/systemd/user/badi-session.service').is_file())
+                restart = ['systemctl', '--user', 'restart', 'badi-session.service']
+                if state == 'disabled':
+                    self.assertNotIn(restart, calls)
+                    self.assertNotIn(['systemctl', '--user', 'enable', 'badi-session.service'], calls)
+                    helper.assert_not_called()
+                    self.assertIn('The session helper is disabled', output.getvalue())
+                else:
+                    broker = calls.index(['systemctl', '--user', 'restart', 'badi-broker.service'])
+                    self.assertLess(broker, calls.index(restart), 'the helper reconnects to the new broker')
+                    self.assertIn(['systemctl', '--user', 'enable', 'badi-session.service'], calls)
+                    helper.assert_called_once()
+                    self.assertIn('Session helper reporting', output.getvalue())
+
     def test_full_install_verifies_helper_before_fcitx_and_preserves_backup_and_autostart(self):
         for helper_ready in (True, False):
             with self.subTest(helper_ready=helper_ready), tempfile.TemporaryDirectory() as temporary:
@@ -769,6 +819,7 @@ class DesktopInstallTests(unittest.TestCase):
                      patch.object(installer, 'require_writing_assets'), \
                      patch.object(installer, 'require_unlocked'), \
                      patch.object(installer, 'require_accessibility_runtime'), \
+                     patch.object(installer, 'wait_session_helper', return_value=True), \
                      patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
                      patch.object(installer, 'wait_accessibility', side_effect=ready), \
                      patch.object(installer, 'wait_native_addon') as addon, \
@@ -846,6 +897,7 @@ class FullInstall:
              patch.object(installer, 'compat_launcher', return_value=launcher), \
              patch.object(installer, 'require_unlocked'), \
              patch.object(installer, 'require_accessibility_runtime'), \
+             patch.object(installer, 'wait_session_helper', return_value=True), \
              patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
              patch.object(installer, 'wait_accessibility'), \
              patch.object(installer, 'wait_native_addon'), \

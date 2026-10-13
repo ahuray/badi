@@ -7,6 +7,8 @@ import process from "node:process";
 const DEFAULT_CHECKS = [
   "docs:check",
   "accessibility:check",
+  "session:check",
+  "libreoffice:check",
   "desktop:check",
   "omarchy:check",
   "editors:check",

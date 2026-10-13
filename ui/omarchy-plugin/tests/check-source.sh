@@ -79,6 +79,9 @@ grep -F 'value.schema !== "badi.settings.v2"' "$artifact_dir/BadiClient.qml" >/d
 grep -F 'parsed.schema !== "badi.overview.v2"' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'value.kind === "linux_app"' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'value.adapter === "fcitx"' "$artifact_dir/BadiClient.qml" >/dev/null
+# A neovim rule must not make the panel reject the whole settings document.
+grep -F 'value.adapter === "neovim"' "$artifact_dir/BadiClient.qml" >/dev/null
+grep -F 'appId === "nvim" ? "neovim"' "$artifact_dir/DesktopPanel.qml" >/dev/null
 grep -F 'return isBrowserIdentity(value) || isLinuxIdentity(value)' "$artifact_dir/BadiClient.qml" >/dev/null
 
 validator="$omarchy_root/bin/omarchy-plugin-validate"

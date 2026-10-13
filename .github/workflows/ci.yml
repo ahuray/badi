@@ -140,10 +140,47 @@ jobs:
         run: |
           cargo build -p badi-broker --bins --locked
           python adapters/fcitx5/tests/broker-smoke.py
+      - name: Exercise the session helper on a private bus against the real broker
+        run: PYTHONDONTWRITEBYTECODE=1 python adapters/session/tests/integration.py
       - name: Exercise isolated accessibility buses and actual addon event flow
         run: |
           PYTHONDONTWRITEBYTECODE=1 python adapters/accessibility/tests/run-isolated.py
           PYTHONDONTWRITEBYTECODE=1 python adapters/fcitx5/tests/observed-desktop.py
+
+  neovim:
+    name: Neovim plugin / pinned Arch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure the dated Arch package snapshot
+        run: |
+          # Pacman expands these repository placeholders.
+          # shellcheck disable=SC2016
+          printf '%s\n' \
+            'Server = https://archive.archlinux.org/repos/2026/08/31/$repo/os/$arch' \
+            > /etc/pacman.d/mirrorlist
+          pacman -Syyu --noconfirm
+          pacman -S --needed --noconfirm ca-certificates gcc git neovim nodejs
+          pacman -Q neovim nodejs
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Rust for the real broker lane
+        uses: dtolnay/rust-toolchain@1.99.0
+      - name: Exercise the plugin, its bridge and the real broker
+        # Ubuntu's Neovim predates inline virtual text, so the Repository
+        # checks job reports these tests as skipped; here they must run.
+        env:
+          BADI_REQUIRE_NEOVIM: "1"
+        run: |
+          cargo build -p badi-broker --bins --locked
+          node --test adapters/neovim/plugin.test.mjs adapters/neovim/broker.test.mjs
 
   checks:
     name: Repository checks / Node 24
