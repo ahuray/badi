@@ -2,7 +2,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from preview import (Preview, disable_preview_animation, field_box_ends_before_caret, font_facts,
@@ -22,6 +22,12 @@ def focus():
 
 
 class PreviewGeometryTests(unittest.TestCase):
+    def setUp(self):
+        # Unit rendering must never change the user's running compositor.
+        rule = patch("preview.disable_preview_animation", return_value=True)
+        self.disable_animation = rule.start()
+        self.addCleanup(rule.stop)
+
     def test_window_local_caret_maps_once_into_global_logical_coordinates(self):
         caret = mapped_caret(focus())
         self.assertEqual((caret.x, caret.y, caret.line_height, caret.field_right), (210, 150, 20, 720))
@@ -165,6 +171,36 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertTrue(preview.render(data, " next", 1500))
         self.assertIn(("class", "chip"), calls)
 
+    def test_snapping_cannot_move_text_past_the_following_glyph_or_field(self):
+        data = focus()
+        data["geometry"]["scale"] = 1.5
+        data["geometry"]["monitor"]["scale"] = 1.5
+        data["geometry"]["caret"]["x"] = 110.6
+        data["geometry"]["following_x"] = 311.8
+        self.assertIsNone(place_inline(mapped_caret(data), 200, 24, 19),
+                          "snapping right would cover the following glyph")
+        del data["geometry"]["following_x"]
+        data["geometry"]["field"]["width"] = 291.8
+        self.assertIsNone(place_inline(mapped_caret(data), 200, 24, 19),
+                          "snapping right would cross the field edge")
+        data["geometry"]["field"] = {"x": 20.4, "y": 40, "width": 600, "height": 200}
+        self.assertIsNone(place_chip(mapped_caret(data), 600, 24),
+                          "a full-width chip cannot round outside its field")
+
+    def test_font_metrics_anchor_reported_and_fallback_faces(self):
+        preview, _calls, _monitor = self.render_fixture()
+        description = Mock()
+        metrics = SimpleNamespace(get_ascent=lambda: 15 * 1024, get_descent=lambda: 5 * 1024)
+        context = Mock()
+        context.get_metrics.return_value = metrics
+        preview.label.get_pango_context = lambda: context
+        preview.Pango.FontDescription = lambda: description
+        self.assertEqual(preview._field_ascent({"family": "Iosevka", "weight": 700}, 18, 30), 15)
+        description.set_family.assert_called_once_with("Iosevka")
+        description.set_absolute_size.assert_called_once_with(18 * 1024)
+        self.assertEqual(preview._field_ascent({}, 18, 30), 22.5)
+        self.assertIsNone(preview._field_ascent({}, 18, None))
+
     def test_preview_animation_is_disabled_best_effort_via_hyprctl(self):
         calls = []
         def fake_run(command, **kwargs):
@@ -177,6 +213,20 @@ class PreviewGeometryTests(unittest.TestCase):
             raise FileNotFoundError("hyprctl")
         self.assertFalse(disable_preview_animation(run=missing))
         self.assertFalse(disable_preview_animation(run=lambda *_a, **_k: SimpleNamespace(returncode=1)))
+
+    def test_rule_refresh_runs_off_the_render_path_and_is_rate_limited(self):
+        preview = object.__new__(Preview)
+        with patch("preview.time.monotonic", side_effect=[1, 2, 31, 32]), patch("preview.Thread") as worker:
+            preview._refresh_layer_rule(background=False)
+            self.disable_animation.assert_called_once_with()
+            worker.assert_not_called()
+            preview._refresh_layer_rule()
+            worker.assert_not_called()
+            preview._refresh_layer_rule()
+            worker.assert_called_once_with(target=self.disable_animation, daemon=True)
+            worker.return_value.start.assert_called_once_with()
+            preview._refresh_layer_rule()
+            self.assertEqual(worker.call_count, 1)
 
     def test_font_follows_the_caret_glyph_and_text_is_ltr_only(self):
         self.assertAlmostEqual(font_pixels(mapped_caret(focus())), 17.2)
@@ -208,6 +258,7 @@ class PreviewGeometryTests(unittest.TestCase):
 
     def render_fixture(self, natural=(200, 24), baseline=19):
         preview = object.__new__(Preview)
+        preview._refresh_layer_rule = Mock()
         calls = []
         monitor = SimpleNamespace(get_connector=lambda: "eDP-1",
                                   get_geometry=lambda: SimpleNamespace(x=0, y=0, width=1440, height=900))

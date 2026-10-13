@@ -68,19 +68,13 @@ Standing user decisions:
       rejoin showed 2 suggestions and 1 reference match, with no deadline
       misses; the following-line prompt showed 1 suggestion and 1 reference
       match, and missed 550 ms on 34 of 41 because that line is not cached.
-- [x] Make the grey preview read as in-field text, Cotypist-grade
-      ([research](docs/reports/2026-10-13-inline-ghost-text-research.md)):
-      ship a Hyprland `noanim` layer rule for `badi-writing-preview`, anchor
-      the baseline from real font metrics (≤ 1 physical px on the Chromium
-      and Omawrite lanes), snap margins to the physical pixel grid, and
-      measure then reduce the chip/Fcitx-panel fallback rate per app. Client
-      preedit stays rejected: no styling in text-input-v3 and composition
-      side effects break explicit acceptance. On 2026-10-13, disposable
-      Chromium and Omawrite on this machine both showed the ghost inline on
-      the caret line with a measured baseline delta of 0 physical px; the
-      following glyph now bounds mid-line inline room, so the chip only
-      remains where inline text would cover the next words. Native
-      non-observed fields still use the Fcitx candidate panel.
+- [ ] Evaluate a longer acceptance lease or explicit renewal while the
+      suggestion remains fresh, preserving every field, revision, fingerprint,
+      focus and expiry check. The current five-second lease remains unchanged.
+- [ ] Measure fallback frequency per app and restyle the Fcitx candidate panel
+      at field edges. Inline font-metric placement and animation suppression
+      are implemented ([preview contract](adapters/accessibility/README.md#caret-geometry-and-preview));
+      fractional-scale and multi-monitor live trials remain open.
 - [ ] Confirm live that the grey preview uses the host font in Telegram.
       A disposable Chromium textarea (2026-10-12, build `7957f16`) set to
       JetBrainsMono NF at 20px reports `family-name` JetBrainsMono NF and
@@ -250,10 +244,6 @@ From the 2026-10-11 audit. These are not part of the installed behavior.
       password input type is refused. Labels, placeholders, and HTML
       autocomplete hints are not.
 - [ ] An ADR retiring protocol v1.
-- [x] Enforce `authority.ack`, or delete it if nothing consumes it. The broker
-      now fails session, context and suggestion messages closed until the
-      connection acknowledges the current epoch
-      ([broker runbook](broker/README.md#protocol-and-authority)).
 - [x] The settings panel polls only while its window is open. A closed
       window does not ask the broker. The bar mark updates when pause is
       toggled from the bar, and the next time the window opens.

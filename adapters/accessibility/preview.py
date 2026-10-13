@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import math
 import re
 import subprocess
+from threading import Thread
 import time
 import unicodedata
 
@@ -247,15 +248,16 @@ def place_inline(caret, width, height, baseline, field_ascent=None):
         return None
     mx, my, mw, mh = caret.monitor
     wx, wy, ww, wh = caret.window
-    x = caret.x + 1
-    y = _baseline_y(caret, height, baseline, field_ascent)
+    # Check the actual margins after snapping, including the next glyph bound.
+    x = mx + _snap(caret.x + 1 - mx, caret.scale)
+    y = my + _snap(_baseline_y(caret, height, baseline, field_ascent) - my, caret.scale)
     right = min(caret.field_right, wx + ww, mx + mw)
     if caret.following_x is not None:
         right = min(right, caret.following_x)
     if (x < max(mx, wx) or x + width > right
             or y < max(my, wy) or y + height > min(my + mh, wy + wh)):
         return None
-    return _snap(x, caret.scale) - round(mx), _snap(y, caret.scale) - round(my)
+    return round(x - mx), round(y - my)
 
 
 def field_box_ends_before_caret(caret):
@@ -277,13 +279,13 @@ def place_on_caret_line(caret, width, height, baseline, field_ascent=None):
         return None
     mx, my, mw, mh = caret.monitor
     wx, wy, ww, wh = caret.window
-    x = caret.x + 1
-    y = _baseline_y(caret, height, baseline, field_ascent)
+    x = mx + _snap(caret.x + 1 - mx, caret.scale)
+    y = my + _snap(_baseline_y(caret, height, baseline, field_ascent) - my, caret.scale)
     left, right = max(mx, wx), min(mx + mw, wx + ww)
     top, bottom = max(my, wy), min(my + mh, wy + wh)
     if x < left or x + width > right or y < top or y + height > bottom:
         return None
-    return _snap(x, caret.scale) - round(mx), _snap(y, caret.scale) - round(my)
+    return round(x - mx), round(y - my)
 
 
 def place_chip(caret, width, height):
@@ -304,10 +306,14 @@ def place_chip(caret, width, height):
     if width > field_right - field_left:
         return None
     x = min(max(caret.x - CHIP_INSET, field_left), field_right - width)
+    x = mx + _snap(x - mx, caret.scale)
+    if x < field_left or x + width > field_right:
+        return None
     below, above = caret.y + caret.line_height + CHIP_GAP, caret.y - CHIP_GAP - height
     for y in (below, above):
+        y = my + _snap(y - my, caret.scale)
         if field_top <= y and y + height <= field_bottom:
-            return _snap(x, caret.scale) - round(mx), _snap(y, caret.scale) - round(my)
+            return round(x - mx), round(y - my)
     return None
 
 
@@ -393,8 +399,8 @@ class Preview:
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), self.css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         Gtk4LayerShell.init_for_window(self.window)
         Gtk4LayerShell.set_namespace(self.window, LAYER_NAMESPACE)
-        self._rule_applied_at = 0.0
-        self._refresh_layer_rule()
+        self._rule_applied_at = None
+        self._refresh_layer_rule(background=False)
         Gtk4LayerShell.set_layer(self.window, Gtk4LayerShell.Layer.OVERLAY)
         Gtk4LayerShell.set_keyboard_mode(self.window, Gtk4LayerShell.KeyboardMode.NONE)
         Gtk4LayerShell.set_exclusive_zone(self.window, -1)
@@ -403,12 +409,18 @@ class Preview:
         self.window.connect("realize", self._input_transparent)
         self.window.connect("map", self._input_transparent)
 
-    def _refresh_layer_rule(self):
+    def _refresh_layer_rule(self, *, background=True):
         now = time.monotonic()
-        if now - getattr(self, "_rule_applied_at", 0.0) < RULE_REFRESH_SECONDS:
+        previous = getattr(self, "_rule_applied_at", None)
+        if previous is not None and now - previous < RULE_REFRESH_SECONDS:
             return
         self._rule_applied_at = now
-        disable_preview_animation()
+        if background:
+            # Compositor IPC must not block preview expiry or field invalidation.
+            # The helper's two-second timeout is shorter than the refresh interval.
+            Thread(target=disable_preview_animation, daemon=True).start()
+        else:
+            disable_preview_animation()
 
     def _field_ascent(self, font, pixels, line_height=None):
         """Ascent anchoring the field's baseline at the ghost size, or None.

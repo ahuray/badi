@@ -15,6 +15,11 @@ excluded.
 Browser fields use the [IME-parity path](../../README.md#how-badi-edits-chromium-based-apps-and-zen)
 instead.
 
+The 2026-10-13 handoff additionally reports Obsidian 1.14.4 showing inline grey
+text, accepting a word with Tab and displaying the next suggestion in a
+disposable note, then deleting that note. This narrower live observation does
+not repeat the full 1.13.7 matrix above.
+
 ## Install
 
 After the desktop model is provisioned:

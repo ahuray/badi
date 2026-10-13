@@ -555,14 +555,18 @@ class FieldBackend:
         return extents
 
     def following_extents(self, text, caret, coordinates):
-        """Extents of the glyph after the caret, or None; never fatal.
+        """Extents of the glyph after the caret, or None within the budget.
 
         At the end of the text there is no such glyph, and some toolkits
         raise instead of answering. Missing proof only keeps the chip.
         """
+        self.budget()
         try:
-            self.budget()
             return text.get_character_extents(caret, coordinates)
+        except Denied as error:
+            if error.timed_out:
+                raise
+            return None
         except Exception:
             return None
 

@@ -1486,6 +1486,19 @@ class GeometryWiringTests(unittest.TestCase):
         with self.assertRaisesRegex(Denied, "operation_timeout"):
             self.backend.geometry(self.field, self.text, 12, self.window)
 
+    def test_following_glyph_lookup_preserves_the_operation_deadline(self):
+        def expired():
+            raise Denied("operation_timeout")
+        self.backend.budget = expired
+        with self.assertRaisesRegex(Denied, "operation_timeout"):
+            self.backend.following_extents(self.text, 12, "screen")
+        self.assertEqual(self.offsets, [], "expired requests make no more AT-SPI calls")
+        self.backend.budget = lambda: None
+        def missing(*_args):
+            raise RuntimeError("no glyph at end of field")
+        self.text.get_character_extents = missing
+        self.assertIsNone(self.backend.following_extents(self.text, 12, "screen"))
+
 
 class VisualDirectionTests(unittest.TestCase):
     """Gecko has no direction attribute; glyph order decides the caret edge."""

@@ -34,7 +34,11 @@ grey text would cover those words, it shows in a small box under the line
 instead, and that box keeps the separating space.
 
 Grey text uses the field's font family, size and weight when accessibility
-exposes them, and otherwise a size taken from the caret's glyph. Fcitx 5.1.22
+exposes them, and otherwise a size taken from the caret's glyph. The observer
+aligns it using font metrics and disables the Hyprland preview entrance
+animation. If it cannot fit safely at the field edge, Fcitx uses its candidate
+panel ([preview contract](adapters/accessibility/README.md#caret-geometry-and-preview)).
+Fcitx 5.1.22
 on this machine already supplies emoji: QuickPhrase (Super+semicolon, then a
 word such as `smile`) and the Emoji module. They do not expand a colon
 shortcode while you type. Badi does not add one. Replacing `:smile` would
@@ -57,7 +61,7 @@ Linux in general.
 | Telegram | | Telegram desktop (Qt) |
 | Omawrite | | 0.5.0 |
 | Xournal++ text tool | Tab requests, exact native undo | 1.3.7 |
-| Obsidian | Badi plugin | 1.13.7 |
+| Obsidian | Badi plugin; the 1.14.4 handoff reports inline preview and Tab acceptance | 1.13.7, 1.14.4 |
 | Bash | Grey Readline preview and narrow English spelling fixes | Bash 5.3.15 in Ghostty 1.3.1 |
 | Grok Bot | Ready, but its composer is untested | 0.35 |
 

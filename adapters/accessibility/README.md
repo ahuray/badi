@@ -261,13 +261,18 @@ after the caret, with no background. When the caret's text run reports a font
 family, a size (`size` in points, or `font-size` in px) or a weight, the
 overlay uses those, and the baseline is anchored at that font's real Pango
 ascent below the glyph box top; without a reported family the size comes
-from the glyph height, the face stays the overlay's own and the baseline
-falls back to the layout-ratio heuristic. Layer margins snap to the
-monitor's physical pixel grid, so fractional scales do not shift or blur
-the ghost against the field's text. On Hyprland the observer asks the
+from the glyph height, the face stays the overlay's own and its ascent as a
+fraction of ascent plus descent places the baseline within the caret height.
+If those metrics are unavailable, the layout-ratio heuristic remains.
+Integer layer margins favor the monitor's physical pixel grid and are checked
+after snapping against the drawing bounds, including the following glyph.
+Some fractional scales cannot put every margin on an exact physical pixel.
+On Hyprland the observer asks the
 compositor not to animate its layer (`no_anim` rule for the
-`badi-writing-preview` namespace, re-applied periodically since a config
-reload drops runtime rules); the desktop installer persists the same rule
+`badi-writing-preview` namespace, re-applied at most every 30 seconds since a
+config reload drops runtime rules). Refreshes run outside the rendering
+thread so compositor IPC cannot delay expiry or field invalidation; the
+desktop installer persists the same rule
 as `~/.config/hypr/badi.lua`, loaded from `hyprland.lua`. A field box that ends before the caret still
 keeps that text on the caret's baseline inside the window, so it is not dropped onto the chrome under the
 input. A box that still contains the caret is a real edge: text that would

@@ -185,6 +185,16 @@ by IME-parity. These are live samples, not held-out language quality evidence;
 Omawrite 0.5.0’s native Open File location field also reported `file_dialog`,
 made no automatic model call after typing, and displayed an explicit request.
 
+The 2026-10-13 inline-preview handoff reports grey text and Tab acceptance in
+Brave Origin's DuckDuckGo box and a disposable local textarea. Zen's
+DuckDuckGo box showed inline text on Ctrl+Shift+Space; automatic suggestions
+stayed quiet, and acceptance was not established in that trial. Google was
+not tested because of its consent wall; no Google result is inferred from
+DuckDuckGo. The earlier Chromium and Omawrite captures recorded zero physical
+pixels between typed and ghost glyph-bottom modes at scale 2
+([measurement](../../docs/reports/2026-10-13-inline-ghost-text-research.md#implementation-outcome-2026-10-13-same-day)).
+These are prior live observations, separate from the merge's automated checks.
+
 | Application | Reaches Fcitx through | Boundary |
 | --- | --- | --- |
 | Omawrite 0.5.0 (Qt 6) | `QT_IM_MODULE=fcitx` | 20/20 trials; one native undo restores the exact prefix |
