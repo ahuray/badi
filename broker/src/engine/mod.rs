@@ -5,8 +5,6 @@
 mod acceptance;
 mod authority;
 mod desktop;
-#[cfg(test)]
-mod desktop_tests;
 mod error;
 mod events;
 mod generation;
@@ -15,8 +13,6 @@ mod probe;
 mod session;
 mod settings;
 mod status;
-#[cfg(test)]
-mod style_tests;
 #[cfg(test)]
 mod tests;
 mod type_through;

@@ -256,7 +256,8 @@ languages remain Lab-only until their independent qualification passes.
 | --- | --- |
 | [AGENTS.md](AGENTS.md) | How to work here: architecture, invariants, checks |
 | [VISION.md](VISION.md) | The product contract |
-| [future plans.md](<future plans.md>) | The only backlog |
+| [future plans.md](<future plans.md>) | The only backlog, with the ordered next steps |
+| [CHANGELOG.md](CHANGELOG.md) | What shipped, by pull request |
 | [docs/decisions](docs/decisions/) | Durable architecture decisions |
 | Component runbooks | [broker](broker/README.md), [Fcitx addon](adapters/fcitx5/README.md), [observer](adapters/accessibility/README.md), [session helper](adapters/session/README.md), [editors](adapters/shared/README.md), [Bash](adapters/shell/README.md), [Neovim](adapters/neovim/README.md), [LibreOffice Writer](adapters/libreoffice/README.md), [Omarchy panel](ui/omarchy-plugin/README.md), [Fcitx frontend backport](packaging/fcitx5-wayland-compat/README.md), [Prediction Lab](evaluation/writing/README.md) |
 

@@ -9,8 +9,8 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 use tokio_util::sync::CancellationToken;
 
-use super::{Broker, BrokerConfig, BrokerEvent, BrokerEventSink, SessionAuthority};
 use crate::control_plane::ControlPlane;
+use crate::engine::{Broker, BrokerConfig, BrokerEvent, BrokerEventSink, SessionAuthority};
 use crate::protocol::{
     Activation, AdapterKind, Capability, CommitResultPayload, CommitStatus, ContextChangedPayload,
     ControlAction, Coordinates, FieldDescriptor, FieldPurpose, OffsetUnit, Origin, OriginScheme,
@@ -285,7 +285,11 @@ async fn revoking_learning_in_settings_purges_its_samples() {
     let fixture = fixture(settings(1, true, true));
     fixture.broker.deliver_style_key(key()).expect("key");
     accept(&fixture.broker, CommitStatus::Applied).await;
-    assert_eq!(fixture.broker.style_status().expect("status").samples, 1);
+    // The worker seals samples in queue order; an export waits behind it.
+    assert_eq!(
+        fixture.broker.export_style().await.expect("export").len(),
+        1
+    );
     fixture
         .control_plane
         .replace_settings(1, settings(2, true, false))

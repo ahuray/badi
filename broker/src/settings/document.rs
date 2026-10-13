@@ -1,0 +1,436 @@
+//! The `badi.settings.v2` document, its decoding from v1 or v2, and validation.
+
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Deserializer, Serialize};
+use thiserror::Error;
+
+use crate::protocol::{MAX_SAFE_COUNTER, TargetDescriptor, valid_linux_app_id};
+
+use super::identity::{IdentityError, StableIdentity};
+use super::permissions::{
+    ALL_LINUX_APPS_PERMISSIONS, ALL_WEB_ORIGINS_PERMISSIONS, SubjectPermissions, SubjectRule,
+};
+use super::policy::{PolicyResolution, PolicySource};
+use super::{MAX_ESCAPE_QUIET_SECONDS, MAX_SUBJECTS, SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1};
+
+/// Explicit languages already supported by the installed provider. New
+/// languages must pass qualification before they become settings values.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum PredictionLanguage {
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "de")]
+    German,
+    #[serde(rename = "fa")]
+    Persian,
+}
+
+impl PredictionLanguage {
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::English => "en",
+            Self::German => "de",
+            Self::Persian => "fa",
+        }
+    }
+}
+
+/// How automatic suggestions behave while the desktop helper reports battery
+/// power or the power-saver profile. Explicit requests are never changed, and
+/// the model stays resident in every mode.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum BatteryMode {
+    /// The same scheduling as on mains power.
+    #[serde(rename = "normal")]
+    Normal,
+    /// The default, omitted from documents: the model starts only after a
+    /// typing pause, so keys typed in quick succession never start a
+    /// generation that the next key cancels.
+    #[default]
+    #[serde(rename = "quiet")]
+    Quiet,
+    /// Automatic suggestions abstain; explicit requests still ask the model.
+    #[serde(rename = "explicit")]
+    ExplicitOnly,
+}
+
+impl BatteryMode {
+    #[must_use]
+    pub const fn is_quiet(&self) -> bool {
+        matches!(self, Self::Quiet)
+    }
+}
+
+/// Settings v1 documents deserialize into this type, but it is always
+/// canonical settings v2 in memory and on disk.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+// Independent persisted flags, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
+pub struct SettingsV2 {
+    pub schema: String,
+    pub revision: u64,
+    pub paused: bool,
+    /// Opt-in browser default: an http(s) origin without an exact rule gets
+    /// [`ALL_WEB_ORIGINS_PERMISSIONS`]. Exact rules win and field denial still
+    /// applies. Omitted when off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all_web_origins: bool,
+    /// Opt-in app default (blocklist mode): a Linux app without an exact rule
+    /// gets [`ALL_LINUX_APPS_PERMISSIONS`], reported as a default so adapters
+    /// open only fields they can corroborate. Omitted when off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all_linux_apps: bool,
+    /// Mid-sentence suggestions. Off by default: a word after the caret
+    /// abstains before any model call. Punctuation after the caret can still
+    /// complete the word being typed. Omitted when off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mid_line: bool,
+    /// Seconds a dismissal (Escape) keeps its field quiet for automatic
+    /// suggestions, across edits, until the focus epoch ends or an explicit
+    /// request asks again. Zero keeps the adapters' own until-edit decline
+    /// only. Omitted when zero.
+    #[serde(default, skip_serializing_if = "escape_quiet_seconds_is_zero")]
+    pub escape_quiet_seconds: u64,
+    /// Automatic scheduling on battery or in the power-saver profile.
+    /// Omitted when quiet, the default.
+    #[serde(default, skip_serializing_if = "BatteryMode::is_quiet")]
+    pub battery_mode: BatteryMode,
+    /// Opt-in style learning: encrypted samples of the user's own sentences
+    /// from subjects that allow learning with bounded retention. Omitted when
+    /// off. Turning it off stops collection; forgetting is a separate step.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub style_learning: bool,
+    /// Per-app quality hints, independent of app/site acquisition permission.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub language_overrides: BTreeMap<String, PredictionLanguage>,
+    pub subjects: Vec<SubjectRule>,
+}
+
+// Serde's skip_serializing_if dictates the by-reference signature.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn escape_quiet_seconds_is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsDocument {
+    schema: String,
+    revision: u64,
+    paused: bool,
+    #[serde(default)]
+    all_web_origins: Option<bool>,
+    #[serde(default)]
+    all_linux_apps: Option<bool>,
+    #[serde(default)]
+    mid_line: Option<bool>,
+    #[serde(default)]
+    escape_quiet_seconds: Option<u64>,
+    #[serde(default)]
+    battery_mode: Option<BatteryMode>,
+    #[serde(default)]
+    style_learning: Option<bool>,
+    #[serde(default, deserialize_with = "present_language_overrides")]
+    language_overrides: Option<BTreeMap<String, PredictionLanguage>>,
+    subjects: Vec<SubjectRule>,
+}
+
+fn present_language_overrides<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<BTreeMap<String, PredictionLanguage>>, D::Error> {
+    BTreeMap::deserialize(deserializer).map(Some)
+}
+
+impl<'de> Deserialize<'de> for SettingsV2 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let decoded = SettingsDocument::deserialize(deserializer)?;
+        if decoded.schema != SETTINGS_SCHEMA && decoded.schema != SETTINGS_SCHEMA_V1 {
+            return Err(serde::de::Error::custom("unsupported_settings_schema"));
+        }
+        if decoded.schema == SETTINGS_SCHEMA_V1
+            && decoded
+                .subjects
+                .iter()
+                .any(|rule| matches!(rule.identity, StableIdentity::LinuxApp { .. }))
+        {
+            return Err(serde::de::Error::custom("linux_app_requires_settings_v2"));
+        }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.all_web_origins.is_some() {
+            return Err(serde::de::Error::custom(
+                "all_web_origins_requires_settings_v2",
+            ));
+        }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.all_linux_apps.is_some() {
+            return Err(serde::de::Error::custom(
+                "all_linux_apps_requires_settings_v2",
+            ));
+        }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.mid_line.is_some() {
+            return Err(serde::de::Error::custom("mid_line_requires_settings_v2"));
+        }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.escape_quiet_seconds.is_some() {
+            return Err(serde::de::Error::custom(
+                "escape_quiet_seconds_requires_settings_v2",
+            ));
+        }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.battery_mode.is_some() {
+            return Err(serde::de::Error::custom(
+                "battery_mode_requires_settings_v2",
+            ));
+        }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.style_learning.is_some() {
+            return Err(serde::de::Error::custom(
+                "style_learning_requires_settings_v2",
+            ));
+        }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.language_overrides.is_some() {
+            return Err(serde::de::Error::custom(
+                "language_overrides_requires_settings_v2",
+            ));
+        }
+        Ok(Self {
+            schema: SETTINGS_SCHEMA.to_owned(),
+            revision: decoded.revision,
+            paused: decoded.paused,
+            all_web_origins: decoded.all_web_origins.unwrap_or(false),
+            all_linux_apps: decoded.all_linux_apps.unwrap_or(false),
+            mid_line: decoded.mid_line.unwrap_or(false),
+            escape_quiet_seconds: decoded.escape_quiet_seconds.unwrap_or(0),
+            battery_mode: decoded.battery_mode.unwrap_or_default(),
+            style_learning: decoded.style_learning.unwrap_or(false),
+            language_overrides: decoded.language_overrides.unwrap_or_default(),
+            subjects: decoded.subjects,
+        })
+    }
+}
+
+impl SettingsV2 {
+    #[must_use]
+    pub fn language_override(&self, target: &TargetDescriptor) -> Option<PredictionLanguage> {
+        let app = match target.app_id.as_str() {
+            "chromium-browser" => "chromium",
+            app => app,
+        };
+        self.language_overrides
+            .get(&target.app_id)
+            .or_else(|| self.language_overrides.get(app))
+            .copied()
+    }
+
+    #[must_use]
+    pub fn deny_by_default() -> Self {
+        Self {
+            schema: SETTINGS_SCHEMA.to_owned(),
+            revision: 0,
+            paused: true,
+            all_web_origins: false,
+            all_linux_apps: false,
+            mid_line: false,
+            escape_quiet_seconds: 0,
+            battery_mode: BatteryMode::Quiet,
+            style_learning: false,
+            language_overrides: BTreeMap::new(),
+            subjects: Vec::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), SettingsValidationError> {
+        if self.schema != SETTINGS_SCHEMA {
+            return Err(SettingsValidationError::UnsupportedSchema);
+        }
+        if self.revision > MAX_SAFE_COUNTER {
+            return Err(SettingsValidationError::RevisionOutOfRange);
+        }
+        if self.escape_quiet_seconds > MAX_ESCAPE_QUIET_SECONDS {
+            return Err(SettingsValidationError::EscapeQuietOutOfRange);
+        }
+        if self.language_overrides.len() > MAX_SUBJECTS
+            || self
+                .language_overrides
+                .keys()
+                .any(|app| !valid_linux_app_id(app))
+        {
+            return Err(SettingsValidationError::InvalidLanguageOverride);
+        }
+        if self.subjects.len() > MAX_SUBJECTS {
+            return Err(SettingsValidationError::TooManySubjects);
+        }
+
+        let mut previous: Option<&StableIdentity> = None;
+        for rule in &self.subjects {
+            rule.identity.validate()?;
+            rule.permissions.validate()?;
+            if matches!(rule.identity, StableIdentity::LinuxApp { .. })
+                && rule.permissions.learn.is_allowed()
+            {
+                return Err(SettingsValidationError::LinuxAppLearningUnsupported);
+            }
+            if let Some(identity) = previous {
+                match identity.cmp(&rule.identity) {
+                    Ordering::Equal => return Err(SettingsValidationError::DuplicateIdentity),
+                    Ordering::Greater => {
+                        return Err(SettingsValidationError::SubjectsNotCanonical);
+                    }
+                    Ordering::Less => {}
+                }
+            }
+            previous = Some(&rule.identity);
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn resolve_identity(&self, identity: &StableIdentity) -> PolicyResolution {
+        if self.validate().is_err() || identity.validate().is_err() {
+            return PolicyResolution::unknown(self.revision, self.paused);
+        }
+        self.resolve_identity_validated(identity)
+    }
+
+    #[must_use]
+    pub(crate) fn resolve_identity_validated(&self, identity: &StableIdentity) -> PolicyResolution {
+        match self
+            .subjects
+            .binary_search_by(|rule| rule.identity.cmp(identity))
+        {
+            Ok(index) => PolicyResolution {
+                settings_revision: self.revision,
+                paused: self.paused,
+                identity_known: true,
+                source: PolicySource::Rule,
+                permissions: self.subjects[index].permissions,
+            },
+            Err(_)
+                if self.all_web_origins
+                    && matches!(identity, StableIdentity::BrowserOrigin { .. }) =>
+            {
+                PolicyResolution {
+                    settings_revision: self.revision,
+                    paused: self.paused,
+                    identity_known: true,
+                    source: PolicySource::ListDefault,
+                    permissions: ALL_WEB_ORIGINS_PERMISSIONS,
+                }
+            }
+            Err(_)
+                if self.all_linux_apps && matches!(identity, StableIdentity::LinuxApp { .. }) =>
+            {
+                PolicyResolution {
+                    settings_revision: self.revision,
+                    paused: self.paused,
+                    identity_known: true,
+                    source: PolicySource::ListDefault,
+                    permissions: ALL_LINUX_APPS_PERMISSIONS,
+                }
+            }
+            Err(_) => PolicyResolution {
+                settings_revision: self.revision,
+                paused: self.paused,
+                identity_known: true,
+                source: PolicySource::Unconfigured,
+                permissions: SubjectPermissions::deny_all(),
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn resolve_target(&self, target: &TargetDescriptor) -> PolicyResolution {
+        if self.validate().is_err() {
+            return PolicyResolution::unknown(self.revision, self.paused);
+        }
+        self.resolve_target_validated(target)
+    }
+
+    #[must_use]
+    pub(crate) fn resolve_target_validated(&self, target: &TargetDescriptor) -> PolicyResolution {
+        StableIdentity::from_target(target).map_or_else(
+            |_| PolicyResolution::unknown(self.revision, self.paused),
+            |identity| self.resolve_identity_validated(&identity),
+        )
+    }
+
+    pub fn wire_document(
+        &self,
+        protocol_version: u8,
+    ) -> Result<serde_json::Value, serde_json::Error> {
+        if protocol_version == crate::protocol::PROTOCOL_VERSION {
+            let subjects = self
+                .subjects
+                .iter()
+                .filter(|rule| matches!(rule.identity, StableIdentity::BrowserOrigin { .. }))
+                .collect::<Vec<_>>();
+            Ok(serde_json::json!({
+                "schema": SETTINGS_SCHEMA_V1,
+                "revision": self.revision,
+                "paused": self.paused,
+                "subjects": subjects,
+            }))
+        } else {
+            serde_json::to_value(self)
+        }
+    }
+
+    /// A protocol v1 settings client can still manage its browser-origin
+    /// slice, but cannot erase native rules or the all-web and all-app
+    /// defaults that its schema is unable to represent.
+    #[must_use]
+    pub fn preserving_v2_policy_from(mut self, current: &Self) -> Self {
+        self.all_web_origins = current.all_web_origins;
+        self.all_linux_apps = current.all_linux_apps;
+        self.mid_line = current.mid_line;
+        self.escape_quiet_seconds = current.escape_quiet_seconds;
+        self.battery_mode = current.battery_mode;
+        self.style_learning = current.style_learning;
+        self.language_overrides
+            .clone_from(&current.language_overrides);
+        self.subjects.extend(
+            current
+                .subjects
+                .iter()
+                .filter(|rule| matches!(rule.identity, StableIdentity::LinuxApp { .. }))
+                .cloned(),
+        );
+        self.subjects
+            .sort_by(|left, right| left.identity.cmp(&right.identity));
+        self
+    }
+}
+
+impl Default for SettingsV2 {
+    fn default() -> Self {
+        Self::deny_by_default()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum SettingsValidationError {
+    #[error("invalid_language_override")]
+    InvalidLanguageOverride,
+    #[error("duplicate_identity")]
+    DuplicateIdentity,
+    #[error("escape_quiet_out_of_range")]
+    EscapeQuietOutOfRange,
+    #[error("identity")]
+    Identity(#[from] IdentityError),
+    #[error("invalid_retention")]
+    InvalidRetention,
+    #[error("linux_app_learning_unsupported")]
+    LinuxAppLearningUnsupported,
+    #[error("permission_dependency")]
+    PermissionDependency,
+    #[error("revision_out_of_range")]
+    RevisionOutOfRange,
+    #[error("subjects_not_canonical")]
+    SubjectsNotCanonical,
+    #[error("too_many_subjects")]
+    TooManySubjects,
+    #[error("unsupported_schema")]
+    UnsupportedSchema,
+}

@@ -10,8 +10,10 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 use tokio_util::sync::CancellationToken;
 
-use super::{Broker, BrokerConfig, BrokerError, BrokerEvent, BrokerEventSink, SessionAuthority};
 use crate::control_plane::ControlPlane;
+use crate::engine::{
+    Broker, BrokerConfig, BrokerError, BrokerEvent, BrokerEventSink, SessionAuthority,
+};
 use crate::protocol::{
     Activation, AdapterKind, AutomaticScheduling, Capability, ContextChangedPayload, Coordinates,
     DesktopSession, DesktopStatePayload, FieldDescriptor, FieldPurpose, OffsetUnit, Origin,
@@ -372,8 +374,8 @@ async fn quiet_battery_mode_skips_keys_typed_inside_the_typing_pause() {
         1,
         "superseded keys never reach the model"
     );
-    assert!(fixture.provider.first_start() >= last + super::QUIET_START_DELAY);
-    assert!(fixture.provider.first_start() >= requested + super::QUIET_START_DELAY);
+    assert!(fixture.provider.first_start() >= last + crate::engine::QUIET_START_DELAY);
+    assert!(fixture.provider.first_start() >= requested + crate::engine::QUIET_START_DELAY);
 }
 
 #[tokio::test]
@@ -388,7 +390,7 @@ async fn quiet_battery_mode_never_delays_an_explicit_request_or_mains_power() {
     let BrokerEvent::SuggestionShow { .. } = fixture.next_event().await else {
         panic!("expected an explicit suggestion");
     };
-    assert!(fixture.provider.first_start() < requested + super::QUIET_START_DELAY);
+    assert!(fixture.provider.first_start() < requested + crate::engine::QUIET_START_DELAY);
 
     fixture.report(DesktopSession::Active, false).await;
     assert_eq!(
@@ -406,7 +408,7 @@ async fn quiet_battery_mode_never_delays_an_explicit_request_or_mains_power() {
         }
     }
     let started = fixture.provider.started.lock().expect("start times")[1];
-    assert!(started < requested + super::QUIET_START_DELAY);
+    assert!(started < requested + crate::engine::QUIET_START_DELAY);
 }
 
 #[tokio::test]

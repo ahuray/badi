@@ -21,7 +21,7 @@ path = "src/main.rs"
 
 [[bin]]
 name = "badictl"
-path = "src/bin/badictl.rs"
+path = "src/bin/badictl/main.rs"
 
 [[test]]
 name = "owned_runtime"

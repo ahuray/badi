@@ -206,6 +206,24 @@ prints pinned download advice and downloads nothing
   the server stays at one slot. Prefill batches are 16 tokens so cancellation
   lands quickly; up to four threads. The GPU is not used: Vulkan on the Iris
   Xe was slower for these short requests.
+- **Measured and not adopted** (2026-10-12, this machine, five disposable
+  prefixes): six threads produced the same greedy text and were not faster.
+  Bartowski's Q4_0 of Qwen3-1.7B
+  (`c470091d31c4ada174ee5c2547daa020e930593cbca5ca8ca385ce8ff59a2fdf`, not a
+  re-quant of the pinned file) was slightly faster in four of six paired
+  8-token decodes, slower in one, and changed greedy text on four prefixes
+  ("Thank" → " youngster"); production stays on Q4_K_M. N-gram speculation
+  was no faster, and a Qwen3-0.6B Q4_K_M draft
+  (`9acfc1e001311f34b4252001b626f2e466d592a42065f66571bff3790d4e1b14`, two
+  tokens ahead) took 0.5–1.8 s to the first word against 0.15–0.47 s without
+  it, so no draft model is loaded.
+- **Speed sample.** Build `5faafcf` (2026-10-12; the same five prefixes four
+  times each, predictions on): first grey word in Omawrite 0.5.0 20/20 at
+  209–250 ms, middle 220–223 ms, 19th of 20 at 244 ms; in a Chromium
+  textarea 20/20 at 227–371 ms, middle 246–249 ms, 19th at 314 ms. A known
+  field starts the model on the key, so the 120 ms typing pause runs inside
+  the generation wait ([Fcitx runbook](../adapters/fcitx5/README.md)). One
+  machine and these prefixes, not a universal latency.
 - **Memory.** CPU weights are copied instead of mapped, allowing repacking to
   release the original allocation. A frozen 260-case UD r2.16 confirmation
   comparison on 2026-10-13 produced identical raw and displayed output for

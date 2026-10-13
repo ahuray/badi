@@ -74,5 +74,9 @@ node adapters/shared/evaluate-writing.mjs            # 20-prefix model smoke, no
 
 The live runner uses the installed Obsidian with its own temporary vault,
 profile, plugin and broker; headless Ozone exercises the real editor without
-the desktop. Results stay under the ignored `output/` directory. These checks
-prove editing behavior, not the usefulness of German or Persian prose.
+the desktop. It ends Obsidian by signalling only the app process, never its
+process group, so Electron's crash helper does not fire; on 2026-10-12 it
+passed on Obsidian 1.13.7-2 with no new core dump. It never presses Tab
+without a suggestion, because Tab then indents the line. Results stay under
+the ignored `output/` directory. These checks prove editing behavior, not the
+usefulness of German or Persian prose.

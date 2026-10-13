@@ -11,12 +11,17 @@ Preserve exact editing authority and prove the affected user flow.
   | --- | --- |
   | [README.md](README.md) | What users can do: keys, coverage, install, commands |
   | [VISION.md](VISION.md) | The durable product contract |
-  | [future plans.md](<future plans.md>) | The only backlog: open work and open decisions |
+  | [future plans.md](<future plans.md>) | The only backlog: where Badi stands, the ordered next steps, open work and decisions |
+  | [CHANGELOG.md](CHANGELOG.md) | What shipped, by merged pull request |
   | [docs/decisions](docs/decisions/) | Durable architecture decisions (ADRs) |
   | Component `README.md` files | That component's contract, tests and boundaries |
 
   Link to a fact instead of repeating it. Delete stale material instead of
   archiving it, and never add parallel planning or handoff documents.
+- New to the repository: read "Where Badi stands" and "Next steps" in
+  [future plans.md](<future plans.md>), the top of [CHANGELOG.md](CHANGELOG.md),
+  then the runbook of the area you will touch. When work finishes, delete its
+  backlog item, record the result in the runbook and add a changelog line.
 - Inspect Git status before editing; preserve existing changes, untracked files
   and deletions. Work on the requested outcome, not the rest of the backlog.
 - For implementation requests, carry the change through code, tests and the
@@ -36,7 +41,30 @@ Preserve exact editing authority and prove the affected user flow.
 | `adapters/libreoffice/` | Python UNO Writer extension: explicit English spelling replacement in one undo context, verified by reading back. [Runbook](adapters/libreoffice/README.md). |
 | `ui/omarchy-plugin/` | Omarchy bar mark and settings panel. [Runbook](ui/omarchy-plugin/README.md). |
 | `scripts/`, `packaging/` | `badi` desktop controller, user-local installers, service units, [Fcitx frontend backport](packaging/fcitx5-wayland-compat/README.md). |
-| `evaluation/` | Prediction Lab and its worker crate `badi-writing-lab`, which uses only the broker's public API. The broker never references the Lab. [Runbook](evaluation/writing/README.md), [model fit](docs/architecture/model-selection.md). |
+| `evaluation/` | Prediction Lab and its worker crate `badi-writing-lab`, which uses only the broker's public API. The broker never references the Lab. [Runbook](evaluation/writing/README.md), [model fit](docs/architecture/model-selection.md). `evaluation/power/` holds the paced battery trial. |
+
+Where code lives inside the larger components:
+
+- **Broker** (`broker/src/`): `server.rs` decodes wire frames and runs one
+  handler per message; `engine/` owns sessions, authority epochs, generation,
+  acceptance, type-through and desktop holds, with its tests in
+  `engine/tests/` by topic; `settings/` is the private settings document
+  (identity, permissions, policy, paths, private files, the compare-and-swap
+  store); `writing.rs` and `semantic/` run the local model; `style.rs`,
+  `personalization.rs`, `model_selection.rs` and `control_plane.rs` are what
+  their names say; `bin/badictl/` is the control CLI. A module's unit tests
+  live beside it in `<module>/tests.rs`.
+- **Fcitx addon** (`adapters/fcitx5/src/`): `addon.h` declares the addon;
+  `addon.cpp` (lifecycle and input-context events), `addon_keys.cpp`,
+  `addon_observer.cpp`, `addon_broker.cpp` (broker events and display) and
+  `addon_session.cpp` implement it over the tested core in `state`,
+  `observation`, `transport`, `accessibility`, `sanitizer` and `debug`.
+- **Observer** (`adapters/accessibility/`): `daemon.py` (the private D-Bus
+  service and AT-SPI events), `desktop.py` (active window, Omarchy lock and
+  process identity), `field.py` (acquisition, serialization and Lab-only
+  window context), `contract.py` (the acquisition contract), `geometry.py`
+  and `preview.py` (caret calibration and the overlay), `health.py`
+  (readiness probe).
 
 ## Editing and privacy invariants
 
