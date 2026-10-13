@@ -38,6 +38,16 @@
         "timeout": 0,
         "provider_error": 0,
         "last": "budget_prefill"
+      },
+      "type_through": {
+        "carried": 2,
+        "scope": 0,
+        "after_changed": 1,
+        "language_changed": 0,
+        "deadline_tight": 0,
+        "prefix_mismatch": 0,
+        "shape_rejected": 0,
+        "last_miss": "after_changed"
       }
     }
   }

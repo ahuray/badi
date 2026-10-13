@@ -54,6 +54,48 @@ impl NoSuggestionReason {
     }
 }
 
+/// Content-free class of an admitted request that generation answered with a
+/// provider call although a type-through carry (ADR 0004) existed. The class
+/// names the carry gate that declined; the gates themselves are unchanged.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CarryMiss {
+    /// The request is in another app or site than the shown suggestion.
+    Scope,
+    /// Text after the caret differs from the shown suggestion's context.
+    AfterChanged,
+    /// The context language differs from the shown suggestion's context.
+    LanguageChanged,
+    /// Less than the minimum carried reading time remained.
+    DeadlineTight,
+    /// The new text is not the old text plus a typed proper prefix.
+    PrefixMismatch,
+    /// The remainder failed sanitization or completion-shape validation.
+    ShapeRejected,
+}
+
+impl CarryMiss {
+    const ALL: [Self; 6] = [
+        Self::Scope,
+        Self::AfterChanged,
+        Self::LanguageChanged,
+        Self::DeadlineTight,
+        Self::PrefixMismatch,
+        Self::ShapeRejected,
+    ];
+
+    const fn index(self) -> usize {
+        match self {
+            Self::Scope => 0,
+            Self::AfterChanged => 1,
+            Self::LanguageChanged => 2,
+            Self::DeadlineTight => 3,
+            Self::PrefixMismatch => 4,
+            Self::ShapeRejected => 5,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Metrics {
     context_updates: AtomicU64,
@@ -76,6 +118,10 @@ pub struct Metrics {
     no_suggestion: [AtomicU64; 8],
     /// Zero until the first no-suggestion outcome; otherwise its index plus one.
     last_no_suggestion: AtomicU8,
+    type_through_carried: AtomicU64,
+    carry_miss: [AtomicU64; 6],
+    /// Zero until the first carry miss; otherwise its index plus one.
+    last_carry_miss: AtomicU8,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -116,6 +162,44 @@ impl NoSuggestionSnapshot {
     }
 }
 
+/// Type-through outcomes (ADR 0004) since broker start: requests answered
+/// from the carry, and admitted requests that reached the provider although
+/// a carry existed, by the gate that declined it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeThroughSnapshot {
+    pub carried: u64,
+    pub scope: u64,
+    pub after_changed: u64,
+    pub language_changed: u64,
+    pub deadline_tight: u64,
+    pub prefix_mismatch: u64,
+    pub shape_rejected: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_miss: Option<CarryMiss>,
+}
+
+impl TypeThroughSnapshot {
+    #[must_use]
+    pub const fn count(&self, miss: CarryMiss) -> u64 {
+        match miss {
+            CarryMiss::Scope => self.scope,
+            CarryMiss::AfterChanged => self.after_changed,
+            CarryMiss::LanguageChanged => self.language_changed,
+            CarryMiss::DeadlineTight => self.deadline_tight,
+            CarryMiss::PrefixMismatch => self.prefix_mismatch,
+            CarryMiss::ShapeRejected => self.shape_rejected,
+        }
+    }
+
+    #[must_use]
+    pub fn misses(&self) -> u64 {
+        CarryMiss::ALL
+            .iter()
+            .fold(0_u64, |total, miss| total.saturating_add(self.count(*miss)))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MetricsSnapshot {
@@ -140,6 +224,9 @@ pub struct MetricsSnapshot {
     /// Word completions since broker start; absent from v1 and older brokers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub word_savings: Option<WordSavings>,
+    /// Type-through carry outcomes; absent from protocol v1 and older brokers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_through: Option<TypeThroughSnapshot>,
 }
 
 /// An estimate, not a document audit: partial words count and undo is unknown.
@@ -157,6 +244,7 @@ impl MetricsSnapshot {
         Self {
             no_suggestion: None,
             word_savings: None,
+            type_through: None,
             ..self
         }
     }
@@ -236,6 +324,18 @@ impl Metrics {
         );
     }
 
+    pub fn record_type_through_carried(&self) {
+        self.type_through_carried.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_carry_miss(&self, miss: CarryMiss) {
+        self.carry_miss[miss.index()].fetch_add(1, Ordering::Relaxed);
+        self.last_carry_miss.store(
+            u8::try_from(miss.index() + 1).unwrap_or(0),
+            Ordering::Relaxed,
+        );
+    }
+
     #[must_use]
     pub fn snapshot(&self) -> MetricsSnapshot {
         let count =
@@ -243,6 +343,10 @@ impl Metrics {
         let last = usize::from(self.last_no_suggestion.load(Ordering::Relaxed))
             .checked_sub(1)
             .and_then(|index| NoSuggestionReason::ALL.get(index).copied());
+        let miss_count = |miss: CarryMiss| self.carry_miss[miss.index()].load(Ordering::Relaxed);
+        let last_miss = usize::from(self.last_carry_miss.load(Ordering::Relaxed))
+            .checked_sub(1)
+            .and_then(|index| CarryMiss::ALL.get(index).copied());
         MetricsSnapshot {
             context_updates: self.context_updates.load(Ordering::Relaxed),
             provider_calls: self.provider_calls.load(Ordering::Relaxed),
@@ -274,6 +378,16 @@ impl Metrics {
                 provider_error: count(NoSuggestionReason::ProviderError),
                 last,
             }),
+            type_through: Some(TypeThroughSnapshot {
+                carried: self.type_through_carried.load(Ordering::Relaxed),
+                scope: miss_count(CarryMiss::Scope),
+                after_changed: miss_count(CarryMiss::AfterChanged),
+                language_changed: miss_count(CarryMiss::LanguageChanged),
+                deadline_tight: miss_count(CarryMiss::DeadlineTight),
+                prefix_mismatch: miss_count(CarryMiss::PrefixMismatch),
+                shape_rejected: miss_count(CarryMiss::ShapeRejected),
+                last_miss,
+            }),
         }
     }
 }
@@ -284,7 +398,7 @@ fn saturating_u64(value: usize) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Metrics, MetricsSnapshot, NoSuggestionReason};
+    use super::{CarryMiss, Metrics, MetricsSnapshot, NoSuggestionReason};
 
     #[test]
     fn each_reason_has_its_own_counter_and_the_last_class_is_retained() {
@@ -320,11 +434,45 @@ mod tests {
             serde_json::to_value(metrics.snapshot().for_protocol_v1()).expect("legacy JSON");
         assert!(legacy.get("no_suggestion").is_none());
         assert!(legacy.get("word_savings").is_none());
+        assert!(legacy.get("type_through").is_none());
         let decoded: MetricsSnapshot = serde_json::from_value(legacy).expect("older broker");
         assert_eq!(decoded.no_suggestion, None);
         assert_eq!(decoded.word_savings, None);
+        assert_eq!(decoded.type_through, None);
         let mut unknown = value;
         unknown["no_suggestion"]["guessed"] = serde_json::json!(1);
+        assert!(serde_json::from_value::<MetricsSnapshot>(unknown).is_err());
+    }
+
+    #[test]
+    fn each_carry_miss_has_its_own_counter_and_the_last_class_is_retained() {
+        let metrics = Metrics::default();
+        let empty = metrics.snapshot().type_through.expect("breakdown");
+        assert_eq!(empty.carried, 0);
+        assert_eq!(empty.misses(), 0);
+        assert_eq!(empty.last_miss, None);
+        metrics.record_type_through_carried();
+        metrics.record_type_through_carried();
+        for (repeat, miss) in CarryMiss::ALL.into_iter().enumerate() {
+            for _ in 0..=repeat {
+                metrics.record_carry_miss(miss);
+            }
+            let snapshot = metrics.snapshot().type_through.expect("breakdown");
+            assert_eq!(
+                snapshot.count(miss),
+                u64::try_from(repeat + 1).expect("small")
+            );
+            assert_eq!(snapshot.last_miss, Some(miss));
+        }
+        let snapshot = metrics.snapshot().type_through.expect("breakdown");
+        assert_eq!(snapshot.carried, 2);
+        assert_eq!(snapshot.misses(), 21);
+        let value = serde_json::to_value(metrics.snapshot()).expect("metrics JSON");
+        assert_eq!(value["type_through"]["carried"], 2);
+        assert_eq!(value["type_through"]["prefix_mismatch"], 5);
+        assert_eq!(value["type_through"]["last_miss"], "shape_rejected");
+        let mut unknown = value;
+        unknown["type_through"]["guessed"] = serde_json::json!(1);
         assert!(serde_json::from_value::<MetricsSnapshot>(unknown).is_err());
     }
 }
