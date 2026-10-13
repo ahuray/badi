@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#77](https://github.com/ahuray/badi/pull/77) Records only: the
+  2026-10-13 evening live install/trial results in the plan — session
+  helper and binds proven, the observer chip-doubling defect in browsers
+  and Writer, and live type-through carry counters. No behavior change.
 - [#76](https://github.com/ahuray/badi/pull/76) `badictl status` counts
   type-through carry outcomes by declining gate (`type_through`), and a
   browser-scoped single-space carry is regression-tested; the live
