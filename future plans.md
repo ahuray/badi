@@ -69,21 +69,36 @@ publish need the user's go-ahead first; the rest can start at once.
 
 1. **Install this release and run the installed-flow matrix.**
    `scripts/install-desktop.py` installs the broker, addon, observer and the
-   session helper. Then, with disposable text: a real suspend and resume, a VT
-   switch and a Tab pressed right after resume; a service restart, undo,
-   pause, composition and stale focus; the style key delivered from the
-   desktop keyring after `badi style on`; and the Hyprland binds for
-   `pause-toggle` and `open-settings`. Hyprland 0.56.2 keeps listing the
-   shortcuts registered by the 2026-10-13 trial until it restarts. Add
-   fractional scaling and several monitors when a second display is at hand.
-   *Done when* the matrix shows zero wrong-field or stale edits and the
-   session helper and Fcitx runbooks record it.
+   session helper. Install half done on 2026-10-13 evening: `b492c0a` runs
+   here (`badi doctor` clean, installed source `b492c0a`), the session
+   helper reports `active`/`observed`, the Hyprland binds (`SUPER+ALT+B`
+   pause-toggle, `SUPER+ALT+PERIOD` open-settings — comma was already taken)
+   are in the user's `badi.lua` and dispatch-proven, `badi style on` reports
+   key ready, and old-build backups were deleted. Still to run, with
+   disposable text: a real suspend and resume, a VT switch and a Tab pressed
+   right after resume; a service restart, undo, pause, composition and stale
+   focus; and fractional scaling / several monitors when a second display is
+   at hand. *Done when* the matrix shows zero wrong-field or stale edits and
+   the session helper and Fcitx runbooks record it.
 2. **Try the new editor surfaces live.** Neovim: the real model in an
    interactive terminal Neovim (display, Tab, Ctrl+→, undo, and whether
    Ctrl+Shift+Space arrives). Writer: the interactive window under Wayland
    with Fcitx beside it (infobar look and focus, Alt+F7, one Ctrl+Z) and a
    model-backed correction of an ambiguous word; the grey preview stays
-   IME-parity. *Done when* the [Neovim](adapters/neovim/README.md) and
+   IME-parity. Live trial 2026-10-13 evening (installed `b492c0a`, real
+   model, user typing): editor-owned surfaces (Obsidian, the terminal text
+   editor) read clean. The observer chip/edge pill is not usable in
+   browsers or Writer: it hovers away from the caret and renders each
+   character doubled (`ddwwaarree ffrroomm`); in Obsidian the same pill
+   hovers beside the editor client's own clean inline ghost, so two display
+   paths show at once there. A captured inline observer ghost was clean and
+   single. Broker/addon text is clean through `previewRequest`
+   ([probe](broker/README.md#badictl); displays were `display_overlay`),
+   so the doubling sits inside the observer's chip presentation on this
+   host (eDP-1 scale 2) — cause unproven, fix not attempted. In Omawrite,
+   Tab accepted the whole multi-word suggestion, which is the Fcitx mapping
+   (Ctrl+→ takes one word). *Done when* the
+   [Neovim](adapters/neovim/README.md) and
    [Writer](adapters/libreoffice/README.md) runbooks record the live result
    and any defect found is fixed.
 3. **Stop the second model call after type-through in browsers.** On
@@ -100,9 +115,15 @@ publish need the user's go-ahead first; the rest can start at once.
    `badictl status` now counts each declining gate under `type_through`
    (latest in `last_miss`, [broker runbook](broker/README.md#badictl)). The
    next live trial reads that counter to name the gate, then the fix lands
-   at that gate with its own test. *Done when* typing the suggestion's next
-   characters, including a space, returns the remainder without a model
-   call in Brave Origin and Zen.
+   at that gate with its own test. The 2026-10-13 evening live session
+   (mixed apps, aggregates not per-browser) ended at `carried` 24 with
+   misses dominated by `prefix_mismatch` (56; typed text diverging from the
+   suggestion), plus `scope` 2 and `deadline_tight` 2, and no
+   `after_changed`, `language_changed` or `shape_rejected` — so carries do
+   happen live, and no single gated field explains the 2026-10-12 browser
+   case yet. Chase it per-browser together with the chip defect in step 2.
+   *Done when* typing the suggestion's next characters, including a space,
+   returns the remainder without a model call in Brave Origin and Zen.
 4. **Qualify on the frozen confirmation set.** The user-approved public set
    (UD r2.16 test, 100 English and 40 each German, French, Spanish and
    Persian prefixes) is frozen privately at
