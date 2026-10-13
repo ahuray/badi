@@ -802,10 +802,12 @@ def session(root, report):
             wait(lambda: context.candidate() == SUFFIX, label + ' candidate before dismissal')
             assert context.key(desktop.ESCAPE)
             wait(lambda: context.candidate() is None, label + ' Escape dismissal')
+            context.text(PREFIX)
             quiet(.3)
             assert context.candidate() is None, 'A dismissed automatic context stays dismissed'
+            # Do not pump the observer between deleting and retyping. Its
+            # snapshot may skip the empty field even though Fcitx publishes it.
             change('')
-            quiet(.2)
             assert context.candidate() is None, label + ' clearing the field does not revive the dismissed suggestion'
             change(PREFIX)
             wait(lambda: context.candidate() == SUFFIX,
