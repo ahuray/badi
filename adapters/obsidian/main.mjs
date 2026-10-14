@@ -64,6 +64,7 @@ class WritingView {
   }
 
   clearPreview() {
+    if (this.text) recordActivity('obsidian', 'ghost', 'hidden');
     this.text = null;
     this.replaceBefore = undefined;
     this.decorations = Decoration.none;
@@ -148,6 +149,7 @@ class WritingView {
       const preview = replaceBefore === undefined ? text : ` ${replaceBefore.trim()} → ${text.trim()}`;
       this.decorations = Decoration.set([Decoration.widget({ widget: new SuggestionWidget(preview), side: 1 }).range(end)]);
       this.render();
+      recordActivity('obsidian', 'ghost', 'shown');
     } catch {
       if (generation === this.generation && this.view.hasFocus) this.owner.status.setText('Badi · no suggestion · Ctrl+Shift+Space retries');
     } finally {

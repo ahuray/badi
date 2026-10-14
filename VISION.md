@@ -47,7 +47,9 @@ interaction, the exact editing authority and the policy around them.
   decisions; deny wins. Ordinary context is ephemeral. Enabled style learning
   uses only authorized samples, stays encrypted locally, and supports one-step
   deletion; opting out stops further acquisition and learning. Typed text and
-  credentials stay out of diagnostics, which record content-free counts and reasons.
+  credentials stay out of diagnostics, which record content-free counts and reasons;
+  only an explicit, expiring, memory-only `badi debug on --text` run records text
+  ([ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
 - Raw keylogging, clipboard or screen scraping and blind synthetic typing are
   never product integrations.
 

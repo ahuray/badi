@@ -1,4 +1,4 @@
-import { lstatSync, openSync, readFileSync, fstatSync, closeSync, writeFileSync, renameSync, unlinkSync, constants } from 'node:fs';
+import { lstatSync, openSync, readFileSync, fstatSync, closeSync, writeFileSync, writeSync, renameSync, unlinkSync, constants } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -10,6 +10,30 @@ const DISABLED_RECHECK_MS = 1000;
 const runs = new Map();
 let disabledSince = null;
 const APP_IDS = Object.freeze({ obsidian: 'obsidian', terminal: 'bash', neovim: 'nvim' });
+
+// Writers stop appending once the shared trace reaches this size.
+const MAX_TRACE_BYTES = 16 * 1024 * 1024;
+
+// One line in the shared `badi debug` trace. Only `badi debug on` creates the
+// trace and `badi debug off` deletes it, so a missing file means no trace.
+function appendTrace(directory, line) {
+  // Test runs set BADI_DEBUG_TRACE=off so they never write into a live run.
+  if (process.env.BADI_DEBUG_TRACE === 'off') return;
+  let fd;
+  try {
+    fd = openSync(join(directory, 'debug-trace.jsonl'),
+      constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW);
+    const metadata = fstatSync(fd);
+    if (!metadata.isFile() || metadata.uid !== process.getuid() || (metadata.mode & 0o077) ||
+        metadata.size > MAX_TRACE_BYTES) return;
+    // One write per line: O_APPEND keeps concurrent writers' lines whole.
+    writeSync(fd, `${JSON.stringify(line)}\n`);
+  } catch {
+    // The trace is optional diagnostics.
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
 
 export function recordActivity(adapter, event, reason) {
   if (!Object.hasOwn(APP_IDS, adapter) || !/^[a-z_. ]{1,64}$/.test(event) ||
@@ -38,6 +62,7 @@ export function recordActivity(adapter, event, reason) {
       run = { id: control.id, counts: {}, reason_counts: {} };
       runs.set(adapter, run);
     }
+    appendTrace(directory, { t: now, src: adapter, ev: event, reason });
     run.counts[event] = (run.counts[event] ?? 0) + 1;
     run.reason_counts[reason] = (run.reason_counts[reason] ?? 0) + 1;
     temporary = join(directory, `debug-${adapter}.${randomUUID()}.tmp`);

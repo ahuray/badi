@@ -176,6 +176,21 @@ enum class PreKeyAction {
     AcceptWord,       // Ctrl+Right accepts the candidate's next word
 };
 
+// The action's name in the debug trace.
+constexpr std::string_view preKeyActionName(PreKeyAction action) {
+    switch (action) {
+    case PreKeyAction::PassThrough: return "pass_through";
+    case PreKeyAction::Cancel: return "cancel";
+    case PreKeyAction::CancelDeclining: return "cancel_declining";
+    case PreKeyAction::CancelTypingThrough: return "type_through";
+    case PreKeyAction::Tab: return "tab";
+    case PreKeyAction::CloseNotice: return "close_notice";
+    case PreKeyAction::Dismiss: return "dismiss";
+    case PreKeyAction::AcceptWord: return "accept_word";
+    }
+    return "unknown";
+}
+
 // What Badi shows in Fcitx's auxiliary text.
 namespace notice {
 inline constexpr std::string_view kUnavailableApp = "Badi cannot safely insert suggestions in this app yet";

@@ -108,7 +108,11 @@ ambiguous words go to the model in production and get nothing from the fixture.
 ## Boundaries
 
 Tested headless with LibreOffice 26.8 on this workstation, with the phrase
-fixture. Not yet verified: the interactive Writer window under Wayland with
-Fcitx running beside it, the infobar's look and focus in the GTK/Qt UI, a
-model-backed correction of an ambiguous word, and other LibreOffice versions.
-English only, like the broker's spelling contract.
+fixture. Live on 2026-10-14 (LibreOffice 26.8.0.3, interactive Wayland
+window, Fcitx beside it, installed broker, isolated profile, disposable
+text): Alt+F7 showed the infobar `Badi: adress → address`, Alt+F7 again
+replaced it (`applied`) and one Ctrl+Z restored `adress`. Writer then leaves
+the restored word selected, so the next key typed replaces it; that is
+Writer's undo, not a Badi edit. Not yet verified: a model-backed correction
+of an ambiguous word and other LibreOffice versions. English only, like the
+broker's spelling contract.

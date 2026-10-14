@@ -17,7 +17,7 @@ four-second local display timer. Update the broker before the editor plugin.
 | Obsidian | Automatic, or Ctrl+Shift+Space to request. Tab accepts one word only while a suggestion is visible; otherwise it stays Tab. Ctrl/Command+Right accepts all, Escape dismisses. Mid-note, only what fits before the next word. | Obsidian 1.13.7 / Electron 43, real app and model: English, German and Persian display, acceptance, undo, Escape, broker restart |
 | Bash | Ctrl-X then Tab requests and accepts, Ctrl-X then Escape dismisses; never submits ([details](../shell/README.md)) | Bash 5.3.15, Readline 8.3, Ghostty 1.3.1 |
 | Neovim | Prose buffers, automatic after a 120 ms pause, or Ctrl+Shift+Space. Tab accepts all and Ctrl+Right one word only while a suggestion is visible; leaving Insert mode dismisses ([details](../neovim/README.md)) | Neovim 0.12.5 headless, scripted bridge and real phrase broker; not yet with the real model in a terminal |
-| LibreOffice Writer (spelling) | Alt+F7 shows a correction of the word before the caret, Alt+F7 again replaces it in one undo step, Escape dismisses ([details](../libreoffice/README.md)) | LibreOffice 26.8 headless, phrase fixture; not yet the interactive window |
+| LibreOffice Writer (spelling) | Alt+F7 shows a correction of the word before the caret, Alt+F7 again replaces it in one undo step, Escape dismisses ([details](../libreoffice/README.md)) | LibreOffice 26.8 headless, phrase fixture; the interactive Wayland window live (Alt+F7, replace, one Ctrl+Z) |
 
 Browser fields use the [IME-parity path](../../README.md#how-badi-edits-chromium-based-apps-and-zen)
 instead.
@@ -61,7 +61,8 @@ Language: an Arabic-script letter nearest the caret selects Persian; otherwise
 the app's language hint applies. Persian half-spaces (U+200C) are kept only
 between the letters in
 [the orthographic fixture](../../protocol/orthographic-joiner-fixtures.json).
-`badi debug on` records content-free metadata for 15 minutes.
+`badi debug on` records content-free metadata for 15 minutes and appends each
+event to the shared [debug trace](../../README.md#debug-trace).
 
 ## Check
 

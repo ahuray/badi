@@ -203,6 +203,12 @@ void BadiAddon::displaySuggestion(Suggestion suggestion, bool overlay) {
         });
     binding->inputContext->updateUserInterface(::fcitx::UserInterfaceComponent::InputPanel);
     debug_.record("suggestion", binding->state.appId(), overlay ? "display_overlay" : "display_dispatched");
+    // The overlay is the observer's grey text at the caret; the panel is
+    // Fcitx's candidate popup, Badi's fallback display.
+    debug_.trace("ghost shown", binding->state.appId(),
+        {{"display", overlay ? "overlay" : "panel"}, {"id", suggestion.suggestionId},
+         {"bytes", suggestion.text.size()}},
+        {{"text", suggestion.text}});
 }
 
 // Keep the last-resort panel to one quiet line; key help lives in the runbook.

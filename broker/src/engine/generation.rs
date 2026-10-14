@@ -14,7 +14,8 @@ use super::type_through::{CarryScope, TypeThrough};
 use super::{
     Broker, BrokerError, BrokerEvent, BrokerState, SessionState, VisibleSuggestion, duration_millis,
 };
-use crate::metrics::{CarryMiss, NoSuggestionReason};
+use crate::debug_trace;
+use crate::metrics::{CarryMiss, Metrics, NoSuggestionReason};
 use crate::personalization::PersonalizationSignal;
 use crate::policy::PolicyDecision;
 use crate::protocol::{
@@ -181,7 +182,7 @@ impl Broker {
                 expires_at,
                 aggregate_day,
             };
-            metrics.record_type_through_carried();
+            record_carry(metrics, &binding, None);
             let cancellation = CancellationToken::new();
             self.show_if_current(state, binding, &cancellation, proposal, Some(carried), true);
             return Ok(None);
@@ -208,7 +209,7 @@ impl Broker {
         // the gate that declined it. An abstention above calls no provider
         // and records nothing.
         if let Some(miss) = carry_miss {
-            metrics.record_carry_miss(miss);
+            record_carry(metrics, &binding, Some(miss));
         }
         session.generation = binding.generation;
         let cancellation = CancellationToken::new();
@@ -286,6 +287,13 @@ impl Broker {
             return;
         }
         self.inner.metrics.record_provider_call(request.byte_len());
+        let started = Instant::now();
+        debug_trace::emit("model start", |entry| {
+            entry.put("sid", debug_trace::session(binding.coordinates.session_id));
+            entry.put("trigger", format!("{trigger:?}").to_lowercase());
+            entry.put("input_bytes", request.byte_len());
+            entry.put("waited_ms", duration_millis(delay));
+        });
         let provider_deadline = Instant::now() + self.inner.config.provider_timeout;
         let deadline = binding.deadline.min(provider_deadline);
         let stream_partials = request.after.is_empty();
@@ -311,12 +319,14 @@ impl Broker {
                     if shown_partial.is_none() {
                         self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
                     }
+                    trace_model_done(&binding, started, "cancelled", None);
                     return;
                 }
                 () = shutdown.cancelled() => {
                     if shown_partial.is_none() {
                         self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
                     }
+                    trace_model_done(&binding, started, "shutdown", None);
                     return;
                 }
                 partial = partial_rx.recv(), if partials_open => {
@@ -353,6 +363,18 @@ impl Broker {
                     }
                 }
                 result = &mut provider => {
+                    let (outcome, text) = match &result {
+                        Ok(Ok(ProviderOutcome::Proposal(raw))) => {
+                            ("proposal".to_owned(), Some(raw.text.as_str()))
+                        }
+                        Ok(Ok(ProviderOutcome::NoSuggestion(reason))) => {
+                            (trace_name(reason), None)
+                        }
+                        Ok(Err(ProviderError::Cancelled)) => ("cancelled".to_owned(), None),
+                        Ok(Err(ProviderError::Unavailable)) => ("unavailable".to_owned(), None),
+                        Err(_) => ("timeout".to_owned(), None),
+                    };
+                    trace_model_done(&binding, started, &outcome, text);
                     self.finish_generation(binding, &cancellation, result, shown_partial, carried)
                         .await;
                     return;
@@ -674,6 +696,48 @@ impl Broker {
 
 /// The carried remainder for this admitted request (ADR 0004), or the gate
 /// that declined the carry. Both are `None` when no carry exists.
+/// A metrics class as the trace names it: its `snake_case` wire name.
+fn trace_name(class: impl serde::Serialize) -> String {
+    serde_json::to_value(class)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+/// Counts and traces a type-through decision: carried, or the gate that
+/// declined although the request then reached the provider.
+fn record_carry(metrics: &Metrics, binding: &GenerationBinding, miss: Option<CarryMiss>) {
+    match miss {
+        None => metrics.record_type_through_carried(),
+        Some(miss) => metrics.record_carry_miss(miss),
+    }
+    debug_trace::emit("carry", |entry| {
+        entry.put("sid", debug_trace::session(binding.coordinates.session_id));
+        entry.put(
+            "outcome",
+            miss.map_or_else(|| "carried".to_owned(), trace_name),
+        );
+    });
+}
+
+/// One provider call's end, with its latency and outcome class.
+fn trace_model_done(
+    binding: &GenerationBinding,
+    started: Instant,
+    outcome: &str,
+    text: Option<&str>,
+) {
+    debug_trace::emit("model done", |entry| {
+        entry.put("sid", debug_trace::session(binding.coordinates.session_id));
+        entry.put("ms", duration_millis(started.elapsed()));
+        entry.put("outcome", outcome);
+        if let Some(text) = text {
+            entry.put("chars", text.chars().count());
+            entry.text("text", text);
+        }
+    });
+}
+
 fn consult_carry(
     carry: Option<&TypeThrough>,
     scope: &CarryScope,

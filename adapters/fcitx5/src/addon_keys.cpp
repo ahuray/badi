@@ -38,8 +38,18 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
         .word = key.check(wordKey()) && unclaimed,
         .typesSuggestion = typesSuggestionStart(typed, expected),
     };
-    switch (decidePreKey(pressed, binding->state.editingAvailable(), !binding->ownedAuxiliary.empty(),
-                         binding->state.suggestionVisible(), panel)) {
+    const auto action = decidePreKey(pressed, binding->state.editingAvailable(), !binding->ownedAuxiliary.empty(),
+                                     binding->state.suggestionVisible(), panel);
+    if (!pressed.modifier) {
+        // A key that types text is named only in a text run; control keys
+        // such as Tab and Escape also "type" a control character.
+        const bool printable = !typed.empty() && static_cast<unsigned char>(typed[0]) >= 0x20 && typed != "\x7f";
+        debug_.trace("key", app,
+            {{"key", printable ? "printable" : key.toString()}, {"action", preKeyActionName(action)},
+             {"ghost_visible", binding->state.suggestionVisible()}},
+            printable ? nlohmann::json{{"typed", typed}} : nlohmann::json(nullptr));
+    }
+    switch (action) {
     case PreKeyAction::PassThrough:
         return;
     case PreKeyAction::CancelDeclining:

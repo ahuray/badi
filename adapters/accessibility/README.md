@@ -40,6 +40,11 @@ editing works ([coverage](../../README.md#where-it-works)).
   `paragraph` fields qualify. Writer gives Fcitx only the caret's sentence, so
   the snapshot, after the binding is authorized, starts at the AT-SPI
   `SENTENCE` boundary and must still equal it. Inspect does not read that sentence.
+  At a trailing space that ends the paragraph, Writer 26.8 answers an empty
+  range (0, 0); the lookup steps back over empty answers only, and the
+  sentence it finds must still contain the caret's character. Fcitx's
+  sentence there ends before the space, so the addon fails closed as
+  `observer_context_mismatch` ([future plans](<../../future plans.md>)).
 
 Browser targets share one browser-origin identity (adapter `chromium`), so one
 `badi site ... on` grant covers Chromium, Brave and Zen. The target and binding
@@ -323,6 +328,12 @@ preview accepts the broker's remaining lease up to 15 seconds; scrolling
 repositions it with only the remaining time and never renews it. The
 helper forces software rendering and the simple GTK input module, so it never
 loads a GPU driver or connects to an input method.
+
+With `badi debug on`, `debugtrace.py` adds each request, each preview drawn
+(placement and monitor-local box), declined (`uncalibrated_caret`,
+`right_to_left_text`, `monitor_unmatched`, `no_room`), mapped and hidden
+(`replaced`, `expired`, `withdrawn`) to the
+[debug trace](../../README.md#debug-trace).
 
 ## Installation and the renderer flag
 

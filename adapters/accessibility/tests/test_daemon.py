@@ -1570,6 +1570,14 @@ class MetadataTests(unittest.TestCase):
             sentences[(4, "sentence")] = SimpleNamespace(start_offset=start, end_offset=end, content="no")
             with self.subTest(sentence=(start, end)), self.assertRaisesRegex(Denied, "invalid_caret"):
                 backend.sentence_start(backend.metadata("libreoffice"))
+        # Writer answers (0, 0) at a paragraph's trailing space; the sentence
+        # before it must still contain that space.
+        sentences[(4, "sentence")] = SimpleNamespace(start_offset=0, end_offset=0, content="")
+        sentences[(3, "sentence")] = SimpleNamespace(start_offset=2, end_offset=5, content="Find the report ")
+        self.assertEqual(backend.sentence_start(backend.metadata("libreoffice")), 2)
+        sentences[(3, "sentence")] = SimpleNamespace(start_offset=2, end_offset=4, content="Find the report")
+        with self.assertRaisesRegex(Denied, "invalid_caret"):
+            backend.sentence_start(backend.metadata("libreoffice"))
         sentences[(4, "sentence")] = SimpleNamespace(start_offset=2, end_offset=5, content="Find the report")
         for role in ("text", "entry"):
             node.role = role

@@ -222,6 +222,7 @@ learn ([details](broker/README.md#style-learning-opt-in)).
 badi doctor                  # setup and startup problems
 badi doctor --json           # the same diagnosis for tools; exit 1 on problems
 badi debug on                # then: badi debug watch, and type in another app
+badi debug on --text         # the same trace with context and suggestion text
 badictl probe -              # run a disposable phrase through the live model
 badi service restart
 ```
@@ -239,6 +240,29 @@ what you typed:
 
 Debug mode expires after 15 minutes. A crashed model service restarts with
 backoff; a missing or oversized model stops it for `badi doctor` to explain.
+
+### Debug trace
+
+`badi debug on` writes one line per event to
+`$XDG_RUNTIME_DIR/badi/debug-trace.jsonl`, from every part of Badi:
+
+| Source | Events |
+| --- | --- |
+| `broker` | Each message to and from an adapter (`in context.changed`, `out suggestion.show`, `out suggestion.clear` with its reason, commits), `model start` / `model done` with latency and outcome, `carry` (type-through kept or the gate that declined) |
+| `fcitx` | `key` with the action taken and whether a suggestion was showing; `ghost shown` as the `overlay` (grey text at the caret) or the `panel` (Fcitx's popup); `ghost hidden`; every blocked request or display with its reason |
+| `observer` | Each field request; `preview drawn` with its placement (`inline`, `caret_line`, `chip`, `edge_panel`) and box, `preview declined` with its reason, `preview mapped`, `preview hidden` with its cause |
+| `compositor` | While `badi debug watch` runs: whether Hyprland has the grey preview on screen, and where |
+| `obsidian`, `neovim`, `terminal` | Editor activity; Obsidian's `ghost shown` and `hidden` |
+
+`badi debug watch` follows it as readable lines, `badi debug log` prints it
+(`--json` for the raw lines) and `badi debug off` deletes it. Without
+`--text` the trace holds lengths, ids, reasons and positions only. With
+`--text` it also holds the text before and after the caret, typed characters
+and every suggestion; it stays in memory, ends after 15 minutes and is
+deleted at logout, and a field that reports itself sensitive contributes no
+text ([ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
+Test commands set `BADI_DEBUG_TRACE=off`, which keeps a process out of a
+running trace.
 
 ## Model and languages
 

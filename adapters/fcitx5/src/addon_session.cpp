@@ -154,6 +154,12 @@ void BadiAddon::showNotice(Binding &binding, std::string_view message) {
 }
 
 void BadiAddon::clearOwnedPanel(Binding &binding) {
+    // The display Badi owns, not the suggestion state: a broker clear or the
+    // local lease retires the state before the display is cleared here.
+    if (binding.overlayOwned || binding.ownedCandidates) {
+        debug_.trace("ghost hidden", binding.state.appId(),
+            {{"display", binding.overlayOwned ? "overlay" : "panel"}});
+    }
     binding.pendingSuggestion.reset();
     binding.heldSuggestion.reset();
     if (binding.holdTimer) binding.holdTimer->setEnabled(false);

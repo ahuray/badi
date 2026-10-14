@@ -57,7 +57,7 @@ package() {
     ln -s ../lib/badi/badi-desktop.py "$pkgdir/usr/bin/badi"
     ln -s ../lib/badi/badi-desktop.py "$pkgdir/usr/bin/badi-desktop"
     ln -s ../lib/badi/badictl "$pkgdir/usr/bin/badictl"
-    for file in daemon contract desktop field geometry preview health; do
+    for file in daemon contract desktop field geometry preview health debugtrace; do
         install -Dm644 "adapters/accessibility/$file.py" "$pkgdir/usr/lib/badi/accessibility/$file.py"
     done
     for file in daemon link style_key; do
