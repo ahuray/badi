@@ -189,6 +189,17 @@ Scope {
       if (["normal", "quiet", "explicit"].indexOf(value.battery_mode) < 0) return false
       keys.push("battery_mode")
     }
+    // Spelling languages: producers omit exactly ["en"] and keep this order.
+    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "spelling_languages")) {
+      var order = ["en", "de", "fr", "es", "it", "nl", "pl"]
+      var languages = value.spelling_languages
+      if (!Array.isArray(languages)) return false
+      for (var language = 0; language < languages.length; language += 1) {
+        var position = order.indexOf(languages[language])
+        if (position < 0 || (language > 0 && position <= order.indexOf(languages[language - 1]))) return false
+      }
+      keys.push("spelling_languages")
+    }
     if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "language_overrides")) {
       if (!isObject(value.language_overrides)) return false
       var apps = Object.keys(value.language_overrides)

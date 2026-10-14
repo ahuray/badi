@@ -183,9 +183,11 @@ Xournal++, which uses Tab requests, still needs `badi app xournalpp on`.
 A field the toolkit marks as a password is refused in every mode. A normal
 text field is not treated as sensitive from its label, placeholder, or
 autocomplete hint. The **b** mark in the
-Omarchy bar opens the same settings, and right-clicking it pauses Badi.
-Its Writing view shows content-free shown and accepted counts and estimated
-words saved since model start ([counter definitions](ui/omarchy-plugin/README.md#statistics)).
+Omarchy bar opens the same settings as a keyboard-driven popout (j/k, space,
+h/l, `/` to search), and right-clicking it pauses Badi. It shows the model's
+live state, content-free shown and accepted counts, an acceptance meter and
+estimated words saved since model start
+([counter definitions](ui/omarchy-plugin/README.md#statistics)).
 
 A language override takes precedence over detection and the adapter's hint
 without granting access to an app or website. `badi language APP reset`

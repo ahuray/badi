@@ -1275,11 +1275,16 @@ def main(arguments):
     if arguments == ["overview", "--json"]:
         overview = json.loads(output)
         counters = json.loads(control(["status"], endpoint))["metrics"]
+        misses = no_suggestion_summary(counters)
+        if misses and misses["last"]:
+            misses["last_meaning"] = NO_SUGGESTION[misses["last"]]
         overview["desktop"] = {
             "requests": counters["provider_calls"], "suggestions": counters["suggestions_shown"],
             "errors": counters["provider_errors"],
             "accepted": counters.get("commits_prepared"),
             "word_savings": counters.get("word_savings"),
+            "no_suggestion": misses,
+            "spelling": spelling_report(overview.get("settings") or {}),
             "activity": debug_activity(),
         }
         print(json.dumps(overview))
