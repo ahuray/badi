@@ -20,6 +20,9 @@ Linux in general.
 - **Interaction:** type-through, Ctrl+→ next-word acceptance and search-box
   quieting work, and a typed-through remainder returns within about 50 ms with
   no model call ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md)).
+  In browsers it now survives the field being admitted again after the
+  keystroke: Chromium, Brave Origin and Zen kept it with no second model call
+  on 2026-10-13 (checkout broker, real model; the installed build predates it).
   The inline preview ([ADR 0006](docs/decisions/0006-grey-preview-is-an-overlay.md))
   reaches VS Code, iframe editors, Qt apps (Telegram, Omawrite) and
   LibreOffice Writer.
@@ -87,44 +90,25 @@ publish need the user's go-ahead first; the rest can start at once.
    model-backed correction of an ambiguous word; the grey preview stays
    IME-parity. Live trial 2026-10-13 evening (installed `b492c0a`, real
    model, user typing): editor-owned surfaces (Obsidian, the terminal text
-   editor) read clean. The observer chip/edge pill is not usable in
-   browsers or Writer: it hovers away from the caret and renders each
-   character doubled (`ddwwaarree ffrroomm`); in Obsidian the same pill
-   hovers beside the editor client's own clean inline ghost, so two display
-   paths show at once there. A captured inline observer ghost was clean and
-   single. Broker/addon text is clean through `previewRequest`
-   ([probe](broker/README.md#badictl); displays were `display_overlay`),
-   so the doubling sits inside the observer's chip presentation on this
-   host (eDP-1 scale 2) — cause unproven, fix not attempted. In Omawrite,
-   Tab accepted the whole multi-word suggestion, which is the Fcitx mapping
-   (Ctrl+→ takes one word). *Done when* the
+   editor) read clean. The dark two-tone pill with every character doubled
+   (`ddwwaarree ffrroomm`), seen in browsers, Writer, Obsidian and Ghostty,
+   is not Badi's: it is cotype, a separate evdev autocomplete on this
+   desktop (`~/Projects/cotype`, its 8 px-radius bordered overlay). Both
+   `cotype.service` and Hyprland's `autostart.lua` (`cotype start`) launch
+   it; the second launch re-activates the running GTK application, which
+   starts a second keyboard listener (two `listening on 2 keyboard(s)`
+   lines at one start in its journal), so every key reaches its buffer
+   twice. Badi's own overlay, re-checked live that night in Chromium and
+   Brave Origin, drew single, clean text; its overflow chip now stays
+   under the caret inside the field
+   ([observer runbook](adapters/accessibility/README.md#caret-geometry-and-preview)).
+   Writer and Neovim still need their live trial without cotype running.
+   In Omawrite, Tab accepted the whole multi-word suggestion, which is the
+   Fcitx mapping (Ctrl+→ takes one word). *Done when* the
    [Neovim](adapters/neovim/README.md) and
    [Writer](adapters/libreoffice/README.md) runbooks record the live result
    and any defect found is fixed.
-3. **Stop the second model call after type-through in browsers.** On
-   2026-10-12 a disposable Brave Origin page showed grey "for the
-   opportunity" after "Thank you". The addon counted the following space as
-   type-through and the field gained that space, but the broker made another
-   model call. With the type-through wait installed, the same trial still made
-   a second call, and the wait did not run: the field already contained the
-   space when the request went out. A fresh Zen profile exposed only the
-   window frame, so its page was not typed in; tab mode needs the user's
-   running browser. At broker level a single typed space in a
-   browser-scoped session already carries (engine regression tests), so the
-   live wire context differs in one gated field or no carry existed;
-   `badictl status` now counts each declining gate under `type_through`
-   (latest in `last_miss`, [broker runbook](broker/README.md#badictl)). The
-   next live trial reads that counter to name the gate, then the fix lands
-   at that gate with its own test. The 2026-10-13 evening live session
-   (mixed apps, aggregates not per-browser) ended at `carried` 24 with
-   misses dominated by `prefix_mismatch` (56; typed text diverging from the
-   suggestion), plus `scope` 2 and `deadline_tight` 2, and no
-   `after_changed`, `language_changed` or `shape_rejected` — so carries do
-   happen live, and no single gated field explains the 2026-10-12 browser
-   case yet. Chase it per-browser together with the chip defect in step 2.
-   *Done when* typing the suggestion's next characters, including a space,
-   returns the remainder without a model call in Brave Origin and Zen.
-4. **Qualify on the frozen confirmation set.** The user-approved public set
+3. **Qualify on the frozen confirmation set.** The user-approved public set
    (UD r2.16 test, 100 English and 40 each German, French, Spanish and
    Persian prefixes) is frozen privately at
    `output/writing/confirmation-ud-r2.16-2026-10-12/suite.json`, SHA-256
@@ -139,7 +123,7 @@ publish need the user's go-ahead first; the rest can start at once.
    Persian review where results are ambiguous and the full
    [qualification](docs/architecture/model-selection.md). *Done when* a
    candidate passes or fails every gate per language on that set.
-5. **Evaluate same-window context independently.** The observer's
+4. **Evaluate same-window context independently.** The observer's
    [`window_context()`](adapters/accessibility/README.md#same-window-context-lab-only)
    reads the nearest heading and preceding paragraph of the field's own web
    document, never another field, a password, a hidden node or another frame;
@@ -158,7 +142,7 @@ publish need the user's go-ahead first; the rest can start at once.
    like `style_fact_conflict` for context facts and a cache-stable prompt
    layout that meets 550 ms justify production use; only then add the global
    and per-app controls, the wire field and cancellation on focus changes.
-6. **Compare style learning in the Lab.** `badi style on` keeps the sentence
+5. **Compare style learning in the Lab.** `badi style on` keeps the sentence
    written before each accepted suggestion on sites that allow learning,
    sealed with a keyring key; revocation, expiry, key loss, forgetting and the
    locked keyring are tested
@@ -170,7 +154,7 @@ publish need the user's go-ahead first; the rest can start at once.
    lifting that is a separate privacy decision. *Done when* the comparison
    shows a per-language gain without more harm, before any prompt reads
    samples.
-7. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
+6. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
    It packages the addon, broker, observer and user units; writing assets are
    a separate pinned, hash-verified download. *Done when* install, update and
    removal leave nothing behind; publication waits for the naming and licence
@@ -190,6 +174,10 @@ publish need the user's go-ahead first; the rest can start at once.
       Investigate explicit requests in horizontally scrolled, very narrow
       inputs: the installed Chromium trial at 100 CSS px did not establish
       coverage ([tested boundary](adapters/fcitx5/README.md#tested-with)).
+- [ ] Zen showed its suggestion in Fcitx's candidate box, not the overlay,
+      in a fresh profile started with `GNOME_ACCESSIBILITY=1` (2026-10-13,
+      [trial](adapters/fcitx5/README.md#tested-with)). Find which geometry
+      gate declined; the user's own Zen profile is untested since.
 - [ ] Confirm live that the grey preview uses the host font in Telegram.
       A disposable Chromium textarea (2026-10-12, build `7957f16`) set to
       JetBrainsMono NF at 20px reports `family-name` JetBrainsMono NF and

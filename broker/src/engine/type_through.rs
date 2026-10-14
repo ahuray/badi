@@ -59,11 +59,18 @@ impl TypeThrough {
     /// a typed, non-empty proper prefix of its text, in the same app or site,
     /// with enough reading time left and a valid continuation shape. The
     /// error names the first gate that declined, for content-free metrics.
+    ///
+    /// An automatic request for exactly this carry's context keeps the whole
+    /// text: an observed field is re-admitted under a new session when its
+    /// epoch changes, with nothing typed since, and the suggestion on screen
+    /// must not be replaced by another model call. An explicit request for
+    /// that context asks the model.
     pub(super) fn remainder(
         &self,
         scope: &CarryScope,
         context: &ContextChangedPayload,
         now: Instant,
+        explicit: bool,
     ) -> Result<String, CarryMiss> {
         if *scope != self.scope {
             return Err(CarryMiss::Scope);
@@ -77,8 +84,12 @@ impl TypeThrough {
         if self.expires_at < now + MIN_CARRIED_TTL {
             return Err(CarryMiss::DeadlineTight);
         }
-        let typed = typed_prefix(&self.before, &context.before, &self.text)
-            .ok_or(CarryMiss::PrefixMismatch)?;
+        let typed = if !explicit && context.before == self.before {
+            0
+        } else {
+            typed_prefix(&self.before, &context.before, &self.text)
+                .ok_or(CarryMiss::PrefixMismatch)?
+        };
         let remainder = &self.text[typed..];
         let remainder = sanitize_suggestion(remainder).map_err(|_| CarryMiss::ShapeRejected)?;
         // The user typed the start of the word themselves, so the remainder
@@ -167,7 +178,7 @@ mod tests {
         next.after = "report today".to_owned();
         assert_eq!(
             shown
-                .remainder(&scope("org.telegram.desktop"), &next, Instant::now())
+                .remainder(&scope("org.telegram.desktop"), &next, Instant::now(), false)
                 .as_deref(),
             Ok("inal ")
         );
@@ -189,7 +200,10 @@ mod tests {
             (" report f", "or"),
         ] {
             let context = context(&format!("Please find attached the{typed}"));
-            assert_eq!(shown.remainder(&here, &context, now).as_deref(), Ok(rest));
+            assert_eq!(
+                shown.remainder(&here, &context, now, false).as_deref(),
+                Ok(rest)
+            );
         }
     }
 
@@ -203,7 +217,6 @@ mod tests {
         let here = scope("org.telegram.desktop");
         let now = Instant::now();
         for before in [
-            "Please find attached the",            // nothing typed
             "Please find attached the report for", // all of it typed
             "Please find attached the rep0",       // a different character
             "Please find attached the  ",          // an extra space
@@ -211,7 +224,7 @@ mod tests {
             "Please find attached them re",        // an edit at the old caret
         ] {
             assert_eq!(
-                shown.remainder(&here, &context(before), now),
+                shown.remainder(&here, &context(before), now, false),
                 Err(CarryMiss::PrefixMismatch),
                 "{before:?}"
             );
@@ -220,22 +233,71 @@ mod tests {
         let mut after_changed = context("Please find attached the re");
         after_changed.after = "x".to_owned();
         assert_eq!(
-            shown.remainder(&here, &after_changed, now),
+            shown.remainder(&here, &after_changed, now, false),
             Err(CarryMiss::AfterChanged)
         );
         let mut language_changed = context("Please find attached the re");
         language_changed.language = Some("de".to_owned());
         assert_eq!(
-            shown.remainder(&here, &language_changed, now),
+            shown.remainder(&here, &language_changed, now, false),
             Err(CarryMiss::LanguageChanged)
         );
         assert_eq!(
             shown.remainder(
                 &scope("org.other.app"),
                 &context("Please find attached the re"),
-                now
+                now,
+                false
             ),
             Err(CarryMiss::Scope)
+        );
+    }
+
+    #[test]
+    fn the_same_context_again_keeps_the_whole_suggestion_unless_asked_anew() {
+        let shown = carry(
+            "Please find attached the l",
+            "atest version",
+            Duration::from_secs(5),
+        );
+        let here = scope("org.telegram.desktop");
+        let now = Instant::now();
+        let same = context("Please find attached the l");
+        assert_eq!(
+            shown.remainder(&here, &same, now, false).as_deref(),
+            Ok("atest version")
+        );
+        // An explicit request for that context asks the model.
+        assert_eq!(
+            shown.remainder(&here, &same, now, true),
+            Err(CarryMiss::PrefixMismatch)
+        );
+        // Typing still carries for an explicit request.
+        assert_eq!(
+            shown
+                .remainder(&here, &context("Please find attached the la"), now, true)
+                .as_deref(),
+            Ok("test version")
+        );
+        // Every other gate still applies to the repeat.
+        let mut after_changed = same.clone();
+        after_changed.after = "x".to_owned();
+        assert_eq!(
+            shown.remainder(&here, &after_changed, now, false),
+            Err(CarryMiss::AfterChanged)
+        );
+        assert_eq!(
+            shown.remainder(&scope("org.other.app"), &same, now, false),
+            Err(CarryMiss::Scope)
+        );
+        let tight = carry(
+            "Please find attached the l",
+            "atest version",
+            Duration::from_millis(300),
+        );
+        assert_eq!(
+            tight.remainder(&here, &same, now, false),
+            Err(CarryMiss::DeadlineTight)
         );
     }
 
@@ -250,7 +312,7 @@ mod tests {
         let mut next = context("Please find attached the ");
         next.after = "report today".to_owned();
         assert_eq!(
-            shown.remainder(&scope("org.telegram.desktop"), &next, Instant::now()),
+            shown.remainder(&scope("org.telegram.desktop"), &next, Instant::now(), false),
             Err(CarryMiss::ShapeRejected)
         );
     }
@@ -262,7 +324,8 @@ mod tests {
             shown.remainder(
                 &scope("org.telegram.desktop"),
                 &context("Thanks for the up"),
-                Instant::now()
+                Instant::now(),
+                false
             ),
             Err(CarryMiss::DeadlineTight)
         );

@@ -34,7 +34,13 @@ from it without inference when all of these hold:
 - at least 500 ms of the original deadline remain.
 
 If the adapter's bounded window has dropped leading text since, `before` may
-instead keep at least 128 bytes of the old text exactly.
+instead keep at least 128 bytes of the old text exactly. An automatic request
+whose `before` equals the carry's own, with nothing typed since, is answered
+with the whole carried text: a keystroke in Chromium also changes the observed
+field's accessibility epoch, so the same context is admitted again under a new
+session (live trial, 2026-10-13), and a model call there would replace the
+remainder already on screen. An explicit request for that context asks the
+model.
 
 The answer is a new suggestion, with a new id, bound to the new session,
 revision and fingerprint. Its shape is checked against the new context; a

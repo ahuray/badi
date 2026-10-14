@@ -305,10 +305,17 @@ pass it is not drawn over the controls beside the field. When the last
 snapshot had words after the caret on its line
 (`text_follows`), the glyph after the caret bounds the inline room: text
 that ends before it still draws inline, and only text that would cover it
-draws a compact grey chip under the caret instead while it fits inside the
-field. Overflow uses the same borderless grey surface wholly below or above
-the field, bounded by the window and monitor, so it does not cover controls
-beside the field. There is no title, key banner or selection highlight.
+draws a compact chip (grey text on a dark background) under the caret
+instead while it fits inside the field, 2 px clear of its border. When
+nothing but whitespace follows the caret in a plain (not rich-editor) field
+(`text_ends`), the lines under the caret are empty, so text too long for the
+line draws as that chip under the caret's line, never above it. Any other
+overflow uses the same chip wholly below or above the field, bounded by the
+window and monitor, so it does not cover controls beside the field. The
+chip's padding is a label margin, not CSS: GTK restyles a class toggled just
+before measuring only on the next frame, and on 2026-10-13 a chip measured
+12 px narrow crossed a Chromium textarea's edge. There is no title, key
+banner or selection highlight.
 Suggestions are at most 64 characters; one that fits nowhere returns
 `rendered: false` for the native single-candidate fallback. The surface takes
 no input or focus, and any invalidation, new render or expiry hides it. The

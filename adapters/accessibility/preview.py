@@ -41,8 +41,10 @@ def valid_preview_text(text):
     return True
 
 
-# The chip's text starts at the caret: its padding plus border.
-CHIP_INSET = 7
+# Space between a chip's edge and its text: (horizontal, vertical).
+CHIP_PADDING = (6, 2)
+# The chip's text starts at the caret: its padding plus one pixel.
+CHIP_INSET = CHIP_PADDING[0] + 1
 # Space between the caret's line and a chip above or below it.
 CHIP_GAP = 2
 
@@ -62,6 +64,7 @@ class CaretGeometry:
     text_follows: bool
     scale: float = 1.0
     following_x: float | None = None
+    text_ends: bool = False
 
 
 def ltr_text(text):
@@ -106,7 +109,8 @@ def mapped_caret(focus):
             at[0] + min(field["x"] + field["width"], size[0]),
             at[1] + min(field["y"] + field["height"], size[1]),
             geometry.get("text_follows") is True, float(scale),
-            None if following is None else at[0] + following)
+            None if following is None else at[0] + following,
+            geometry.get("text_ends") is True and geometry.get("text_follows") is not True)
         mx, my, mw, mh = result.monitor
         if not (mx <= result.x <= mx + mw and my <= result.y < my + mh):
             return None
@@ -288,12 +292,13 @@ def place_on_caret_line(caret, width, height, baseline, field_ascent=None):
     return round(x - mx), round(y - my)
 
 
-def place_chip(caret, width, height):
+def place_chip(caret, width, height, below_only=False):
     """Monitor-local origin for a compact chip under the caret, inside the field.
 
-    Inline text would cover the words after the caret. The chip stays in the
-    field: below the line when it fits, above it when it does not. It does not
-    step outside the field onto the window chrome.
+    Inline text would cover the words after the caret, or would not fit. The
+    chip stays in the field: below the line when it fits, above it when it
+    does not and `below_only` is unset. It does not step outside the field
+    onto the window chrome.
     """
     if not _number(width, 1, 4096) or not _number(height, 1, 256):
         return None
@@ -301,7 +306,8 @@ def place_chip(caret, width, height):
     wx, wy, ww, wh = caret.window
     left, right = max(mx, wx), min(mx + mw, wx + ww)
     top, bottom = max(my, wy), min(my + mh, wy + wh)
-    field_left, field_right = max(left, caret.field_left), min(right, caret.field_right)
+    # The reported box includes the field's border; keep the chip off it.
+    field_left, field_right = max(left, caret.field_left + CHIP_GAP), min(right, caret.field_right - CHIP_GAP)
     field_top, field_bottom = max(top, caret.field_top), min(bottom, caret.field_bottom)
     if width > field_right - field_left:
         return None
@@ -310,7 +316,7 @@ def place_chip(caret, width, height):
     if x < field_left or x + width > field_right:
         return None
     below, above = caret.y + caret.line_height + CHIP_GAP, caret.y - CHIP_GAP - height
-    for y in (below, above):
+    for y in (below,) if below_only else (below, above):
         y = my + _snap(y - my, caret.scale)
         if field_top <= y and y + height <= field_bottom:
             return round(x - mx), round(y - my)
@@ -400,6 +406,8 @@ class Preview:
         self.css = Gtk.CssProvider()
         # Inline ghost text: mid grey stays readable on light and dark fields.
         # A chip carries its own dark background, since it may lie over text.
+        # Nothing here changes a size: a class toggled just before measuring
+        # is not restyled yet, so the chip's padding is a label margin.
         self.css.load_from_string("""
             window.badi-writing-preview {
                 background: none;
@@ -414,12 +422,12 @@ class Preview:
                 margin: 0;
                 font-weight: 400;
             }
+            window.badi-writing-preview.chip {
+                background-color: rgba(28, 30, 35, 0.94);
+                border-radius: 3px;
+            }
             window.badi-writing-preview.chip label {
                 color: rgba(176, 176, 176, 0.96);
-                background-color: rgba(28, 30, 35, 0.94);
-                border: none;
-                border-radius: 3px;
-                padding: 2px 6px;
             }
         """)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), self.css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
@@ -495,6 +503,11 @@ class Preview:
             self.window.add_css_class("chip")
         else:
             self.window.remove_css_class("chip")
+        across, down = CHIP_PADDING if chip else (0, 0)
+        self.label.set_margin_start(across)
+        self.label.set_margin_end(across)
+        self.label.set_margin_top(down)
+        self.label.set_margin_bottom(down)
         self.label.set_text(text)
         width = self.window.measure(self.Gtk.Orientation.HORIZONTAL, -1).natural
         height = self.window.measure(self.Gtk.Orientation.VERTICAL, width).natural
@@ -556,11 +569,13 @@ class Preview:
             position = place_inline(caret, width, height, baseline, ascent)
             if position is None and not caret.text_follows and field_box_ends_before_caret(caret):
                 position = place_on_caret_line(caret, width, height, baseline, ascent)
-        if position is None and caret.text_follows:
+        if position is None and (caret.text_follows or caret.text_ends):
             # A leading space would draw over the following words. The trailing
             # space is the separator that acceptance inserts, so the chip keeps it.
+            # At the end of the text only the empty lines below are free; the
+            # lines above hold the user's own words.
             width, height, _baseline = self._layout(text.lstrip(" "), chip=True)
-            position = place_chip(caret, width, height)
+            position = place_chip(caret, width, height, below_only=caret.text_ends)
         if position is None:
             width, height, _baseline = self._layout(text.lstrip(" "), chip=True)
             position = place_edge_panel(caret, width, height)

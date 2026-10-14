@@ -146,7 +146,8 @@ impl Broker {
         // allowing an obsolete suggestion to remain eligible.
         session.retire_generation(metrics, ReasonCode::Superseded);
         let scope = CarryScope::of(session);
-        let (carried, carry_miss) = consult_carry(state.type_through.as_ref(), &scope, &context);
+        let carry = state.type_through.as_ref();
+        let (carried, carry_miss) = consult_carry(carry, &scope, &context, payload.explicit);
         let mid_line = state
             .settings
             .as_ref()
@@ -677,10 +678,11 @@ fn consult_carry(
     carry: Option<&TypeThrough>,
     scope: &CarryScope,
     context: &crate::protocol::ContextChangedPayload,
+    explicit: bool,
 ) -> CarryOutcome {
     match carry.map(|carry| {
         (
-            carry.remainder(scope, context, Instant::now()),
+            carry.remainder(scope, context, Instant::now(), explicit),
             carry.expires_at,
             carry.aggregate_day,
         )

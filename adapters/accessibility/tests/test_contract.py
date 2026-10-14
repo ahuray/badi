@@ -337,6 +337,18 @@ class ContractTests(unittest.TestCase):
         self.observer.withdraw()
         self.assertFalse(self.observer.text_follows)
 
+    def test_snapshot_marks_a_caret_with_nothing_visible_after_it(self):
+        for content, caret, ends in (("Please find the", 15, True), ("Please find the \n\n", 15, True),
+                                     ("Please find the\nreport", 15, False), ("Please find the report", 15, False)):
+            self.setUp()
+            self.backend.content = content
+            self.backend.meta.update(caret=caret, total_chars=len(content), direction="lr", geometry={"test": True})
+            focus = self.snapshot(self.inspect()["focus"])["focus"]
+            self.assertIs(focus["geometry"]["text_ends"], ends, content)
+            self.assertIs(self.observer.text_ends, ends)
+        self.observer.withdraw()
+        self.assertFalse(self.observer.text_ends)
+
     def test_origin_normalization_and_credentials_rejection(self):
         self.assertEqual(canonical_origin("https://EXAMPLE.test:443/path?q=1"), {"scheme": "https", "host": "example.test"})
         self.assertEqual(canonical_origin("http://127.0.0.1:4321/path"), {"scheme": "http", "host": "127.0.0.1", "port": 4321})
