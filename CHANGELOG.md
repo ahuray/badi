@@ -7,6 +7,9 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#80](https://github.com/ahuray/badi/pull/80) Obsidian and Neovim show the
+  whole streamed suggestion and accept the newest; Writer suggests after a
+  trailing space at a paragraph end.
 - [#79](https://github.com/ahuray/badi/pull/79) `badi debug on [--text]`
   traces each suggestion from model to screen across the broker, Fcitx,
   observer, editors and compositor ([ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md));
