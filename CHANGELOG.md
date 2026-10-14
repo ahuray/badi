@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#78](https://github.com/ahuray/badi/pull/78) Type-through keeps the
+  carried remainder when a browser field is re-admitted with the same
+  context, instead of asking the model again; the observer's overflow chip
+  sits under the caret inside the field when nothing follows it. Corrects
+  #77: the doubled pill was cotype, a separate autocomplete, not Badi.
 - [#77](https://github.com/ahuray/badi/pull/77) Records only: the
   2026-10-13 evening live install/trial results in the plan — session
   helper and binds proven, the observer chip-doubling defect in browsers
