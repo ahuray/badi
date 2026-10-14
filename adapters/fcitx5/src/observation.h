@@ -54,6 +54,12 @@ bool continuedFieldSnapshot(const nlohmann::json &previous, const nlohmann::json
 // app; prior authority is then retired rather than falling back.
 std::optional<NativeEditTarget> inspectedEditTarget(const nlohmann::json &focus, std::string_view appId);
 
+// Writer gives Fcitx only the caret's sentence, and at the end of a paragraph
+// that sentence leaves out the spaces just typed. When the observer's verified
+// text is Fcitx's plus only those spaces, with nothing after the caret, they
+// are restored; no other observer text ever enters the context.
+void restoreObservedTrailingSpaces(ContextWindow &context, const nlohmann::json &observed);
+
 // The observer's text around the caret equals Fcitx's live context.
 bool observerAgrees(const nlohmann::json &observed, const ContextWindow &context);
 

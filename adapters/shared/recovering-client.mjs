@@ -35,7 +35,7 @@ export class RecoveringBrokerClient extends EventEmitter {
     const client = new BrokerClient(this.#profile, this.#options);
     this.#client = client;
     previous?.close();
-    for (const event of ['clear', 'diagnostic', 'activity', 'state']) {
+    for (const event of ['clear', 'update', 'diagnostic', 'activity', 'state']) {
       client.on(event, value => {
         if (this.#closed || this.#client !== client) return;
         this.emit(event, value);

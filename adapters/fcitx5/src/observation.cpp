@@ -114,6 +114,20 @@ bool beforeAgrees(const Json &observed, const std::string &before) {
            before[before.size() - block.size() - 1] == '\n';
 }
 
+void restoreObservedTrailingSpaces(ContextWindow &context, const Json &observed) {
+    if (!observed.is_object() || observed.value("after", Json()) != "" || !context.after.empty() ||
+        !context.paragraphEnd.empty()) return;
+    const auto before = observed.value("before", Json());
+    if (!before.is_string()) return;
+    const auto &text = before.get_ref<const std::string &>();
+    if (text.size() <= context.before.size() || !text.starts_with(context.before)) return;
+    const auto spaces = text.size() - context.before.size();
+    if (text.find_first_not_of(' ', context.before.size()) != std::string::npos) return;
+    context.before = text;
+    context.anchor += spaces;
+    context.head += spaces;
+}
+
 bool observerAgrees(const Json &observed, const ContextWindow &context) {
     if (!observed.is_object() || !beforeAgrees(observed, context.before)) return false;
     const auto after = observed.value("after", Json());

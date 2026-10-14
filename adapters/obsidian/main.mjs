@@ -146,15 +146,27 @@ class WritingView {
       this.snapshot = snapshot;
       this.text = text;
       this.replaceBefore = replaceBefore;
-      const preview = replaceBefore === undefined ? text : ` ${replaceBefore.trim()} → ${text.trim()}`;
-      this.decorations = Decoration.set([Decoration.widget({ widget: new SuggestionWidget(preview), side: 1 }).range(end)]);
-      this.render();
-      recordActivity('obsidian', 'ghost', 'shown');
+      this.showPreview(replaceBefore === undefined ? text : ` ${replaceBefore.trim()} → ${text.trim()}`);
     } catch {
       if (generation === this.generation && this.view.hasFocus) this.owner.status.setText('Badi · no suggestion · Ctrl+Shift+Space retries');
     } finally {
       if (generation === this.generation) this.pending = false;
     }
+  }
+
+  showPreview(preview) {
+    const end = this.snapshot.selection.main.head;
+    this.decorations = Decoration.set([Decoration.widget({ widget: new SuggestionWidget(preview), side: 1 }).range(end)]);
+    this.render();
+    recordActivity('obsidian', 'ghost', 'shown');
+  }
+
+  // The broker streamed a longer version of the shown continuation.
+  extend(text) {
+    if (!this.text || this.replaceBefore !== undefined || this.pending || !this.matches(this.snapshot) ||
+        !text.startsWith(this.text)) return;
+    this.text = text;
+    this.showPreview(text);
   }
 
   async accept(acceptance = 'word') {
@@ -257,6 +269,7 @@ export default class BadiPlugin extends Plugin {
     });
     // A cancelled session withdraws whichever preview it produced.
     client.on('clear', () => { if (this.client === client) for (const controller of this.views.values()) controller.clearPreview(); });
+    client.on('update', text => { if (this.client === client) this.session?.extend(text); });
     return client;
   }
 

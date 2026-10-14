@@ -107,7 +107,7 @@ publish need the user's go-ahead first; the rest can start at once.
    preview drew and Tab accepted; Alt+F7 showed and replaced `adress` and one
    Ctrl+Z restored it
    ([Writer runbook](adapters/libreoffice/README.md#boundaries)). Still open:
-   an ambiguous-word correction and the trailing-space mismatch below.
+   an ambiguous-word correction.
    In Omawrite, Tab accepted the whole multi-word suggestion, which is the
    Fcitx mapping (Ctrl+→ takes one word). *Done when* the
    [Neovim](adapters/neovim/README.md) and
@@ -191,19 +191,6 @@ publish need the user's go-ahead first; the rest can start at once.
       a zero glyph box, so its overlay keeps the caret-size fallback.
 - [ ] Browser event cost on large pages (`daemon.py` focus handling and
       `field.py` serialization).
-- [ ] Writer shows no grey preview after a trailing space at the end of a
-      paragraph, the most common place to want one. The observer now finds
-      that sentence, but Writer gives Fcitx the sentence without its trailing
-      space, so the addon refuses (`observer_context_mismatch`, 2026-10-14
-      debug trace). Fixing it means binding Fcitx's shorter view to the
-      observer's: a binding decision, not a display fix.
-- [ ] The editor clients show only the first streamed partial. The broker
-      streams growing versions ("the" → "the opportunity to help"), but
-      `broker-client.mjs` resolves `suggest()` on the first
-      `suggestion.show` and drops the rest, so Obsidian, Neovim and Bash
-      display one word where Fcitx apps show the phrase (Obsidian 1.13.7,
-      2026-10-14). Obsidian's status bar also keeps "Badi · suggestion" after
-      a clear hides the ghost.
 - [ ] Each streamed partial suggestion hides the overlay and draws it again
       about 1 ms later (`preview hidden cause=replaced` in the
       [debug trace](README.md#debug-trace), Chromium, 2026-10-14). Check

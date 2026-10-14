@@ -31,6 +31,7 @@ const armIdleExit = () => {
 // The client clears its candidate on expiry, revocation, pause and
 // disconnect; Neovim withdraws the preview it shows for that candidate.
 client.on('clear', () => send({ event: 'clear' }));
+client.on('update', text => send({ event: 'update', text }));
 client.on('state', state => {
   if (typeof state === 'string' && /^[a-z_]{1,48}$/.test(state)) send({ event: 'state', state });
 });

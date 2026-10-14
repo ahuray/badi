@@ -22,12 +22,22 @@ export const validSuggestion = value => typeof value === 'string' && [...value].
   hasIsolatedSpaces(value) && !hasUnsafeText(value) &&
   [...words.segment(value)].filter(part => part.isWordLike).length <= 4;
 
+const sameCoordinates = (message, session) =>
+  ['session_id', 'focus_epoch', 'revision'].every(key => message[key] === session[key]);
+
+// The `later` suggestion appends to the `earlier` one; replacements never stream.
+const continues = (earlier, later) => earlier.replace_before === undefined && later.replace_before === undefined &&
+  typeof later.text === 'string' && later.text.length > earlier.text.length && later.text.startsWith(earlier.text);
+
 export class BrokerClient extends EventEmitter {
   #socket;
   #buffer = Buffer.alloc(0);
   #pending = new Map();
   #session = null;
   #candidate = null;
+  // A later frame of the current session's growing continuation that arrived
+  // before suggest() resumed (frames can share one socket read).
+  #streamed = null;
   #expiry;
   #epoch = null;
   #closed = false;
@@ -153,22 +163,49 @@ export class BrokerClient extends EventEmitter {
       'suggestion.show', session);
     if (generation !== this.#generation || this.#session !== session || !this.allowed) throw new Error('Context changed');
     if (response.type === 'suggestion.clear') { this.emit('state', response.payload.reason); return null; }
-    const value = response.payload;
+    const streamed = this.#streamed;
+    this.#streamed = null;
+    const value = streamed && continues(response.payload, streamed.payload) ? streamed.payload : response.payload;
+    if (!this.#validShow(value, session, before)) {
+      this.cancel(); throw new Error(`Invalid model suggestion (text=${validSuggestion(value.text)}, words=${typeof value.text === 'string' ? value.text.trim().split(/\s+/u).length : 0}, ttl=${value.ttl_ms}, binding=${value.fingerprint === session.fingerprint})`);
+    }
+    this.#setCandidate(session, value);
+    this.emit('state', 'suggestion');
+    return value.text;
+  }
+
+  #validShow(value, session, before) {
     const replacement = value.replace_before !== undefined;
     const validText = replacement
       ? this.#textReplacement && validCorrection(before, value.replace_before, value.text) && value.accept_word === value.text
       : validSuggestion(value.text) && validSuggestion(value.accept_word) && value.text.startsWith(value.accept_word);
-    if (!validText ||
-        !counter(value.ttl_ms) || value.ttl_ms < 1 || value.ttl_ms > (READING_WINDOW.has(this.#profile.kind) ? 15000 : 5000) ||
-        typeof value.suggestion_id !== 'string' || value.fingerprint !== session.fingerprint) {
-      this.cancel(); throw new Error(`Invalid model suggestion (text=${validSuggestion(value.text)}, words=${typeof value.text === 'string' ? value.text.trim().split(/\s+/u).length : 0}, ttl=${value.ttl_ms}, binding=${value.fingerprint === session.fingerprint})`);
-    }
+    return validText && counter(value.ttl_ms) && value.ttl_ms >= 1 &&
+      value.ttl_ms <= (READING_WINDOW.has(this.#profile.kind) ? 15000 : 5000) &&
+      typeof value.suggestion_id === 'string' && value.fingerprint === session.fingerprint;
+  }
+
+  #setCandidate(session, value) {
+    clearTimeout(this.#expiry);
     this.#candidate = { ...session, suggestion_id: value.suggestion_id, text: value.text, acceptWord: value.accept_word,
-      ...(replacement ? { replaceBefore: value.replace_before } : {}),
+      ...(value.replace_before !== undefined ? { replaceBefore: value.replace_before } : {}),
       expires: performance.now() + value.ttl_ms };
     this.#expiry = setTimeout(() => this.cancel(), value.ttl_ms);
-    this.emit('state', 'suggestion');
-    return value.text;
+  }
+
+  // The broker streams a growing continuation as further suggestion.show
+  // frames for the same request. One that extends the shown text becomes
+  // the candidate, so acceptance binds to what the editor then shows.
+  #extend(message) {
+    const candidate = this.#candidate;
+    if (!candidate) {
+      if (this.#session && sameCoordinates(message, this.#session)) this.#streamed = message;
+      return;
+    }
+    if (!sameCoordinates(message, candidate) ||
+        !continues({ text: candidate.text, replace_before: candidate.replaceBefore }, message.payload) ||
+        !this.#validShow(message.payload, candidate, '')) return;
+    this.#setCandidate(candidate, message.payload);
+    this.emit('update', message.payload.text);
   }
 
   async authorize(acceptance = 'all') {
@@ -215,6 +252,7 @@ export class BrokerClient extends EventEmitter {
     this.#generation++;
     clearTimeout(this.#expiry);
     this.#candidate = null;
+    this.#streamed = null;
     const session = this.#session;
     if (closeSession) this.#session = null;
     for (const [id, pending] of this.#pending) {
@@ -288,10 +326,15 @@ export class BrokerClient extends EventEmitter {
         clearTimeout(pending.timer); this.#pending.delete(message.id);
         if (message.type === 'error' || message.payload.accepted === false) pending.reject(new Error('Broker rejected the request'));
         else pending.resolve(message);
+      } else if (message.type === 'suggestion.show') {
+        this.#extend(message);
       } else if (message.type === 'suggestion.clear' || message.type === 'commit.revoke') {
         // A clear can precede the authority notice that retires this session.
         // Do not echo a close for coordinates the broker may already have revoked.
-        if (this.#session?.session_id === message.session_id) this.cancel(false);
+        if (this.#session?.session_id === message.session_id) {
+          this.cancel(false);
+          if (typeof message.payload.reason === 'string') this.emit('state', message.payload.reason);
+        }
       }
     }
   }
