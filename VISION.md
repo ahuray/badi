@@ -51,7 +51,9 @@ interaction, the exact editing authority and the policy around them.
   only an explicit, expiring, memory-only `badi debug on --text` run records text
   ([ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
 - Raw keylogging, clipboard or screen scraping and blind synthetic typing are
-  never product integrations.
+  never product integrations. The one bounded exception is the line typed into
+  a terminal the user allows by exact rule, held in memory as that field's
+  context ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)).
 
 Language quality work prioritizes English, German, French and Spanish, with
 independent evidence for each language before enabling its behavior. Existing

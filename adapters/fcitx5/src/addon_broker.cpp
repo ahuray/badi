@@ -344,6 +344,10 @@ void BadiAddon::applyCommitPrepare(const CommitPrepare &prepare) {
     // so the result is dispatched-unverified, never applied. A native
     // replacement deletes the exact suffix first; IME-parity stays append-only.
     binding->inputContext->commitString(dispatch->text);
+    if (binding->state.editPath() == NativeEditPath::TypedLine) {
+        binding->typedLine.type(dispatch->text);
+        requestLineAfterPause(*binding);
+    }
     debug_.record("commit", binding->state.appId(), "dispatched_unverified");
     transport_.reportCommit(dispatch->coordinates, dispatch->controlId, dispatch->suggestionId,
                             "dispatched-unverified");

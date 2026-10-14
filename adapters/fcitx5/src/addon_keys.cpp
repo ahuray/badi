@@ -49,6 +49,10 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
              {"ghost_visible", binding->state.suggestionVisible()}},
             printable ? nlohmann::json{{"typed", typed}} : nlohmann::json(nullptr));
     }
+    // Every key the terminal receives edits Badi's record of its line.
+    const bool reachesApp = !pressed.chord && action != PreKeyAction::Tab &&
+                            action != PreKeyAction::Dismiss && action != PreKeyAction::AcceptWord;
+    if (reachesApp && binding->state.editPath() == NativeEditPath::TypedLine) lineKey(*binding, key, typed);
     switch (action) {
     case PreKeyAction::PassThrough:
         return;
@@ -113,9 +117,73 @@ void BadiAddon::tabKey(::fcitx::KeyEvent &event, Binding &binding, const PanelOb
     case LocalAction::PassThrough:
     case LocalAction::Dismiss:
         cancelForInput(binding);
+        // Completion may rewrite a terminal's line in ways Badi cannot see.
+        binding.typedLine.lose();
         return;
     }
     event.filterAndAccept();
+}
+
+// A key the terminal received. Typing and the line edits Readline and most
+// TUIs share are followed; anything else may move the cursor or insert text
+// Badi cannot see, so tracking stops until the next empty line.
+void BadiAddon::lineKey(Binding &binding, const ::fcitx::Key &key, std::string_view typed) {
+    if (key.isModifier()) return;
+    const auto states = key.states();
+    const bool ctrl = !!(states & ::fcitx::KeyState::Ctrl);
+    const bool alt = !!(states & ::fcitx::KeyState::Alt);
+    const auto sym = key.sym();
+    // Fcitx may report a Ctrl letter in either case.
+    const auto letter = [sym](::fcitx::KeySym lower, ::fcitx::KeySym upper) { return sym == lower || sym == upper; };
+    auto &line = binding.typedLine;
+    if (sym == FcitxKey_Return || sym == FcitxKey_KP_Enter ||
+        (ctrl && !alt && (letter(FcitxKey_c, FcitxKey_C) || letter(FcitxKey_u, FcitxKey_U)))) {
+        line.clear();
+    } else if (sym == FcitxKey_BackSpace && !ctrl && !alt) {
+        line.erase();
+    } else if ((ctrl && letter(FcitxKey_w, FcitxKey_W)) || ((ctrl || alt) && sym == FcitxKey_BackSpace)) {
+        line.eraseWord();
+    } else if (!typed.empty() && static_cast<unsigned char>(typed[0]) >= 0x20 && typed != "\x7f") {
+        line.type(typed);
+    } else {
+        line.lose();
+    }
+    requestLineAfterPause(binding);
+}
+
+void BadiAddon::requestLineAfterPause(Binding &binding) {
+    if (binding.lineTimer) binding.lineTimer->setEnabled(false);
+    if (!binding.typedLine.tracking() || !binding.typedLine.prose()) return;
+    const auto pause = binding.typedThrough ? InspectionSchedule::kTypeThroughPauseUs
+                                            : InspectionSchedule::kTypingPauseUs;
+    binding.lineTimer = oneShot(pause, [this, context = binding.inputContext] {
+        if (auto *current = bindingFor(*context)) requestTypedLine(*current, false);
+    });
+}
+
+// A terminal's typed line as the context. Automatic requests need prose;
+// the chord asks for any tracked line.
+void BadiAddon::requestTypedLine(Binding &binding, bool explicitRequest) {
+    const auto &app = binding.state.appId();
+    if (explicitRequest) {
+        clearOwnedPanel(binding);
+        transport_.connect();
+        queryPolicy(binding);
+        if (const auto waiting = manualRequestNotice(requestFacts(binding))) return showNotice(binding, *waiting);
+    }
+    auto context = currentContext(binding);
+    if (!context || context->before.empty() || (!explicitRequest && !binding.typedLine.prose())) {
+        debug_.record("request_blocked", app, binding.typedLine.tracking() ? "context_unavailable" : "line_unknown");
+        if (explicitRequest) showNotice(binding, binding.typedLine.tracking() ? notice::kFieldUnreadable
+                                                                               : notice::kLineUnknown);
+        return;
+    }
+    context->explicitRequest = explicitRequest;
+    const auto update = binding.state.updateContext(*context);
+    if (!update || !open(binding) || !transport_.publishContext(*update)) return;
+    binding.broker.coordinates = update->coordinates;
+    debug_.record("request", app, explicitRequest ? "terminal_explicit_request" : "terminal_line_request",
+                  context->before.size());
 }
 
 // After the input method: Badi's chords, and Escape on its candidate.
@@ -160,6 +228,8 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
 
 // Explicit requests.
 void BadiAddon::invoke(Binding &binding) {
+    if (binding.state.editingAvailable() && binding.state.editPath() == NativeEditPath::TypedLine)
+        return requestTypedLine(binding, true);
     switch (routeInvoke(binding.state.appId(), binding.state.editingAvailable(), binding.observed())) {
     case InvokeRoute::InspectField:
         return inspectOnRequest(binding);

@@ -1354,6 +1354,28 @@ void observerRepliesFailClosed() {
         check(!inspectedEditTarget(focus, "code"), "malformed or foreign field metadata retires authority");
     }
 
+    {
+        // A terminal's only context is the line typed into it (ADR 0009).
+        check(classifyNativeApp("com.mitchellh.ghostty") == NativeAppClass::Terminal &&
+                  nativeEditingAvailable("com.mitchellh.ghostty", NativeEditTarget::DesktopApplication,
+                                         NativeEditPath::TypedLine) &&
+                  !nativeEditingAvailable("com.mitchellh.ghostty", NativeEditTarget::DesktopApplication,
+                                          NativeEditPath::Manual) &&
+                  !nativeObservationAvailable("com.mitchellh.ghostty"),
+              "terminals edit only through their typed line and are never observed");
+        TypedLine line;
+        line.type("git");
+        check(!line.prose(), "a single token is never a request");
+        line.type(" commit the läst");
+        line.erase();
+        line.eraseWord();
+        check(line.text() == "git commit the " && line.prose(), "typing, Backspace and Ctrl+W edit the line");
+        line.lose();
+        line.type("more");
+        check(!line.tracking() && line.text().empty(), "after an unknown key nothing is tracked");
+        line.clear();
+        check(line.tracking() && line.text().empty(), "a new line tracks again");
+    }
     const auto context = captureContextWindow("thank you", 9, 9, true, "en");
     check(context && observerAgrees({{"before", "thank you"}, {"after", ""}}, *context) &&
               !observerAgrees({{"before", "thank you!"}, {"after", ""}}, *context) &&

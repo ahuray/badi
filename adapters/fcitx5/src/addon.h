@@ -85,6 +85,9 @@ private:
         std::uint64_t showAfterUs = 0;
         std::optional<Suggestion> heldSuggestion;
         std::unique_ptr<::fcitx::EventSourceTime> holdTimer;
+        // A terminal's typed line and its typing-pause request.
+        TypedLine typedLine;
+        std::unique_ptr<::fcitx::EventSourceTime> lineTimer;
 
         [[nodiscard]] bool observed() const { return !observedFocus.is_null(); }
     };
@@ -113,6 +116,9 @@ private:
     void requestAcceptance(Binding &binding, bool word = false);
     void dismissSuggestion(Binding &binding, const PanelObservation &panel);
     void declineContext(Binding &binding);
+    void lineKey(Binding &binding, const ::fcitx::Key &key, std::string_view typed);
+    void requestTypedLine(Binding &binding, bool explicitRequest);
+    void requestLineAfterPause(Binding &binding);
 
     // The accessibility observer.
     void observeLater(Binding &binding, bool explicitRequest = false, bool retry = false, bool early = false);

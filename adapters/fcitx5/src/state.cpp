@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -35,6 +36,8 @@ constexpr std::array<std::string_view, 5> kImeParityDesktopApps{"chatgpt", "code
 // id serves modules or fields the observer must tell apart (LibreOffice Calc
 // cells must keep Tab), so no manual path may exist.
 constexpr std::array<std::string_view, 1> kImeParityNativeApps{"libreoffice"};
+// Terminals whose typed line and commitString were tried live.
+constexpr std::array<std::string_view, 1> kTerminalApps{"com.mitchellh.ghostty"};
 
 // Chromium-family identities without an observer rule: other Chromium
 // browsers, channels and Flatpak ids, installed web-app windows (Wayland
@@ -123,6 +126,7 @@ NativeAppClass classifyNativeApp(std::string_view appId) {
     };
     if (!validLinuxAppId(appId) || listed(unavailable) || unobservedGeckoFamily(appId))
         return NativeAppClass::Unavailable;
+    if (listed(kTerminalApps)) return NativeAppClass::Terminal;
     if (listed(kImeParityBrowsers)) return NativeAppClass::ImeParityBrowser;
     if (listed(kImeParityDesktopApps) || listed(kImeParityNativeApps)) return NativeAppClass::ImeParityDesktop;
     if (unobservedChromiumFamily(appId)) return NativeAppClass::Unavailable;
@@ -146,7 +150,8 @@ std::optional<unsigned> nativeReplacementChars(bool imeParity, std::string_view 
 }
 
 bool nativeObservationAvailable(std::string_view appId) {
-    return classifyNativeApp(appId) != NativeAppClass::Unavailable;
+    const auto kind = classifyNativeApp(appId);
+    return kind != NativeAppClass::Unavailable && kind != NativeAppClass::Terminal;
 }
 
 bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target,
@@ -158,6 +163,8 @@ bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target,
         return path == NativeEditPath::Observed && target == NativeEditTarget::BrowserOrigin;
     case NativeAppClass::ImeParityDesktop:
         return path == NativeEditPath::Observed && target == NativeEditTarget::DesktopApplication;
+    case NativeAppClass::Terminal:
+        return path == NativeEditPath::TypedLine && target == NativeEditTarget::DesktopApplication;
     case NativeAppClass::Unavailable:
         return false;
     }
@@ -166,6 +173,7 @@ bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target,
 
 std::string_view focusReason(std::string_view appId) {
     if (appId.empty()) return "unidentified_app";
+    if (classifyNativeApp(appId) == NativeAppClass::Terminal) return "terminal_typed_line";
     if (!nativeObservationAvailable(appId)) return "editor_transaction_unavailable";
     return imeParityApp(appId) ? "awaiting_observed_field" : "checking_app_policy";
 }
@@ -326,6 +334,53 @@ void normalizeObservedParagraphEnd(ContextWindow &context) {
 
 std::string observedAfter(const ContextWindow &context) {
     return context.paragraphEnd.empty() ? context.after : context.paragraphEnd;
+}
+
+void TypedLine::type(std::string_view text) {
+    if (!tracking_) return;
+    text_ += text;
+    // Keep whole scalars of the last context's worth of bytes.
+    constexpr std::size_t limit = kMaxBeforeScalars * 4;
+    if (text_.size() > limit) {
+        auto start = text_.size() - limit;
+        while (start < text_.size() && (static_cast<unsigned char>(text_[start]) & 0xC0U) == 0x80U) ++start;
+        text_.erase(0, start);
+    }
+}
+
+void TypedLine::erase() {
+    if (!tracking_ || text_.empty()) return;
+    auto end = text_.size() - 1;
+    while (end > 0 && (static_cast<unsigned char>(text_[end]) & 0xC0U) == 0x80U) --end;
+    text_.erase(end);
+}
+
+void TypedLine::eraseWord() {
+    if (!tracking_) return;
+    auto end = text_.find_last_not_of(' ');
+    if (end == std::string::npos) return text_.clear();
+    const auto start = text_.find_last_of(' ', end);
+    text_.erase(start == std::string::npos ? 0 : start + 1);
+}
+
+void TypedLine::clear() {
+    text_.clear();
+    tracking_ = true;
+}
+
+void TypedLine::lose() {
+    text_.clear();
+    tracking_ = false;
+}
+
+bool TypedLine::prose() const {
+    const auto first = text_.find_first_not_of(' ');
+    if (first == std::string::npos) return false;
+    const auto gap = text_.find(' ', first);
+    return gap != std::string::npos && text_.find_first_not_of(' ', gap) != std::string::npos &&
+           std::any_of(text_.begin(), text_.end(), [](unsigned char byte) {
+               return std::isalpha(byte) || byte >= 0x80U;
+           });
 }
 
 bool SessionState::focusIn(std::string sessionId, std::string targetId,

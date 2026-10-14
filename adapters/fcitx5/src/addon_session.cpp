@@ -11,6 +11,7 @@
 #include <fcitx/text.h>
 #include <fcitx/userinterface.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -75,8 +76,12 @@ RequestFacts BadiAddon::requestFacts(const Binding &binding) const {
         .paused = authorityPaused_,
         .policyKnown = binding.broker.policyKnown,
         .policyAllowed = binding.broker.policyAllowed,
-        .fresh = binding.surroundingFreshness.fresh(),
-        .fieldAllowed = allowsNativeContext(binding.inputContext->capabilityFlags()),
+        // A terminal has no surrounding text; its typed line is the context.
+        .fresh = binding.state.editPath() == NativeEditPath::TypedLine ? binding.typedLine.tracking()
+                                                                       : binding.surroundingFreshness.fresh(),
+        .fieldAllowed = binding.state.editPath() == NativeEditPath::TypedLine
+            ? !(binding.inputContext->capabilityFlags() & ::fcitx::CapabilityFlag::PasswordOrSensitive)
+            : allowsNativeContext(binding.inputContext->capabilityFlags()),
         .foreignIme = hasForeignImeUi(observePanel(binding)),
     };
 }
@@ -85,6 +90,12 @@ RequestFacts BadiAddon::requestFacts(const Binding &binding) const {
 // fresh and non-sensitive field that no input method is composing in.
 bool BadiAddon::contextReadable(const Binding &binding) const {
     auto &input = *binding.inputContext;
+    if (binding.state.editPath() == NativeEditPath::TypedLine) {
+        return binding.state.editingAvailable() && input.hasFocus() && binding.state.focused() &&
+            binding.broker.policyAllowed && binding.typedLine.tracking() &&
+            !(input.capabilityFlags() & ::fcitx::CapabilityFlag::PasswordOrSensitive) &&
+            !instance_->isComposing(&input);
+    }
     return binding.state.editingAvailable() && input.hasFocus() && binding.state.focused() &&
         binding.broker.policyAllowed && binding.surroundingFreshness.fresh() &&
         allowsNativeContext(input.capabilityFlags()) && !instance_->isComposing(&input);
@@ -97,6 +108,20 @@ bool BadiAddon::safeToObserve(const Binding &binding) const {
 std::optional<ContextWindow> BadiAddon::currentContext(const Binding &binding) const {
     if (!contextReadable(binding)) return std::nullopt;
     auto &input = *binding.inputContext;
+    if (binding.state.editPath() == NativeEditPath::TypedLine) {
+        const auto *method = instance_->inputMethodEntry(&input);
+        if (!method || !validLanguageTag(method->languageCode())) return std::nullopt;
+        const auto &line = binding.typedLine.text();
+        const auto caret = static_cast<std::size_t>(std::count_if(line.begin(), line.end(),
+            [](unsigned char byte) { return (byte & 0xC0U) != 0x80U; }));
+        auto context = captureContextWindow(line, caret, caret, false,
+            binding.broker.languageOverride.empty() ? method->languageCode() : binding.broker.languageOverride);
+        if (context) {
+            context->identityKnown = true;
+            context->explicitRequest = false;
+        }
+        return context;
+    }
     const auto &surrounding = input.surroundingText();
     const auto *inputMethod = instance_->inputMethodEntry(&input);
     if (!surrounding.isValid() || !inputMethod || !validLanguageTag(inputMethod->languageCode())) {
