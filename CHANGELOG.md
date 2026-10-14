@@ -7,6 +7,9 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#83](https://github.com/ahuray/badi/pull/83) `badi spelling` turns on German,
+  French, Spanish, Italian, Dutch and Polish spelling from installed Hunspell
+  dictionaries; the model chooses between candidates.
 - [#82](https://github.com/ahuray/badi/pull/82) Writer checks each finished word
   on its own and Alt+F7 corrects the word at the caret; the broker serves the
   Writer target corrections only.
