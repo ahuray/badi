@@ -7,6 +7,9 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#81](https://github.com/ahuray/badi/pull/81) Ghostty: suggestions follow the
+  line typed into an allowed terminal and Tab types them
+  ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)).
 - [#80](https://github.com/ahuray/badi/pull/80) Obsidian and Neovim show the
   whole streamed suggestion and accept the newest; Writer suggests after a
   trailing space at a paragraph end.
