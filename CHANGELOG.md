@@ -7,6 +7,9 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#82](https://github.com/ahuray/badi/pull/82) Writer checks each finished word
+  on its own and Alt+F7 corrects the word at the caret; the broker serves the
+  Writer target corrections only.
 - [#81](https://github.com/ahuray/badi/pull/81) Ghostty: suggestions follow the
   line typed into an allowed terminal and Tab types them
   ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)).
