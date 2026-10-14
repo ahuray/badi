@@ -301,6 +301,7 @@ fn controlled_settings(revision: u64, allowed: bool, learn: bool) -> SettingsV2 
         battery_mode: crate::settings::BatteryMode::Normal,
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,
@@ -340,6 +341,7 @@ fn controlled_learning_settings(revision: u64, retention: RetentionPermission) -
         battery_mode: crate::settings::BatteryMode::Normal,
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,

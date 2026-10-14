@@ -10,6 +10,19 @@ const MIN_CONFIDENCE: f64 = 0.9;
 /// an explicit user override must take precedence over this inference.
 #[must_use]
 pub fn detect_field_language(before: &str) -> Option<&'static str> {
+    match confident_language(before)? {
+        whatlang::Lang::Eng => Some("en"),
+        whatlang::Lang::Deu => Some("de"),
+        whatlang::Lang::Pes => Some("fa"),
+        _ => None,
+    }
+}
+
+/// The confidently detected language of the bounded field suffix, from the
+/// detector's full inventory: limiting it to the languages Badi supports
+/// would force French, Spanish and other prose into an incorrect language.
+#[must_use]
+pub fn confident_language(before: &str) -> Option<whatlang::Lang> {
     let start = before
         .char_indices()
         .rev()
@@ -19,18 +32,8 @@ pub fn detect_field_language(before: &str) -> Option<&'static str> {
     if sample.chars().count() < MIN_SCALARS {
         return None;
     }
-    // Keep the full detector inventory: limiting it to our supported languages
-    // would force French, Spanish and other prose into an incorrect language.
     let detected = whatlang::detect(sample)?;
-    if detected.confidence() < MIN_CONFIDENCE {
-        return None;
-    }
-    match detected.lang() {
-        whatlang::Lang::Eng => Some("en"),
-        whatlang::Lang::Deu => Some("de"),
-        whatlang::Lang::Pes => Some("fa"),
-        _ => None,
-    }
+    (detected.confidence() >= MIN_CONFIDENCE).then(|| detected.lang())
 }
 
 #[cfg(test)]

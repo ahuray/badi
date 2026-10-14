@@ -61,6 +61,9 @@ HELP = """Badi — local writing controls
                                default 30)
   badi style export | forget   Print the samples as JSON, or delete them and
                                the keyring key
+  badi spelling [LANG on|off] [--json]
+                               Spelling languages (en de fr es it nl pl) and
+                               their dictionaries; English is built in
   badi language APP en|de|fa|reset
                                Override one app's writing language; reset
                                restores automatic language selection
@@ -742,6 +745,64 @@ def set_language(document, app, language):
         document.pop("language_overrides", None)
 
 
+# The broker's SpellingLanguage order (broker/src/spelling.rs): its dictionary
+# names, most common first, and the Arch package that installs them.
+SPELLING = {
+    "en": ("English", (), None),
+    "de": ("German", ("de_DE", "de_AT", "de_CH"), "hunspell-de"),
+    "fr": ("French", ("fr_FR", "fr"), "hunspell-fr-comprehensive"),
+    "es": ("Spanish", ("es_ES", "es_ANY", "es_MX"), "hunspell-es_es"),
+    "it": ("Italian", ("it_IT",), "hunspell-it"),
+    "nl": ("Dutch", ("nl_NL",), "hunspell-nl"),
+    "pl": ("Polish", ("pl_PL",), "hunspell-pl"),
+}
+# The broker's dictionary_directories(): the user's own, then the system's.
+DICTIONARY_DIRECTORIES = (
+    Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "hunspell",
+    Path("/usr/share/hunspell"), Path("/usr/share/myspell/dicts"))
+
+
+def installed_dictionary(language):
+    """The installed dictionary name for `language`, "built in" for English, or None."""
+    _name, names, _package = SPELLING[language]
+    if not names:
+        return "built in"
+    return next((name for name in names for directory in DICTIONARY_DIRECTORIES
+                 if (directory / f"{name}.aff").is_file() and (directory / f"{name}.dic").is_file()), None)
+
+
+def spelling_report(settings):
+    enabled = settings.get("spelling_languages", ["en"])
+    return [{"language": code, "name": name, "enabled": code in enabled,
+             "dictionary": installed_dictionary(code), "package": package}
+            for code, (name, _names, package) in SPELLING.items()]
+
+
+def set_spelling(document, language, enabled):
+    if language not in SPELLING:
+        raise RuntimeError("Use one of: " + " ".join(SPELLING))
+    current = set(document.get("spelling_languages", ["en"]))
+    current = current | {language} if enabled else current - {language}
+    ordered = [code for code in SPELLING if code in current]
+    if ordered == ["en"]:
+        document.pop("spelling_languages", None)
+    else:
+        document["spelling_languages"] = ordered
+
+
+def print_spelling(report):
+    on = [entry["name"] for entry in report if entry["enabled"]]
+    print("Spelling: corrects " + (", ".join(on) if on else "nothing (every language is off)"))
+    for entry in report:
+        ready = entry["dictionary"] is not None
+        mark = "✓" if entry["enabled"] and ready else "!" if entry["enabled"] else "·"
+        detail = (entry["dictionary"] if entry["dictionary"] == "built in"
+                  else f"dictionary {entry['dictionary']}" if ready
+                  else f"needs: sudo pacman -S {entry['package']} (or its .aff/.dic in ~/.local/share/hunspell)")
+        print(f"  {mark} {entry['name']:<8} {'on ' if entry['enabled'] else 'off'}  {detail}")
+    print("Turn one on or off: badi spelling LANG on|off  (" + " ".join(SPELLING) + ")")
+
+
 def mode_text(blocklist, kind):
     if blocklist is True:
         return ("blocklist: every supported app except blocked ones" if kind == "app"
@@ -1106,6 +1167,18 @@ def main(arguments):
         update_settings(lambda document: set_mode(document, "mid_line", enabled))
         print("Mid-sentence suggestions are on." if enabled
               else "Mid-sentence suggestions are off. A word after the caret asks for nothing.")
+        return
+    if arguments[:1] == ["spelling"] and arguments[1:] in ([], ["--json"]):
+        report = spelling_report(json.loads(control(["settings", "show", "--json"])))
+        if arguments[1:]:
+            print(json.dumps({"schema": "badi.spelling.v1", "languages": report}, indent=2))
+        else:
+            print_spelling(report)
+        return
+    if len(arguments) == 3 and arguments[0] == "spelling" and arguments[2] in ("on", "off"):
+        language = arguments[1]
+        update_settings(lambda document: set_spelling(document, language, arguments[2] == "on"))
+        print_spelling(spelling_report(json.loads(control(["settings", "show", "--json"]))))
         return
     if len(arguments) == 3 and arguments[0] == "language":
         app, language = arguments[1:]

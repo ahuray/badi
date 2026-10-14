@@ -575,6 +575,7 @@ fn personalization_privacy_floor(current: &SettingsV2, next: &SettingsV2) -> Set
         battery_mode: current.battery_mode,
         style_learning: current.style_learning && next.style_learning,
         language_overrides: current.language_overrides.clone(),
+        spelling_languages: current.spelling_languages.clone(),
         subjects,
     }
 }

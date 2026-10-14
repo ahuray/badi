@@ -94,6 +94,7 @@ fn settings(battery_mode: BatteryMode) -> SettingsV2 {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode,
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
         subjects: vec![SubjectRule {

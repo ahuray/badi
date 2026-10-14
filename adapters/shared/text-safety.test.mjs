@@ -23,14 +23,14 @@ test('all editor text guards share the exact Persian orthographic joiner contrac
 test('corrections preserve one exact whole-word suffix and its optional space', () => {
   for (const [before, original, replacement] of [
     ['Use this adress', 'adress', 'address'], ['Use this adress ', 'adress ', 'address '],
-    ['adress ', 'adress ', 'address '],
+    ['adress ', 'adress ', 'address '], ['Ins Hauss ', 'Hauss ', 'Haus '], ['muchas grasias ', 'grasias ', 'gracias '],
   ]) assert.equal(validCorrection(before, original, replacement), true);
   for (const [before, original, replacement] of [
     ['badadress ', 'adress ', 'address '], ['adress ', 'adress ', 'address'],
     ['adress', 'adress', 'address '], ['adress ', 'adress ', 'adress '],
     ['adress  ', 'adress  ', 'address  '], ['adress\n', 'adress\n', 'address\n'],
     ['adress ', 'adress ', 'address\n'], ['adress\t', 'adress\t', 'address\t'],
-    ['adress ', 'other ', 'address '], ['Adress ', 'Adress ', 'Address '],
+    ['adress ', 'other ', 'address '], ['x2 ', 'x2 ', 'xz '], ['mot-clef ', 'mot-clef ', 'motclef '],
     ['adress ', 'adress ', 'address; '],
   ]) assert.equal(validCorrection(before, original, replacement), false, JSON.stringify([before, original, replacement]));
 });

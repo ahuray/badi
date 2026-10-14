@@ -13,7 +13,7 @@ _ARABIC_LETTER = re.compile(
     "[ؠ-ؿف-يٮ-ٯٱ-ۓەۥ-ۦ"
     "ۮ-ۯۺ-ۼۿ]")
 _UNSAFE_CATEGORIES = {"Cc", "Cf", "Zl", "Zp", "Cs"}
-_CORRECTION_WORD = re.compile(r"[a-z]{3,24} ?")
+_CORRECTION_WORD = re.compile(r"[^\W\d_]{2,32} ?")
 _LANGUAGE_TAG = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
 # U+FFFC stands in for an anchored object or other non-text content; such a
 # paragraph's string is not the text the user sees.
@@ -44,12 +44,19 @@ def has_unsafe_text(value, allow_context_whitespace=False):
     return False
 
 
+def _correction_word(value):
+    """2-32 cased letters (as the broker and text-safety.mjs require) and at
+    most one trailing space."""
+    return (_CORRECTION_WORD.fullmatch(value) is not None
+            and all(character.islower() or character.isupper() for character in value.rstrip(" ")))
+
+
 def valid_correction(before, original, replacement):
-    """A correction owns one exact lowercase English word before the caret,
-    with at most its own typed space, and never a wider document range."""
+    """A correction owns one exact word before the caret, with at most its own
+    typed space, and never a wider document range."""
     if not all(isinstance(value, str) for value in (before, original, replacement)):
         return False
-    if (not _CORRECTION_WORD.fullmatch(original) or not _CORRECTION_WORD.fullmatch(replacement)
+    if (not _correction_word(original) or not _correction_word(replacement)
             or original == replacement or original.endswith(" ") != replacement.endswith(" ")
             or not before.endswith(original)):
         return False

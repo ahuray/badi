@@ -247,6 +247,13 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 ### Suggestion quality
 
+- [ ] Measure dictionary spelling (`badi spelling`, opt-in beyond English)
+      on held-out misspellings per language: correction precision, abstention
+      and the model's choice among candidates. That choice is an uncached
+      model call of 1-2.5 s here, so it fits Writer's spelling budget but not
+      the 550 ms typing budget, where several candidates get no correction;
+      a cached spelling prompt slot would close that gap.
+
 - [ ] Qualify French and Spanish before enabling them. Gather independently
       reviewed confirmation prefixes and full-addition reviews for both,
       alongside the existing English, German and Persian confirmation gate.

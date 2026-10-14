@@ -746,6 +746,28 @@ class DesktopTests(unittest.TestCase):
         failed = lambda *_a, **_k: SimpleNamespace(returncode=1, stdout='')
         self.assertIsNone(desktop.preview_layers(run=failed))
 
+    def test_spelling_languages_stay_canonical_and_name_missing_dictionaries(self):
+        document = {}
+        desktop.set_spelling(document, "fr", True)
+        desktop.set_spelling(document, "de", True)
+        self.assertEqual(document["spelling_languages"], ["en", "de", "fr"])
+        desktop.set_spelling(document, "de", False)
+        desktop.set_spelling(document, "fr", False)
+        self.assertNotIn("spelling_languages", document, "English alone is the omitted default")
+        desktop.set_spelling(document, "en", False)
+        self.assertEqual(document["spelling_languages"], [])
+        with self.assertRaisesRegex(RuntimeError, "Use one of"):
+            desktop.set_spelling(document, "fa", True)
+        (self.directory / "de_AT.aff").write_text("SET UTF-8\n")
+        (self.directory / "de_AT.dic").write_text("1\nHaus\n")
+        with patch.object(desktop, "DICTIONARY_DIRECTORIES", (self.directory,)):
+            report = {entry["language"]: entry for entry in
+                      desktop.spelling_report({"spelling_languages": ["en", "de", "fr"]})}
+        self.assertEqual(report["en"]["dictionary"], "built in")
+        self.assertEqual(report["de"]["dictionary"], "de_AT")
+        self.assertEqual((report["fr"]["dictionary"], report["fr"]["package"]), (None, "hunspell-fr-comprehensive"))
+        self.assertFalse(report["es"]["enabled"])
+
     def test_debug_refuses_public_symlink_expired_and_malformed_data(self):
         flag = self.directory / 'debug-control.json'
         with patch.object(desktop, 'runtime_directory', return_value=self.directory), \

@@ -13,6 +13,9 @@ pub const AUTOMATIC_WRITING_BUDGET_MS: u64 = 550;
 /// Provider writing budget for an explicit request (Tab or a control
 /// request): the user asked and waits for one suggestion.
 pub const EXPLICIT_WRITING_BUDGET_MS: u64 = 1_200;
+/// A spelling-only field's check: no keystroke waits for it, and choosing
+/// between dictionary candidates needs an uncached model call.
+pub const SPELLING_WRITING_BUDGET_MS: u64 = 2_500;
 
 /// What asked for a suggestion. Only the time budget differs; policy,
 /// binding and validation are the same for both.
@@ -21,6 +24,8 @@ pub enum RequestTrigger {
     #[default]
     Automatic,
     Explicit,
+    /// A spelling-only field (the Writer extension), automatic or explicit.
+    Spelling,
 }
 
 impl RequestTrigger {
@@ -38,6 +43,7 @@ impl RequestTrigger {
         Duration::from_millis(match self {
             Self::Automatic => AUTOMATIC_WRITING_BUDGET_MS,
             Self::Explicit => EXPLICIT_WRITING_BUDGET_MS,
+            Self::Spelling => SPELLING_WRITING_BUDGET_MS,
         })
     }
 }
@@ -416,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_requests_have_the_longer_writing_budget() {
+    fn explicit_and_spelling_requests_have_longer_writing_budgets() {
         use super::RequestTrigger;
         use std::time::Duration;
 
@@ -428,6 +434,10 @@ mod tests {
         assert_eq!(
             RequestTrigger::from_explicit(true).writing_budget(),
             Duration::from_millis(1_200)
+        );
+        assert_eq!(
+            RequestTrigger::Spelling.writing_budget(),
+            Duration::from_millis(2_500)
         );
     }
 

@@ -7,6 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
 use crate::protocol::{MAX_SAFE_COUNTER, TargetDescriptor, valid_linux_app_id};
+use crate::spelling::SpellingLanguage;
 
 use super::identity::{IdentityError, StableIdentity};
 use super::permissions::{
@@ -107,7 +108,15 @@ pub struct SettingsV2 {
     /// Per-app quality hints, independent of app/site acquisition permission.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub language_overrides: BTreeMap<String, PredictionLanguage>,
+    /// Languages whose spelling is corrected, in canonical order. Omitted
+    /// when only English, the default; empty turns spelling off.
+    #[serde(skip_serializing_if = "only_english")]
+    pub spelling_languages: Vec<SpellingLanguage>,
     pub subjects: Vec<SubjectRule>,
+}
+
+fn only_english(languages: &[SpellingLanguage]) -> bool {
+    languages == [SpellingLanguage::English]
 }
 
 // Serde's skip_serializing_if dictates the by-reference signature.
@@ -136,6 +145,8 @@ struct SettingsDocument {
     style_learning: Option<bool>,
     #[serde(default, deserialize_with = "present_language_overrides")]
     language_overrides: Option<BTreeMap<String, PredictionLanguage>>,
+    #[serde(default)]
+    spelling_languages: Option<Vec<SpellingLanguage>>,
     subjects: Vec<SubjectRule>,
 }
 
@@ -195,6 +206,11 @@ impl<'de> Deserialize<'de> for SettingsV2 {
                 "language_overrides_requires_settings_v2",
             ));
         }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.spelling_languages.is_some() {
+            return Err(serde::de::Error::custom(
+                "spelling_languages_requires_settings_v2",
+            ));
+        }
         Ok(Self {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: decoded.revision,
@@ -206,6 +222,9 @@ impl<'de> Deserialize<'de> for SettingsV2 {
             battery_mode: decoded.battery_mode.unwrap_or_default(),
             style_learning: decoded.style_learning.unwrap_or(false),
             language_overrides: decoded.language_overrides.unwrap_or_default(),
+            spelling_languages: decoded
+                .spelling_languages
+                .unwrap_or_else(|| vec![SpellingLanguage::English]),
             subjects: decoded.subjects,
         })
     }
@@ -237,6 +256,7 @@ impl SettingsV2 {
             battery_mode: BatteryMode::Quiet,
             style_learning: false,
             language_overrides: BTreeMap::new(),
+            spelling_languages: vec![SpellingLanguage::English],
             subjects: Vec::new(),
         }
     }
@@ -258,6 +278,9 @@ impl SettingsV2 {
                 .any(|app| !valid_linux_app_id(app))
         {
             return Err(SettingsValidationError::InvalidLanguageOverride);
+        }
+        if !self.spelling_languages.is_sorted_by(|a, b| a < b) {
+            return Err(SettingsValidationError::SpellingLanguagesNotCanonical);
         }
         if self.subjects.len() > MAX_SUBJECTS {
             return Err(SettingsValidationError::TooManySubjects);
@@ -390,6 +413,8 @@ impl SettingsV2 {
         self.style_learning = current.style_learning;
         self.language_overrides
             .clone_from(&current.language_overrides);
+        self.spelling_languages
+            .clone_from(&current.spelling_languages);
         self.subjects.extend(
             current
                 .subjects
@@ -427,6 +452,8 @@ pub enum SettingsValidationError {
     PermissionDependency,
     #[error("revision_out_of_range")]
     RevisionOutOfRange,
+    #[error("spelling_languages_not_canonical")]
+    SpellingLanguagesNotCanonical,
     #[error("subjects_not_canonical")]
     SubjectsNotCanonical,
     #[error("too_many_subjects")]

@@ -43,6 +43,7 @@ fn settings_with(rule: SubjectRule) -> SettingsV2 {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
         subjects: vec![rule],
@@ -205,6 +206,45 @@ fn escape_quiet_seconds_round_trips_bounds_and_rejects_v1() {
     let legacy = serde_json::json!({
         "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
         "escape_quiet_seconds": 90, "subjects": [],
+    });
+    assert!(
+        serde_json::from_value::<SettingsV2>(legacy).is_err(),
+        "v1 cannot name it"
+    );
+}
+
+#[test]
+fn spelling_languages_omit_english_alone_and_must_be_canonical() {
+    use crate::spelling::SpellingLanguage::{English, French, German};
+    let mut settings = settings_with(SubjectRule {
+        identity: identity("mail.example"),
+        permissions: allowed(None),
+    });
+    let encoded = serde_json::to_value(&settings).expect("encode settings");
+    assert!(
+        encoded.get("spelling_languages").is_none(),
+        "English alone is omitted"
+    );
+    settings.spelling_languages = vec![English, German, French];
+    let encoded = serde_json::to_value(&settings).expect("encode settings");
+    assert_eq!(
+        encoded["spelling_languages"],
+        serde_json::json!(["en", "de", "fr"])
+    );
+    assert_eq!(
+        serde_json::from_value::<SettingsV2>(encoded).expect("decode"),
+        settings
+    );
+    settings.spelling_languages = vec![French, German];
+    assert_eq!(
+        settings.validate(),
+        Err(SettingsValidationError::SpellingLanguagesNotCanonical)
+    );
+    settings.spelling_languages = Vec::new();
+    assert_eq!(settings.validate(), Ok(()), "spelling can be off");
+    let legacy = serde_json::json!({
+        "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
+        "spelling_languages": ["en"], "subjects": [],
     });
     assert!(
         serde_json::from_value::<SettingsV2>(legacy).is_err(),
@@ -464,6 +504,7 @@ fn linux_adapters_sort_by_wire_name_like_the_desktop_clients() {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
         subjects: vec![
@@ -496,6 +537,7 @@ fn settings_require_sorted_unique_subjects() {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
         subjects: vec![first.clone(), second.clone()],
@@ -536,6 +578,7 @@ fn maximum_shape_settings_fit_storage_and_wire_limits() {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         language_overrides: (0..MAX_SUBJECTS)
             .map(|index| {

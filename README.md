@@ -63,7 +63,7 @@ Linux in general.
 | Zen | Grey preview; Ctrl+Z undoes an acceptance alone | Zen 1.23b |
 | VS Code, Cursor | Needs `"editor.editContext": false` in VS Code | VS Code 1.140, Cursor 3.21 |
 | Codex desktop | Composer | 26.930 |
-| LibreOffice Writer | Document paragraphs; Calc gets nothing. English spelling: the [Badi extension](adapters/libreoffice/README.md), Alt+F7 shows and Alt+F7 again replaces in one undo step (headless trial) | 26.8 |
+| LibreOffice Writer | Document paragraphs; Calc gets nothing. Spelling: the [Badi extension](adapters/libreoffice/README.md) shows a correction after a finished word, Alt+F7 shows one for the word at the caret, Alt+F7 again replaces it in one undo step | 26.8 |
 | Telegram | | Telegram desktop (Qt) |
 | Omawrite | | 0.5.0 |
 | Xournal++ text tool | Tab requests, exact native undo | 1.3.7 |
@@ -94,8 +94,13 @@ can redirect it like a keystroke
 identity and caret position before showing a suggestion and again before
 inserting it, and it never reads a field the toolkit marks as a password.
 
-English spelling replaces the mistyped word in Bash, Obsidian, and native exact
-fields such as Omawrite, Telegram and Xournal++. In LibreOffice Writer the
+Spelling replaces the mistyped word in Bash, Obsidian, and native exact
+fields such as Omawrite, Telegram and Xournal++. English is built in;
+`badi spelling LANG on` adds German, French, Spanish, Italian, Dutch or Polish
+from that language's Hunspell dictionary (`badi spelling` lists them and names
+the package to install). A single dictionary candidate is offered at once;
+when several fit, the local model picks one from the sentence, and text
+confidently in a language that is not turned on is never corrected. In LibreOffice Writer the
 [Badi extension](adapters/libreoffice/README.md) shows a correction after you
 finish a misspelled word, or on Alt+F7 for the word at the caret, and replaces
 it through Writer's own text and undo APIs; one Ctrl+Z restores the typo. The apps in the section above, plus Writer's

@@ -54,6 +54,7 @@ fn settings(revision: u64, style_learning: bool, learn: bool) -> SettingsV2 {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Quiet,
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning,
         language_overrides: std::collections::BTreeMap::new(),
         subjects: vec![SubjectRule {

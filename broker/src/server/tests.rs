@@ -456,6 +456,7 @@ async fn v1_settings_roundtrip_projects_browser_rules_and_preserves_native_rules
                 battery_mode: crate::settings::BatteryMode::Normal,
                 style_learning: false,
                 language_overrides: std::collections::BTreeMap::new(),
+                spelling_languages: vec![crate::spelling::SpellingLanguage::English],
                 subjects: vec![
                     SubjectRule {
                         identity: StableIdentity::browser_origin(
