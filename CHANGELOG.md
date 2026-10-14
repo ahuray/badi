@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#79](https://github.com/ahuray/badi/pull/79) `badi debug on [--text]`
+  traces each suggestion from model to screen across the broker, Fcitx,
+  observer, editors and compositor ([ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md));
+  Writer's trailing-space sentence lookup no longer refuses the caret.
 - [#78](https://github.com/ahuray/badi/pull/78) Type-through keeps the
   carried remainder when a browser field is re-admitted with the same
   context, instead of asking the model again; the observer's overflow chip
