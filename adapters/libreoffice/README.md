@@ -11,7 +11,8 @@ remains append-only; this extension never appends.
 
 | Action | Key |
 | --- | --- |
-| Show a correction for the word before the caret | **Alt+F7** (or Tools ▸ Add-Ons ▸ Badi: Correct Last Word) |
+| See a correction as you type | Finish a misspelled word with a space and pause: the infobar shows it |
+| Show a correction for the word at or before the caret | **Alt+F7** (or Tools ▸ Add-Ons ▸ Badi: Correct Last Word) |
 | Replace it | **Alt+F7** again, or the infobar's **Replace** button |
 | Dismiss | **Escape**, the infobar's close button, or any edit or caret move |
 
@@ -46,18 +47,26 @@ command.
   subject `linux_app/libreoffice/libreoffice-writer`. The Fcitx grant
   `badi app libreoffice` covers the grey preview only and does not authorize
   this extension; the app blocklist mode does, as for Obsidian and Bash. The
-  broker serves this target only explicit requests.
-- **Where it works.** The collapsed caret at the end of a body-text paragraph
-  of an editable, plain Writer document, with no selection or multi-selection.
-  Tables, frames, headers, footnotes, fields, protected sections, read-only and
-  Web/master documents, change tracking (`RecordChanges`) and paragraphs with
-  objects (U+FFFC) are refused before anything is sent. The broker replaces
-  only at the end of the field, so text after the caret means no request.
-- **Context.** The paragraph before the caret (last 512 characters) and its
-  character locale (`en-US`); nothing from other paragraphs. Text is held in
-  memory only for the attempt and never logged.
-- **Binding.** The frame, controller, document (`RuntimeUID`), paragraph text
-  before and after the caret and its language are captured at the request and
+  broker serves this target corrections only: it calls no model unless the
+  last word is a correction target, and withholds any continuation.
+- **Automatic checks.** A job on each new or opened document (`Jobs.xcu`)
+  watches its edits. After a 0.5 s pause following a word and one space at
+  the end of a paragraph, one automatic request checks that word once; only a
+  correction is shown, and nothing else appears. An Alt+F7 request replaces a
+  check in flight.
+- **Where it works.** The collapsed caret in a body-text paragraph of an
+  editable, plain Writer document, with no selection or multi-selection. The
+  corrected word holds the caret, ends at it (with its own space), or sits
+  before closing punctuation; `correction_span()` finds it. Tables, frames,
+  headers, footnotes, fields, protected sections, read-only and Web/master
+  documents, change tracking (`RecordChanges`) and paragraphs with objects
+  (U+FFFC) are refused before anything is sent.
+- **Context.** The paragraph up to that word's end (last 512 characters) and
+  its character locale (`en-US`); the broker sees no text after it and the
+  rest of the paragraph must stay unchanged. Text is held in memory only for
+  the attempt and never logged.
+- **Binding.** The frame, controller, document (`RuntimeUID`), the paragraph
+  up to the word, the rest of it and its language are captured at the request and
   compared again: before display, every 250 ms and on every edit, selection
   change or Escape while the proposal is visible, before the grant is asked
   for, and once more right before the edit. A Replace button from another

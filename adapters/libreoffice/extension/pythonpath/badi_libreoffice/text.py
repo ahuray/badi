@@ -57,6 +57,28 @@ def valid_correction(before, original, replacement):
     return start == 0 or before[start - 1].isspace()
 
 
+_CLOSING = ".,;:!?…)]}\"'»”’"
+
+
+def correction_span(before, after):
+    """Where Alt+F7 corrects, as (target, tail): `target` is the paragraph up
+    to the end of the word at or before the caret, with that word's own typed
+    space, and `tail` the rest, which the correction leaves untouched. The
+    word may hold the caret, end at it, or sit before closing punctuation.
+    None without such a word."""
+    if not isinstance(before, str) or not isinstance(after, str):
+        return None
+    if before[-1:].isalpha():
+        run = next((index for index, character in enumerate(after) if not character.isalpha()), len(after))
+        return before + after[:run], after[run:]
+    if before.endswith(" ") and before[-2:-1].isalpha():
+        return before, after
+    end = len(before.rstrip(" ").rstrip(_CLOSING))
+    if end and before[end - 1].isalpha() and end < len(before):
+        return before[:end], before[end:] + after
+    return None
+
+
 def valid_language_tag(tag):
     """The broker's language-tag shape: 2-35 ASCII alphanumerics in subtags."""
     return isinstance(tag, str) and 2 <= len(tag) <= 35 and _LANGUAGE_TAG.fullmatch(tag) is not None

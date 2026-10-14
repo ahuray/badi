@@ -272,6 +272,17 @@ impl SessionState {
     /// A spelling correction needs negotiated replacement and a field whose
     /// identity the adapter knows. IME-parity apps stay append-only even when
     /// the shared Fcitx connection advertises replacement for native fields.
+    /// The Writer extension shows corrections only, so its requests never
+    /// run a continuation.
+    pub(super) fn spelling_only(&self) -> bool {
+        self.target.target.kind == TargetKind::Libreoffice
+    }
+
+    /// A spelling-only field without a word to correct calls no provider.
+    pub(super) fn nothing_to_correct(&self, before: &str) -> bool {
+        self.spelling_only() && crate::writing::correction_target(before).is_none()
+    }
+
     pub(super) fn allows_text_replacement(&self) -> bool {
         self.authority.grants(Capability::TextReplacement)
             && self

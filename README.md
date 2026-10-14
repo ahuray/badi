@@ -96,9 +96,9 @@ inserting it, and it never reads a field the toolkit marks as a password.
 
 English spelling replaces the mistyped word in Bash, Obsidian, and native exact
 fields such as Omawrite, Telegram and Xournal++. In LibreOffice Writer the
-[Badi extension](adapters/libreoffice/README.md) does it on request (Alt+F7),
-through Writer's own text and undo APIs, at the end of a body-text paragraph;
-one Ctrl+Z restores the typo. The apps in the section above, plus Writer's
+[Badi extension](adapters/libreoffice/README.md) shows a correction after you
+finish a misspelled word, or on Alt+F7 for the word at the caret, and replaces
+it through Writer's own text and undo APIs; one Ctrl+Z restores the typo. The apps in the section above, plus Writer's
 grey preview, VS Code, Cursor, Codex, Discord and Grok Bot, stay append-only,
 so a typo there is not deleted. In Omawrite 0.5.0 a spelling
 replacement is two native undos: the first removes the correction and the

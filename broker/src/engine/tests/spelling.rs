@@ -396,3 +396,100 @@ async fn ime_parity_apps_do_not_receive_spelling_authority() {
         );
     }
 }
+
+/// The Writer extension's session, which shows corrections only.
+async fn open_writer_session(
+    provider: std::sync::Arc<dyn CompletionProvider>,
+) -> (Broker, SessionId, mpsc::Receiver<BrokerEvent>) {
+    let broker = Broker::new(provider, BrokerConfig::default());
+    let session_id = SessionId::new();
+    let (sink, events) = mpsc::channel(32);
+    broker
+        .open_session(
+            coordinates(session_id, 0),
+            SessionOpenPayload {
+                target: TargetDescriptor {
+                    kind: TargetKind::Libreoffice,
+                    app_id: "libreoffice-writer".to_owned(),
+                    target_id: "writer-1".to_owned(),
+                    origin: None,
+                },
+                activation: Activation::Always,
+            },
+            SessionAuthority {
+                protocol_version: 2,
+                adapter_kind: AdapterKind::Libreoffice,
+                capabilities: vec![
+                    Capability::Context,
+                    Capability::Suggestion,
+                    Capability::CommitApplied,
+                    Capability::TextReplacement,
+                ],
+            },
+            event_sink(sink),
+        )
+        .await
+        .expect("open writer session");
+    (broker, session_id, events)
+}
+
+async fn writer_request(
+    broker: &Broker,
+    session_id: SessionId,
+    revision: u64,
+    before: &str,
+    events: &mut mpsc::Receiver<BrokerEvent>,
+) -> BrokerEvent {
+    let mut update = context(revision, FieldPurpose::Normal);
+    update.before = before.to_owned();
+    update.selection.anchor = u64::try_from(before.len()).expect("small fixture");
+    update.selection.head = update.selection.anchor;
+    broker
+        .update_context(coordinates(session_id, revision), update.clone())
+        .await
+        .expect("context");
+    broker
+        .request_suggestion(
+            coordinates(session_id, revision),
+            SuggestRequestPayload {
+                fingerprint: update.fingerprint,
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("request");
+    timeout(Duration::from_millis(200), events.recv())
+        .await
+        .expect("deadline")
+        .expect("event")
+}
+
+#[tokio::test]
+async fn the_writer_extension_gets_corrections_and_never_a_continuation() {
+    let counting = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
+    let (broker, id, mut events) = open_writer_session(counting.clone()).await;
+    // A known word: no provider call at all.
+    let known = writer_request(&broker, id, 1, "This is fine ", &mut events).await;
+    assert!(
+        matches!(known, BrokerEvent::SuggestionClear { .. }),
+        "{known:?}"
+    );
+    assert_eq!(counting.calls.load(Ordering::Relaxed), 0);
+    // An unknown word whose provider answers with a continuation: withheld.
+    let continued = writer_request(&broker, id, 2, "This is teh ", &mut events).await;
+    assert!(
+        matches!(continued, BrokerEvent::SuggestionClear { .. }),
+        "{continued:?}"
+    );
+    assert_eq!(counting.calls.load(Ordering::Relaxed), 1);
+
+    let (broker, id, mut events) =
+        open_writer_session(std::sync::Arc::new(SpellingProvider("teh ", "the "))).await;
+    let BrokerEvent::SuggestionShow { payload, .. } =
+        writer_request(&broker, id, 1, "This is teh ", &mut events).await
+    else {
+        panic!("expected a correction")
+    };
+    assert_eq!(payload.replace_before.as_deref(), Some("teh "));
+}

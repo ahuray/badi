@@ -55,11 +55,10 @@ pub const fn evaluate(input: PolicyInput) -> PolicyDecision {
     if matches!(input.activation, Activation::Never) {
         return PolicyDecision::Deny(PolicyReason::PolicyNever);
     }
-    // Bash and the LibreOffice Writer extension act only on explicit requests.
-    if (matches!(
-        input.target_kind,
-        TargetKind::Terminal | TargetKind::Libreoffice
-    ) || matches!(input.field.purpose, FieldPurpose::Terminal))
+    // Bash acts only on explicit requests. The Writer extension may also ask
+    // on its own after a finished word; the engine keeps it to corrections.
+    if (matches!(input.target_kind, TargetKind::Terminal)
+        || matches!(input.field.purpose, FieldPurpose::Terminal))
         && !input.explicit
     {
         return PolicyDecision::ManualRequired(PolicyReason::ManualRequired);
@@ -165,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn libreoffice_writer_extension_is_explicit_only() {
+    fn libreoffice_writer_extension_may_ask_on_its_own() {
         let input = |explicit| PolicyInput {
             activation: Activation::Always,
             explicit,
@@ -176,7 +175,7 @@ mod tests {
         };
         assert_eq!(
             evaluate(input(false)),
-            PolicyDecision::ManualRequired(PolicyReason::ManualRequired)
+            PolicyDecision::Allow(PolicyReason::AllowedAlways)
         );
         assert_eq!(
             evaluate(input(true)),

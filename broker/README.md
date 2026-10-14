@@ -344,8 +344,8 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   is proposed without inference. The
   [LibreOffice Writer extension](../adapters/libreoffice/README.md) (adapter and
   target kind `libreoffice`, app id `libreoffice-writer`, settings adapter
-  `libreoffice`) is explicit-only, like Bash, and reports `applied` only after
-  reading the edit back. Settings order Linux app rules by adapter name, as
+  `libreoffice`) gets corrections only, automatic or explicit, and reports
+  `applied` only after reading the edit back. Settings order Linux app rules by adapter name, as
   the desktop CLI and panel sort them.
 
 ## Shutdown and tests

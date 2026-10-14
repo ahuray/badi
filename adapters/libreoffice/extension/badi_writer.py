@@ -1,8 +1,9 @@
 """Badi spelling replacement for LibreOffice Writer.
 
 `vnd.badi.libreoffice:correct` (Alt+F7, Tools ▸ Add-Ons) asks the local broker
-to correct the word before the caret and shows the proposal in an infobar
-without editing. Invoking it again, or the infobar's Replace button, accepts:
+to correct the word at or before the caret, and a document job checks each
+finished word on its own; either shows the proposal in an infobar without
+editing. Invoking it again, or the infobar's Replace button, accepts:
 the extension revalidates the exact document, view, caret and revision, takes
 the broker's one-shot grant, revalidates again and replaces exactly the bound
 word inside one undo context, then reads the paragraph back before reporting
@@ -21,6 +22,7 @@ import unohelper
 from com.sun.star.awt import XCallback, XKeyHandler
 from com.sun.star.frame import FeatureStateEvent, XDispatch, XDispatchProvider
 from com.sun.star.lang import XInitialization, XServiceInfo
+from com.sun.star.task import XJob
 from com.sun.star.util import XModifyListener
 from com.sun.star.view import XSelectionChangeListener
 
@@ -39,6 +41,8 @@ ESCAPE = 1281  # com.sun.star.awt.Key.ESCAPE
 INFO = 1  # com.sun.star.frame.InfobarType.INFO
 NOTICE_SECONDS = 4.0
 POLL_SECONDS = 0.25
+# A finished word is checked once typing pauses this long.
+AUTOMATIC_PAUSE_SECONDS = 0.5
 
 
 def _grant_delay():
@@ -80,13 +84,14 @@ def _supports(target, service):
 class Binding:
     """The exact Writer state a proposal was requested for."""
 
-    def __init__(self, frame, controller, model, before, after, language):
+    def __init__(self, frame, controller, model, before, tail, language):
         self.frame = frame
         self.controller = controller
         self.model = model
         self.runtime_uid = _property(model, "RuntimeUID")
+        # The paragraph up to the corrected word's end, and the rest of it.
         self.before = before
-        self.after = after
+        self.tail = tail
         self.language = language
 
     @classmethod
@@ -121,17 +126,19 @@ class Binding:
                                               getattr(locale, "Country", ""))
         except Exception:
             return None, "unsupported_field"
-        # Replacement is defined only at the end of the field (the paragraph).
-        if language is None or after or badi_text.bounded_context(before, after) is None:
+        span = badi_text.correction_span(before, after)
+        # The broker sees the paragraph up to the word: a correction replaces
+        # the end of that text, and the tail stays as it is.
+        if language is None or span is None or badi_text.bounded_context(span[0], "") is None:
             return None, "unsupported_field"
-        return cls(frame, controller, model, before, after, language), None
+        return cls(frame, controller, model, span[0], span[1], language), None
 
     def current(self):
-        """The same frame, view, document, caret paragraph and language."""
+        """The same frame, view, document, paragraph, word and language."""
         fresh, _reason = Binding.capture(self.frame)
         return (fresh is not None and fresh.controller == self.controller
                 and fresh.model == self.model and fresh.runtime_uid == self.runtime_uid
-                and fresh.before == self.before and fresh.after == self.after
+                and fresh.before == self.before and fresh.tail == self.tail
                 and fresh.language == self.language)
 
 
@@ -181,6 +188,20 @@ class _Watch(unohelper.Base, XModifyListener, XSelectionChangeListener, XKeyHand
         self._controller.post(lambda: self._controller.invalidate(self._token, "stale"))
 
 
+class _Typing(unohelper.Base, XModifyListener):
+    """Notices edits in one document so a finished word can be checked."""
+
+    def __init__(self, controller, model):
+        self._controller = controller
+        self._model = model
+
+    def modified(self, _event):
+        self._controller.post(lambda: self._controller.typed(self._model))
+
+    def disposing(self, _event):
+        self._controller.post(lambda: self._controller.forget(self._model))
+
+
 class Controller:
     """One correction at a time for the whole office process. State changes
     happen only on the main thread, through `post`."""
@@ -199,6 +220,12 @@ class Controller:
         self._timer = None
         self._notice = None
         self._listeners = []
+        # Automatic checks: the documents watched, the pending pause, the
+        # last word checked, and whether the current attempt is automatic.
+        self._typing = []
+        self._pause = None
+        self._checked = None
+        self._automatic = False
 
     # Threads and listeners --------------------------------------------------
 
@@ -245,9 +272,56 @@ class Controller:
 
     # Commands ---------------------------------------------------------------
 
+    def watch(self, frame):
+        try:
+            self.watch_model(frame.getController().getModel())
+        except Exception:
+            pass
+
+    def watch_model(self, model):
+        """Checks each finished word of this document on its own."""
+        if (model is None or not _supports(model, "com.sun.star.text.TextDocument")
+                or any(watched == model for watched in self._typing)):
+            return
+        try:
+            model.addModifyListener(_Typing(self, model))
+        except Exception:
+            return
+        self._typing.append(model)
+
+    def forget(self, model):
+        self._typing = [watched for watched in self._typing if watched != model]
+
+    def typed(self, model):
+        if self._pause is not None:
+            self._pause.cancel()
+        self._pause = self._later(AUTOMATIC_PAUSE_SECONDS, lambda: self._check(model))
+
+    def _check(self, model):
+        """After a typing pause: a word just finished with a space, checked once."""
+        self._pause = None
+        if self._phase != "idle":
+            return
+        try:
+            frame = model.getCurrentController().getFrame()
+        except Exception:
+            return
+        binding, _reason = Binding.capture(frame)
+        if binding is None or binding.tail or not binding.before.endswith(" ") \
+                or not binding.before[-2:-1].isalpha():
+            return
+        key = (binding.runtime_uid, binding.before)
+        if key == self._checked:
+            return
+        self._checked = key
+        self._request(frame, binding)
+
     def invoke(self, frame, command):
         if command == "status":
             return
+        if command == "correct" and self._phase == "requesting" and self._automatic:
+            # The user's own request replaces an automatic check in flight.
+            self._finish("stale")
         if self._phase == "showing":
             # Only the visible, still-current proposal in this window can be
             # accepted. A Replace button left in another window never touches
@@ -262,12 +336,15 @@ class Controller:
         if command == "correct" and self._phase == "idle":
             self._request(frame)
 
-    def _request(self, frame):
-        binding, reason = Binding.capture(frame)
+    def _request(self, frame, automatic=None):
+        """An explicit request, or the automatic check of `automatic` (a Binding)."""
+        binding, reason = (automatic, None) if automatic is not None else Binding.capture(frame)
         if binding is None:
             self._notice_on(frame, reason)
             self._publish("idle", reason)
             return
+        self._automatic = automatic is not None
+        explicit = not self._automatic
         self._token += 1
         token = self._token
         self._binding = binding
@@ -282,7 +359,7 @@ class Controller:
             attempt = None
             try:
                 attempt = broker.Attempt(on_revoked=revoked)
-                proposal = attempt.request(binding.before, binding.after, binding.language)
+                proposal = attempt.request(binding.before, "", binding.language, explicit)
                 self.post(lambda: self._show(token, attempt, proposal))
             except broker.BrokerError as error:
                 code = error.code
@@ -373,7 +450,9 @@ class Controller:
             body = binding.model.getText()
             view_cursor = binding.controller.getViewCursor()
             cursor = body.createTextCursorByRange(view_cursor.getStart())
-            if not cursor.goLeft(len(original), True) or cursor.getString() != original:
+            cursor.gotoStartOfParagraph(False)
+            if (not cursor.goRight(len(binding.before), False) or not cursor.goLeft(len(original), True)
+                    or cursor.getString() != original):
                 return "stale"
             undo = binding.model.getUndoManager()
         except Exception:
@@ -391,8 +470,8 @@ class Controller:
             self._watch.mutating = False
         try:
             before, after = _paragraph(body, binding.controller.getViewCursor())
-            verified = (before == binding.before[:len(binding.before) - len(original)] + proposal.text
-                        and after == binding.after
+            expected = binding.before[:len(binding.before) - len(original)] + proposal.text + binding.tail
+            verified = (before + after == expected
                         and binding.controller.getViewCursor().isCollapsed()
                         and undo.getCurrentUndoActionTitle() == UNDO_TITLE)
         except Exception:
@@ -435,8 +514,10 @@ class Controller:
         self._watch = None
         if not keep_infobar:
             self._remove_infobar(frame)
-            if outcome in MESSAGES:
+            # An automatic check that found nothing, or failed, stays silent.
+            if outcome in MESSAGES and not self._automatic:
                 self._notice_on(frame, outcome)
+        self._automatic = False
         self._publish("idle", outcome)
 
     def _cancel_timer(self):
@@ -548,6 +629,10 @@ class WriterCorrection(unohelper.Base, XInitialization, XDispatchProvider, XServ
         for argument in arguments:
             if hasattr(argument, "getController"):
                 self._frame = argument
+        if self._frame is not None:
+            controller = controller_for(self._context)
+            frame = self._frame
+            controller.post(lambda: controller.watch(frame))
 
     def queryDispatch(self, url, _target, _flags):
         if url.Protocol == PROTOCOL and url.Path in COMMANDS and self._frame is not None:
@@ -568,5 +653,26 @@ class WriterCorrection(unohelper.Base, XInitialization, XDispatchProvider, XServ
         return SERVICES
 
 
+class WriterWatch(unohelper.Base, XJob):
+    """Runs on each new or opened document so its finished words are checked
+    without Alt+F7 first."""
+
+    def __init__(self, context, *_arguments):
+        self._context = context
+
+    def execute(self, arguments):
+        for argument in arguments:
+            if argument.Name != "Environment":
+                continue
+            for value in argument.Value:
+                if value.Name == "Model" and _supports(value.Value, "com.sun.star.text.TextDocument"):
+                    model = value.Value
+                    controller = controller_for(self._context)
+                    controller.post(lambda: controller.watch_model(model))
+        return ()
+
+
 g_ImplementationHelper = unohelper.ImplementationHelper()
 g_ImplementationHelper.addImplementation(WriterCorrection, IMPLEMENTATION, SERVICES)
+g_ImplementationHelper.addImplementation(WriterWatch, "io.github.ahuray.badi.WriterWatch",
+                                         ("com.sun.star.task.Job",))
