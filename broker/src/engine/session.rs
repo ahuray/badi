@@ -16,6 +16,7 @@ use crate::protocol::{
     Activation, Capability, ContextChangedPayload, Coordinates, ReasonCode, SessionId,
     SessionOpenPayload, TargetKind,
 };
+use crate::provider::RequestTrigger;
 
 impl Broker {
     pub async fn open_session(
@@ -278,9 +279,23 @@ impl SessionState {
         self.target.target.kind == TargetKind::Libreoffice
     }
 
-    /// A spelling-only field without a word to correct calls no provider.
-    pub(super) fn nothing_to_correct(&self, before: &str) -> bool {
-        self.spelling_only() && crate::writing::correction_target(before).is_none()
+    /// What a request asks the provider for, and with which budget.
+    pub(super) fn trigger(&self, explicit: bool) -> RequestTrigger {
+        if self.spelling_only() {
+            RequestTrigger::Spelling
+        } else {
+            RequestTrigger::from_explicit(explicit)
+        }
+    }
+
+    /// A spelling-only field without a misspelled word calls no provider.
+    pub(super) fn nothing_to_correct(&self, explicit: bool) -> bool {
+        self.spelling_only()
+            && self.context.as_ref().is_none_or(|context| {
+                crate::spelling::global()
+                    .locate(&context.before, context.language.as_deref(), explicit)
+                    .is_none()
+            })
     }
 
     pub(super) fn allows_text_replacement(&self) -> bool {

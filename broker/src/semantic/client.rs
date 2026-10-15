@@ -13,6 +13,7 @@ use crate::provider::{
     CompletionProvider, ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger,
     WritingProposal,
 };
+use crate::spelling::Located;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -612,6 +613,101 @@ impl SemanticClient {
         }
     }
 
+    /// A spelling correction of the field's last word, when one is certain
+    /// enough. English: a single lexicon candidate, else the model's
+    /// validated word. Other enabled languages: the dictionary's single
+    /// candidate, else the model's choice among its candidates.
+    async fn correction(
+        &self,
+        request: &ProviderRequest,
+        explicit: bool,
+        cancellation: &CancellationToken,
+        started: Instant,
+        budget: Duration,
+    ) -> Result<Option<WritingProposal>, ProviderError> {
+        let spelling = crate::spelling::global();
+        let Some(located) = spelling.locate(&request.before, request.language.as_deref(), explicit)
+        else {
+            return Ok(None);
+        };
+        let (target, corrected) = match located {
+            Located::English(target) => {
+                let corrected = match crate::writing::unambiguous_correction(target.word) {
+                    Some(corrected) => Some(corrected),
+                    None => self
+                        .spelling_completion(
+                            &crate::writing::correction_payload(target.word),
+                            cancellation,
+                            started,
+                            budget,
+                        )
+                        .await?
+                        .filter(|corrected| {
+                            crate::writing::valid_correction(target.word, corrected)
+                        }),
+                };
+                (target, corrected)
+            }
+            Located::Dictionary { language, target } => {
+                let word = target.word.to_owned();
+                let candidates =
+                    tokio::task::spawn_blocking(move || spelling.candidates(language, &word))
+                        .await
+                        .map_err(|_| ProviderError::Unavailable)?;
+                let corrected = match candidates.as_slice() {
+                    [] => None,
+                    [only] => Some(only.clone()),
+                    _ => self
+                        .spelling_completion(
+                            &crate::spelling::choice_payload(
+                                &request.before,
+                                target.word,
+                                &candidates,
+                            ),
+                            cancellation,
+                            started,
+                            budget,
+                        )
+                        .await?
+                        .and_then(|output| crate::spelling::chosen(&output, &candidates).cloned()),
+                };
+                (target, corrected)
+            }
+        };
+        if cancellation.is_cancelled() {
+            return Err(ProviderError::Cancelled);
+        }
+        Ok(corrected.map(|corrected| WritingProposal {
+            text: format!("{corrected}{}", target.delimiter),
+            replace_before: Some(target.suffix.to_owned()),
+        }))
+    }
+
+    /// The model's trimmed answer to a spelling prompt, within the writing
+    /// budget the continuation shares.
+    async fn spelling_completion(
+        &self,
+        payload: &serde_json::Value,
+        cancellation: &CancellationToken,
+        started: Instant,
+        budget: Duration,
+    ) -> Result<Option<String>, ProviderError> {
+        let payload = serde_json::to_vec(payload).map_err(|_| ProviderError::Unavailable)?;
+        let observed = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
+            result = tokio::time::timeout_at(
+                (started + budget + WRITING_RESULT_GRACE).into(),
+                self.complete_inner(payload, started, budget, cancellation.clone(), None, None),
+            ) => result.unwrap_or(Err(ClientError::Timeout)),
+        }
+        .map_err(|error| match error {
+            ClientError::Cancelled => ProviderError::Cancelled,
+            _ => ProviderError::Unavailable,
+        })?;
+        Ok(observed.output.as_deref().map(str::trim).map(str::to_owned))
+    }
+
     async fn complete_inner(
         &self,
         payload: Vec<u8>,
@@ -731,56 +827,20 @@ impl CompletionProvider for SemanticClient {
             return Err(ProviderError::Cancelled);
         }
         // A correction replaces the last word of the field; mid-text it stays
-        // editor-owned.
+        // editor-owned. It needs a well-formed request, not a language the
+        // model continues in: spelling has its own languages.
         if allow_replacement
             && request.after.is_empty()
-            && matches!(validate_request(&request), Ok(InputEligibility::Eligible))
-            && request
-                .language
-                .as_deref()
-                .and_then(crate::writing::WritingLanguage::from_tag)
-                == Some(crate::writing::WritingLanguage::English)
+            && !request.before.is_empty()
+            && validate_request(&request).is_ok()
         {
-            if let Some(target) = crate::writing::correction_target(&request.before) {
-                let word = target.word;
-                if let Some(corrected) = crate::writing::unambiguous_correction(word) {
-                    if cancellation.is_cancelled() {
-                        return Err(ProviderError::Cancelled);
-                    }
-                    return Ok(ProviderOutcome::Proposal(WritingProposal {
-                        text: format!("{corrected}{}", target.delimiter),
-                        replace_before: Some(target.suffix.to_owned()),
-                    }));
-                }
-                let payload = serde_json::to_vec(&crate::writing::correction_payload(word))
-                    .map_err(|_| ProviderError::Unavailable)?;
-                let observed = tokio::select! {
-                    biased;
-                    () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
-                    result = tokio::time::timeout_at(
-                        (started + budget + WRITING_RESULT_GRACE).into(),
-                        self.complete_inner(
-                            payload,
-                            started,
-                            budget,
-                            cancellation.clone(),
-                            None,
-                            None,
-                        ),
-                    ) => result.unwrap_or(Err(ClientError::Timeout)),
-                }
-                .map_err(|error| match error {
-                    ClientError::Cancelled => ProviderError::Cancelled,
-                    _ => ProviderError::Unavailable,
-                })?;
-                if let Some(corrected) = observed.output.as_deref().map(str::trim) {
-                    if crate::writing::valid_correction(word, corrected) {
-                        return Ok(ProviderOutcome::Proposal(WritingProposal {
-                            text: format!("{corrected}{}", target.delimiter),
-                            replace_before: Some(target.suffix.to_owned()),
-                        }));
-                    }
-                }
+            // A spelling-only field's own check counts as asked for.
+            let explicit = !matches!(trigger, RequestTrigger::Automatic);
+            if let Some(proposal) = self
+                .correction(&request, explicit, &cancellation, started, budget)
+                .await?
+            {
+                return Ok(ProviderOutcome::Proposal(proposal));
             }
         }
         let before = request.before.clone();

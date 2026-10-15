@@ -62,6 +62,8 @@ pub const MAX_PROVIDER_CONCURRENCY: usize = 16;
 pub const MAX_GENERATION_TIMEOUT_MS: u64 = 600;
 /// The same limit for an explicit request, which has a longer writing budget.
 pub const MAX_EXPLICIT_GENERATION_TIMEOUT_MS: u64 = 1_250;
+/// The limit for a spelling-only field's check, beyond its writing budget.
+pub const SPELLING_GENERATION_TIMEOUT_MS: u64 = 2_750;
 /// Native panels need enough time to read and accept a continuation.
 pub const NATIVE_SUGGESTION_TTL_MS: u64 = 5_000;
 /// Opt-in reading window; older v2 clients retain their five-second ceiling.
@@ -86,10 +88,19 @@ pub struct BrokerConfig {
 }
 
 impl BrokerConfig {
+    /// A spelling-only check's provider call has its whole generation limit.
+    const fn provider_timeout_for(&self, trigger: RequestTrigger) -> Duration {
+        match trigger {
+            RequestTrigger::Spelling => Duration::from_millis(SPELLING_GENERATION_TIMEOUT_MS),
+            RequestTrigger::Automatic | RequestTrigger::Explicit => self.provider_timeout,
+        }
+    }
+
     const fn generation_timeout_for(&self, trigger: RequestTrigger) -> Duration {
         match trigger {
             RequestTrigger::Automatic => self.generation_timeout,
             RequestTrigger::Explicit => self.explicit_generation_timeout,
+            RequestTrigger::Spelling => Duration::from_millis(SPELLING_GENERATION_TIMEOUT_MS),
         }
     }
 
@@ -343,6 +354,10 @@ impl Broker {
     ) -> Self {
         let config = config.clamped();
         let (authority_events, _) = broadcast::channel(32);
+        let mut state = BrokerState::default();
+        if let Some(settings) = settings {
+            state.install_settings(settings);
+        }
         Self {
             inner: Arc::new(BrokerInner {
                 control_plane,
@@ -357,11 +372,7 @@ impl Broker {
                 outcome_recorder,
                 started: Instant::now(),
                 socket_path: std::sync::Mutex::new(None),
-                state: Mutex::new(BrokerState {
-                    settings_revision: settings.as_ref().map_or(0, |value| value.revision),
-                    settings,
-                    ..BrokerState::default()
-                }),
+                state: Mutex::new(state),
             }),
         }
     }

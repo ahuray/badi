@@ -31,6 +31,7 @@ fn settings(retention: RetentionPermission) -> SettingsV2 {
         battery_mode: crate::settings::BatteryMode::Normal,
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         subjects: vec![SubjectRule {
             identity: identity("example.com"),
             permissions: SubjectPermissions {

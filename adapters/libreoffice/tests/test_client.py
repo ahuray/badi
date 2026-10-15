@@ -37,13 +37,15 @@ class TextTest(unittest.TestCase):
     def test_corrections_own_one_exact_word_and_its_typed_space(self):
         # The same cases as adapters/shared/text-safety.test.mjs.
         for case in (("Use this adress", "adress", "address"),
-                     ("Use this adress ", "adress ", "address "), ("adress ", "adress ", "address ")):
+                     ("Use this adress ", "adress ", "address "), ("adress ", "adress ", "address "),
+                     ("Ins Hauss ", "Hauss ", "Haus "), ("muchas grasias ", "grasias ", "gracias ")):
             self.assertTrue(text.valid_correction(*case), case)
         for case in (("badadress ", "adress ", "address "), ("adress ", "adress ", "address"),
                      ("adress", "adress", "address "), ("adress ", "adress ", "adress "),
                      ("adress  ", "adress  ", "address  "), ("adress\n", "adress\n", "address\n"),
                      ("adress ", "adress ", "address\n"), ("adress\t", "adress\t", "address\t"),
-                     ("adress ", "other ", "address "), ("Adress ", "Adress ", "Address "),
+                     ("adress ", "other ", "address "), ("x2 ", "x2 ", "xz "),
+                     ("mot-clef ", "mot-clef ", "motclef "),
                      ("adress ", "adress ", "address; ")):
             self.assertFalse(text.valid_correction(*case), case)
 

@@ -65,6 +65,7 @@ fn learning_settings(revision: u64, retention: RetentionPermission) -> SettingsV
         battery_mode: crate::settings::BatteryMode::Normal,
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         subjects: vec![SubjectRule {
             identity: identity(),
             permissions: SubjectPermissions {
@@ -265,6 +266,7 @@ fn settings_cas_immediately_reconciles_revoked_personalization() {
         battery_mode: crate::settings::BatteryMode::Normal,
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         subjects: Vec::new(),
     };
     control
@@ -359,6 +361,7 @@ fn stale_settings_cas_does_not_reconcile_personalization() {
         battery_mode: crate::settings::BatteryMode::Normal,
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         subjects: Vec::new(),
     };
     assert!(matches!(
@@ -433,6 +436,7 @@ fn over_capacity_settings_are_rejected_before_privacy_reconciliation() {
         battery_mode: crate::settings::BatteryMode::Normal,
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         subjects,
     };
     assert!(matches!(
@@ -729,6 +733,7 @@ fn corrupt_optional_personalization_accepts_durable_deny_before_explicit_clear()
         battery_mode: crate::settings::BatteryMode::Normal,
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         subjects: vec![SubjectRule {
             identity: identity(),
             permissions: SubjectPermissions::deny_all(),

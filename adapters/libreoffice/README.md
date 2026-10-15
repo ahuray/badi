@@ -1,6 +1,7 @@
 # LibreOffice Writer extension
 
-An editor-owned channel for **English spelling replacement** in Writer. It
+An editor-owned channel for **spelling replacement** in Writer, in the
+languages `badi spelling` turns on. It
 corrects the word before the caret through Writer's own UNO text API, in one
 native undo step, and reads the paragraph back before it reports `applied`.
 Continuations and the grey preview in Writer stay on the
@@ -122,6 +123,8 @@ window, Fcitx beside it, installed broker, isolated profile, disposable
 text): Alt+F7 showed the infobar `Badi: adress → address`, Alt+F7 again
 replaced it (`applied`) and one Ctrl+Z restored `adress`. Writer then leaves
 the restored word selected, so the next key typed replaces it; that is
-Writer's undo, not a Badi edit. Not yet verified: a model-backed correction
-of an ambiguous word and other LibreOffice versions. English only, like the
-broker's spelling contract.
+Writer's undo, not a Badi edit. On 2026-10-15, with German, French and
+Spanish dictionaries enabled: a finished `Hauss` in a German sentence showed
+`Hauss → Haus` on its own (the model chose among its candidates) and Alt+F7
+applied it; Alt+F7 on `muchas grasias` showed `gracias` after about 2 s.
+Not yet verified: other LibreOffice versions.

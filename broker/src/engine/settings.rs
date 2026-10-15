@@ -185,8 +185,13 @@ impl Broker {
 }
 
 impl BrokerState {
-    fn install_settings(&mut self, settings: SettingsV2) {
+    /// Every settings document the engine uses goes through here.
+    pub(super) fn install_settings(&mut self, settings: SettingsV2) {
         self.settings_revision = settings.revision;
+        let spelling = crate::spelling::global();
+        let generation = spelling.enable(&settings.spelling_languages);
+        // Dictionaries load off the runtime; a newer setting supersedes it.
+        std::thread::spawn(move || spelling.load(generation));
         self.settings = Some(settings);
     }
 }

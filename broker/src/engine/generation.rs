@@ -121,12 +121,12 @@ impl Broker {
         payload: SuggestRequestPayload,
         request_id: Option<String>,
     ) -> Result<Option<AdmittedGeneration>, BrokerError> {
-        let trigger = RequestTrigger::from_explicit(payload.explicit);
-        let generation_timeout = self.inner.config.generation_timeout_for(trigger);
         let metrics = &self.inner.metrics;
         let mut state = self.inner.state.lock().await;
         let paused = state.effective_paused();
         let session = state.session_with_data_access(coordinates.session_id)?;
+        let trigger = session.trigger(payload.explicit);
+        let generation_timeout = self.inner.config.generation_timeout_for(trigger);
         session.ensure_coordinates(coordinates)?;
         let context = session.context.clone().ok_or(BrokerError::NoContext)?;
         if context.fingerprint != payload.fingerprint {
@@ -166,7 +166,7 @@ impl Broker {
             after: context.after.clone(),
             language: context.language.clone(),
         };
-        if escape_quiet || session.nothing_to_correct(&binding.before) {
+        if escape_quiet || session.nothing_to_correct(payload.explicit) {
             self.abstain_admitted(state, binding, generation_timeout)
                 .await;
             return Ok(None);
@@ -294,7 +294,7 @@ impl Broker {
             entry.put("input_bytes", request.byte_len());
             entry.put("waited_ms", duration_millis(delay));
         });
-        let provider_deadline = Instant::now() + self.inner.config.provider_timeout;
+        let provider_deadline = Instant::now() + self.inner.config.provider_timeout_for(trigger);
         let deadline = binding.deadline.min(provider_deadline);
         let stream_partials = request.after.is_empty();
         let (partial_tx, mut partial_rx) = tokio::sync::mpsc::unbounded_channel();

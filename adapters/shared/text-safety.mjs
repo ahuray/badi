@@ -16,12 +16,11 @@ export function hasUnsafeText(value, allowContextWhitespace = false) {
   });
 }
 
-// A correction owns one exact English suffix, including at most its newly
-// typed space. It never broadens into an arbitrary document range.
+// A correction owns one exact word of 2-32 cased letters, including at most
+// its newly typed space. It never broadens into an arbitrary document range.
 export function validCorrection(before, original, replacement) {
   if (typeof before !== 'string' || typeof original !== 'string' || typeof replacement !== 'string' ||
-      !/^[a-z]{3,24} ?$/u.test(original) || !/^[a-z]{3,24} ?$/u.test(replacement) ||
-      /[^a-z ]/u.test(original + replacement) ||
+      !/^[\p{Ll}\p{Lu}]{2,32} ?$/u.test(original) || !/^[\p{Ll}\p{Lu}]{2,32} ?$/u.test(replacement) ||
       original === replacement || original.endsWith(' ') !== replacement.endsWith(' ') ||
       !before.endsWith(original)) return false;
   const start = before.length - original.length;

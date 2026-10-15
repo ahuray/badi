@@ -981,16 +981,18 @@ pub struct SuggestionShowPayload {
     pub provider: ProviderKind,
 }
 
-/// The replacement route owns exactly one ASCII word and, optionally, the one
-/// space just typed after it. Neither form can add, remove, or alter spacing.
+/// The replacement route owns exactly one word of 2-32 cased letters and,
+/// optionally, the one space just typed after it. Neither form can add,
+/// remove, or alter spacing.
 #[must_use]
 pub fn valid_spelling_replacement(original: &str, corrected: &str) -> bool {
     fn parts(value: &str) -> Option<(&str, bool)> {
         let (word, space) = value
             .strip_suffix(' ')
             .map_or((value, false), |word| (word, true));
-        ((3..=24).contains(&word.len()) && word.bytes().all(|byte| byte.is_ascii_lowercase()))
-            .then_some((word, space))
+        ((2..=32).contains(&word.chars().count())
+            && word.chars().all(crate::spelling::spelling_letter))
+        .then_some((word, space))
     }
     match (parts(original), parts(corrected)) {
         (Some((original_word, original_space)), Some((corrected_word, corrected_space))) => {
@@ -1779,7 +1781,14 @@ mod tests {
 
     #[test]
     fn spelling_suffixes_preserve_one_optional_ascii_space() {
-        for (original, corrected) in [("teh", "the"), ("teh ", "the "), ("adress ", "address ")] {
+        for (original, corrected) in [
+            ("teh", "the"),
+            ("teh ", "the "),
+            ("adress ", "address "),
+            ("Hauss ", "Haus "),
+            ("grasias ", "gracias "),
+            ("één ", "een "),
+        ] {
             assert!(super::valid_spelling_replacement(original, corrected));
         }
         for (original, corrected) in [
@@ -1791,11 +1800,11 @@ mod tests {
             ("teh\u{00a0}", "the\u{00a0}"),
             ("teh.", "the."),
             ("teh x", "the x"),
-            ("Teh ", "The "),
             ("teh ", "teh "),
-            ("te ", "the "),
-            ("teh ", "to "),
-            ("één ", "een "),
+            ("t ", "to "),
+            ("mot-clef ", "motclef "),
+            ("x2 ", "xz "),
+            ("سلام ", "سلم "),
         ] {
             assert!(
                 !super::valid_spelling_replacement(original, corrected),
@@ -1803,12 +1812,12 @@ mod tests {
             );
         }
         assert!(super::valid_spelling_replacement(
-            &format!("{} ", "a".repeat(24)),
-            &format!("{} ", "b".repeat(24))
+            &format!("{} ", "ä".repeat(32)),
+            &format!("{} ", "b".repeat(32))
         ));
         assert!(!super::valid_spelling_replacement(
-            &format!("{} ", "a".repeat(25)),
-            &format!("{} ", "b".repeat(25))
+            &format!("{} ", "a".repeat(33)),
+            &format!("{} ", "b".repeat(33))
         ));
     }
 

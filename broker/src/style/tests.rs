@@ -49,6 +49,7 @@ fn settings(enabled: bool, mut subjects: Vec<SubjectRule>) -> SettingsV2 {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Quiet,
+        spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: enabled,
         language_overrides: BTreeMap::new(),
         subjects,

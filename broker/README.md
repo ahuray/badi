@@ -339,12 +339,24 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   context and request already carries `explicit`, so no wire change is needed. During the
   quiet, adapters still inspect and publish context under their existing
   grants; the model is never called.
-- **Spelling** is English only and needs negotiated exact replacement of the
-  word before the caret at the end of the field; a single dictionary candidate
-  is proposed without inference. The
+- **Spelling** needs negotiated exact replacement of the word before the caret
+  at the end of the field, in a language of `spelling_languages` (default
+  `["en"]`). `spelling.rs` picks the language: a confident detection decides,
+  so text in a language that is off is never corrected; otherwise the field's
+  hint. English uses the embedded lexicon (`writing.rs`); the other languages
+  their Hunspell dictionary from `$XDG_DATA_HOME/hunspell`, `/usr/share/hunspell`
+  or `/usr/share/myspell/dicts`, loaded off the runtime when enabled. A word
+  unknown to it gets at most three candidates of letters, with the same first
+  letter and at most two edits; one is proposed without inference, several go
+  to the model, which must answer with one of them. A word without its typed
+  space is checked only on an explicit request, and a capitalized word
+  mid-sentence only in German. Replacements are 2-32 cased letters plus the
+  optional space, in every validator. The
   [LibreOffice Writer extension](../adapters/libreoffice/README.md) (adapter and
   target kind `libreoffice`, app id `libreoffice-writer`, settings adapter
-  `libreoffice`) gets corrections only, automatic or explicit, and reports
+  `libreoffice`) gets corrections only, automatic or explicit, under its own
+  `RequestTrigger::Spelling`: no keystroke waits for it, so the model has
+  2.5 s to choose between candidates (2.75 s generation limit). It reports
   `applied` only after reading the edit back. Settings order Linux app rules by adapter name, as
   the desktop CLI and panel sort them.
 
