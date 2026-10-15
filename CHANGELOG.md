@@ -7,6 +7,9 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#84](https://github.com/ahuray/badi/pull/84) The bar mark opens a keyboard-first
+  Omarchy popout: mode chip, activity spinner, acceptance meter, settings
+  search and rows for battery, spelling languages and Ghostty.
 - [#83](https://github.com/ahuray/badi/pull/83) `badi spelling` turns on German,
   French, Spanish, Italian, Dutch and Polish spelling from installed Hunspell
   dictionaries; the model chooses between candidates.

@@ -11,7 +11,7 @@ import subprocess
 import badi_install
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ("manifest.json", "BarWidget.qml", "BadiMark.qml", "DesktopPanel.qml", "BadiClient.qml")
+FILES = ("manifest.json", "BarWidget.qml", "BadiMark.qml", "DesktopPanel.qml", "SettingsView.qml", "BadiClient.qml")
 
 
 def ipc(target, method):

@@ -14,7 +14,21 @@
       "shell/Commons/qmldir": "sha256:5593fa25d33b1e2d3ed8628ca2e0dce5074497608f2bad6652689e390727e5e8",
       "bin/omarchy-plugin-validate": "sha256:f7507e5042eb970e3dc918bdf6bf251c7557443892a77e71a17d7019ddde72c8",
       "shell/services/PluginShellApi.qml": "sha256:ff0cb5ec5fcdda0b21af447b11f07a24e065a3557796639364109aaa2ce5c763",
-      "shell/Ui/PluginBarApi.qml": "sha256:91964a42b92c58476a4f961df35148d4c94071344ef1a69eab1563d1496705a7"
+      "shell/Ui/PluginBarApi.qml": "sha256:91964a42b92c58476a4f961df35148d4c94071344ef1a69eab1563d1496705a7",
+      "shell/Ui/Panel.qml": "sha256:e6588b3d7c1075d68c6392d028483fcc5d4d2bcb29180758fe265a957cbdc71d",
+      "shell/Ui/KeyboardPanel.qml": "sha256:96245f2da8d38baa0017caa285d596c485bd19a3a4d2cd1675bee9d84ffba42d",
+      "shell/Ui/PanelKeyCatcher.qml": "sha256:76abaf157317ea260b81591a614460dfbc7173f545963be25558ed5a8cddedb4",
+      "shell/Ui/PanelHero.qml": "sha256:bf0753e69c91c906b8f1e1a46cfbbd4326228e9d9abde1b4007ee86c0bf78f05",
+      "shell/Ui/Toggle.qml": "sha256:158aaa84cf1fff771b932bb1c79e00be19bee1bfeef2d27bfbd8aa4f1c416e6b",
+      "shell/Ui/ToggleSwitch.qml": "sha256:6bfae25396c1d03979efd9a27130e03f11edc2c7062d1f0c0c252b30e60a9898",
+      "shell/Ui/ButtonGroup.qml": "sha256:4af792f394534b7d61b270fcb44203bba8d88ed25f8822e0b90e456e35487542",
+      "shell/Ui/CursorSurface.qml": "sha256:27844a40fbe378e84c0aea35654dd8b396afb7e331c86be80852e1529da4f5b2",
+      "shell/Ui/PanelActionButton.qml": "sha256:6c94ff62997f18d1712a741e8ae24ed98a6fa5c6350b266c631ff92f26cffdc7",
+      "shell/Ui/TextField.qml": "sha256:b3ad72f56f86c2df164e347d64205c099f77c5fb90933fabea3b0f2a9e2b3778",
+      "shell/Ui/PanelToolTip.qml": "sha256:5520685c2d160002cb4bd62c9e5da193003c071fca69b90e6012ebf0c8ee4ca3",
+      "shell/Ui/PanelSeparator.qml": "sha256:667cd49e89c5911fbe564904720b3d4073057e0b6fa38f03e55fa5949ccd195c",
+      "shell/Ui/PanelSectionHeader.qml": "sha256:ede63ff97dd3d4d2198b771cbb33dcd07b7026d64d92f1c624e71465d000115d",
+      "shell/Ui/BarIconButton.qml": "sha256:bae9894d021655105b67d4ae7dec734bcd36ebf3b17a4aaef2c462e0cfa0c874"
     }
   },
   "quickshell": "0.3.1-1",

@@ -212,6 +212,18 @@ for value in '"off"' null true; do
   [[ $(ipc validateSettings "$document") == $([[ $value == true ]] && echo true || echo false) ]]
 done
 
+# Spelling languages: known codes in the broker's order, no repeats.
+for value in '[]' '["en"]' '["en","de","fr"]' '["de","pl"]'; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, spelling_languages: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == true ]]
+done
+for value in '["fr","de"]' '["en","en"]' '["fa"]' '"en"' null; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, spelling_languages: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == false ]]
+done
+
 # A settings write changes only its own field at the next revision and carries
 # every subject and the `badi site all on` flag through unchanged.
 ipc setPaused true >/dev/null

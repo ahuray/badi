@@ -4,31 +4,43 @@ The Omarchy plugin `io.github.ahuray.badi`:
 
 | File | Role |
 | --- | --- |
-| `BarWidget.qml` | The bar widget |
+| `BarWidget.qml` | The bar mark and its popout: an Omarchy `Panel` with a `KeyboardPanel` |
 | `BadiMark.qml` | The **b** speech-bubble mark |
-| `DesktopPanel.qml` | The floating settings window |
+| `DesktopPanel.qml` | State and actions without visuals: the client, helper processes, every settings change and the typed rows |
+| `SettingsView.qml` | The popout's content |
 | `BadiClient.qml` | The shared `badictl` client |
 
 It uses only the host's `qs.Ui` and `qs.Commons` modules, `badictl` and the
 installed `badi-desktop` helper.
 
-Left-click the mark to open or close settings; right-click pauses or resumes
-(a paused mark is dimmed). While the window is closed, the panel does not poll
-the broker. The mark updates when you toggle pause from the bar, and the next
-time the window opens. The window has three views:
+Left-click the mark to open or close the popout; right-click pauses or
+resumes (a paused mark is dimmed). The popout hangs under the mark like
+Omarchy's own panels, takes the keyboard and polls the broker every three
+seconds only while open. From the top:
 
-- **Writing:** model state, pause, mid-sentence mode, Escape quiet presets
-  (until edit, 30 seconds, 5 minutes, 1 hour), editor launch buttons, key
-  help, usage statistics and a short privacy note.
-- **Applications:** the app and website list modes, allow or block per
-  supported app, and exact website rules. Blocking revokes context reading,
-  suggestions and display; learning stays blocked and retention `none`.
-- **System:** login startup, model start, stop and restart, service status and
-  terminal commands.
+- **Hero:** the mark, the model as a pill, Badi's mode as a glyph and word
+  (`⏵⏵ SUGGESTING`, `⏸ PAUSED`, `◌ LOADING`, `○ MODEL OFFLINE`,
+  `◇ NO APP ALLOWED`) and a switch that pauses or resumes.
+- **Activity:** while something runs, a spinner, a verb and the elapsed
+  seconds (`Saving…`, `Loading the model… 3s`); otherwise a status dot and
+  the counts since model start.
+- **Usage:** a ten-cell acceptance meter, words saved and the last
+  no-suggestion reason (`⎿ last miss: …`).
+- **Search:** `/` filters every row by name, description or section.
+- **Rows**, in sections: Writing (mid-sentence, Escape quiet, battery),
+  Spelling (each language and its dictionary, naming the package when one is
+  missing), Apps (the list mode and each supported app), Websites (the list
+  mode, each rule, an add field: Enter allows, Shift+Enter blocks) and
+  System (start at login, debug trace, restart, start or stop).
+
+Keys: j/k or arrows move one cursor through the rows, space or Enter toggles
+or runs, h/l changes a choice, x removes a site rule, p pauses, r refreshes,
+Tab moves to the neighbouring bar panel and Escape closes. The footer shows
+the last result (`✓ Spelling on`, `✗ …`) or these keys.
 
 Settings writes use the broker's compare-and-swap API and fail visibly on a
 conflict instead of retrying over another change. `badi settings` toggles the
-window through the `badi-writing` IPC target. The terminal equivalents are in
+popout through the `badi-writing` IPC target. The terminal equivalents are in
 the [README](../../README.md#choose-where-badi-writes).
 Per-app language overrides are currently set from the terminal. Panel writes
 validate and preserve them.
@@ -47,7 +59,7 @@ The updater runs the source checks, waits for an explicitly unlocked desktop
 (it never unlocks it), backs up replaced files under
 `~/.local/state/badi/ui-backups/<UTC time>/` (newest three kept, plus the
 original backup), removes files the manifest no longer loads, restarts the
-Omarchy shell the supported way and checks that the new window answers IPC.
+Omarchy shell the supported way and checks that the new popout answers IPC.
 A missing plugin directory is created and enabled with `omarchy plugin enable
 io.github.ahuray.badi`; `XDG_CONFIG_HOME` selects that directory. `omarchy
 plugin disable io.github.ahuray.badi` hides the mark.
@@ -63,7 +75,7 @@ reactivation during teardown queues exactly one fresh read.
 
 ## Statistics
 
-The Writing view reports counters since model start, without storing prose:
+The popout reports counters since model start, without storing prose:
 - **Shown:** broker suggestions, excluding growth and type-through remainders.
 - **Accepted:** explicit acceptance requests dispatched to the adapter, not a
   claim that every edit applied.
@@ -76,16 +88,18 @@ An older broker without word counters shows `—`, never a fabricated zero.
 Restarting the model resets these counters. The broker retains verified and
 unverified word counts separately in `word_savings`.
 
-On 2026-10-12 the installed panel was rendered in the real Omarchy session at
-2× scale: the Escape presets and statistics were visible without clipping.
-Selecting 30 seconds passed through QML stdin and advanced the settings revision;
-the previous off setting was restored afterward.
+On 2026-10-15 the popout was rendered in the real Omarchy session (Tokyo
+Night, square corners): j/k moved the cursor and scrolled, `l` on "On battery"
+wrote `battery_mode` through stdin (`h` restored it), `/ghost` left only the
+Ghostty row, and a restart from System showed `◌ LOADING` with
+`Loading the model… 3s` until the broker answered.
 
 ## Pinned host
 
 `compatibility.json` records the Omarchy host files the plugin depends on,
 byte-compared with Omarchy `v4.0.3` (`0534987009061cbe2dacdde4ad564092ab698d12`)
-under Quickshell 0.3.1 and Qt declarative 6.11.2. The strict check fails when the
+under Quickshell 0.3.1 and Qt declarative 6.11.2, including every `qs.Ui`
+component the popout uses (unchanged in 4.0.4). The strict check fails when the
 installed host drifts. The manifest declares only the `bar-widget` kind.
 
 ## Checks
@@ -107,5 +121,5 @@ bash ui/omarchy-plugin/tests/run-client-lifecycle.sh      # needs qs
   Omarchy checkout (`BADI_OMARCHY_ROOT`) with the official validator, host-file
   hashes, `qmllint` and the lifecycle.
 
-These checks prove source and process contracts, not the window's look, focus,
+These checks prove source and process contracts, not the popout's look, focus,
 scaling or multi-monitor behavior, which need a real Omarchy session.
