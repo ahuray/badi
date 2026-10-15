@@ -321,6 +321,26 @@ class WriterExtensionTest(unittest.TestCase):
         self.assertEqual(self.body(document), "Use this adress x")
         self.assertEqual(self.status.states[mark:], [])
 
+    def test_04b_the_word_at_the_caret_is_corrected_and_the_rest_is_kept(self):
+        document = self.fresh("An adress here")
+        document.getCurrentController().getViewCursor().goLeft(7, False)
+        self.request(document)
+        mark = self.status.mark()
+        self.invoke(document)
+        self.status.wait("idle:applied", mark)
+        self.assertEqual(self.body(document), "An address here")
+
+    def test_04c_a_finished_word_is_checked_without_a_request(self):
+        document = self.new_document()  # The OnNew job watches it.
+        mark = self.status.mark()
+        self.type_text(document, "Send it to my adress ")
+        self.status.wait("showing:proposal", mark)
+        self.assertEqual(self.body(document), "Send it to my adress ")
+        mark = self.status.mark()
+        self.invoke(document)
+        self.status.wait("idle:applied", mark)
+        self.assertEqual(self.body(document), "Send it to my address ")
+
     def test_05_a_caret_move_makes_the_proposal_stale(self):
         document = self.fresh("Find the adress ")
         self.request(document)
@@ -329,13 +349,10 @@ class WriterExtensionTest(unittest.TestCase):
         self.status.wait("idle:stale", mark)
         self.assertEqual(self.body(document), "Find the adress ")
 
-    def test_06_selection_middle_of_paragraph_and_tables_are_refused_before_the_broker(self):
+    def test_06_selection_and_tables_are_refused_before_the_broker(self):
         calls = self.metrics()["provider_calls"]
         document = self.fresh("A selected adress ")
         document.getCurrentController().getViewCursor().goLeft(3, True)
-        self.request(document, "idle:unsupported_field")
-        document = self.fresh("An adress here")
-        document.getCurrentController().getViewCursor().goLeft(5, False)
         self.request(document, "idle:unsupported_field")
         document = self.new_document()
         table = document.createInstance("com.sun.star.text.TextTable")

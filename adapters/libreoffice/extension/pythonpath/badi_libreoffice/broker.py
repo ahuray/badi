@@ -287,8 +287,9 @@ class Attempt:
                 or not policy["display_allowed"] or not policy["suggestions_allowed"]):
             raise self._fail("blocked")
 
-    def request(self, before, after, language):
-        """Asks for a correction of the word before the caret. Returns a
+    def request(self, before, after, language, explicit=True):
+        """Asks for a correction of the word before the caret, on the user's
+        request or as an automatic check of a finished word. Returns a
         Proposal, or None when the broker has no replacement to offer."""
         if self._socket is not None:
             raise BrokerError("protocol")
@@ -312,10 +313,10 @@ class Attempt:
             "field": {"purpose": "normal", "editable": True, "multiline": True, "composing": False,
                       "sensitive": False, "identity_known": True, "focused": True,
                       "lock_screen": False},
-            "activation": "manual", "explicit": True,
+            "activation": "manual" if explicit else "always", "explicit": explicit,
         }, coordinates=self._session)
         started = self._clock()
-        reply = self._rpc("suggest.request", {"fingerprint": self._fingerprint, "explicit": True},
+        reply = self._rpc("suggest.request", {"fingerprint": self._fingerprint, "explicit": explicit},
                           ("suggestion.show", "suggestion.clear"), self._session, SUGGEST_TIMEOUT)
         if reply["type"] == "suggestion.clear":
             return None

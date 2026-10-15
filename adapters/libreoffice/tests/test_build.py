@@ -32,7 +32,7 @@ class BuildTest(unittest.TestCase):
                 declared = {entry.get(MANIFEST + "full-path") for entry in manifest}
                 self.assertTrue(declared <= names, declared - names)
                 self.assertEqual(declared, {"badi.components", "ProtocolHandler.xcu",
-                                            "Accelerators.xcu", "Addons.xcu"})
+                                            "Accelerators.xcu", "Addons.xcu", "Jobs.xcu"})
                 components = archive.read("badi.components").decode()
                 self.assertIn('uri="badi_writer.py"', components)
                 self.assertIn("pythonpath/badi_libreoffice/broker.py", names)

@@ -4,5 +4,8 @@
     <implementation name="io.github.ahuray.badi.WriterCorrection">
       <service name="com.sun.star.frame.ProtocolHandler"/>
     </implementation>
+    <implementation name="io.github.ahuray.badi.WriterWatch">
+      <service name="com.sun.star.task.Job"/>
+    </implementation>
   </component>
 </components>

@@ -166,7 +166,7 @@ impl Broker {
             after: context.after.clone(),
             language: context.language.clone(),
         };
-        if escape_quiet {
+        if escape_quiet || session.nothing_to_correct(&binding.before) {
             self.abstain_admitted(state, binding, generation_timeout)
                 .await;
             return Ok(None);
@@ -519,6 +519,16 @@ impl Broker {
             after,
             language,
         } = binding;
+        if proposal.replace_before.is_none() && session.spelling_only() {
+            metrics.record_no_suggestion(NoSuggestionReason::ModelAbstained);
+            let _ = session.sink.send(BrokerEvent::generation_withdrawn(
+                coordinates,
+                fingerprint,
+                ReasonCode::NoSuggestion,
+                request_id,
+            ));
+            return None;
+        }
         if proposal.replace_before.is_some() && !session.allows_text_replacement() {
             metrics.record_provider_error();
             metrics.record_no_suggestion(NoSuggestionReason::OutputRejected);
