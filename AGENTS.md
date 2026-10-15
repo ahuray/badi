@@ -99,7 +99,8 @@ Where code lives inside the larger components:
 - Spelling replacement needs negotiated `text_replacement`, an exactly bound
   suffix or range and explicit acceptance; test stale replacement and undo.
 - No raw keylogging, clipboard replacement or blind synthetic typing as product
-  integrations. Keep typed prose and credentials out of diagnostics; only the
+  integrations; an allowed terminal's typed line is the one bounded exception
+  ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)). Keep typed prose and credentials out of diagnostics; only the
   explicit, expiring `badi debug on --text` trace records text
   ([ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
   Headed tests use disposable text and isolated profiles.

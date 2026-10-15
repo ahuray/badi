@@ -120,6 +120,19 @@ In this module that means:
 Unavailable apps are never read or inspected. Ctrl+Shift+Space there reaches
 the app; `badi debug` records `no_edit_path`.
 
+### Terminals
+
+Terminals report the `Terminal` capability and no surrounding text. For an
+exact app rule on a listed terminal (only `com.mitchellh.ghostty` so far), the
+`TypedLine` path follows the line typed into that input context and uses it as
+the context ([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.md)).
+`lineKey()` applies typing, Backspace, Ctrl+W, Ctrl+U, Ctrl+C and Enter, and
+stops tracking at any other key the terminal receives (`line_unknown` until
+the next empty line). After the typing pause a line of two or more words
+requests automatically; the panel shows the suggestion and Tab or Ctrl+→
+commits it, after which the next request follows. Tab without a suggestion
+stays the terminal's.
+
 ### Observed fields
 
 The broker target id is random per field visit. It survives reacquisition of

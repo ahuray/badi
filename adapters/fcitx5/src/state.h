@@ -11,8 +11,9 @@ namespace badi::fcitx5 {
 
 enum class NativeEditTarget { DesktopApplication, BrowserOrigin, Unsupported };
 // Manual is the unknown-identity explicit contract; Observed is a field bound
-// by the accessibility observer's inspect result.
-enum class NativeEditPath { Manual, Observed };
+// by the accessibility observer's inspect result; TypedLine is a terminal's
+// input context, whose only context is the line typed into it (ADR 0009).
+enum class NativeEditPath { Manual, Observed, TypedLine };
 
 // Every native decision starts from the class of the canonical app id.
 enum class NativeAppClass {
@@ -24,6 +25,9 @@ enum class NativeAppClass {
     // like typing.
     ImeParityBrowser,
     ImeParityDesktop,
+    // Terminals: no surrounding text or accessible text, so the typed line is
+    // the context and acceptance types the text (ADR 0009).
+    Terminal,
     // Other Gecko browsers, Chromium-family ids without an observer rule, and
     // apps whose own Badi integration owns editing.
     Unavailable,
@@ -203,6 +207,7 @@ inline constexpr std::string_view kPaused = "Badi paused — resume from the tra
 inline constexpr std::string_view kDisabled = "Badi is disabled for this application";
 inline constexpr std::string_view kModelNotConnected = "Badi model is not connected";
 inline constexpr std::string_view kThinking = "Badi is thinking…";
+inline constexpr std::string_view kLineUnknown = "Badi lost track of this line — press Enter or Ctrl+U";
 inline constexpr std::string_view kRequestFailed = "Badi request failed — check the tray status";
 } // namespace notice
 
@@ -320,6 +325,28 @@ std::optional<ContextWindow> captureContextWindow(std::string_view text,
                                                   std::size_t anchor,
                                                   bool multiline,
                                                   std::string language);
+
+// The line typed into a terminal since its last boundary, held in memory
+// only. Keys whose effect on the line is unknown (cursor movement, paste,
+// completion) stop tracking until the next empty line.
+class TypedLine {
+public:
+    void type(std::string_view text);
+    void erase();
+    void eraseWord();
+    // Enter, Ctrl+C, Ctrl+U and focus: a known, empty line.
+    void clear();
+    void lose();
+    [[nodiscard]] bool tracking() const { return tracking_; }
+    [[nodiscard]] const std::string &text() const { return text_; }
+    // At least two words with letters: a single token (a command, a secret)
+    // never becomes a request on its own.
+    [[nodiscard]] bool prose() const;
+
+private:
+    std::string text_;
+    bool tracking_ = true;
+};
 
 class SessionState {
 public:

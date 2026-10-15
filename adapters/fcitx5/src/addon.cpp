@@ -122,7 +122,10 @@ void BadiAddon::focusIn(::fcitx::InputContext &inputContext) {
     binding.typeThroughWaits = 0;
     binding.inspection.input();
     binding.surroundingFreshness.focusIn();
-    if (!binding.state.focusIn(*sessionId, contextId, appId, *salt)) {
+    binding.typedLine.clear();
+    const auto path = classifyNativeApp(appId) == NativeAppClass::Terminal ? NativeEditPath::TypedLine
+                                                                            : NativeEditPath::Manual;
+    if (!binding.state.focusIn(*sessionId, contextId, appId, *salt, NativeEditTarget::DesktopApplication, path)) {
         bindings_.erase(contextId);
         return;
     }
