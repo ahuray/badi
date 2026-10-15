@@ -9,6 +9,8 @@ import time
 import unicodedata
 from urllib.parse import urlsplit
 
+import debugtrace as trace
+
 SCHEMA = "badi.accessibility.v1"
 MAX_FRAME = 16 * 1024
 MAX_BEFORE = 512
@@ -96,6 +98,23 @@ def eligible(metadata):
         raise Denied("invalid_caret")
 
 
+def reply_facts(reply, tracked):
+    """Content-free facts of an answered observer request, for the debug trace."""
+    focus = reply.get("focus") if isinstance(reply.get("focus"), dict) else {}
+    facts = {"ok": True, "app": (tracked or {}).get("app_id", "")}
+    for key in ("caret", "total_chars", "rendered", "scope", "purpose"):
+        if key in focus:
+            facts[key] = focus[key]
+    for key in ("before", "after"):
+        if isinstance(focus.get(key), str):
+            facts[f"{key}_chars"] = len(focus[key])
+    if isinstance(focus.get("geometry"), dict):
+        geometry = focus["geometry"]
+        facts["geometry"] = {key: geometry[key] for key in ("caret_edge", "text_follows", "text_ends")
+                             if key in geometry}
+    return facts
+
+
 class Observer:
     """Binds each read to a current object, compositor identity and epoch.
 
@@ -121,6 +140,7 @@ class Observer:
 
     def invalidate(self, reason):
         previous = self.tracked
+        trace.emit("observer invalidate", {"reason": reason, "app": previous["app_id"] if previous else ""})
         self.withdraw()
         self.epoch += 1
         self.tracked = None
@@ -138,12 +158,18 @@ class Observer:
 
     def request(self, request):
         request_id = request.get("id") if isinstance(request, dict) else None
+        name = None
         try:
-            operation = self.operations[operation_name(request)]
-            return {"schema": SCHEMA, "id": request_id, "ok": True, **operation(request)}
+            name = operation_name(request)
+            reply = {"schema": SCHEMA, "id": request_id, "ok": True, **self.operations[name](request)}
+            if name != "status":
+                trace.emit(f"observer {name}", reply_facts(reply, self.tracked))
+            return reply
         except Denied as error:
             if str(error) not in MALFORMED:
                 self.withdraw()
+            trace.emit(f"observer {name or 'request'}", {"ok": False, "error": str(error),
+                                                         "app": (self.tracked or {}).get("app_id", "")})
             return {"schema": SCHEMA, "id": request_id, "ok": False, "error": str(error), "epoch": self.epoch}
 
     def status(self, _request):

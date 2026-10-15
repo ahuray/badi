@@ -696,6 +696,56 @@ class DesktopTests(unittest.TestCase):
             self.assertFalse(native.exists())
             self.assertFalse(desktop.debug_activity()['enabled'])
 
+    def test_debug_on_creates_a_private_trace_and_text_only_when_asked(self):
+        trace = self.directory / 'debug-trace.jsonl'
+        with patch.object(desktop, 'runtime_directory', return_value=self.directory), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['debug', 'on'])
+            self.assertFalse(desktop.private_json(self.directory / 'debug-control.json')['text'])
+            self.assertEqual((trace.stat().st_mode & 0o777, trace.stat().st_size), (0o600, 0))
+            self.assertIn('no typed text is stored', output.getvalue())
+            trace.write_text('{"ev": "old run"}\n')
+            desktop.main(['debug', 'on', '--text'])
+            self.assertTrue(desktop.private_json(self.directory / 'debug-control.json')['text'])
+            self.assertEqual(trace.stat().st_size, 0, 'a new run starts an empty trace')
+            desktop.main(['debug', 'off'])
+            self.assertFalse(trace.exists())
+            self.assertFalse((self.directory / 'debug-control.json').exists())
+
+    def test_debug_log_prints_complete_lines_with_text_last(self):
+        trace = self.directory / 'debug-trace.jsonl'
+        trace.write_text(
+            json.dumps({'t': 1000, 'src': 'broker', 'ev': 'out suggestion.show', 'text': ' next words',
+                        'chars': 11, 'sid': 'abcd1234'}) + '\n'
+            + 'not json\n'
+            + json.dumps({'t': 2000, 'src': 'observer', 'ev': 'preview drawn', 'placement': 'chip'}) + '\n'
+            + '{"t": 3000, "src": "fcitx"')
+        trace.chmod(0o600)
+        with patch.object(desktop, 'runtime_directory', return_value=self.directory), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['debug', 'log'])
+        shown, drawn = output.getvalue().splitlines()
+        self.assertRegex(shown, r'^\d\d:\d\d:\d\d\.000  broker     out suggestion.show +chars=11 sid=abcd1234 '
+                                r'text=" next words"$')
+        self.assertIn('observer   preview drawn', drawn)
+        self.assertIn('placement=chip', drawn)
+        trace.chmod(0o644)
+        with patch.object(desktop, 'runtime_directory', return_value=self.directory), \
+             self.assertRaisesRegex(RuntimeError, 'private'):
+            desktop.print_trace()
+
+    def test_watch_reads_the_preview_layer_from_hyprland(self):
+        layers = {'eDP-1': {'levels': {'2': [{'namespace': 'omarchy-bar', 'x': 0, 'y': 0, 'w': 1440, 'h': 26}],
+                                       '3': [{'namespace': 'badi-writing-preview', 'x': 491, 'y': 312,
+                                              'w': 185, 'h': 22}]}}}
+        run = lambda *_a, **_k: SimpleNamespace(returncode=0, stdout=json.dumps(layers))
+        self.assertEqual(desktop.preview_layers(run=run), [('eDP-1', 491, 312, 185, 22)])
+        entry = desktop.compositor_entry(desktop.preview_layers(run=run))
+        self.assertEqual((entry['ev'], entry['x'], entry['width']), ('preview on screen', 491, 185))
+        self.assertEqual(desktop.compositor_entry([])['ev'], 'preview not on screen')
+        failed = lambda *_a, **_k: SimpleNamespace(returncode=1, stdout='')
+        self.assertIsNone(desktop.preview_layers(run=failed))
+
     def test_debug_refuses_public_symlink_expired_and_malformed_data(self):
         flag = self.directory / 'debug-control.json'
         with patch.object(desktop, 'runtime_directory', return_value=self.directory), \

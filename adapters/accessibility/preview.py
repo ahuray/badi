@@ -11,6 +11,7 @@ import unicodedata
 
 from contract import MAX_PREVIEW_TTL_MS, RIGHT_TO_LEFT
 from geometry import CALIBRATED
+import debugtrace as trace
 
 
 def _number(value, minimum=-100000, maximum=100000):
@@ -442,6 +443,8 @@ class Preview:
         Gtk4LayerShell.set_anchor(self.window, Gtk4LayerShell.Edge.TOP, True)
         self.window.connect("realize", self._input_transparent)
         self.window.connect("map", self._input_transparent)
+        self.window.connect("map", self._mapped)
+        self.shown = None
 
     def _refresh_layer_rule(self, *, background=True):
         now = time.monotonic()
@@ -520,25 +523,47 @@ class Preview:
         self.label.get_layout().get_baseline()
         self.label.set_text("")
 
-    def hide(self):
+    def hide(self, cause="withdrawn"):
         if self.timer is not None:
             self.GLib.source_remove(self.timer)
             self.timer = None
         self.window.set_visible(False)
         self.label.set_text("")
+        if getattr(self, "shown", None) is not None:
+            trace.emit("preview hidden", {**self.shown, "cause": cause})
+            self.shown = None
 
     def _expire(self):
         self.timer = None
-        self.hide()
+        self.hide("expired")
         return False
 
+    def _mapped(self, *_args):
+        """GTK mapped the layer surface. Mapping happens inside render(), before
+        its trace line, so it is reported once the main loop is idle again; the
+        compositor's own box is the `badi debug watch` line."""
+        self.GLib.idle_add(lambda: trace.emit("preview mapped", {"mapped": self.window.get_mapped()}) and False)
+
     def render(self, focus, text, ttl_ms):
-        self.hide()
+        """Draws `text` at the caret; false when the field's geometry declines it."""
+        self.hide("replaced")
+        details = self._render(focus, text, ttl_ms)
+        if "reason" in details:
+            trace.emit("preview declined", details)
+            return False
+        self.shown = details
+        trace.emit("preview drawn", details, {"text": text})
+        return True
+
+    def _render(self, focus, text, ttl_ms):
+        """The drawn placement and box, or the `reason` it was declined."""
         if not valid_preview_text(text) or type(ttl_ms) is not int or not 1 <= ttl_ms <= MAX_PREVIEW_TTL_MS:
-            return False
+            return {"reason": "invalid_request"}
         caret = mapped_caret(focus)
-        if caret is None or not ltr_text(text):
-            return False
+        if caret is None:
+            return {"reason": "uncalibrated_caret"}
+        if not ltr_text(text):
+            return {"reason": "right_to_left_text"}
         monitors = self.Gdk.Display.get_default().get_monitors()
         matching = []
         for index in range(monitors.get_n_items()):
@@ -548,7 +573,7 @@ class Preview:
                     all(abs(a - b) <= 1 for a, b in zip((rect.x, rect.y, rect.width, rect.height), caret.monitor))):
                 matching.append(monitor)
         if len(matching) != 1:
-            return False
+            return {"reason": "monitor_unmatched"}
         self.Layer.set_monitor(self.window, matching[0])
         font = focus.get("font") if isinstance(focus, dict) else None
         attributes = self.Pango.AttrList()
@@ -566,9 +591,10 @@ class Preview:
         if not caret.text_follows or caret.following_x is not None:
             width, height, baseline = self._layout(text, chip=False)
             ascent = self._field_ascent(font, font_pixels(caret, font), caret.line_height)
-            position = place_inline(caret, width, height, baseline, ascent)
+            position, placement = place_inline(caret, width, height, baseline, ascent), "inline"
             if position is None and not caret.text_follows and field_box_ends_before_caret(caret):
                 position = place_on_caret_line(caret, width, height, baseline, ascent)
+                placement = "caret_line"
         if position is None and (caret.text_follows or caret.text_ends):
             # A leading space would draw over the following words. The trailing
             # space is the separator that acceptance inserts, so the chip keeps it.
@@ -576,14 +602,17 @@ class Preview:
             # lines above hold the user's own words.
             width, height, _baseline = self._layout(text.lstrip(" "), chip=True)
             position = place_chip(caret, width, height, below_only=caret.text_ends)
+            placement = "chip"
         if position is None:
             width, height, _baseline = self._layout(text.lstrip(" "), chip=True)
-            position = place_edge_panel(caret, width, height)
+            position, placement = place_edge_panel(caret, width, height), "edge_panel"
         if position is None:
             self.label.set_text("")
-            return False
+            return {"reason": "no_room"}
         self.Layer.set_margin(self.window, self.Layer.Edge.LEFT, position[0])
         self.Layer.set_margin(self.window, self.Layer.Edge.TOP, position[1])
         self.window.set_visible(True)
         self.timer = self.GLib.timeout_add(ttl_ms, self._expire)
-        return True
+        # Monitor-local logical pixels, as `hyprctl layers` reports them.
+        return {"placement": placement, "monitor": caret.connector, "x": position[0], "y": position[1],
+                "width": width, "height": height, "ttl_ms": ttl_ms}

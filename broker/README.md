@@ -145,6 +145,15 @@ is never kept.
 This protects stored text at rest; a process running as the same user can
 still ask the keyring or the broker ([ADR 0001](../docs/decisions/0001-same-uid-trust-boundary.md)).
 
+## Debug trace
+
+While `badi debug on` runs, `debug_trace.rs` appends each wire frame in and
+out of the broker (allowlisted fields; settings, style and memory frames by
+type only; health polls not at all), each `model start` and `model done`
+with latency and outcome, and each `carry` decision to the
+[debug trace](../README.md#debug-trace). Unit tests never write to a live
+trace.
+
 ## badictl
 
 `badictl --help` lists every command. Broker commands print JSON; a failure

@@ -74,6 +74,27 @@ test('each editor records under its own exact app id; unknown adapters record no
   }
 });
 
+test('activity also appends to the shared trace, which only badi debug on creates', context => {
+  const { dir, marker, later } = debugRuntime(context);
+  const trace = join(dir, 'debug-trace.jsonl');
+  const switched = process.env.BADI_DEBUG_TRACE;
+  delete process.env.BADI_DEBUG_TRACE;
+  context.after(() => { if (switched !== undefined) process.env.BADI_DEBUG_TRACE = switched; });
+  writeFileSync(marker, JSON.stringify({ id: randomUUID(), expires_at: Math.floor(Date.now() / 1000) + 60 }), { mode: 0o600 });
+  later(); later();
+  recordActivity('obsidian', 'ghost', 'shown');
+  assert.equal(existsSync(trace), false);
+  writeFileSync(trace, '', { mode: 0o600 });
+  recordActivity('obsidian', 'ghost', 'shown');
+  recordActivity('neovim', 'commit', 'authorized');
+  const lines = readFileSync(trace, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(lines.map(({ src, ev, reason }) => [src, ev, reason]),
+    [['obsidian', 'ghost', 'shown'], ['neovim', 'commit', 'authorized']]);
+  chmodSync(trace, 0o644);
+  recordActivity('obsidian', 'ghost', 'hidden');
+  assert.equal(readFileSync(trace, 'utf8').trim().split('\n').length, 2);
+});
+
 test('punctuation does not count as an extra predicted word', () => {
   assert.equal(validSuggestion(' — the connection is lost'), true);
   assert.equal(validSuggestion(' one two three four five'), false);

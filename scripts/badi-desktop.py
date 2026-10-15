@@ -79,8 +79,11 @@ HELP = """Badi — local writing controls
   badi autostart on|off         Start with the graphical session (next login)
   badi doctor [--json]         Inspect service, model, install identity and
                                no-suggestion reasons; --json is for tools
-  badi debug on|off|status|watch
-                               Trace activity for 15 minutes, without typed text
+  badi debug on [--text] | off  Trace every suggestion, key decision and ghost
+                               display for 15 minutes; --text also records
+                               context and suggestion text (RAM only)
+  badi debug watch | log [--json] | status
+                               Follow the trace live, print it, or summarize
   badi logs                    Print the last 60 service log entries
   badi launch omawrite|xournalpp
                                Open a supported editor
@@ -873,39 +876,171 @@ def debug_line(report):
             f"errors={metrics.get('provider_errors', 0)}  " + "  ".join(adapters))
 
 
-def debug_mode(mode):
+TRACE_FILE = "debug-trace.jsonl"
+# Trace fields that hold typed or suggested text; present only in a --text run.
+TRACE_TEXT_FIELDS = ("before", "after", "typed", "text", "accept_word", "replace_before")
+PREVIEW_LAYER = "badi-writing-preview"
+
+
+def private_directory():
     directory = runtime_directory()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise RuntimeError("Badi runtime directory must be private and owned by this user")
+    return directory
+
+
+def debug_mode(mode, text=False):
     if mode in ("on", "off"):
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        info = directory.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise RuntimeError("Badi runtime directory must be private and owned by this user")
-        if mode == "off":
-            (directory / "debug-control.json").unlink(missing_ok=True)
-            (directory / "debug-native.json").unlink(missing_ok=True)
-            for adapter in ("obsidian", "terminal"):
-                (directory / f"debug-{adapter}.json").unlink(missing_ok=True)
-        else:
-            marker = {"id": str(uuid.uuid4()), "expires_at": int(time.time()) + 900}
+        directory = private_directory()
+        for name in ("debug-control.json", "debug-native.json", TRACE_FILE,
+                     *(f"debug-{adapter}.json" for adapter in ("obsidian", "terminal", "neovim"))):
+            (directory / name).unlink(missing_ok=True)
+        if mode == "on":
+            # The trace exists before the control names the run, so no writer
+            # sees a run without its file; writers never create it.
+            descriptor = os.open(directory / TRACE_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            os.close(descriptor)
+            marker = {"id": str(uuid.uuid4()), "expires_at": int(time.time()) + 900, "text": text}
             badi_install.atomic_write(directory / "debug-control.json", json.dumps(marker).encode())
-        print("Activity debug enabled for 15 minutes; no typed text is stored."
-              if mode == "on" else "Activity debug disabled and its snapshot removed.")
+            print("Debug trace on for 15 minutes"
+                  + (", including context and suggestion text. It stays in memory"
+                     " ($XDG_RUNTIME_DIR) and is deleted by badi debug off or logout."
+                     if text else "; no typed text is stored (add --text for it).")
+                  + " Follow it with badi debug watch.")
+        else:
+            print("Debug disabled and its trace and snapshots removed.")
         return
-    while True:
-        report = {"schema": "badi.debug.v1", **debug_activity()}
+    if mode == "watch":
+        return debug_watch()
+    report = {"schema": "badi.debug.v1", **debug_activity()}
+    try:
+        health = json.loads(control(["status"]))
+        report["model"] = {key: health[key] for key in ("provider", "paused", "sessions", "metrics")}
+        summary = no_suggestion_summary(health["metrics"])
+        if summary and summary["last"]:
+            summary["last_meaning"] = NO_SUGGESTION[summary["last"]]
+        report["model"]["no_suggestion"] = summary
+    except RuntimeError as error:
+        report["model_error"] = str(error)
+    if mode == "status":
+        print(json.dumps(report, indent=2), flush=True)
+    else:
+        print(debug_line(report), flush=True)
+
+
+def trace_entries(lines):
+    """Trace entries from complete lines; a partial or malformed line is skipped."""
+    for line in lines:
+        if not line.endswith("\n"):
+            continue
         try:
-            health = json.loads(control(["status"]))
-            report["model"] = {key: health[key] for key in ("provider", "paused", "sessions", "metrics")}
-            summary = no_suggestion_summary(health["metrics"])
-            if summary and summary["last"]:
-                summary["last_meaning"] = NO_SUGGESTION[summary["last"]]
-            report["model"]["no_suggestion"] = summary
-        except RuntimeError as error:
-            report["model_error"] = str(error)
-        print(json.dumps(report, indent=2) if mode == "status" else debug_line(report), flush=True)
-        if mode != "watch" or not report["enabled"]:
-            return
-        time.sleep(1)
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            yield entry
+
+
+def format_trace(entry):
+    """One readable line: time, source, event, facts, then any text quoted."""
+    at = entry.get("t")
+    stamp = (time.strftime("%H:%M:%S", time.localtime(at / 1000)) + f".{int(at) % 1000:03d}"
+             if isinstance(at, (int, float)) else "--:--:--.---")
+    facts = []
+    for key, value in entry.items():
+        if key in ("t", "src", "ev") or key in TRACE_TEXT_FIELDS:
+            continue
+        facts.append(f"{key}={json.dumps(value, ensure_ascii=False, separators=(',', ':')) if isinstance(value, (dict, list)) else value}")
+    for key in TRACE_TEXT_FIELDS:
+        if isinstance(entry.get(key), str):
+            facts.append(f"{key}={json.dumps(entry[key], ensure_ascii=False)}")
+    return f"{stamp}  {str(entry.get('src', '?')):<10} {str(entry.get('ev', '?')):<24} {' '.join(facts)}".rstrip()
+
+
+def open_trace(directory):
+    descriptor = os.open(directory / TRACE_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    info = os.fstat(descriptor)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        os.close(descriptor)
+        raise RuntimeError("The debug trace must be a private, owned regular file")
+    return os.fdopen(descriptor, encoding="utf-8", errors="replace")
+
+
+def append_trace(directory, entry):
+    """The controller's own lines, under the same rules as every writer."""
+    try:
+        descriptor = os.open(directory / TRACE_FILE, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return
+    try:
+        info = os.fstat(descriptor)
+        if stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077:
+            os.write(descriptor, (json.dumps(entry, ensure_ascii=False) + "\n").encode())
+    finally:
+        os.close(descriptor)
+
+
+def preview_layers(run=subprocess.run):
+    """The grey preview's layer surfaces as Hyprland maps them now, or None if unknown."""
+    try:
+        result = run(["hyprctl", "-j", "layers"], capture_output=True, text=True, timeout=2, check=False)
+        monitors = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if result.returncode != 0 or not isinstance(monitors, dict):
+        return None
+    return sorted((name, layer.get("x"), layer.get("y"), layer.get("w"), layer.get("h"))
+                  for name, monitor in monitors.items() if isinstance(monitor, dict)
+                  for level in (monitor.get("levels") or {}).values() if isinstance(level, list)
+                  for layer in level if isinstance(layer, dict) and layer.get("namespace") == PREVIEW_LAYER)
+
+
+def compositor_entry(layers):
+    entry = {"t": int(time.time() * 1000), "src": "compositor"}
+    if not layers:
+        return {**entry, "ev": "preview not on screen"}
+    name, x, y, width, height = layers[0]
+    return {**entry, "ev": "preview on screen", "monitor": name, "x": x, "y": y, "width": width,
+            "height": height, "surfaces": len(layers)}
+
+
+def print_trace(as_json=False):
+    with open_trace(private_directory()) as stream:
+        for entry in trace_entries(stream):
+            print(json.dumps(entry, ensure_ascii=False) if as_json else format_trace(entry), flush=True)
+
+
+def debug_watch(poll=0.15):
+    """Follows the trace and records what Hyprland shows, until the run ends."""
+    directory = private_directory()
+    report = debug_activity()
+    if not report["enabled"]:
+        raise RuntimeError("Debug is off; run badi debug on (or on --text) first")
+    print(f"Following {directory / TRACE_FILE}; Ctrl+C stops. The compositor lines say whether"
+          " the grey preview is really on screen.", flush=True)
+    layers = None
+    pending = ""
+    checked = time.monotonic()
+    with open_trace(directory) as stream:
+        while True:
+            lines = (pending + stream.read()).splitlines(keepends=True)
+            # A writer's line may arrive in two reads; keep its start.
+            pending = lines.pop() if lines and not lines[-1].endswith("\n") else ""
+            for entry in trace_entries(lines):
+                print(format_trace(entry), flush=True)
+            now = preview_layers()
+            if now is not None and now != layers:
+                if layers is not None or now:
+                    append_trace(directory, compositor_entry(now))
+                layers = now
+            if time.monotonic() - checked >= 2:
+                checked = time.monotonic()
+                if not debug_activity()["enabled"]:
+                    print("Debug run ended.", flush=True)
+                    return
+            time.sleep(poll)
 
 
 def desktop_socket():
@@ -927,8 +1062,14 @@ def main(arguments):
     if arguments == ["settings"]:
         subprocess.run(["omarchy-shell", "badi-writing", "toggle"], check=True, timeout=4)
         return
-    if len(arguments) == 2 and arguments[0] == "debug" and arguments[1] in ("on", "off", "status", "watch"):
-        debug_mode(arguments[1])
+    if arguments[:1] == ["debug"] and arguments[1:] in (["on"], ["on", "--text"], ["off"], ["status"], ["watch"]):
+        try:
+            debug_mode(arguments[1], text=arguments[2:] == ["--text"])
+        except KeyboardInterrupt:
+            pass
+        return
+    if arguments[:2] == ["debug", "log"] and arguments[2:] in ([], ["--json"]):
+        print_trace(as_json=arguments[2:] == ["--json"])
         return
     if arguments == ["settings", "--json"]:
         print(control(["settings", "show", "--json"]), end="")

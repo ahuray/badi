@@ -13,6 +13,7 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use crate::control_plane::{ControlPlaneError, ControlPlaneSnapshot};
+use crate::debug_trace;
 use crate::engine::{
     Broker, BrokerError, BrokerEvent, BrokerEventSink, OutcomeRecorderHealth, SessionAuthority,
 };
@@ -367,9 +368,11 @@ async fn serve_connection_with_timeouts(
         }
     });
     let (wire_tx, mut wire_rx) = mpsc::channel::<WireEnvelope>(WIRE_QUEUE_CAPACITY);
+    let adapter_kind = authority.adapter_kind;
     let mut writer_task = tokio::spawn(async move {
         while let Some(mut envelope) = wire_rx.recv().await {
             envelope.v = selected_version;
+            debug_trace::wire("out", adapter_kind, &envelope);
             write_envelope(&mut writer, &envelope).await?;
         }
         Ok::<(), FrameError>(())
@@ -438,6 +441,7 @@ async fn serve_connection_with_timeouts(
                 idle_deadline
                     .as_mut()
                     .reset(time::Instant::now() + idle_timeout);
+                debug_trace::wire("in", adapter_kind, &envelope);
                 let request_id = envelope.id.clone();
                 let request_type = envelope.message_type;
                 let mut handler = MessageHandler {

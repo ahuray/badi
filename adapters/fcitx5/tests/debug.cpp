@@ -10,6 +10,8 @@
 #include <iostream>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace {
 namespace fs = std::filesystem;
@@ -95,7 +97,35 @@ int main() {
         debug.refresh();
         debug.record("input", "omawrite", "input_received");
         check(fs::exists(output)); // The same recorder resumes once the control is valid.
-        std::cout << "Activity debug: disabled, cached, redacted, private, expired, symlink and malformed checks passed\n";
+
+        // The shared trace: appended only when `badi debug on` created it.
+        const auto trace = runtime.path / "badi/debug-trace.jsonl";
+        debug.trace("ghost shown", "omawrite", {{"display", "overlay"}}, {{"text", "secret words"}});
+        check(!fs::exists(trace));
+        std::ofstream{trace};
+        fs::permissions(trace, fs::perms::owner_read | fs::perms::owner_write);
+        debug.record("input", "omawrite", "input_received");
+        debug.trace("ghost shown", "omawrite", {{"display", "overlay"}}, {{"text", "secret words"}});
+        std::ofstream(control) << nlohmann::json{
+            {"id", "550e8400-e29b-41d4-a716-446655440000"},
+            {"expires_at", std::time(nullptr) + 900}, {"text", true}};
+        debug.trace("ghost shown", "omawrite", {{"display", "panel"}}, {{"text", "kept words"}});
+        std::vector<nlohmann::json> lines;
+        std::ifstream stream(trace);
+        for (std::string line; std::getline(stream, line);) lines.push_back(nlohmann::json::parse(line));
+        check(lines.size() == 3);
+        check(lines[0]["src"] == "fcitx" && lines[0]["ev"] == "input" && lines[0]["reason"] == "input_received");
+        check(lines[1]["display"] == "overlay" && !lines[1].contains("text"));  // Events-only run.
+        check(lines[2]["display"] == "panel" && lines[2]["text"] == "kept words");  // `--text` run.
+        fs::permissions(trace, fs::perms::others_read, fs::perm_options::add);
+        debug.trace("ghost hidden", "omawrite", {{"display", "panel"}});
+        check([&] {
+            std::ifstream again(trace);
+            std::size_t count = 0;
+            for (std::string line; std::getline(again, line);) ++count;
+            return count == 3;
+        }());  // A trace readable by others is left untouched.
+        std::cout << "Activity debug: disabled, cached, redacted, private, expired, symlink, malformed and trace checks passed\n";
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';
         return 1;

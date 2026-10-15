@@ -14,6 +14,8 @@ from geometry import (calibrated_geometry, gecko_calibrated_geometry, input_meth
                       native_calibrated_geometry, visual_direction)
 from preview import font_facts
 
+# Empty sentence answers skipped back from the caret (trailing spaces).
+MAX_SENTENCE_STEPS = 8
 MAX_APPLICATIONS = 64
 MAX_MATCHES = 8
 MAX_TREE_NODES = 192
@@ -168,7 +170,14 @@ class FieldBackend:
             return 0
         self.budget()
         text = metadata["node"].get_text_iface()
-        sentence = self.atspi.Text.get_string_at_offset(text, caret - 1, self.atspi.TextGranularity.SENTENCE)
+        # Writer reports an empty range (0, 0) at a trailing space that ends
+        # its paragraph, while the letters before it report the sentence
+        # including that space. Step back only over empty answers; the
+        # sentence found must still contain the caret's character.
+        for offset in range(caret - 1, max(-1, caret - 1 - MAX_SENTENCE_STEPS), -1):
+            sentence = self.atspi.Text.get_string_at_offset(text, offset, self.atspi.TextGranularity.SENTENCE)
+            if sentence is None or sentence.start_offset != sentence.end_offset:
+                break
         if sentence is None or not 0 <= sentence.start_offset <= caret - 1 < sentence.end_offset:
             raise Denied("invalid_caret")
         return sentence.start_offset

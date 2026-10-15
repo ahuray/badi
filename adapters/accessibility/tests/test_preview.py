@@ -330,6 +330,20 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertEqual(calls[-2:], [("visible", True), ("timer", 1500)])
         self.assertEqual(preview.timer, 7)
 
+    def test_render_traces_its_placement_and_hide_cause_or_why_it_declined(self):
+        preview, _calls, _monitor = self.render_fixture()
+        with patch("preview.trace.emit") as emit:
+            self.assertTrue(preview.render(focus(), " next words", 1500))
+            preview._expire()
+            self.assertFalse(preview.render({"caret": 1}, " next", 1500))
+        drawn, hidden, declined = emit.call_args_list
+        self.assertEqual(drawn.args[0], "preview drawn")
+        self.assertEqual((drawn.args[1]["placement"], drawn.args[1]["x"], drawn.args[1]["y"]),
+                         ("inline", 211, 147))
+        self.assertEqual(drawn.args[2], {"text": " next words"}, "text is offered; the run decides")
+        self.assertEqual((hidden.args[0], hidden.args[1]["cause"]), ("preview hidden", "expired"))
+        self.assertEqual(declined.args, ("preview declined", {"reason": "uncalibrated_caret"}))
+
     def test_render_uses_a_reported_host_font(self):
         preview, calls, _monitor = self.render_fixture()
         data = focus()

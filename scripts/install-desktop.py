@@ -44,7 +44,8 @@ OBSERVED_FLAG = "--force-renderer-accessibility=complete"
 ACCESSIBILITY_SWITCH = "--force-renderer-accessibility"
 COMPLETE_ACCESSIBILITY = (ACCESSIBILITY_SWITCH, OBSERVED_FLAG)
 # Every module the installed observer imports, beside its daemon.
-OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geometry.py", "preview.py", "health.py")
+OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geometry.py", "preview.py", "health.py",
+                    "debugtrace.py")
 SESSION_MODULES = ("daemon.py", "link.py", "style_key.py")
 SESSION_SERVICE = "badi-session.service"
 COMPAT_LIBRARY = Path(".local/lib/badi/compat")

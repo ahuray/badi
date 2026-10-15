@@ -4,6 +4,7 @@
 
 pub mod build_info;
 pub mod control_plane;
+pub mod debug_trace;
 pub mod engine;
 pub mod ipc;
 pub mod language;

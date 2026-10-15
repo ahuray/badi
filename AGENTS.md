@@ -99,8 +99,10 @@ Where code lives inside the larger components:
 - Spelling replacement needs negotiated `text_replacement`, an exactly bound
   suffix or range and explicit acceptance; test stale replacement and undo.
 - No raw keylogging, clipboard replacement or blind synthetic typing as product
-  integrations. Keep typed prose and credentials out of diagnostics. Headed
-  tests use disposable text and isolated profiles.
+  integrations. Keep typed prose and credentials out of diagnostics; only the
+  explicit, expiring `badi debug on --text` trace records text
+  ([ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
+  Headed tests use disposable text and isolated profiles.
 - The normal broker uses the hardware-selected local model; `--provider phrase`
   selects the deterministic fixture. Model readiness alone proves no adapter
   input.
