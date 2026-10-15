@@ -290,8 +290,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Grok Bot composer trial in the signed-in app after a relaunch with
       `grok-bot-flags.conf`.
 - [ ] More native toolkits through measured integrations.
-- [ ] Writer corrections in the middle of a paragraph need a broker contract
-      beyond end-of-field replacement.
 - [ ] Neovim spelling replacement through `text_replacement`, with
       stale-replacement and undo tests.
 - [ ] Extend shell support using
@@ -301,8 +299,9 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       measured preview integration compatible with its own autosuggestions.
       Neither shell is installed here. Acceptance must only edit the buffer,
       preserve native undo and never execute a generated command.
-- [ ] Terminal agent prompts (Claude Code, Codex): terminals send no
-      surrounding text, so each needs its own channel or stays unsupported.
+- [ ] Terminals other than Ghostty (kitty, foot, Alacritty) on the typed-line
+      path ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)),
+      each after a live trial of its app id and `commitString`.
 - [ ] Later: other Linux desktops, a standard tray and personal snippets.
       Emoji stays with Fcitx: QuickPhrase and the Emoji module, not a Badi
       colon shortcode.
