@@ -226,8 +226,9 @@ void BadiAddon::publishObservedContext(Binding &binding, const Json &focus, cons
     if (!samePosition) {
         return debug_.record("request_blocked", app, "observer_context_mismatch");
     }
-    const auto context = currentContext(binding);
+    auto context = currentContext(binding);
     if (!context) return debug_.record("request_blocked", app, unavailableContextReason(binding));
+    if (app == "libreoffice") restoreObservedTrailingSpaces(*context, observed);
     // Escape declines one context. Deleting that text, including clearing
     // the field, ends the decline. An empty field still does not request.
     if (binding.dismissedContext == *context) return;

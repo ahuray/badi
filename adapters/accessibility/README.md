@@ -43,8 +43,8 @@ editing works ([coverage](../../README.md#where-it-works)).
   At a trailing space that ends the paragraph, Writer 26.8 answers an empty
   range (0, 0); the lookup steps back over empty answers only, and the
   sentence it finds must still contain the caret's character. Fcitx's
-  sentence there ends before the space, so the addon fails closed as
-  `observer_context_mismatch` ([future plans](<../../future plans.md>)).
+  sentence there ends before the space; the addon restores only that space
+  ([Fcitx runbook](../fcitx5/README.md#observed-fields)).
 
 Browser targets share one browser-origin identity (adapter `chromium`), so one
 `badi site ... on` grant covers Chromium, Brave and Zen. The target and binding

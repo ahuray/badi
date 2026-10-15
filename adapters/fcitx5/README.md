@@ -159,6 +159,10 @@ Chromium's surrounding text current. Neither provides an editor transaction.
   field only, `normalizeObservedParagraphEnd()` treats exactly that suffix as
   end of field: Tab and the broker see `after: ""`, while the fingerprint and
   every observer check use the raw text (`observedAfter()`).
+- **Writer's trailing spaces.** Writer's sentence for Fcitx leaves out the
+  spaces just typed at a paragraph end. `restoreObservedTrailingSpaces()`
+  takes exactly those spaces from the observer's verified text when nothing
+  follows the caret; any other difference stays a mismatch.
 - **Mid-text.** An observed field requests with text after the caret too; the
   broker suggests only what fits before it, and Tab inserts at the caret. The
   manual Tab-request path still requires the end of the field, so Tab keeps its

@@ -1365,6 +1365,22 @@ void observerRepliesFailClosed() {
               !observerAgrees({{"before", "thank you"}, {"after", " \n"}}, *context) &&
               !observerAgrees({{"before", "thank you"}, {"after", "\nmore"}}, *context),
           "an observed block end and an empty Fcitx after both name the end of the field, and nothing else does");
+    {
+        // Writer's sentence leaves out the spaces just typed at a paragraph end.
+        auto writer = *context;
+        restoreObservedTrailingSpaces(writer, {{"before", "thank you "}, {"after", ""}});
+        check(writer.before == "thank you " && writer.head == 10 && writer.anchor == 10 &&
+                  observerAgrees({{"before", "thank you "}, {"after", ""}}, writer),
+              "only spaces the observer verified at the caret are restored");
+        for (const auto &observed : {nlohmann::json{{"before", "thank you x"}, {"after", ""}},
+                                     nlohmann::json{{"before", "thank you "}, {"after", "more"}},
+                                     nlohmann::json{{"before", "thank you\t"}, {"after", ""}},
+                                     nlohmann::json{{"before", "Thank you "}, {"after", ""}}}) {
+            auto unchanged = *context;
+            restoreObservedTrailingSpaces(unchanged, observed);
+            check(unchanged == *context, "any other difference stays a mismatch");
+        }
+    }
     const auto quoted = captureContextWindow("Quoted list\n\nThanks for the", 27, 27, true, "en");
     check(quoted && observerAgrees({{"before", "Thanks for the"}, {"after", ""}, {"scope", "block"}}, *quoted) &&
               !observerAgrees({{"before", ""}, {"after", ""}, {"scope", "block"}}, *captureContextWindow("Above\n", 6, 6, true, "en")) &&

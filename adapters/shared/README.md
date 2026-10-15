@@ -57,6 +57,10 @@ restricted mode or edits a note.
   `stdpath('data')/site/pack/badi`; Node must be on PATH, and its bridge exits
   after ten idle minutes like Bash's ([details](../neovim/README.md)).
 
+A suggestion grows while the model streams it: each longer version that
+continues the shown text replaces it in Obsidian and Neovim, and acceptance
+binds to the newest. Bash shows the first version its Ctrl-X Tab receives.
+
 Language: an Arabic-script letter nearest the caret selects Persian; otherwise
 the app's language hint applies. Persian half-spaces (U+200C) are kept only
 between the letters in

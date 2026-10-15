@@ -18,7 +18,7 @@
     "writing:check": "npm run writing:lab:check && python3 scripts/build-writing-lexicon.py --verify && PYTHONDONTWRITEBYTECODE=1 python3 broker/data/writing-lexicon/test_generator.py",
     "check": "node scripts/run-checks.mjs",
     "shell:check": "bash -n adapters/shell/badi.bash && PYTHONDONTWRITEBYTECODE=1 python3 adapters/shell/test-preview.py",
-    "editors:check": "BADI_DEBUG_TRACE=off node --test adapters/shared/activity.test.mjs adapters/shared/recovering-client.test.mjs adapters/shared/writing-language.test.mjs adapters/shared/text-safety.test.mjs adapters/obsidian/main.test.mjs adapters/neovim/plugin.test.mjs && node adapters/obsidian/build.mjs && npm run shell:check",
+    "editors:check": "BADI_DEBUG_TRACE=off node --test adapters/shared/activity.test.mjs adapters/shared/broker-client-stream.test.mjs adapters/shared/recovering-client.test.mjs adapters/shared/writing-language.test.mjs adapters/shared/text-safety.test.mjs adapters/obsidian/main.test.mjs adapters/neovim/plugin.test.mjs && node adapters/obsidian/build.mjs && npm run shell:check",
     "editors:integration": "cargo build -p badi-broker --bins --locked && python3 adapters/shell/build-preview.py && node --test adapters/shared/broker-client.test.mjs adapters/neovim/broker.test.mjs",
     "libreoffice:check": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s adapters/libreoffice/tests -p 'test_*.py' -v",
     "libreoffice:integration": "cargo build -p badi-broker --bins --locked && PYTHONDONTWRITEBYTECODE=1 python3 adapters/libreoffice/tests/integration.py"

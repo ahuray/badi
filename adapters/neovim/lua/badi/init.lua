@@ -125,6 +125,21 @@ local function clear_preview()
   end
 end
 
+--- The broker streamed a longer version of the shown continuation: redraw
+--- the same extmark with it.
+local function extend(text)
+  local visible = state.visible
+  if not visible or state.accepting or type(text) ~= 'string' or not matches(visible.snapshot)
+      or not context.insertable(text) or text:sub(1, #visible.text) ~= visible.text then return end
+  local s = visible.snapshot
+  local ok = pcall(api.nvim_buf_set_extmark, s.buf, namespace, s.row, s.col, {
+    id = visible.mark, virt_text = { { text, 'BadiSuggestion' } }, virt_text_pos = 'inline', hl_mode = 'combine',
+  })
+  if not ok then return end
+  visible.text = text
+  state.shown.text = text
+end
+
 --- Withdraws the preview and any request in flight. `notify` names the
 --- bridge operation that releases the broker's session: 'cancel' keeps the
 --- type-through carry, 'dismiss' ends it.
@@ -147,6 +162,8 @@ local function ensure_bridge()
         -- Expiry, revocation, pause or disconnect: the grant behind the
         -- preview is gone, so the preview goes too.
         if state.visible and not state.accepting then invalidate(nil) end
+      elseif message.event == 'update' then
+        extend(message.text)
       elseif message.event == 'state' then
         set_status(message.state)
         if message.state == 'offline' or message.state == 'offline_retry' then invalidate(nil) end

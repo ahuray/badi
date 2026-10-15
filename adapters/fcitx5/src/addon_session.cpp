@@ -111,6 +111,8 @@ std::optional<ContextWindow> BadiAddon::currentContext(const Binding &binding) c
     // Only an observed IME-parity field treats Chromium's paragraph end
     // as end of field; every observer check still compares observedAfter().
     if (context->identityKnown && imeParityApp(binding.state.appId())) normalizeObservedParagraphEnd(*context);
+    if (context->identityKnown && binding.state.appId() == "libreoffice")
+        restoreObservedTrailingSpaces(*context, binding.observedFocus);
     return context;
 }
 
