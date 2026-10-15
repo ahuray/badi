@@ -7,6 +7,8 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#85](https://github.com/ahuray/badi/pull/85) Records only: `next steps.md`
+  reviews what to consider after #78–#84; two finished backlog items retired.
 - [#84](https://github.com/ahuray/badi/pull/84) The bar mark opens a keyboard-first
   Omarchy popout: mode chip, activity spinner, acceptance meter, settings
   search and rows for battery, spelling languages and Ghostty.
