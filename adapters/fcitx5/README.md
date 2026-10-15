@@ -208,6 +208,22 @@ that boundary remains unverified. These are acceptance samples, not latency
 or language-quality scores. The disposable browser profile was removed; the
 installed settings and keyboard profile remained byte-identical.
 
+Type-through on 2026-10-13 night: the installed `b492c0a` broker, then the
+checkout broker run in its place (same socket, real model, not installed),
+with isolated profiles of Chromium 152, Brave Origin and Zen and `wtype` keys
+on a disposable page. The installed broker carried the typed `l` of "latest",
+then made a second model call: Chromium's text change also ended the
+observer's epoch, so the addon admitted the same context again under a new
+session and the carry, which then needed newly typed characters, declined
+(`prefix_mismatch`). The fixed broker answered both admissions from the carry:
+the remainder stayed on screen within about 300 ms and `provider_calls` did
+not move, in Chromium (a typed letter, then three more), Brave Origin and Zen
+(a typed space after "Thank you"). In that fresh Zen profile the suggestion
+showed in Fcitx's candidate box, not the overlay. One Ctrl+Z in Chromium
+undid the accepted text together with the preceding typing, as IME-parity
+allows. `wtype` cannot start a call with a space on this desktop (it is
+dropped even while Badi is paused), so the trial sent a Shift tap first.
+
 | Application | Reaches Fcitx through | Boundary |
 | --- | --- | --- |
 | Omawrite 0.5.0 (Qt 6) | `QT_IM_MODULE=fcitx` | 20/20 trials; one native undo restores the exact prefix |

@@ -63,6 +63,9 @@ and whether they were dirty (`--version` prints both; packagers may set
   - When a later admitted request in the same app or site keeps `after` and
     the language, and its `before` adds a typed proper prefix of the
     suggestion, the broker answers with the remainder and no model call.
+  - An automatic request for exactly the carry's context, which Fcitx sends
+    when the typed key also changes the observed field's epoch, gets the
+    same text again; an explicit request for it asks the model.
   - The remainder is a new suggestion that keeps the original deadline.
   - Escape, a whole acceptance, pause or an authority change ends the carry; a
     word acceptance keeps it. Editors send `dismiss` for Escape. Closing the

@@ -110,8 +110,9 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertTrue(caret.text_follows)
         # Inside a tall field: right under the caret's line, text aligned with the caret.
         self.assertEqual(place_chip(caret, 120, 24), (203, 172))
-        # Near the field's right edge it shifts left to stay inside the field.
-        self.assertEqual(place_chip(caret, 590, 24), (130, 172))
+        # Near the field's right edge it shifts left to stay inside the field,
+        # off its border.
+        self.assertEqual(place_chip(caret, 590, 24), (128, 172))
         # Wider than the field, or below a one-line field: not on the chrome.
         self.assertIsNone(place_chip(caret, 800, 24), "wider than the field")
         self.assertIsNone(place_chip(caret, 901, 24), "wider than the window")
@@ -131,6 +132,25 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertEqual(place_on_caret_line(early, 200, 24, 19), (211, 147))
         for size in ((0, 24), (120, 0), (float("nan"), 24)):
             self.assertIsNone(place_chip(caret, *size), size)
+
+    def test_at_the_end_of_the_text_a_chip_goes_only_under_the_caret_line(self):
+        data = focus()
+        data["geometry"]["text_ends"] = True
+        data["geometry"]["field"]["height"] = 200
+        caret = mapped_caret(data)
+        self.assertTrue(caret.text_ends)
+        self.assertEqual(place_chip(caret, 120, 24, below_only=True), (203, 172))
+        # The caret's line at the bottom of the field: above would cover the
+        # user's own lines, so there is no chip.
+        data["geometry"]["caret"]["y"] = 200
+        self.assertIsNone(place_chip(mapped_caret(data), 120, 24, below_only=True))
+        self.assertEqual(place_chip(mapped_caret(data), 120, 24), (203, 274))
+        # Words after the caret are never "the end".
+        data = focus()
+        data["geometry"].update(text_ends=True, text_follows=True)
+        self.assertFalse(mapped_caret(data).text_ends)
+        data["geometry"].update(text_ends="yes", text_follows=False)
+        self.assertFalse(mapped_caret(data).text_ends)
 
     def test_field_ascent_anchors_the_baseline_and_fractional_scale_snaps_to_physical_pixels(self):
         caret = mapped_caret(focus())
@@ -290,6 +310,10 @@ class PreviewGeometryTests(unittest.TestCase):
                                          remove_css_class=lambda name: calls.append(("unclass", name)),
                                          measure=lambda orientation, _for: SimpleNamespace(natural=sizes[orientation]))
         preview.label = SimpleNamespace(set_text=lambda text: calls.append(("text", text)),
+                                        set_margin_start=lambda value: calls.append(("pad_start", value)),
+                                        set_margin_end=lambda value: calls.append(("pad_end", value)),
+                                        set_margin_top=lambda value: calls.append(("pad_top", value)),
+                                        set_margin_bottom=lambda value: calls.append(("pad_bottom", value)),
                                         set_attributes=lambda _attrs: None,
                                         get_layout=lambda: SimpleNamespace(get_baseline=lambda: baseline * 1024))
         preview.timer = None
@@ -340,6 +364,40 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertNotIn(("class", "chip"), calls)
         self.assertIn(("left", 211), calls)
         self.assertIn(("top", 147), calls)
+
+    def test_render_keeps_end_of_text_overflow_under_the_caret_inside_the_field(self):
+        data = focus()
+        data["geometry"]["text_ends"] = True
+        data["geometry"]["field"]["height"] = 200
+        # 515 wide from the caret at x=211 passes the field's right edge (720).
+        preview, calls, _monitor = self.render_fixture((515, 24))
+        self.assertTrue(preview.render(data, " next", 1500))
+        self.assertIn(("class", "chip"), calls)
+        self.assertIn(("text", "next"), calls)
+        self.assertIn(("left", 203), calls)
+        self.assertIn(("top", 172), calls, "under the caret line, not outside the field")
+        # A one-line field has no room under the line: the outside panel.
+        one_line = focus()
+        one_line["geometry"]["text_ends"] = True
+        preview, calls, _monitor = self.render_fixture((515, 24))
+        self.assertTrue(preview.render(one_line, " next", 1500))
+        self.assertIn(("top", 182), calls)
+
+    def test_chip_padding_is_measured_with_the_text_not_left_to_a_restyle(self):
+        # A CSS class toggled right before measuring is not restyled yet; the
+        # live chip measured 12 px narrow and crossed the field's edge.
+        data = focus()
+        data["geometry"]["text_follows"] = True
+        data["geometry"]["field"]["height"] = 200
+        preview, calls, _monitor = self.render_fixture((120, 24))
+        self.assertTrue(preview.render(data, " final", 1500))
+        chip = calls.index(("class", "chip"))
+        self.assertEqual(calls[chip + 1:chip + 5],
+                         [("pad_start", 6), ("pad_end", 6), ("pad_top", 2), ("pad_bottom", 2)])
+        preview, calls, _monitor = self.render_fixture()
+        self.assertTrue(preview.render(focus(), " next words", 1500))
+        self.assertIn(("pad_start", 0), calls)
+        self.assertNotIn(("pad_start", 6), calls)
 
     def test_render_refuses_rtl_unmapped_or_unfitting_text(self):
         for text, data, natural in ((" متن", focus(), (200, 24)), (" next", {**focus(), "geometry": None}, (200, 24)),

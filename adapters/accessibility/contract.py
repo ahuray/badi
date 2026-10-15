@@ -114,6 +114,7 @@ class Observer:
         self.disarm = lambda: None
         self.caret_edge = None
         self.text_follows = False
+        self.text_ends = False
         self.preview_hold = None
         self.operations = {"status": self.status, "hide": self.hide_preview, "inspect": self.inspect,
                            "snapshot": self.snapshot, "preview": self.preview}
@@ -132,6 +133,7 @@ class Observer:
         self.disarm()
         self.caret_edge = None
         self.text_follows = False
+        self.text_ends = False
         self.preview_hold = None
 
     def request(self, request):
@@ -180,8 +182,13 @@ class Observer:
         self.caret_edge = "right" if ltr_caret_line(metadata.get("direction"), before, native) else None
         # Words after the caret on its line: inline text would cover them.
         self.text_follows = bool(after.split("\n", 1)[0].strip())
+        # Nothing visible after the caret in a plain field: the lines under
+        # it are empty, so a chip there covers no text. A rich editor's
+        # window is one block, which proves nothing about the blocks below.
+        self.text_ends = not margin and end == metadata["total_chars"] and not after.strip()
         if focus["geometry"] and self.caret_edge:
-            focus["geometry"].update(caret_edge=self.caret_edge, text_follows=self.text_follows)
+            focus["geometry"].update(caret_edge=self.caret_edge, text_follows=self.text_follows,
+                                     text_ends=self.text_ends)
         focus.update(before=before, after=after, total_chars=metadata["total_chars"])
         return {"focus": focus}
 
@@ -270,7 +277,8 @@ class Observer:
         binding = {"epoch": self.epoch, **key}
         target = self.policy_target(metadata, app_id)
         if metadata.get("geometry") and self.caret_edge:
-            metadata["geometry"].update(caret_edge=self.caret_edge, text_follows=self.text_follows)
+            metadata["geometry"].update(caret_edge=self.caret_edge, text_follows=self.text_follows,
+                                        text_ends=self.text_ends)
         focus = {"binding": binding, "target": target, "purpose": "plain_text",
                  "caret": metadata["caret"], "selection_count": metadata["selection_count"],
                  "geometry": metadata.get("geometry")}

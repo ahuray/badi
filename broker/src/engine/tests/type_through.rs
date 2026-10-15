@@ -252,3 +252,63 @@ async fn a_declined_carry_records_its_gate_when_generation_runs() {
     assert_eq!(type_through.misses(), 1);
     assert_eq!(type_through.last_miss, Some(CarryMiss::LanguageChanged));
 }
+
+#[tokio::test]
+async fn a_carried_remainder_survives_its_field_being_admitted_again_unchanged() {
+    // Live Chromium: the typed character changes the field's accessibility
+    // epoch, so the same context arrives once more under a new session.
+    let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
+    let broker = Broker::new(provider.clone(), BrokerConfig::default());
+    let (first, mut first_events) = open_browser_session(&broker, "field-epoch-1").await;
+    shown_after(&broker, first, &mut first_events, "Thank you")
+        .await
+        .expect("generated suggestion");
+    let (second, mut second_events) = open_browser_session(&broker, "field-epoch-2").await;
+    let carried = shown_after(&broker, second, &mut second_events, "Thank you r")
+        .await
+        .expect("carried remainder");
+    assert_eq!(carried.text, "evision Thank you");
+
+    let (third, mut third_events) = open_browser_session(&broker, "field-epoch-3").await;
+    let again = shown_after(&broker, third, &mut third_events, "Thank you r")
+        .await
+        .expect("the same remainder");
+    assert_eq!(again.text, "evision Thank you");
+    assert!(again.ttl_ms <= carried.ttl_ms);
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 1);
+    let type_through = broker
+        .inner
+        .metrics
+        .snapshot()
+        .type_through
+        .expect("type-through breakdown");
+    assert_eq!(type_through.carried, 2);
+    assert_eq!(type_through.misses(), 0);
+
+    // Asking explicitly for that context still runs the model.
+    let (fourth, mut fourth_events) = open_browser_session(&broker, "field-epoch-4").await;
+    let mut update = context(1, FieldPurpose::Normal);
+    update.before = "Thank you r".to_owned();
+    broker
+        .update_context(coordinates(fourth, 1), update.clone())
+        .await
+        .expect("context");
+    broker
+        .request_suggestion(
+            coordinates(fourth, 1),
+            SuggestRequestPayload {
+                fingerprint: update.fingerprint,
+                explicit: true,
+            },
+            None,
+        )
+        .await
+        .expect("request");
+    loop {
+        match timeout(Duration::from_millis(100), fourth_events.recv()).await {
+            Ok(Some(BrokerEvent::SuggestionShow { .. }) | None) | Err(_) => break,
+            Ok(Some(_)) => {}
+        }
+    }
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 2);
+}
