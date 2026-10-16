@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#86](https://github.com/ahuray/badi/pull/86) Records only: `AGENTS.md` gives
+  agents a numbered start and work loop with live-trial steps; `next steps.md`
+  is folded into the backlog, whose step 1 is now Tab-takes-a-word and a
+  steadier ghost.
 - [#85](https://github.com/ahuray/badi/pull/85) Records only: `next steps.md`
   reviews what to consider after #78–#84; two finished backlog items retired.
 - [#84](https://github.com/ahuray/badi/pull/84) The bar mark opens a keyboard-first

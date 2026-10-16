@@ -5,28 +5,53 @@ Preserve exact editing authority and prove the affected user flow.
 
 ## Start here
 
-- Read this file, the affected source and its runbook. Each fact has one home:
+1. Read this file, then "Where Badi stands", the open decisions and "Next
+   steps" in [future plans.md](<future plans.md>). Its step 1 is the current
+   priority unless the user asks for something else.
+2. Read the runbook of the area you will touch (see [Architecture](#architecture))
+   and the ADRs it links. The top of [CHANGELOG.md](CHANGELOG.md) shows what
+   changed last.
+3. Run `git status` and `git log --oneline -5`. Preserve existing changes,
+   untracked files and deletions. `output/` holds ignored local evaluation
+   evidence; leave it alone.
+4. Set up once: `npm ci`. Cargo installs the pinned toolchain from
+   [rust-toolchain.toml](rust-toolchain.toml) on first use.
+5. Before reasoning about live behavior, check what is installed: `badi doctor`
+   names the installed commit, `badi status` the model and counters.
 
-  | Document | Owns |
-  | --- | --- |
-  | [README.md](README.md) | What users can do: keys, coverage, install, commands |
-  | [VISION.md](VISION.md) | The durable product contract |
-  | [future plans.md](<future plans.md>) | The only backlog: where Badi stands, the ordered next steps, open work and decisions |
-  | [CHANGELOG.md](CHANGELOG.md) | What shipped, by merged pull request |
-  | [docs/decisions](docs/decisions/) | Durable architecture decisions (ADRs) |
-  | Component `README.md` files | That component's contract, tests and boundaries |
+Each fact has one home:
 
-  Link to a fact instead of repeating it. Delete stale material instead of
-  archiving it, and never add parallel planning or handoff documents.
-- New to the repository: read "Where Badi stands" and "Next steps" in
-  [future plans.md](<future plans.md>), the top of [CHANGELOG.md](CHANGELOG.md),
-  then the runbook of the area you will touch. When work finishes, delete its
-  backlog item, record the result in the runbook and add a changelog line.
-- Inspect Git status before editing; preserve existing changes, untracked files
-  and deletions. Work on the requested outcome, not the rest of the backlog.
-- For implementation requests, carry the change through code, tests and the
-  affected runbook. Make routine local decisions yourself and reuse prior
-  authorization; report concrete blockers after finishing independent work.
+| Document | Owns |
+| --- | --- |
+| [README.md](README.md) | What users can do: keys, coverage, install, commands |
+| [VISION.md](VISION.md) | The durable product contract |
+| [future plans.md](<future plans.md>) | The only backlog: where Badi stands, open decisions, the ordered next steps and later work |
+| [CHANGELOG.md](CHANGELOG.md) | What shipped, by merged pull request |
+| [docs/decisions](docs/decisions/) | Durable architecture decisions (ADRs) |
+| Component `README.md` files | That component's contract, tests and boundaries |
+
+Link to a fact instead of repeating it. Delete stale material instead of
+archiving it, and never add parallel planning, handoff or report documents.
+
+## How to work
+
+1. Branch from an up-to-date `main`: `git switch -c <agent>/<topic>` (for
+   example `cursor/tab-word`). Work on the requested outcome, not the rest of
+   the backlog.
+2. Carry a change through code, focused tests and the affected runbook in one
+   branch. Make routine local decisions yourself; report concrete blockers
+   after finishing independent work.
+3. Run the checks for the changed surface ([Verification](#verification)).
+   Never weaken a test, gate or hook to pass.
+4. Prove user-visible behavior live ([Live trials](#live-trials)) when the
+   user authorized installation; otherwise name the unverified boundary.
+5. Finish the records: delete a completed backlog item from
+   [future plans.md](<future plans.md>), update the runbook and
+   [README.md](README.md) keys or coverage, and add one
+   [CHANGELOG.md](CHANGELOG.md) line under the newest heading.
+6. Commit, push, open or merge a pull request only when the user asked. Stage
+   exact paths and inspect the staged diff. A pull request says what changed,
+   which checks ran, the live evidence and what remains unverified.
 
 ## Architecture
 
@@ -165,14 +190,24 @@ boundary.
   publication or Git history changes. When the user asked for one, carry it
   through without asking again.
 
+## Live trials
+
+- Install the branch: `python3 scripts/install-desktop.py`, plus
+  `scripts/install-editors.py` or `scripts/install-omarchy-ui.py` when those
+  changed; `badi doctor` must then name your commit.
+- Trace the flow: `badi debug on --text`, `badi debug watch` in a second
+  terminal, then `badi debug log --json` for evidence and `badi debug off`.
+  The trace shows requests, model outcomes, keys with `ghost_visible`, and
+  every ghost show and hide with its cause.
+- Type only disposable text, in isolated browser profiles and scratch
+  documents. Name the app, its version and the installed commit in results.
+
 ## Evidence and completion
 
-- Commit only when the task authorizes it. Never relax schema, identity,
-  sample-count or cleanup gates to make a result pass.
+- Never relax schema, identity, sample-count or cleanup gates to make a result
+  pass.
 - Report fixture, real-broker, real-model and live-app evidence separately. A
   smoke result is not a held-out quality score; a tested app version is not
   universal Linux support.
-- When behavior changes or a backlog item completes, update its runbook,
-  [README.md](README.md) coverage and [future plans.md](<future plans.md>).
 - Before finishing, inspect the final diff and status, including untracked
   files, and state what changed, which checks ran and what remains unverified.
