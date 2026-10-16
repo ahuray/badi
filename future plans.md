@@ -10,12 +10,15 @@ keeps the history of what shipped. Evidence here names its kind (fixture,
 real broker, real model, live app); a tested app version is not a claim about
 Linux in general.
 
-## Where Badi stands (2026-10-13)
+## Where Badi stands (2026-10-16)
 
 - **Coverage** is ahead of every Linux alternative found: Chromium-based apps
   and any website, Zen, Omarchy web apps, Telegram, LibreOffice Writer,
-  Obsidian and Bash. Neovim and Writer spelling replacement pass headless
-  lanes only. The closest Omarchy alternative, Oma Tab, replaces the input
+  Obsidian, Bash and, by an opt-in rule, Ghostty's typed line
+  ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)). Neovim
+  passes headless lanes only. Writer checks spelling as you type and Alt+F7
+  fixes the word at the caret; German, French, Spanish, Italian, Dutch and
+  Polish spelling turn on with `badi spelling` and their Hunspell dictionaries. The closest Omarchy alternative, Oma Tab, replaces the input
   method and ships a 4.8 GB model.
 - **Interaction:** type-through, Ctrl+→ next-word acceptance and search-box
   quieting work, and a typed-through remainder returns within about 50 ms with
@@ -45,6 +48,11 @@ Linux in general.
   8-token automatic budget: on 2026-10-12, 21 tokens missed 550 ms on all 13
   development cases. Mid-sentence stays off
   ([why](broker/README.md#suggestion-limits)).
+- **Diagnosis:** `badi debug on [--text]`, `badi debug watch` and `badi debug
+  log` trace every request, suggestion, key and ghost show/hide across the
+  broker, Fcitx and observer ([README](README.md#debug-trace),
+  [ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
+  Use it for every live trial.
 - **Context and learning:** same-window context is extracted for the Lab only;
   style learning stores sealed samples behind `badi style on`, and no prompt
   reads them yet.
@@ -55,7 +63,10 @@ Standing user decisions:
 - promote a quality fix only without a per-language harm increase;
 - keep the model resident;
 - explicit requests get about 1.2 s;
-- Tab accepts all and Ctrl+→ one word on Fcitx fields;
+- Tab accepts one word and Ctrl+→ all of it, on every surface (changed
+  2026-10-16; next step 1 implements it on Fcitx and Neovim);
+- Ghostty follows the typed line automatically, by exact opt-in rule
+  ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md));
 - window context and learning stay on the device, with global and per-app
   opt-outs; language work prioritizes English, German, French and Spanish,
   and Persian keeps its regression gates (confirmed 2026-10-12; the
@@ -65,55 +76,82 @@ Standing user decisions:
 - Discord uses desktop-wide AT-SPI `ScreenReaderEnabled`, with recorded prior
   settings and unchanged Badi app/site permissions (confirmed 2026-10-13).
 
+Open decisions, for the user:
+- **Terminal privacy.** A terminal cannot mark a password prompt, so a
+  passphrase of two or more words in an allowed terminal can reach the local
+  model. Keep it, make terminals explicit-only, or pause after prompts such as
+  `password:` (Badi cannot read terminal output to detect them).
+- **Spelling beyond English is unqualified.** It is opt-in; decide whether that
+  is enough or each language first needs the held-out measurement under
+  [Suggestion quality](#suggestion-quality).
+- **The `--text` debug trace** keeps typed text in memory for 15 minutes;
+  confirm that, or limit it to suggestions.
+
 ## Next steps, in order
 
 Each step ends with its completion test. Steps that install to the desktop or
 publish need the user's go-ahead first; the rest can start at once.
 
-1. **Install this release and run the installed-flow matrix.**
-   `scripts/install-desktop.py` installs the broker, addon, observer and the
-   session helper. Install half done on 2026-10-13 evening: `b492c0a` runs
-   here (`badi doctor` clean, installed source `b492c0a`), the session
-   helper reports `active`/`observed`, the Hyprland binds (`SUPER+ALT+B`
-   pause-toggle, `SUPER+ALT+PERIOD` open-settings — comma was already taken)
-   are in the user's `badi.lua` and dispatch-proven, `badi style on` reports
-   key ready, and old-build backups were deleted. Still to run, with
-   disposable text: a real suspend and resume, a VT switch and a Tab pressed
-   right after resume; a service restart, undo, pause, composition and stale
-   focus; and fractional scaling / several monitors when a second display is
-   at hand. *Done when* the matrix shows zero wrong-field or stale edits and
+1. **Make Tab and the ghost feel right.** Reported live on 2026-10-16
+   (installed `3c61f34`):
+   - *Terminal notices.* In Ghostty every automatic miss shows "Badi has no
+     continuation". `onClear` in `adapters/fcitx5/src/addon_broker.cpp` shows
+     `clearNoticeText` for any binding that is not observed; show it only
+     after an explicit request (track that like `observationExplicit`). Then
+     read the debug trace: if terminal misses are `budget_prefill` or
+     `budget_stream`, measure trimming the typed-line context
+     (`currentContext` in `addon_session.cpp`) before touching any budget.
+     The terminal ghost is Fcitx's panel at the cursor; grey inline text in a
+     terminal is a separate spike.
+   - *Tab takes one word.* `tabKey` in `adapters/fcitx5/src/addon_keys.cpp`
+     accepts all and Ctrl+→ (`wordKey()` in `addon_support.h`) one word. Swap
+     them, rename the action and key helpers to match, and swap Neovim's
+     defaults (`adapters/neovim/lua/badi/init.lua`), so every surface behaves
+     like Obsidian. Spelling replacements stay whole; the broker already
+     accepts a replacement entirely.
+   - *The ghost stays.* `finish_generation` in
+     `broker/src/engine/generation.rs` sends `suggestion.clear` when the final
+     result is rejected or late, even while a streamed partial is showing (a
+     trace showed `" 2023 edition"`, then `output_rejected` and a clear). Keep
+     the last shown partial if it ends at a word boundary; only edits, focus,
+     Escape and expiry withdraw it. Count it as shown, not as a miss.
+   - *A quick second Tab continues.* After a word is accepted, the rest
+     returns one context round trip later (ADR 0004), and a Tab in that gap
+     reaches the app. Hold at most one Tab for about 700 ms while
+     `typeThroughRest` is pending; when the carried rest is displayed and
+     still starts with it, accept its next word through the normal broker
+     grant. Any other key, Escape, focus change or timeout drops the held
+     Tab.
+
+   *Done when* the Fcitx, Neovim and broker tests cover the new mapping, the
+   kept partial and the held Tab; a live trial with the debug trace and
+   disposable text in Ghostty, a Chromium field and Omawrite shows no notice
+   for automatic misses, three quick Tabs typing three words with no app Tab,
+   Ctrl+→ taking the rest, Tab with nothing showing staying Tab, and Writer
+   corrections still whole; and the README keys, the Fcitx and Neovim
+   runbooks and ADR 0009 describe it.
+2. **Run the installed-flow matrix.** `scripts/install-desktop.py` installs
+   the broker, addon, observer and the session helper; `main` runs here
+   (`badi doctor` clean, 2026-10-16), and the session helper's Hyprland binds
+   (`SUPER+ALT+B` pause-toggle, `SUPER+ALT+PERIOD` open-settings) are in the
+   user's `badi.lua`. Still to run, with disposable text: a real suspend and
+   resume, a VT switch and a Tab pressed right after resume; a service restart, undo, pause, composition and stale
+   focus, including Ghostty's typed line, which must start empty and stay
+   quiet after a restart; and fractional scaling / several monitors when a
+   second display is at hand. *Done when* the matrix shows zero wrong-field or stale edits and
    the session helper and Fcitx runbooks record it.
-2. **Try the new editor surfaces live.** Neovim: the real model in an
-   interactive terminal Neovim (display, Tab, Ctrl+→, undo, and whether
-   Ctrl+Shift+Space arrives). Writer: the interactive window under Wayland
-   with Fcitx beside it (infobar look and focus, Alt+F7, one Ctrl+Z) and a
-   model-backed correction of an ambiguous word; the grey preview stays
-   IME-parity. Live trial 2026-10-13 evening (installed `b492c0a`, real
-   model, user typing): editor-owned surfaces (Obsidian, the terminal text
-   editor) read clean. The dark two-tone pill with every character doubled
-   (`ddwwaarree ffrroomm`), seen in browsers, Writer, Obsidian and Ghostty,
-   is not Badi's: it is cotype, a separate evdev autocomplete on this
-   desktop (`~/Projects/cotype`, its 8 px-radius bordered overlay). Both
-   `cotype.service` and Hyprland's `autostart.lua` (`cotype start`) launch
-   it; the second launch re-activates the running GTK application, which
-   starts a second keyboard listener (two `listening on 2 keyboard(s)`
-   lines at one start in its journal), so every key reaches its buffer
-   twice. Badi's own overlay, re-checked live that night in Chromium and
-   Brave Origin, drew single, clean text; its overflow chip now stays
-   under the caret inside the field
-   ([observer runbook](adapters/accessibility/README.md#caret-geometry-and-preview)).
-   Writer and Neovim still need their live trial without cotype running.
-   Writer, 2026-10-14 (cotype off, debug trace, isolated profile): the grey
-   preview drew and Tab accepted; Alt+F7 showed and replaced `adress` and one
-   Ctrl+Z restored it
-   ([Writer runbook](adapters/libreoffice/README.md#boundaries)). Still open:
-   an ambiguous-word correction.
-   In Omawrite, Tab accepted the whole multi-word suggestion, which is the
-   Fcitx mapping (Ctrl+→ takes one word). *Done when* the
+3. **Try the new editor surfaces live.** Neovim: the real model in an
+   interactive terminal Neovim (display, Tab, Ctrl+→, undo, streamed growth,
+   and whether Ctrl+Shift+Space arrives). Writer: the grey preview, Tab and
+   Alt+F7 with one Ctrl+Z work (2026-10-14, isolated profile); still open are
+   a model-backed correction of an ambiguous word and the automatic hint with
+   German, French and Spanish dictionaries installed. A dark pill with every
+   character doubled is cotype, a separate autocomplete now disabled on this
+   desktop, not Badi. *Done when* the
    [Neovim](adapters/neovim/README.md) and
    [Writer](adapters/libreoffice/README.md) runbooks record the live result
    and any defect found is fixed.
-3. **Qualify on the frozen confirmation set.** The user-approved public set
+4. **Qualify on the frozen confirmation set.** The user-approved public set
    (UD r2.16 test, 100 English and 40 each German, French, Spanish and
    Persian prefixes) is frozen privately at
    `output/writing/confirmation-ud-r2.16-2026-10-12/suite.json`, SHA-256
@@ -128,7 +166,7 @@ publish need the user's go-ahead first; the rest can start at once.
    Persian review where results are ambiguous and the full
    [qualification](docs/architecture/model-selection.md). *Done when* a
    candidate passes or fails every gate per language on that set.
-4. **Evaluate same-window context independently.** The observer's
+5. **Evaluate same-window context independently.** The observer's
    [`window_context()`](adapters/accessibility/README.md#same-window-context-lab-only)
    reads the nearest heading and preceding paragraph of the field's own web
    document, never another field, a password, a hidden node or another frame;
@@ -147,7 +185,7 @@ publish need the user's go-ahead first; the rest can start at once.
    like `style_fact_conflict` for context facts and a cache-stable prompt
    layout that meets 550 ms justify production use; only then add the global
    and per-app controls, the wire field and cancellation on focus changes.
-5. **Compare style learning in the Lab.** `badi style on` keeps the sentence
+6. **Compare style learning in the Lab.** `badi style on` keeps the sentence
    written before each accepted suggestion on sites that allow learning,
    sealed with a keyring key; revocation, expiry, key loss, forgetting and the
    locked keyring are tested
@@ -159,11 +197,12 @@ publish need the user's go-ahead first; the rest can start at once.
    lifting that is a separate privacy decision. *Done when* the comparison
    shows a per-language gain without more harm, before any prompt reads
    samples.
-6. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
+7. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
    It packages the addon, broker, observer and user units; writing assets are
    a separate pinned, hash-verified download. *Done when* install, update and
    removal leave nothing behind; publication waits for the naming and licence
    review.
+
 ## Later, by area
 
 ### Interaction
@@ -277,6 +316,8 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       off until the Lab spelling gate passes (the 40-case run was 2 and 4
       useful, with one unwanted change each).
 - [ ] Calibrate token confidence against reviewed full additions per language.
+- [ ] Spelling for Persian, which has no cased letters and needs its own word
+      shape rather than the European one.
 - [ ] Measure Cotypist parity with the same tasks on a named Cotypist version on
       a Mac.
 
@@ -302,6 +343,20 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Terminals other than Ghostty (kitty, foot, Alacritty) on the typed-line
       path ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)),
       each after a live trial of its app id and `commitString`.
+- [ ] Panel rows for per-app language overrides and style learning, which
+      are terminal-only today.
 - [ ] Later: other Linux desktops, a standard tray and personal snippets.
       Emoji stays with Fcitx: QuickPhrase and the Emoji module, not a Badi
       colon shortcode.
+
+### Engineering upkeep
+
+- [ ] `observed-desktop.py` timed out once at "candidate before timed quiet"
+      (#81) and passed on rerun. If it recurs, give that wait its neighbours'
+      bound or find the timing it races.
+- [ ] No test covers `SettingsView.qml`'s keyboard model; a headless `qs`
+      test with a fake controller driving `move()` and `activate()` would
+      guard j/k, h/l and search.
+- [ ] One replacement-shape rule lives in `protocol.rs`, the schema,
+      `text-safety.mjs` and `text.py`; a shared fixture file, like
+      `orthographic-joiner-fixtures.json`, would stop them drifting.
