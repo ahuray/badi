@@ -61,6 +61,10 @@ private:
         std::string fieldVisitId;
         std::uint64_t observationGeneration = 0;
         bool observationExplicit = false;
+        // The published request a broker clear would answer was explicit:
+        // only then may a miss show its notice. Automatic misses (a typed
+        // terminal line above all) stay quiet.
+        bool requestExplicit = false;
         bool waitingForForeignUi = false;
         InspectionSchedule inspection;
         std::unique_ptr<::fcitx::EventSourceTime> observeTimer;
@@ -80,6 +84,14 @@ private:
         std::string typeThroughBase;
         std::string typeThroughTyped;
         unsigned int typeThroughWaits = 0;
+        // The pending rest of a word acceptance returns on its own (it was
+        // accepted on an observed field or a typed line), so one Tab may be
+        // held for it; see tabMayHoldForRest.
+        bool typeThroughAutomatic = false;
+        // At most one Tab held for that rest, and the timer that drops it.
+        bool heldTab = false;
+        std::string heldTabRest;
+        std::unique_ptr<::fcitx::EventSourceTime> heldTabTimer;
         // Show a suggestion that arrives during the typing pause only after
         // that pause, and only if this keystroke is still the latest.
         std::uint64_t showAfterUs = 0;
@@ -108,6 +120,8 @@ private:
 
     // Keys.
     void preKeyEvent(::fcitx::KeyEvent &event);
+    void holdTab(Binding &binding);
+    void dropHeldTab(Binding &binding);
     void tabKey(::fcitx::KeyEvent &event, Binding &binding, const PanelObservation &panel);
     void keyEvent(::fcitx::KeyEvent &event);
     void invoke(Binding &binding);

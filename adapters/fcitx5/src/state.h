@@ -152,7 +152,10 @@ struct PanelObservation {
     bool foreignAuxiliary = false;
 };
 
-enum class LocalAction { PassThrough, Invoke, Accept, Dismiss };
+// Tab accepts one word; Ctrl+Right and the accept chord accept all of it.
+// Every surface uses this order (the broker accepts a spelling replacement
+// whole either way, because its next word is the whole correction).
+enum class LocalAction { PassThrough, Invoke, AcceptAll, AcceptWord, Dismiss };
 
 // A key before the input method sees it.
 struct PreKey {
@@ -161,7 +164,7 @@ struct PreKey {
     bool tab = false;    // plain Tab that no earlier handler took
     bool escape = false;
     bool chord = false;  // Badi's invoke or accept chord, handled after the input method
-    bool word = false;   // Ctrl+Right that no earlier handler took
+    bool all = false;    // Ctrl+Right that no earlier handler took
     // The key types the next characters of Badi's suggestion, visible or
     // hidden by an earlier typed-through key.
     bool typesSuggestion = false;
@@ -177,7 +180,7 @@ enum class PreKeyAction {
     Tab,              // decideTabAction() owns plain Tab
     CloseNotice,      // Escape closes Badi's notice and still reaches the application
     Dismiss,          // Escape dismisses Badi's candidate
-    AcceptWord,       // Ctrl+Right accepts the candidate's next word
+    AcceptAll,        // Ctrl+Right accepts the whole candidate
 };
 
 // The action's name in the debug trace.
@@ -190,7 +193,7 @@ constexpr std::string_view preKeyActionName(PreKeyAction action) {
     case PreKeyAction::Tab: return "tab";
     case PreKeyAction::CloseNotice: return "close_notice";
     case PreKeyAction::Dismiss: return "dismiss";
-    case PreKeyAction::AcceptWord: return "accept_word";
+    case PreKeyAction::AcceptAll: return "accept_all";
     }
     return "unknown";
 }
@@ -314,6 +317,17 @@ PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeS
 bool tabEligibleContext(const std::optional<ContextWindow> &context);
 // `typed` (a key's text) is a non-empty proper prefix of `suggestion`.
 bool typesSuggestionStart(std::string_view typed, std::string_view suggestion);
+// A Tab pressed while the type-through remainder of a word acceptance is
+// still on its way back may be held for it, instead of reaching the app.
+// Only a remainder that returns on its own (an observed field, a terminal's
+// typed line) may hold one: on the manual path that same Tab is the request
+// that brings the remainder, so holding it would wait for nothing.
+bool tabMayHoldForRest(bool restPending, bool restAutomatic, bool foreignIme,
+                       bool suggestionVisible);
+// The displayed suggestion still begins with the word a held Tab meant:
+// the broker's next word of the display is the pending remainder's start.
+// A spelling replacement is never taken on a held Tab.
+bool heldTabMatchesRest(std::string_view rest, const Suggestion &suggestion);
 // The field text includes the characters typed through a suggestion whose
 // context was `base`. A shorter window may keep only the last 128 bytes of
 // `base`, matching the broker's type-through slide rule.

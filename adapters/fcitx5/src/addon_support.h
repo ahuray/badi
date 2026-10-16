@@ -25,6 +25,9 @@ namespace badi::fcitx5 {
 using Json = nlohmann::json;
 
 inline constexpr std::uint64_t kNoticeLifetimeUs = 5'000'000;
+// One Tab may wait this long for the type-through remainder of a word
+// acceptance to be displayed again; then it is dropped, never replayed.
+inline constexpr std::uint64_t kHeldTabTimeoutUs = 700'000;
 // Fcitx's sd-event loop treats a timer accuracy of 0 as its 250 ms default
 // slack, which delayed the 120 ms typing pause by up to 250 ms.
 inline constexpr std::uint64_t kTimerAccuracyUs = 1'000;
@@ -90,7 +93,7 @@ inline const ::fcitx::Key &acceptChord() {
     return key;
 }
 
-inline const ::fcitx::Key &wordKey() {
+inline const ::fcitx::Key &allKey() {
     static const ::fcitx::Key key("Control+Right");
     return key;
 }

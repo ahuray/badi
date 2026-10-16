@@ -252,6 +252,7 @@ void BadiAddon::publishObservedContext(Binding &binding, const Json &focus, cons
     const auto update = binding.state.updateContext(*context);
     if (update && open(binding) && transport_.publishContext(*update)) {
         binding.broker.coordinates = update->coordinates;
+        binding.requestExplicit = update->context.explicitRequest;
         debug_.record("request", app, !context->paragraphEnd.empty() ?
             "observed_field_request_paragraph_end" : "observed_field_request", context->before.size());
     }

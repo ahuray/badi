@@ -103,7 +103,7 @@ def check_app(app):
         expected = context.candidate()
         assert isinstance(expected, str) and expected.strip(), "The model must display a nonempty candidate"
         assert len(expected.split()) <= 4, "The native preview remains bounded"
-        assert context.key(TAB), "Second Tab must accept"
+        assert context.key(0xff53, 1 << 2), "Ctrl+Right must accept all of it"
         wait_for(lambda: bool(context.commits()))
         assert context.commits() == [expected], "Acceptance must dispatch the exact visible candidate once"
 
@@ -123,7 +123,7 @@ def check_app(app):
         assert context.commits() == [expected]
     finally:
         context.close()
-    print(f"{app}: Tab request/accept, empty/selected/mid-text pass-through, Escape and stale text passed")
+    print(f"{app}: Tab request, Ctrl+Right accept, empty/selected/mid-text pass-through, Escape and stale text passed")
 
 
 def check_denied(app, extra_capabilities=0):

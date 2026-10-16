@@ -208,7 +208,7 @@ LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
     if (!hasLiveOwnedCandidate || !hasOwnedCandidate(panel)) {
         return LocalAction::PassThrough;
     }
-    if (acceptChord) return LocalAction::Accept;
+    if (acceptChord) return LocalAction::AcceptAll;
     if (escapeKey) return LocalAction::Dismiss;
     return LocalAction::PassThrough;
 }
@@ -216,7 +216,7 @@ LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
 LocalAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
                             const PanelObservation &panel, NativeEditPath path) {
     if (hasForeignImeUi(panel)) return LocalAction::PassThrough;
-    if (hasLiveOwnedCandidate && hasOwnedCandidate(panel)) return LocalAction::Accept;
+    if (hasLiveOwnedCandidate && hasOwnedCandidate(panel)) return LocalAction::AcceptWord;
     // Observed fields suggest on their own, so Tab without a suggestion keeps
     // its meaning (next field, indent); requesting there takes the chord.
     const bool tabRequests = eligibleContext && path == NativeEditPath::Manual;
@@ -242,7 +242,7 @@ PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeS
         return PreKeyAction::Dismiss;
     }
     const bool ownedUi = liveOwnedCandidate && hasOwnedCandidate(panel) && !hasForeignImeUi(panel);
-    if (key.word && ownedUi) return PreKeyAction::AcceptWord;
+    if (key.all && ownedUi) return PreKeyAction::AcceptAll;
     if (key.modifier || key.chord) return PreKeyAction::PassThrough;
     if (key.escape) return PreKeyAction::CancelDeclining;
     // The candidate may already be hidden by an earlier typed-through key.
@@ -251,6 +251,17 @@ PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeS
 
 bool typesSuggestionStart(std::string_view typed, std::string_view suggestion) {
     return !typed.empty() && typed.size() < suggestion.size() && suggestion.starts_with(typed);
+}
+
+bool tabMayHoldForRest(bool restPending, bool restAutomatic, bool foreignIme,
+                       bool suggestionVisible) {
+    return restPending && restAutomatic && !foreignIme && !suggestionVisible;
+}
+
+bool heldTabMatchesRest(std::string_view rest, const Suggestion &suggestion) {
+    return !rest.empty() && !suggestion.replaceBefore && !suggestion.acceptWord.empty() &&
+           suggestion.text.starts_with(suggestion.acceptWord) &&
+           rest.starts_with(suggestion.acceptWord);
 }
 
 bool typeThroughContextReady(std::string_view base, std::string_view typed, std::string_view before) {

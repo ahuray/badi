@@ -8,8 +8,8 @@ virtual text and makes the edit itself, so native undo applies. Needs Neovim
 | Key (Insert mode) | Action |
 | --- | --- |
 | Pause typing | A suggestion appears after 120 ms |
-| **Tab** | Accept it all. Without a suggestion, Tab is yours: your mapping, another plugin's, or Neovim's |
-| **Ctrl+Right** | Accept the next word; the rest stays |
+| **Tab** | Accept the next word; the rest stays. Without a suggestion, Tab is yours: your mapping, another plugin's, or Neovim's |
+| **Ctrl+Right** | Accept it all |
 | Keep typing | Typing its next letters keeps the rest |
 | **Escape** | Leaving Insert mode dismisses it |
 | **Ctrl+Shift+Space** | Ask for one (`:BadiRequest` from any mapping) |
@@ -48,7 +48,7 @@ vim.g.badi = {
   automatic = true,          -- false: only explicit requests
   delay_ms = 120,            -- typing pause before an automatic request
   language = nil,            -- 'en', 'de' or 'fa'; nil uses $BADI_LANGUAGE, then the locale
-  keys = { accept = '<Tab>', accept_word = '<C-Right>', request = '<C-S-Space>' },
+  keys = { accept = '<C-Right>', accept_word = '<Tab>', request = '<C-S-Space>' },
 }
 ```
 
@@ -124,7 +124,8 @@ npm run editors:integration   # broker.test.mjs: plugin + bridge + real phrase b
 ```
 
 Both drive a headless Neovim through its RPC socket with `nvim --server`. The
-scripted lane covers inline display and cursor placement, Tab and Ctrl+Right,
+scripted lane covers inline display and cursor placement, Tab (one word) and
+Ctrl+Right (all of it),
 one-step undo with typing before and after, multibyte (German and Persian)
 byte offsets, a result or a grant arriving after an edit, fall-through to
 global, buffer-local and completion-menu Tab mappings, a second window on the

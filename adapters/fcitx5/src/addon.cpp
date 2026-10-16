@@ -114,8 +114,11 @@ void BadiAddon::focusIn(::fcitx::InputContext &inputContext) {
     binding.inputContext = &inputContext;
     stopObserving(binding);
     binding.observationExplicit = false;
+    binding.requestExplicit = false;
+    dropHeldTab(binding);
     binding.dismissedContext.reset();
     binding.typedThrough = false;
+    binding.typeThroughAutomatic = false;
     binding.typeThroughRest.clear();
     binding.typeThroughBase.clear();
     binding.typeThroughTyped.clear();
@@ -139,6 +142,7 @@ void BadiAddon::focusOut(::fcitx::InputContext &inputContext) {
     auto *binding = bindingFor(inputContext);
     if (!binding) return;
     closeBrokerSession(*binding);
+    dropHeldTab(*binding);
     clearOwnedPanel(*binding);
     binding->state.focusOut();
     binding->surroundingFreshness.focusOut();

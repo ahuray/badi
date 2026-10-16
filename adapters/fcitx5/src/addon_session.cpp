@@ -235,6 +235,7 @@ void BadiAddon::hidePreview() {
 // Fence callbacks before the active IME can consume the key. A foreign
 // composition need not publish surrounding text or reach our post hook.
 void BadiAddon::cancelForInput(Binding &binding) {
+    dropHeldTab(binding);
     ++binding.observationGeneration;
     if (binding.observeTimer) binding.observeTimer->setEnabled(false);
     binding.state.invalidateContext();

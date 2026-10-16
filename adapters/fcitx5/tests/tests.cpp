@@ -576,7 +576,7 @@ void foreignImeAndManualKeysYieldCooperatively() {
               !claimInvokeChord(false, false, false) && !claimInvokeChord(true, true, true),
           "without a grant, without an edit path, or under a foreign IME the chord reaches the app");
     check(decideLocalAction(false, true, false, true, ownedCandidates) ==
-              LocalAction::Accept,
+              LocalAction::AcceptAll,
           "accept chord should act only on owned live candidate");
     check(decideLocalAction(false, false, true, true, ownedCandidates) ==
               LocalAction::Dismiss,
@@ -597,8 +597,8 @@ void foreignImeAndManualKeysYieldCooperatively() {
     constexpr auto observed = NativeEditPath::Observed;
     check(decideTabAction(true, false, {}, manual) == LocalAction::Invoke,
           "manual Tab requests at an eligible end-of-text caret");
-    check(decideTabAction(true, true, ownedCandidates, manual) == LocalAction::Accept,
-          "Tab accepts the owned live candidate before generic IME navigation");
+    check(decideTabAction(true, true, ownedCandidates, manual) == LocalAction::AcceptWord,
+          "Tab accepts one word of the owned live candidate before generic IME navigation");
     check(decideTabAction(false, false, {}, manual) == LocalAction::PassThrough,
           "Tab preserves navigation and indentation without eligible context");
     check(decideTabAction(true, true, foreignCandidates, manual) == LocalAction::PassThrough,
@@ -607,8 +607,8 @@ void foreignImeAndManualKeysYieldCooperatively() {
           "Tab yields to foreign auxiliary UI");
     check(decideTabAction(true, false, {}, observed) == LocalAction::PassThrough,
           "observed Tab without a suggestion stays the application's Tab (next field, indent)");
-    check(decideTabAction(true, true, ownedCandidates, observed) == LocalAction::Accept,
-          "observed Tab accepts a visible suggestion");
+    check(decideTabAction(true, true, ownedCandidates, observed) == LocalAction::AcceptWord,
+          "observed Tab accepts one word of a visible suggestion");
 
     auto state = focusedState();
     const auto update = explicitContext(state);
@@ -664,14 +664,14 @@ void preInputKeysConsumeOnlyBadiUi() {
               decide(chord, false, true, owned) == PreKeyAction::PassThrough,
           "typing cancels, while modifiers and Badi's chords wait for the input method");
 
-    const PreKey word{.word = true};
+    const PreKey all{.all = true};
     const PreKey typing{.typesSuggestion = true};
-    check(decide(word, false, true, owned) == PreKeyAction::AcceptWord,
-          "Ctrl+Right accepts the live candidate's next word");
-    check(decide(word, false, false, {}) == PreKeyAction::Cancel &&
-              decide(word, false, true, foreign) == PreKeyAction::Cancel &&
-              decide(word, false, true, owned, false) == PreKeyAction::Cancel &&
-              decide({.repeat = true, .word = true}, false, true, owned) == PreKeyAction::Cancel,
+    check(decide(all, false, true, owned) == PreKeyAction::AcceptAll,
+          "Ctrl+Right accepts the whole live candidate");
+    check(decide(all, false, false, {}) == PreKeyAction::Cancel &&
+              decide(all, false, true, foreign) == PreKeyAction::Cancel &&
+              decide(all, false, true, owned, false) == PreKeyAction::Cancel &&
+              decide({.repeat = true, .all = true}, false, true, owned) == PreKeyAction::Cancel,
           "without Badi's own live candidate Ctrl+Right stays the application's");
     check(decide(typing, false, true, owned) == PreKeyAction::CancelTypingThrough,
           "typing the suggestion's next characters cancels and inspects sooner");
@@ -698,6 +698,43 @@ void preInputKeysConsumeOnlyBadiUi() {
     check(typeThroughContextReady(base, " ", std::string("zz") + tail + " ") &&
               !typeThroughContextReady(base, " ", tail),
           "a slid field window still has to contain the typed characters");
+}
+
+void heldTabWaitsForTheCarriedRest() {
+    check(tabMayHoldForRest(true, true, false, false),
+          "a rest that returns on its own may hold one Tab");
+    check(!tabMayHoldForRest(false, true, false, false),
+          "no pending rest holds nothing: Tab stays the application's");
+    check(!tabMayHoldForRest(true, false, false, false),
+          "a manual rest arrives only by that Tab's own request, so Tab must request");
+    check(!tabMayHoldForRest(true, true, true, false),
+          "foreign input-method UI keeps Tab");
+    check(!tabMayHoldForRest(true, true, false, true),
+          "a visible suggestion takes Tab as a word acceptance instead");
+
+    Suggestion carried;
+    carried.text = " for your time";
+    carried.acceptWord = " for";
+    check(heldTabMatchesRest(" for your time", carried),
+          "the redisplayed rest still starts with the held Tab's word");
+    Suggestion grown;
+    grown.text = " for your kind time";
+    grown.acceptWord = " for";
+    check(heldTabMatchesRest(" for your time", grown),
+          "only the next word must still match; what follows may differ");
+    Suggestion other;
+    other.text = " with your time";
+    other.acceptWord = " with";
+    check(!heldTabMatchesRest(" for your time", other),
+          "a different first word is not the word the held Tab meant");
+    Suggestion replacement;
+    replacement.text = "the ";
+    replacement.acceptWord = "the ";
+    replacement.replaceBefore = "teh ";
+    check(!heldTabMatchesRest("the rest", replacement),
+          "a spelling replacement is never taken on a held Tab");
+    check(!heldTabMatchesRest("", carried) && !heldTabMatchesRest(" for", Suggestion{}),
+          "an empty rest or word matches nothing");
 }
 
 void wordAcceptanceGrantsOnlyTheNextWord() {
@@ -1593,6 +1630,7 @@ int main(int argc, char **argv) {
         {"observer requests name the bound field", observerRequestsNameTheBoundField},
         {"inspection backoff without input", inspectionBacksOffWithoutInput},
         {"pre-input keys consume only Badi UI", preInputKeysConsumeOnlyBadiUi},
+        {"held Tab waits for the carried rest", heldTabWaitsForTheCarriedRest},
         {"word acceptance grants only the next word", wordAcceptanceGrantsOnlyTheNextWord},
         {"invoke routes and waiting notices", invokeRoutesByEditPathAndExplainsWaits},
         {"Tab decision reasons", tabReasonNamesTheFirstBlocker},

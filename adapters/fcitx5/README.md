@@ -21,8 +21,8 @@ observer wire details.
 
   | Key | When Badi takes it |
   | --- | --- |
-  | Tab | Accepts a visible suggestion. On the manual path it also requests at the end of a phrase. Otherwise it stays the app's Tab. |
-  | Ctrl+Right | Accepts the next word of Badi's live candidate; otherwise the app's key. |
+  | Tab | Accepts the next word of a visible suggestion (a spelling correction whole). While that word's remainder is still returning on an observed or typed-line field, one Tab is held for it instead of reaching the app. On the manual path it also requests at the end of a phrase. Otherwise it stays the app's Tab. |
+  | Ctrl+Right | Accepts all of Badi's live candidate; otherwise the app's key. |
   | Escape | Dismisses the suggestion or closes a notice. |
   | Ctrl+Shift+Space, Ctrl+Shift+Y | Request or refresh; accept. |
 
@@ -39,6 +39,12 @@ observer wire details.
   typed before the remainder returns, even while the field waits to be observed
   again, still count. The broker then answers with the remainder and no model
   call ([ADR 0004](../../docs/decisions/0004-type-through-carries-text-not-authority.md)).
+  After a word acceptance on an observed or typed-line field, a Tab in that
+  gap is held for at most 700 ms; when the remainder is displayed and still
+  begins with the word that Tab meant, it takes that word through the normal
+  broker grant. Any other key, Escape, a focus change or the timeout drops
+  the held Tab without replaying it. On the manual path no Tab is held: that
+  Tab is the request that brings the remainder.
 - **Manual request.** It needs a collapsed, non-composing, non-sensitive
   surrounding-text snapshot, the live `SurroundingText` capability, a valid
   input-method language or explicit app override (English, German or Persian),
@@ -59,8 +65,9 @@ observer wire details.
   causes exactly one `commitString`, reported as `dispatched-unverified`. The
   candidate must still be present and owned at dispatch, and a local timer
   clears it when its lease expires.
-  Tab freezes the chosen version of a growing preview while authorization
-  is in flight; later extensions cannot replace its text or pending request.
+  An acceptance key freezes the chosen version of a growing preview while
+  authorization is in flight; later extensions cannot replace its text or
+  pending request.
   If a preview still occupies the observer, the commit snapshot waits up to
   500 ms for it; it still takes a fresh snapshot and keeps the original leases.
 - **Reconnect.** A closed connection retires every session, revision,
@@ -129,9 +136,13 @@ the context ([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.m
 `lineKey()` applies typing, Backspace, Ctrl+W, Ctrl+U, Ctrl+C and Enter, and
 stops tracking at any other key the terminal receives (`line_unknown` until
 the next empty line). After the typing pause a line of two or more words
-requests automatically; the panel shows the suggestion and Tab or Ctrl+→
-commits it, after which the next request follows. Tab without a suggestion
-stays the terminal's.
+requests automatically; the panel shows the suggestion, Tab types one word
+and Ctrl+→ all of it, after which the next request follows the line. Tab
+without a suggestion or a pending remainder stays the terminal's. A miss is
+announced only after an explicit request: an automatic request that finds
+nothing shows no notice, on this path and every other (`requestExplicit`
+records how the published request was made; `onClear` shows
+`clearNoticeText` only for an explicit one).
 
 ### Observed fields
 
@@ -316,7 +327,8 @@ the installed language path, not a latency distribution or quality score.
 Open Omawrite or Xournal++ with `badi launch omawrite` or `badi launch
 xournalpp` (in Xournal++, select the **Text** tool and click the page). Type
 `Please find attached the` with the caret at the end. Omawrite suggests on its
-own; in Xournal++, press Tab to request. Then Tab accepts and Escape dismisses.
+own; in Xournal++, press Tab to request. Then Tab accepts a word (Ctrl+→ all
+of it) and Escape dismisses.
 
 Judge usefulness and editing safety separately. Try at least 20 prefixes from
 your own writing, and count late, irrelevant and invented suggestions apart
@@ -331,9 +343,9 @@ Needs CMake, Ninja, a C++20 compiler, Fcitx5Core and nlohmann-json.
 
 | Command | Covers |
 | --- | --- |
-| `npm run fcitx5:check` | Build plus deterministic suites: app classes and ids (and their agreement with the observer, `tests/observer-identities.py`), key, Tab, invoke and inspection decisions, type-through and word acceptance, binding and sanitization, framing and strict wire shapes, one-shot commits, foreign-IME yield, debug snapshots, reconnect |
+| `npm run fcitx5:check` | Build plus deterministic suites: app classes and ids (and their agreement with the observer, `tests/observer-identities.py`), key, Tab, invoke and inspection decisions, type-through, word acceptance and the held Tab, binding and sanitization, framing and strict wire shapes, one-shot commits, foreign-IME yield, debug snapshots, reconnect |
 | `npm run fcitx5:integration` | Also needs Cargo and Python 3. The shipped transport against a real broker in temporary roots: context, accept, report, dismiss, a type-through and word-acceptance scenario that must generate once, and recovery after a broker restart |
-| `PYTHONDONTWRITEBYTECODE=1 python3 adapters/fcitx5/tests/observed-desktop.py` | The real addon in a private D-Bus session with its own Fcitx, broker and a synthetic observer: every app class, denials, panel and preview display, disagreement at request, display and dispatch, type-through, Ctrl+Right, the Zen urlbar, foreign preedit, paragraph ends and recovery. Proves transport and state, not app behavior |
+| `PYTHONDONTWRITEBYTECODE=1 python3 adapters/fcitx5/tests/observed-desktop.py` | The real addon in a private D-Bus session with its own Fcitx, broker and a synthetic observer: every app class, denials, panel and preview display, disagreement at request, display and dispatch, type-through with Tab, the held Tab and Ctrl+Right, a Ghostty typed line with quiet automatic misses, the Zen urlbar, foreign preedit, paragraph ends and recovery. Proves transport and state, not app behavior |
 | `PYTHONDONTWRITEBYTECODE=1 python3 adapters/fcitx5/tests/desktop-tab.py` | Opt-in, after installation: synthetic contexts drive the installed addon and model through Tab request, accept and denials; run it while not typing elsewhere |
 
 A staged install leaves the live Fcitx alone:

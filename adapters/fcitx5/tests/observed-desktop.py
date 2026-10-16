@@ -37,6 +37,7 @@ IME_PARITY_APPS = ('chromium', 'chromium-browser', 'brave-origin', 'zen', 'chatg
 RIGHT, CONTROL = 0xff53, 1 << 2
 # Chromium's text-input-v3 path adds UppercaseWords (0x80072 in total).
 CHROMIUM_HINT = 1 << 19
+TERMINAL_HINT = 1 << 32
 ALLOWED_URI = 'https://allowed.example.test/document'
 
 
@@ -504,9 +505,10 @@ def session(root, report):
         wait(lambda: context.candidate() == SUFFIX, 'the next surrounding-text publication inspects again')
         checks.append('A field event without Fcitx input waits for the next publication before inspecting again')
 
-        assert context.key(desktop.TAB)
-        wait(lambda: context.commits() == [SUFFIX], 'Tab dispatch after observed verification')
-        checks.append('Explicit Tab verifies the current observed field and dispatches exact CommitString once')
+        assert context.key(RIGHT, CONTROL)
+        wait(lambda: context.commits() == [SUFFIX], 'Ctrl+Right dispatch after observed verification')
+        checks.append('Explicit Ctrl+Right verifies the current observed field and dispatches the whole '
+                      'suggestion as one exact CommitString')
 
         for invalid_target in ({}, {'kind': 'unknown', 'target_id': 'invalid-kind'},
                                {'kind': 'desktop_application', 'app_id': 'another-app', 'target_id': 'wrong-app'}):
@@ -652,8 +654,8 @@ def session(root, report):
         quiet(.8)
         change(PREFIX)
         wait(lambda: context.candidate() == SUFFIX, 'same input context after broker restart', timeout=6)
-        assert context.key(desktop.TAB)
-        wait(lambda: len(context.commits()) == previous + 1, 'recovered Tab dispatch')
+        assert context.key(RIGHT, CONTROL)
+        wait(lambda: len(context.commits()) == previous + 1, 'recovered Ctrl+Right dispatch')
         assert context.commits()[-1] == SUFFIX
         checks.append('Same live input context recovers after broker restart with a fresh verified dispatch')
 
@@ -682,7 +684,7 @@ def session(root, report):
         assert backend.reads == reads
         assert context.key(desktop.TAB), 'Unobserved native manual invocation remains available'
         wait(lambda: context.candidate() == SUFFIX, 'native manual phrase candidate')
-        assert context.key(desktop.TAB)
+        assert context.key(RIGHT, CONTROL)
         wait(lambda: context.commits() == [SUFFIX], 'native manual exact append dispatch')
         assert backend.reads == reads
         checks.append('Native manual unknown-widget append still invokes and dispatches once without observer prose')
@@ -699,7 +701,7 @@ def session(root, report):
         assert context.key(desktop.TAB), 'Tab after an unchanged reconnect must not require new input'
         wait(lambda: context.candidate() == SUFFIX, 'native manual request after unchanged reconnect')
         assert control('status')['metrics']['context_updates'] == 1
-        assert context.key(desktop.TAB)
+        assert context.key(RIGHT, CONTROL)
         wait(lambda: context.commits() == [SUFFIX, SUFFIX], 'native exact append after unchanged reconnect')
         assert backend.reads == reads
         checks.append('Native manual Tab survives an unchanged-authority reconnect with republished context and no retired grant')
@@ -796,12 +798,12 @@ def session(root, report):
             if app == 'brave-origin':
                 quiet(5.5)
                 assert context.candidate() == SUFFIX, 'the negotiated native reading window survives five seconds'
-            assert context.key(desktop.TAB)
-            wait(lambda: context.commits() == [SUFFIX], label + ' Tab dispatch after observed verification')
+            assert context.key(RIGHT, CONTROL)
+            wait(lambda: context.commits() == [SUFFIX], label + ' Ctrl+Right dispatch after observed verification')
             quiet(.3)
             assert context.commits() == [SUFFIX] and context.candidate() is None, label + ' exactly one CommitString'
             checks.append(label + ': automatic observed suggestion in the single-line Fcitx panel; '
-                          'Tab dispatches one exact append')
+                          'Ctrl+Right dispatches the whole suggestion as one exact append')
 
             change(PREFIX)
             wait(lambda: context.candidate() == SUFFIX, label + ' candidate before dismissal')
@@ -825,10 +827,10 @@ def session(root, report):
             assert context.key(ord(' '), 5), label + ' explicit chord is claimed on an observed field'
             wait(lambda: context.candidate() == SUFFIX, label + ' explicit observed request')
             assert backend.inspections > inspections
-            assert context.key(desktop.TAB)
+            assert context.key(RIGHT, CONTROL)
             wait(lambda: context.commits() == [SUFFIX, SUFFIX], label + ' explicit acceptance')
             checks.append(label + ': after Escape, Tab stays the application Tab; the explicit chord re-inspects '
-                          'the observed field and Tab accepts once')
+                          'the observed field and Ctrl+Right accepts it all once')
 
             mismatch = reason_count('observer_context_mismatch')
             before = updates()
@@ -863,7 +865,8 @@ def session(root, report):
 
         # Type-through (ADR 0004). Each edit ends the observer's binding, so the
         # broker answers the next field session with the remainder instead of
-        # generating; Ctrl+Right dispatches only the next word.
+        # generating; Tab dispatches only the next word, and a second Tab in
+        # the gap is held for the remainder instead of reaching the app.
         def provider_calls():
             return control('status')['metrics']['provider_calls']
 
@@ -881,18 +884,35 @@ def session(root, report):
         change(PREFIX + ' f')
         wait(lambda: context.candidate() == SUFFIX[2:], 'type-through remainder')
         assert provider_calls() == calls, 'the remainder is carried, never generated'
-        assert context.key(RIGHT, CONTROL), 'Ctrl+Right is claimed over a live candidate'
-        wait(lambda: context.commits() == [*commits, 'or'], 'Ctrl+Right dispatches the rest of the word')
+        assert context.key(desktop.TAB), 'Tab is claimed over a live candidate'
+        wait(lambda: context.commits() == [*commits, 'or'], 'Tab dispatches one word')
+        held = reason_count('tab_held')
+        assert context.key(desktop.TAB), 'a quick second Tab is held, not sent to the application'
+        wait(lambda: reason_count('tab_held') == held + 1, 'the second Tab is recorded held')
+        assert context.commits() == [*commits, 'or'], 'the held Tab commits nothing before the rest returns'
         change(PREFIX + ' for')
-        wait(lambda: context.candidate() == ' your time', 'remainder after a word acceptance')
-        assert provider_calls() == calls and context.commits() == [*commits, 'or']
+        wait(lambda: context.commits() == [*commits, 'or', ' your'],
+             'the held Tab accepts the next word when the carried rest is displayed')
+        assert reason_count('tab_held_accepted') >= 1
+        assert provider_calls() == calls
+        change(PREFIX + ' for your')
+        wait(lambda: context.candidate() == ' time', 'remainder after the held Tab')
+        assert provider_calls() == calls
+        assert context.key(RIGHT, CONTROL), 'Ctrl+Right is claimed over a live candidate'
+        wait(lambda: context.commits() == [*commits, 'or', ' your', ' time'],
+             'Ctrl+Right dispatches the whole remainder')
+        change(PREFIX)
+        wait(lambda: context.candidate() == SUFFIX, 'candidate before Escape ends the carry')
+        calls = provider_calls()
         assert context.key(desktop.ESCAPE)
         wait(lambda: context.candidate() is None, 'Escape ends type-through')
         assert not context.key(RIGHT, CONTROL), 'without a candidate Ctrl+Right stays the application key'
+        assert not context.key(desktop.TAB), 'without a candidate or a pending rest Tab stays the application Tab'
         change(PREFIX + ' fo')
         wait(lambda: provider_calls() > calls, 'after Escape a typed prefix is generated again')
         checks.append('IME-parity type-through: a typed prefix of the suggestion shows its remainder in the next '
-                      'field session without a model call; Ctrl+Right dispatches one word and its rest carries; '
+                      'field session without a model call; Tab dispatches one word, a quick second Tab is held '
+                      'and takes the next word when the rest returns, and Ctrl+Right takes the rest; '
                       'Escape ends the carry')
 
         # Foreign composition and a rendered overlay on the same browser field.
@@ -915,8 +935,8 @@ def session(root, report):
         wait(lambda: len(render_calls) > renders, 'rendered IME-parity preview')
         quiet(.3)
         assert context.candidate() is None and auxiliary() == '', 'A rendered preview replaces the Fcitx panel'
-        assert context.key(desktop.TAB)
-        wait(lambda: context.commits() == [*commits, SUFFIX], 'Tab accepts the rendered preview once')
+        assert context.key(RIGHT, CONTROL)
+        wait(lambda: context.commits() == [*commits, SUFFIX], 'Ctrl+Right accepts the rendered preview once')
         render_result['value'] = False
         checks.append('A rendered observer preview is accepted once without a Fcitx candidate panel')
 
@@ -961,12 +981,12 @@ def session(root, report):
         wait(lambda: context.candidate() == SUFFIX, 'chatgpt composer suggestion before the paragraph end')
         assert updates() == start_updates + 1
         assert reason_count('observed_field_request_paragraph_end') == normalized + 1
-        assert context.key(desktop.TAB)
-        wait(lambda: context.commits() == [SUFFIX], 'chatgpt composer Tab dispatch before the paragraph end')
+        assert context.key(RIGHT, CONTROL)
+        wait(lambda: context.commits() == [SUFFIX], 'chatgpt composer Ctrl+Right dispatch before the paragraph end')
         quiet(.3)
         assert context.commits() == [SUFFIX] and context.candidate() is None
         checks.append('IME-parity desktop (chatgpt): a paragraph end "\\n\\n" agreed by the observer is end of '
-                      'field; the suggestion displays and Tab dispatches one exact append')
+                      'field; the suggestion displays and Ctrl+Right dispatches one exact append')
         for observed_after, fcitx_after in (('', '\n\n'), ('\n', '\n\n')):
             unchanged, count = updates(), reason_count('observer_context_mismatch')
             paragraph_end(observed_after, fcitx_after)
@@ -1008,9 +1028,10 @@ def session(root, report):
         assert 'Telegram' not in backend.requested
         assert context.key(desktop.TAB), 'A canonicalized native app keeps the manual path'
         wait(lambda: context.candidate() == SUFFIX, 'Telegram native manual candidate')
-        assert context.key(desktop.TAB)
+        assert context.key(RIGHT, CONTROL)
         wait(lambda: context.commits() == [SUFFIX], 'Telegram native manual dispatch')
-        checks.append("Program 'Telegram' becomes 'telegram' for observer, policy and session; native manual Tab dispatches once")
+        checks.append("Program 'Telegram' becomes 'telegram' for observer, policy and session; native manual "
+                      "Tab requests and Ctrl+Right dispatches once")
         open_context('A window title')
         context.text(PREFIX)
         assert not context.key(desktop.TAB) and not context.key(ord(' '), 5)
@@ -1081,6 +1102,34 @@ def session(root, report):
         checks.append('Timed Escape quiet survives same-field observer rebinds without a model call; '
                       'an explicit request resumes and another field is not quieted')
 
+        # A terminal's typed line (ADR 0009): automatic requests follow the
+        # keys typed into the context, and an automatic miss stays quiet.
+        # Only an explicit request may show the no-continuation notice.
+        allowed = reason_count('app_allowed')
+        open_context('com.mitchellh.ghostty', TERMINAL_HINT)
+        wait(lambda: reason_count('app_allowed') > allowed, 'the exact terminal rule answers policy')
+
+        def typed(text):
+            for char in text:
+                assert not context.key(ord(char)), 'typing on a typed line reaches the terminal'
+
+        typed('hello brave world')
+        quiet(.6)
+        assert context.candidate() is None and auxiliary() == '', \
+            'an automatic terminal miss shows no notice'
+        assert context.key(ord(' '), 5), 'the explicit chord is claimed on a typed line'
+        wait(lambda: 'no continuation' in auxiliary(), 'an explicit terminal miss may show its notice')
+        assert not context.key(ord('u'), CONTROL), 'Ctrl+U reaches the terminal and clears the tracked line'
+        typed(PREFIX)
+        wait(lambda: context.candidate() == SUFFIX, 'a typed line suggests automatically after the pause')
+        assert context.key(desktop.TAB)
+        wait(lambda: context.commits() == [' for'], 'Tab types one word into the terminal')
+        wait(lambda: context.candidate() == ' your time', 'the rest follows the accepted word on the line')
+        assert context.key(RIGHT, CONTROL)
+        wait(lambda: context.commits() == [' for', ' your time'], 'Ctrl+Right types the rest')
+        checks.append('Terminal typed line: automatic misses stay quiet, an explicit miss may show its '
+                      'notice, Tab types one word and Ctrl+Right the rest')
+
         # Replacement is not negotiated. A peer that injects one anyway, on an
         # otherwise valid IME-parity observed session, loses the connection.
         broker_metrics = control('status')['metrics']
@@ -1121,7 +1170,7 @@ def session(root, report):
                 'provider': 'phrase_v1'})
             fake_wait(lambda: context.candidate() == SUFFIX, app + ' append suggestion from the fake broker')
             controls = fake.count('control.request')
-            assert context.key(desktop.TAB)
+            assert context.key(RIGHT, CONTROL)
             fake_wait(lambda: fake.count('control.request') > controls, app + ' acceptance request')
             results = fake.count('commit.result')
             fake.respond(fake.last('control.request'), 'commit.prepare', {
@@ -1161,7 +1210,7 @@ def session(root, report):
             acceptance = fake.last('control.request')
             assert acceptance['payload']['suggestion_id'] == 'first-word'
             fake.respond(acceptance, 'commit.prepare', {
-                'suggestion_id': 'first-word', 'text': ' for', 'acceptance': 'all'})
+                'suggestion_id': 'first-word', 'text': ' for', 'acceptance': 'word'})
             if changed_field:
                 backend.field += 1  # Silent identity change must be caught by the fresh snapshot.
             fake_wait(lambda: fake.count('commit.result') > results, 'pending preview finishes before commit snapshot')
@@ -1248,7 +1297,7 @@ def main():
                                    # IME-parity apps also hold app rules: a manual
                                    # request would be authorized if ever sent.
                                    for app in sorted((*UNAVAILABLE_APPS, *IME_PARITY_APPS, *UNOBSERVED_FAMILY_PROGRAMS.values(),
-                                                      FIXTURE_APP, 'omawrite', 'telegram')))]}
+                                                      FIXTURE_APP, 'omawrite', 'telegram', 'com.mitchellh.ghostty')))]}
         private_file(root / 'config/badi/settings.json', json.dumps(settings))
         private_file(root / 'runtime/badi/debug-control.json', json.dumps({
             'id': '550e8400-e29b-41d4-a716-446655440000', 'expires_at': int(time.time()) + 180}))

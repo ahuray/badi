@@ -83,7 +83,7 @@ test('Neovim edits through the real broker only under its exact grant', { skip }
   await editor.send(' <BS>');
   state = await editor.until(current => current.preview === ' for your time', 'granted preview');
   assert.equal(state.screen, 'thank you for your time');
-  await editor.send('<Tab>');
+  await editor.send('<C-Right>');
   state = await editor.until(current => current.lines[0] === 'thank you for your time', 'acceptance');
   await committed(1);
   await editor.send('<Esc>u');
@@ -93,11 +93,11 @@ test('Neovim edits through the real broker only under its exact grant', { skip }
   await editor.send('A <BS>');
   await editor.until(current => current.preview === ' for your time', 'preview again');
   const calls = (await control(['status'])).metrics.provider_calls;
-  await editor.send('<C-Right>');
+  await editor.send('<Tab>');
   state = await editor.until(current => current.preview === ' your time', 'carried remainder');
   assert.deepEqual(state.lines, ['thank you for']);
   assert.equal((await control(['status'])).metrics.provider_calls, calls, 'Type-through carries text without inference');
-  await editor.send('<Tab>');
+  await editor.send('<C-Right>');
   await editor.until(current => current.lines[0] === 'thank you for your time', 'rest accepted');
   await committed(3);
 
