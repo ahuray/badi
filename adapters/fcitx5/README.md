@@ -254,6 +254,23 @@ undid the accepted text together with the preceding typing, as IME-parity
 allows. `wtype` cannot start a call with a space on this desktop (it is
 dropped even while Badi is paused), so the trial sent a Shift tap first.
 
+Tab-takes-a-word on 2026-10-16 night (installed `d74c238`, `badi debug on
+--text`, disposable text): in Ghostty 1.3.1, Chromium 152.0.7977.82 (isolated
+profile, a local page) and Omawrite 0.5.0, Tab took one word, three quick
+Tabs typed three words with no Tab reaching the app, and Ctrl+→ took the
+rest; the trace recorded `tab_held` and `tab_held_accepted` in Chromium and
+Omawrite, while in Ghostty the remainder returned before the second Tab
+landed. Tab with nothing showing stayed the application's (shell completion
+in Ghostty, a focus move in Chromium). An automatic Ghostty miss showed no
+notice, while the same miss after Ctrl+Shift+Space showed "Badi has no
+continuation". The automatic misses that night were `budget_prefill` and
+`budget_stream` at 550 ms even for short lines; trimming the typed line
+further would not change the broker's sentence-window prompt (`badictl
+probe`: a 423-character line and its last sentence alone answered the same),
+and explicit 1.2 s requests proposed once warm, so no budget or context
+change followed. Writer 26.8's `adress → address` hint still replaced the
+whole word on Alt+F7.
+
 | Application | Reaches Fcitx through | Boundary |
 | --- | --- | --- |
 | Omawrite 0.5.0 (Qt 6) | `QT_IM_MODULE=fcitx` | 20/20 trials; one native undo restores the exact prefix |
