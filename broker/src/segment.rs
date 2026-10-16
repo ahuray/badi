@@ -221,8 +221,9 @@ pub fn accept_word(text: &str) -> AcceptedParts {
             .map(|(index, grapheme)| index + grapheme.len())
     });
     let mut end = leading_bytes + part_end.unwrap_or(0);
-    // Ctrl+→ on the last word includes the one space that separates it from
-    // the text after the caret. A space before a later word stays with that word.
+    // Word acceptance on the last word includes the one space that
+    // separates it from the text after the caret. A space before a later
+    // word stays with that word.
     if &text[end..] == " " {
         end += 1;
     }
@@ -230,6 +231,20 @@ pub fn accept_word(text: &str) -> AcceptedParts {
         accepted: text[..end].to_owned(),
         remainder: text[end..].to_owned(),
     }
+}
+
+/// A streamed partial ends at a word boundary when nothing trails its last
+/// complete word but at most the one separator space, and it does not end
+/// on a mark that continues a word (a hyphen, an apostrophe, a combining
+/// accent or a joiner). Providers emit partials only at completed spaced
+/// words; the broker re-checks this before a rejected or late final may
+/// leave one on screen.
+#[must_use]
+pub fn ends_at_word_boundary(text: &str) -> bool {
+    let text = text.strip_suffix(' ').unwrap_or(text);
+    text.chars().next_back().is_some_and(|last| {
+        last.is_alphanumeric() || matches!(last, '.' | ',' | '!' | '?' | ';' | ':')
+    })
 }
 
 fn is_forbidden_output_scalar(character: char) -> bool {
@@ -265,7 +280,10 @@ mod tests {
     use serde::Deserialize;
     use unicode_segmentation::UnicodeSegmentation;
 
-    use super::{OutputError, accept_word, sanitize_suggestion, validate_suggestion_shape};
+    use super::{
+        OutputError, accept_word, ends_at_word_boundary, sanitize_suggestion,
+        validate_suggestion_shape,
+    };
 
     #[derive(Deserialize)]
     struct FixtureSet {
@@ -317,6 +335,17 @@ mod tests {
         let combining = accept_word(" e\u{301}lan vital");
         assert_eq!(combining.accepted, " e\u{301}lan");
         assert_eq!(combining.remainder, " vital");
+    }
+
+    #[test]
+    fn word_boundary_accepts_complete_words_and_rejects_continuations() {
+        for complete in [" for", " 2023 edition", " café", " done.", " wait,"] {
+            assert!(ends_at_word_boundary(complete), "{complete:?}");
+        }
+        assert!(ends_at_word_boundary("final "), "the separator space");
+        for incomplete in ["", " ", " state-of-", " don'", " e\u{301}", " می\u{200c}"] {
+            assert!(!ends_at_word_boundary(incomplete), "{incomplete:?}");
+        }
     }
 
     #[test]

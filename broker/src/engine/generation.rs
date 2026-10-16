@@ -25,7 +25,9 @@ use crate::protocol::{
 use crate::provider::{
     ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger, WritingProposal,
 };
-use crate::segment::{accept_word, sanitize_suggestion, validate_suggestion_shape};
+use crate::segment::{
+    accept_word, ends_at_word_boundary, sanitize_suggestion, validate_suggestion_shape,
+};
 
 type ProviderResult = Result<Result<ProviderOutcome, ProviderError>, time::error::Elapsed>;
 /// A carried remainder with its deadline and outcome day, or its declining gate.
@@ -70,6 +72,10 @@ enum Withheld {
     Clear(ReasonCode),
     /// The provider honored a cancellation; whatever superseded it owns the display.
     Silently,
+    /// A rejected or late final leaves the streamed partial already shown:
+    /// it was checked before display and counts as shown, not as a miss.
+    /// Only an edit, focus change, Escape or expiry withdraws it.
+    KeepPartial,
 }
 
 impl Broker {
@@ -383,7 +389,9 @@ impl Broker {
         }
     }
 
-    /// Every path records exactly one no-suggestion class or one shown result.
+    /// Every path records exactly one no-suggestion class or one shown
+    /// result, except a finished generation whose streamed partial stays:
+    /// that partial already recorded the shown result.
     async fn finish_generation(
         &self,
         binding: GenerationBinding,
@@ -392,13 +400,19 @@ impl Broker {
         shown_partial: Option<String>,
         carried: Option<Carried>,
     ) {
-        let proposal = match self.check_provider_result(&binding, cancellation, result) {
-            Ok(proposal) => proposal,
-            Err(Withheld::Clear(reason)) => {
-                return self.clear_failed_generation(binding, reason).await;
-            }
-            Err(Withheld::Silently) => return,
-        };
+        let keep_partial = shown_partial.as_deref().is_some_and(ends_at_word_boundary);
+        let proposal =
+            match self.check_provider_result(&binding, cancellation, result, keep_partial) {
+                Ok(proposal) => proposal,
+                Err(Withheld::Clear(reason)) => {
+                    return self.clear_failed_generation(binding, reason).await;
+                }
+                Err(Withheld::Silently) => return,
+                Err(Withheld::KeepPartial) => {
+                    self.release_finished_generation(&binding).await;
+                    return;
+                }
+            };
         if shown_partial
             .as_ref()
             .is_some_and(|shown| shown == &proposal.text)
@@ -409,6 +423,12 @@ impl Broker {
         let state = self.inner.state.lock().await;
         if Instant::now() >= binding.deadline {
             drop(state);
+            // The extension is late, but the partial is already the shown
+            // suggestion; dropping the extension must not withdraw it.
+            if keep_partial {
+                self.release_finished_generation(&binding).await;
+                return;
+            }
             self.record_generation_timeout(cancellation);
             return self
                 .clear_failed_generation(binding, ReasonCode::ProviderTimeout)
@@ -434,9 +454,14 @@ impl Broker {
         binding: &GenerationBinding,
         cancellation: &CancellationToken,
         result: ProviderResult,
+        keep_partial: bool,
     ) -> Result<WritingProposal, Withheld> {
         let metrics = &self.inner.metrics;
         if Instant::now() >= binding.deadline {
+            if keep_partial {
+                cancellation.cancel();
+                return Err(Withheld::KeepPartial);
+            }
             self.record_generation_timeout(cancellation);
             return Err(Withheld::Clear(ReasonCode::ProviderTimeout));
         }
@@ -456,6 +481,10 @@ impl Broker {
                 return Err(Withheld::Clear(ReasonCode::ProviderError));
             }
             Err(_elapsed) => {
+                if keep_partial {
+                    cancellation.cancel();
+                    return Err(Withheld::KeepPartial);
+                }
                 self.record_generation_timeout(cancellation);
                 return Err(Withheld::Clear(ReasonCode::ProviderTimeout));
             }
@@ -468,6 +497,9 @@ impl Broker {
             raw,
         )
         .ok_or_else(|| {
+            if keep_partial {
+                return Withheld::KeepPartial;
+            }
             metrics.record_provider_error();
             metrics.record_no_suggestion(NoSuggestionReason::OutputRejected);
             Withheld::Clear(ReasonCode::InvalidOutput)

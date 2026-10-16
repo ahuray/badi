@@ -35,7 +35,7 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
         .tab = tab && unclaimed,
         .escape = key.check(::fcitx::Key(FcitxKey_Escape)),
         .chord = key.check(invokeChord()) || key.check(acceptChord()),
-        .word = key.check(wordKey()) && unclaimed,
+        .all = key.check(allKey()) && unclaimed,
         .typesSuggestion = typesSuggestionStart(typed, expected),
     };
     const auto action = decidePreKey(pressed, binding->state.editingAvailable(), !binding->ownedAuxiliary.empty(),
@@ -49,9 +49,28 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
              {"ghost_visible", binding->state.suggestionVisible()}},
             printable ? nlohmann::json{{"typed", typed}} : nlohmann::json(nullptr));
     }
+    // A Tab in the gap after a word acceptance, while its remainder is
+    // still returning on its own, is held for that remainder instead of
+    // reaching the app (where it would move focus or complete a command).
+    // This precedes the edit-path checks: the accepted word's own edit may
+    // have retired the observed field until it is bound again. At most one
+    // Tab is held; further Tabs while held are swallowed with it. Any
+    // other key drops the held Tab and keeps its own meaning.
+    if (pressed.tab && binding->heldTab) {
+        event.filterAndAccept();
+        return;
+    }
+    if (pressed.tab &&
+        tabMayHoldForRest(!binding->typeThroughRest.empty(), binding->typeThroughAutomatic,
+                          hasForeignImeUi(panel), binding->state.suggestionVisible())) {
+        holdTab(*binding);
+        event.filterAndAccept();
+        return;
+    }
+    if (!pressed.modifier && !pressed.tab) dropHeldTab(*binding);
     // Every key the terminal receives edits Badi's record of its line.
     const bool reachesApp = !pressed.chord && action != PreKeyAction::Tab &&
-                            action != PreKeyAction::Dismiss && action != PreKeyAction::AcceptWord;
+                            action != PreKeyAction::Dismiss && action != PreKeyAction::AcceptAll;
     if (reachesApp && binding->state.editPath() == NativeEditPath::TypedLine) lineKey(*binding, key, typed);
     switch (action) {
     case PreKeyAction::PassThrough:
@@ -61,6 +80,7 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
         [[fallthrough]];
     case PreKeyAction::Cancel:
         binding->typedThrough = false;
+        binding->typeThroughAutomatic = false;
         binding->typeThroughRest.clear();
         binding->typeThroughBase.clear();
         binding->typeThroughTyped.clear();
@@ -89,11 +109,29 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     case PreKeyAction::Dismiss:
         dismissSuggestion(*binding, panel);
         break;
-    case PreKeyAction::AcceptWord:
-        requestAcceptance(*binding, true);
+    case PreKeyAction::AcceptAll:
+        requestAcceptance(*binding);
         break;
     }
     event.filterAndAccept();
+}
+
+void BadiAddon::holdTab(Binding &binding) {
+    binding.heldTab = true;
+    binding.heldTabRest = binding.typeThroughRest;
+    debug_.record("decision", binding.state.appId(), "tab_held");
+    binding.heldTabTimer = oneShot(kHeldTabTimeoutUs, [this, context = binding.inputContext] {
+        if (auto *current = bindingFor(*context)) {
+            debug_.record("decision", current->state.appId(), "tab_held_dropped");
+            dropHeldTab(*current);
+        }
+    });
+}
+
+void BadiAddon::dropHeldTab(Binding &binding) {
+    binding.heldTab = false;
+    binding.heldTabRest.clear();
+    if (binding.heldTabTimer) binding.heldTabTimer->setEnabled(false);
 }
 
 // Plain Tab is claimed before Fcitx's candidate navigation only to accept
@@ -108,7 +146,10 @@ void BadiAddon::tabKey(::fcitx::KeyEvent &event, Binding &binding, const PanelOb
                   context ? context->before.size() : 0);
     switch (decideTabAction(tabEligibleContext(context), binding.state.suggestionVisible(), panel,
                             binding.state.editPath())) {
-    case LocalAction::Accept:
+    case LocalAction::AcceptWord:
+        requestAcceptance(binding, true);
+        break;
+    case LocalAction::AcceptAll:
         requestAcceptance(binding);
         break;
     case LocalAction::Invoke:
@@ -182,6 +223,7 @@ void BadiAddon::requestTypedLine(Binding &binding, bool explicitRequest) {
     const auto update = binding.state.updateContext(*context);
     if (!update || !open(binding) || !transport_.publishContext(*update)) return;
     binding.broker.coordinates = update->coordinates;
+    binding.requestExplicit = update->context.explicitRequest;
     debug_.record("request", app, explicitRequest ? "terminal_explicit_request" : "terminal_line_request",
                   context->before.size());
 }
@@ -210,8 +252,11 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
     case LocalAction::Invoke:
         invoke(*binding);
         break;
-    case LocalAction::Accept:
+    case LocalAction::AcceptAll:
         requestAcceptance(*binding);
+        break;
+    case LocalAction::AcceptWord:
+        requestAcceptance(*binding, true);
         break;
     case LocalAction::Dismiss:
         dismissSuggestion(*binding, panel);
@@ -267,6 +312,7 @@ void BadiAddon::requestManually(Binding &binding) {
     if (!update) return;
     if (!open(binding)) return showNotice(binding, authorityPaused_ ? notice::kPaused : notice::kModelNotConnected);
     if (!transport_.publishContext(*update)) return showNotice(binding, notice::kRequestFailed);
+    binding.requestExplicit = update->context.explicitRequest;
     debug_.record("request", binding.state.appId(), "sent_to_model", context->before.size());
     binding.broker.coordinates = update->coordinates;
     showNotice(binding, notice::kThinking);

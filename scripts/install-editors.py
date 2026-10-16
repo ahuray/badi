@@ -131,7 +131,7 @@ def main():
             installation.copy(ROOT / "adapters" / path, home / ".local/lib/badi/editors" / path, 0o644)
         note = "" if shutil.which("nvim") else " Neovim 0.10 or newer was not found on PATH."
         print("Neovim installed as a start package. Restart Neovim; prose buffers suggest after a typing pause, "
-              f"Tab accepts, Ctrl+Right accepts a word. Allow it with: badi app nvim on.{note}")
+              f"Tab accepts a word, Ctrl+Right accepts all. Allow it with: badi app nvim on.{note}")
     if args.libreoffice:
         package = home / LIBREOFFICE_PACKAGE
         installation.write(package, extension, 0o644)

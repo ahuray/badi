@@ -20,7 +20,8 @@ Linux in general.
   fixes the word at the caret; German, French, Spanish, Italian, Dutch and
   Polish spelling turn on with `badi spelling` and their Hunspell dictionaries. The closest Omarchy alternative, Oma Tab, replaces the input
   method and ships a 4.8 GB model.
-- **Interaction:** type-through, Ctrl+→ next-word acceptance and search-box
+- **Interaction:** type-through, Tab next-word acceptance (a quick second
+  Tab is held for the returning remainder) and search-box
   quieting work, and a typed-through remainder returns within about 50 ms with
   no model call ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md)).
   In browsers it now survives the field being admitted again after the
@@ -64,7 +65,7 @@ Standing user decisions:
 - keep the model resident;
 - explicit requests get about 1.2 s;
 - Tab accepts one word and Ctrl+→ all of it, on every surface (changed
-  2026-10-16; next step 1 implements it on Fcitx and Neovim);
+  2026-10-16);
 - Ghostty follows the typed line automatically, by exact opt-in rule
   ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md));
 - window context and learning stay on the device, with global and per-app
@@ -92,45 +93,7 @@ Open decisions, for the user:
 Each step ends with its completion test. Steps that install to the desktop or
 publish need the user's go-ahead first; the rest can start at once.
 
-1. **Make Tab and the ghost feel right.** Reported live on 2026-10-16
-   (installed `3c61f34`):
-   - *Terminal notices.* In Ghostty every automatic miss shows "Badi has no
-     continuation". `onClear` in `adapters/fcitx5/src/addon_broker.cpp` shows
-     `clearNoticeText` for any binding that is not observed; show it only
-     after an explicit request (track that like `observationExplicit`). Then
-     read the debug trace: if terminal misses are `budget_prefill` or
-     `budget_stream`, measure trimming the typed-line context
-     (`currentContext` in `addon_session.cpp`) before touching any budget.
-     The terminal ghost is Fcitx's panel at the cursor; grey inline text in a
-     terminal is a separate spike.
-   - *Tab takes one word.* `tabKey` in `adapters/fcitx5/src/addon_keys.cpp`
-     accepts all and Ctrl+→ (`wordKey()` in `addon_support.h`) one word. Swap
-     them, rename the action and key helpers to match, and swap Neovim's
-     defaults (`adapters/neovim/lua/badi/init.lua`), so every surface behaves
-     like Obsidian. Spelling replacements stay whole; the broker already
-     accepts a replacement entirely.
-   - *The ghost stays.* `finish_generation` in
-     `broker/src/engine/generation.rs` sends `suggestion.clear` when the final
-     result is rejected or late, even while a streamed partial is showing (a
-     trace showed `" 2023 edition"`, then `output_rejected` and a clear). Keep
-     the last shown partial if it ends at a word boundary; only edits, focus,
-     Escape and expiry withdraw it. Count it as shown, not as a miss.
-   - *A quick second Tab continues.* After a word is accepted, the rest
-     returns one context round trip later (ADR 0004), and a Tab in that gap
-     reaches the app. Hold at most one Tab for about 700 ms while
-     `typeThroughRest` is pending; when the carried rest is displayed and
-     still starts with it, accept its next word through the normal broker
-     grant. Any other key, Escape, focus change or timeout drops the held
-     Tab.
-
-   *Done when* the Fcitx, Neovim and broker tests cover the new mapping, the
-   kept partial and the held Tab; a live trial with the debug trace and
-   disposable text in Ghostty, a Chromium field and Omawrite shows no notice
-   for automatic misses, three quick Tabs typing three words with no app Tab,
-   Ctrl+→ taking the rest, Tab with nothing showing staying Tab, and Writer
-   corrections still whole; and the README keys, the Fcitx and Neovim
-   runbooks and ADR 0009 describe it.
-2. **Run the installed-flow matrix.** `scripts/install-desktop.py` installs
+1. **Run the installed-flow matrix.** `scripts/install-desktop.py` installs
    the broker, addon, observer and the session helper; `main` runs here
    (`badi doctor` clean, 2026-10-16), and the session helper's Hyprland binds
    (`SUPER+ALT+B` pause-toggle, `SUPER+ALT+PERIOD` open-settings) are in the
@@ -140,7 +103,7 @@ publish need the user's go-ahead first; the rest can start at once.
    quiet after a restart; and fractional scaling / several monitors when a
    second display is at hand. *Done when* the matrix shows zero wrong-field or stale edits and
    the session helper and Fcitx runbooks record it.
-3. **Try the new editor surfaces live.** Neovim: the real model in an
+2. **Try the new editor surfaces live.** Neovim: the real model in an
    interactive terminal Neovim (display, Tab, Ctrl+→, undo, streamed growth,
    and whether Ctrl+Shift+Space arrives). Writer: the grey preview, Tab and
    Alt+F7 with one Ctrl+Z work (2026-10-14, isolated profile); still open are
@@ -151,7 +114,7 @@ publish need the user's go-ahead first; the rest can start at once.
    [Neovim](adapters/neovim/README.md) and
    [Writer](adapters/libreoffice/README.md) runbooks record the live result
    and any defect found is fixed.
-4. **Qualify on the frozen confirmation set.** The user-approved public set
+3. **Qualify on the frozen confirmation set.** The user-approved public set
    (UD r2.16 test, 100 English and 40 each German, French, Spanish and
    Persian prefixes) is frozen privately at
    `output/writing/confirmation-ud-r2.16-2026-10-12/suite.json`, SHA-256
@@ -166,7 +129,7 @@ publish need the user's go-ahead first; the rest can start at once.
    Persian review where results are ambiguous and the full
    [qualification](docs/architecture/model-selection.md). *Done when* a
    candidate passes or fails every gate per language on that set.
-5. **Evaluate same-window context independently.** The observer's
+4. **Evaluate same-window context independently.** The observer's
    [`window_context()`](adapters/accessibility/README.md#same-window-context-lab-only)
    reads the nearest heading and preceding paragraph of the field's own web
    document, never another field, a password, a hidden node or another frame;
@@ -185,7 +148,7 @@ publish need the user's go-ahead first; the rest can start at once.
    like `style_fact_conflict` for context facts and a cache-stable prompt
    layout that meets 550 ms justify production use; only then add the global
    and per-app controls, the wire field and cancellation on focus changes.
-6. **Compare style learning in the Lab.** `badi style on` keeps the sentence
+5. **Compare style learning in the Lab.** `badi style on` keeps the sentence
    written before each accepted suggestion on sites that allow learning,
    sealed with a keyring key; revocation, expiry, key loss, forgetting and the
    locked keyring are tested
@@ -197,7 +160,7 @@ publish need the user's go-ahead first; the rest can start at once.
    lifting that is a separate privacy decision. *Done when* the comparison
    shows a per-language gain without more harm, before any prompt reads
    samples.
-7. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
+6. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
    It packages the addon, broker, observer and user units; writing assets are
    a separate pinned, hash-verified download. *Done when* install, update and
    removal leave nothing behind; publication waits for the naming and licence

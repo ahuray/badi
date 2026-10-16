@@ -16,7 +16,7 @@ local defaults = {
   delay_ms = 120,
   -- 'en', 'de' or 'fa'; nil uses $BADI_LANGUAGE, then the locale.
   language = nil,
-  keys = { accept = '<Tab>', accept_word = '<C-Right>', request = '<C-S-Space>' },
+  keys = { accept = '<C-Right>', accept_word = '<Tab>', request = '<C-S-Space>' },
   node = 'node',
   -- Defaults to $BADI_EDITOR_DIR (or ~/.local/lib/badi/editors)/neovim/bridge.mjs.
   bridge = nil,

@@ -59,6 +59,8 @@ void BadiAddon::onAuthority(const AuthoritySnapshot &snapshot) {
     for (auto &[_, binding] : bindings_) {
         // The broker already retired these sessions at the new authority epoch.
         binding.broker.retire();
+        binding.requestExplicit = false;
+        dropHeldTab(binding);
         binding.state.invalidateContext();
         binding.surroundingFreshness.capabilityChanged();
         clearOwnedPanel(binding);
@@ -188,6 +190,7 @@ void BadiAddon::displaySuggestion(Suggestion suggestion, bool overlay) {
     binding->overlayOwned = overlay;
     binding->pendingSuggestion.reset();
     binding->typedThrough = false;
+    binding->typeThroughAutomatic = false;
     binding->typeThroughRest.clear();
     binding->typeThroughBase.clear();
     binding->typeThroughTyped.clear();
@@ -209,6 +212,18 @@ void BadiAddon::displaySuggestion(Suggestion suggestion, bool overlay) {
         {{"display", overlay ? "overlay" : "panel"}, {"id", suggestion.suggestionId},
          {"bytes", suggestion.text.size()}},
         {{"text", suggestion.text}});
+    // A Tab held for this remainder now takes its next word, through the
+    // normal broker grant for the suggestion just displayed. A display
+    // that no longer starts with that word leaves the held Tab dropped
+    // and the suggestion standing.
+    if (binding->heldTab) {
+        const std::string rest(binding->heldTabRest);
+        dropHeldTab(*binding);
+        if (heldTabMatchesRest(rest, suggestion)) {
+            debug_.record("decision", binding->state.appId(), "tab_held_accepted");
+            requestAcceptance(*binding, true);
+        }
+    }
 }
 
 // Keep the last-resort panel to one quiet line; key help lives in the runbook.
@@ -241,7 +256,9 @@ void BadiAddon::onClear(const ClearNotice &clear) {
         // Retire that asynchronous candidate even though it is not visible.
         return cancelForInput(*binding);
     }
-    if (current && !clear.suggestionId && (!binding->observed() || binding->observationExplicit)) {
+    // A miss is announced only when the user asked: an automatic request
+    // that finds nothing stays quiet on every path, terminals included.
+    if (current && !clear.suggestionId && binding->requestExplicit) {
         if (const auto text = clearNoticeText(clear.reason)) return showNotice(*binding, *text);
     }
     if (binding->state.clearSuggestionIf(clear.coordinates, clear.suggestionId)) clearOwnedPanel(*binding);
@@ -322,6 +339,9 @@ void BadiAddon::applyCommitPrepare(const CommitPrepare &prepare) {
                        shown.starts_with(dispatch->text);
     binding->typedThrough = word;
     binding->typeThroughRest = word ? shown.substr(dispatch->text.size()) : std::string();
+    // Only a rest that returns on its own may hold a quick second Tab.
+    binding->typeThroughAutomatic =
+        word && (binding->observed() || binding->state.editPath() == NativeEditPath::TypedLine);
     binding->typeThroughWaits = 0;
     if (word) {
         if (const auto previous = binding->state.lastContext())
@@ -372,6 +392,8 @@ void BadiAddon::onDisconnected() {
         binding.broker.retire();
         ++binding.observationGeneration;
         binding.observationExplicit = false;
+        binding.requestExplicit = false;
+        dropHeldTab(binding);
         binding.state.invalidateContext();
         binding.surroundingFreshness.transportLost();
         clearOwnedPanel(binding);

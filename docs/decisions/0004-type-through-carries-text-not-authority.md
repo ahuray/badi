@@ -70,13 +70,17 @@ Adapters may shorten their typing pause after a key that types the suggestion's
 next characters, or after a word acceptance. The Fcitx addon uses 30 ms rather
 than 120 ms.
 
-On Fcitx fields, Tab accepts the whole suggestion and Ctrl+Right the next word
-over Badi's own live candidate; otherwise both stay the application's keys.
-Obsidian keeps its own order (Tab a word, Ctrl+Right the rest), because it
-redraws the remainder synchronously. An observed field takes a moment to show
-the carried remainder:
-- a second Tab in that gap would reach the app and move focus;
-- a second Ctrl+Right at the end of the text moves nothing.
+On every surface Tab accepts the next word and Ctrl+Right all of it over
+Badi's own live candidate; otherwise both stay the application's keys
+(since 2026-10-16; Fcitx and Neovim previously had the two swapped, because
+an observed field takes a moment to show the carried remainder and a second
+Tab in that gap would reach the app and move focus). That gap is now closed
+without giving the preview any authority: after a word acceptance whose
+remainder returns on its own, the Fcitx addon holds at most one Tab for
+about 700 ms and, when the remainder is displayed and still begins with the
+word that Tab meant, accepts that word through the normal broker grant for
+the newly displayed suggestion. Any other key, Escape, a focus change or
+the timeout drops the held Tab; it is never replayed to the app.
 
 ## Consequences
 

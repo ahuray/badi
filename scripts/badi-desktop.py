@@ -91,18 +91,18 @@ HELP = """Badi — local writing controls
   badi launch omawrite|xournalpp
                                Open a supported editor
 
-Keys: Tab accepts a visible suggestion and otherwise stays Tab; Ctrl+Right
-accepts its next word; typing its next letters keeps the rest; Escape
-dismisses; Ctrl+Shift+Space requests. Suggestions appear on their own in
+Keys: Tab accepts the next word of a visible suggestion and otherwise stays
+Tab; Ctrl+Right accepts all of it; typing its next letters keeps the rest;
+Escape dismisses; Ctrl+Shift+Space requests. Suggestions appear on their own in
 Omawrite, Telegram and the IME-parity apps ({IME_APPS}),
 each with an app or site grant; one site grant covers all three browsers.
 IME-parity accepts once, append-only, like typing: undo may merge it with
 earlier typing.
-Xournal++ text cells: Tab requests, Tab again accepts.
+Xournal++ text cells: Tab requests, Tab again accepts a word.
 Obsidian: Tab accepts a word, Ctrl/Command+Right all.
 Bash: Ctrl-X then Tab requests/accepts, Ctrl-X then Escape dismisses.
 Neovim (badi app nvim on): prose buffers suggest after a typing pause; Tab
-accepts, Ctrl+Right accepts a word, leaving Insert mode dismisses.
+accepts a word, Ctrl+Right accepts all, leaving Insert mode dismisses.
 LibreOffice Writer spelling extension (badi app libreoffice-writer on): Alt+F7
 shows a correction for the word before the caret, Alt+F7 again replaces it in
 one undo step, Escape dismisses. badi app libreoffice covers the grey preview.
@@ -588,7 +588,7 @@ def status_text(health, settings=None):
             f"Requests: {counters['provider_calls']} · Suggestions: {counters['suggestions_shown']} · Errors: {counters['provider_errors']} · {misses}\n"
             "Native Fcitx: automatic in Omawrite; Tab request/accept in the Xournal++ Text tool\n"
             "Editors: Obsidian automatic/Tab · Bash Ctrl-X then Tab\n"
-            f"Observed fields: automatic for Omawrite, Telegram and IME-parity apps ({IME_APPS}); Tab accepts a visible suggestion, otherwise stays Tab; Ctrl+Right its next word; Ctrl+Shift+Space requests\n"
+            f"Observed fields: automatic for Omawrite, Telegram and IME-parity apps ({IME_APPS}); Tab accepts a visible suggestion's next word, otherwise stays Tab; Ctrl+Right accepts all of it; Ctrl+Shift+Space requests\n"
             + f"Apps: {mode_text((settings or {}).get('all_linux_apps'), 'app')}\n"
             + f"Web sites: {mode_text((settings or {}).get('all_web_origins'), 'site')}\n"
             + f"Escape: dismiss (quiet: {quiet_text}) · Why nothing appeared: badi doctor; badi debug on; badi debug watch"

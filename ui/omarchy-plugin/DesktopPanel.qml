@@ -14,7 +14,7 @@ Item {
   readonly property var supportedApps: [
     {name: "Omawrite", appId: "omawrite", detail: "Markdown editor"},
     {name: "Ghostty", appId: "com.mitchellh.ghostty", detail: "Terminal · follows the line you type", manual: true},
-    {name: "Xournal++", appId: "com.github.xournalpp.xournalpp", detail: "Text tool · Tab requests, Tab again accepts", manual: true},
+    {name: "Xournal++", appId: "com.github.xournalpp.xournalpp", detail: "Text tool · Tab requests, Tab again accepts a word", manual: true},
     {name: "Obsidian", appId: "obsidian", detail: "Badi plugin · Tab a word, Ctrl+Right all"},
     {name: "Neovim", appId: "nvim", detail: "Badi plugin · prose buffers"},
     {name: "Bash", appId: "bash", detail: "Ctrl-X Tab requests and accepts"},

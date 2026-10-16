@@ -10,19 +10,19 @@ machine. Badi is pre-release software.
 
 | Key | Action |
 | --- | --- |
-| **Tab** | Accept the suggestion. Without one, Tab stays Tab. |
-| **Ctrl+→** | Accept only the next word; the rest stays. |
+| **Tab** | Accept only the next word; the rest returns. Without a suggestion, Tab stays Tab. |
+| **Ctrl+→** | Accept all of it. |
 | Keep typing | Typing the suggestion's next letters keeps the rest. |
 | **Escape** | Dismiss. |
 | **Ctrl+Shift+Space** | Ask for a suggestion. |
 
-Obsidian accepts one word with Tab only while a suggestion is visible, and
-takes all of it with Ctrl/Command+→. Ctrl+Shift+Space asks for one. Tab with
-nothing showing stays Tab.
-Bash uses Ctrl-X then Tab to request and accept. Neovim suggests in prose
-buffers after a typing pause: Tab accepts all and Ctrl+→ one word only while a
-suggestion is visible, and leaving Insert mode dismisses it. In a Xournal++
-text cell, Tab requests and Tab again accepts. Fcitx, Obsidian and Neovim
+Every surface uses that order: Obsidian with Ctrl/Command+→ for all of it,
+Neovim in prose buffers after a typing pause (leaving Insert mode dismisses
+it), and the Fcitx apps below. A spelling correction is still taken whole.
+After Tab takes a word, a second Tab pressed before the rest returns is held
+for it, so quick Tabs keep typing words instead of reaching the app.
+Bash uses Ctrl-X then Tab to request and accept. In a Xournal++
+text cell, Tab requests and Tab again accepts a word. Fcitx, Obsidian and Neovim
 suggestions last up to 15 seconds; edits, focus changes and dismissal still
 remove them immediately. Bash keeps its four-second preview. In the
 observed apps below, Badi stays quiet on its own in file dialogs and very
@@ -69,7 +69,7 @@ Linux in general.
 | Xournal++ text tool | Tab requests, exact native undo | 1.3.7 |
 | Obsidian | Badi plugin; the 1.14.4 handoff reports inline preview and Tab acceptance | 1.13.7, 1.14.4 |
 | Bash | Grey Readline preview and narrow English spelling fixes | Bash 5.3.15 in Ghostty 1.3.1 |
-| Ghostty (any TUI, such as a coding agent's prompt) | `badi app com.mitchellh.ghostty on`; suggestions follow the line you type and show in a panel at the cursor; Tab types them ([how](docs/decisions/0009-terminals-use-the-typed-line.md)) | Ghostty 1.3.1 |
+| Ghostty (any TUI, such as a coding agent's prompt) | `badi app com.mitchellh.ghostty on`; suggestions follow the line you type and show in a panel at the cursor; Tab types a word, Ctrl+→ all of it, and an automatic miss stays quiet ([how](docs/decisions/0009-terminals-use-the-typed-line.md)) | Ghostty 1.3.1 |
 | Neovim | Badi plugin; prose buffers, inline preview, one-step undo; no spelling fixes yet. Tested headless with the deterministic phrase provider, not yet with the real model in a terminal | 0.12.5 |
 | Grok Bot | Ready, but its composer is untested | 0.35 |
 

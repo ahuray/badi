@@ -25,9 +25,13 @@ input context since its last boundary, in memory, and uses it as the context:
 - An automatic request needs at least two words with letters, so a lone
   token, such as a command or a typed secret, never becomes a request.
   Ctrl+Shift+Space asks for any tracked line.
-- The suggestion shows in Badi's Fcitx panel at the cursor. Tab, or Ctrl+→
-  for a word, types it with one `commitString`; the result is
-  `dispatched-unverified`.
+- The suggestion shows in Badi's Fcitx panel at the cursor. Tab types one
+  word and Ctrl+→ all of it, each with one `commitString`; the result is
+  `dispatched-unverified`. A second Tab pressed before a word acceptance's
+  remainder returns is held for it, so it cannot fall through to the
+  terminal's own completion. An automatic request that finds nothing stays
+  quiet: the no-continuation notice is shown only after an explicit request,
+  so a terminal that mostly runs commands is not told about every miss.
 - A field marked password or sensitive is never read. The line is never
   written anywhere except a `badi debug on --text` trace (ADR 0008).
 

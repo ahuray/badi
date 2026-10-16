@@ -160,7 +160,7 @@ void runReconnect(const std::string &socket, const std::string &appId) {
 }
 
 // Typing the suggestion's next characters gets its remainder without another
-// generation, and Ctrl+Right's word grant leaves the rest to carry on
+// generation, and Tab's word grant leaves the rest to carry on
 // (ADR 0004). The phrase fixture would suggest differently for these texts.
 void runTypeThrough(const std::string &socket, const std::string &appId) {
     ::fcitx::EventLoop loop;

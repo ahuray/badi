@@ -35,14 +35,14 @@ async function markdown(editor, keys) {
   await editor.send(keys);
 }
 
-test('a pause shows inline grey text; Tab inserts it as one undo step', { skip }, async t => {
+test('a pause shows inline grey text; Ctrl+Right inserts it all as one undo step', { skip }, async t => {
   const editor = await fakeEditor(t);
   await markdown(editor, 'iDear team,<CR>thank you');
   let state = await editor.until(current => current.preview === ' for your time', 'preview');
   assert.deepEqual(state.lines, ['Dear team,', 'thank you'], 'The preview is not buffer text');
   assert.equal(state.screen, 'thank you for your time', 'Inline virtual text follows the caret');
   assert.equal(state.mode, 'i');
-  await editor.send('<Tab>');
+  await editor.send('<C-Right>');
   state = await editor.until(current => current.lines[1] === 'thank you for your time', 'acceptance');
   assert.deepEqual(state.cursor, [2, 23]);
   assert.equal(state.preview, null);
@@ -70,13 +70,13 @@ test('another window on the same buffer never shows the preview', { skip }, asyn
   assert.equal(state.rows.filter(row => row === 'thank you for your time').length, 1);
 });
 
-test('Ctrl+Right takes one word and typing through keeps the rest', { skip }, async t => {
+test('Tab takes one word and typing through keeps the rest', { skip }, async t => {
   const editor = await fakeEditor(t, { delay_ms: 1500 });
   await markdown(editor, 'ithank you');
   await editor.command('lua require("badi").request(false)');
   await editor.until(current => current.preview === ' for your time', 'preview');
   const accepted = performance.now();
-  await editor.send('<C-Right>');
+  await editor.send('<Tab>');
   const state = await editor.until(current => current.preview === ' your time', 'carried remainder');
   assert.deepEqual(state.lines, ['thank you for']);
   assert.deepEqual(state.cursor, [1, 13]);
@@ -91,7 +91,7 @@ test('multibyte text before the caret keeps byte-exact placement and undo', { sk
   let state = await editor.until(current => current.preview === 'Welt bleibt', 'preview');
   // 'arabicshape' draws Persian in presentation forms; check the Latin ends.
   assert.match(state.screen, /^Grüße und .+ Welt bleibt$/u);
-  await editor.send('<Tab>');
+  await editor.send('<C-Right>');
   state = await editor.until(current => current.lines[1] === 'Grüße und سلام Welt bleibt', 'acceptance');
   assert.deepEqual(state.cursor, [2, Buffer.byteLength('Grüße und سلام Welt bleibt')]);
   await editor.send('<Esc>u');

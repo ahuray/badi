@@ -57,7 +57,12 @@ and whether they were dirty (`--version` prints both; packagers may set
   revision and original expiry, so a new word crossing Tab on the socket
   cannot swallow the acceptance. Accepting or dismissing any version retires
   them all; cancellation, focus changes and expiry revoke the whole group.
-  At most 64 versions fit the protocol's 64-character limit.
+  At most 64 versions fit the protocol's 64-character limit. When the final
+  result is rejected by the display checks or arrives late, the last shown
+  partial stays if it ends at a word boundary (`ends_at_word_boundary`): it
+  was already checked before display, so it counts as the shown suggestion,
+  not as a no-suggestion miss, and only an edit, a focus change, Escape or
+  its expiry withdraws it.
 - **Type-through** ([ADR 0004](../docs/decisions/0004-type-through-carries-text-not-authority.md)).
   The last shown continuation is kept as text only.
   - When a later admitted request in the same app or site keeps `after` and
@@ -299,7 +304,8 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   `output_rejected`. If the caret already follows whitespace and the next
   character is a letter or digit, the insertion may end in one ASCII space so
   it does not join that word. End of text, punctuation, and a repeated space
-  stay rejected. Ctrl+→ on that last word includes the space, and typing its
+  stay rejected. Word acceptance on that last word includes the space, and
+  typing its
   first letters carries the space with the remainder.
 - **Language overrides.** Optional `language_overrides` settings map up to 64
   canonical app ids to `en`, `de` or `fa`. `badi language APP TAG` sets one;

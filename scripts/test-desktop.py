@@ -791,7 +791,9 @@ class DesktopTests(unittest.TestCase):
         text = desktop.status_text(health)
         self.assertIn('No suggestion: 3 (last: budget_prefill)', text)
         self.assertIn('Observed fields: automatic for Omawrite, Telegram and IME-parity apps', text)
-        self.assertIn('Tab accepts a visible suggestion, otherwise stays Tab', text)
+        self.assertIn("Tab accepts a visible suggestion's next word, otherwise stays Tab", text)
+        self.assertIn('Ctrl+Right accepts all of it', text)
+        self.assertIn('Tab accepts the next word of a visible suggestion', ' '.join(desktop.HELP.split()))
         self.assertIn('IME-parity accepts once, append-only, like typing', ' '.join(desktop.HELP.split()))
         for stale in ('native browser/Codex writing is disabled', 'automatic only for Omawrite'):
             self.assertNotIn(stale, text)
