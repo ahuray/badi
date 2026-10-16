@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#87](https://github.com/ahuray/badi/pull/87) Tab accepts one word and
+  Ctrl+→ all of it on every surface; a quick second Tab is held for the
+  returning remainder; a rejected or late final no longer clears a shown
+  partial; automatic misses (terminals above all) no longer show a notice.
 - [#86](https://github.com/ahuray/badi/pull/86) Records only: `AGENTS.md` gives
   agents a numbered start and work loop with live-trial steps; `next steps.md`
   is folded into the backlog, whose step 1 is now Tab-takes-a-word and a
