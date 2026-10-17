@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#91](https://github.com/ahuray/badi/pull/91) The terminal suggestion panel
+  wears the Omarchy theme (Omarchy font, the word Tab takes in bold accent)
+  and follows theme and font changes; a paste, completion or End no longer
+  ends terminal suggestions until Enter.
 - [#90](https://github.com/ahuray/badi/pull/90) Neovim in a terminal owns its
   keys: while it holds the terminal's focus (`editor.focus`), the broker
   withholds the input method's typed line, so Tab and Ctrl+Shift+Space reach

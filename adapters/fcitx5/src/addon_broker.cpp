@@ -20,11 +20,22 @@ namespace badi::fcitx5 {
 
 namespace {
 
+// The word Tab takes in the theme's highlight colour and bold, then the
+// rest in its normal colour (ui/omarchy-plugin/fcitx-theme.py).
+::fcitx::Text candidateText(const Suggestion &suggestion) {
+    const auto parts = candidateParts(suggestion);
+    ::fcitx::Text text;
+    text.append(parts.strong, ::fcitx::TextFormatFlags{::fcitx::TextFormatFlag::HighLight,
+                                                      ::fcitx::TextFormatFlag::Bold});
+    if (!parts.rest.empty()) text.append(parts.rest);
+    return text;
+}
+
 class BadiCandidate final : public ::fcitx::CandidateWord {
 public:
-    BadiCandidate(std::string text,
+    BadiCandidate(::fcitx::Text text,
                   std::function<void(::fcitx::InputContext *)> selected)
-        : CandidateWord(::fcitx::Text(std::move(text))),
+        : CandidateWord(std::move(text)),
           selected_(std::move(selected)) {
         setCustomLabel(::fcitx::Text());
     }
@@ -234,7 +245,7 @@ void BadiAddon::showCandidate(Binding &binding, const Suggestion &suggestion) {
     auto list = std::make_unique<::fcitx::CommonCandidateList>();
     list->setPageSize(1);
     list->setLayoutHint(::fcitx::CandidateLayoutHint::Horizontal);
-    list->append(std::make_unique<BadiCandidate>(suggestion.text,
+    list->append(std::make_unique<BadiCandidate>(candidateText(suggestion),
         [this, sessionId = suggestion.coordinates.sessionId](::fcitx::InputContext *selected) {
             auto *current = bindingFor(sessionId);
             if (current && current->inputContext == selected && selected->hasFocus()) requestAcceptance(*current);

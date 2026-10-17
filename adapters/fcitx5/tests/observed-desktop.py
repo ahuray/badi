@@ -22,6 +22,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[3]
 PREFIX, SUFFIX = 'thank you', ' for your time'
+# The panel shows a suggestion without its separating space.
+SHOWN = SUFFIX.lstrip()
 FIXTURE_APP = 'badi-native-fixture'
 UNAVAILABLE_APPS = ('firefox', 'zen-browser', 'app.zen_browser.zen', 'librewolf', 'obsidian')
 # Mixed-case Chromium- and Gecko-family programs fold to granted ids without an observer rule.
@@ -483,7 +485,7 @@ def session(root, report):
         checks.append('Observer and native surrounding-text disagreement blocks model context publication')
 
         change(PREFIX, uri='https://allowed.example.test/document')
-        wait(lambda: context.candidate() == SUFFIX, 'automatic observed suggestion')
+        wait(lambda: context.candidate() == SHOWN, 'automatic observed suggestion')
         metrics = control('status')['metrics']
         assert metrics['context_updates'] == 1 and metrics['provider_calls'] == 1
         assert backend.reads >= 2
@@ -491,7 +493,7 @@ def session(root, report):
 
         context.text(PREFIX)
         quiet(.25)
-        assert context.candidate() == SUFFIX
+        assert context.candidate() == SHOWN
         assert control('status')['metrics']['context_updates'] == metrics['context_updates']
         checks.append('Unchanged toolkit context preserves the visible candidate and session')
 
@@ -502,7 +504,7 @@ def session(root, report):
         assert backend.inspections == inspections and reason_count('observer_awaiting_input') > awaiting, \
             'A field event without Fcitx input waits for input instead of inspecting again'
         context.text(PREFIX)
-        wait(lambda: context.candidate() == SUFFIX, 'the next surrounding-text publication inspects again')
+        wait(lambda: context.candidate() == SHOWN, 'the next surrounding-text publication inspects again')
         checks.append('A field event without Fcitx input waits for the next publication before inspecting again')
 
         assert context.key(RIGHT, CONTROL)
@@ -525,7 +527,7 @@ def session(root, report):
             assert control('status')['metrics']['context_updates'] == updates
             backend.invalid_target = None
             change(PREFIX, new_field=True)
-            wait(lambda: context.candidate() == SUFFIX, 'fresh synthetic desktop binding after malformed metadata')
+            wait(lambda: context.candidate() == SHOWN, 'fresh synthetic desktop binding after malformed metadata')
         checks.append('Missing, unknown and mismatched target metadata retire prior authority without prose acquisition')
 
         repeated_block = 'x' * (512 - len(PREFIX) - 1) + '\n' + PREFIX
@@ -557,7 +559,7 @@ def session(root, report):
         for mode, detail in (('repeat', 'absolute caret changes beyond the identical cropped text'),
                              ('total', 'document length changes with identical caret and text')):
             change(repeated_block, new_field=True)
-            wait(lambda: context.candidate() == SUFFIX, 'fresh repeated-text candidate before stale commit')
+            wait(lambda: context.candidate() == SHOWN, 'fresh repeated-text candidate before stale commit')
             commits_before = context.commits()
             arm_change('snapshot', mode=mode)
             assert context.key(desktop.TAB)
@@ -592,7 +594,7 @@ def session(root, report):
         wait(lambda: delayed_preview['started'] > started, 'pending preview before field switch')
         change(PREFIX, new_field=True)
         delayed_preview['enabled'] = False
-        wait(lambda: context.candidate() == SUFFIX, 'automatic new field recovery behind stale observer RPC')
+        wait(lambda: context.candidate() == SHOWN, 'automatic new field recovery behind stale observer RPC')
         assert preview_fields[-1] == f'/synthetic/field/{backend.field}'
         assert context.commits() == previous_commits
         checks.append('A field switch during an observer RPC retries boundedly and automatically previews the new field')
@@ -600,7 +602,7 @@ def session(root, report):
         change(PREFIX + ' x')
         quiet(.15)
         change(PREFIX)
-        wait(lambda: context.candidate() == SUFFIX, 'fresh suggestion before same-text field switch')
+        wait(lambda: context.candidate() == SHOWN, 'fresh suggestion before same-text field switch')
         backend.browser = True
         change(PREFIX, uri='https://allowed.example.test/document', new_field=True)
         wait(lambda: context.candidate() is None, 'same-text field invalidation')
@@ -612,7 +614,7 @@ def session(root, report):
 
         backend.browser = False
         change(PREFIX, uri='https://allowed.example.test/document')
-        wait(lambda: context.candidate() == SUFFIX, 'policy recovery before pause')
+        wait(lambda: context.candidate() == SHOWN, 'policy recovery before pause')
         control('pause', 'on')
         wait(lambda: context.candidate() is None, 'pause clears candidate')
         reads = backend.reads
@@ -622,7 +624,7 @@ def session(root, report):
         checks.append('Broker pause clears UI and blocks subsequent observer prose reads')
         control('pause', 'off')
         change(PREFIX)
-        wait(lambda: context.candidate() == SUFFIX, 'resume with fresh context')
+        wait(lambda: context.candidate() == SHOWN, 'resume with fresh context')
 
         # Fcitx's shipped Unicode module owns real foreign preedit. Its
         # default direct-mode shortcut is Control+Shift+U; only this private
@@ -630,13 +632,13 @@ def session(root, report):
         assert context.key(ord('U'), 5)
         assert context.key(ord('4'))
         wait(lambda: preedit() == 'U+4', 'real Unicode formatted preedit')
-        wait(lambda: context.candidate() != SUFFIX, 'Unicode composition takes over Badi UI')
+        wait(lambda: context.candidate() != SHOWN, 'Unicode composition takes over Badi UI')
         reads = backend.reads
         context.text(PREFIX)
         quiet(.3)
-        assert backend.reads == reads and context.candidate() != SUFFIX
+        assert backend.reads == reads and context.candidate() != SHOWN
         assert context.key(desktop.ESCAPE)
-        wait(lambda: context.candidate() == SUFFIX, 'automatic recovery after foreign preedit clears')
+        wait(lambda: context.candidate() == SHOWN, 'automatic recovery after foreign preedit clears')
         assert preedit() == ''
         checks.append('Real Unicode addon preedit takes priority, prevents prose reads, then automatically resumes on clear')
 
@@ -644,7 +646,7 @@ def session(root, report):
         wait(lambda: context.candidate() is None, 'focus loss clears candidate')
         context.ic('FocusIn')
         context.text(PREFIX)
-        wait(lambda: context.candidate() == SUFFIX, 'fresh focus recovery')
+        wait(lambda: context.candidate() == SHOWN, 'fresh focus recovery')
         checks.append('Focus loss clears and fresh focus obtains new authority')
 
         stop(broker)
@@ -653,7 +655,7 @@ def session(root, report):
         broker = start_broker()
         quiet(.8)
         change(PREFIX)
-        wait(lambda: context.candidate() == SUFFIX, 'same input context after broker restart', timeout=6)
+        wait(lambda: context.candidate() == SHOWN, 'same input context after broker restart', timeout=6)
         assert context.key(RIGHT, CONTROL)
         wait(lambda: len(context.commits()) == previous + 1, 'recovered Ctrl+Right dispatch')
         assert context.commits()[-1] == SUFFIX
@@ -670,7 +672,7 @@ def session(root, report):
             'A reconnect alone must not republish unchanged observed prose'
         assert not context.key(desktop.TAB), 'Tab without a suggestion stays the application Tab after a reconnect'
         assert context.key(ord(' '), 5), 'Explicit chord after an unchanged reconnect must read current Fcitx text'
-        wait(lambda: context.candidate() == SUFFIX, 'explicit observed request after unchanged reconnect', timeout=6)
+        wait(lambda: context.candidate() == SHOWN, 'explicit observed request after unchanged reconnect', timeout=6)
         checks.append('Unchanged-authority reconnect republishes no observed prose automatically; the explicit chord '
                       'requests afresh while plain Tab stays the application Tab')
 
@@ -683,14 +685,14 @@ def session(root, report):
         assert context.candidate() is None and control('status')['metrics']['context_updates'] == updates
         assert backend.reads == reads
         assert context.key(desktop.TAB), 'Unobserved native manual invocation remains available'
-        wait(lambda: context.candidate() == SUFFIX, 'native manual phrase candidate')
+        wait(lambda: context.candidate() == SHOWN, 'native manual phrase candidate')
         assert context.key(RIGHT, CONTROL)
         wait(lambda: context.commits() == [SUFFIX], 'native manual exact append dispatch')
         assert backend.reads == reads
         checks.append('Native manual unknown-widget append still invokes and dispatches once without observer prose')
 
         assert context.key(desktop.TAB)
-        wait(lambda: context.candidate() == SUFFIX, 'native manual candidate before transport loss')
+        wait(lambda: context.candidate() == SHOWN, 'native manual candidate before transport loss')
         stop(broker)
         broker = None
         wait(lambda: context.candidate() is None, 'transport loss retires the native candidate')
@@ -699,7 +701,7 @@ def session(root, report):
         assert not context.key(ord('Y'), 5), 'A candidate from the closed connection cannot be accepted'
         assert control('status')['metrics']['context_updates'] == 0
         assert context.key(desktop.TAB), 'Tab after an unchanged reconnect must not require new input'
-        wait(lambda: context.candidate() == SUFFIX, 'native manual request after unchanged reconnect')
+        wait(lambda: context.candidate() == SHOWN, 'native manual request after unchanged reconnect')
         assert control('status')['metrics']['context_updates'] == 1
         assert context.key(RIGHT, CONTROL)
         wait(lambda: context.commits() == [SUFFIX, SUFFIX], 'native exact append after unchanged reconnect')
@@ -789,7 +791,7 @@ def session(root, report):
             checks.append(label + ': an observer-denied password field reads no prose and sends no context')
 
             change(PREFIX, new_field=True)
-            wait(lambda: context.candidate() == SUFFIX, label + ' automatic observed suggestion')
+            wait(lambda: context.candidate() == SHOWN, label + ' automatic observed suggestion')
             assert auxiliary() == '', label + ' fallback panel omits the keyboard-help banner'
             panel_event = next(values for name, values in reversed(context.events) if name == 'UpdateClientSideUI')
             assert panel_event[4][0][0] == '', label + ' fallback candidate has no numeric label'
@@ -797,7 +799,7 @@ def session(root, report):
             assert updates() == start_updates + 1 and backend.reads > reads
             if app == 'brave-origin':
                 quiet(5.5)
-                assert context.candidate() == SUFFIX, 'the negotiated native reading window survives five seconds'
+                assert context.candidate() == SHOWN, 'the negotiated native reading window survives five seconds'
             assert context.key(RIGHT, CONTROL)
             wait(lambda: context.commits() == [SUFFIX], label + ' Ctrl+Right dispatch after observed verification')
             quiet(.3)
@@ -806,7 +808,7 @@ def session(root, report):
                           'Ctrl+Right dispatches the whole suggestion as one exact append')
 
             change(PREFIX)
-            wait(lambda: context.candidate() == SUFFIX, label + ' candidate before dismissal')
+            wait(lambda: context.candidate() == SHOWN, label + ' candidate before dismissal')
             assert context.key(desktop.ESCAPE)
             wait(lambda: context.candidate() is None, label + ' Escape dismissal')
             context.text(PREFIX)
@@ -817,7 +819,7 @@ def session(root, report):
             change('')
             assert context.candidate() is None, label + ' clearing the field does not revive the dismissed suggestion'
             change(PREFIX)
-            wait(lambda: context.candidate() == SUFFIX,
+            wait(lambda: context.candidate() == SHOWN,
                  label + ' the same words suggest again after the dismissed text is deleted')
             assert context.key(desktop.ESCAPE)
             wait(lambda: context.candidate() is None, label + ' the repeated suggestion dismisses again')
@@ -825,7 +827,7 @@ def session(root, report):
             assert not context.key(desktop.TAB), label + ' Tab without a suggestion stays the application Tab'
             assert context.candidate() is None and context.commits() == [SUFFIX]
             assert context.key(ord(' '), 5), label + ' explicit chord is claimed on an observed field'
-            wait(lambda: context.candidate() == SUFFIX, label + ' explicit observed request')
+            wait(lambda: context.candidate() == SHOWN, label + ' explicit observed request')
             assert backend.inspections > inspections
             assert context.key(RIGHT, CONTROL)
             wait(lambda: context.commits() == [SUFFIX, SUFFIX], label + ' explicit acceptance')
@@ -849,7 +851,7 @@ def session(root, report):
             silent_change['op'] = None
             for mode, reason in (('before', 'observer_dispatch_mismatch'), ('deny', 'observer_dispatch_unavailable')):
                 change(PREFIX)
-                wait(lambda: context.candidate() == SUFFIX, label + ' candidate before stale dispatch')
+                wait(lambda: context.candidate() == SHOWN, label + ' candidate before stale dispatch')
                 commits, count = context.commits(), reason_count(reason)
                 arm_change('snapshot', 1, mode)
                 assert context.key(desktop.TAB)
@@ -871,7 +873,7 @@ def session(root, report):
             return control('status')['metrics']['provider_calls']
 
         change(PREFIX)
-        wait(lambda: context.candidate() == SUFFIX, 'candidate before type-through')
+        wait(lambda: context.candidate() == SHOWN, 'candidate before type-through')
         calls, typed = provider_calls(), reason_count('typed_through')
         assert not context.key(ord(' ')), 'a typed-through key still reaches the application'
         # The app's edit retires the observed field; the next key arrives
@@ -896,13 +898,13 @@ def session(root, report):
         assert reason_count('tab_held_accepted') >= 1
         assert provider_calls() == calls
         change(PREFIX + ' for your')
-        wait(lambda: context.candidate() == ' time', 'remainder after the held Tab')
+        wait(lambda: context.candidate() == 'time', 'remainder after the held Tab')
         assert provider_calls() == calls
         assert context.key(RIGHT, CONTROL), 'Ctrl+Right is claimed over a live candidate'
         wait(lambda: context.commits() == [*commits, 'or', ' your', ' time'],
              'Ctrl+Right dispatches the whole remainder')
         change(PREFIX)
-        wait(lambda: context.candidate() == SUFFIX, 'candidate before Escape ends the carry')
+        wait(lambda: context.candidate() == SHOWN, 'candidate before Escape ends the carry')
         calls = provider_calls()
         assert context.key(desktop.ESCAPE)
         wait(lambda: context.candidate() is None, 'Escape ends type-through')
@@ -919,7 +921,7 @@ def session(root, report):
         # (the field is left unchanged), the held Tab times out and the next
         # Tab reaches the application instead of being held again.
         change(PREFIX)
-        wait(lambda: context.candidate() == SUFFIX, 'candidate before the held-Tab timeout')
+        wait(lambda: context.candidate() == SHOWN, 'candidate before the held-Tab timeout')
         commits = context.commits()
         assert context.key(desktop.TAB)
         wait(lambda: context.commits() == [*commits, ' for'], 'Tab dispatches one word before the timeout step')
@@ -932,22 +934,22 @@ def session(root, report):
         assert not context.key(desktop.TAB), 'after the timeout the next Tab reaches the application'
         assert reason_count('tab_held') == held + 1, 'no second hold for the same word acceptance'
         change(PREFIX + ' for')
-        wait(lambda: context.candidate() == ' your time', 'the rest still returns when the field catches up')
+        wait(lambda: context.candidate() == 'your time', 'the rest still returns when the field catches up')
         checks.append('IME-parity held Tab: at most one hold per word acceptance; after the 700 ms timeout '
                       'the next Tab is the application Tab again')
 
         # Foreign composition and a rendered overlay on the same browser field.
         change(PREFIX)
-        wait(lambda: context.candidate() == SUFFIX, 'browser candidate before foreign preedit')
+        wait(lambda: context.candidate() == SHOWN, 'browser candidate before foreign preedit')
         assert context.key(ord('U'), 5) and context.key(ord('4'))
         wait(lambda: preedit() == 'U+4', 'IME-parity field real Unicode preedit')
-        wait(lambda: context.candidate() != SUFFIX, 'foreign preedit owns the panel')
+        wait(lambda: context.candidate() != SHOWN, 'foreign preedit owns the panel')
         reads = backend.reads
         context.text(PREFIX)
         quiet(.3)
-        assert backend.reads == reads and context.candidate() != SUFFIX, 'No prose is read during foreign composition'
+        assert backend.reads == reads and context.candidate() != SHOWN, 'No prose is read during foreign composition'
         assert context.key(desktop.ESCAPE)
-        wait(lambda: context.candidate() == SUFFIX, 'IME-parity recovery after foreign preedit clears')
+        wait(lambda: context.candidate() == SHOWN, 'IME-parity recovery after foreign preedit clears')
         assert preedit() == ''
         checks.append('IME-parity Fcitx panel fallback yields to foreign preedit and recovers afterwards')
         render_result['value'] = True
@@ -999,7 +1001,7 @@ def session(root, report):
         open_context('chatgpt')
         start_updates, normalized = updates(), reason_count('observed_field_request_paragraph_end')
         paragraph_end('\n\n', '\n\n', new_field=True)
-        wait(lambda: context.candidate() == SUFFIX, 'chatgpt composer suggestion before the paragraph end')
+        wait(lambda: context.candidate() == SHOWN, 'chatgpt composer suggestion before the paragraph end')
         assert updates() == start_updates + 1
         assert reason_count('observed_field_request_paragraph_end') == normalized + 1
         assert context.key(RIGHT, CONTROL)
@@ -1035,7 +1037,7 @@ def session(root, report):
         # A <div> line ends with one break; an EditContext editor sends none while the DOM shows one.
         for observed_after, fcitx_after in (('\n', '\n'), ('\n', '')):
             paragraph_end(observed_after, fcitx_after, new_field=True)
-            wait(lambda: context.candidate() == SUFFIX, 'chatgpt suggestion for ' + repr((observed_after, fcitx_after)))
+            wait(lambda: context.candidate() == SHOWN, 'chatgpt suggestion for ' + repr((observed_after, fcitx_after)))
             assert context.key(desktop.ESCAPE)
             quiet(.3)
             assert context.candidate() is None and context.commits() == [SUFFIX]
@@ -1048,7 +1050,7 @@ def session(root, report):
         wait(lambda: 'telegram' in backend.requested[requested:], 'observer receives the canonical identity')
         assert 'Telegram' not in backend.requested
         assert context.key(desktop.TAB), 'A canonicalized native app keeps the manual path'
-        wait(lambda: context.candidate() == SUFFIX, 'Telegram native manual candidate')
+        wait(lambda: context.candidate() == SHOWN, 'Telegram native manual candidate')
         assert context.key(RIGHT, CONTROL)
         wait(lambda: context.commits() == [SUFFIX], 'Telegram native manual dispatch')
         checks.append("Program 'Telegram' becomes 'telegram' for observer, policy and session; native manual "
@@ -1083,7 +1085,7 @@ def session(root, report):
         daemon.observer.invalidate('fixture_field_changed')
         open_context('cursor')
         context.text(PREFIX, len(PREFIX))
-        wait(lambda: context.candidate() == SUFFIX, 'default-allowed observed app suggestion')
+        wait(lambda: context.candidate() == SHOWN, 'default-allowed observed app suggestion')
         assert context.key(desktop.ESCAPE)
         quiet(.2)
         restored = control('settings', 'show', '--json')
@@ -1100,7 +1102,7 @@ def session(root, report):
         open_context('chatgpt')
         backend.apps.add('chatgpt')
         change(PREFIX, new_field=True)
-        wait(lambda: context.candidate() == SUFFIX, 'candidate before timed quiet')
+        wait(lambda: context.candidate() == SHOWN, 'candidate before timed quiet')
         assert context.key(desktop.ESCAPE)
         quiet(.1)
         calls = control('status')['metrics']['provider_calls']
@@ -1116,7 +1118,7 @@ def session(root, report):
         wait(lambda: context.candidate() is not None, 'explicit request ends quiet across the rebind')
         assert context.key(desktop.ESCAPE)
         change(PREFIX, new_field=True)
-        wait(lambda: context.candidate() == SUFFIX, 'a different field is not quieted')
+        wait(lambda: context.candidate() == SHOWN, 'a different field is not quieted')
         restored = control('settings', 'show', '--json')
         control('settings', 'replace', '--if-revision', str(restored['revision']), '--json',
                 json.dumps({**listed, 'revision': restored['revision'] + 1}))
@@ -1142,10 +1144,10 @@ def session(root, report):
         wait(lambda: 'no continuation' in auxiliary(), 'an explicit terminal miss may show its notice')
         assert not context.key(ord('u'), CONTROL), 'Ctrl+U reaches the terminal and clears the tracked line'
         typed(PREFIX)
-        wait(lambda: context.candidate() == SUFFIX, 'a typed line suggests automatically after the pause')
+        wait(lambda: context.candidate() == SHOWN, 'a typed line suggests automatically after the pause')
         assert context.key(desktop.TAB)
         wait(lambda: context.commits() == [' for'], 'Tab types one word into the terminal')
-        wait(lambda: context.candidate() == ' your time', 'the rest follows the accepted word on the line')
+        wait(lambda: context.candidate() == 'your time', 'the rest follows the accepted word on the line')
         assert context.key(RIGHT, CONTROL)
         wait(lambda: context.commits() == [' for', ' your time'], 'Ctrl+Right types the rest')
         checks.append('Terminal typed line: automatic misses stay quiet, an explicit miss may show its '
@@ -1189,7 +1191,7 @@ def session(root, report):
             fake.respond(fake_request(), 'suggestion.show', {
                 'suggestion_id': 'append-show', 'text': SUFFIX, 'accept_word': ' for', 'ttl_ms': 3000,
                 'provider': 'phrase_v1'})
-            fake_wait(lambda: context.candidate() == SUFFIX, app + ' append suggestion from the fake broker')
+            fake_wait(lambda: context.candidate() == SHOWN, app + ' append suggestion from the fake broker')
             controls = fake.count('control.request')
             assert context.key(RIGHT, CONTROL)
             fake_wait(lambda: fake.count('control.request') > controls, app + ' acceptance request')
@@ -1218,7 +1220,7 @@ def session(root, report):
             fake.respond(request, 'suggestion.show', {
                 'suggestion_id': 'first-word', 'text': ' for', 'accept_word': ' for',
                 'ttl_ms': 3000, 'provider': 'phrase_v1'})
-            fake_wait(lambda: context.candidate() == ' for', 'first immutable preview')
+            fake_wait(lambda: context.candidate() == 'for', 'first immutable preview')
             delayed_preview['enabled'] = True
             started = delayed_preview['started']
             fake.respond(request, 'suggestion.show', {

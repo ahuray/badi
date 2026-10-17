@@ -136,10 +136,15 @@ Terminals report the `Terminal` capability and no surrounding text. For an
 exact app rule on a listed terminal (only `com.mitchellh.ghostty` so far), the
 `TypedLine` path follows the line typed into that input context and uses it as
 the context ([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.md)).
-`lineKey()` applies typing, Backspace, Ctrl+W, Ctrl+U, Ctrl+C and Enter, and
-stops tracking at any other key the terminal receives (`line_unknown` until
-the next empty line). After the typing pause a line of two or more words
-requests automatically; the panel shows the suggestion, Tab types one word
+`lineKey()` applies typing, Backspace, Ctrl+W, Ctrl+U, Ctrl+C and Enter. A
+key that may move the caret into the line (`movesCaretIntoLine()`: arrows,
+Home, Delete, Readline motion) stops tracking (`line_unknown` until the next
+empty line); any other key, such as a paste, completion or End, restarts it
+from the caret. After the typing pause a line of two or more words
+requests automatically; the panel shows the suggestion with the word Tab
+takes in the theme's bold highlight and the rest plain, without the leading
+space ([panel theme](../../ui/omarchy-plugin/README.md#suggestion-panel-theme)),
+Tab types one word
 and Ctrl+→ all of it, after which the next request follows the line. Tab
 without a suggestion or a pending remainder stays the terminal's. A miss is
 announced only after an explicit request: an automatic request that finds

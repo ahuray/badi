@@ -19,9 +19,13 @@ com.mitchellh.ghostty on`), the Fcitx module keeps the line typed into that
 input context since its last boundary, in memory, and uses it as the context:
 
 - Typing appends; Backspace, Ctrl+W, Ctrl+U, Ctrl+C and Enter edit or reset
-  the line. Any other key the terminal receives (arrows, Home, Tab, paste,
-  Escape) may change the line invisibly, so tracking stops until the next
-  empty line. A new focus starts an empty line.
+  the line. A key that may put the caret inside the line (arrows, Home,
+  Delete, Readline motion such as Ctrl+A or Alt+B) stops tracking until the
+  next empty line. Any other key the terminal receives (a paste, Tab
+  completion, Escape, End) changes the line invisibly but leaves the caret at
+  its end, so tracking restarts there and follows only what is typed next
+  (changed 2026-10-17: a pasted image in a coding agent's prompt used to end
+  suggestions until Enter). A new focus starts an empty line.
 - An automatic request needs at least two words with letters, so a lone
   token, such as a command or a typed secret, never becomes a request.
   Ctrl+Shift+Space asks for any tracked line.

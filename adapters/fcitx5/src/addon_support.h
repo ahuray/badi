@@ -105,6 +105,32 @@ inline std::string typedText(const ::fcitx::Key &key) {
     return ::fcitx::Key::keySymToUTF8(key.sym());
 }
 
+// A key a terminal line editor uses to put the caret inside the line, or
+// to edit beside it: the typed line no longer ends at the caret. Any other
+// unknown key (paste, completion, a new prompt line) leaves it at the end.
+inline bool movesCaretIntoLine(const ::fcitx::Key &key) {
+    const auto states = key.states();
+    const bool ctrl = !!(states & ::fcitx::KeyState::Ctrl);
+    const bool alt = !!(states & ::fcitx::KeyState::Alt);
+    switch (key.sym()) {
+    case FcitxKey_Left: case FcitxKey_Right: case FcitxKey_Up: case FcitxKey_Down:
+    case FcitxKey_Home: case FcitxKey_Page_Up: case FcitxKey_Page_Down:
+    case FcitxKey_KP_Left: case FcitxKey_KP_Right: case FcitxKey_KP_Up: case FcitxKey_KP_Down:
+    case FcitxKey_KP_Home: case FcitxKey_Delete: case FcitxKey_KP_Delete:
+        return true;
+    default:
+        break;
+    }
+    const auto sym = ::fcitx::Key(key.sym()).normalize().sym();
+    const auto is = [sym](::fcitx::KeySym lower, ::fcitx::KeySym upper) { return sym == lower || sym == upper; };
+    // Readline and Emacs-style motion: Ctrl+A/B/F/D/T, Alt+B/F/D.
+    return (ctrl && !alt && (is(FcitxKey_a, FcitxKey_A) || is(FcitxKey_b, FcitxKey_B) ||
+                             is(FcitxKey_f, FcitxKey_F) || is(FcitxKey_d, FcitxKey_D) ||
+                             is(FcitxKey_t, FcitxKey_T))) ||
+           (alt && !ctrl && (is(FcitxKey_b, FcitxKey_B) || is(FcitxKey_f, FcitxKey_F) ||
+                             is(FcitxKey_d, FcitxKey_D)));
+}
+
 inline std::size_t surroundingDigest(const ::fcitx::SurroundingText &surrounding) {
     return std::hash<std::string_view>{}(surrounding.text()) ^
            (static_cast<std::size_t>(surrounding.cursor()) * 0x9e3779b97f4a7c15ULL) ^ surrounding.anchor();

@@ -64,6 +64,25 @@ A missing plugin directory is created and enabled with `omarchy plugin enable
 io.github.ahuray.badi`; `XDG_CONFIG_HOME` selects that directory. `omarchy
 plugin disable io.github.ahuray.badi` hides the mark.
 
+## Suggestion panel theme
+
+Terminals, and any field without the grey overlay, show Badi's suggestion
+in Fcitx's panel. [`fcitx-theme.py`](fcitx-theme.py) dresses it in the
+current Omarchy theme: the theme background with Omarchy's soft control
+border (the foreground at 40%), square corners, the Omarchy font at Ghostty's
+`font-size`, the word Tab takes in bold accent, and the rest softened to the
+dimmest shade that still reads at 4.5:1 (the accent falls back to the
+foreground below that). It writes `fcitx5/themes/badi-omarchy/theme.conf`
+under `XDG_DATA_HOME` and, only when absent or written by Badi,
+`fcitx5/conf/classicui.conf`; a classicui.conf you wrote is left alone and
+named on the console. The updater installs the generator as
+`~/.local/lib/badi/omarchy/fcitx-theme.py`, adds `badi-fcitx-theme` to
+Omarchy's `theme-set.d` and `font-set.d` hooks, writes the theme for the
+current one and reloads Fcitx's classic UI. All of it is in the backup map,
+so a restore removes it. Badi cannot draw grey text inline in a terminal:
+over Wayland's input-method-v2 the compositor places this panel at the
+cursor, and Fcitx never learns where the caret is.
+
 ## Client contract
 
 `BadiClient.qml` never reads document text, model state or settings files
