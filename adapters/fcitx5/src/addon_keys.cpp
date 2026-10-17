@@ -173,29 +173,7 @@ void BadiAddon::tabKey(::fcitx::KeyEvent &event, Binding &binding, const PanelOb
 // Badi cannot see, so tracking stops until the next empty line.
 void BadiAddon::lineKey(Binding &binding, const ::fcitx::Key &key, std::string_view typed) {
     if (key.isModifier()) return;
-    const auto states = key.states();
-    const bool ctrl = !!(states & ::fcitx::KeyState::Ctrl);
-    const bool alt = !!(states & ::fcitx::KeyState::Alt);
-    const auto sym = key.sym();
-    // Fcitx may report a Ctrl letter in either case.
-    const auto letter = [sym](::fcitx::KeySym lower, ::fcitx::KeySym upper) { return sym == lower || sym == upper; };
-    auto &line = binding.typedLine;
-    if (sym == FcitxKey_Return || sym == FcitxKey_KP_Enter ||
-        (ctrl && !alt && (letter(FcitxKey_c, FcitxKey_C) || letter(FcitxKey_u, FcitxKey_U)))) {
-        line.clear();
-    } else if (sym == FcitxKey_BackSpace && !ctrl && !alt) {
-        line.erase();
-    } else if ((ctrl && letter(FcitxKey_w, FcitxKey_W)) || ((ctrl || alt) && sym == FcitxKey_BackSpace)) {
-        line.eraseWord();
-    } else if (!typed.empty() && static_cast<unsigned char>(typed[0]) >= 0x20 && typed != "\x7f") {
-        line.type(typed);
-    } else if (movesCaretIntoLine(key)) {
-        line.lose();
-    } else {
-        // A paste (an image in a coding agent's prompt), completion,
-        // history or a new prompt line: the caret stays at the end.
-        line.restart();
-    }
+    binding.typedLine.apply(lineEditFor(key, typed), typed);
     requestLineAfterPause(binding);
 }
 

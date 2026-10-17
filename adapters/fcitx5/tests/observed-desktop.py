@@ -1150,8 +1150,17 @@ def session(root, report):
         wait(lambda: context.candidate() == 'your time', 'the rest follows the accepted word on the line')
         assert context.key(RIGHT, CONTROL)
         wait(lambda: context.commits() == [' for', ' your time'], 'Ctrl+Right types the rest')
+        # A terminal ignores the input method's delete request: a correction
+        # leads its one commit with a DEL per scalar of the tracked typo.
+        assert not context.key(ord('u'), CONTROL)
+        typed('send it to the adress ')
+        wait(lambda: context.candidate() == 'adress \u2192 address', 'a typed-line correction shows the typo')
+        assert context.key(desktop.TAB)
+        wait(lambda: context.commits()[-1:] == ['\x7f' * 7 + 'address '],
+             'Tab erases exactly the typo with DELs, then types the correction')
         checks.append('Terminal typed line: automatic misses stay quiet, an explicit miss may show its '
-                      'notice, Tab types one word and Ctrl+Right the rest')
+                      'notice, Tab types one word and Ctrl+Right the rest, and a correction erases '
+                      'exactly the typo before typing its fix')
 
         # Replacement is not negotiated. A peer that injects one anyway, on an
         # otherwise valid IME-parity observed session, loses the connection.

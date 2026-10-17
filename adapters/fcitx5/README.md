@@ -136,11 +136,17 @@ Terminals report the `Terminal` capability and no surrounding text. For an
 exact app rule on a listed terminal (only `com.mitchellh.ghostty` so far), the
 `TypedLine` path follows the line typed into that input context and uses it as
 the context ([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.md)).
-`lineKey()` applies typing, Backspace, Ctrl+W, Ctrl+U, Ctrl+C and Enter. A
-key that may move the caret into the line (`movesCaretIntoLine()`: arrows,
-Home, Delete, Readline motion) stops tracking (`line_unknown` until the next
-empty line); any other key, such as a paste, completion or End, restarts it
-from the caret. After the typing pause a line of two or more words
+`lineKey()` classifies each key with `lineEditFor()` and `TypedLine` applies
+it at a tracked caret: typing inserts, Backspace, Ctrl+W, Delete, Ctrl+D and
+Ctrl+K edit, and Left, Right, Home, End and Ctrl+A/B/E/F move, so the rest of
+the line is the request's `after`. Enter, Ctrl+C and Ctrl+U start an empty
+line. Word or vertical motion (Ctrl/Alt+arrows, Alt+B/F/D, Up, Down, Page
+keys), or Left/Right past an end, stops tracking (`line_unknown`) until End
+or an empty line; any other key, such as a paste or completion, restarts it
+from the caret. A correction shows as `teh → the`; Tab commits one DEL per
+tracked scalar of the typo followed by the fix, because a terminal ignores
+`deleteSurroundingText` (live 2026-10-17: before, Tab left `adress address`).
+After the typing pause a line of two or more words
 requests automatically; the panel shows the suggestion with the word Tab
 takes in the theme's bold highlight and the rest plain, without the leading
 space ([panel theme](../../ui/omarchy-plugin/README.md#suggestion-panel-theme)),

@@ -111,10 +111,9 @@ std::optional<ContextWindow> BadiAddon::currentContext(const Binding &binding) c
     if (binding.state.editPath() == NativeEditPath::TypedLine) {
         const auto *method = instance_->inputMethodEntry(&input);
         if (!method || !validLanguageTag(method->languageCode())) return std::nullopt;
-        const auto &line = binding.typedLine.text();
-        const auto caret = static_cast<std::size_t>(std::count_if(line.begin(), line.end(),
-            [](unsigned char byte) { return (byte & 0xC0U) != 0x80U; }));
-        auto context = captureContextWindow(line, caret, caret, false,
+        // The rest of the line after a moved caret is the context's `after`.
+        const auto caret = binding.typedLine.caretScalars();
+        auto context = captureContextWindow(binding.typedLine.text(), caret, caret, false,
             binding.broker.languageOverride.empty() ? method->languageCode() : binding.broker.languageOverride);
         if (context) {
             context->identityKnown = true;

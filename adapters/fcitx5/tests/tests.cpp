@@ -1413,32 +1413,61 @@ void observerRepliesFailClosed() {
         line.type("git");
         check(!line.prose(), "a single token is never a request");
         line.type(" commit the läst");
-        line.erase();
-        line.eraseWord();
+        line.apply(LineEdit::Erase);
+        line.apply(LineEdit::EraseWord);
         check(line.text() == "git commit the " && line.prose(), "typing, Backspace and Ctrl+W edit the line");
-        line.lose();
+        line.apply(LineEdit::Lose);
         line.type("more");
-        check(!line.tracking() && line.text().empty(), "after an unknown key nothing is tracked");
-        line.clear();
+        check(!line.tracking() && line.text().empty(), "after word or vertical motion nothing is tracked");
+        line.apply(LineEdit::Clear);
         check(line.tracking() && line.text().empty(), "a new line tracks again");
         line.type("see the image");
-        line.restart();
+        line.apply(LineEdit::Restart);
         line.type("is a sample of");
         check(line.tracking() && line.text() == "is a sample of" && line.prose(),
               "after a paste only what is typed next is followed");
+
+        // The caret moves within a line Badi watched being typed.
+        TypedLine middle;
+        middle.type("send it to me");
+        for (int moved = 0; moved < 6; ++moved) middle.apply(LineEdit::Left);
+        check(middle.before() == "send it" && middle.caretScalars() == 7, "Left moves the caret one scalar");
+        middle.apply(LineEdit::Type, " back");
+        check(middle.text() == "send it back to me" && middle.before() == "send it back",
+              "typing inserts at the caret");
+        middle.apply(LineEdit::DeleteForward);
+        middle.apply(LineEdit::End);
+        middle.erase(3);
+        check(middle.text() == "send it backto" && middle.caretScalars() == 14,
+              "Delete, End and a correction's Backspaces edit where the line editor does");
+        middle.apply(LineEdit::Home);
+        middle.apply(LineEdit::Left);
+        check(!middle.tracking(), "motion past the start may change lines, so the line is lost");
+        middle.apply(LineEdit::End);
+        check(middle.tracking() && middle.text().empty(), "End resumes from the end of the line");
+        check(lineEditFor(::fcitx::Key(FcitxKey_Left), "") == LineEdit::Left &&
+                  lineEditFor(::fcitx::Key("Control+Left"), "") == LineEdit::Lose &&
+                  lineEditFor(::fcitx::Key("Control+a"), "") == LineEdit::Home &&
+                  lineEditFor(::fcitx::Key("Control+U"), "") == LineEdit::Clear &&
+                  lineEditFor(::fcitx::Key("Alt+b"), "") == LineEdit::Lose &&
+                  lineEditFor(::fcitx::Key(FcitxKey_Up), "") == LineEdit::Lose &&
+                  lineEditFor(::fcitx::Key("Control+Shift+V"), "") == LineEdit::Restart &&
+                  lineEditFor(::fcitx::Key(FcitxKey_a), "a") == LineEdit::Type,
+              "line keys are classified as Readline and most TUIs apply them");
     }
     {
         Suggestion shown;
         shown.text = " is a sample";
         shown.acceptWord = " is";
         const auto parts = candidateParts(shown);
-        check(parts.strong == "is" && parts.rest == " a sample",
+        check(parts.lead.empty() && parts.strong == "is" && parts.rest == " a sample",
               "the panel shows the word Tab takes apart from the rest, without the leading space");
-        shown.replaceBefore = "teh";
-        shown.text = "the";
-        shown.acceptWord = "the";
-        check(candidateParts(shown).strong == "the" && candidateParts(shown).rest.empty(),
-              "a spelling replacement is taken, and shown, whole");
+        shown.replaceBefore = "teh ";
+        shown.text = "the ";
+        shown.acceptWord = "the ";
+        const auto correction = candidateParts(shown);
+        check(correction.lead == "teh \u2192 " && correction.strong == "the" && correction.rest.empty(),
+              "a spelling replacement is shown as the typo and its whole correction");
     }
     const auto context = captureContextWindow("thank you", 9, 9, true, "en");
     check(context && observerAgrees({{"before", "thank you"}, {"after", ""}}, *context) &&

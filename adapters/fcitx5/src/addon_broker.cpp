@@ -25,6 +25,7 @@ namespace {
 ::fcitx::Text candidateText(const Suggestion &suggestion) {
     const auto parts = candidateParts(suggestion);
     ::fcitx::Text text;
+    if (!parts.lead.empty()) text.append(parts.lead);
     text.append(parts.strong, ::fcitx::TextFormatFlags{::fcitx::TextFormatFlag::HighLight,
                                                       ::fcitx::TextFormatFlag::Bold});
     if (!parts.rest.empty()) text.append(parts.rest);
@@ -374,6 +375,7 @@ void BadiAddon::applyCommitPrepare(const CommitPrepare &prepare) {
         binding->typeThroughBase.clear();
         binding->typeThroughTyped.clear();
     }
+    std::string terminalErase;
     if (dispatch->replaceBefore) {
         if (imeParityApp(binding->state.appId())) return refuseCommit(prepare, binding);
         const auto context = currentContext(*binding);
@@ -381,12 +383,22 @@ void BadiAddon::applyCommitPrepare(const CommitPrepare &prepare) {
                                         false, context->before, *dispatch->replaceBefore)
                                     : std::nullopt;
         if (!count) return refuseCommit(prepare, binding);
-        binding->inputContext->deleteSurroundingText(-static_cast<int>(*count), *count);
+        if (binding->state.editPath() == NativeEditPath::TypedLine) {
+            // A terminal ignores the input method's delete request. Its
+            // Backspace key sends DEL to the program, so the same DELs, one
+            // per tracked scalar of the typo, lead the one commit that types
+            // the correction, in order (ADR 0009).
+            binding->typedLine.erase(*count);
+            debug_.record("commit", binding->state.appId(), "terminal_backspaces", *count);
+            terminalErase = std::string(*count, '\x7f');
+        } else {
+            binding->inputContext->deleteSurroundingText(-static_cast<int>(*count), *count);
+        }
     }
     // One append, like typed text. Fcitx cannot see the client apply it,
     // so the result is dispatched-unverified, never applied. A native
     // replacement deletes the exact suffix first; IME-parity stays append-only.
-    binding->inputContext->commitString(dispatch->text);
+    binding->inputContext->commitString(terminalErase + dispatch->text);
     if (binding->state.editPath() == NativeEditPath::TypedLine) {
         binding->typedLine.type(dispatch->text);
         requestLineAfterPause(*binding);
