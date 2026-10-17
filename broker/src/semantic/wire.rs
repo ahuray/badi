@@ -547,8 +547,40 @@ fn malformed(reason: &'static str) -> ClientError {
     ClientError::Transport(io::Error::new(io::ErrorKind::InvalidData, reason))
 }
 
+/// The runtime's own counts: newly evaluated prompt tokens, prompt tokens
+/// reused from its prefix cache, and tokens generated.
+#[derive(Clone, Copy, Debug)]
+pub struct NativeTimings {
+    pub prompt_n: Option<u32>,
+    pub cache_n: Option<u32>,
+    pub predicted_n: Option<u32>,
+}
+
+/// Optional timing statistics never invalidate an otherwise valid stream:
+/// a non-object timings value, or a field that is not a `u32`, stays unknown.
+fn deserialize_native_timings<'de, D>(deserializer: D) -> Result<Option<NativeTimings>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| {
+        let object = value.as_object()?;
+        let count = |name: &str| {
+            object
+                .get(name)
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|count| u32::try_from(count).ok())
+        };
+        Some(NativeTimings {
+            prompt_n: count("prompt_n"),
+            cache_n: count("cache_n"),
+            predicted_n: count("predicted_n"),
+        })
+    }))
+}
+
 /// One event of the native streaming completion endpoint. Only the terminal
-/// event (`stop: true`) may carry the stop fields.
+/// event (`stop: true`) may carry the stop fields; timings may be per token.
 #[derive(Debug, Deserialize)]
 pub struct NativeStreamChunk {
     pub index: u32,
@@ -567,6 +599,8 @@ pub struct NativeStreamChunk {
     pub stopped_eos: Option<bool>,
     #[serde(default)]
     pub stopping_word: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_native_timings")]
+    pub timings: Option<NativeTimings>,
 }
 
 #[derive(Debug, Deserialize)]

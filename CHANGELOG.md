@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#89](https://github.com/ahuray/badi/pull/89) The debug trace records
+  model timing and cache counts; long run-on sentences keep the runtime's
+  prefix cache through 64-scalar context steps; and the Neovim installer
+  writes a lazy.nvim spec so the plugin loads under LazyVim.
 - [#88](https://github.com/ahuray/badi/pull/88) Follow-up: a provider-rejected
   final also keeps the shown partial, and at most one Tab is held per word
   acceptance; the terminal budget measurement and the Neovim, Writer and

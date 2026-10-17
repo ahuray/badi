@@ -21,8 +21,8 @@ use uuid::Uuid;
 
 use crate::protocol::ProviderKind;
 use crate::provider::{
-    CompletionProvider, ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger,
-    WritingProposal,
+    CompletionProvider, ProviderError, ProviderOutcome, ProviderReply, ProviderRequest,
+    RequestTrigger, WritingProposal,
 };
 
 use super::client::{
@@ -668,7 +668,7 @@ impl CompletionProvider for OwnedRuntime {
         allow_replacement: bool,
         trigger: RequestTrigger,
         partials: Option<tokio::sync::mpsc::UnboundedSender<String>>,
-    ) -> Result<ProviderOutcome, ProviderError> {
+    ) -> Result<ProviderReply, ProviderError> {
         self.client
             .propose_outcome_with_partials(
                 request,

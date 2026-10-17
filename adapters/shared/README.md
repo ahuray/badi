@@ -16,7 +16,7 @@ four-second local display timer. Update the broker before the editor plugin.
 | --- | --- | --- |
 | Obsidian | Automatic, or Ctrl+Shift+Space to request. Tab accepts one word only while a suggestion is visible; otherwise it stays Tab. Ctrl/Command+Right accepts all, Escape dismisses. Mid-note, only what fits before the next word. | Obsidian 1.13.7 / Electron 43, real app and model: English, German and Persian display, acceptance, undo, Escape, broker restart |
 | Bash | Ctrl-X then Tab requests and accepts, Ctrl-X then Escape dismisses; never submits ([details](../shell/README.md)) | Bash 5.3.15, Readline 8.3, Ghostty 1.3.1 |
-| Neovim | Prose buffers, automatic after a 120 ms pause, or Ctrl+Shift+Space. Tab accepts one word and Ctrl+Right all of it, only while a suggestion is visible; leaving Insert mode dismisses ([details](../neovim/README.md)) | Neovim 0.12.5 headless, scripted bridge and real phrase broker; live with the real model in foot on 2026-10-17 (`-u NONE`; this workstation's `packpath` keeps the start package from loading under its own config) |
+| Neovim | Prose buffers, automatic after a 120 ms pause, or Ctrl+Shift+Space. Tab accepts one word and Ctrl+Right all of it, only while a suggestion is visible; leaving Insert mode dismisses ([details](../neovim/README.md)) | Neovim 0.12.5 headless, scripted bridge and real phrase broker; live with the real model in foot on 2026-10-17, first with `-u NONE`, then under this workstation's own LazyVim through the installer's lazy.nvim spec, including Tab, Ctrl+Right and Ctrl+Shift+Space |
 | LibreOffice Writer (spelling) | A finished misspelled word shows its correction; Alt+F7 shows one for the word at the caret; Alt+F7 again replaces it in one undo step, Escape dismisses ([details](../libreoffice/README.md)) | LibreOffice 26.8 headless, phrase fixture; the interactive Wayland window live (Alt+F7, replace, one Ctrl+Z) |
 
 Browser fields use the [IME-parity path](../../README.md#how-badi-edits-chromium-based-apps-and-zen)
@@ -54,8 +54,10 @@ restricted mode or edits a note.
   `BADI_LANGUAGE=de` or `fa` overrides the locale. The Node bridge exits after
   ten idle minutes, and the next Ctrl-X Tab starts a new one.
 - **Neovim.** Restart it. The plugin is a start package under
-  `stdpath('data')/site/pack/badi`; Node must be on PATH, and its bridge exits
-  after ten idle minutes like Bash's ([details](../neovim/README.md)).
+  `stdpath('data')/site/pack/badi`; when lazy.nvim is detected the installer
+  also writes its own new `lua/plugins/badi.lua` spec for that package.
+  Node must be on PATH, and its bridge exits after ten idle minutes like
+  Bash's ([details](../neovim/README.md)).
 
 A suggestion grows while the model streams it: each longer version that
 continues the shown text replaces it in Obsidian and Neovim, and acceptance

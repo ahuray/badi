@@ -145,17 +145,28 @@ without a suggestion or a pending remainder stays the terminal's. A miss is
 announced only after an explicit request: an automatic request that finds
 nothing shows no notice, on this path and every other (`requestExplicit`
 records how the published request was made; `onClear` shows
-`clearNoticeText` only for an explicit one). Automatic misses here are
-usually the inference budget, not the line's length: measured 2026-10-17
-on the installed `d74c238` build, typing a 462-character prompt into a
-Claude Code session in Ghostty produced seven automatic requests (typed
-lines of 68–462 characters) and every one ended `budget_stream` at
-550 ms, while `badictl probe` of that same line suggested 3/3 once cached,
-its last 160 characters 2/3, and its last 80 or 40 characters 0/3
-(`budget_prefill`/`budget_stream`). Trimming `before` at a word boundary
-in the addon is therefore not done: the broker's prompt already caps the
-context at 160 characters, and a moving trim point would forfeit prefix
-cache reuse on every keystroke.
+`clearNoticeText` only for an explicit one). The broker, not the addon,
+owns the prompt window, so the typed line itself is not trimmed here.
+Measured 2026-10-17 with the same seeded, word-paced disposable typing
+into Claude Code in Ghostty: a 287-character text of short sentences made
+46 automatic requests before and after the broker's coarse context cut,
+with 39 proposals, five `output_rejected` and two cancellations each time
+and no budget outcome. A 337-character single sentence separated the
+cause. Before the fix, its first 24 requests (through a 159-byte model
+input) mostly evaluated one new prompt token (`prompt_n=1`) while
+`cache_n` rose to 30 and time to first token stayed around 30–48 ms.
+From 163 bytes on, 31 requests produced eight proposals, 14 cancellations,
+four `budget_stream`, four `budget_prefill` and one model abstention; 13
+were cancelled before a first token, and the completed cold rows showed
+`prompt_n=30–31`, `cache_n=0` and 369–512 ms to the first token. The
+sliding 160-scalar sentence start was changing the prompt's first bytes
+on every request. With the broker moving that start in 64-scalar steps,
+the same run-on typing made 51 requests: 50 proposals and one
+`output_rejected`, with no cancellation or budget outcome. At inputs of
+160 bytes or more, all 27 were proposals and 25 had a distinct first
+ghost within 550 ms; only the two cut boundaries (inputs 230 and 294)
+re-evaluated 32/31 prompt tokens with `cache_n=0`, at 358/440 ms to the
+first token. Budgets were not raised.
 
 ### Observed fields
 

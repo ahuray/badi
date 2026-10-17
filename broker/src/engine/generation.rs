@@ -23,13 +23,14 @@ use crate::protocol::{
     SuggestionShowPayload,
 };
 use crate::provider::{
-    ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger, WritingProposal,
+    ProviderError, ProviderOutcome, ProviderReply, ProviderRequest, ProviderStats, RequestTrigger,
+    WritingProposal,
 };
 use crate::segment::{
     accept_word, ends_at_word_boundary, sanitize_suggestion, validate_suggestion_shape,
 };
 
-type ProviderResult = Result<Result<ProviderOutcome, ProviderError>, time::error::Elapsed>;
+type ProviderResult = Result<Result<ProviderReply, ProviderError>, time::error::Elapsed>;
 /// A carried remainder with its deadline and outcome day, or its declining gate.
 type CarryOutcome = (Option<(String, Instant, Option<u64>)>, Option<CarryMiss>);
 
@@ -325,14 +326,18 @@ impl Broker {
                     if shown_partial.is_none() {
                         self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
                     }
-                    trace_model_done(&binding, started, "cancelled", None);
+                    // The provider future is dropped here, so its counts are
+                    // gone; a shown partial proves a first token arrived.
+                    trace_model_done(&binding, started, "cancelled", None, None,
+                        shown_partial.is_none());
                     return;
                 }
                 () = shutdown.cancelled() => {
                     if shown_partial.is_none() {
                         self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
                     }
-                    trace_model_done(&binding, started, "shutdown", None);
+                    trace_model_done(&binding, started, "shutdown", None, None,
+                        shown_partial.is_none());
                     return;
                 }
                 partial = partial_rx.recv(), if partials_open => {
@@ -369,18 +374,29 @@ impl Broker {
                     }
                 }
                 result = &mut provider => {
-                    let (outcome, text) = match &result {
-                        Ok(Ok(ProviderOutcome::Proposal(raw))) => {
-                            ("proposal".to_owned(), Some(raw.text.as_str()))
+                    let (outcome, text, stats) = match &result {
+                        Ok(Ok(ProviderReply {
+                            outcome: ProviderOutcome::Proposal(raw),
+                            stats,
+                        })) => ("proposal".to_owned(), Some(raw.text.as_str()), *stats),
+                        Ok(Ok(ProviderReply {
+                            outcome: ProviderOutcome::NoSuggestion(reason),
+                            stats,
+                        })) => (trace_name(reason), None, *stats),
+                        Ok(Err(ProviderError::Cancelled)) => {
+                            ("cancelled".to_owned(), None, None)
                         }
-                        Ok(Ok(ProviderOutcome::NoSuggestion(reason))) => {
-                            (trace_name(reason), None)
+                        Ok(Err(ProviderError::Unavailable)) => {
+                            ("unavailable".to_owned(), None, None)
                         }
-                        Ok(Err(ProviderError::Cancelled)) => ("cancelled".to_owned(), None),
-                        Ok(Err(ProviderError::Unavailable)) => ("unavailable".to_owned(), None),
-                        Err(_) => ("timeout".to_owned(), None),
+                        Err(_) => ("timeout".to_owned(), None, None),
                     };
-                    trace_model_done(&binding, started, &outcome, text);
+                    let cancelled_before_first_token = matches!(
+                        outcome.as_str(), "cancelled" | "timeout")
+                        && stats.is_none_or(|stats| stats.ttft.is_none())
+                        && shown_partial.is_none();
+                    trace_model_done(&binding, started, &outcome, text, stats.as_ref(),
+                        cancelled_before_first_token);
                     self.finish_generation(binding, &cancellation, result, shown_partial, carried)
                         .await;
                     return;
@@ -466,8 +482,14 @@ impl Broker {
             return Err(Withheld::Clear(ReasonCode::ProviderTimeout));
         }
         let raw = match result {
-            Ok(Ok(ProviderOutcome::Proposal(raw))) => raw,
-            Ok(Ok(ProviderOutcome::NoSuggestion(reason))) => {
+            Ok(Ok(ProviderReply {
+                outcome: ProviderOutcome::Proposal(raw),
+                ..
+            })) => raw,
+            Ok(Ok(ProviderReply {
+                outcome: ProviderOutcome::NoSuggestion(reason),
+                ..
+            })) => {
                 // The provider's own rejection of its whole output (the
                 // local model's `validate_proposal`, reported here rather
                 // than as a proposal) must not withdraw a partial it had
@@ -769,17 +791,35 @@ fn record_carry(metrics: &Metrics, binding: &GenerationBinding, miss: Option<Car
     });
 }
 
-/// One provider call's end, with its latency and outcome class.
+/// One provider call's end, with its latency, outcome class and the
+/// provider's content-free counts when it measured the call.
 fn trace_model_done(
     binding: &GenerationBinding,
     started: Instant,
     outcome: &str,
     text: Option<&str>,
+    stats: Option<&ProviderStats>,
+    cancelled_before_first_token: bool,
 ) {
     debug_trace::emit("model done", |entry| {
         entry.put("sid", debug_trace::session(binding.coordinates.session_id));
         entry.put("ms", duration_millis(started.elapsed()));
         entry.put("outcome", outcome);
+        if let Some(stats) = stats {
+            if let Some(ttft) = stats.ttft {
+                entry.put("ttft_ms", duration_millis(ttft));
+            }
+            if let Some(prompt_tokens) = stats.prompt_tokens {
+                entry.put("prompt_tokens", prompt_tokens);
+            }
+            if let Some(cache_tokens) = stats.cache_tokens {
+                entry.put("cache_tokens", cache_tokens);
+            }
+            entry.put("generated_tokens", stats.generated_tokens);
+        }
+        if matches!(outcome, "cancelled" | "shutdown" | "timeout") {
+            entry.put("cancelled_before_first_token", cancelled_before_first_token);
+        }
         if let Some(text) = text {
             entry.put("chars", text.chars().count());
             entry.text("text", text);

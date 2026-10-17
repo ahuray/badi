@@ -223,7 +223,8 @@ fn cold_inference_uses_a_bounded_sentence_without_changing_authority_context() {
     assert_eq!(payload["prompt"], "Please review the");
     assert_eq!(request.before, original);
     for context in ["word ".repeat(100), "فارسی ".repeat(100), "x".repeat(300)] {
-        assert!(super::inference_context(&context).chars().count() <= 160);
+        // The coarse cut lets the window grow one step past 160 scalars.
+        assert!(super::inference_context(&context).chars().count() <= 224);
     }
     assert_eq!(
         super::inference_context("We use version 2.5 in production"),
@@ -308,8 +309,9 @@ fn a_short_sentence_start_keeps_the_previous_sentences_in_the_window() {
     ] {
         assert_eq!(super::inference_context(context), expected, "{context:?}");
     }
-    // The 160-scalar window and its whitespace cut still bound the prompt,
-    // even when the previous sentence begins before the window.
+    // The window and its whitespace cut still bound the prompt (160 scalars
+    // plus at most one 64-scalar cut step), even when the previous sentence
+    // begins before the window.
     for (sentence, start) in [
         ("word ".repeat(40), "Please"),
         ("Wort ".repeat(40), "Bitte"),
@@ -317,9 +319,10 @@ fn a_short_sentence_start_keeps_the_previous_sentences_in_the_window() {
     ] {
         let before = format!("{}. {start} ", sentence.trim_end());
         let context = super::inference_context(&before);
-        assert!(context.chars().count() <= 160, "{context:?}");
+        assert!(context.chars().count() <= 224, "{context:?}");
         assert!(context.ends_with(&format!(". {start} ")), "{context:?}");
-        assert!(before[..before.len() - context.len()].ends_with(' '));
+        let removed = &before[..before.len() - context.len()];
+        assert!(removed.is_empty() || removed.ends_with(' '), "{removed:?}");
         assert!(context.starts_with(sentence.split(' ').next().expect("word")));
     }
     // Typed in order, the previous request's prompt is a prefix of the
@@ -328,6 +331,39 @@ fn a_short_sentence_start_keeps_the_previous_sentences_in_the_window() {
     let next = super::inference_context("Thanks for sharing the draft. I");
     assert_eq!(next, "Thanks for sharing the draft. I");
     assert!(next.starts_with(previous));
+
+    // A single sentence past the window keeps one fixed start per cut step,
+    // so word-by-word appends extend the previous prompt instead of sliding
+    // its first bytes: consecutive contexts share a prefix except at the
+    // rare step boundary, where the new context is a suffix of the old text.
+    let words: Vec<String> = (0..80).map(|index| format!("word{index}")).collect();
+    let mut typed = String::new();
+    let mut previous = String::new();
+    let mut steps = 0;
+    let mut extensions = 0;
+    for word in &words {
+        if !typed.is_empty() {
+            typed.push(' ');
+        }
+        typed.push_str(word);
+        let context = super::inference_context(&typed).to_owned();
+        if !previous.is_empty() {
+            if context.starts_with(&previous) {
+                extensions += 1;
+            } else {
+                steps += 1;
+                assert!(
+                    typed.ends_with(&context) && context.chars().count() >= 150,
+                    "{context:?}"
+                );
+            }
+        }
+        previous = context;
+    }
+    // 80 words ≈ 560 scalars: with 64-scalar steps the start can move only
+    // a handful of times; a per-request slide would move it nearly always.
+    assert!(extensions > 60, "extensions={extensions} steps={steps}");
+    assert!(steps <= 8, "extensions={extensions} steps={steps}");
     let request = crate::provider::ProviderRequest {
         before: "Previous notes are here. Thanks for sharing the draft. Please ".to_owned(),
         after: String::new(),
@@ -413,6 +449,7 @@ fn trailing_space_boundary_preserves_exact_bytes_and_the_eight_token_budget() {
         assert_eq!(payload["stop"], serde_json::json!([".", "\n"]));
         assert_eq!(payload["seed"], 42);
         assert_eq!(payload["cache_prompt"], true);
+        assert_eq!(payload["timings_per_token"], true);
         assert_eq!(request.before, before, "editing context must not change");
         let legacy = super::completion_plan(&request, &[]);
         assert_eq!(legacy.prompt, original);

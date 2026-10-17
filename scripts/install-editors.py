@@ -28,14 +28,46 @@ SHARED_CLIENT = ("shared/broker-client.mjs", "shared/activity.mjs", "shared/writ
 NEOVIM_PLUGIN = ("plugin/badi.lua", "lua/badi/init.lua", "lua/badi/context.lua", "lua/badi/bridge.lua")
 
 
-def neovim_package(home):
-    """Neovim's own start package directory: stdpath('data')/site/pack."""
-    data = os.environ.get("XDG_DATA_HOME", "")
-    base = Path(data) if os.path.isabs(data) else home / ".local/share"
+def neovim_appname():
     appname = os.environ.get("NVIM_APPNAME") or "nvim"
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", appname) or appname in (".", ".."):
         raise RuntimeError("NVIM_APPNAME must be a plain directory name")
-    return base / appname / "site/pack/badi/start/badi"
+    return appname
+
+
+def neovim_base(home, variable, fallback):
+    value = os.environ.get(variable, "")
+    return Path(value) if os.path.isabs(value) else home / fallback
+
+
+def neovim_package(home):
+    """Neovim's own start package directory: stdpath('data')/site/pack."""
+    return neovim_base(home, "XDG_DATA_HOME", ".local/share") / neovim_appname() / "site/pack/badi/start/badi"
+
+
+def neovim_config(home):
+    """stdpath('config') for the same appname as the start package."""
+    return neovim_base(home, "XDG_CONFIG_HOME", ".config") / neovim_appname()
+
+
+def neovim_uses_lazy(home):
+    """lazy.nvim manages the runtimepath itself, so a start package alone
+    may never load (a LazyVim packpath omits the site directory)."""
+    data = neovim_base(home, "XDG_DATA_HOME", ".local/share") / neovim_appname()
+    config = neovim_config(home)
+    return ((data / "lazy/lazy.nvim").is_dir()
+            or (config / "lazy-lock.json").is_file()
+            or (config / "lua/plugins").is_dir())
+
+
+NEOVIM_LAZY_MARKER = "-- badi:lazy-spec v1"
+
+
+def neovim_lazy_spec(package):
+    return (f"{NEOVIM_LAZY_MARKER}\n"
+            "-- Written by scripts/install-editors.py so lazy.nvim loads Badi's\n"
+            "-- start package; the editor install's restore removes this file.\n"
+            f"return {{ dir = {json.dumps(str(package), ensure_ascii=False)}, lazy = false }}\n").encode()
 
 
 def build_libreoffice_extension():
@@ -129,9 +161,23 @@ def main():
             installation.copy(ROOT / "adapters/neovim" / path, package / path, 0o644)
         for path in (*SHARED_CLIENT, "shared/recovering-client.mjs", "neovim/bridge.mjs"):
             installation.copy(ROOT / "adapters" / path, home / ".local/lib/badi/editors" / path, 0o644)
+        lazy_note = ""
+        if neovim_uses_lazy(home):
+            # A new file only; the user's own specs are never edited. The
+            # write is backed up and receipted like every editor file, so
+            # the installation's restore removes it again.
+            spec = neovim_config(home) / "lua/plugins/badi.lua"
+            if spec.is_symlink():
+                raise RuntimeError(f"A symlink occupies the Neovim lazy spec path: {spec}")
+            body = neovim_lazy_spec(package)
+            current = spec.read_bytes() if spec.is_file() else b""
+            if current and current != body and not current.startswith(NEOVIM_LAZY_MARKER.encode()):
+                raise RuntimeError(f"An existing plugin spec occupies {spec}; Badi will not overwrite it")
+            installation.write(spec, body, 0o644)
+            lazy_note = f" lazy.nvim detected: spec written to {spec}."
         note = "" if shutil.which("nvim") else " Neovim 0.10 or newer was not found on PATH."
         print("Neovim installed as a start package. Restart Neovim; prose buffers suggest after a typing pause, "
-              f"Tab accepts a word, Ctrl+Right accepts all. Allow it with: badi app nvim on.{note}")
+              f"Tab accepts a word, Ctrl+Right accepts all. Allow it with: badi app nvim on.{lazy_note}{note}")
     if args.libreoffice:
         package = home / LIBREOFFICE_PACKAGE
         installation.write(package, extension, 0o644)

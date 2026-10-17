@@ -48,6 +48,34 @@ impl RequestTrigger {
     }
 }
 
+/// Content-free counts from one provider call, for the debug trace. Token
+/// counts come from the runtime's own timings when it finished the call;
+/// `generated_tokens` falls back to the streamed token events seen.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProviderStats {
+    pub ttft: Option<Duration>,
+    pub prompt_tokens: Option<u32>,
+    pub cache_tokens: Option<u32>,
+    pub generated_tokens: u32,
+}
+
+/// One provider reply: the outcome and, when the provider measured the
+/// call, its counts.
+#[derive(Clone, Debug)]
+pub struct ProviderReply {
+    pub outcome: ProviderOutcome,
+    pub stats: Option<ProviderStats>,
+}
+
+impl From<ProviderOutcome> for ProviderReply {
+    fn from(outcome: ProviderOutcome) -> Self {
+        Self {
+            outcome,
+            stats: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderRequest {
     pub before: String,
@@ -139,10 +167,11 @@ pub trait CompletionProvider: Send + Sync + 'static {
         allow_replacement: bool,
         trigger: RequestTrigger,
         partials: Option<UnboundedSender<String>>,
-    ) -> Result<ProviderOutcome, ProviderError> {
+    ) -> Result<ProviderReply, ProviderError> {
         let _ = partials;
         self.propose_outcome(request, cancellation, allow_replacement, trigger)
             .await
+            .map(ProviderReply::from)
     }
 }
 

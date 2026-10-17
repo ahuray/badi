@@ -10,13 +10,14 @@ keeps the history of what shipped. Evidence here names its kind (fixture,
 real broker, real model, live app); a tested app version is not a claim about
 Linux in general.
 
-## Where Badi stands (2026-10-16)
+## Where Badi stands (2026-10-17)
 
 - **Coverage** is ahead of every Linux alternative found: Chromium-based apps
   and any website, Zen, Omarchy web apps, Telegram, LibreOffice Writer,
   Obsidian, Bash and, by an opt-in rule, Ghostty's typed line
   ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)). Neovim
-  passes headless lanes only. Writer checks spelling as you type and Alt+F7
+  also passed live under this workstation's own LazyVim on 2026-10-17.
+  Writer checks spelling as you type and Alt+F7
   fixes the word at the caret; German, French, Spanish, Italian, Dutch and
   Polish spelling turn on with `badi spelling` and their Hunspell dictionaries. The closest Omarchy alternative, Oma Tab, replaces the input
   method and ships a 4.8 GB model.
@@ -43,7 +44,12 @@ Linux in general.
   ([runtime](broker/README.md#writing-model-runtime)). These are bounded
   samples on this machine, not universal latency or language-quality claims.
   Vulkan on the Iris Xe is slower per keystroke (13–20 against 19–30 tokens/s
-  for generation), so Badi stays on the CPU.
+  for generation), so Badi stays on the CPU. For one long run-on sentence
+  typed into Claude Code in Ghostty, moving the broker's 160-scalar prompt
+  start in 64-scalar steps changed requests at model inputs of at least
+  160 bytes from 8/31 proposals (13 cancelled before a first token) to
+  27/27 proposals, with 25 distinct first ghosts within 550 ms
+  ([terminal evidence](adapters/fcitx5/README.md#terminals)).
 - **Quality:** the installed Qwen3-1.7B is weak on independent sets, and no
   ~350M candidate passed the English/German/Persian gates. Persian keeps the
   8-token automatic budget: on 2026-10-12, 21 tokens missed 550 ms on all 13
@@ -53,6 +59,8 @@ Linux in general.
   log` trace every request, suggestion, key and ghost show/hide across the
   broker, Fcitx and observer ([README](README.md#debug-trace),
   [ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
+  Each `model done` also records time to first token and the runtime's
+  newly evaluated, cache-reused and generated token counts when available.
   Use it for every live trial.
 - **Context and learning:** same-window context is extracted for the Lab only;
   style learning stores sealed samples behind `badi style on`, and no prompt
@@ -103,12 +111,11 @@ publish need the user's go-ahead first; the rest can start at once.
    quiet after a restart; and fractional scaling / several monitors when a
    second display is at hand. *Done when* the matrix shows zero wrong-field or stale edits and
    the session helper and Fcitx runbooks record it.
-2. **Try the new editor surfaces live.** Neovim: the real model in an
-   interactive terminal works (2026-10-17: display, Tab, Ctrl+→, streamed
-   growth, Insert-leave dismissal; run with `-u NONE` because this
-   workstation's `packpath` excludes the installed start package, so the
-   plugin never loads under its own config — still open are that config and
-   whether Ctrl+Shift+Space arrives). Writer: the grey preview, Tab and
+2. **Try the new editor surfaces live.** Neovim is done: the real model
+   works in an interactive terminal and, through the installer's new
+   lazy.nvim spec, under this workstation's own LazyVim in foot
+   (2026-10-17: display, Tab, Ctrl+→, streamed growth, Insert-leave
+   dismissal and an explicit Ctrl+Shift+Space request). Writer: the grey preview, Tab and
    Alt+F7 with one Ctrl+Z work (2026-10-14, isolated profile); still open are
    a model-backed correction of an ambiguous word and the automatic hint with
    German, French and Spanish dictionaries installed. A dark pill with every
