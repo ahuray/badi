@@ -142,7 +142,17 @@ without a suggestion or a pending remainder stays the terminal's. A miss is
 announced only after an explicit request: an automatic request that finds
 nothing shows no notice, on this path and every other (`requestExplicit`
 records how the published request was made; `onClear` shows
-`clearNoticeText` only for an explicit one).
+`clearNoticeText` only for an explicit one). Automatic misses here are
+usually the inference budget, not the line's length: measured 2026-10-17
+on the installed `d74c238` build, typing a 462-character prompt into a
+Claude Code session in Ghostty produced seven automatic requests (typed
+lines of 68–462 characters) and every one ended `budget_stream` at
+550 ms, while `badictl probe` of that same line suggested 3/3 once cached,
+its last 160 characters 2/3, and its last 80 or 40 characters 0/3
+(`budget_prefill`/`budget_stream`). Trimming `before` at a word boundary
+in the addon is therefore not done: the broker's prompt already caps the
+context at 160 characters, and a moving trim point would forfeit prefix
+cache reuse on every keystroke.
 
 ### Observed fields
 

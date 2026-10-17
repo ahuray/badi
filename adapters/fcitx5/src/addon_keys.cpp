@@ -123,6 +123,9 @@ void BadiAddon::holdTab(Binding &binding) {
     binding.heldTabTimer = oneShot(kHeldTabTimeoutUs, [this, context = binding.inputContext] {
         if (auto *current = bindingFor(*context)) {
             debug_.record("decision", current->state.appId(), "tab_held_dropped");
+            // At most one hold per word acceptance: the wait is over, so
+            // the next Tab reaches the application.
+            current->typeThroughAutomatic = false;
             dropHeldTab(*current);
         }
     });

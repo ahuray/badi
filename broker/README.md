@@ -58,8 +58,10 @@ and whether they were dirty (`--version` prints both; packagers may set
   cannot swallow the acceptance. Accepting or dismissing any version retires
   them all; cancellation, focus changes and expiry revoke the whole group.
   At most 64 versions fit the protocol's 64-character limit. When the final
-  result is rejected by the display checks or arrives late, the last shown
-  partial stays if it ends at a word boundary (`ends_at_word_boundary`): it
+  result is rejected (by the display checks, or by the provider's own
+  validation, which it reports as a no-suggestion outcome) or arrives late,
+  the last shown partial stays if it ends at a word boundary
+  (`ends_at_word_boundary`): it
   was already checked before display, so it counts as the shown suggestion,
   not as a no-suggestion miss, and only an edit, a focus change, Escape or
   its expiry withdraws it.

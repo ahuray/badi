@@ -247,9 +247,18 @@ void BadiAddon::showCandidate(Binding &binding, const Suggestion &suggestion) {
 void BadiAddon::onClear(const ClearNotice &clear) {
     auto *binding = bindingFor(clear.coordinates.sessionId);
     if (!binding) return;
+    const bool current = binding->state.coordinates() == clear.coordinates;
+    if (current) {
+        // The request that would have brought a word acceptance's remainder
+        // was answered without a suggestion: no Tab may be held for that
+        // acceptance any more (at most one hold each), and a Tab already
+        // held is dropped with it.
+        if (binding->heldTab) debug_.record("decision", binding->state.appId(), "tab_held_dropped");
+        binding->typeThroughAutomatic = false;
+        dropHeldTab(*binding);
+    }
     if (!binding->state.editingAvailable()) return clearOwnedPanel(*binding);
     debug_.record("clear", binding->state.appId(), clear.reason);
-    const bool current = binding->state.coordinates() == clear.coordinates;
     if (current && binding->pendingSuggestion &&
         (!clear.suggestionId || *clear.suggestionId == *binding->pendingSuggestion)) {
         // A broker cancellation can arrive before the preview RPC returns.
