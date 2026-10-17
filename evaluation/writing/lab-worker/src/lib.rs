@@ -122,6 +122,9 @@ pub enum Mode {
     /// Lab-only: name the line after the caret, then continue from the text
     /// before it. Production prompts do not include that line.
     FollowingText,
+    /// The production provider with the case's context as window text: its
+    /// words bias the continuation's first tokens; the prompt is unchanged.
+    ContextBias,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -475,7 +478,10 @@ pub async fn run(
         return Err(LabError::RuntimeUnavailable);
     }
     let started = Instant::now();
-    if request.config.mode == Mode::ProductionBoundary {
+    if matches!(
+        request.config.mode,
+        Mode::ProductionBoundary | Mode::ContextBias
+    ) {
         return baseline(runtime, &request, cancellation, started).await;
     }
     if matches!(
@@ -590,17 +596,20 @@ async fn baseline(
         temperature: 0.0,
         seed: 42,
     };
-    if !request.context.is_empty() || !request.style_examples.is_empty() {
+    let bias_context = request.config.mode == Mode::ContextBias;
+    if (!bias_context && !request.context.is_empty()) || !request.style_examples.is_empty() {
         result
             .warnings
             .push("context_and_style_ignored_by_production");
     }
     result.warnings.push("production_raw_and_ttft_not_retained");
+    result.used_context = bias_context && !request.context.is_empty();
     let trace = Arc::new(RequestTrace::default());
     let client = runtime
         .client()
         .clone()
-        .with_request_observer(Arc::clone(&trace) as _);
+        .with_request_observer(Arc::clone(&trace) as _)
+        .with_window_context(if bias_context { &request.context } else { "" });
     let proposal = client
         .propose(request.provider_request(), cancellation, true)
         .await

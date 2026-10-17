@@ -290,6 +290,19 @@ per-app language always wins. The text, fingerprint, caret and edit authority
 are unchanged, and no sample is retained. French and Spanish generation
 still requires independent qualification.
 
+## Context word bias
+
+`SemanticClient::with_window_context(text)` lets a caller hand the client the
+bounded text around a field. Its distinctive English words (letters only, at
+least five scalars, not common function words, not among the last six words
+typed, at most 24) raise the first token of each by a logit bias of 2.0
+(`writing::CONTEXT_BIAS`). The tokens come from one `/tokenize` call with
+pieces, capped at 60 ms and cached per client; a first token of one or two
+letters is skipped, and any failure sends the request unbiased. The prompt
+never grows, so prefill and the 550 ms budget are unchanged. Only the
+Prediction Lab supplies window text today, so production requests carry no
+bias; the measurements are in [future plans](<../future plans.md>), step 4.
+
 ## Suggestion limits
 
 The exact rules live in [src/writing.rs](src/writing.rs).

@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#93](https://github.com/ahuray/badi/pull/93) Lab: window text can bias the
+  model's word choice (`context_bias`, English, no longer prompt), and
+  `window-ocr.py` reads a window's text from the screen; both measured,
+  production unchanged until a window-text source is decided.
 - [#92](https://github.com/ahuray/badi/pull/92) In terminals, Tab fixes a
   typo (`teh → the`) instead of appending the correction after it, and the
   typed line follows the caret through arrows, Home, End and Delete.

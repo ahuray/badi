@@ -102,6 +102,7 @@ names in all five languages. Spelling and word lookup retain their own coverage.
 | `field_context` | Lab only: earlier text of the same field, kept to about 200 tokens and moved only in jumps of about 64 so the prefix cache can hold |
 | `probability_rejoin` | Lab only: force the next words and keep a prefix only when they are not unlikely. The cut is uncalibrated and is not installed |
 | `following_text` | Lab only: name the line after the caret, then continue from the text before it. Production prompts do not include that line |
+| `context_bias` | The production provider, with the case's context as window text: its distinctive English words raise the first token of each by a logit bias of 2.0 (`CONTEXT_BIAS`); the prompt is unchanged. Production has no window text yet, so it behaves as `production_boundary` there |
 
 `instructed_word` and `healed_attested` are not selectable. The 2026-09-09 next-word study had no useful `instructed_word` result in 30 opportunities and one harmful result. `healed_attested` added harmful suggestions on top of `healed`.
 
@@ -138,6 +139,19 @@ node evaluation/writing/lab/server.mjs \
 with paths, sizes and SHA-256. A correction needs one Unicode edit, keeps the
 first letter, case and Persian joiners, and passes a second native check within
 550 ms. Spelling never starts the language model.
+
+## Window text from the screen
+
+[`window-ocr.py`](window-ocr.py) captures the focused window (Hyprland
+geometry, `grim`) and recognises its text in memory with Tesseract, keeping
+the last 800 characters, nearest a terminal prompt or a chat composer. It
+prints timings and sizes only, or with `--expect FILE` a character error rate
+against text known to be shown, and writes the text only to an `--output`
+file for disposable trials. Nothing installs or calls it; reading the screen
+needs its own privacy decision. On 2026-10-17 a disposable Ghostty window
+(1416×850 logical, JetBrainsMono 9) read with no errors at native scale in
+about 1.25 s and with one character wrong in 547 at `--scale 1` in about
+0.8 s.
 
 ## Terminal runs
 

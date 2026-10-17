@@ -385,6 +385,11 @@ pub trait RequestObserver: fmt::Debug + Send + Sync {
 pub struct SemanticClient {
     config: SemanticClientConfig,
     request_observer: Option<Arc<dyn RequestObserver>>,
+    /// Bounded text around the field, when a caller has it; only its words
+    /// are used, as a logit bias, never as prompt text.
+    window_context: Option<Arc<str>>,
+    /// First token of each biased word, shared by this client's clones.
+    bias_tokens: Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
 }
 
 impl SemanticClient {
@@ -393,7 +398,73 @@ impl SemanticClient {
         Ok(Self {
             config,
             request_observer: None,
+            window_context: None,
+            bias_tokens: Arc::default(),
         })
+    }
+
+    /// This client with `text` as the window context whose words may bias
+    /// a continuation (Lab only until a production source exists).
+    #[must_use]
+    pub fn with_window_context(mut self, text: &str) -> Self {
+        self.window_context = (!text.is_empty()).then(|| Arc::from(text));
+        self
+    }
+
+    /// `logit_bias` entries for the first token of each context word, or
+    /// `None` when there are none or the runtime cannot name them in time.
+    /// Words already looked up cost nothing; the rest take one `/tokenize`.
+    async fn context_bias(&self, words: &[&str]) -> Option<serde_json::Value> {
+        const LOOKUP_TIMEOUT: Duration = Duration::from_millis(60);
+        const CACHE_LIMIT: usize = 4096;
+        if words.is_empty() || crate::writing::CONTEXT_BIAS <= 0.0 {
+            return None;
+        }
+        let missing: Vec<&str> = {
+            let cache = self.bias_tokens.lock().ok()?;
+            words
+                .iter()
+                .copied()
+                .filter(|word| !cache.contains_key(*word))
+                .collect()
+        };
+        if !missing.is_empty() {
+            let content = missing.iter().fold(String::new(), |mut content, word| {
+                content.push(' ');
+                content.push_str(word);
+                content
+            });
+            let body = serde_json::to_vec(&serde_json::json!({
+                "content": content, "add_special": false, "with_pieces": true,
+            }))
+            .ok()?;
+            let response = self
+                .post_runtime("/tokenize", body, Some(LOOKUP_TIMEOUT))
+                .await
+                .ok()?;
+            if response.status() != StatusCode::OK {
+                return None;
+            }
+            let body = read_bounded_body(response, MAX_RESPONSE_BYTES).await.ok()?;
+            let firsts = first_word_tokens(&serde_json::from_slice(&body).ok()?)?;
+            if firsts.len() != missing.len() {
+                return None;
+            }
+            let mut cache = self.bias_tokens.lock().ok()?;
+            if cache.len() + missing.len() > CACHE_LIMIT {
+                cache.clear();
+            }
+            for (word, token) in missing.iter().zip(firsts) {
+                cache.insert((*word).to_owned(), token);
+            }
+        }
+        let cache = self.bias_tokens.lock().ok()?;
+        let entries: Vec<serde_json::Value> = words
+            .iter()
+            .filter_map(|word| cache.get(*word).filter(|token| **token != 0))
+            .map(|token| serde_json::json!([token, crate::writing::CONTEXT_BIAS]))
+            .collect();
+        (!entries.is_empty()).then_some(serde_json::Value::Array(entries))
     }
 
     #[must_use]
@@ -515,8 +586,16 @@ impl SemanticClient {
         if plan.prompt.trim().is_empty() {
             return Ok(ObservedCompletion::language_abstention());
         }
-        let payload =
-            serde_json::to_vec(&plan.payload()).map_err(|_| ClientError::InvalidRequest)?;
+        let mut payload = plan.payload();
+        let words = crate::writing::bias_words(
+            &request.before,
+            self.window_context.as_deref().unwrap_or(""),
+            request.language.as_deref(),
+        );
+        if let Some(bias) = self.context_bias(&words).await {
+            payload["logit_bias"] = bias;
+        }
+        let payload = serde_json::to_vec(&payload).map_err(|_| ClientError::InvalidRequest)?;
         let operation = self.complete_inner(
             payload,
             started,
@@ -988,6 +1067,25 @@ struct HealthResponse {
     status: String,
 }
 
+/// The first token of each word in a `/tokenize` answer with pieces, where
+/// every word was sent with one leading space.
+fn first_word_tokens(answer: &serde_json::Value) -> Option<Vec<u32>> {
+    let mut firsts = Vec::new();
+    for token in answer.get("tokens")?.as_array()? {
+        let id = u32::try_from(token.get("id")?.as_u64()?).ok()?;
+        if let Some(piece) = token
+            .get("piece")?
+            .as_str()
+            .and_then(|piece| piece.strip_prefix(' '))
+        {
+            // A word whose first token is one or two letters is not biased:
+            // that token starts too many other words (0 marks it skipped).
+            firsts.push(if piece.chars().count() >= 3 { id } else { 0 });
+        }
+    }
+    Some(firsts)
+}
+
 #[derive(Debug, Serialize)]
 struct TokenizeRequest {
     content: &'static str,
@@ -1300,6 +1398,20 @@ fn finish_observed_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn word_starts_name_a_token_only_when_it_is_a_real_word_start() {
+        let answer = serde_json::json!({"tokens": [
+            {"id": 11, "piece": " ware"}, {"id": 12, "piece": "house"},
+            {"id": 13, "piece": " ب"}, {"id": 14, "piece": "ستن"},
+            {"id": 15, "piece": " Thursday"},
+        ]});
+        assert_eq!(first_word_tokens(&answer), Some(vec![11, 0, 15]));
+        assert_eq!(
+            first_word_tokens(&serde_json::json!({"tokens": [{"id": "x"}]})),
+            None
+        );
+    }
 
     #[test]
     fn stream_counts_come_from_per_token_timings() {
