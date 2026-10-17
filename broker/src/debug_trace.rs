@@ -301,6 +301,11 @@ fn describe(entry: &mut Entry, adapter: AdapterKind, envelope: &WireEnvelope) {
         MessageType::DesktopState | MessageType::DesktopStatus => {
             entry.put("state", payload.clone());
         }
+        // Content-free editor focus: one boolean each way.
+        MessageType::EditorFocus => entry.copy(payload, &[("focused", "/focused")]),
+        MessageType::EditorStatus => {
+            entry.copy(payload, &[("native_withheld", "/native_withheld")]);
+        }
         // Settings, style keys and samples, memory and probes: the type only.
         _ => {}
     }

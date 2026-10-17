@@ -34,6 +34,7 @@ use crate::settings::{
 
 mod commit;
 mod desktop;
+mod editor;
 mod generation;
 mod outcomes;
 mod policy;

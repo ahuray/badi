@@ -1,0 +1,9 @@
+{
+  "v": 2,
+  "id": "nvim.focus.1",
+  "type": "editor.status",
+  "mono_ms": 13,
+  "payload": {
+    "native_withheld": true
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "v": 2,
+  "id": "nvim.focus.2",
+  "type": "editor.focus",
+  "session_id": "2f1c6a1e-8d7b-4c3a-9e2f-1a2b3c4d5e6f",
+  "focus_epoch": 1,
+  "revision": 1,
+  "mono_ms": 14,
+  "payload": {
+    "focused": false
+  }
+}

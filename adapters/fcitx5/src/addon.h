@@ -151,7 +151,7 @@ private:
     // Broker events.
     void queryFocusedPolicies();
     void onAuthority(const AuthoritySnapshot &snapshot);
-    void onPolicy(std::string_view session, bool allowed, bool byDefault, std::string language);
+    void onPolicy(std::string_view session, bool allowed, const std::string &reason, std::string language);
     void onSuggestion(Suggestion suggestion);
     void presentSuggestion(Binding &binding, Suggestion suggestion);
     void previewIfCorroborated(Binding &binding, const Suggestion &suggestion, const Json &focus, const Json &reply);

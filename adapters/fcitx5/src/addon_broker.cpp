@@ -68,18 +68,21 @@ void BadiAddon::onAuthority(const AuthoritySnapshot &snapshot) {
     if (!authorityPaused_) queryFocusedPolicies();
 }
 
-void BadiAddon::onPolicy(std::string_view session, bool allowed, bool byDefault, std::string language) {
+void BadiAddon::onPolicy(std::string_view session, bool allowed, const std::string &reason, std::string language) {
     auto *binding = bindingFor(session);
     if (!binding || !binding->state.focused() || !binding->state.editingAvailable()) return;
     // The app list mode opens only fields the observer corroborates; the
     // manual unknown-identity path (Tab requests) needs an exact app rule.
-    if (allowed && byDefault && !binding->observed()) {
+    if (allowed && reason == "matched_default" && !binding->observed()) {
         binding->broker.answer(false);
         debug_.record("policy", binding->state.appId(), "app_rule_required");
         return;
     }
     binding->broker.answer(allowed, std::move(language));
-    debug_.record("policy", binding->state.appId(), allowed ? "app_allowed" : "app_disabled");
+    // An editor with its own Badi integration (Neovim) holds the focused
+    // terminal: Tab, the chord and every request stay the editor's.
+    debug_.record("policy", binding->state.appId(),
+                  allowed ? "app_allowed" : reason == "editor_focused" ? "editor_focused" : "app_disabled");
     if (!allowed) return;
     if (binding->observed()) requestObservedContext(*binding);
     open(*binding);

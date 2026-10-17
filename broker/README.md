@@ -119,6 +119,19 @@ the connection closes.
 - v2 `health.status` (and `badictl status`) includes `desktop`; protocol v1
   health omits it.
 
+## Editor focus
+
+An editor with its own Badi integration that runs inside a terminal (Neovim,
+capability `editor_focus`, which only the `neovim` adapter kind may negotiate)
+sends `editor.focus {focused}` when it gains or loses its terminal's focus and
+receives `editor.status {native_withheld}`. While any connection holds focus,
+every `desktop_application` target resolves to `editor_focused`: no such
+session opens, open ones lose their context, and the input method's
+typed-line path in that terminal stays quiet, so Tab and Ctrl+Shift+Space
+reach the editor ([ADR 0009](../docs/decisions/0009-terminals-use-the-typed-line.md)).
+Starting or ending the hold advances the authority epoch. The report belongs
+to its connection and ends with it; it withholds only and never grants.
+
 ## Style learning (opt-in)
 
 Off by default (`style_learning` omitted). With `badi style on` and a site

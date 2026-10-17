@@ -1,0 +1,9 @@
+{
+  "v": 2,
+  "id": "nvim.focus.1",
+  "type": "editor.focus",
+  "mono_ms": 12,
+  "payload": {
+    "focused": true
+  }
+}

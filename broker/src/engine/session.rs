@@ -44,6 +44,7 @@ impl Broker {
             }
             let policy = policy_status(
                 state.runtime_paused(),
+                state.editor_withholds(&payload.target),
                 state.authority_epoch,
                 settings,
                 &payload.target,

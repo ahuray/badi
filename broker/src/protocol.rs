@@ -21,7 +21,7 @@ pub const MAX_SUGGESTION_CHARS: usize = 64;
 pub const MAX_SUGGESTION_WORDS: usize = 8;
 pub const MAX_ID_CHARS: usize = 128;
 pub const DEFAULT_SUGGESTION_TTL_MS: u64 = 600;
-pub const CAPABILITY_COUNT: usize = 12;
+pub const CAPABILITY_COUNT: usize = 13;
 /// The only app id the Writer extension target may claim.
 pub const LIBREOFFICE_WRITER_APP_ID: &str = "libreoffice-writer";
 
@@ -127,6 +127,10 @@ pub enum Capability {
     /// Delivers the keyring's style-learning key (session helper, CLI).
     #[serde(rename = "style_key")]
     StyleKey,
+    /// An editor running in a terminal reports when it holds that
+    /// terminal's focus (Neovim only); it only withholds (ADR 0009).
+    #[serde(rename = "editor_focus")]
+    EditorFocus,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -318,6 +322,10 @@ pub enum MessageType {
     StyleStatus,
     #[serde(rename = "style.samples")]
     StyleSamples,
+    #[serde(rename = "editor.focus")]
+    EditorFocus,
+    #[serde(rename = "editor.status")]
+    EditorStatus,
 }
 
 impl MessageType {
@@ -558,6 +566,12 @@ impl HelloPayload {
         {
             return Err(ProtocolError::InvalidPayload);
         }
+        if self.capabilities.contains(&Capability::EditorFocus)
+            && (self.adapter.kind != AdapterKind::Neovim
+                || frame_version != CURRENT_PROTOCOL_VERSION)
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
         if self.min_v != frame_version || self.max_v != frame_version {
             return Err(ProtocolError::VersionNegotiationFailed);
         }
@@ -696,6 +710,9 @@ pub enum PolicyResolutionReason {
     MatchedDefault,
     SuggestionsDisabled,
     UnknownIdentity,
+    /// An editor with its own Badi integration holds the focused terminal,
+    /// so the native input-method path stays out of its way.
+    EditorFocused,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1174,6 +1191,22 @@ pub struct DesktopStatePayload {
     pub on_battery: bool,
     /// The power-saver profile is active; false when unknown.
     pub power_saver: bool,
+}
+
+/// An editor's report that it holds, or no longer holds, the focus of the
+/// terminal it runs in. Content-free and bound to the reporting connection.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditorFocusPayload {
+    pub focused: bool,
+}
+
+/// Whether any connected editor holds a terminal's focus, which withholds
+/// the input method's native path until it reports otherwise or disconnects.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditorStatusPayload {
+    pub native_withheld: bool,
 }
 
 /// The broker's combined view after a report: every reporting connection's
