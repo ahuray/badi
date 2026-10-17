@@ -72,7 +72,10 @@ test('Neovim edits through the real broker only under its exact grant', { skip }
   t.after(() => editor.close());
   await editor.command('setfiletype markdown');
   await editor.send('ithank you');
-  let state = await editor.until(current => current.status.status === 'app_disabled_or_model_paused', 'denied');
+  // The refused request and the bridge's first policy refresh may land in
+  // either order; both name the missing grant.
+  let state = await editor.until(current =>
+    ['app_disabled_or_model_paused', 'app_disabled'].includes(current.status.status), 'denied');
   assert.equal(state.preview, null);
   assert.equal((await control(['status'])).metrics.provider_calls, 0, 'An app without a grant is never read');
 
@@ -82,6 +85,8 @@ test('Neovim edits through the real broker only under its exact grant', { skip }
   current.subjects.unshift(subject('neovim', 'nvim'));
   current.revision = revision + 1;
   await control(['settings', 'replace', '--if-revision', String(revision), '--json', '-'], JSON.stringify(current));
+  // Type only once the bridge has resolved the new grant.
+  await editor.until(current => current.status.status === 'ready', 'grant resolved');
   await editor.send(' <BS>');
   state = await editor.until(current => current.preview === ' for your time', 'granted preview');
   assert.equal(state.screen, 'thank you for your time');
