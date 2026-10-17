@@ -36,6 +36,19 @@ input context since its last boundary, in memory, and uses it as the context:
   terminal's own completion. An automatic request that finds nothing stays
   quiet: the no-continuation notice is shown only after an explicit request,
   so a terminal that mostly runs commands is not told about every miss.
+- The caret is followed within the tracked line (added 2026-10-17): Left,
+  Right, Home, End, Delete and Readline's Ctrl+A/B/E/F/D/K move or edit it
+  there, so the text after the caret becomes the request's `after`; motion
+  past either end of the line stops tracking, since a multi-line prompt may
+  change lines there.
+- A spelling correction shows as `teh → the` and is applied only on Tab
+  (user decision, 2026-10-17). A terminal ignores the input method's delete
+  request, and its Backspace key sends DEL to the program, so the one
+  `commitString` leads with one DEL per tracked scalar of the typo and then
+  types the correction. Only a suffix that exactly ends the tracked text
+  before the caret is erased; nothing is ever deleted that Badi did not see
+  typed. A terminal whose erase character is not DEL (`stty erase ^H`) would
+  show `^?` instead.
 - A field marked password or sensitive is never read. The line is never
   written anywhere except a `badi debug on --text` trace (ADR 0008).
 - An editor with its own Badi integration owns the keys typed into it.

@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#92](https://github.com/ahuray/badi/pull/92) In terminals, Tab fixes a
+  typo (`teh → the`) instead of appending the correction after it, and the
+  typed line follows the caret through arrows, Home, End and Delete.
+  Mid-sentence suggestions are on by user choice; a wider prompt window was
+  measured and not kept.
 - [#91](https://github.com/ahuray/badi/pull/91) The terminal suggestion panel
   wears the Omarchy theme (Omarchy font, the word Tab takes in bold accent)
   and follows theme and font changes; a paste, completion or End no longer

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <fcitx-utils/capabilityflags.h>
+#include <fcitx-utils/key.h>
 
 #include <cstdint>
 #include <optional>
@@ -333,9 +334,10 @@ bool tabMayHoldForRest(bool restPending, bool restAutomatic, bool foreignIme,
 // A spelling replacement is never taken on a held Tab.
 bool heldTabMatchesRest(std::string_view rest, const Suggestion &suggestion);
 // The panel's two parts of a suggestion: the word Tab takes (`strong`) and
-// the rest. The leading space is dropped, since the panel is its own box; a
-// spelling replacement is taken whole, so it is all `strong`.
+// the rest. The leading space is dropped, since the panel is its own box. A
+// spelling replacement is taken whole: `teh → the`, the correction strong.
 struct CandidateParts {
+    std::string lead; // a correction's misspelled word and arrow
     std::string strong;
     std::string rest;
 };
@@ -355,26 +357,52 @@ std::optional<ContextWindow> captureContextWindow(std::string_view text,
 // The line typed into a terminal since its last boundary, held in memory
 // only. Keys whose effect on the line is unknown (cursor movement, paste,
 // completion) stop tracking until the next empty line.
+// What a key the terminal received does to the line it edits.
+enum class LineEdit {
+    Type,          // printable text, inserted at the caret
+    Erase,         // Backspace
+    EraseWord,     // Ctrl+W, Ctrl/Alt+Backspace
+    DeleteForward, // Delete, Ctrl+D
+    KillAfter,     // Ctrl+K
+    Left,          // Left, Ctrl+B
+    Right,         // Right, Ctrl+F
+    Home,          // Home, Ctrl+A
+    End,           // End, Ctrl+E
+    Clear,         // Enter, Ctrl+C, Ctrl+U: a known, empty line
+    Restart,       // an invisible change that leaves the caret at the end
+    Lose,          // the caret may be anywhere: stop following
+};
+// Readline's and most TUIs' line keys. A key outside this table changes
+// the line invisibly (a paste, completion, a new prompt line), except word
+// and vertical motion, which can put the caret anywhere.
+LineEdit lineEditFor(const ::fcitx::Key &key, std::string_view typed);
+
 class TypedLine {
 public:
+    // Applies one key; motion past either end of the line stops following,
+    // since a multi-line prompt may move to another line there.
+    void apply(LineEdit edit, std::string_view typed = {});
     void type(std::string_view text);
-    void erase();
-    void eraseWord();
-    // Enter, Ctrl+C, Ctrl+U and focus: a known, empty line.
+    // Backspace `count` scalars before the caret, as a correction does.
+    void erase(std::size_t count = 1);
     void clear();
-    // A key changed the line invisibly but left the caret at its end (a
-    // paste, completion, history): follow only what is typed from here.
     void restart();
-    // The caret may now be inside the line: stop until the next empty line.
     void lose();
     [[nodiscard]] bool tracking() const { return tracking_; }
     [[nodiscard]] const std::string &text() const { return text_; }
-    // At least two words with letters: a single token (a command, a secret)
-    // never becomes a request on its own.
+    [[nodiscard]] std::string_view before() const { return std::string_view(text_).substr(0, caret_); }
+    // Scalars before the caret.
+    [[nodiscard]] std::size_t caretScalars() const;
+    // At least two words with letters before the caret: a single token (a
+    // command, a secret) never becomes a request on its own.
     [[nodiscard]] bool prose() const;
 
 private:
+    bool left();
+    bool right();
+    void eraseWord();
     std::string text_;
+    std::size_t caret_ = 0; // byte offset, on a scalar boundary
     bool tracking_ = true;
 };
 

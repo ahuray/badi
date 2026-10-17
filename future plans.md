@@ -55,8 +55,15 @@ Linux in general.
 - **Quality:** the installed Qwen3-1.7B is weak on independent sets, and no
   ~350M candidate passed the English/German/Persian gates. Persian keeps the
   8-token automatic budget: on 2026-10-12, 21 tokens missed 550 ms on all 13
-  development cases. Mid-sentence stays off
-  ([why](broker/README.md#suggestion-limits)).
+  development cases. Mid-sentence is on for this user since 2026-10-17
+  (`badi mid-line on`), but it rarely helps: on the 41 mid-line development
+  cases at 550 ms, production showed 2 and the Lab's `following_text` prompt 1
+  ([why](broker/README.md#suggestion-limits)). Giving the model the whole
+  160–224-scalar window instead of the current sentence was tried the same
+  day and not kept: cold Lab prompts showed fewer suggestions (10 against 15
+  of 19 real-text cases) with no more matches, and a live paragraph in Ghostty
+  read no better. Long Tab-only chains drift (a run of Tabs turned a
+  sentence into a maths exercise); the model, not the window, is the limit.
 - **Diagnosis:** `badi debug on [--text]`, `badi debug watch` and `badi debug
   log` trace every request, suggestion, key and ghost show/hide across the
   broker, Fcitx and observer ([README](README.md#debug-trace),

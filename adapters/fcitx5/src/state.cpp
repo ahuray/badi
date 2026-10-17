@@ -270,8 +270,17 @@ CandidateParts candidateParts(const Suggestion &suggestion) {
     const std::string_view text = std::string_view(suggestion.text).substr(first);
     const auto word = std::string_view(suggestion.acceptWord).substr(
         std::min(first, suggestion.acceptWord.size()));
-    if (suggestion.replaceBefore || word.empty() || !text.starts_with(word)) return {std::string(text), {}};
-    return {std::string(word), std::string(text.substr(word.size()))};
+    if (suggestion.replaceBefore) {
+        const auto trimmed = [](std::string_view value) {
+            const auto first = value.find_first_not_of(' ');
+            if (first == std::string_view::npos) return std::string_view{};
+            return value.substr(first, value.find_last_not_of(' ') - first + 1);
+        };
+        const auto typo = trimmed(*suggestion.replaceBefore);
+        return {typo.empty() ? std::string() : std::string(typo) + " \u2192 ", std::string(trimmed(text)), {}};
+    }
+    if (word.empty() || !text.starts_with(word)) return {{}, std::string(text), {}};
+    return {{}, std::string(word), std::string(text.substr(word.size()))};
 }
 
 bool typeThroughContextReady(std::string_view base, std::string_view typed, std::string_view before) {
@@ -357,54 +366,164 @@ std::string observedAfter(const ContextWindow &context) {
     return context.paragraphEnd.empty() ? context.after : context.paragraphEnd;
 }
 
+namespace {
+
+bool continuation(char byte) { return (static_cast<unsigned char>(byte) & 0xC0U) == 0x80U; }
+
+} // namespace
+
+LineEdit lineEditFor(const ::fcitx::Key &key, std::string_view typed) {
+    const auto states = key.states();
+    const bool ctrl = !!(states & ::fcitx::KeyState::Ctrl);
+    const bool alt = !!(states & ::fcitx::KeyState::Alt);
+    const auto sym = key.sym();
+    // Fcitx may report a Ctrl letter in either case.
+    const auto letter = [sym](char lower) {
+        return sym == static_cast<::fcitx::KeySym>(lower) || sym == static_cast<::fcitx::KeySym>(lower - 32);
+    };
+    if (ctrl && !alt) {
+        if (letter('c') || letter('u')) return LineEdit::Clear;
+        if (letter('w')) return LineEdit::EraseWord;
+        if (letter('d')) return LineEdit::DeleteForward;
+        if (letter('k')) return LineEdit::KillAfter;
+        if (letter('b')) return LineEdit::Left;
+        if (letter('f')) return LineEdit::Right;
+        if (letter('a')) return LineEdit::Home;
+        if (letter('e')) return LineEdit::End;
+    }
+    switch (sym) {
+    case FcitxKey_Return: case FcitxKey_KP_Enter:
+        return LineEdit::Clear;
+    case FcitxKey_BackSpace:
+        return ctrl || alt ? LineEdit::EraseWord : LineEdit::Erase;
+    case FcitxKey_Delete: case FcitxKey_KP_Delete:
+        return ctrl || alt ? LineEdit::Lose : LineEdit::DeleteForward;
+    case FcitxKey_Left: case FcitxKey_KP_Left:
+        return ctrl || alt ? LineEdit::Lose : LineEdit::Left;
+    case FcitxKey_Right: case FcitxKey_KP_Right:
+        return ctrl || alt ? LineEdit::Lose : LineEdit::Right;
+    case FcitxKey_Home: case FcitxKey_KP_Home:
+        return LineEdit::Home;
+    case FcitxKey_End: case FcitxKey_KP_End:
+        return LineEdit::End;
+    case FcitxKey_Up: case FcitxKey_Down: case FcitxKey_KP_Up: case FcitxKey_KP_Down:
+    case FcitxKey_Page_Up: case FcitxKey_Page_Down:
+        return LineEdit::Lose;
+    default:
+        break;
+    }
+    // Readline's word motion and deletion.
+    if (alt && !ctrl && (letter('b') || letter('f') || letter('d'))) return LineEdit::Lose;
+    if (!typed.empty() && static_cast<unsigned char>(typed[0]) >= 0x20 && typed != "\x7f") return LineEdit::Type;
+    return LineEdit::Restart;
+}
+
+void TypedLine::apply(LineEdit edit, std::string_view typed) {
+    if (edit == LineEdit::Clear) return clear();
+    if (edit == LineEdit::Restart) return restart();
+    if (edit == LineEdit::Lose) return lose();
+    if (!tracking_) {
+        // End puts the caret back at the end of whatever the line holds.
+        if (edit == LineEdit::End) restart();
+        return;
+    }
+    switch (edit) {
+    case LineEdit::Type: return type(typed);
+    case LineEdit::Erase: return erase();
+    case LineEdit::EraseWord: return eraseWord();
+    case LineEdit::DeleteForward:
+        // Ctrl+D on an empty line ends the input instead.
+        if (text_.empty()) return clear();
+        if (caret_ < text_.size()) {
+            auto end = caret_ + 1;
+            while (end < text_.size() && continuation(text_[end])) ++end;
+            text_.erase(caret_, end - caret_);
+        }
+        return;
+    case LineEdit::KillAfter: text_.erase(caret_); return;
+    case LineEdit::Left: if (!left()) lose(); return;
+    case LineEdit::Right: if (!right()) lose(); return;
+    case LineEdit::Home: caret_ = 0; return;
+    case LineEdit::End: caret_ = text_.size(); return;
+    case LineEdit::Clear: case LineEdit::Restart: case LineEdit::Lose: return;
+    }
+}
+
 void TypedLine::type(std::string_view text) {
     if (!tracking_) return;
-    text_ += text;
+    text_.insert(caret_, text);
+    caret_ += text.size();
     // Keep whole scalars of the last context's worth of bytes.
     constexpr std::size_t limit = kMaxBeforeScalars * 4;
     if (text_.size() > limit) {
         auto start = text_.size() - limit;
-        while (start < text_.size() && (static_cast<unsigned char>(text_[start]) & 0xC0U) == 0x80U) ++start;
+        while (start < text_.size() && continuation(text_[start])) ++start;
         text_.erase(0, start);
+        caret_ = caret_ > start ? caret_ - start : 0;
     }
 }
 
-void TypedLine::erase() {
-    if (!tracking_ || text_.empty()) return;
-    auto end = text_.size() - 1;
-    while (end > 0 && (static_cast<unsigned char>(text_[end]) & 0xC0U) == 0x80U) --end;
-    text_.erase(end);
+void TypedLine::erase(std::size_t count) {
+    if (!tracking_) return;
+    for (; count > 0 && caret_ > 0; --count) {
+        auto start = caret_ - 1;
+        while (start > 0 && continuation(text_[start])) --start;
+        text_.erase(start, caret_ - start);
+        caret_ = start;
+    }
 }
 
 void TypedLine::eraseWord() {
-    if (!tracking_) return;
-    auto end = text_.find_last_not_of(' ');
-    if (end == std::string::npos) return text_.clear();
-    const auto start = text_.find_last_of(' ', end);
-    text_.erase(start == std::string::npos ? 0 : start + 1);
+    const auto head = before();
+    auto end = head.find_last_not_of(' ');
+    std::size_t start = 0;
+    if (end != std::string_view::npos) {
+        const auto space = head.find_last_of(' ', end);
+        start = space == std::string_view::npos ? 0 : space + 1;
+    }
+    text_.erase(start, caret_ - start);
+    caret_ = start;
+}
+
+bool TypedLine::left() {
+    if (caret_ == 0) return false;
+    do --caret_; while (caret_ > 0 && continuation(text_[caret_]));
+    return true;
+}
+
+bool TypedLine::right() {
+    if (caret_ >= text_.size()) return false;
+    do ++caret_; while (caret_ < text_.size() && continuation(text_[caret_]));
+    return true;
 }
 
 void TypedLine::clear() {
     text_.clear();
+    caret_ = 0;
     tracking_ = true;
 }
 
-void TypedLine::restart() {
-    text_.clear();
-    tracking_ = true;
-}
+void TypedLine::restart() { clear(); }
 
 void TypedLine::lose() {
     text_.clear();
+    caret_ = 0;
     tracking_ = false;
 }
 
+std::size_t TypedLine::caretScalars() const {
+    const auto head = before();
+    return static_cast<std::size_t>(std::count_if(head.begin(), head.end(),
+                                                  [](char byte) { return !continuation(byte); }));
+}
+
 bool TypedLine::prose() const {
-    const auto first = text_.find_first_not_of(' ');
-    if (first == std::string::npos) return false;
-    const auto gap = text_.find(' ', first);
-    return gap != std::string::npos && text_.find_first_not_of(' ', gap) != std::string::npos &&
-           std::any_of(text_.begin(), text_.end(), [](unsigned char byte) {
+    const auto head = before();
+    const auto first = head.find_first_not_of(' ');
+    if (first == std::string_view::npos) return false;
+    const auto gap = head.find(' ', first);
+    return gap != std::string_view::npos && head.find_first_not_of(' ', gap) != std::string_view::npos &&
+           std::any_of(head.begin(), head.end(), [](unsigned char byte) {
                return std::isalpha(byte) || byte >= 0x80U;
            });
 }
