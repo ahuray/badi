@@ -145,8 +145,17 @@ without a suggestion or a pending remainder stays the terminal's. A miss is
 announced only after an explicit request: an automatic request that finds
 nothing shows no notice, on this path and every other (`requestExplicit`
 records how the published request was made; `onClear` shows
-`clearNoticeText` only for an explicit one). The broker, not the addon,
-owns the prompt window, so the typed line itself is not trimmed here.
+`clearNoticeText` only for an explicit one). When Neovim with
+the Badi plugin holds the terminal's focus, the broker answers the terminal's
+policy with `editor_focused` (trace `policy editor_focused`): the typed line
+requests nothing, and Tab and Ctrl+Shift+Space reach Neovim, whose own
+integration suggests with exact undo. Live on 2026-10-17 (Ghostty 1.3.1,
+the user's LazyVim, real model): before, one pause made two model calls and
+showed Fcitx's panel beside Neovim's grey text, and Tab typed Fcitx's
+suggestion into the buffer; after, only Neovim asked, Tab and the chord went
+to Neovim, and after `:q` the shell's typed line suggested again. The broker,
+not the addon, owns the prompt window, so the typed line itself is not
+trimmed here.
 Measured 2026-10-17 with the same seeded, word-paced disposable typing
 into Claude Code in Ghostty: a 287-character text of short sentences made
 46 automatic requests before and after the broker's coarse context cut,

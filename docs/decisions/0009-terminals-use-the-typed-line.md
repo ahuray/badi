@@ -34,6 +34,13 @@ input context since its last boundary, in memory, and uses it as the context:
   so a terminal that mostly runs commands is not told about every miss.
 - A field marked password or sensitive is never read. The line is never
   written anywhere except a `badi debug on --text` trace (ADR 0008).
+- An editor with its own Badi integration owns the keys typed into it.
+  Neovim reports when it holds its terminal's focus (`editor.focus`, added
+  2026-10-17), and while it does the broker withholds every desktop-application
+  target, so the typed line asks nothing and Tab and Ctrl+Shift+Space reach
+  Neovim. The report only withholds, like the desktop signals of ADR 0005, and
+  ends with Neovim's focus or connection. Bash keeps both paths: its own
+  integration answers only Ctrl-X Tab.
 
 ## Consequences
 

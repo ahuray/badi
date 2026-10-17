@@ -4,13 +4,14 @@ use std::path::{Path, PathBuf};
 use badi_broker::protocol::{
     AuthorityAckPayload, AuthorityChangedPayload, CommitPreparePayload, CommitResultPayload,
     ContextChangedPayload, ControlAction, ControlResultPayload, DesktopStatePayload,
-    DesktopStatusPayload, EmptyPayload, ErrorPayload, GlobalControlRequestPayload,
-    HealthStatusPayload, HelloAckPayload, HelloPayload, MemoryStatusPayload, MessageType,
-    PolicyQueryPayload, PolicyStatusPayload, ProbeRequestPayload, ProbeResultPayload, ProviderKind,
-    SessionClosePayload, SessionControlRequestPayload, SessionOpenPayload, SettingsReplacePayload,
-    SettingsStatusPayload, StyleKeyPayload, StyleSamplesPayload, StyleStatusPayload,
-    SuggestCancelPayload, SuggestRequestPayload, SuggestionClearPayload, SuggestionShowPayload,
-    WireEnvelope, valid_opaque_id, validate_fingerprint,
+    DesktopStatusPayload, EditorFocusPayload, EditorStatusPayload, EmptyPayload, ErrorPayload,
+    GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
+    MemoryStatusPayload, MessageType, PolicyQueryPayload, PolicyStatusPayload, ProbeRequestPayload,
+    ProbeResultPayload, ProviderKind, SessionClosePayload, SessionControlRequestPayload,
+    SessionOpenPayload, SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload,
+    StyleSamplesPayload, StyleStatusPayload, SuggestCancelPayload, SuggestRequestPayload,
+    SuggestionClearPayload, SuggestionShowPayload, WireEnvelope, valid_opaque_id,
+    validate_fingerprint,
 };
 use badi_broker::segment::{accept_word, sanitize_suggestion};
 use badi_broker::{Metrics, NoSuggestionReason};
@@ -248,6 +249,12 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         MessageType::DesktopStatus => decode::<DesktopStatusPayload>(envelope)
             .validate()
             .expect("valid desktop status"),
+        MessageType::EditorFocus => {
+            let _: EditorFocusPayload = decode(envelope);
+        }
+        MessageType::EditorStatus => {
+            let _: EditorStatusPayload = decode(envelope);
+        }
         MessageType::StyleKey => {
             let payload: StyleKeyPayload = decode(envelope);
             badi_broker::style::StyleKey::from_hex(&payload.key_id, &payload.key)

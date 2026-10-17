@@ -5,6 +5,7 @@
 mod acceptance;
 mod authority;
 mod desktop;
+mod editor;
 mod error;
 mod events;
 mod generation;
@@ -17,7 +18,7 @@ mod status;
 mod tests;
 mod type_through;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -250,6 +251,8 @@ struct BrokerState {
     rebound_quiet: Option<ReboundQuiet>,
     /// Each connected desktop helper's latest report, by connection.
     desktop: HashMap<String, DesktopStatePayload>,
+    /// Editor connections that hold their terminal's focus.
+    editor_focus: HashSet<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -466,13 +469,16 @@ impl BrokerState {
         session_id: SessionId,
     ) -> Result<&mut SessionState, BrokerError> {
         let runtime_paused = self.runtime_paused();
+        let editor_focus_held = self.editor_focus_held();
         let session = self
             .sessions
             .get_mut(&session_id)
             .ok_or(BrokerError::UnknownSession)?;
-        if self.settings.as_ref().is_some_and(|settings| {
-            !authority::settings_allow_data(runtime_paused, settings, &session.target.target)
-        }) {
+        if (editor_focus_held && editor::withheld_by_editor(&session.target.target))
+            || self.settings.as_ref().is_some_and(|settings| {
+                !authority::settings_allow_data(runtime_paused, settings, &session.target.target)
+            })
+        {
             return Err(BrokerError::Denied(PolicyReason::PolicyNever));
         }
         Ok(session)

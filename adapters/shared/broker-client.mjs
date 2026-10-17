@@ -14,6 +14,9 @@ const PROFILES = Object.freeze({
 // Editors whose preview stays until an edit or dismissal negotiate the
 // broker's 15-second reading window; Readline keeps its own short hold.
 const READING_WINDOW = new Set(['obsidian', 'neovim']);
+// Editors that run inside a terminal report holding its focus, so the input
+// method's typed-line path stays out of their way (ADR 0009).
+const EDITOR_FOCUS = new Set(['neovim']);
 const CAPABILITIES = ['context', 'suggestion', 'commit.applied', 'control', 'policy'];
 const FRAME_LIMIT = 65536;
 const counter = value => Number.isSafeInteger(value) && value >= 0;
@@ -90,7 +93,8 @@ export class BrokerClient extends EventEmitter {
     try {
       // Readline's display has its own four-second hold; keep its existing lease.
       const capabilities = [...CAPABILITIES, ...(this.#textReplacement ? ['text_replacement'] : []),
-        ...(READING_WINDOW.has(this.#profile.kind) ? ['long_reading_window'] : [])];
+        ...(READING_WINDOW.has(this.#profile.kind) ? ['long_reading_window'] : []),
+        ...(EDITOR_FOCUS.has(this.#profile.kind) ? ['editor_focus'] : [])];
       const hello = await this.#rpc('hello', { min_v: 2, max_v: 2,
         adapter: { kind: this.#profile.kind, name: `badi-${this.#profile.kind}`, version: '0.1.0' },
         capabilities }, 'hello.ack');
@@ -114,6 +118,15 @@ export class BrokerClient extends EventEmitter {
   }
 
   #target(id) { return { ...this.#profile, target_id: id }; }
+
+  // Content-free: whether this editor holds its terminal's focus. Resolves
+  // to whether the broker now withholds the input method's native path.
+  async reportFocus(focused) {
+    if (!EDITOR_FOCUS.has(this.#profile.kind) || typeof focused !== 'boolean') throw new Error('Invalid focus report');
+    const response = await this.#rpc('editor.focus', { focused }, 'editor.status');
+    if (typeof response.payload?.native_withheld !== 'boolean') throw new Error('Invalid editor status');
+    return response.payload.native_withheld;
+  }
 
   async #refreshPolicy() {
     this.#policy = null;

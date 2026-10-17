@@ -17,7 +17,8 @@
       "commit.applied",
       "control",
       "policy",
-      "long_reading_window"
+      "long_reading_window",
+      "editor_focus"
     ]
   }
 }

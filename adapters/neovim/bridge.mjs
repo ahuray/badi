@@ -19,11 +19,15 @@ const RESULTS = new Set(['applied', 'stale', 'failed']);
 
 const client = new RecoveringBrokerClient('neovim');
 let grant = null;
+// While Neovim holds its terminal's focus the bridge stays connected, since
+// the broker drops the focus report with the connection.
+let focused = false;
 const send = message => process.stdout.write(`${JSON.stringify(message)}\n`);
 const lines = createInterface({ input: process.stdin, terminal: false });
 let idle = null;
 const armIdleExit = () => {
   clearTimeout(idle);
+  if (focused) return;
   idle = setTimeout(() => { lines.close(); process.stdin.destroy(); }, IDLE_MS);
   idle.unref();
 };
@@ -91,6 +95,13 @@ async function handle(command) {
       grant = null;
       client.cancel();
       return { ok: true };
+    case 'focus': {
+      if (typeof command.focused !== 'boolean') return { ok: false, reason: 'invalid_request' };
+      focused = command.focused;
+      if (!client.connected) await client.connect().catch(() => false);
+      const withheld = await client.reportFocus(focused).catch(() => false);
+      return { ok: true, withheld };
+    }
     case 'status':
       if (!client.connected) await client.connect().catch(() => false);
       return { ok: true, connected: client.connected, allowed: client.allowed, automatic: client.automaticAllowed };

@@ -19,11 +19,12 @@ use crate::ipc::{read_envelope, write_envelope};
 use crate::protocol::{
     Activation, AdapterDescriptor, AdapterKind, AuthorityAckPayload, AuthorityChangedPayload,
     CURRENT_PROTOCOL_VERSION, Capability, ContextChangedPayload, Coordinates, DesktopSession,
-    DesktopStatePayload, DesktopStatusPayload, EmptyPayload, FieldDescriptor, FieldPurpose,
-    HealthStatusPayload, HelloAckPayload, HelloPayload, MessageType, OffsetUnit, PROTOCOL_VERSION,
-    ProbeOutcome, ProbeRequestPayload, ProbeResultPayload, Selection, SessionId,
-    SessionOpenPayload, SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload,
-    SuggestRequestPayload, TargetDescriptor, TargetKind, WireEnvelope,
+    DesktopStatePayload, DesktopStatusPayload, EditorFocusPayload, EditorStatusPayload,
+    EmptyPayload, FieldDescriptor, FieldPurpose, HealthStatusPayload, HelloAckPayload,
+    HelloPayload, MessageType, OffsetUnit, PROTOCOL_VERSION, ProbeOutcome, ProbeRequestPayload,
+    ProbeResultPayload, Selection, SessionId, SessionOpenPayload, SettingsReplacePayload,
+    SettingsStatusPayload, StyleKeyPayload, SuggestRequestPayload, TargetDescriptor, TargetKind,
+    WireEnvelope,
 };
 use crate::provider::DeterministicPhraseProvider;
 use crate::settings::{
@@ -1303,4 +1304,91 @@ async fn replaces_only_a_stale_owned_private_socket() {
     drop(listener);
     drop(guard);
     assert!(!socket_path.exists());
+}
+
+#[tokio::test]
+async fn an_editor_focus_report_holds_the_native_path_until_its_connection_closes() {
+    let broker = broker();
+    let (server, mut editor) = UnixStream::pair().expect("Unix stream pair");
+    let connection = tokio::spawn(serve_connection_with_timeouts(
+        server,
+        broker.clone(),
+        CancellationToken::new(),
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    ));
+    let hello = WireEnvelope::global(
+        MessageType::Hello,
+        0,
+        &HelloPayload {
+            min_v: CURRENT_PROTOCOL_VERSION,
+            max_v: CURRENT_PROTOCOL_VERSION,
+            adapter: AdapterDescriptor {
+                kind: AdapterKind::Neovim,
+                name: "badi-neovim".to_owned(),
+                version: "1".to_owned(),
+            },
+            capabilities: vec![Capability::EditorFocus],
+        },
+    )
+    .expect("hello")
+    .at_version(CURRENT_PROTOCOL_VERSION)
+    .expect("v2 hello");
+    write_envelope(&mut editor, &hello)
+        .await
+        .expect("write hello");
+    let acknowledgment = read_envelope(&mut editor)
+        .await
+        .expect("read acknowledgment")
+        .expect("acknowledgment");
+    assert_eq!(acknowledgment.message_type, MessageType::HelloAck);
+
+    let reply = exchange(
+        &mut editor,
+        MessageType::EditorFocus,
+        CURRENT_PROTOCOL_VERSION,
+        &EditorFocusPayload { focused: true },
+    )
+    .await;
+    assert_eq!(reply.message_type, MessageType::EditorStatus);
+    let status: EditorStatusPayload = reply.decode_payload().expect("editor status");
+    assert!(status.native_withheld);
+
+    drop(editor);
+    connection
+        .await
+        .expect("connection task")
+        .expect("editor shutdown");
+    let status = broker.report_editor_focus("c:probe", false).await;
+    assert!(!status.native_withheld, "a closed editor releases its hold");
+}
+
+#[test]
+fn only_neovim_may_negotiate_editor_focus() {
+    let hello = |kind| HelloPayload {
+        min_v: CURRENT_PROTOCOL_VERSION,
+        max_v: CURRENT_PROTOCOL_VERSION,
+        adapter: AdapterDescriptor {
+            kind,
+            name: "editor".to_owned(),
+            version: "1".to_owned(),
+        },
+        capabilities: vec![Capability::EditorFocus],
+    };
+    assert!(
+        hello(AdapterKind::Neovim)
+            .validate_for_frame(CURRENT_PROTOCOL_VERSION)
+            .is_ok()
+    );
+    for kind in [
+        AdapterKind::Fcitx,
+        AdapterKind::Obsidian,
+        AdapterKind::Terminal,
+    ] {
+        assert!(
+            hello(kind)
+                .validate_for_frame(CURRENT_PROTOCOL_VERSION)
+                .is_err()
+        );
+    }
 }

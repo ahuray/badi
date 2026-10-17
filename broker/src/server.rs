@@ -22,14 +22,14 @@ use crate::policy::PolicyReason;
 use crate::protocol::{
     AdapterKind, AuthorityAckPayload, AuthorityChangedPayload, CURRENT_PROTOCOL_VERSION,
     Capability, CommitResultPayload, ContextChangedPayload, ControlAction, ControlResultPayload,
-    DesktopStatePayload, EmptyPayload, ErrorPayload, GlobalControlRequestPayload,
-    HealthStatusPayload, HelloAckPayload, HelloPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS,
-    MAX_FRAME_BYTES, MAX_SAFE_COUNTER, MAX_SUGGESTION_CHARS, MAX_SUGGESTION_WORDS,
-    MemoryStatusPayload, MessageType, PROTOCOL_VERSION, PolicyQueryPayload, ProbeRequestPayload,
-    ProtocolError, ReasonCode, SessionClosePayload, SessionControlRequestPayload, SessionId,
-    SessionOpenPayload, SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload,
-    StyleSamplesPayload, StyleStatusPayload, SuggestCancelPayload, SuggestRequestPayload,
-    WireEnvelope,
+    DesktopStatePayload, EditorFocusPayload, EmptyPayload, ErrorPayload,
+    GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
+    MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SAFE_COUNTER, MAX_SUGGESTION_CHARS,
+    MAX_SUGGESTION_WORDS, MemoryStatusPayload, MessageType, PROTOCOL_VERSION, PolicyQueryPayload,
+    ProbeRequestPayload, ProtocolError, ReasonCode, SessionClosePayload,
+    SessionControlRequestPayload, SessionId, SessionOpenPayload, SettingsReplacePayload,
+    SettingsStatusPayload, StyleKeyPayload, StyleSamplesPayload, StyleStatusPayload,
+    SuggestCancelPayload, SuggestRequestPayload, WireEnvelope,
 };
 use crate::settings::{SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2};
 use crate::style::{StyleKey, StyleKeyState};
@@ -489,6 +489,9 @@ async fn serve_connection_with_timeouts(
     if desktop_enabled {
         broker.forget_desktop_state(&connection_id).await;
     }
+    if authority.capabilities.contains(&Capability::EditorFocus) {
+        broker.forget_editor_focus(&connection_id).await;
+    }
     reader_task.abort();
     let _ = reader_task.await;
     drop(event_sink);
@@ -532,6 +535,7 @@ impl MessageHandler<'_> {
             MessageType::MemoryClear => self.memory_clear(envelope).await,
             MessageType::ProbeRequest => self.probe(envelope).await,
             MessageType::DesktopState => self.desktop_state(envelope).await,
+            MessageType::EditorFocus => self.editor_focus(envelope).await,
             MessageType::StyleKey => self.style_key(envelope).await,
             MessageType::StyleQuery => self.style_query(envelope).await,
             MessageType::StyleForget => self.style_forget(envelope).await,
@@ -549,6 +553,7 @@ impl MessageHandler<'_> {
             | MessageType::MemoryStatus
             | MessageType::ProbeResult
             | MessageType::DesktopStatus
+            | MessageType::EditorStatus
             | MessageType::StyleStatus
             | MessageType::StyleSamples
             | MessageType::Error => Err(ServerError::InvalidMessage),
@@ -776,6 +781,16 @@ impl MessageHandler<'_> {
             .report_desktop_state(self.connection_id, report)
             .await?;
         self.reply(MessageType::DesktopStatus, envelope.id, &status)
+    }
+
+    async fn editor_focus(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_capability(self.authority, Capability::EditorFocus)?;
+        let report: EditorFocusPayload = envelope.decode_payload()?;
+        let status = self
+            .broker
+            .report_editor_focus(self.connection_id, report.focused)
+            .await;
+        self.reply(MessageType::EditorStatus, envelope.id, &status)
     }
 
     async fn resolve_policy(&self, envelope: WireEnvelope) -> Result<(), ServerError> {

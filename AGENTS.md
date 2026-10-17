@@ -206,6 +206,8 @@ boundary.
 
 - Never relax schema, identity, sample-count or cleanup gates to make a result
   pass.
+- A Prediction Lab claim pairs runs of the same suites, settings and seed
+  before and after the change; a single after-run is not a comparison.
 - Report fixture, real-broker, real-model and live-app evidence separately. A
   smoke result is not a held-out quality score; a tested app version is not
   universal Linux support.

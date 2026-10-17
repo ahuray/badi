@@ -138,7 +138,7 @@ void runReconnect(const std::string &socket, const std::string &appId) {
             state.focusOut();
             require(!state.requestAcceptance(wire->nowMs(), kPanel));
         },
-        .onPolicy = [&](std::string_view session, bool allowed, bool, std::string) {
+        .onPolicy = [&](std::string_view session, bool allowed, std::string, std::string) {
             require(allowed && session == state.coordinates().sessionId);
             require(wire->openSession(state.coordinates(), targetOf(state)));
             const auto update = state.updateContext(ContextWindow{

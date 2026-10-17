@@ -42,6 +42,10 @@ local state = {
   -- Text-only memory of the last preview, for type-through detection.
   shown = nil,
   focused = true,
+  -- Neovim holds its terminal's focus, as the terminal reported it. While
+  -- it does, the broker keeps the input method's typed line out of the
+  -- terminal, so these keys get one suggester (ADR 0009).
+  holds_terminal = false,
   status = 'idle',
 }
 
@@ -174,7 +178,23 @@ local function ensure_bridge()
       set_status('bridge_exited')
     end,
   })
-  return state.bridge:start()
+  if not state.bridge:start() then return false end
+  -- A new bridge is a new broker connection, which holds nothing yet.
+  if state.holds_terminal then state.bridge:notify({ op = 'focus', focused = true }) end
+  return true
+end
+
+-- Only a terminal that reports focus changes (FocusGained) makes Neovim
+-- claim it, so a terminal or multiplexer without focus events never leaves
+-- a claim behind that no FocusLost would end.
+local function hold_terminal(holds)
+  if state.holds_terminal == holds then return end
+  state.holds_terminal = holds
+  if state.bridge and state.bridge:running() then
+    state.bridge:notify({ op = 'focus', focused = holds })
+  elseif holds then
+    ensure_bridge()
+  end
 end
 
 local accept
@@ -378,8 +398,19 @@ function M.setup(options)
   autocmd('FocusLost', function()
     state.focused = false
     invalidate('cancel')
+    hold_terminal(false)
   end)
-  autocmd('FocusGained', function() state.focused = true end)
+  autocmd('FocusGained', function()
+    state.focused = true
+    hold_terminal(true)
+  end)
+  -- Ctrl+Z hands the terminal back to the shell; `fg` returns it.
+  local resumes = false
+  autocmd('VimSuspend', function()
+    resumes = state.holds_terminal
+    hold_terminal(false)
+  end)
+  autocmd('VimResume', function() if resumes then hold_terminal(true) end end)
   autocmd('VimLeavePre', function()
     invalidate('cancel')
     if state.bridge then state.bridge:stop() end
@@ -411,6 +442,7 @@ function M.status()
     pending = state.pending ~= nil,
     visible = state.visible ~= nil,
     accepting = state.accepting,
+    holds_terminal = state.holds_terminal,
     blocked = not state.config and 'not_set_up' or blocked_reason(),
   }
 end

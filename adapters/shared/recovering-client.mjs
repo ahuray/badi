@@ -12,6 +12,9 @@ export class RecoveringBrokerClient extends EventEmitter {
   #timer = null;
   #attempts = 0;
   #closed = false;
+  // The last focus this editor reported; a new connection repeats a held
+  // focus, because the broker forgets it with the old connection.
+  #focused = false;
 
   constructor(profile, options = {}) { super(); this.#profile = profile; this.#options = { ...options }; }
   get connected() { return !this.#closed && this.#client?.connected === true; }
@@ -45,6 +48,7 @@ export class RecoveringBrokerClient extends EventEmitter {
     const connection = client.connect(this.#socketPath).then(allowed => {
       if (this.#client !== client || this.#closed) return false;
       this.#attempts = 0;
+      if (this.#focused) void client.reportFocus(true).catch(() => undefined);
       return allowed;
     }).catch(error => {
       client.close();
@@ -77,6 +81,11 @@ export class RecoveringBrokerClient extends EventEmitter {
     return this.#client.authorize(...args);
   }
   report(...args) { if (this.allowed) this.#client.report(...args); }
+  reportFocus(focused) {
+    this.#focused = focused === true;
+    if (!this.connected) return Promise.resolve(false);
+    return this.#client.reportFocus(this.#focused);
+  }
   dismiss() { this.#client?.dismiss(); }
   cancel() { this.#client?.cancel(); }
   close() {

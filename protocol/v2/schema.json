@@ -45,7 +45,9 @@
         "style.forget",
         "style.export",
         "style.status",
-        "style.samples"
+        "style.samples",
+        "editor.focus",
+        "editor.status"
       ]
     },
     "session_id": { "$ref": "#/$defs/sessionId" },
@@ -312,6 +314,24 @@
     },
     {
       "properties": {
+        "type": { "const": "editor.focus" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/editorFocusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "editor.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/editorStatusPayload" }
+      }
+    },
+    {
+      "properties": {
         "type": { "const": "style.key" },
         "session_id": false,
         "focus_epoch": false,
@@ -401,13 +421,14 @@
         "text_replacement",
         "long_reading_window",
         "desktop_signals",
-        "style_key"
+        "style_key",
+        "editor_focus"
       ]
     },
     "capabilities": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 12,
+      "maxItems": 13,
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/capability" }
     },
@@ -630,7 +651,8 @@
         "matched_rule",
         "matched_default",
         "suggestions_disabled",
-        "unknown_identity"
+        "unknown_identity",
+        "editor_focused"
       ]
     },
     "policyQueryPayload": {
@@ -1287,6 +1309,20 @@
           "then": { "properties": { "automatic": { "const": "normal" } } }
         }
       ]
+    },
+    "editorFocusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An editor running in a terminal (capability editor_focus, Neovim only) reports whether it holds that terminal's focus. Content-free and bound to the reporting connection; it never grants authority.",
+      "required": ["focused"],
+      "properties": { "focused": { "type": "boolean" } }
+    },
+    "editorStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Whether any connected editor holds its terminal's focus. While one does, desktop_application targets resolve to policy reason editor_focused and every grant there is withheld.",
+      "required": ["native_withheld"],
+      "properties": { "native_withheld": { "type": "boolean" } }
     },
     "styleKeyPayload": {
       "type": "object",

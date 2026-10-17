@@ -64,13 +64,18 @@ test('Neovim edits through the real broker only under its exact grant', { skip }
   // Content-free debug activity, as `badi debug on` would enable it.
   await writeFile(join(environment.XDG_RUNTIME_DIR, 'badi/debug-control.json'),
     JSON.stringify({ id: randomUUID(), expires_at: Math.floor(Date.now() / 1000) + 600 }), { mode: 0o600 });
+  // The broker appends to a trace the controller created; it never creates one.
+  await writeFile(join(environment.XDG_RUNTIME_DIR, 'badi/debug-trace.jsonl'), '', { mode: 0o600 });
 
   const editor = await startNeovim({ env: { XDG_RUNTIME_DIR: environment.XDG_RUNTIME_DIR },
     config: { bridge: join(PLUGIN, 'bridge.mjs'), delay_ms: 40, language: 'en' } });
   t.after(() => editor.close());
   await editor.command('setfiletype markdown');
   await editor.send('ithank you');
-  let state = await editor.until(current => current.status.status === 'app_disabled_or_model_paused', 'denied');
+  // The refused request and the bridge's first policy refresh may land in
+  // either order; both name the missing grant.
+  let state = await editor.until(current =>
+    ['app_disabled_or_model_paused', 'app_disabled'].includes(current.status.status), 'denied');
   assert.equal(state.preview, null);
   assert.equal((await control(['status'])).metrics.provider_calls, 0, 'An app without a grant is never read');
 
@@ -80,6 +85,8 @@ test('Neovim edits through the real broker only under its exact grant', { skip }
   current.subjects.unshift(subject('neovim', 'nvim'));
   current.revision = revision + 1;
   await control(['settings', 'replace', '--if-revision', String(revision), '--json', '-'], JSON.stringify(current));
+  // Type only once the bridge has resolved the new grant.
+  await editor.until(current => current.status.status === 'ready', 'grant resolved');
   await editor.send(' <BS>');
   state = await editor.until(current => current.preview === ' for your time', 'granted preview');
   assert.equal(state.screen, 'thank you for your time');
@@ -125,6 +132,31 @@ test('Neovim edits through the real broker only under its exact grant', { skip }
   await editor.send(' ');
   await editor.send('<BS>');
   state = await editor.until(current => current.preview === ' to hearing from you', 'preview after restart');
+
+  // Holding the terminal's focus withholds the input method's native path,
+  // survives a broker restart through the bridge's new connection, and ends
+  // with FocusLost.
+  const focusReports = async () => (await readFile(join(environment.XDG_RUNTIME_DIR, 'badi/debug-trace.jsonl'), 'utf8'))
+    .split('\n').filter(Boolean).map(line => JSON.parse(line))
+    .filter(entry => entry.ev === 'out editor.status').map(entry => entry.native_withheld);
+  const reported = async (count, withheld, label) => {
+    const end = performance.now() + 4000;
+    for (;;) {
+      const reports = await focusReports();
+      if (reports.length >= count && reports.at(-1) === withheld) return;
+      assert.ok(performance.now() < end, `${label}: ${JSON.stringify(reports)}`);
+      await delay(20);
+    }
+  };
+  const before = (await focusReports()).length;
+  await editor.command('doautocmd FocusGained');
+  await reported(before + 1, true, 'focus withholds the native path');
+  assert.equal((await editor.state()).status.holds_terminal, true);
+  await stopBroker();
+  startBroker();
+  await reported(before + 2, true, 'the claim returns with the new connection');
+  await editor.command('doautocmd FocusLost');
+  await reported(before + 3, false, 'FocusLost releases it');
 
   const activity = await readFile(join(environment.XDG_RUNTIME_DIR, 'badi/debug-neovim.json'), 'utf8');
   assert.equal(JSON.parse(activity).app_id, 'nvim');

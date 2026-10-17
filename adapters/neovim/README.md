@@ -93,6 +93,13 @@ policy. The preview uses the `BadiSuggestion` highlight, linked to `Comment`.
 - **Undo.** The edit breaks the undo sequence before and after itself
   (`undolevels`), so one `u` removes exactly the accepted text, typing before
   it stays, and typing after it is a separate step.
+- **Terminal focus.** When the terminal reports focus (`FocusGained`), the
+  plugin tells the broker it holds that terminal (`editor.focus`), and the
+  input method's typed-line path stays out of it until `FocusLost`, Ctrl+Z
+  or exit; the bridge then stays connected, and a new connection repeats the
+  claim. Ghostty sends focus events by itself; inside tmux, enable
+  `focus-events`, or both Badi paths may suggest at once.
+  `:lua print(vim.inspect(require('badi').status()))` shows `holds_terminal`.
 - **Privacy.** Typed and suggested text goes only to the bridge and the broker.
   The plugin's messages and `:BadiStatus` name reasons, never text; the bridge
   logs nothing, and Neovim discards its stderr. `badi debug on` records
