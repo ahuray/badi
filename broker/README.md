@@ -64,7 +64,11 @@ and whether they were dirty (`--version` prints both; packagers may set
   (`ends_at_word_boundary`): it
   was already checked before display, so it counts as the shown suggestion,
   not as a no-suggestion miss, and only an edit, a focus change, Escape or
-  its expiry withdraws it.
+  its expiry withdraws it. Live in Ghostty on 2026-10-17, ten
+  provider-rejected finals followed two or three shown partials and none
+  produced a `no_suggestion` clear; the next broker clear was `superseded`
+  46–280 ms later, and in the row inspected key-by-key the ghost was still
+  marked visible when the next printable key arrived 129 ms after rejection.
 - **Type-through** ([ADR 0004](../docs/decisions/0004-type-through-carries-text-not-authority.md)).
   The last shown continuation is kept as text only.
   - When a later admitted request in the same app or site keeps `after` and
@@ -158,8 +162,14 @@ While `badi debug on` runs, `debug_trace.rs` appends each wire frame in and
 out of the broker (allowlisted fields; settings, style and memory frames by
 type only; health polls not at all), each `model start` and `model done`
 with latency and outcome, and each `carry` decision to the
-[debug trace](../README.md#debug-trace). Unit tests never write to a live
-trace.
+[debug trace](../README.md#debug-trace). When the local runtime reports
+them, `model done` also carries content-free `ttft_ms`, `prompt_tokens`
+(llama.cpp `prompt_n`, newly evaluated), `cache_tokens` (`cache_n`, reused)
+and `generated_tokens`; a cancelled, shutdown or timed-out call records
+`cancelled_before_first_token`. Malformed optional timing statistics stay
+unknown rather than invalidating the completion, and no new text is recorded
+([ADR 0008](../docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
+Unit tests never write to a live trace.
 
 ## badictl
 
@@ -274,8 +284,13 @@ The exact rules live in [src/writing.rs](src/writing.rs).
 - **Budgets.** An automatic request gives the model 550 ms, an explicit one
   (Tab, Ctrl-X Tab or a `request` control) 1,200 ms.
 - **Context.** At most 512 characters before the caret and 128 after. The
-  prompt is the current sentence within 160 characters, extended back a
-  sentence at a time to four words, so text typed in order reuses the cache.
+  prompt is the current sentence from a 160-Unicode-scalar window; once
+  the text is longer, its start advances only in 64-scalar
+  steps at a word boundary (so the window is under 224 scalars before
+  sentence narrowing), then extends back a sentence at a time to four words.
+  Consecutive requests therefore share a prompt prefix while a long sentence
+  grows, instead of changing its first bytes on every keystroke and losing
+  llama.cpp's prefix cache.
 - **Shape.** At most four words and 64 characters. `en`, `de` and `fa` are
   routed; English and German must be Latin script, Persian Arabic script, with
   ZWNJ only between the letters in

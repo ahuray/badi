@@ -682,8 +682,12 @@ fn token_budget(_language: Option<WritingLanguage>, english_tokens: u16) -> u16 
 
 impl CompletionPlan<'_> {
     pub(crate) fn payload(&self) -> Value {
+        // Per-token timings put the prompt/cache counts on the first token
+        // already, so a call the writing budget cuts still reports how much
+        // of its prompt came from the runtime's prefix cache.
         let mut payload = json!({"prompt":self.prompt,"n_predict":self.max_tokens,
-            "temperature":0.0,"seed":42,"stop":[".","\n"],"stream":true,"cache_prompt":true});
+            "temperature":0.0,"seed":42,"stop":[".","\n"],"stream":true,"cache_prompt":true,
+            "timings_per_token":true});
         if let Some(echo) = self.echo {
             // Generate at the earlier boundary, reproduce the exact removed
             // bytes, then let the streaming reader remove only that echo.
@@ -712,12 +716,27 @@ fn context_words(text: &str) -> usize {
         .count()
 }
 
+/// Scalars of context a prompt keeps before the cut starts moving.
+const CONTEXT_WINDOW_SCALARS: usize = 160;
+/// The cut advances in steps of this many scalars, never per keystroke:
+/// while a sentence grows within one step, the window start stays fixed and
+/// each request's prompt extends the previous one, so the runtime reuses
+/// its prefix cache. A per-request sliding start instead changed the
+/// prompt's first bytes every time and forced a full re-prefill (measured
+/// 2026-10-17: cache reuse 0 of ~30 prompt tokens, 380–510 ms to the first
+/// token, once a single sentence passed 160 scalars).
+const CONTEXT_CUT_STEP_SCALARS: usize = 64;
+
 /// Limit cold prefill cost without changing the context used for edit authority.
 pub(crate) fn inference_context(before: &str) -> &str {
+    let excess = before
+        .chars()
+        .count()
+        .saturating_sub(CONTEXT_WINDOW_SCALARS);
+    let cut_scalars = excess / CONTEXT_CUT_STEP_SCALARS * CONTEXT_CUT_STEP_SCALARS;
     let start = before
         .char_indices()
-        .rev()
-        .nth(159)
+        .nth(cut_scalars)
         .map_or(0, |(index, _)| index);
     let mut window = &before[start..];
     if start > 0 && !before[..start].ends_with(char::is_whitespace) {

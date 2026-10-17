@@ -218,7 +218,7 @@ impl CompletionProvider for GrowingProvider {
         _allow_replacement: bool,
         _trigger: RequestTrigger,
         partials: Option<mpsc::UnboundedSender<String>>,
-    ) -> Result<crate::provider::ProviderOutcome, ProviderError> {
+    ) -> Result<crate::provider::ProviderReply, ProviderError> {
         if let Some(partials) = partials {
             let _ = partials.send(" for".to_owned());
         }
@@ -227,12 +227,11 @@ impl CompletionProvider for GrowingProvider {
             () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
             () = sleep(Duration::from_millis(150)) => {}
         }
-        Ok(crate::provider::ProviderOutcome::Proposal(
-            WritingProposal {
-                text: " for the opportunity".to_owned(),
-                replace_before: None,
-            },
-        ))
+        Ok(crate::provider::ProviderOutcome::Proposal(WritingProposal {
+            text: " for the opportunity".to_owned(),
+            replace_before: None,
+        })
+        .into())
     }
 }
 
@@ -421,7 +420,7 @@ impl CompletionProvider for RejectedExtensionProvider {
         _allow_replacement: bool,
         _trigger: RequestTrigger,
         partials: Option<mpsc::UnboundedSender<String>>,
-    ) -> Result<crate::provider::ProviderOutcome, ProviderError> {
+    ) -> Result<crate::provider::ProviderReply, ProviderError> {
         if let Some(partials) = partials {
             let _ = partials.send(" for".to_owned());
         }
@@ -430,12 +429,11 @@ impl CompletionProvider for RejectedExtensionProvider {
             () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
             () = sleep(Duration::from_millis(50)) => {}
         }
-        Ok(crate::provider::ProviderOutcome::Proposal(
-            WritingProposal {
-                text: " for the opportunity to discuss this further with you soon".to_owned(),
-                replace_before: None,
-            },
-        ))
+        Ok(crate::provider::ProviderOutcome::Proposal(WritingProposal {
+            text: " for the opportunity to discuss this further with you soon".to_owned(),
+            replace_before: None,
+        })
+        .into())
     }
 }
 
@@ -529,7 +527,7 @@ impl CompletionProvider for LateExtensionProvider {
         _allow_replacement: bool,
         _trigger: RequestTrigger,
         partials: Option<mpsc::UnboundedSender<String>>,
-    ) -> Result<crate::provider::ProviderOutcome, ProviderError> {
+    ) -> Result<crate::provider::ProviderReply, ProviderError> {
         if let Some(partials) = partials {
             let _ = partials.send(" for".to_owned());
         }
@@ -538,12 +536,11 @@ impl CompletionProvider for LateExtensionProvider {
             () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
             () = sleep(Duration::from_millis(300)) => {}
         }
-        Ok(crate::provider::ProviderOutcome::Proposal(
-            WritingProposal {
-                text: " for the opportunity".to_owned(),
-                replace_before: None,
-            },
-        ))
+        Ok(crate::provider::ProviderOutcome::Proposal(WritingProposal {
+            text: " for the opportunity".to_owned(),
+            replace_before: None,
+        })
+        .into())
     }
 }
 
@@ -642,7 +639,7 @@ impl CompletionProvider for ProviderRejectedExtensionProvider {
         _allow_replacement: bool,
         _trigger: RequestTrigger,
         partials: Option<mpsc::UnboundedSender<String>>,
-    ) -> Result<crate::provider::ProviderOutcome, ProviderError> {
+    ) -> Result<crate::provider::ProviderReply, ProviderError> {
         if let Some(partials) = partials {
             let _ = partials.send(" for".to_owned());
         }
@@ -651,9 +648,10 @@ impl CompletionProvider for ProviderRejectedExtensionProvider {
             () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
             () = sleep(Duration::from_millis(50)) => {}
         }
-        Ok(crate::provider::ProviderOutcome::NoSuggestion(
-            NoSuggestionReason::OutputRejected,
-        ))
+        Ok(
+            crate::provider::ProviderOutcome::NoSuggestion(NoSuggestionReason::OutputRejected)
+                .into(),
+        )
     }
 }
 

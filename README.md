@@ -70,7 +70,7 @@ Linux in general.
 | Obsidian | Badi plugin; the 1.14.4 handoff reports inline preview and Tab acceptance | 1.13.7, 1.14.4 |
 | Bash | Grey Readline preview and narrow English spelling fixes | Bash 5.3.15 in Ghostty 1.3.1 |
 | Ghostty (any TUI, such as a coding agent's prompt) | `badi app com.mitchellh.ghostty on`; suggestions follow the line you type and show in a panel at the cursor; Tab types a word, Ctrl+→ all of it, and an automatic miss stays quiet ([how](docs/decisions/0009-terminals-use-the-typed-line.md)) | Ghostty 1.3.1 |
-| Neovim | Badi plugin; prose buffers, inline preview, one-step undo; no spelling fixes yet. Tested headless with the deterministic phrase provider, not yet with the real model in a terminal | 0.12.5 |
+| Neovim | Badi plugin; prose buffers, inline preview, one-step undo; no spelling fixes yet. Live with the real model under LazyVim in foot, including Ctrl+Shift+Space | 0.12.5 |
 | Grok Bot | Ready, but its composer is untested | 0.35 |
 
 **Not yet:**
@@ -256,7 +256,7 @@ backoff; a missing or oversized model stops it for `badi doctor` to explain.
 
 | Source | Events |
 | --- | --- |
-| `broker` | Each message to and from an adapter (`in context.changed`, `out suggestion.show`, `out suggestion.clear` with its reason, commits), `model start` / `model done` with latency and outcome, `carry` (type-through kept or the gate that declined) |
+| `broker` | Each message to and from an adapter (`in context.changed`, `out suggestion.show`, `out suggestion.clear` with its reason, commits), `model start` / `model done` with latency, outcome and content-free token/timing counts, `carry` (type-through kept or the gate that declined) |
 | `fcitx` | `key` with the action taken and whether a suggestion was showing; `ghost shown` as the `overlay` (grey text at the caret) or the `panel` (Fcitx's popup); `ghost hidden`; every blocked request or display with its reason |
 | `observer` | Each field request; `preview drawn` with its placement (`inline`, `caret_line`, `chip`, `edge_panel`) and box, `preview declined` with its reason, `preview mapped`, `preview hidden` with its cause |
 | `compositor` | While `badi debug watch` runs: whether Hyprland has the grey preview on screen, and where |

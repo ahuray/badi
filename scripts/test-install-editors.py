@@ -86,7 +86,7 @@ class InstallEditorsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             environment = {key: value for key, value in os.environ.items()
-                           if key not in ('XDG_DATA_HOME', 'NVIM_APPNAME')}
+                           if key not in ('XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'NVIM_APPNAME')}
             with patch.object(installer.Path, 'home', return_value=home), \
                  patch.dict(os.environ, environment, clear=True), \
                  patch('sys.argv', ['install-editors.py', '--neovim']), \
@@ -155,6 +155,57 @@ class InstallEditorsTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'unexpected package'):
                     installer.main()
             self.assertEqual(sorted(path.name for path in (start / 'badi').iterdir()), ['README'])
+
+    def test_neovim_lazy_gets_a_spec_file_and_plain_configs_do_not(self):
+        clean = {key: value for key, value in os.environ.items()
+                 if key not in ('XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'NVIM_APPNAME')}
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            (home / '.local/share/nvim/lazy/lazy.nvim').mkdir(parents=True)
+            with patch.object(installer.Path, 'home', return_value=home), \
+                 patch.dict(os.environ, clean, clear=True), \
+                 patch('sys.argv', ['install-editors.py', '--neovim']), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                installer.main()
+                installer.main()
+            spec = home / '.config/nvim/lua/plugins/badi.lua'
+            package = home / '.local/share/nvim/site/pack/badi/start/badi'
+            self.assertEqual(spec.read_bytes(), installer.neovim_lazy_spec(package))
+            self.assertIn(f'dir = "{package}"', spec.read_text())
+            self.assertIn('lazy = false', spec.read_text())
+            self.assertIn('lazy.nvim detected', output.getvalue())
+            self.assertIn('already current; no backup was needed', output.getvalue())
+            receipt = json.loads((home / '.local/state/badi/receipts/editors.json').read_text())
+            self.assertIn('.config/nvim/lua/plugins/badi.lua', receipt['files'])
+            # Our own earlier spec (marker, stale path) is replaced, backed up.
+            spec.write_bytes(b'-- badi:lazy-spec v1\nreturn { dir = "/old", lazy = false }\n')
+            with patch.object(installer.Path, 'home', return_value=home), \
+                 patch.dict(os.environ, clean, clear=True), \
+                 patch('sys.argv', ['install-editors.py', '--neovim']), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                installer.main()
+            self.assertEqual(spec.read_bytes(), installer.neovim_lazy_spec(package))
+            backups = home / '.local/state/badi/editor-backups'
+            saved = [path for path in backups.rglob('badi.lua') if b'/old' in path.read_bytes()]
+            self.assertEqual(len(saved), 1, 'The replaced spec is backed up for restore')
+            # A spec the user wrote is never overwritten.
+            spec.write_text('return { "mine" }\n')
+            with patch.object(installer.Path, 'home', return_value=home), \
+                 patch.dict(os.environ, clean, clear=True), \
+                 patch('sys.argv', ['install-editors.py', '--neovim']):
+                with self.assertRaisesRegex(RuntimeError, 'will not overwrite'):
+                    installer.main()
+            self.assertEqual(spec.read_text(), 'return { "mine" }\n')
+
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            with patch.object(installer.Path, 'home', return_value=home), \
+                 patch.dict(os.environ, clean, clear=True), \
+                 patch('sys.argv', ['install-editors.py', '--neovim']), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                installer.main()
+            self.assertFalse((home / '.config/nvim/lua/plugins/badi.lua').exists())
+            self.assertNotIn('lazy.nvim detected', output.getvalue())
 
     def test_existing_bashrc_symlink_is_not_replaced(self):
         with tempfile.TemporaryDirectory() as temporary:

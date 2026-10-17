@@ -10,8 +10,8 @@ use crate::protocol::{
     valid_language_tag,
 };
 use crate::provider::{
-    CompletionProvider, ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger,
-    WritingProposal,
+    CompletionProvider, ProviderError, ProviderOutcome, ProviderReply, ProviderRequest,
+    ProviderStats, RequestTrigger, WritingProposal,
 };
 use crate::spelling::Located;
 use async_trait::async_trait;
@@ -22,8 +22,8 @@ use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::wire::{
-    self, Method, NativeStreamChunk, Response, StatusCode, TokenizeResponse, ensure_content_type,
-    event_data, next_event_boundary, read_bounded_body,
+    self, Method, NativeStreamChunk, NativeTimings, Response, StatusCode, TokenizeResponse,
+    ensure_content_type, event_data, next_event_boundary, read_bounded_body,
 };
 
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_millis(200);
@@ -219,6 +219,12 @@ pub struct ObservedCompletion {
     elapsed: Duration,
     request_body_bytes: usize,
     response_body_bytes: usize,
+    /// Newly evaluated prompt tokens (`prompt_n`); `None` when unknown.
+    prompt_tokens: Option<u32>,
+    /// Prompt tokens the runtime reused from its prefix cache.
+    cache_tokens: Option<u32>,
+    /// Tokens generated (the runtime's count, else streamed events seen).
+    generated_tokens: u32,
 }
 
 impl ObservedCompletion {
@@ -257,6 +263,30 @@ impl ObservedCompletion {
         self.response_body_bytes
     }
 
+    #[must_use]
+    pub const fn prompt_tokens(&self) -> Option<u32> {
+        self.prompt_tokens
+    }
+
+    #[must_use]
+    pub const fn cache_tokens(&self) -> Option<u32> {
+        self.cache_tokens
+    }
+
+    #[must_use]
+    pub const fn generated_tokens(&self) -> u32 {
+        self.generated_tokens
+    }
+
+    fn stats(&self) -> ProviderStats {
+        ProviderStats {
+            ttft: self.ttft,
+            prompt_tokens: self.prompt_tokens,
+            cache_tokens: self.cache_tokens,
+            generated_tokens: self.generated_tokens,
+        }
+    }
+
     fn language_abstention() -> Self {
         Self {
             disposition: CompletionDisposition::LanguageAbstained,
@@ -266,6 +296,9 @@ impl ObservedCompletion {
             elapsed: Duration::ZERO,
             request_body_bytes: 0,
             response_body_bytes: 0,
+            prompt_tokens: None,
+            cache_tokens: None,
+            generated_tokens: 0,
         }
     }
 
@@ -280,6 +313,9 @@ impl ObservedCompletion {
             elapsed: started.elapsed(),
             request_body_bytes,
             response_body_bytes: 0,
+            prompt_tokens: None,
+            cache_tokens: None,
+            generated_tokens: 0,
         }
     }
 }
@@ -522,7 +558,7 @@ impl SemanticClient {
         started: Instant,
         budget: Duration,
         partials: Option<UnboundedSender<String>>,
-    ) -> Result<Result<String, NoSuggestionReason>, ProviderError> {
+    ) -> Result<(Result<String, NoSuggestionReason>, ProviderStats), ProviderError> {
         let observed = self
             .complete_observed_started(request, cancellation, started, budget, partials)
             .await
@@ -530,13 +566,14 @@ impl SemanticClient {
                 ClientError::Cancelled => ProviderError::Cancelled,
                 _ => ProviderError::Unavailable,
             })?;
+        let stats = observed.stats();
         let abstention = observed
             .no_suggestion
             .unwrap_or(NoSuggestionReason::ModelAbstained);
         match observed.disposition {
-            CompletionDisposition::Suggested => Ok(observed.output.ok_or(abstention)),
+            CompletionDisposition::Suggested => Ok((observed.output.ok_or(abstention), stats)),
             CompletionDisposition::ModelAbstained | CompletionDisposition::LanguageAbstained => {
-                Ok(Err(abstention))
+                Ok((Err(abstention), stats))
             }
             CompletionDisposition::InvalidOutput => Err(ProviderError::Unavailable),
         }
@@ -811,6 +848,7 @@ impl CompletionProvider for SemanticClient {
     ) -> Result<ProviderOutcome, ProviderError> {
         self.propose_outcome_with_partials(request, cancellation, allow_replacement, trigger, None)
             .await
+            .map(|reply| reply.outcome)
     }
 
     async fn propose_outcome_with_partials(
@@ -820,7 +858,7 @@ impl CompletionProvider for SemanticClient {
         allow_replacement: bool,
         trigger: RequestTrigger,
         partials: Option<UnboundedSender<String>>,
-    ) -> Result<ProviderOutcome, ProviderError> {
+    ) -> Result<ProviderReply, ProviderError> {
         let started = Instant::now();
         let budget = trigger.writing_budget();
         if cancellation.is_cancelled() {
@@ -840,39 +878,44 @@ impl CompletionProvider for SemanticClient {
                 .correction(&request, explicit, &cancellation, started, budget)
                 .await?
             {
-                return Ok(ProviderOutcome::Proposal(proposal));
+                return Ok(ProviderOutcome::Proposal(proposal).into());
             }
         }
         let before = request.before.clone();
         let after = request.after.clone();
         let language = request.language.clone();
-        let text = match self
+        let (text, stats) = match self
             .complete_started(request, cancellation, started, budget, partials)
             .await?
         {
-            Ok(text) => text,
-            Err(reason) => return Ok(ProviderOutcome::NoSuggestion(reason)),
+            (Ok(text), stats) => (text, stats),
+            (Err(reason), stats) => {
+                return Ok(ProviderReply {
+                    outcome: ProviderOutcome::NoSuggestion(reason),
+                    stats: Some(stats),
+                });
+            }
         };
-        let text = match crate::writing::line_rest(&after) {
-            Some(line) => match crate::writing::mid_line_insertion(&before, line, &text) {
-                Some(inserted) => inserted,
-                None => {
-                    return Ok(ProviderOutcome::NoSuggestion(
-                        NoSuggestionReason::OutputRejected,
-                    ));
-                }
-            },
-            None => text,
-        };
-        let valid =
-            crate::writing::validate_proposal(&before, &after, &text, language.as_deref()).is_ok();
-        Ok(if valid {
-            ProviderOutcome::Proposal(WritingProposal {
-                text,
-                replace_before: None,
-            })
-        } else {
-            ProviderOutcome::NoSuggestion(NoSuggestionReason::OutputRejected)
+        let outcome = match crate::writing::line_rest(&after) {
+            Some(line) => crate::writing::mid_line_insertion(&before, line, &text),
+            None => Some(text),
+        }
+        .and_then(|text| {
+            crate::writing::validate_proposal(&before, &after, &text, language.as_deref())
+                .ok()
+                .map(|()| {
+                    ProviderOutcome::Proposal(WritingProposal {
+                        text,
+                        replace_before: None,
+                    })
+                })
+        })
+        .unwrap_or(ProviderOutcome::NoSuggestion(
+            NoSuggestionReason::OutputRejected,
+        ));
+        Ok(ProviderReply {
+            outcome,
+            stats: Some(stats),
         })
     }
 
@@ -889,7 +932,7 @@ impl CompletionProvider for SemanticClient {
             None,
         )
         .await
-        .map(Result::ok)
+        .map(|(text, _stats)| text.ok())
     }
 }
 
@@ -963,6 +1006,26 @@ struct StreamAccumulator {
     ttft: Option<Duration>,
     finish: Option<StreamFinish>,
     invalid: bool,
+    /// Streamed events that carried content (one per generated token).
+    tokens: u32,
+    /// The latest per-token timings the runtime reported.
+    timings: Option<NativeTimings>,
+}
+
+impl StreamAccumulator {
+    /// Newly evaluated prompt tokens, cache-reused prompt tokens and
+    /// generated tokens, as far as the stream reported them.
+    fn counts(&self) -> (Option<u32>, Option<u32>, u32) {
+        let generated = self
+            .timings
+            .and_then(|timings| timings.predicted_n)
+            .unwrap_or(self.tokens);
+        (
+            self.timings.and_then(|timings| timings.prompt_n),
+            self.timings.and_then(|timings| timings.cache_n),
+            generated,
+        )
+    }
 }
 
 impl StreamAccumulator {
@@ -984,6 +1047,12 @@ impl StreamAccumulator {
         }
         if !chunk.content.is_empty() && self.ttft.is_none() {
             self.ttft = Some(started.elapsed());
+        }
+        if !chunk.content.is_empty() {
+            self.tokens = self.tokens.saturating_add(1);
+        }
+        if chunk.timings.is_some() {
+            self.timings = chunk.timings;
         }
         if self.output.len().saturating_add(chunk.content.len()) > MAX_RAW_OUTPUT_BYTES {
             self.invalid = true;
@@ -1045,6 +1114,30 @@ impl StreamAccumulator {
     }
 }
 
+fn observed_completion(
+    accumulator: &StreamAccumulator,
+    disposition: CompletionDisposition,
+    no_suggestion: Option<NoSuggestionReason>,
+    output: Option<String>,
+    started: Instant,
+    request_body_bytes: usize,
+    response_body_bytes: usize,
+) -> ObservedCompletion {
+    let (prompt_tokens, cache_tokens, generated_tokens) = accumulator.counts();
+    ObservedCompletion {
+        disposition,
+        no_suggestion,
+        output,
+        ttft: accumulator.ttft,
+        elapsed: started.elapsed(),
+        request_body_bytes,
+        response_body_bytes,
+        prompt_tokens,
+        cache_tokens,
+        generated_tokens,
+    }
+}
+
 async fn read_stream(
     mut response: Response,
     request_body_bytes: usize,
@@ -1071,13 +1164,17 @@ async fn read_stream(
                     .then(|| crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
                         .and_then(crate::writing::available_complete_words))
                     .flatten();
-                return Ok(ObservedCompletion {
-                    disposition: if output.is_some() { CompletionDisposition::Suggested }
-                        else { CompletionDisposition::ModelAbstained },
-                    no_suggestion: output.is_none().then_some(NoSuggestionReason::BudgetStream),
-                    output, ttft: accumulator.ttft, elapsed: started.elapsed(),
+                let disposition = if output.is_some() {
+                    CompletionDisposition::Suggested
+                } else {
+                    CompletionDisposition::ModelAbstained
+                };
+                let no_suggestion =
+                    output.is_none().then_some(NoSuggestionReason::BudgetStream);
+                return Ok(observed_completion(
+                    &accumulator, disposition, no_suggestion, output, started,
                     request_body_bytes, response_body_bytes,
-                });
+                ));
             },
             result = response.chunk() => result?,
         };
@@ -1120,15 +1217,15 @@ async fn read_stream(
                     crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
                         .and_then(|raw| crate::writing::complete_word_prefix(raw, 4, false))
                 {
-                    return Ok(ObservedCompletion {
-                        disposition: CompletionDisposition::Suggested,
-                        no_suggestion: None,
-                        output: Some(output),
-                        ttft: accumulator.ttft,
-                        elapsed: started.elapsed(),
+                    return Ok(observed_completion(
+                        &accumulator,
+                        CompletionDisposition::Suggested,
+                        None,
+                        Some(output),
+                        started,
                         request_body_bytes,
                         response_body_bytes,
-                    });
+                    ));
                 }
             }
             if saw_done {
@@ -1159,7 +1256,6 @@ fn finish_observed_stream(
     request_body_bytes: usize,
     response_body_bytes: usize,
 ) -> ObservedCompletion {
-    let elapsed = started.elapsed();
     let (disposition, output) = if accumulator.invalid {
         (CompletionDisposition::InvalidOutput, None)
     } else {
@@ -1189,21 +1285,62 @@ fn finish_observed_stream(
     } else {
         disposition
     };
-    ObservedCompletion {
+    observed_completion(
+        accumulator,
         disposition,
-        no_suggestion: (disposition == CompletionDisposition::ModelAbstained)
+        (disposition == CompletionDisposition::ModelAbstained)
             .then_some(NoSuggestionReason::ModelAbstained),
         output,
-        ttft: accumulator.ttft,
-        elapsed,
+        started,
         request_body_bytes,
         response_body_bytes,
-    }
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_counts_come_from_per_token_timings() {
+        let started = Instant::now();
+        let mut accumulator = StreamAccumulator::default();
+        assert_eq!(accumulator.counts(), (None, None, 0));
+        accumulator
+            .accept_event(
+                r#"{"index":0,"content":" for","stop":false,"timings":{"prompt_n":41,"cache_n":33,"predicted_n":1}}"#,
+                started,
+            )
+            .expect("token event");
+        assert_eq!(accumulator.counts(), (Some(41), Some(33), 1));
+        assert!(accumulator.ttft.is_some());
+        accumulator
+            .accept_event(
+                r#"{"index":0,"content":" the","stop":false,"timings":{"prompt_n":41,"cache_n":33,"predicted_n":2}}"#,
+                started,
+            )
+            .expect("token event");
+        // Without timings the generated count falls back to token events.
+        accumulator.timings = None;
+        assert_eq!(accumulator.counts(), (None, None, 2));
+
+        // Malformed optional statistics stay unknown instead of rejecting
+        // an otherwise valid token event.
+        let mut malformed = StreamAccumulator::default();
+        malformed
+            .accept_event(
+                r#"{"index":0,"content":" for","stop":false,"timings":[]}"#,
+                started,
+            )
+            .expect("token event with malformed timings");
+        malformed
+            .accept_event(
+                r#"{"index":0,"content":" the","stop":false,"timings":{"prompt_n":-1,"cache_n":"33","predicted_n":1.5}}"#,
+                started,
+            )
+            .expect("token event with malformed timing fields");
+        assert_eq!(malformed.counts(), (None, None, 2));
+    }
 
     #[test]
     fn text_after_the_caret_is_eligible_unless_the_caret_splits_a_word() {

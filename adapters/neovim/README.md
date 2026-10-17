@@ -53,8 +53,10 @@ vim.g.badi = {
 ```
 
 A terminal can send Ctrl+Shift+Space only through an extended keyboard
-protocol; that has not been tried in a live terminal. Where the key does not
-arrive, map `:BadiRequest` to one that does. `:BadiStatus` prints a
+protocol. In foot on 2026-10-17 it arrived under this workstation's own
+LazyVim configuration and the broker trace recorded an explicit Neovim
+request. Where the key does not arrive, map `:BadiRequest` to one that
+does. `:BadiStatus` prints a
 content-free state, and `:BadiReconnect` restarts the bridge with fresh
 policy. The preview uses the `BadiSuggestion` highlight, linked to `Comment`.
 
@@ -97,11 +99,7 @@ policy. The preview uses the `BadiSuggestion` highlight, linked to `Comment`.
   content-free counts in `debug-neovim.json`.
 
 Not yet: spelling replacement (the plugin does not negotiate
-`text_replacement`, so suggestions only append) and a trial under this
-workstation's own LazyVim configuration, whose `packpath` excludes the
-site directory the start package installs into, so the plugin never loads
-there (found live 2026-10-17; `vim.g.loaded_badi` unset, `:BadiStatus`
-unknown).
+`text_replacement`, so suggestions only append).
 
 ## Install
 
@@ -113,9 +111,18 @@ badi app nvim on
 The plugin goes to Neovim's start package directory,
 `stdpath('data')/site/pack/badi/start/badi` (following `XDG_DATA_HOME` and
 `NVIM_APPNAME`), and the bridge with its shared modules to
-`~/.local/lib/badi/editors/`. Restart Neovim. The installer refuses a symlinked
-or foreign package directory, skips identical files and backs up what it
-replaces ([editor installs](../shared/README.md#install)). For source testing,
+`~/.local/lib/badi/editors/`. When lazy.nvim is detected (its installed
+`lazy/lazy.nvim` directory, `lazy-lock.json`, or `lua/plugins/` under
+`stdpath('config')`), the installer also writes the new file
+`lua/plugins/badi.lua` containing `{ dir = "<installed start package>",
+lazy = false }`, because lazy.nvim manages the runtimepath itself and a
+start package alone may never load. It never edits an existing user spec:
+a foreign `badi.lua` or a symlink at that path is refused, while Badi's
+own marked spec is backed up before replacement and receipted so the
+editor installation's restore removes it. Restart Neovim. The installer
+refuses a symlinked or foreign package directory, skips identical files
+and backs up what it replaces ([editor installs](../shared/README.md#install)).
+For source testing,
 add this directory to `runtimepath` and set `BADI_EDITOR_DIR` to the
 repository's `adapters` directory, or set the `bridge` option to a path.
 
@@ -143,9 +150,17 @@ so they must run there.
 Tested headless with Neovim 0.12.5 and the deterministic phrase provider.
 Live on 2026-10-17 with the real model (installed `78ff8ca`): interactive
 Neovim in foot, run as `nvim -u NONE` with the installed start package on
-`runtimepath` (see the `packpath` note above) and disposable text in a
-scratch Markdown buffer, showed the grey `help.` after a typing pause,
-Tab took `help`, a second Tab the `.` remainder, Ctrl+→ took the whole
-next suggestion, and leaving Insert mode dismissed the following one.
-Streamed growth was visible in the broker trace (`I'm` → `I'm trying to
-understand`). Ctrl+Shift+Space arrival in a terminal is still untested.
+`runtimepath` and disposable text in a scratch Markdown buffer, showed the
+grey `help.` after a typing pause, Tab took `help`, a second Tab the `.`
+remainder, Ctrl+→ took the whole next suggestion, and leaving Insert mode
+dismissed the following one. Streamed growth was visible in the broker
+trace (`I'm` → `I'm trying to understand`).
+
+Live later on 2026-10-17 under this workstation's own LazyVim
+configuration (Neovim 0.12.5 in foot, the installed lazy.nvim spec and
+disposable Markdown): the grey `version of the paper` appeared after a
+typing pause, Tab inserted ` version` and left the rest, Ctrl+→ inserted
+the remainder, and on a second line Ctrl+Shift+Space produced an explicit
+broker request whose grey `next meeting will be` then yielded ` next` to
+Tab. `badi debug watch` was open throughout; this Neovim trace contained
+no `output_rejected` outcome.
