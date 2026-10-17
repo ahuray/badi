@@ -31,13 +31,13 @@ fn overview_schema_validator() -> jsonschema::Validator {
         .expect("parse schema")
     };
     let hardware = read_schema("badi.hardware.v1.schema.json");
-    let advice = read_schema("badi.model-advice.v2.schema.json");
+    let advice = read_schema("badi.model-advice.v3.schema.json");
     let settings = read_schema("badi.settings.v2.schema.json");
     let schema = read_schema("badi.overview.v2.schema.json");
     let registry = Registry::new()
         .add("urn:badi:schema:hardware:v1", hardware)
         .expect("hardware resource")
-        .add("urn:badi:schema:model-advice:v2", advice)
+        .add("urn:badi:schema:model-advice:v3", advice)
         .expect("advice resource")
         .add("urn:badi:schema:settings:v2", settings)
         .expect("settings resource")

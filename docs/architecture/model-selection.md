@@ -11,9 +11,16 @@ promotes another.
   owns the pinned catalog and hardware detector behind `badictl hardware` and
   `badictl models`. Their schemas are
   [hardware v1](../../broker/schemas/badi.hardware.v1.schema.json) and
-  [model advice v2](../../broker/schemas/badi.model-advice.v2.schema.json). The
+  [model advice v3](../../broker/schemas/badi.model-advice.v3.schema.json). The
   pinned advice reserves 2 GiB and adds 768 MiB plus 25% of the artifact as
-  runtime allowance; it may answer `no_fit` and never claims usefulness.
+  runtime allowance; it may answer `no_fit`. Among the writing models that
+  fit, within the tier the device allows (compact on battery or without
+  AVX2), it recommends the highest `screen_useful`: the blind-reviewed
+  useful suggestions of 135 development requests in the 2026-10-17 Lab
+  screen (Gemma 3 1B 46, Llama 3.2 1B 41, Qwen3 1.7B 33; Qwen3 0.6B was not
+  screened and stays the compact choice). That is a screening score, not the
+  qualification below. The advice lists the whole catalog, each entry marked
+  whether it fits, for `badi model` and the panel's Model row.
 - **The Prediction Lab** ([qualification.rs](../../evaluation/writing/lab-worker/src/qualification.rs))
   owns discovery and qualification; the shipped broker does not contain it.
   The [Lab bridge](../../evaluation/writing/lab/device-qualification.mjs) calls

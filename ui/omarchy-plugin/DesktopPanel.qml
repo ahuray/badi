@@ -54,11 +54,15 @@ Item {
   readonly property var activity: client.objectValue(desktop, "activity")
   readonly property var misses: client.objectValue(desktop, "no_suggestion")
   readonly property var spelling: Array.isArray(desktop.spelling) ? desktop.spelling : []
-  readonly property string modelName: {
-    var advice = client.objectValue(client.objectValue(client.objectValue(client.overview, "models"), "writing"), "advice")
-    var file = client.objectValue(advice, "recommended").filename
-    return typeof file === "string" ? file.replace(/\.gguf$/, "").replace(/-Q[0-9A-Z_]+$/, "").replace(/-/g, " ") : ""
+  readonly property var modelAdvice: client.objectValue(client.objectValue(client.objectValue(client.overview, "models"), "writing"), "advice")
+  readonly property var modelCatalog: Array.isArray(modelAdvice.catalog) ? modelAdvice.catalog : []
+  // The model the running broker loaded, else the device recommendation.
+  readonly property var activeModel: {
+    for (var i = 0; i < modelCatalog.length; i++)
+      if (modelCatalog[i].filename === desktop.model_file) return modelCatalog[i]
+    return client.objectValue(modelAdvice, "recommended")
   }
+  readonly property string modelName: typeof activeModel.name === "string" ? activeModel.name : ""
   // The service runs but the broker does not answer yet: the model loads.
   readonly property bool loading: !client.brokerReachable
     && (serviceState.active === "active" || serviceState.active === "activating")
@@ -223,8 +227,10 @@ Item {
     client.replaceSettings(writeRule(identity, enabled ? "allow" : "block"), enabled ? "App allowed" : "App blocked")
   }
 
-  function runAction(arguments, verb, success) {
+  // `timeout` in ms; a model download needs minutes, the rest seconds.
+  function runAction(arguments, verb, success, timeout) {
     if (controlsBusy) return
+    actionTimeout.interval = timeout || 20000
     actionVerb = verb
     actionMessage = ""
     actionSuccess = success
@@ -253,6 +259,23 @@ Item {
     var list = []
     var reachable = client.brokerReachable
 
+    // The writing model: every model that fits this device, the best
+    // measured one marked; picking one downloads it (pinned) and restarts.
+    var fitting = modelCatalog.filter(function(model) { return model.fits === true })
+    var recommendedId = client.objectValue(modelAdvice, "recommended").id
+    if (fitting.length > 0) {
+      var licences = {"Gemma": "Gemma terms", "Llama-3.2-Community": "Llama 3.2 licence", "Apache-2.0": "Apache-2.0"}
+      list.push({key: "model", section: "Model", kind: "choice", label: "Writing model",
+        detail: (activeModel.id === recommendedId ? "Recommended for this device" : "Recommended: " + (client.objectValue(modelAdvice, "recommended").name || "none"))
+          + " · " + (licences[activeModel.license] || activeModel.license || "") + " · choosing one accepts its licence",
+        value: activeModel.id || "", enabled: !controlsBusy,
+        options: fitting.map(function(model) {
+          return {value: model.id, label: model.name + (model.id === recommendedId ? " ★" : "")}
+        }),
+        choose: function(value) {
+          if (value !== activeModel.id) root.runAction(["model", "use", value, "--accept-license"], "Switching the model", "Model switched", 900000)
+        }})
+    }
     list.push({key: "mid_line", section: "Writing", kind: "toggle", label: "Mid-sentence suggestions",
       detail: "Also suggest when a word follows the caret", checked: client.settings.mid_line === true,
       enabled: canChange, activate: function() { root.setFlag("mid_line", client.settings.mid_line !== true,

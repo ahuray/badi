@@ -38,7 +38,7 @@ fn model_report_is_pinned_and_never_claims_runtime_readiness() {
     assert!(output.status.success());
     assert_eq!(output.stderr, [] as [u8; 0]);
     let report: Value = serde_json::from_slice(&output.stdout).expect("models JSON");
-    assert_eq!(report["schema"], "badi.model-advice.v2");
+    assert_eq!(report["schema"], "badi.model-advice.v3");
     assert_eq!(report["hardware"]["schema"], "badi.hardware.v1");
     assert_eq!(report["use_case"], "code");
     assert_eq!(report["runtime_ready"], false);

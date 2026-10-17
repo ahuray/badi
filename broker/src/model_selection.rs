@@ -5,13 +5,15 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use std::cmp::Reverse;
+
 use serde::Serialize;
 
 const MIB: u64 = 1_048_576;
 const HOST_RESERVE_MIB: u64 = 2_048;
 const RUNTIME_BASE_MIB: u64 = 768;
 const HARDWARE_SCHEMA: &str = "badi.hardware.v1";
-const MODEL_ADVICE_SCHEMA: &str = "badi.model-advice.v2";
+const MODEL_ADVICE_SCHEMA: &str = "badi.model-advice.v3";
 const LLAMA_CPP_MINIMUM_VERSION: &str = "b5092";
 const NVIDIA_SMI_TIMEOUT: Duration = Duration::from_secs(2);
 const NVIDIA_SMI_MAX_STDOUT_BYTES: usize = 16 * 1_024;
@@ -91,6 +93,9 @@ pub struct HardwareProfile {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ModelArtifact {
+    /// Stable short name, as `badi model use ID` and the settings name it.
+    pub id: &'static str,
+    pub name: &'static str,
     pub use_case: ModelUseCase,
     pub tier: ModelTier,
     pub repository: &'static str,
@@ -104,6 +109,12 @@ pub struct ModelArtifact {
     pub minimum_runtime_version: &'static str,
     pub prompt_format: &'static str,
     pub runtime_caveat: &'static str,
+    /// Languages Badi measured or routes for this model.
+    pub languages: &'static [&'static str],
+    /// Blind-reviewed useful suggestions among the 135 development requests
+    /// of the 2026-10-17 Prediction Lab screen (en, de, fr, es, fa), when
+    /// the model took part. A screening score, not a qualification.
+    pub screen_useful: Option<u16>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -140,6 +151,15 @@ pub struct ModelAdvice {
     pub fit: Option<MemoryFit>,
     pub download: Option<DownloadPlan>,
     pub runtime_ready: bool,
+    /// Every pinned model for this use, and whether it fits this device.
+    pub catalog: Vec<CatalogChoice>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct CatalogChoice {
+    #[serde(flatten)]
+    pub artifact: ModelArtifact,
+    pub fits: bool,
 }
 
 const WRITING_PROMPT_FORMAT: &str = "llama_cpp_native_prefix_completion_v1";
@@ -148,8 +168,15 @@ const WRITING_RUNTIME_CAVEAT: &str =
 const CODE_PROMPT_FORMAT: &str = "qwen2_5_coder_instruct_chat_template";
 const CODE_RUNTIME_CAVEAT: &str = "An instruct GGUF is not proof of fill-in-the-middle quality; latency and inline quality are not validated by Badi.";
 
-const WRITING_MODELS: [ModelArtifact; 3] = [
+/// Writing models, compact first. Within a tier the recommendation prefers
+/// the higher screen score, then the smaller download.
+const WRITING_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "fa"];
+const CODE_LANGUAGES: &[&str] = &["code"];
+
+const WRITING_MODELS: [ModelArtifact; 4] = [
     ModelArtifact {
+        id: "qwen3-0.6b",
+        name: "Qwen3 0.6B",
         use_case: ModelUseCase::Writing,
         tier: ModelTier::Compact,
         repository: "Qwen/Qwen3-0.6B-GGUF",
@@ -163,8 +190,12 @@ const WRITING_MODELS: [ModelArtifact; 3] = [
         minimum_runtime_version: LLAMA_CPP_MINIMUM_VERSION,
         prompt_format: WRITING_PROMPT_FORMAT,
         runtime_caveat: WRITING_RUNTIME_CAVEAT,
+        languages: WRITING_LANGUAGES,
+        screen_useful: None,
     },
     ModelArtifact {
+        id: "qwen3-1.7b",
+        name: "Qwen3 1.7B",
         use_case: ModelUseCase::Writing,
         tier: ModelTier::Balanced,
         repository: "ggml-org/Qwen3-1.7B-GGUF",
@@ -178,26 +209,53 @@ const WRITING_MODELS: [ModelArtifact; 3] = [
         minimum_runtime_version: LLAMA_CPP_MINIMUM_VERSION,
         prompt_format: WRITING_PROMPT_FORMAT,
         runtime_caveat: WRITING_RUNTIME_CAVEAT,
+        languages: WRITING_LANGUAGES,
+        screen_useful: Some(33),
     },
     ModelArtifact {
+        id: "llama-3.2-1b",
+        name: "Llama 3.2 1B",
         use_case: ModelUseCase::Writing,
-        tier: ModelTier::Quality,
-        repository: "Qwen/Qwen3-4B-GGUF",
-        revision: "bc640142c66e1fdd12af0bd68f40445458f3869b",
-        filename: "Qwen3-4B-Q4_K_M.gguf",
-        sha256: "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
-        download_bytes: 2_497_280_256,
+        tier: ModelTier::Balanced,
+        repository: "QuantFactory/Llama-3.2-1B-GGUF",
+        revision: "983f8cd1e4a8227322945f7f4a9aa97346ff1f65",
+        filename: "Llama-3.2-1B.Q4_K_M.gguf",
+        sha256: "ac81ee4bf5b82d94f380a87fd48560254b970107a94b6f228b2a36991853af60",
+        download_bytes: 807_690_208,
         quantization: "Q4_K_M",
-        license: "Apache-2.0",
+        license: "Llama-3.2-Community",
         runtime: "llama.cpp",
         minimum_runtime_version: LLAMA_CPP_MINIMUM_VERSION,
         prompt_format: WRITING_PROMPT_FORMAT,
         runtime_caveat: WRITING_RUNTIME_CAVEAT,
+        languages: WRITING_LANGUAGES,
+        screen_useful: Some(41),
+    },
+    ModelArtifact {
+        id: "gemma-3-1b",
+        name: "Gemma 3 1B",
+        use_case: ModelUseCase::Writing,
+        tier: ModelTier::Balanced,
+        repository: "gguf-org/gemma-3-1b-pt-gguf",
+        revision: "53a59a084b70c19aaa73f5854538f6b3da32d043",
+        filename: "gemma-3-1b-pt-q4_k_m.gguf",
+        sha256: "3c313086e97e47432c8aa45e2884c0f9fe727af9766c2291d06b8cb1e709af0f",
+        download_bytes: 806_056_736,
+        quantization: "Q4_K_M",
+        license: "Gemma",
+        runtime: "llama.cpp",
+        minimum_runtime_version: LLAMA_CPP_MINIMUM_VERSION,
+        prompt_format: WRITING_PROMPT_FORMAT,
+        runtime_caveat: WRITING_RUNTIME_CAVEAT,
+        languages: WRITING_LANGUAGES,
+        screen_useful: Some(46),
     },
 ];
 
 const CODE_MODELS: [ModelArtifact; 3] = [
     ModelArtifact {
+        id: "qwen2.5-coder-0.5b",
+        name: "Qwen2.5 Coder 0.5B",
         use_case: ModelUseCase::Code,
         tier: ModelTier::Compact,
         repository: "Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF",
@@ -211,8 +269,12 @@ const CODE_MODELS: [ModelArtifact; 3] = [
         minimum_runtime_version: LLAMA_CPP_MINIMUM_VERSION,
         prompt_format: CODE_PROMPT_FORMAT,
         runtime_caveat: CODE_RUNTIME_CAVEAT,
+        languages: CODE_LANGUAGES,
+        screen_useful: None,
     },
     ModelArtifact {
+        id: "qwen2.5-coder-1.5b",
+        name: "Qwen2.5 Coder 1.5B",
         use_case: ModelUseCase::Code,
         tier: ModelTier::Balanced,
         repository: "Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF",
@@ -226,8 +288,12 @@ const CODE_MODELS: [ModelArtifact; 3] = [
         minimum_runtime_version: LLAMA_CPP_MINIMUM_VERSION,
         prompt_format: CODE_PROMPT_FORMAT,
         runtime_caveat: CODE_RUNTIME_CAVEAT,
+        languages: CODE_LANGUAGES,
+        screen_useful: None,
     },
     ModelArtifact {
+        id: "qwen2.5-coder-7b",
+        name: "Qwen2.5 Coder 7B",
         use_case: ModelUseCase::Code,
         tier: ModelTier::Quality,
         repository: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
@@ -241,6 +307,8 @@ const CODE_MODELS: [ModelArtifact; 3] = [
         minimum_runtime_version: LLAMA_CPP_MINIMUM_VERSION,
         prompt_format: CODE_PROMPT_FORMAT,
         runtime_caveat: CODE_RUNTIME_CAVEAT,
+        languages: CODE_LANGUAGES,
+        screen_useful: None,
     },
 ];
 
@@ -277,7 +345,17 @@ pub fn current_memory() -> MemoryProfile {
 
 #[must_use]
 pub fn recommend_model(hardware: HardwareProfile, use_case: ModelUseCase) -> ModelAdvice {
-    match select_model(&hardware, use_case) {
+    let selection = select_model(&hardware, use_case);
+    let catalog = catalog(use_case)
+        .iter()
+        .map(|artifact| CatalogChoice {
+            artifact: *artifact,
+            fits: selection.as_ref().is_ok_and(|selection| {
+                selection.recommended == *artifact || selection.alternatives.contains(artifact)
+            }),
+        })
+        .collect();
+    match selection {
         Ok(selection) => {
             let recommended = selection.recommended;
             let download = DownloadPlan {
@@ -306,6 +384,7 @@ pub fn recommend_model(hardware: HardwareProfile, use_case: ModelUseCase) -> Mod
                 fit: Some(selection.fit),
                 download: Some(download),
                 runtime_ready: false,
+                catalog,
             }
         }
         Err(reason) => ModelAdvice {
@@ -321,6 +400,7 @@ pub fn recommend_model(hardware: HardwareProfile, use_case: ModelUseCase) -> Mod
             fit: None,
             download: None,
             runtime_ready: false,
+            catalog,
         },
     }
 }
@@ -334,11 +414,13 @@ pub fn recommend_model(hardware: HardwareProfile, use_case: ModelUseCase) -> Mod
 pub(crate) fn select_installed_writing_model(
     hardware: &HardwareProfile,
     installed_filenames: &[&str],
+    chosen: Option<&str>,
 ) -> Result<Option<ModelArtifact>, AdviceReason> {
     let mut capacity = hardware.clone();
     capacity.memory.available_mib = hardware.memory.total_mib;
     let selection = select_model(&capacity, ModelUseCase::Writing)?;
-    let installed: Vec<_> = catalog(ModelUseCase::Writing)
+    let usable = selection.fit.usable_host_memory_mib;
+    let mut installed: Vec<_> = catalog(ModelUseCase::Writing)
         .iter()
         .copied()
         .filter(|model| installed_filenames.contains(&model.filename))
@@ -346,17 +428,17 @@ pub(crate) fn select_installed_writing_model(
     if installed.is_empty() {
         return Ok(None);
     }
-    let usable = selection.fit.usable_host_memory_mib;
-    let fits =
-        |model: &&ModelArtifact| memory_fit(**model, usable).required_host_memory_mib <= usable;
-    // Prefer the advised tier, then smaller artifacts. If only a larger pinned
-    // artifact is installed, use the smallest one that still fits safely.
+    installed.retain(|model| memory_fit(*model, usable).required_host_memory_mib <= usable);
+    // The user's installed choice wins whenever it fits safely; otherwise
+    // the advised tier comes first, then the recommendation's preference.
+    if let Some(model) = chosen.and_then(|id| installed.iter().find(|model| model.id == id)) {
+        return Ok(Some(*model));
+    }
+    installed.sort_by_key(|model| {
+        Reverse((model.tier <= selection.recommended.tier, preference(model)))
+    });
     installed
-        .iter()
-        .rev()
-        .filter(|model| model.tier <= selection.recommended.tier)
-        .find(fits)
-        .or_else(|| installed.iter().find(fits))
+        .first()
         .copied()
         .map(Some)
         .ok_or(AdviceReason::InsufficientUsableMemory)
@@ -403,31 +485,34 @@ fn select_model(
     let usable_host_memory_mib = available_mib
         .saturating_sub(HOST_RESERVE_MIB)
         .min(total_mib.saturating_sub(HOST_RESERVE_MIB));
-    let catalog = catalog(use_case);
-    let recommended = catalog
+    let mut fitting: Vec<ModelArtifact> = catalog(use_case)
         .iter()
-        .rev()
         .copied()
-        .find(|artifact| {
+        .filter(|artifact| {
             artifact.tier <= ceiling
                 && memory_fit(*artifact, usable_host_memory_mib).required_host_memory_mib
                     <= usable_host_memory_mib
         })
-        .ok_or(AdviceReason::InsufficientUsableMemory)?;
-    let alternatives = catalog
-        .iter()
-        .copied()
-        .filter(|artifact| {
-            artifact.tier < recommended.tier
-                && memory_fit(*artifact, usable_host_memory_mib).required_host_memory_mib
-                    <= usable_host_memory_mib
-        })
         .collect();
+    fitting.sort_by_key(|artifact| Reverse(preference(artifact)));
+    let recommended = *fitting
+        .first()
+        .ok_or(AdviceReason::InsufficientUsableMemory)?;
     Ok(Selection {
         recommended,
-        alternatives,
+        alternatives: fitting[1..].to_vec(),
         fit: memory_fit(recommended, usable_host_memory_mib),
     })
+}
+
+/// What a recommendation prefers among models that fit: a higher screen
+/// score, then a higher tier, then a smaller download.
+fn preference(artifact: &ModelArtifact) -> (u16, ModelTier, Reverse<u64>) {
+    (
+        artifact.screen_useful.unwrap_or(0),
+        artifact.tier,
+        Reverse(artifact.download_bytes),
+    )
 }
 
 fn reported_memory(hardware: &HardwareProfile) -> Result<(u64, u64), AdviceReason> {
@@ -500,7 +585,7 @@ fn meminfo_mib(value: &str, wanted: &str) -> Option<u64> {
     })
 }
 
-pub(crate) fn catalog(use_case: ModelUseCase) -> &'static [ModelArtifact; 3] {
+pub(crate) fn catalog(use_case: ModelUseCase) -> &'static [ModelArtifact] {
     match use_case {
         ModelUseCase::Writing => &WRITING_MODELS,
         ModelUseCase::Code => &CODE_MODELS,
@@ -516,6 +601,12 @@ fn candidate_rationale(
         "The {} MiB artifact plus {} MiB conservative runtime headroom fits within {} MiB usable host memory.",
         fit.artifact_memory_mib, fit.runtime_headroom_mib, fit.usable_host_memory_mib
     )];
+    if let Some(useful) = artifact.screen_useful {
+        reasons.push(format!(
+            "{} gave the most useful suggestions of the models that fit: {useful} of 135 in the 2026-10-17 blind development screen.",
+            artifact.name
+        ));
+    }
     if hardware.architecture == "aarch64"
         || (hardware.architecture == "x86_64" && !hardware.cpu.avx2)
     {

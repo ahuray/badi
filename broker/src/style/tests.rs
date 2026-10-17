@@ -52,6 +52,7 @@ fn settings(enabled: bool, mut subjects: Vec<SubjectRule>) -> SettingsV2 {
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: enabled,
         language_overrides: BTreeMap::new(),
+        writing_model: None,
         subjects,
     }
 }

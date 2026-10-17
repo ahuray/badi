@@ -73,9 +73,24 @@ fn assert_semantic_invariants(advice: &ModelAdvice) {
                     badi_broker::MODEL_DOWNLOAD_DIRECTORY,
                 ]
             );
+            // Alternatives are the other models that fit, none ranked above
+            // the recommendation (screen score, then tier, then smaller file).
+            let rank = |model: &badi_broker::ModelArtifact| {
+                (
+                    model.screen_useful.unwrap_or(0),
+                    model.tier,
+                    std::cmp::Reverse(model.download_bytes),
+                )
+            };
+            for choice in &advice.catalog {
+                let listed = choice.artifact == *recommended
+                    || advice.alternatives.contains(&choice.artifact);
+                assert_eq!(choice.fits, listed, "{}", choice.artifact.id);
+            }
             for alternative in &advice.alternatives {
                 assert_eq!(alternative.use_case, advice.use_case);
-                assert!(alternative.tier < recommended.tier);
+                assert!(alternative.tier <= recommended.tier);
+                assert!(rank(alternative) <= rank(recommended));
                 let artifact_memory_mib = alternative.download_bytes.div_ceil(1_048_576);
                 let required_host_memory_mib =
                     artifact_memory_mib + 768 + artifact_memory_mib.div_ceil(4);
@@ -96,7 +111,7 @@ fn assert_semantic_invariants(advice: &ModelAdvice) {
 fn representative_hardware_and_advice_outputs_match_their_formal_schemas() {
     let root = schema_root();
     let hardware_schema = read_json(&root.join("badi.hardware.v1.schema.json"));
-    let advice_schema = read_json(&root.join("badi.model-advice.v2.schema.json"));
+    let advice_schema = read_json(&root.join("badi.model-advice.v3.schema.json"));
     let hardware_validator = jsonschema::validator_for(&hardware_schema).expect("hardware schema");
     let registry = Registry::new()
         .add(HARDWARE_SCHEMA_ID, hardware_schema)
@@ -143,7 +158,7 @@ fn producer_preserves_cross_field_model_invariants_at_tier_boundaries() {
 fn schema_rejects_runtime_readiness_and_mixed_candidate_states() {
     let root = schema_root();
     let hardware_schema = read_json(&root.join("badi.hardware.v1.schema.json"));
-    let advice_schema = read_json(&root.join("badi.model-advice.v2.schema.json"));
+    let advice_schema = read_json(&root.join("badi.model-advice.v3.schema.json"));
     let registry = Registry::new()
         .add(HARDWARE_SCHEMA_ID, hardware_schema)
         .expect("hardware schema resource")

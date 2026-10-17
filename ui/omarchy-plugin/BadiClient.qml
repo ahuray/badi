@@ -200,6 +200,11 @@ Scope {
       }
       keys.push("spelling_languages")
     }
+    // The chosen writing model: a catalog id the broker reads at its start.
+    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "writing_model")) {
+      if (typeof value.writing_model !== "string" || !/^[a-z0-9.-]{1,64}$/.test(value.writing_model)) return false
+      keys.push("writing_model")
+    }
     if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "language_overrides")) {
       if (!isObject(value.language_overrides)) return false
       var apps = Object.keys(value.language_overrides)

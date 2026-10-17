@@ -97,6 +97,7 @@ fn settings(battery_mode: BatteryMode) -> SettingsV2 {
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
+        writing_model: None,
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,

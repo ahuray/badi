@@ -63,15 +63,19 @@ fn current_class_machine_stays_balanced_for_both_use_cases() {
 }
 
 #[test]
-fn artifact_bytes_can_downgrade_one_use_case_before_another() {
-    let hardware = profile(8_192, 4_300, 8);
+fn artifact_bytes_decide_each_use_case_on_its_own() {
+    // 2100 MiB usable: Gemma 3 1B (769 + 961 MiB) fits, the 1.1 GB code
+    // model (1066 + 1035 MiB) does not, and the 1.3 GB Qwen3 1.7B never did.
+    let hardware = profile(8_192, 4_148, 8);
+    let writing = recommend_model(hardware.clone(), ModelUseCase::Writing);
+    assert_eq!(writing.tier, Some(ModelTier::Balanced));
     assert_eq!(
-        recommend_model(hardware.clone(), ModelUseCase::Writing).tier,
-        Some(ModelTier::Compact)
+        writing.recommended.map(|model| model.id),
+        Some("gemma-3-1b")
     );
     assert_eq!(
         recommend_model(hardware, ModelUseCase::Code).tier,
-        Some(ModelTier::Balanced)
+        Some(ModelTier::Compact)
     );
 }
 
@@ -83,12 +87,12 @@ fn installed_writing_model_survives_power_advice_changes() {
     let balanced = super::WRITING_MODELS[1];
     assert_eq!(recommended_tier(&hardware), ModelTier::Compact);
     assert_eq!(
-        super::select_installed_writing_model(&hardware, &[balanced.filename]),
+        super::select_installed_writing_model(&hardware, &[balanced.filename], None),
         Ok(Some(balanced))
     );
     hardware.on_battery = None;
     assert_eq!(
-        super::select_installed_writing_model(&hardware, &[balanced.filename]),
+        super::select_installed_writing_model(&hardware, &[balanced.filename], None),
         Ok(Some(balanced))
     );
 }
@@ -100,17 +104,17 @@ fn installed_selection_prefers_advice_then_smaller_artifacts() {
     let compact = super::WRITING_MODELS[0];
     let balanced = super::WRITING_MODELS[1];
     assert_eq!(
-        super::select_installed_writing_model(&hardware, &[compact.filename]),
+        super::select_installed_writing_model(&hardware, &[compact.filename], None),
         Ok(Some(compact))
     );
     let installed = [compact.filename, balanced.filename];
     assert_eq!(
-        super::select_installed_writing_model(&hardware, &installed),
+        super::select_installed_writing_model(&hardware, &installed, None),
         Ok(Some(balanced))
     );
     hardware.on_battery = Some(true);
     assert_eq!(
-        super::select_installed_writing_model(&hardware, &installed),
+        super::select_installed_writing_model(&hardware, &installed, None),
         Ok(Some(compact))
     );
 }
@@ -122,38 +126,38 @@ fn installed_selection_uses_total_memory_and_keeps_compatibility_gates() {
     // A momentary dip in available memory must not refuse the installation.
     let mut hardware = profile(15_663, 4_300, 20);
     assert_eq!(
-        super::select_installed_writing_model(&hardware, &[balanced.filename]),
+        super::select_installed_writing_model(&hardware, &[balanced.filename], None),
         Ok(Some(balanced))
     );
     hardware.memory.available_mib = None;
     assert_eq!(
-        super::select_installed_writing_model(&hardware, &[balanced.filename]),
+        super::select_installed_writing_model(&hardware, &[balanced.filename], None),
         Ok(Some(balanced))
     );
     let floor = profile(4_096, 4_000, 8);
     assert_eq!(
-        super::select_installed_writing_model(&floor, &[balanced.filename]),
+        super::select_installed_writing_model(&floor, &[balanced.filename], None),
         Err(AdviceReason::InsufficientUsableMemory)
     );
     hardware.memory.total_mib = None;
     assert_eq!(
-        super::select_installed_writing_model(&hardware, &[balanced.filename]),
+        super::select_installed_writing_model(&hardware, &[balanced.filename], None),
         Err(AdviceReason::MemoryCapacityUnknown)
     );
     hardware.memory.total_mib = Some(0);
     assert_eq!(
-        super::select_installed_writing_model(&hardware, &[balanced.filename]),
+        super::select_installed_writing_model(&hardware, &[balanced.filename], None),
         Err(AdviceReason::MemoryCapacityInvalid)
     );
     let mut hardware = profile(15_663, 8_000, 2);
     assert_eq!(
-        super::select_installed_writing_model(&hardware, &[balanced.filename]),
+        super::select_installed_writing_model(&hardware, &[balanced.filename], None),
         Err(AdviceReason::InsufficientCompute)
     );
     hardware.architecture = "riscv64".to_owned();
     hardware.logical_cpus = 20;
     assert_eq!(
-        super::select_installed_writing_model(&hardware, &[balanced.filename]),
+        super::select_installed_writing_model(&hardware, &[balanced.filename], None),
         Err(AdviceReason::UnsupportedArchitecture)
     );
 }
@@ -176,11 +180,11 @@ fn start_waits_until_the_model_and_host_reserve_fit_available_memory() {
 fn installed_selection_never_invents_a_model_or_accepts_an_unknown_artifact() {
     let hardware = profile(16_384, 8_192, 20);
     assert_eq!(
-        super::select_installed_writing_model(&hardware, &[]),
+        super::select_installed_writing_model(&hardware, &[], None),
         Ok(None)
     );
     assert_eq!(
-        super::select_installed_writing_model(&hardware, &["unreviewed.gguf"]),
+        super::select_installed_writing_model(&hardware, &["unreviewed.gguf"], None),
         Ok(None)
     );
 }
@@ -229,12 +233,16 @@ fn arm_non_avx2_battery_and_hybrid_profiles_are_capped() {
 fn quality_requires_known_ac_power_and_substantial_host_headroom() {
     let hardware = profile(32_768, 20_000, 16);
     assert_eq!(recommended_tier(&hardware), ModelTier::Quality);
-    for use_case in [ModelUseCase::Writing, ModelUseCase::Code] {
-        assert_eq!(
-            recommend_model(hardware.clone(), use_case).tier,
-            Some(ModelTier::Quality)
-        );
-    }
+    assert_eq!(
+        recommend_model(hardware.clone(), ModelUseCase::Code).tier,
+        Some(ModelTier::Quality)
+    );
+    // Writing has no quality tier: a larger model screened no better.
+    let writing = recommend_model(hardware, ModelUseCase::Writing);
+    assert_eq!(
+        writing.recommended.map(|model| model.id),
+        Some("gemma-3-1b")
+    );
 }
 
 #[test]
@@ -249,11 +257,11 @@ fn live_available_memory_always_preserves_the_host_reserve() {
 }
 
 #[test]
-fn broker_service_cap_holds_the_quality_writing_tier() {
+fn broker_service_cap_holds_the_largest_writing_model() {
     let quality = super::WRITING_MODELS
         .iter()
-        .find(|model| model.tier == ModelTier::Quality)
-        .expect("quality writing tier");
+        .max_by_key(|model| model.download_bytes)
+        .expect("largest writing model");
     let fit = super::memory_fit(*quality, 16_000);
     let unit = include_str!("../../../packaging/systemd/badi-broker.service");
     assert!(unit.contains("ReadOnlyPaths=-%h/.local/share/badi/models"));
@@ -353,7 +361,8 @@ fn catalog_metadata_is_pinned_and_records_runtime_constraints() {
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
         );
         assert_eq!(std::path::Path::new(model.filename).components().count(), 1);
-        assert_eq!(model.license, "Apache-2.0");
+        assert!(["Apache-2.0", "Gemma", "Llama-3.2-Community"].contains(&model.license));
+        assert!(!model.id.is_empty() && !model.name.is_empty() && !model.languages.is_empty());
         assert_eq!(model.runtime, "llama.cpp");
         assert_eq!(model.minimum_runtime_version, "b5092");
         assert_ne!(model.prompt_format, "");
@@ -449,4 +458,57 @@ fn bounded_command_caps_and_marks_noisy_stdout() {
     assert!(output.status.success());
     assert_eq!(output.stdout.len(), 64);
     assert!(output.truncated);
+}
+
+#[test]
+fn the_recommendation_is_the_best_screened_model_that_fits() {
+    let advice = recommend_model(profile(16_384, 8_192, 20), ModelUseCase::Writing);
+    let recommended = advice.recommended.expect("a writing model fits");
+    assert_eq!(recommended.id, "gemma-3-1b");
+    assert!(
+        advice
+            .catalog
+            .iter()
+            .all(|choice| choice.fits || choice.artifact.tier > ModelTier::Balanced)
+    );
+    assert_eq!(advice.catalog.len(), super::WRITING_MODELS.len());
+    // On battery only the compact model is advised, whatever its score.
+    let mut battery = profile(16_384, 8_192, 20);
+    battery.on_battery = Some(true);
+    let compact = recommend_model(battery, ModelUseCase::Writing);
+    assert_eq!(
+        compact.recommended.map(|model| model.id),
+        Some("qwen3-0.6b")
+    );
+    assert!(compact.catalog.iter().any(|choice| !choice.fits));
+}
+
+#[cfg(feature = "local-model")]
+#[test]
+fn an_installed_chosen_model_wins_while_it_fits() {
+    let hardware = profile(16_384, 8_192, 20);
+    let [compact, qwen, llama, gemma] = super::WRITING_MODELS;
+    let installed = [
+        compact.filename,
+        qwen.filename,
+        llama.filename,
+        gemma.filename,
+    ];
+    assert_eq!(
+        super::select_installed_writing_model(&hardware, &installed, None),
+        Ok(Some(gemma))
+    );
+    assert_eq!(
+        super::select_installed_writing_model(&hardware, &installed, Some("llama-3.2-1b")),
+        Ok(Some(llama))
+    );
+    // A choice that is not installed, or unknown, falls back to the preference.
+    assert_eq!(
+        super::select_installed_writing_model(&hardware, &[qwen.filename], Some("gemma-3-1b")),
+        Ok(Some(qwen))
+    );
+    assert_eq!(
+        super::select_installed_writing_model(&hardware, &installed, Some("unknown")),
+        Ok(Some(gemma))
+    );
 }

@@ -94,7 +94,7 @@
           "additionalProperties": false,
           "required": ["advice", "configured", "installed"],
           "properties": {
-            "advice": { "$ref": "urn:badi:schema:model-advice:v2" },
+            "advice": { "$ref": "urn:badi:schema:model-advice:v3" },
             "configured": { "type": "boolean" },
             "installed": { "type": "boolean" }
           }
