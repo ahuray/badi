@@ -303,7 +303,18 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   sentence narrowing), then extends back a sentence at a time to four words.
   Consecutive requests therefore share a prompt prefix while a long sentence
   grows, instead of changing its first bytes on every keystroke and losing
-  llama.cpp's prefix cache.
+  llama.cpp's prefix cache. Each step re-reads the whole window once. Measured
+  2026-10-17 (installed build, real model, a 380-character run-on sentence
+  typed word by word into Ghostty): in the performance profile at 250 ms per
+  word, 40 of 47 requests showed a suggestion, and each step at inputs 228,
+  292 and 359 cost one request cancelled before its first token while it
+  re-read about 30 tokens; the next request was warm again (`cache_n` 27-28),
+  because the runtime keeps what a cancelled request read. No request missed
+  its budget. Reading the next window ahead of time is not done: with one
+  runtime slot it would evict the window in use. In the power-saver profile
+  (450 ms per word), `quiet` battery scheduling, not the step, set the rate:
+  15 of 62 requests showed one, most cancelled by the next word after
+  generation had started.
 - **Shape.** At most four words and 64 characters. `en`, `de` and `fa` are
   routed; English and German must be Latin script, Persian Arabic script, with
   ZWNJ only between the letters in

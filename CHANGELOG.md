@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#90](https://github.com/ahuray/badi/pull/90) Neovim in a terminal owns its
+  keys: while it holds the terminal's focus (`editor.focus`), the broker
+  withholds the input method's typed line, so Tab and Ctrl+Shift+Space reach
+  Neovim and only one suggester runs. The 64-scalar context step was measured
+  live and needs no cache warming.
 - [#89](https://github.com/ahuray/badi/pull/89) The debug trace records
   model timing and cache counts; long run-on sentences keep the runtime's
   prefix cache through 64-scalar context steps; and the Neovim installer

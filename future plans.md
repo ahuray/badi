@@ -16,7 +16,9 @@ Linux in general.
   and any website, Zen, Omarchy web apps, Telegram, LibreOffice Writer,
   Obsidian, Bash and, by an opt-in rule, Ghostty's typed line
   ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)). Neovim
-  also passed live under this workstation's own LazyVim on 2026-10-17.
+  also passed live under this workstation's own LazyVim on 2026-10-17, in
+  foot and in Ghostty, where it takes over from the typed line while it holds
+  the terminal's focus.
   Writer checks spelling as you type and Alt+F7
   fixes the word at the caret; German, French, Spanish, Italian, Dutch and
   Polish spelling turn on with `badi spelling` and their Hunspell dictionaries. The closest Omarchy alternative, Oma Tab, replaces the input
@@ -228,7 +230,11 @@ Measured alternatives that were not adopted are in the
       performance profile (the trial still reports battery, one repeat, 376
       keys per mode), showed the cost on a fast CPU: 45 against 220 calls and
       50 against 148 runtime CPU seconds, but 27 against 31 distinct reference
-      words covered and p95 456 against 211 ms. Still open: the balanced
+      words covered and p95 456 against 211 ms. On 2026-10-17 in the
+      power-saver profile, a run-on sentence typed at 450 ms per word showed
+      15 suggestions from 62 requests under `quiet`, most cancelled by the
+      next word after generation began
+      ([runtime](broker/README.md#suggestion-limits)). Still open: the balanced
       profile on battery, real typing intervals, energy from a privileged power
       counter rather than runtime CPU time, and a reviewed count of fully
       accepted additions.
