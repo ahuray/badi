@@ -97,8 +97,11 @@ policy. The preview uses the `BadiSuggestion` highlight, linked to `Comment`.
   content-free counts in `debug-neovim.json`.
 
 Not yet: spelling replacement (the plugin does not negotiate
-`text_replacement`, so suggestions only append) and a trial with the real
-model in an interactive terminal Neovim.
+`text_replacement`, so suggestions only append) and a trial under this
+workstation's own LazyVim configuration, whose `packpath` excludes the
+site directory the start package installs into, so the plugin never loads
+there (found live 2026-10-17; `vim.g.loaded_badi` unset, `:BadiStatus`
+unknown).
 
 ## Install
 
@@ -137,5 +140,12 @@ debug activity, broker logs and messages. The tests skip where Neovim 0.10 is
 missing; the CI job `Neovim plugin / pinned Arch` sets `BADI_REQUIRE_NEOVIM=1`
 so they must run there.
 
-Tested headless with Neovim 0.12.5 and the deterministic phrase provider. No
-trial has used the real model in an interactive terminal.
+Tested headless with Neovim 0.12.5 and the deterministic phrase provider.
+Live on 2026-10-17 with the real model (installed `78ff8ca`): interactive
+Neovim in foot, run as `nvim -u NONE` with the installed start package on
+`runtimepath` (see the `packpath` note above) and disposable text in a
+scratch Markdown buffer, showed the grey `help.` after a typing pause,
+Tab took `help`, a second Tab the `.` remainder, Ctrl+→ took the whole
+next suggestion, and leaving Insert mode dismissed the following one.
+Streamed growth was visible in the broker trace (`I'm` → `I'm trying to
+understand`). Ctrl+Shift+Space arrival in a terminal is still untested.

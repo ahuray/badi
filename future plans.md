@@ -104,8 +104,11 @@ publish need the user's go-ahead first; the rest can start at once.
    second display is at hand. *Done when* the matrix shows zero wrong-field or stale edits and
    the session helper and Fcitx runbooks record it.
 2. **Try the new editor surfaces live.** Neovim: the real model in an
-   interactive terminal Neovim (display, Tab, Ctrl+→, undo, streamed growth,
-   and whether Ctrl+Shift+Space arrives). Writer: the grey preview, Tab and
+   interactive terminal works (2026-10-17: display, Tab, Ctrl+→, streamed
+   growth, Insert-leave dismissal; run with `-u NONE` because this
+   workstation's `packpath` excludes the installed start package, so the
+   plugin never loads under its own config — still open are that config and
+   whether Ctrl+Shift+Space arrives). Writer: the grey preview, Tab and
    Alt+F7 with one Ctrl+Z work (2026-10-14, isolated profile); still open are
    a model-backed correction of an ambiguous word and the automatic hint with
    German, French and Spanish dictionaries installed. A dark pill with every

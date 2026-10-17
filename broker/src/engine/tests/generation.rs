@@ -616,6 +616,112 @@ async fn a_late_final_keeps_the_shown_partial() {
     assert_eq!(payload.text, " for");
 }
 
+/// Streams one complete word, then rejects its own whole output the way
+/// the local model does: `validate_proposal` failure is returned as a
+/// no-suggestion outcome, not as a proposal for the broker to reject.
+struct ProviderRejectedExtensionProvider;
+
+#[async_trait]
+impl CompletionProvider for ProviderRejectedExtensionProvider {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::PhraseV1
+    }
+
+    async fn complete(
+        &self,
+        _request: ProviderRequest,
+        _cancellation: CancellationToken,
+    ) -> Result<Option<String>, ProviderError> {
+        Ok(None)
+    }
+
+    async fn propose_outcome_with_partials(
+        &self,
+        _request: ProviderRequest,
+        cancellation: CancellationToken,
+        _allow_replacement: bool,
+        _trigger: RequestTrigger,
+        partials: Option<mpsc::UnboundedSender<String>>,
+    ) -> Result<crate::provider::ProviderOutcome, ProviderError> {
+        if let Some(partials) = partials {
+            let _ = partials.send(" for".to_owned());
+        }
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
+            () = sleep(Duration::from_millis(50)) => {}
+        }
+        Ok(crate::provider::ProviderOutcome::NoSuggestion(
+            NoSuggestionReason::OutputRejected,
+        ))
+    }
+}
+
+#[tokio::test]
+async fn a_provider_rejected_final_keeps_the_shown_partial() {
+    let (broker, id, mut events) = setup(
+        std::sync::Arc::new(ProviderRejectedExtensionProvider),
+        BrokerConfig::default(),
+    )
+    .await;
+    let mut update = context(1, FieldPurpose::Normal);
+    update.before = "Thank you".to_owned();
+    update.selection.anchor = u64::try_from(update.before.len()).expect("small fixture");
+    update.selection.head = update.selection.anchor;
+    broker
+        .update_context(coordinates(id, 1), update.clone())
+        .await
+        .expect("context");
+    broker
+        .request_suggestion(
+            coordinates(id, 1),
+            SuggestRequestPayload {
+                fingerprint: update.fingerprint.clone(),
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("request");
+    let BrokerEvent::SuggestionShow { payload: first, .. } =
+        timeout(Duration::from_millis(200), events.recv())
+            .await
+            .expect("deadline")
+            .expect("event")
+    else {
+        panic!("expected the first word")
+    };
+    assert_eq!(first.text, " for");
+    assert!(
+        timeout(Duration::from_millis(150), events.recv())
+            .await
+            .is_err(),
+        "a provider-rejected extension clears nothing"
+    );
+    let metrics = broker.metrics().snapshot();
+    assert_eq!(metrics.suggestions_shown, 1);
+    assert!(
+        metrics.no_suggestion.is_none_or(|b| b.total() == 0),
+        "a kept partial counts as shown, not as a miss"
+    );
+    broker
+        .session_control(
+            coordinates(id, 1),
+            SessionControlRequestPayload {
+                action: ControlAction::AcceptAll,
+                fingerprint: update.fingerprint,
+                suggestion_id: Some(first.suggestion_id),
+            },
+            None,
+        )
+        .await
+        .expect("the kept partial stays acceptable");
+    let BrokerEvent::CommitPrepare { payload, .. } = events.recv().await.expect("commit") else {
+        panic!("expected the kept word")
+    };
+    assert_eq!(payload.text, " for");
+}
+
 #[tokio::test]
 async fn accepting_the_first_word_stops_the_growing_continuation() {
     let (broker, id, mut events) = setup(

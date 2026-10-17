@@ -915,6 +915,27 @@ def session(root, report):
                       'and takes the next word when the rest returns, and Ctrl+Right takes the rest; '
                       'Escape ends the carry')
 
+        # At most one hold per word acceptance: when the rest never returns
+        # (the field is left unchanged), the held Tab times out and the next
+        # Tab reaches the application instead of being held again.
+        change(PREFIX)
+        wait(lambda: context.candidate() == SUFFIX, 'candidate before the held-Tab timeout')
+        commits = context.commits()
+        assert context.key(desktop.TAB)
+        wait(lambda: context.commits() == [*commits, ' for'], 'Tab dispatches one word before the timeout step')
+        held = reason_count('tab_held')
+        dropped = reason_count('tab_held_dropped')
+        assert context.key(desktop.TAB), 'the first Tab in the gap is held'
+        wait(lambda: reason_count('tab_held') == held + 1, 'the timeout step hold is recorded')
+        wait(lambda: reason_count('tab_held_dropped') == dropped + 1, 'the held Tab times out')
+        assert context.commits() == [*commits, ' for'], 'the timed-out Tab committed and inserted nothing'
+        assert not context.key(desktop.TAB), 'after the timeout the next Tab reaches the application'
+        assert reason_count('tab_held') == held + 1, 'no second hold for the same word acceptance'
+        change(PREFIX + ' for')
+        wait(lambda: context.candidate() == ' your time', 'the rest still returns when the field catches up')
+        checks.append('IME-parity held Tab: at most one hold per word acceptance; after the 700 ms timeout '
+                      'the next Tab is the application Tab again')
+
         # Foreign composition and a rendered overlay on the same browser field.
         change(PREFIX)
         wait(lambda: context.candidate() == SUFFIX, 'browser candidate before foreign preedit')

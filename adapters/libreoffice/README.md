@@ -127,4 +127,9 @@ Writer's undo, not a Badi edit. On 2026-10-15, with German, French and
 Spanish dictionaries enabled: a finished `Hauss` in a German sentence showed
 `Hauss → Haus` on its own (the model chose among its candidates) and Alt+F7
 applied it; Alt+F7 on `muchas grasias` showed `gracias` after about 2 s.
+On 2026-10-17 (installed `78ff8ca`, interactive window, disposable text),
+after the Tab/Ctrl+→ swap: the automatic hint showed `adress → address`;
+Tab is not this extension's key (pressed with the hint showing, it stayed
+Writer's own Tab, inserted a tab character and withdrew the hint), and
+Alt+F7 showed then replaced the whole word, one Ctrl+Z restored `adress`.
 Not yet verified: other LibreOffice versions.

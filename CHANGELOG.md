@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#88](https://github.com/ahuray/badi/pull/88) Follow-up: a provider-rejected
+  final also keeps the shown partial, and at most one Tab is held per word
+  acceptance; the terminal budget measurement and the Neovim, Writer and
+  Omawrite live rows are recorded.
 - [#87](https://github.com/ahuray/badi/pull/87) Tab accepts one word and
   Ctrl+→ all of it on every surface; a quick second Tab is held for the
   returning remainder; a rejected or late final no longer clears a shown

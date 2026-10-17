@@ -43,8 +43,11 @@ observer wire details.
   gap is held for at most 700 ms; when the remainder is displayed and still
   begins with the word that Tab meant, it takes that word through the normal
   broker grant. Any other key, Escape, a focus change or the timeout drops
-  the held Tab without replaying it. On the manual path no Tab is held: that
-  Tab is the request that brings the remainder.
+  the held Tab without replaying it. At most one Tab is held per acceptance:
+  the timeout, and a broker clear answering the request for the remainder,
+  end its automatic return (`typeThroughAutomatic`), so the next Tab reaches
+  the application. On the manual path no Tab is held: that Tab is the
+  request that brings the remainder.
 - **Manual request.** It needs a collapsed, non-composing, non-sensitive
   surrounding-text snapshot, the live `SurroundingText` capability, a valid
   input-method language or explicit app override (English, German or Persian),
@@ -142,7 +145,17 @@ without a suggestion or a pending remainder stays the terminal's. A miss is
 announced only after an explicit request: an automatic request that finds
 nothing shows no notice, on this path and every other (`requestExplicit`
 records how the published request was made; `onClear` shows
-`clearNoticeText` only for an explicit one).
+`clearNoticeText` only for an explicit one). Automatic misses here are
+usually the inference budget, not the line's length: measured 2026-10-17
+on the installed `d74c238` build, typing a 462-character prompt into a
+Claude Code session in Ghostty produced seven automatic requests (typed
+lines of 68–462 characters) and every one ended `budget_stream` at
+550 ms, while `badictl probe` of that same line suggested 3/3 once cached,
+its last 160 characters 2/3, and its last 80 or 40 characters 0/3
+(`budget_prefill`/`budget_stream`). Trimming `before` at a word boundary
+in the addon is therefore not done: the broker's prompt already caps the
+context at 160 characters, and a moving trim point would forfeit prefix
+cache reuse on every keystroke.
 
 ### Observed fields
 
@@ -269,7 +282,13 @@ further would not change the broker's sentence-window prompt (`badictl
 probe`: a 423-character line and its last sentence alone answered the same),
 and explicit 1.2 s requests proposed once warm, so no budget or context
 change followed. Writer 26.8's `adress → address` hint still replaced the
-whole word on Alt+F7.
+whole word on Alt+F7. Completed on 2026-10-17 (installed `78ff8ca`):
+Omawrite in full with no window in the way (`the opportunity to speak`:
+three Tabs typed `the`, `opportunity`, `to`, Ctrl+→ the rest, and an
+explicit request's grey `the` for a finished `teh ` was taken whole on
+Tab, replacing it with `the `), and Writer again (Tab with the extension's
+hint showing stayed Writer's own key; Alt+F7 replaced whole, one Ctrl+Z
+restored the typo — [details](../libreoffice/README.md#boundaries)).
 
 | Application | Reaches Fcitx through | Boundary |
 | --- | --- | --- |

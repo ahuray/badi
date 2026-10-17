@@ -711,6 +711,15 @@ void heldTabWaitsForTheCarriedRest() {
           "foreign input-method UI keeps Tab");
     check(!tabMayHoldForRest(true, true, false, true),
           "a visible suggestion takes Tab as a word acceptance instead");
+    // At most one hold per word acceptance: the timeout (and a broker clear
+    // answering the carried request) ends the remainder's automatic return,
+    // which is exactly the input the addon clears in both places.
+    bool restAutomatic = true;
+    check(tabMayHoldForRest(true, restAutomatic, false, false),
+          "the first Tab in the gap may be held for the returning remainder");
+    restAutomatic = false;
+    check(!tabMayHoldForRest(true, restAutomatic, false, false),
+          "after the hold ends without the remainder, the next Tab reaches the application");
 
     Suggestion carried;
     carried.text = " for your time";

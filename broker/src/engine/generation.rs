@@ -468,6 +468,13 @@ impl Broker {
         let raw = match result {
             Ok(Ok(ProviderOutcome::Proposal(raw))) => raw,
             Ok(Ok(ProviderOutcome::NoSuggestion(reason))) => {
+                // The provider's own rejection of its whole output (the
+                // local model's `validate_proposal`, reported here rather
+                // than as a proposal) must not withdraw a partial it had
+                // already streamed and the broker had checked and shown.
+                if keep_partial {
+                    return Err(Withheld::KeepPartial);
+                }
                 metrics.record_no_suggestion(reason);
                 return Err(Withheld::Clear(ReasonCode::NoSuggestion));
             }

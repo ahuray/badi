@@ -321,7 +321,11 @@ bool typesSuggestionStart(std::string_view typed, std::string_view suggestion);
 // still on its way back may be held for it, instead of reaching the app.
 // Only a remainder that returns on its own (an observed field, a terminal's
 // typed line) may hold one: on the manual path that same Tab is the request
-// that brings the remainder, so holding it would wait for nothing.
+// that brings the remainder, so holding it would wait for nothing. At most
+// one Tab is held per acceptance: when the hold times out, or a broker
+// clear answers the request for the remainder, the addon ends the
+// remainder's automatic return (`restAutomatic` false) and the next Tab
+// reaches the application.
 bool tabMayHoldForRest(bool restPending, bool restAutomatic, bool foreignIme,
                        bool suggestionVisible);
 // The displayed suggestion still begins with the word a held Tab meant:
