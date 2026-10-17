@@ -880,3 +880,37 @@ fn the_word_limit_never_cuts_inside_a_joined_word() {
         );
     }
 }
+
+#[test]
+fn window_words_bias_only_english_topic_words_not_typed_just_now() {
+    let window =
+        "The data migration moves invoices to the warehouse on Thursday, which is after the audit.";
+    let words = super::bias_words("Can we finish the migration", window, Some("en"));
+    assert!(
+        words.contains(&"invoices") && words.contains(&"warehouse") && words.contains(&"Thursday")
+    );
+    assert!(
+        !words.contains(&"migration"),
+        "a word just typed invites a repeat"
+    );
+    assert!(
+        !words.contains(&"which") && !words.contains(&"after"),
+        "function words carry no topic"
+    );
+    assert!(
+        !words.contains(&"data"),
+        "short words start too many others"
+    );
+    assert_eq!(
+        super::bias_words("سلام", "کتابخانه موزه", Some("fa")),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
+        super::bias_words("Hallo", "Lagerhaus Rechnungen", Some("de")),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
+        super::bias_words("Hello there", "", Some("en")),
+        Vec::<&str>::new()
+    );
+}

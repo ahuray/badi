@@ -727,6 +727,53 @@ const CONTEXT_WINDOW_SCALARS: usize = 160;
 /// token, once a single sentence passed 160 scalars).
 const CONTEXT_CUT_STEP_SCALARS: usize = 64;
 
+/// Logit bias for the first token of each context word: enough to tip a
+/// near tie toward a word already in the text, not to force it.
+pub(crate) const CONTEXT_BIAS: f64 = 2.0;
+const BIAS_MIN_SCALARS: usize = 5;
+const BIAS_MAX_WORDS: usize = 24;
+/// The words just typed are left out, so the bias never invites a repeat.
+const BIAS_RECENT_WORDS: usize = 6;
+/// Common English function words long enough to pass the length floor.
+const BIAS_STOP_WORDS: &[&str] = &[
+    "about", "after", "again", "always", "another", "because", "before", "being", "could", "every",
+    "first", "maybe", "never", "other", "really", "should", "since", "still", "their", "there",
+    "these", "thing", "things", "think", "those", "through", "under", "until", "where", "which",
+    "while", "would",
+];
+
+/// Distinctive words of `window`, the bounded text around the field, that a
+/// continuation may reuse. Words are letters only and at least five scalars,
+/// so names and topic words count and function words do not; words among
+/// the last few typed are left out. English only: Persian words often begin
+/// with a one-letter token, and biasing those wrote `ب ب ب` in the Lab
+/// (2026-10-17). The field's own earlier text measured neutral as a source.
+pub(crate) fn bias_words<'a>(
+    before: &str,
+    window: &'a str,
+    language: Option<&str>,
+) -> Vec<&'a str> {
+    if language.and_then(WritingLanguage::from_tag) != Some(WritingLanguage::English) {
+        return Vec::new();
+    }
+    let earlier: Vec<&str> = before.split_whitespace().collect();
+    let recent_tail = &earlier[earlier.len().saturating_sub(BIAS_RECENT_WORDS)..];
+    let words = window
+        .split(|character: char| !character.is_alphabetic())
+        .filter(|word| word.chars().count() >= BIAS_MIN_SCALARS)
+        .filter(|word| !BIAS_STOP_WORDS.contains(&word.to_lowercase().as_str()));
+    let mut chosen: Vec<&str> = Vec::new();
+    for word in words {
+        if chosen.len() == BIAS_MAX_WORDS {
+            break;
+        }
+        if !chosen.contains(&word) && !recent_tail.iter().any(|tail| tail.contains(word)) {
+            chosen.push(word);
+        }
+    }
+    chosen
+}
+
 /// Limit cold prefill cost without changing the context used for edit authority.
 pub(crate) fn inference_context(before: &str) -> &str {
     let excess = before

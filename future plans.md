@@ -163,10 +163,24 @@ publish need the user's go-ahead first; the rest can start at once.
    continuation onto the page's topic ("I have attached the chapter three"),
    and several additions answered for the user ("November? Yes, it's
    available"). At 550 ms both arms missed the deadline on 23 or 24 cold
-   prompts. *Done when* independent cases with full-addition review, a fence
-   like `style_fact_conflict` for context facts and a cache-stable prompt
-   layout that meets 550 ms justify production use; only then add the global
-   and per-app controls, the wire field and cancellation on focus changes.
+   prompts. On 2026-10-17 window words were tried as a logit bias instead of
+   prompt text, so no prompt grows and 550 ms holds (`context_bias`,
+   [Lab](evaluation/writing/README.md), English only): on the same 24 cases
+   first-word matches rose from 8 to 11 and matching characters from 43 to 64
+   at bias 2.0, with every suggestion still shown; one control drifted onto
+   the page's topic. Across four suites (65 cases) 12 became 15. Bias 4.0
+   reached 13 of 24 but wrote loops ("Thursday, Thursday"), and Persian
+   degraded at both, so it is excluded. The field's own earlier text as the
+   source measured neutral. For terminals, which expose no accessibility
+   text, [`window-ocr.py`](evaluation/writing/window-ocr.py) read a
+   disposable Ghostty screen with no character errors in about 0.8 s
+   (capture 0.2 s, OCR 0.56 s at logical scale), but five replies about that
+   screen gained nothing from its words. *Done when* independent cases with
+   full-addition review, a fence like `style_fact_conflict` for context facts
+   and a measured gain justify production use; only then add the source (the
+   observer's accessibility context, and screen reading only after its own
+   privacy decision), the global and per-app controls, the wire field and
+   cancellation on focus changes.
 5. **Compare style learning in the Lab.** `badi style on` keeps the sentence
    written before each accepted suggestion on sites that allow learning,
    sealed with a keyring key; revocation, expiry, key loss, forgetting and the
