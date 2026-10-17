@@ -46,6 +46,7 @@ fn settings_with(rule: SubjectRule) -> SettingsV2 {
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
+        writing_model: None,
         subjects: vec![rule],
     }
 }
@@ -507,6 +508,7 @@ fn linux_adapters_sort_by_wire_name_like_the_desktop_clients() {
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
+        writing_model: None,
         subjects: vec![
             rule(LinuxAdapter::Fcitx, "libreoffice"),
             rule(LinuxAdapter::Libreoffice, "libreoffice-writer"),
@@ -540,6 +542,7 @@ fn settings_require_sorted_unique_subjects() {
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
+        writing_model: None,
         subjects: vec![first.clone(), second.clone()],
     };
     valid.validate().expect("canonical settings");
@@ -588,6 +591,7 @@ fn maximum_shape_settings_fit_storage_and_wire_limits() {
                 )
             })
             .collect(),
+        writing_model: None,
         subjects,
     };
     settings.validate().expect("maximum-shape settings");

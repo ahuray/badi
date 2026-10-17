@@ -112,6 +112,11 @@ pub struct SettingsV2 {
     /// when only English, the default; empty turns spelling off.
     #[serde(skip_serializing_if = "only_english")]
     pub spelling_languages: Vec<SpellingLanguage>,
+    /// The writing model the user chose (`badi model use ID`), by catalog
+    /// id. The broker uses it at its next start when it is installed and
+    /// fits; omitted, the installed model the recommendation prefers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writing_model: Option<String>,
     pub subjects: Vec<SubjectRule>,
 }
 
@@ -147,6 +152,8 @@ struct SettingsDocument {
     language_overrides: Option<BTreeMap<String, PredictionLanguage>>,
     #[serde(default)]
     spelling_languages: Option<Vec<SpellingLanguage>>,
+    #[serde(default)]
+    writing_model: Option<String>,
     subjects: Vec<SubjectRule>,
 }
 
@@ -211,6 +218,11 @@ impl<'de> Deserialize<'de> for SettingsV2 {
                 "spelling_languages_requires_settings_v2",
             ));
         }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.writing_model.is_some() {
+            return Err(serde::de::Error::custom(
+                "writing_model_requires_settings_v2",
+            ));
+        }
         Ok(Self {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: decoded.revision,
@@ -225,6 +237,7 @@ impl<'de> Deserialize<'de> for SettingsV2 {
             spelling_languages: decoded
                 .spelling_languages
                 .unwrap_or_else(|| vec![SpellingLanguage::English]),
+            writing_model: decoded.writing_model,
             subjects: decoded.subjects,
         })
     }
@@ -257,6 +270,7 @@ impl SettingsV2 {
             style_learning: false,
             language_overrides: BTreeMap::new(),
             spelling_languages: vec![SpellingLanguage::English],
+            writing_model: None,
             subjects: Vec::new(),
         }
     }
@@ -281,6 +295,16 @@ impl SettingsV2 {
         }
         if !self.spelling_languages.is_sorted_by(|a, b| a < b) {
             return Err(SettingsValidationError::SpellingLanguagesNotCanonical);
+        }
+        // A catalog id; one the broker does not know is ignored at start.
+        if self.writing_model.as_deref().is_some_and(|id| {
+            id.is_empty()
+                || id.len() > 64
+                || !id.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || b".-".contains(&byte)
+                })
+        }) {
+            return Err(SettingsValidationError::InvalidWritingModel);
         }
         if self.subjects.len() > MAX_SUBJECTS {
             return Err(SettingsValidationError::TooManySubjects);
@@ -438,6 +462,8 @@ impl Default for SettingsV2 {
 pub enum SettingsValidationError {
     #[error("invalid_language_override")]
     InvalidLanguageOverride,
+    #[error("invalid_writing_model")]
+    InvalidWritingModel,
     #[error("duplicate_identity")]
     DuplicateIdentity,
     #[error("escape_quiet_out_of_range")]

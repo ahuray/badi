@@ -94,6 +94,7 @@ def broker_only_install(root):
          patch.object(installer.Path, 'home', return_value=home), \
          patch.object(installer.subprocess, 'run', side_effect=execute), \
          patch.object(installer, 'require_writing_assets'), \
+         patch.object(installer, 'require_writing_model'), \
          patch.object(installer, 'wait_session_helper', return_value=True), \
          patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
          patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(root / 'runtime'),
@@ -105,16 +106,33 @@ def broker_only_install(root):
 
 
 class DesktopInstallTests(unittest.TestCase):
-    def test_missing_or_wrong_model_stops_before_cargo(self):
+    def test_missing_or_wrong_runtime_stops_before_cargo(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             with self.assertRaisesRegex(RuntimeError, 'is missing'):
                 installer.require_writing_assets(home)
-            model = home / '.local/share/badi/models/Qwen3-1.7B-Q4_K_M.gguf'
-            model.parent.mkdir(parents=True)
-            model.write_bytes(b'not the model')
+            server = home / '.local/share/badi/runtimes/llama-b10726/llama-server'
+            server.parent.mkdir(parents=True)
+            server.write_bytes(b'not the runtime')
             with self.assertRaisesRegex(RuntimeError, 'does not match the pinned hash'):
                 installer.require_writing_assets(home)
+
+    def test_any_pinned_catalog_model_satisfies_the_install(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            data = b'model bytes'
+            catalog = {'recommended': {'name': 'Gemma 3 1B'}, 'catalog': [
+                {'filename': 'a.gguf', 'download_bytes': 1, 'sha256': '0' * 64},
+                {'filename': 'b.gguf', 'download_bytes': len(data),
+                 'sha256': hashlib.sha256(data).hexdigest()}]}
+            reply = unittest.mock.Mock(stdout=json.dumps(catalog))
+            with patch.object(installer.subprocess, 'run', return_value=reply):
+                with self.assertRaisesRegex(RuntimeError, 'prints the pinned download of Gemma 3 1B'):
+                    installer.require_writing_model(home, 'badictl')
+                models = home / '.local/share/badi/models'
+                models.mkdir(parents=True)
+                (models / 'b.gguf').write_bytes(data)
+                self.assertEqual(installer.require_writing_model(home, 'badictl')['filename'], 'b.gguf')
 
     def test_changed_flags_abort_before_any_file_is_copied(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -205,6 +223,7 @@ class DesktopInstallTests(unittest.TestCase):
                  patch.object(installer.Path, 'home', return_value=home), \
                  patch.object(installer.subprocess, 'run', side_effect=execute), \
                  patch.object(installer, 'require_writing_assets'), \
+                 patch.object(installer, 'require_writing_model'), \
                  patch.object(installer, 'wait_model', side_effect=RuntimeError('broker did not become ready')), \
                  patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(root / 'runtime'),
                                          'XDG_CONFIG_HOME': str(home / '.config')}), \
@@ -487,6 +506,7 @@ class DesktopInstallTests(unittest.TestCase):
                  patch.object(installer.Path, 'home', return_value=home), \
                  patch.object(installer.subprocess, 'run', side_effect=execute), \
                  patch.object(installer, 'require_writing_assets'), \
+                 patch.object(installer, 'require_writing_model'), \
                  patch.object(installer, 'wait_session_helper', return_value=True), \
                  patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': True, 'control_plane_degraded': False}), \
                  patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(root / 'runtime'),
@@ -767,6 +787,7 @@ class DesktopInstallTests(unittest.TestCase):
                      patch.object(installer.Path, 'home', return_value=home), \
                      patch.object(installer.subprocess, 'run', side_effect=execute), \
                      patch.object(installer, 'require_writing_assets'), \
+                     patch.object(installer, 'require_writing_model'), \
                      patch.object(installer, 'wait_session_helper', return_value=True) as helper, \
                      patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
                      patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(root / 'runtime'),
@@ -817,6 +838,7 @@ class DesktopInstallTests(unittest.TestCase):
                      patch.object(installer.Path, 'home', return_value=home), \
                      patch.object(installer.subprocess, 'run', side_effect=execute), \
                      patch.object(installer, 'require_writing_assets'), \
+                     patch.object(installer, 'require_writing_model'), \
                      patch.object(installer, 'require_unlocked'), \
                      patch.object(installer, 'require_accessibility_runtime'), \
                      patch.object(installer, 'wait_session_helper', return_value=True), \
@@ -892,6 +914,7 @@ class FullInstall:
 
         with patch.object(installer, 'ROOT', project), \
              patch.object(installer, 'require_writing_assets'), \
+             patch.object(installer, 'require_writing_model'), \
              patch.object(installer.Path, 'home', return_value=home), \
              patch.object(installer.subprocess, 'run', side_effect=execute), \
              patch.object(installer, 'compat_launcher', return_value=launcher), \

@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#94](https://github.com/ahuray/badi/pull/94) Badi recommends the writing
+  model that fits each device best (Gemma 3 1B on this one, by a blind
+  development screen of eight models), and `badi model` and the panel's
+  Model row switch models with a pinned, hash-checked download; the
+  installer accepts any catalog model.
 - [#93](https://github.com/ahuray/badi/pull/93) Lab: window text can bias the
   model's word choice (`context_bias`, English, no longer prompt), and
   `window-ocr.py` reads a window's text from the screen; both measured,

@@ -27,7 +27,10 @@ seconds only while open. From the top:
 - **Usage:** a ten-cell acceptance meter, words saved and the last
   no-suggestion reason (`⎿ last miss: …`).
 - **Search:** `/` filters every row by name, description or section.
-- **Rows**, in sections: Writing (mid-sentence, Escape quiet, battery),
+- **Rows**, in sections: Model (the writing model: a chip for each model
+  that fits this device, ★ on the recommendation; picking one runs `badi
+  model use`, which accepts its licence, downloads it and restarts the
+  model), Writing (mid-sentence, Escape quiet, battery),
   Spelling (each language and its dictionary, naming the package when one is
   missing), Apps (the list mode and each supported app), Websites (the list
   mode, each rule, an add field: Enter allows, Shift+Enter blocks) and

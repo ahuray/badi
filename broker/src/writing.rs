@@ -374,8 +374,9 @@ pub fn data_directory() -> Result<PathBuf, WritingError> {
 /// is temporarily too short for it.
 pub async fn activate(
     directory: PathBuf,
+    chosen: Option<String>,
 ) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
-    start(directory, false).await
+    start(directory, false, chosen).await
 }
 
 /// [`activate`] for a binary that dispatches [`EXEC_HELPER_FLAG`] before it
@@ -385,15 +386,17 @@ pub async fn activate(
 #[cfg(target_os = "linux")]
 pub async fn activate_contained(
     directory: PathBuf,
+    chosen: Option<String>,
 ) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
-    start(directory, true).await
+    start(directory, true, chosen).await
 }
 
 async fn start(
     directory: PathBuf,
     contained: bool,
+    chosen: Option<String>,
 ) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
-    let (model, threads) = installed_model(&directory)?;
+    let (model, threads) = installed_model(&directory, chosen.as_deref())?;
     wait_for_memory(model).await;
     let launch = verify_launch(directory, model, threads).await?;
     let launch = if contained {
@@ -469,8 +472,13 @@ pub fn activation_report(model: &ModelArtifact, warm_up: WarmUpReport) -> String
 }
 
 /// The installed catalog model that fits this host, with the inference
-/// thread count, from the models under `directory`.
-pub fn installed_model(directory: &Path) -> Result<(ModelArtifact, usize), WritingError> {
+/// thread count, from the models under `directory`: the user's `chosen`
+/// model (settings `writing_model`) when it is installed and fits, else the
+/// installed model the recommendation prefers.
+pub fn installed_model(
+    directory: &Path,
+    chosen: Option<&str>,
+) -> Result<(ModelArtifact, usize), WritingError> {
     let hardware = detect_cpu_inference_hardware();
     let threads = threads_for(&hardware)?;
     let installed: Vec<_> = catalog(ModelUseCase::Writing)
@@ -478,7 +486,7 @@ pub fn installed_model(directory: &Path) -> Result<(ModelArtifact, usize), Writi
         .filter(|model| directory.join("models").join(model.filename).is_file())
         .map(|model| model.filename)
         .collect();
-    let model = select_installed_writing_model(&hardware, &installed)
+    let model = select_installed_writing_model(&hardware, &installed, chosen)
         .map_err(|_| WritingError::NoFit)?
         .ok_or_else(|| {
             recommend_model(hardware, ModelUseCase::Writing)

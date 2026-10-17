@@ -61,6 +61,11 @@ HELP = """Badi — local writing controls
                                default 30)
   badi style export | forget   Print the samples as JSON, or delete them and
                                the keyring key
+  badi model [--json]          Writing models: the one this device runs, the
+                               recommendation for it, and every choice
+  badi model use ID            Download (pinned, hash-checked) and switch to
+                               a model, for example gemma-3-1b
+  badi model auto              Return to the device recommendation
   badi spelling [LANG on|off] [--json]
                                Spelling languages (en de fr es it nl pl) and
                                their dictionaries; English is built in
@@ -593,6 +598,137 @@ def status_text(health, settings=None):
             + f"Web sites: {mode_text((settings or {}).get('all_web_origins'), 'site')}\n"
             + f"Escape: dismiss (quiet: {quiet_text}) · Why nothing appeared: badi doctor; badi debug on; badi debug watch"
             + "".join(f"\n{line}" for line in [desktop_text(health.get("desktop"), settings)] if line))
+
+
+MODEL_DIRECTORY = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "badi/models"
+# Models that are not Apache-2.0 come with terms a person accepts once.
+MODEL_LICENSES = {"Gemma": "the Gemma Terms of Use, https://ai.google.dev/gemma/terms",
+                  "Llama-3.2-Community": "the Llama 3.2 Community License, https://www.llama.com/llama3_2/license/"}
+
+
+def model_advice():
+    """The broker's pinned writing catalog for this device (badi.model-advice.v3)."""
+    result = subprocess.run([str(cli_path()), "models", "writing", "--json"],
+                            capture_output=True, text=True, timeout=15)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or "badictl models failed")
+    return json.loads(result.stdout)
+
+
+def active_model_file():
+    """The model file the running broker loaded, from its content-free startup line."""
+    try:
+        identifier = badi_install.unit_value(SERVICE, "InvocationID")
+        if not re.fullmatch(r"[a-f0-9]{32}", identifier):
+            return None
+        journal = subprocess.run(["journalctl", "--user", f"_SYSTEMD_INVOCATION_ID={identifier}",
+                                  "--no-pager", "--output=cat", "--lines=200"],
+                                 capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError, RuntimeError):
+        return None
+    for line in reversed(journal.stdout.splitlines()):
+        found = re.match(r"provider=local_model model=([A-Za-z0-9_.-]{1,120}\.gguf) ", line)
+        if found:
+            return found[1]
+    return None
+
+
+def model_report(settings):
+    advice = model_advice()
+    active = active_model_file()
+    recommended = (advice.get("recommended") or {}).get("id")
+    models = [{"id": model["id"], "name": model["name"], "bytes": model["download_bytes"],
+               "license": model["license"], "languages": model["languages"],
+               "screen_useful": model["screen_useful"], "fits": model["fits"],
+               "installed": (MODEL_DIRECTORY / model["filename"]).is_file(),
+               "active": model["filename"] == active, "recommended": model["id"] == recommended,
+               "chosen": model["id"] == settings.get("writing_model")}
+              for model in advice["catalog"]]
+    return {"schema": "badi.models.v1", "recommended": recommended,
+            "chosen": settings.get("writing_model"), "memory_mib": advice["hardware"]["memory"],
+            "rationale": advice["rationale"], "models": models}
+
+
+def print_models(report):
+    active = next((model for model in report["models"] if model["active"]), None)
+    print("Badi writes with " + (active["name"] if active else "no model yet (is the service running?)") + ".")
+    best = next((model for model in report["models"] if model["recommended"]), None)
+    if best:
+        print(f"Recommended for this device: {best['name']}.")
+    for model in report["models"]:
+        mark = "●" if model["active"] else "★" if model["recommended"] else "·"
+        state = ("in use" if model["active"] else "installed" if model["installed"]
+                 else "too large for this device" if not model["fits"] else "not installed")
+        score = f"{model['screen_useful']}/135 useful" if model["screen_useful"] is not None else "unscreened"
+        print(f"  {mark} {model['id']:13} {model['name']:13} {model['bytes'] / 1e9:4.2f} GB  "
+              f"{score:15} {model['license']:20} {state}")
+    print("Scores are blind-reviewed useful suggestions in Badi's 2026-10-17 development screen, "
+          "not a qualification. Switch with: badi model use ID")
+
+
+def download_model(model):
+    """The pinned file at its pinned revision, checked by size and SHA-256
+    before it becomes visible to the broker."""
+    import hashlib
+    import urllib.request
+    MODEL_DIRECTORY.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target = MODEL_DIRECTORY / model["filename"]
+    partial = target.with_name(target.name + ".part")
+    url = f"https://huggingface.co/{model['repository']}/resolve/{model['revision']}/{model['filename']}"
+    digest = hashlib.sha256()
+    received = 0
+    with urllib.request.urlopen(url, timeout=60) as response, open(partial, "wb") as out:
+        os.fchmod(out.fileno(), 0o600)
+        while chunk := response.read(1 << 20):
+            out.write(chunk)
+            digest.update(chunk)
+            received += len(chunk)
+            if received > model["download_bytes"]:
+                break
+            if sys.stdout.isatty():
+                print(f"\rDownloading {model['name']}: {100 * received // model['download_bytes']}%", end="", flush=True)
+    if sys.stdout.isatty():
+        print()
+    if received != model["download_bytes"] or digest.hexdigest() != model["sha256"]:
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(f"{model['filename']} did not match its pinned size and hash; nothing was installed.")
+    partial.rename(target)
+
+
+def use_model(model_id, accept_license):
+    advice = model_advice()
+    model = next((entry for entry in advice["catalog"] if entry["id"] == model_id), None)
+    if model is None:
+        raise RuntimeError("Unknown model. Choose one of: " + " ".join(entry["id"] for entry in advice["catalog"]))
+    if not model["fits"]:
+        raise RuntimeError(f"{model['name']} does not fit this device's memory with Badi's safety reserve.")
+    terms = MODEL_LICENSES.get(model["license"])
+    if terms and not accept_license:
+        if not sys.stdin.isatty():
+            raise RuntimeError(f"{model['name']} is provided under {terms}. Add --accept-license to agree.")
+        if input(f"{model['name']} is provided under {terms}. Do you accept it? [y/N] ").strip().lower() not in ("y", "yes"):
+            raise RuntimeError("Nothing changed.")
+    if not (MODEL_DIRECTORY / model["filename"]).is_file():
+        download_model(model)
+    update_settings(lambda document: document.update(writing_model=model["id"]))
+    if not restart_service():
+        raise RuntimeError("The model service did not answer after the restart. Run badi doctor.")
+    return model
+
+
+def restart_service(wait=60):
+    """Restart the broker and wait until it answers, up to `wait` seconds."""
+    if service_state()["active"] == "failed":
+        subprocess.run(["systemctl", "--user", "reset-failed", SERVICE], check=True, timeout=4)
+    subprocess.run(["systemctl", "--user", "restart", SERVICE], check=True, timeout=30)
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        try:
+            control(["status"])
+            return True
+        except (RuntimeError, subprocess.SubprocessError):
+            time.sleep(0.5)
+    return False
 
 
 def update_settings(change):
@@ -1168,6 +1304,24 @@ def main(arguments):
         print("Mid-sentence suggestions are on." if enabled
               else "Mid-sentence suggestions are off. A word after the caret asks for nothing.")
         return
+    if arguments in (["model"], ["model", "--json"], ["models"]):
+        report = model_report(json.loads(control(["settings", "show", "--json"])))
+        print(json.dumps(report, indent=2) if arguments[1:] == ["--json"] else "", end="")
+        if arguments[1:] != ["--json"]:
+            print_models(report)
+        return
+    if arguments[:2] == ["model", "use"] and len(arguments) in (3, 4) and arguments[3:] in ([], ["--accept-license"]):
+        model = use_model(arguments[2], arguments[3:] == ["--accept-license"])
+        loaded = active_model_file()
+        print(f"Badi now writes with {model['name']}." if loaded == model["filename"]
+              else f"{model['name']} is chosen, but the broker loaded {loaded or 'no model'}; badi model explains why.")
+        return
+    if arguments == ["model", "auto"]:
+        update_settings(lambda document: document.pop("writing_model", None))
+        if not restart_service():
+            raise RuntimeError("The model service did not answer after the restart. Run badi doctor.")
+        print("Badi follows the device recommendation again.")
+        return
     if arguments[:1] == ["spelling"] and arguments[1:] in ([], ["--json"]):
         report = spelling_report(json.loads(control(["settings", "show", "--json"])))
         if arguments[1:]:
@@ -1286,6 +1440,8 @@ def main(arguments):
             "no_suggestion": misses,
             "spelling": spelling_report(overview.get("settings") or {}),
             "activity": debug_activity(),
+            # The file the running broker loaded; the advice's catalog names it.
+            "model_file": active_model_file(),
         }
         print(json.dumps(overview))
     else:

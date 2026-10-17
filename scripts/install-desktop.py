@@ -620,13 +620,10 @@ def unit_enabled(unit):
     return badi_install.unit_value(unit, "UnitFileState", timeout=4) == "enabled"
 
 
-# Pinned bytes from the balanced writing artifact in model_selection.rs and
-# from semantic/pinned_runtime.rs. The installer verifies them and does not
-# download; the broker has no network code of its own.
+# Pinned bytes from semantic/pinned_runtime.rs. The installer verifies them
+# and does not download; the broker has no network code of its own. Writing
+# models come from the broker's own catalog (badictl models writing).
 WRITING_ASSETS = (
-    ("models/Qwen3-1.7B-Q4_K_M.gguf",
-     "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5",
-     1_282_439_264),
     ("runtimes/llama-b10726/llama-server",
      "4c20c6b55baa75eafeb02c17f118ce93314ba69aef89a9b4156284d58dcbc0c8",
      17_896),
@@ -637,11 +634,10 @@ WRITING_ASSETS = (
 
 
 def require_writing_assets(home):
-    """Refuse to build until the pinned model and llama.cpp runtime match.
+    """Refuse to build until the pinned llama.cpp runtime matches.
 
-    The broker reads ~/.local/share/badi/models and runtimes/llama-b10726 and
-    checks these hashes again at startup. A size mismatch is rejected before
-    the file is read, so a wrong multi-gigabyte download is not hashed here.
+    The broker reads runtimes/llama-b10726 and checks these hashes again at
+    startup. A size mismatch is rejected before the file is read.
     """
     data = Path(home) / ".local/share/badi"
     problems = []
@@ -654,11 +650,26 @@ def require_writing_assets(home):
             problems.append(f"{path} does not match the pinned hash")
     if problems:
         raise RuntimeError(
-            "Writing model or pinned llama.cpp b10726 runtime is not ready. "
-            "The desktop installer checks the pinned hashes before building. "
-            "`badictl models writing` prints hf download with --local-dir "
-            "~/.local/share/badi/models. " + " ".join(problems)
+            "The pinned llama.cpp b10726 runtime is not ready. "
+            "The desktop installer checks the pinned hashes before building. " + " ".join(problems)
         )
+
+
+def require_writing_model(home, badictl):
+    """At least one model of the freshly built broker's writing catalog is
+    installed with its pinned size and hash; the broker picks among them."""
+    advice = json.loads(subprocess.run([str(badictl), "models", "writing", "--json"], capture_output=True,
+                                       text=True, check=True, timeout=15).stdout)
+    models = Path(home) / ".local/share/badi/models"
+    for model in advice["catalog"]:
+        path = models / model["filename"]
+        if (path.is_file() and path.stat().st_size == model["download_bytes"]
+                and badi_install.file_sha256(path) == model["sha256"]):
+            return model
+    recommended = (advice.get("recommended") or {}).get("name", "a catalog model")
+    raise RuntimeError(f"No pinned writing model is installed in {models}. `{badictl} models writing` prints "
+                       f"the pinned download of {recommended}, the one recommended for this device; "
+                       "rerun the installer after it. Later, `badi model use ID` switches models.")
 
 
 def build(plan):
@@ -667,6 +678,7 @@ def build(plan):
     plan.checkout = badi_install.source_identity(ROOT)
     # Build only the shipped package: installs never compile the Prediction Lab.
     run(["cargo", "build", "--release", "--locked", "-p", "badi-broker", "--bins"], cwd=ROOT)
+    require_writing_model(plan.home, ROOT / "target/release/badictl")
     if plan.native:
         run(["npm", "run", "fcitx5:check"], cwd=ROOT)
         if plan.installs_compat:

@@ -254,7 +254,7 @@ pub async fn activate_with_options(
 /// The installed model's launch. Unlike the broker, the Lab reports a host
 /// that is short of memory right now instead of waiting for it.
 async fn installed_launch(directory: PathBuf) -> Result<LlamaCppLaunch, WritingError> {
-    let (model, threads) = writing::installed_model(&directory)?;
+    let (model, threads) = writing::installed_model(&directory, None)?;
     if !writing::memory_fits(model, current_memory().available_mib) {
         return Err(WritingError::NoFit);
     }

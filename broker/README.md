@@ -229,9 +229,13 @@ prints pinned download advice and downloads nothing
 
 ## Writing model runtime
 
-- **Selection.** Startup picks the installed pinned model that fits total
-  memory after a host reserve, preferring the advised tier. Unknown memory
-  fails closed; short available memory waits with backoff up to 30 s.
+- **Selection.** Startup reads the settings' `writing_model` (the user's
+  `badi model use` choice) and loads that installed catalog model when it
+  fits total memory after a host reserve; otherwise the installed model the
+  recommendation prefers: the advised tier first, then the higher screen
+  score, then the smaller file. Unknown memory fails closed; short available
+  memory waits with backoff up to 30 s. A new choice takes effect at the
+  next start, which `badi model use` triggers.
 - **Verification.** Startup hashes the model and runtime once. Checkpoints
   before spawn, after spawn and after readiness confirm the same files by
   device, inode, size and times.

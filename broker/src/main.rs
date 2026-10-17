@@ -72,7 +72,13 @@ async fn run(arguments: Vec<OsString>) -> Result<(), ExitError> {
     })?);
     // Awaited directly on main's block_on thread: the runtime's parent-death
     // signal fires when the thread that spawned it exits.
-    let provider = start_provider(provider, model_directory).await?;
+    // The user's model choice, read once: a new choice takes effect when
+    // `badi model use` restarts the service.
+    let chosen_model = control_plane
+        .snapshot()
+        .ok()
+        .and_then(|snapshot| snapshot.settings.writing_model);
+    let provider = start_provider(provider, model_directory, chosen_model).await?;
     let broker = Broker::with_control_plane(provider, BrokerConfig::default(), control_plane)
         .map_err(|error| match error {
             badi_broker::BrokerError::ControlPlane(error) => ExitError::ControlPlane {
@@ -110,6 +116,7 @@ Options:\n  --provider local|phrase  Local LLM (default) or deterministic integr
 async fn start_provider(
     kind: ProviderSelection,
     directory: Option<PathBuf>,
+    chosen_model: Option<String>,
 ) -> Result<Arc<dyn CompletionProvider>, ExitError> {
     match kind {
         ProviderSelection::Phrase => Ok(Arc::new(DeterministicPhraseProvider::default())),
@@ -123,9 +130,10 @@ async fn start_provider(
                 let directory = directory
                     .map_or_else(badi_broker::writing::data_directory, Ok)
                     .map_err(model_error)?;
-                let (runtime, model, warm_up) = badi_broker::writing::activate_contained(directory)
-                    .await
-                    .map_err(model_error)?;
+                let (runtime, model, warm_up) =
+                    badi_broker::writing::activate_contained(directory, chosen_model)
+                        .await
+                        .map_err(model_error)?;
                 eprintln!(
                     "{}",
                     badi_broker::writing::activation_report(&model, warm_up)
@@ -134,7 +142,7 @@ async fn start_provider(
             }
             #[cfg(not(all(feature = "local-model", target_os = "linux")))]
             {
-                let _ = directory;
+                let _ = (directory, chosen_model);
                 Err(ExitError::Model {
                     message: "rebuild with the local-model feature on Linux".to_owned(),
                     configuration: true,

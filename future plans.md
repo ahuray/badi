@@ -146,8 +146,28 @@ publish need the user's go-ahead first; the rest can start at once.
    keystroke savings and latency misses separately; review full additions.
    Promoting a model needs a new hypothesis, fresh independent cases, native
    Persian review where results are ambiguous and the full
-   [qualification](docs/architecture/model-selection.md). *Done when* a
-   candidate passes or fails every gate per language on that set.
+   [qualification](docs/architecture/model-selection.md). The candidate is
+   chosen: on 2026-10-17 eight models ran the same 135 development cases
+   (20 each en/de/fr/es/fa plus real-text and probe sets; French and Spanish
+   in the Lab `healed` mode, since production refuses them) at 550 ms and 8
+   tokens, and one blind agent reviewer per language judged all 674 unique
+   additions. Gemma 3 1B pt Q4_K_M (`gguf-org/gemma-3-1b-pt-gguf`, 0.81 GB,
+   Gemma Terms of Use) was useful on 46 requests against the installed
+   Qwen3-1.7B's 33, at least acceptable on 106 against 87, with 4 harmful
+   against 3, and faster (shown p50 247 against 351 ms). Llama 3.2 1B was
+   next (41 useful, but 10 harmful); Granite-4.0-1B-Base, LFM2.5-1.2B-Base,
+   EuroLLM-1.7B and Qwen3.5-2B-Base were near or below the installed model;
+   Gemma 4 E2B, at its smallest text-only file (2.19 GB, 2-bit), was useful
+   on 19. Development data and agent reviewers, not a qualification; the
+   runs are under `output/writing/2026-10-17-model-research/`. The Gemma
+   terms need the licence review before any distribution. A second blind
+   round on 2026-10-18 (other reviewers, stricter overall) found no better
+   build: Google's QAT Q4_0 tied it on useful additions (38 each) but was
+   worse on acceptable additions and useful words; an imatrix Q4_K_M and the
+   instruct QAT were worse, and so were Llama 3.2 1B's imatrix and instruct
+   builds. Since then the catalog recommends by this screen score and this
+   desktop runs Gemma 3 1B by the user's choice (`badi model`). *Done when*
+   Gemma 3 1B pt passes or fails every gate per language on that set.
 4. **Evaluate same-window context independently.** The observer's
    [`window_context()`](adapters/accessibility/README.md#same-window-context-lab-only)
    reads the nearest heading and preceding paragraph of the field's own web
@@ -239,8 +259,10 @@ Measured alternatives that were not adopted are in the
 [runtime runbook](broker/README.md#writing-model-runtime).
 
 - [ ] Fewer generated tokens, only after a held-out quality comparison.
-- [ ] Qualify Qwen3 0.6B and Gemma 4 E2B (with its multi-token drafter) in the
-      Lab. Defer hybrid-attention models until llama.cpp reuses their caches.
+- [ ] Pin the runtime's four threads to performance cores (`taskset`/
+      `--cpu-mask`): one idle measurement saw 94/30 against 54/21 prompt/
+      generate tokens per second for Qwen3-1.7B, a second under load saw no
+      consistent gain. Measure on an idle machine before changing the launch.
 - [ ] Battery scheduling: finish the [paced trial](evaluation/power/battery-trial.py).
       On 2026-10-13 (this laptop on battery with power-saver, release build,
       752 disposable keys per mode at 150 ms per key, 450 ms after words and

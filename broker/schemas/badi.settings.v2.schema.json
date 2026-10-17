@@ -43,6 +43,11 @@
       "maxItems": 7,
       "description": "Languages whose spelling is corrected, in this enum's order. English uses Badi's own lexicon; the others use their installed Hunspell dictionary and correct nothing without one. Empty turns spelling off. Producers omit the property when it is exactly [\"en\"], the default."
     },
+    "writing_model": {
+      "type": "string",
+      "pattern": "^[a-z0-9.-]{1,64}$",
+      "description": "The writing model the user chose with `badi model use`, by catalog id (for example gemma-3-1b). The broker uses it at its next start when it is installed and fits; omitted, it uses the installed model the recommendation prefers. An unknown id is ignored."
+    },
     "style_learning": {
       "type": "boolean",
       "description": "Opt-in style learning: sentences the user wrote before an accepted suggestion, in subjects that allow learning with bounded retention, sealed with a key held in the desktop keyring. No production prompt uses them yet. Producers omit the property when false."

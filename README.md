@@ -145,11 +145,29 @@ to those restored bytes. The desktop install needs an unlocked desktop;
 it also installs a
 [backported Fcitx frontend](packaging/fcitx5-wayland-compat/README.md) so
 Chromium-based apps keep sending their text (`--no-wayland-compat` skips it).
-The model files must already be present. `badictl models writing` prints
-`hf download` with `--local-dir ~/.local/share/badi/models`. The pinned
+At least one writing model from Badi's catalog must already be present.
+`badictl models writing` recommends one for this device and prints its pinned
+`hf download` with `--local-dir ~/.local/share/badi/models`; after the install,
+`badi model` switches models ([below](#choose-the-writing-model)). The pinned
 llama.cpp runtime is `~/.local/share/badi/runtimes/llama-b10726`, with its
 archive in `runtimes/downloads/`. `install-desktop.py` checks those pinned
 hashes before it builds, and the broker checks them again before it starts.
+
+## Choose the writing model
+
+```sh
+badi model                          # the model in use, the one recommended for this device, every choice
+badi model use gemma-3-1b           # download (pinned, hash-checked), switch and restart
+badi model auto                     # follow the device recommendation again
+```
+
+Badi recommends, among the models that fit this device's memory and power
+state, the one that gave the most useful suggestions in its blind development
+screen; the panel's Model row offers the same choice. Gemma and Llama come
+with their own licences (the Gemma Terms of Use, the Llama 3.2 Community
+License), which `badi model use` shows and asks you to accept. The broker
+uses your choice when it is installed and fits, and the recommendation
+otherwise ([how](docs/architecture/model-selection.md)).
 
 ## Choose where Badi writes
 
