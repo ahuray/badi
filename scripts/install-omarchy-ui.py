@@ -2,6 +2,7 @@
 """Update the installed Badi panel without disturbing a locked Omarchy shell."""
 
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,34 @@ import badi_install
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ("manifest.json", "BarWidget.qml", "BadiMark.qml", "DesktopPanel.qml", "SettingsView.qml", "BadiClient.qml")
+FCITX_THEME = ROOT / "ui/omarchy-plugin/fcitx-theme.py"
+HOOK_EVENTS = ("theme-set", "font-set")
+
+
+def fcitx_theme():
+    spec = importlib.util.spec_from_file_location("badi_fcitx_theme", FCITX_THEME)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def install_fcitx_theme(installation, home, generator):
+    """Fcitx's panel, where terminals show suggestions, in the Omarchy theme,
+    kept current by Omarchy's theme-set and font-set hooks."""
+    target = home / ".local/lib/badi/omarchy/fcitx-theme.py"
+    installation.write(target, generator, 0o755)
+    hook = (f"#!/bin/sh\n# Badi: dress Fcitx's panel in the new Omarchy theme or font.\n"
+            f"exec python3 '{target}' \"$@\"\n").encode()
+    hooks = badi_install.config_home(home) / "omarchy/hooks"
+    for event in HOOK_EVENTS:
+        installation.write(hooks / f"{event}.d/badi-fcitx-theme", hook, 0o755)
+    try:
+        written = fcitx_theme().files(home)
+    except (OSError, KeyError, ValueError) as error:
+        print(f"Fcitx panel theme skipped until the next Omarchy theme change: {error}", flush=True)
+        return
+    for path, text in written:
+        installation.write(path, text.encode(), 0o644)
 
 
 def ipc(target, method):
@@ -58,6 +87,7 @@ def main():
     # Stage the validated bytes: a checkout edited while waiting is not installed.
     staged = {name: ((ROOT / "ui/omarchy-plugin" / name).read_bytes(),
                      stat.S_IMODE((ROOT / "ui/omarchy-plugin" / name).stat().st_mode)) for name in FILES}
+    generator = FCITX_THEME.read_bytes()
     if not unlocked():
         if args.wait_for_unlock:
             print("Validated UI staged. Waiting for normal desktop unlock; the lock client remains intact.", flush=True)
@@ -72,7 +102,9 @@ def main():
     for child in target.iterdir():
         if child.name not in FILES and child.is_file() and not child.is_symlink():
             installation.remove(child)
+    install_fcitx_theme(installation, home, generator)
     installation.finish()
+    fcitx_theme().reload()
     if fresh:
         subprocess.run(["omarchy", "plugin", "enable", "io.github.ahuray.badi"], check=True, timeout=30)
     badi_install.write_receipt(home, "omarchy-ui", badi_install.source_identity(ROOT), installation.current)

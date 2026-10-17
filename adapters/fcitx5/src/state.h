@@ -332,6 +332,14 @@ bool tabMayHoldForRest(bool restPending, bool restAutomatic, bool foreignIme,
 // the broker's next word of the display is the pending remainder's start.
 // A spelling replacement is never taken on a held Tab.
 bool heldTabMatchesRest(std::string_view rest, const Suggestion &suggestion);
+// The panel's two parts of a suggestion: the word Tab takes (`strong`) and
+// the rest. The leading space is dropped, since the panel is its own box; a
+// spelling replacement is taken whole, so it is all `strong`.
+struct CandidateParts {
+    std::string strong;
+    std::string rest;
+};
+CandidateParts candidateParts(const Suggestion &suggestion);
 // The field text includes the characters typed through a suggestion whose
 // context was `base`. A shorter window may keep only the last 128 bytes of
 // `base`, matching the broker's type-through slide rule.
@@ -354,6 +362,10 @@ public:
     void eraseWord();
     // Enter, Ctrl+C, Ctrl+U and focus: a known, empty line.
     void clear();
+    // A key changed the line invisibly but left the caret at its end (a
+    // paste, completion, history): follow only what is typed from here.
+    void restart();
+    // The caret may now be inside the line: stop until the next empty line.
     void lose();
     [[nodiscard]] bool tracking() const { return tracking_; }
     [[nodiscard]] const std::string &text() const { return text_; }

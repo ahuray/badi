@@ -1421,6 +1421,24 @@ void observerRepliesFailClosed() {
         check(!line.tracking() && line.text().empty(), "after an unknown key nothing is tracked");
         line.clear();
         check(line.tracking() && line.text().empty(), "a new line tracks again");
+        line.type("see the image");
+        line.restart();
+        line.type("is a sample of");
+        check(line.tracking() && line.text() == "is a sample of" && line.prose(),
+              "after a paste only what is typed next is followed");
+    }
+    {
+        Suggestion shown;
+        shown.text = " is a sample";
+        shown.acceptWord = " is";
+        const auto parts = candidateParts(shown);
+        check(parts.strong == "is" && parts.rest == " a sample",
+              "the panel shows the word Tab takes apart from the rest, without the leading space");
+        shown.replaceBefore = "teh";
+        shown.text = "the";
+        shown.acceptWord = "the";
+        check(candidateParts(shown).strong == "the" && candidateParts(shown).rest.empty(),
+              "a spelling replacement is taken, and shown, whole");
     }
     const auto context = captureContextWindow("thank you", 9, 9, true, "en");
     check(context && observerAgrees({{"before", "thank you"}, {"after", ""}}, *context) &&

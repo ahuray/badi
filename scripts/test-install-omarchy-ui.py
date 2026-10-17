@@ -46,7 +46,8 @@ class UpdateTests(unittest.TestCase):
             unlocked = dict.fromkeys(('locked', 'secure', 'requested', 'pending', 'sessionLocked'), False)
             answers = {('lock', 'status'): unlocked, ('badi-writing', 'state'): {'page': 0, 'service': {}}}
             with patch.object(installer.Path, 'home', return_value=home), \
-                 patch.dict(os.environ, {'XDG_CONFIG_HOME': str(home / '.config')}), \
+                 patch.dict(os.environ, {'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_STATE_HOME': str(home / '.local/state'),
+                                          'XDG_DATA_HOME': str(home / '.local/share')}), \
                  patch.object(installer, 'ipc', side_effect=lambda *call: answers[call]), \
                  patch.object(installer.subprocess, 'run') as run, \
                  patch('sys.argv', ['install-omarchy-ui.py']), \
@@ -54,7 +55,8 @@ class UpdateTests(unittest.TestCase):
                 installer.main()
             # Only the source gate and the supported shell restart run; no real shell is touched.
             self.assertEqual([call.args[0][:2] for call in run.call_args_list if call.args[0][0] != 'git'],
-                             [['bash', 'ui/omarchy-plugin/tests/check-source.sh'], ['omarchy', 'restart']])
+                             [['bash', 'ui/omarchy-plugin/tests/check-source.sh'], ['busctl', '--user'],
+                              ['omarchy', 'restart']])
             self.assertCountEqual([path.name for path in target.iterdir()], installer.FILES)
             self.assertFalse((target / 'Old.qml').exists())
             for name in installer.FILES:
@@ -73,7 +75,8 @@ class UpdateTests(unittest.TestCase):
             unlocked = dict.fromkeys(('locked', 'secure', 'requested', 'pending', 'sessionLocked'), False)
             answers = {('lock', 'status'): unlocked, ('badi-writing', 'state'): {'page': 0, 'service': {}}}
             with patch.object(installer.Path, 'home', return_value=home), \
-                 patch.dict(os.environ, {'XDG_CONFIG_HOME': str(config)}), \
+                 patch.dict(os.environ, {'XDG_CONFIG_HOME': str(config), 'XDG_STATE_HOME': str(home / '.local/state'),
+                                          'XDG_DATA_HOME': str(home / '.local/share')}), \
                  patch.object(installer, 'ipc', side_effect=lambda *call: answers[call]), \
                  patch.object(installer.subprocess, 'run') as run, \
                  patch('sys.argv', ['install-omarchy-ui.py']), \
@@ -81,11 +84,62 @@ class UpdateTests(unittest.TestCase):
                 installer.main()
             self.assertEqual([call.args[0][:2] for call in run.call_args_list if call.args[0][0] != 'git'],
                              [['bash', 'ui/omarchy-plugin/tests/check-source.sh'],
+                              ['busctl', '--user'],
                               ['omarchy', 'plugin'],
                               ['omarchy', 'restart']])
-            self.assertEqual(run.call_args_list[1].args[0][2:], ['enable', 'io.github.ahuray.badi'])
+            self.assertEqual(run.call_args_list[2].args[0][2:], ['enable', 'io.github.ahuray.badi'])
             self.assertCountEqual([path.name for path in target.iterdir()], installer.FILES)
             self.assertTrue((home / '.local/state/badi/receipts/omarchy-ui.json').is_file())
+
+
+class FcitxThemeTests(unittest.TestCase):
+    COLORS = 'background = "#1a1b26"\nforeground = "#a9b1d6"\naccent = "#7aa2f7"\n'
+
+    def run_installer(self, home, classicui=None):
+        theme = home / '.local/state/omarchy/current/theme'
+        theme.mkdir(parents=True)
+        (theme / 'colors.toml').write_text(self.COLORS)
+        conf = home / '.config/fcitx5/conf/classicui.conf'
+        if classicui is not None:
+            conf.parent.mkdir(parents=True)
+            conf.write_text(classicui)
+        unlocked = dict.fromkeys(('locked', 'secure', 'requested', 'pending', 'sessionLocked'), False)
+        answers = {('lock', 'status'): unlocked, ('badi-writing', 'state'): {'page': 0, 'service': {}}}
+        font = unittest.mock.Mock(stdout='JetBrainsMono Nerd Font\n')
+        with patch.object(installer.Path, 'home', return_value=home), \
+             patch.dict(os.environ, {'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_STATE_HOME': str(home / '.local/state'),
+                                     'XDG_DATA_HOME': str(home / '.local/share')}), \
+             patch.object(installer, 'ipc', side_effect=lambda *call: answers[call]), \
+             patch.object(installer.subprocess, 'run', return_value=font), \
+             patch('sys.argv', ['install-omarchy-ui.py']), \
+             contextlib.redirect_stdout(io.StringIO()):
+            installer.main()
+        return conf
+
+    def test_the_panel_theme_follows_omarchy_and_keeps_a_users_fcitx_choice(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            conf = self.run_installer(home)
+            theme = (home / '.local/share/fcitx5/themes/badi-omarchy/theme.conf').read_text()
+            self.assertIn('Color=#1a1b26', theme)
+            self.assertIn('HighlightColor=#7aa2f7', theme)
+            self.assertIn('Theme=badi-omarchy', conf.read_text())
+            self.assertIn('Font="JetBrainsMono Nerd Font 10"', conf.read_text())
+            for event in installer.HOOK_EVENTS:
+                hook = home / f'.config/omarchy/hooks/{event}.d/badi-fcitx-theme'
+                self.assertTrue(os.access(hook, os.X_OK))
+                self.assertIn('fcitx-theme.py', hook.read_text())
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            conf = self.run_installer(home, classicui='Theme=default-dark\n')
+            self.assertEqual(conf.read_text(), 'Theme=default-dark\n')
+
+    def test_the_softened_text_keeps_readable_contrast(self):
+        theme = installer.fcitx_theme()
+        for background, foreground in (('#1a1b26', '#a9b1d6'), ('#fdf6e3', '#657b83'), ('#000000', '#777777')):
+            colors = theme.palette({'background': background, 'foreground': foreground, 'accent': foreground})
+            self.assertGreaterEqual(theme.contrast(colors['text'], background), 4.5 if
+                                    theme.contrast(foreground, background) >= 4.5 else 1)
 
 
 if __name__ == '__main__':

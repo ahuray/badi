@@ -161,8 +161,8 @@ void BadiAddon::tabKey(::fcitx::KeyEvent &event, Binding &binding, const PanelOb
     case LocalAction::PassThrough:
     case LocalAction::Dismiss:
         cancelForInput(binding);
-        // Completion may rewrite a terminal's line in ways Badi cannot see.
-        binding.typedLine.lose();
+        // Completion rewrites the line invisibly; follow what comes next.
+        binding.typedLine.restart();
         return;
     }
     event.filterAndAccept();
@@ -189,8 +189,12 @@ void BadiAddon::lineKey(Binding &binding, const ::fcitx::Key &key, std::string_v
         line.eraseWord();
     } else if (!typed.empty() && static_cast<unsigned char>(typed[0]) >= 0x20 && typed != "\x7f") {
         line.type(typed);
-    } else {
+    } else if (movesCaretIntoLine(key)) {
         line.lose();
+    } else {
+        // A paste (an image in a coding agent's prompt), completion,
+        // history or a new prompt line: the caret stays at the end.
+        line.restart();
     }
     requestLineAfterPause(binding);
 }

@@ -105,7 +105,9 @@ def check_app(app):
         assert len(expected.split()) <= 4, "The native preview remains bounded"
         assert context.key(0xff53, 1 << 2), "Ctrl+Right must accept all of it"
         wait_for(lambda: bool(context.commits()))
-        assert context.commits() == [expected], "Acceptance must dispatch the exact visible candidate once"
+        # The panel leaves out the separating space the commit carries.
+        assert [commit.lstrip(" ") for commit in context.commits()] == [expected] and \
+            context.commits()[0].endswith(expected), "Acceptance must dispatch the exact visible candidate once"
 
         context.text(PREFIX)
         assert context.key(TAB)

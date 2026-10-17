@@ -264,6 +264,16 @@ bool heldTabMatchesRest(std::string_view rest, const Suggestion &suggestion) {
            rest.starts_with(suggestion.acceptWord);
 }
 
+CandidateParts candidateParts(const Suggestion &suggestion) {
+    const auto first = suggestion.text.find_first_not_of(' ');
+    if (first == std::string::npos) return {};
+    const std::string_view text = std::string_view(suggestion.text).substr(first);
+    const auto word = std::string_view(suggestion.acceptWord).substr(
+        std::min(first, suggestion.acceptWord.size()));
+    if (suggestion.replaceBefore || word.empty() || !text.starts_with(word)) return {std::string(text), {}};
+    return {std::string(word), std::string(text.substr(word.size()))};
+}
+
 bool typeThroughContextReady(std::string_view base, std::string_view typed, std::string_view before) {
     constexpr std::size_t kSlideBytes = 128;
     if (typed.empty() || typed.size() > before.size()) return false;
@@ -375,6 +385,11 @@ void TypedLine::eraseWord() {
 }
 
 void TypedLine::clear() {
+    text_.clear();
+    tracking_ = true;
+}
+
+void TypedLine::restart() {
     text_.clear();
     tracking_ = true;
 }
