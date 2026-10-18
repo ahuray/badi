@@ -349,8 +349,10 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   is not healed: after a bare space a model must start a word without its
   usual leading-space token, and neither Qwen3 1.7B (0 useful of 20) nor
   Gemma 3 1B (0 of 26, markup or fragments such as `uralt.`) continued one
-  usefully. Healing German on Gemma is an
-  [open decision](<../future plans.md>).
+  usefully. With Gemma 3 1B German is healed instead (`trailing_space_healing`,
+  by the loaded weights' SHA-256): 15 useful against 7 of 67 German
+  development and boundary requests, and 3 harmful against 2, promoted by
+  user decision.
 - **Generation grammar.** Every continuation request carries a grammar that
   excludes what could never be shown: `<`, `>`, backticks and line breaks,
   and, when the typed text has no digit, digits in any script. Without it

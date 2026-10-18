@@ -592,6 +592,31 @@ pub(crate) struct CompletionPlan<'a> {
 pub(crate) const TRAILING_SPACE_HEALING: &[WritingLanguage] =
     &[WritingLanguage::English, WritingLanguage::Persian];
 
+/// Models that also heal German, each by its own blinded review against the
+/// unhealed prompt. Gemma 3 1B: 2026-10-18, Lab `production_boundary`, the
+/// German cases of the frozen boundary set and the development screen, 15
+/// useful against 7 of 67 and 3 harmful against 2, promoted by user decision.
+const GERMAN_HEALING_MODELS: &[&str] = &["gemma-3-1b"];
+const HEALING_WITH_GERMAN: &[WritingLanguage] = &[
+    WritingLanguage::English,
+    WritingLanguage::Persian,
+    WritingLanguage::German,
+];
+
+/// The languages healed for the catalog model whose weights hash to
+/// `model_sha256`; any other model gets [`TRAILING_SPACE_HEALING`].
+#[must_use]
+pub fn trailing_space_healing(model_sha256: &str) -> &'static [WritingLanguage] {
+    let german = catalog(ModelUseCase::Writing)
+        .iter()
+        .any(|model| model.sha256 == model_sha256 && GERMAN_HEALING_MODELS.contains(&model.id));
+    if german {
+        HEALING_WITH_GERMAN
+    } else {
+        TRAILING_SPACE_HEALING
+    }
+}
+
 /// Whether production heals a trailing ASCII space for this language tag.
 #[must_use]
 pub fn heals_trailing_space(language: &str) -> bool {

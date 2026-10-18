@@ -446,6 +446,26 @@ fn an_unhealed_trailing_space_is_never_sent() {
 }
 
 #[test]
+fn german_is_healed_only_for_the_models_reviewed_with_it() {
+    use super::WritingLanguage::{English, German, Persian};
+    use crate::model_selection::{ModelUseCase, catalog};
+    for model in catalog(ModelUseCase::Writing) {
+        let healed = super::trailing_space_healing(model.sha256);
+        assert!(healed.contains(&English) && healed.contains(&Persian));
+        assert_eq!(
+            healed.contains(&German),
+            model.id == "gemma-3-1b",
+            "{}",
+            model.id
+        );
+    }
+    assert_eq!(
+        super::trailing_space_healing(&"0".repeat(64)),
+        super::TRAILING_SPACE_HEALING
+    );
+}
+
+#[test]
 fn generation_excludes_what_could_never_be_shown() {
     let plan = |before: &str, language: &str| {
         let request = crate::provider::ProviderRequest {

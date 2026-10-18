@@ -95,14 +95,6 @@ Standing user decisions:
   settings and unchanged Badi app/site permissions (confirmed 2026-10-13).
 
 Open decisions, for the user:
-- **Heal German on Gemma 3 1B.** On 2026-10-18 (Lab `production_boundary`,
-  67 German development and boundary requests, blind Sonnet review) healing
-  German's trailing space gave 15 useful against 7 and 47 useful or
-  acceptable against 26, and 3 harmful against 2 (the new one invented a
-  cause: `Sobald ` → `die Corona-Pandemie sich`). The standing rule allows no
-  per-language harm increase, so German after a space abstains instead; the
-  change is ready on the `claude/gemma-german-healing` branch (English was
-  promoted the same way, at +1 harmful).
 - **Terminal privacy.** A terminal cannot mark a password prompt, so a
   passphrase of two or more words in an allowed terminal can reach the local
   model. Keep it, make terminals explicit-only, or pause after prompts such as
