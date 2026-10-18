@@ -64,6 +64,10 @@ Linux in general.
   of 19 real-text cases) with no more matches, and a live paragraph in Ghostty
   read no better. Long Tab-only chains drift (a run of Tabs turned a
   sentence into a maths exercise); the model, not the window, is the limit.
+  On 2026-10-18 Granite 4.0 Micro, Gemma 4 E2B and Qwen3.5-4B (2–3.4 GB base
+  models) wrote clearly better German than Gemma 3 1B on a 30-prompt screen,
+  with English level; their speed is unmeasured
+  ([larger-model bench](docs/architecture/model-selection.md)).
 - **Diagnosis:** `badi debug on [--text]`, `badi debug watch` and `badi debug
   log` trace every request, suggestion, key and ghost show/hide across the
   broker, Fcitx and observer ([README](README.md#debug-trace),
@@ -259,6 +263,13 @@ Measured alternatives that were not adopted are in the
 [runtime runbook](broker/README.md#writing-model-runtime).
 
 - [ ] Fewer generated tokens, only after a held-out quality comparison.
+- [ ] Finish the [larger-model bench](evaluation/llm-bench/README.md) on
+      unclamped clocks. On 2026-10-18, on its USB-C supply, this laptop held
+      its cores at 0.4–2.0 GHz under load (rated 4.6), so the thread sweep,
+      CPU against Iris Xe, and warm/cold latency for Granite 4.0 Micro, Gemma 4
+      E2B and Qwen3.5-4B are still to run; also time `--swa-full` against the
+      default for Gemma 3 1B, which reuses the prompt cache after a backspace
+      only with it ([runtime](broker/README.md#writing-model-runtime)).
 - [ ] Pin the runtime's four threads to performance cores (`taskset`/
       `--cpu-mask`): one idle measurement saw 94/30 against 54/21 prompt/
       generate tokens per second for Qwen3-1.7B, a second under load saw no
