@@ -583,7 +583,9 @@ impl SemanticClient {
         // and an unhealed language can send only whitespace. Neither carries
         // context, and the runtime answers an empty prompt with a malformed
         // final chunk, so this is a request-side abstention, sent nowhere.
-        if plan.prompt.trim().is_empty() {
+        // An unhealed prompt that ends in a space abstains too: no reviewed
+        // model continued one usefully (see `CompletionPlan::sends_nothing`).
+        if plan.sends_nothing() {
             return Ok(ObservedCompletion::language_abstention());
         }
         let mut payload = plan.payload();

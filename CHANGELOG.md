@@ -7,6 +7,12 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#95](https://github.com/ahuray/badi/pull/95) The model can no longer
+  write markup, backticks, line breaks or a number the text lacks, which
+  used to discard the whole suggestion, and German after a space abstains
+  instead of showing fragments; with Gemma 3 1B, 62 against 61 useful of
+  215 development requests, harm unchanged. Healing German is an open
+  decision.
 - [#94](https://github.com/ahuray/badi/pull/94) Badi recommends the writing
   model that fits each device best (Gemma 3 1B on this one, by a blind
   development screen of eight models), and `badi model` and the panel's

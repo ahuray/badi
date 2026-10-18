@@ -13,6 +13,11 @@ use badi_broker::semantic::client::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
+/// The generated-text class when the typed text has no digit: no markup,
+/// backtick, line break or digit of any script.
+const NO_DIGITS: &str = "[^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]*";
+const UNHEALED: &str = "root ::= [^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]*";
+
 fn request(before: &str, language: Option<&str>) -> ProviderRequest {
     ProviderRequest {
         before: before.to_owned(),
@@ -107,11 +112,13 @@ async fn healing_that_empties_the_prompt_abstains_before_any_request() -> Result
     )?)?;
     // Only whitespace, healed or not, or one unfinished English word leaves no
     // context. The runtime answers that with a malformed chunk, so these
-    // abstain before any request instead of counting an error.
+    // abstain before any request instead of counting an error. A language
+    // that is not healed abstains after a trailing space as well.
     let spaces = " ".repeat(200);
     for (before, language, replacement) in [
         (" ", "en", true),
         ("   ", "de-DE", true),
+        ("Vielen Dank für Ihre ", "de-DE", true),
         (" ", "fa", true),
         (spaces.as_str(), "en-US", true),
         ("Hel", "en", false),
@@ -957,18 +964,17 @@ async fn production_heals_a_trailing_space_and_never_shows_the_echo() -> Result<
             "  report",
         ),
     ] {
-        let (payload, outcome) = healed_exchange(before, language, pieces).await?;
         if !badi_broker::writing::heals_trailing_space(language) {
-            // A language not promoted keeps the unhealed prompt.
-            assert_eq!(payload["prompt"], format!("{prompt}{echo}"), "{before:?}");
-            assert!(payload.get("grammar").is_none(), "{before:?}");
+            // A language not promoted abstains before any request
+            // (`healing_that_empties_the_prompt_abstains_before_any_request`).
             continue;
         }
+        let (payload, outcome) = healed_exchange(before, language, pieces).await?;
         assert_eq!(payload["prompt"], prompt, "{before:?}");
         assert_eq!(
             payload["grammar"],
             format!(
-                "root ::= {} [^<>\\n\\r`]*",
+                "root ::= {} {NO_DIGITS}",
                 serde_json::to_string(echo).expect("echo literal")
             )
         );
@@ -1010,7 +1016,7 @@ async fn production_heals_a_trailing_space_and_never_shows_the_echo() -> Result<
     ] {
         let (payload, _) = healed_exchange(before, language, &[" Nachricht"]).await?;
         assert_eq!(payload["prompt"], before);
-        assert!(payload.get("grammar").is_none(), "{before:?}");
+        assert_eq!(payload["grammar"], UNHEALED, "{before:?}");
         assert_eq!(payload["n_predict"], 8);
     }
     Ok(())

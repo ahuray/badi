@@ -95,6 +95,14 @@ Standing user decisions:
   settings and unchanged Badi app/site permissions (confirmed 2026-10-13).
 
 Open decisions, for the user:
+- **Heal German on Gemma 3 1B.** On 2026-10-18 (Lab `production_boundary`,
+  67 German development and boundary requests, blind Sonnet review) healing
+  German's trailing space gave 15 useful against 7 and 47 useful or
+  acceptable against 26, and 3 harmful against 2 (the new one invented a
+  cause: `Sobald ` → `die Corona-Pandemie sich`). The standing rule allows no
+  per-language harm increase, so German after a space abstains instead; the
+  change is ready on the `claude/gemma-german-healing` branch (English was
+  promoted the same way, at +1 harmful).
 - **Terminal privacy.** A terminal cannot mark a password prompt, so a
   passphrase of two or more words in an allowed terminal can reach the local
   model. Keep it, make terminals explicit-only, or pause after prompts such as
@@ -338,6 +346,13 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       off until the Lab spelling gate passes (the 40-case run was 2 and 4
       useful, with one unwanted change each).
 - [ ] Calibrate token confidence against reviewed full additions per language.
+      Gmail Smart Compose shows a suggestion only above a length-normalized
+      log-probability threshold set for a target coverage
+      ([arXiv 1906.00080](https://arxiv.org/abs/1906.00080)). With Gemma 3 1B
+      on 2026-10-18, 62 of 215 English, German and Persian development
+      requests were useful, 67 acceptable but generic and 44 unhelpful; such
+      a gate, or cutting a suggestion before its first low-confidence word,
+      targets the last two.
 - [ ] Spelling for Persian, which has no cased letters and needs its own word
       shape rather than the European one.
 - [ ] Measure Cotypist parity with the same tasks on a named Cotypist version on

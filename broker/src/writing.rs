@@ -576,6 +576,9 @@ pub(crate) struct CompletionPlan<'a> {
     pub(crate) prompt: &'a str,
     pub(crate) echo: Option<&'a str>,
     pub(crate) max_tokens: u16,
+    /// Whether generation may write digits: only when the typed text has
+    /// one, since [`introduces_unsupported_fact`] refuses any other number.
+    pub(crate) digits: bool,
 }
 
 /// Languages whose trailing ASCII space is healed in production. A language is
@@ -583,6 +586,8 @@ pub(crate) struct CompletionPlan<'a> {
 /// suggestions over the unhealed prompt; an unlisted language keeps that
 /// prompt, trailing space included. Removing a language is its rollback.
 /// German is unlisted: the sealed 2026-09-10 set rose from 1 to 9 harmful.
+/// With Gemma 3 1B (2026-10-18, 67 German development and boundary requests)
+/// healing German gave 15 useful against 7 and 3 harmful against 2.
 /// English was kept by user decision at +1 harmful for +19 useful in 40.
 pub(crate) const TRAILING_SPACE_HEALING: &[WritingLanguage] =
     &[WritingLanguage::English, WritingLanguage::Persian];
@@ -610,6 +615,7 @@ pub(crate) fn completion_plan<'a>(
         prompt,
         echo,
         max_tokens,
+        digits: request.before.chars().any(|c| ascii_digit(c).is_some()),
     }
 }
 
@@ -689,6 +695,17 @@ fn token_budget(_language: Option<WritingLanguage>, english_tokens: u16) -> u16 
 }
 
 impl CompletionPlan<'_> {
+    /// Whether this plan abstains before any model call: an empty prompt, or
+    /// an unhealed one that ends in an ASCII space. Healed languages never
+    /// leave that space in the prompt. After one, a model must start a word
+    /// without its usual leading-space token: German showed 0 useful of 20
+    /// such cases with Qwen3 1.7B (2026-09-09 boundary set) and 0 of 26 with
+    /// Gemma 3 1B, which wrote markup (`<strong>Bezug`) or, with markup
+    /// excluded, fragments such as `uralt.` (2026-10-18).
+    pub(crate) fn sends_nothing(&self) -> bool {
+        self.prompt.trim().is_empty() || self.prompt.ends_with(' ')
+    }
+
     pub(crate) fn payload(&self) -> Value {
         // Per-token timings put the prompt/cache counts on the first token
         // already, so a call the writing budget cuts still reports how much
@@ -696,12 +713,23 @@ impl CompletionPlan<'_> {
         let mut payload = json!({"prompt":self.prompt,"n_predict":self.max_tokens,
             "temperature":0.0,"seed":42,"stop":[".","\n"],"stream":true,"cache_prompt":true,
             "timings_per_token":true});
-        if let Some(echo) = self.echo {
-            // Generate at the earlier boundary, reproduce the exact removed
-            // bytes, then let the streaming reader remove only that echo.
-            let literal = serde_json::to_string(echo).expect("echo is serializable");
-            payload["grammar"] = Value::String(format!("root ::= {literal} [^<>\\n\\r`]*"));
-        }
+        // Generate only what could be shown. Markup, backticks and line
+        // breaks fail `complete_word_prefix`, and a number the typed text
+        // lacks fails `introduces_unsupported_fact`; left to the model, the
+        // whole suggestion was lost (Gemma 3 1B wrote `<strong>Bezug` and
+        // `town of 1000`), so the grammar excludes them and lets the next
+        // best token through.
+        let class = if self.digits {
+            "[^<>\\n\\r`]"
+        } else {
+            "[^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]"
+        };
+        // With an echo, generate at the earlier boundary, reproduce the exact
+        // removed bytes, then let the streaming reader remove only that echo.
+        let echo = self.echo.map_or_else(String::new, |echo| {
+            serde_json::to_string(echo).expect("echo is serializable") + " "
+        });
+        payload["grammar"] = Value::String(format!("root ::= {echo}{class}*"));
         payload
     }
 }
