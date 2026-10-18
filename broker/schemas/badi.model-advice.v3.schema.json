@@ -173,7 +173,7 @@
         "healed_languages": {
           "description": "Languages whose trailing space is healed with this model by default, each promoted by its own blind review; settings trailing_space_healing overrides it per language.",
           "type": "array",
-          "items": { "enum": ["en", "de", "fa", "fr", "es"] },
+          "items": { "enum": ["en", "de", "fa", "fr", "es", "pt"] },
           "uniqueItems": true
         }
       }

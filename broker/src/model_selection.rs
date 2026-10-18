@@ -174,7 +174,7 @@ const CODE_RUNTIME_CAVEAT: &str = "An instruct GGUF is not proof of fill-in-the-
 
 /// Writing models, compact first. Within a tier the recommendation prefers
 /// the higher screen score, then the smaller download.
-const WRITING_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "fa"];
+const WRITING_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "fa", "pt"];
 const CODE_LANGUAGES: &[&str] = &["code"];
 
 const WRITING_MODELS: [ModelArtifact; 4] = [
@@ -260,7 +260,9 @@ const WRITING_MODELS: [ModelArtifact; 4] = [
         // decision, 2026-10-18). French and Spanish: 12 and 14 useful of 20
         // boundary requests ending in a space, none harmful, where the
         // unhealed prompt shows nothing (2026-10-18 small-model screen).
-        healed_languages: &["en", "de", "fa", "fr", "es"],
+        // Portuguese: 11 useful of 20 such requests, none harmful
+        // (2026-10-19 European-focus screen).
+        healed_languages: &["en", "de", "fa", "fr", "es", "pt"],
     },
 ];
 

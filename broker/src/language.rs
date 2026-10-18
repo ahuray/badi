@@ -16,6 +16,7 @@ pub fn detect_field_language(before: &str) -> Option<&'static str> {
         whatlang::Lang::Pes => Some("fa"),
         whatlang::Lang::Fra => Some("fr"),
         whatlang::Lang::Spa => Some("es"),
+        whatlang::Lang::Por => Some("pt"),
         _ => None,
     }
 }
@@ -64,6 +65,10 @@ mod tests {
             (
                 "Muchas gracias por su mensaje y por el tiempo que nos ha dedicado.",
                 Some("es"),
+            ),
+            (
+                "Muito obrigado pela sua mensagem e pelo tempo que nos dedicou hoje.",
+                Some("pt"),
             ),
             (
                 "Grazie mille per il tuo messaggio e per il tempo che ci hai dedicato.",

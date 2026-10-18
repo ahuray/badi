@@ -202,7 +202,7 @@ Scope {
     }
     // Suggestion languages: producers omit exactly ["en", "de", "fa"] and keep this order.
     if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "writing_languages")) {
-      var writingOrder = ["en", "de", "fa", "fr", "es"]
+      var writingOrder = ["en", "de", "fa", "fr", "es", "pt"]
       var writing = value.writing_languages
       if (!Array.isArray(writing)) return false
       for (var w = 0; w < writing.length; w += 1) {
@@ -216,7 +216,7 @@ Scope {
       if (!isObject(value.trailing_space_healing)) return false
       var healed = Object.keys(value.trailing_space_healing)
       for (var h = 0; h < healed.length; h += 1) {
-        if (["en", "de", "fa", "fr", "es"].indexOf(healed[h]) < 0
+        if (["en", "de", "fa", "fr", "es", "pt"].indexOf(healed[h]) < 0
             || typeof value.trailing_space_healing[healed[h]] !== "boolean") return false
       }
       keys.push("trailing_space_healing")
@@ -232,7 +232,7 @@ Scope {
       if (apps.length > 64) return false
       for (var app = 0; app < apps.length; app += 1) {
         if (apps[app].length > 128 || !/^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/.test(apps[app])
-            || ["en", "de", "fa", "fr", "es"].indexOf(value.language_overrides[apps[app]]) < 0) return false
+            || ["en", "de", "fa", "fr", "es", "pt"].indexOf(value.language_overrides[apps[app]]) < 0) return false
       }
       keys.push("language_overrides")
     }

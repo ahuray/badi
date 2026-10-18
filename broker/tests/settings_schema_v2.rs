@@ -280,10 +280,11 @@ fn writing_languages_and_healing_choices_match_the_schema() {
     for (field, value, valid) in [
         (
             "writing_languages",
-            json!(["en", "de", "fa", "fr", "es"]),
+            json!(["en", "de", "fa", "fr", "es", "pt"]),
             true,
         ),
         ("writing_languages", json!(["en", "fr"]), true),
+        ("writing_languages", json!(["en", "pt"]), true),
         ("writing_languages", json!([]), true),
         // Only the broker enforces the canonical order, as for spelling.
         ("writing_languages", json!(["fr", "en"]), false),
@@ -291,7 +292,7 @@ fn writing_languages_and_healing_choices_match_the_schema() {
         ("writing_languages", json!(["it"]), false),
         (
             "trailing_space_healing",
-            json!({"de": false, "fr": true}),
+            json!({"de": false, "fr": true, "pt": true}),
             true,
         ),
         ("trailing_space_healing", json!({}), true),

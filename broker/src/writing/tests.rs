@@ -468,7 +468,7 @@ fn german_is_healed_only_for_the_models_reviewed_with_it() {
 #[test]
 fn healing_choices_apply_over_the_model_default() {
     use super::LanguagePreferences;
-    use super::WritingLanguage::{English, French, German, Persian, Spanish};
+    use super::WritingLanguage::{English, French, German, Persian, Portuguese, Spanish};
     let model = [English, Persian, German];
     assert_eq!(LanguagePreferences::default().healed(&model), model);
     let chosen = LanguagePreferences {
@@ -478,8 +478,9 @@ fn healing_choices_apply_over_the_model_default() {
     assert_eq!(chosen.healed(&model), [English, Persian, French]);
     assert!(chosen.enables(French) && !chosen.enables(Spanish) && !chosen.enables(Persian));
     assert!(LanguagePreferences::all().enables(Spanish));
-    // French and Spanish write Latin script and whole words only.
-    for language in [French, Spanish] {
+    // French, Spanish and Portuguese write Latin script and whole words only.
+    assert!(LanguagePreferences::all().enables(Portuguese));
+    for language in [French, Spanish, Portuguese] {
         assert!(language.accepts_output(" à demain, señor"));
         assert!(!language.accepts_output(" گزارش"));
         assert_eq!(

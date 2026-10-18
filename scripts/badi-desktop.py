@@ -71,11 +71,11 @@ HELP = """Badi — local writing controls
                                their dictionaries; English is built in
   badi suggest [--json]        Suggestion languages and their healing
   badi suggest LANG on|off     Suggest words in a language (en de fa; fr es
-                               are experimental)
+                               pt are experimental)
   badi suggest LANG healing on|off|auto
                                Heal a trailing space in that language, keep
                                it, or follow the model's reviewed default
-  badi language APP en|de|fa|fr|es|reset
+  badi language APP en|de|fa|fr|es|pt|reset
                                Override one app's writing language; reset
                                restores automatic language selection
   badi apps allowlist|blocklist  Apps: only allowed apps (default), or every
@@ -888,9 +888,10 @@ def set_language(document, app, language):
 
 
 # The broker's PredictionLanguage order (broker/src/settings/document.rs).
-WRITING = {"en": "English", "de": "German", "fa": "Persian", "fr": "French", "es": "Spanish"}
+WRITING = {"en": "English", "de": "German", "fa": "Persian", "fr": "French", "es": "Spanish",
+           "pt": "Portuguese"}
 DEFAULT_WRITING = ["en", "de", "fa"]
-EXPERIMENTAL_WRITING = ("fr", "es")
+EXPERIMENTAL_WRITING = ("fr", "es", "pt")
 
 
 def model_healing():
