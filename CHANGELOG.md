@@ -7,6 +7,9 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#96](https://github.com/ahuray/badi/pull/96) With Gemma 3 1B, German
+  after a space is healed like English and Persian: 15 against 7 useful of
+  67 German development requests, 3 against 2 harmful, by user decision.
 - [#95](https://github.com/ahuray/badi/pull/95) The model can no longer
   write markup, backticks, line breaks or a number the text lacks, which
   used to discard the whole suggestion, and German after a space abstains

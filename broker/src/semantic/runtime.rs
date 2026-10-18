@@ -257,7 +257,8 @@ impl LlamaCppLaunch {
             &socket_path,
             &self.model_alias,
             token.expose(),
-        )?)?;
+        )?)?
+        .for_model(self.model.sha256());
         let negative_client = SemanticClient::new(SemanticClientConfig::unix(
             &socket_path,
             &self.model_alias,

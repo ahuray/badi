@@ -390,6 +390,8 @@ pub struct SemanticClient {
     window_context: Option<Arc<str>>,
     /// First token of each biased word, shared by this client's clones.
     bias_tokens: Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
+    /// The languages whose trailing space is healed for the loaded model.
+    healing: &'static [crate::writing::WritingLanguage],
 }
 
 impl SemanticClient {
@@ -400,7 +402,16 @@ impl SemanticClient {
             request_observer: None,
             window_context: None,
             bias_tokens: Arc::default(),
+            healing: crate::writing::TRAILING_SPACE_HEALING,
         })
+    }
+
+    /// This client healing the languages reviewed for the model whose
+    /// weights hash to `model_sha256`.
+    #[must_use]
+    pub fn for_model(mut self, model_sha256: &str) -> Self {
+        self.healing = crate::writing::trailing_space_healing(model_sha256);
+        self
     }
 
     /// This client with `text` as the window context whose words may bias
@@ -577,8 +588,7 @@ impl SemanticClient {
         // The language boundary deliberately precedes construction and JSON
         // serialization. A rejected request therefore cannot allocate an HTTP
         // payload or send a runtime request/body byte.
-        let plan =
-            crate::writing::completion_plan(&request, crate::writing::TRAILING_SPACE_HEALING);
+        let plan = crate::writing::completion_plan(&request, self.healing);
         // Healing can consume the whole window (one unfinished English word),
         // and an unhealed language can send only whitespace. Neither carries
         // context, and the runtime answers an empty prompt with a malformed
