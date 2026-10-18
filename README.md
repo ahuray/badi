@@ -178,7 +178,10 @@ badi pause toggle                   # what the session helper's shortcut runs
 badi battery normal                 # on battery: keep mains scheduling (default: quiet)
 badi mid-line on                    # suggestions when a word follows the caret; off by default
 badi escape-quiet 60                # a dismissal keeps its field quiet for a minute; off by default
-badi language brave-origin de      # use German in Brave; en, de, fa, or reset
+badi suggest                        # suggestion languages and their healing
+badi suggest fr on                  # also suggest in French (fr, es: experimental)
+badi suggest de healing off         # keep a typed space in German prompts; on|off|auto
+badi language brave-origin de      # use German in Brave; en, de, fa, fr, es, or reset
 badi app telegram on                # allow an app
 badi site https://example.com on    # allow a website (Chromium, Brave and Zen share it)
 badi autostart on
@@ -210,9 +213,17 @@ estimated words saved since model start
 A language override takes precedence over detection and the adapter's hint
 without granting access to an app or website. `badi language APP reset`
 restores automatic selection. For longer text, Badi conservatively detects
-English, German or Persian from the authorized field; short or uncertain
-text keeps the app or keyboard hint. French and Spanish generation remain
-in the Lab until qualified.
+English, German, Persian, French or Spanish from the authorized field; short
+or uncertain text keeps the app or keyboard hint. Badi suggests only in the
+languages turned on with `badi suggest` (English, German and Persian by
+default); French and Spanish are experimental and not yet qualified.
+
+**Healing** is what Badi does after you type a space: the model writes that
+space itself, so it starts the next word as it normally would. Each model
+heals the languages its blind review cleared (Gemma 3 1B: all five); `badi suggest LANG healing on|off` overrides that per language, and
+`auto` returns to the model's choice. A language that is not healed shows
+nothing right after a space. The panel's Suggestions rows set the same
+choices.
 
 ### Sleep, session switches, battery and shortcuts
 
@@ -292,13 +303,13 @@ running trace.
 
 ## Model and languages
 
-The broker runs the pinned model that fits this machine (Qwen3-1.7B Q4_K_M
+The broker runs the pinned model that fits this machine (Gemma 3 1B Q4_K_M
 here) on the CPU and verifies its bytes at startup. English includes careful
-partial-word completion; German and Persian are experimental and complete whole
-words only. The [Prediction Lab](evaluation/writing/README.md) (`npm run
-writing:lab`) compares models and prompts on your own test drafts without
-changing the installed model. It also evaluates French and Spanish; those
-languages remain Lab-only until their independent qualification passes.
+partial-word completion; German, Persian, French and Spanish complete whole
+words only, and French and Spanish are off until you turn them on. The
+[Prediction Lab](evaluation/writing/README.md) (`npm run writing:lab`)
+compares models and prompts on your own test drafts without changing the
+installed model.
 
 ## For contributors
 

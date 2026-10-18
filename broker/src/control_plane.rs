@@ -578,6 +578,8 @@ fn personalization_privacy_floor(current: &SettingsV2, next: &SettingsV2) -> Set
         spelling_languages: current.spelling_languages.clone(),
         // A degraded control plane accepts only reductions; the model stays.
         writing_model: current.writing_model.clone(),
+        writing_languages: current.writing_languages.clone(),
+        trailing_space_healing: current.trailing_space_healing.clone(),
         subjects,
     }
 }

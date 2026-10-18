@@ -461,7 +461,7 @@ fn observe_continuation(
 }
 
 #[test]
-fn french_and_spanish_are_lab_only_with_the_same_style_fact_fence() {
+fn french_and_spanish_keep_the_same_style_fact_fence() {
     for (language, before, style, day) in [
         (
             "fr",
@@ -480,8 +480,8 @@ fn french_and_spanish_are_lab_only_with_the_same_style_fact_fence() {
         value.language = language.to_owned();
         assert!(value.validate().is_ok());
         assert!(
-            WritingLanguage::from_tag(language).is_none(),
-            "production stays unqualified"
+            WritingLanguage::from_tag(language).is_some(),
+            "production writes it when the person turns it on, unqualified"
         );
         let conflict = observe_continuation(Mode::Context, before, language, "", &[style], day);
         assert_eq!(conflict.reason, "style_fact_conflict");

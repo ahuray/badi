@@ -14,6 +14,8 @@ pub fn detect_field_language(before: &str) -> Option<&'static str> {
         whatlang::Lang::Eng => Some("en"),
         whatlang::Lang::Deu => Some("de"),
         whatlang::Lang::Pes => Some("fa"),
+        whatlang::Lang::Fra => Some("fr"),
+        whatlang::Lang::Spa => Some("es"),
         _ => None,
     }
 }
@@ -41,7 +43,7 @@ mod tests {
     use super::detect_field_language;
 
     #[test]
-    fn supported_prose_is_detected_but_short_and_other_language_text_abstains() {
+    fn writing_language_prose_is_detected_but_short_and_other_language_text_abstains() {
         for (text, language) in [
             (
                 "Thank you for taking the time to read this message and for your help.",
@@ -57,10 +59,14 @@ mod tests {
             ),
             (
                 "Merci pour votre message et pour le temps que vous nous avez consacré.",
-                None,
+                Some("fr"),
             ),
             (
                 "Muchas gracias por su mensaje y por el tiempo que nos ha dedicado.",
+                Some("es"),
+            ),
+            (
+                "Grazie mille per il tuo messaggio e per il tempo che ci hai dedicato.",
                 None,
             ),
             ("Vielen Dank", None),

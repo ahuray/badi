@@ -69,7 +69,13 @@ HELP = """Badi — local writing controls
   badi spelling [LANG on|off] [--json]
                                Spelling languages (en de fr es it nl pl) and
                                their dictionaries; English is built in
-  badi language APP en|de|fa|reset
+  badi suggest [--json]        Suggestion languages and their healing
+  badi suggest LANG on|off     Suggest words in a language (en de fa; fr es
+                               are experimental)
+  badi suggest LANG healing on|off|auto
+                               Heal a trailing space in that language, keep
+                               it, or follow the model's reviewed default
+  badi language APP en|de|fa|fr|es|reset
                                Override one app's writing language; reset
                                restores automatic language selection
   badi apps allowlist|blocklist  Apps: only allowed apps (default), or every
@@ -870,8 +876,8 @@ def set_language(document, app, language):
     app_id = app_identity(app)["app_id"]
     if app_id == "chromium-browser":
         app_id = "chromium"
-    if language not in ("en", "de", "fa", "reset"):
-        raise RuntimeError("Use en, de, fa or reset. French and Spanish are still Lab-only.")
+    if language not in (*WRITING, "reset"):
+        raise RuntimeError("Use " + ", ".join(WRITING) + " or reset.")
     overrides = document.setdefault("language_overrides", {})
     if language == "reset":
         overrides.pop(app_id, None)
@@ -879,6 +885,73 @@ def set_language(document, app, language):
         overrides[app_id] = language
     if not overrides:
         document.pop("language_overrides", None)
+
+
+# The broker's PredictionLanguage order (broker/src/settings/document.rs).
+WRITING = {"en": "English", "de": "German", "fa": "Persian", "fr": "French", "es": "Spanish"}
+DEFAULT_WRITING = ["en", "de", "fa"]
+EXPERIMENTAL_WRITING = ("fr", "es")
+
+
+def model_healing():
+    """The running model's name and the languages it heals by default (its
+    catalog `healed_languages`), from the broker's advice."""
+    advice = model_advice()
+    active = active_model_file()
+    catalog = advice.get("catalog") or []
+    model = next((entry for entry in catalog if entry.get("filename") == active), None) \
+        or advice.get("recommended") or {}
+    return model.get("name"), model.get("healed_languages", ["en", "fa"])
+
+
+def writing_report(settings, model_default):
+    enabled = settings.get("writing_languages", DEFAULT_WRITING)
+    choices = settings.get("trailing_space_healing", {})
+    report = []
+    for code, name in WRITING.items():
+        choice = {True: "on", False: "off"}.get(choices.get(code), "auto")
+        report.append({"language": code, "name": name, "enabled": code in enabled,
+                       "experimental": code in EXPERIMENTAL_WRITING, "healing": choice,
+                       "healed": choices.get(code, code in model_default)})
+    return report
+
+
+def set_writing(document, language, enabled):
+    if language not in WRITING:
+        raise RuntimeError("Use one of: " + " ".join(WRITING))
+    current = set(document.get("writing_languages", DEFAULT_WRITING))
+    current = current | {language} if enabled else current - {language}
+    ordered = [code for code in WRITING if code in current]
+    if ordered == DEFAULT_WRITING:
+        document.pop("writing_languages", None)
+    else:
+        document["writing_languages"] = ordered
+
+
+def set_healing(document, language, choice):
+    if language not in WRITING or choice not in ("on", "off", "auto"):
+        raise RuntimeError("Usage: badi suggest LANG healing on|off|auto (LANG: " + " ".join(WRITING) + ")")
+    choices = document.setdefault("trailing_space_healing", {})
+    if choice == "auto":
+        choices.pop(language, None)
+    else:
+        choices[language] = choice == "on"
+    if not choices:
+        document.pop("trailing_space_healing", None)
+
+
+def print_writing(report, model_name):
+    on = [entry["name"] for entry in report if entry["enabled"]]
+    print("Suggestions: " + (", ".join(on) if on else "none (every language is off)"))
+    for entry in report:
+        mark = "✓" if entry["enabled"] else "·"
+        heal = "heals a trailing space" if entry["healed"] else "keeps a trailing space (shows nothing after one)"
+        source = f"auto, as {model_name} was reviewed" if entry["healing"] == "auto" and model_name else entry["healing"]
+        note = "experimental · " if entry["experimental"] else ""
+        print(f"  {mark} {entry['name']:<8} {'on ' if entry['enabled'] else 'off'}  {note}{heal} ({source})")
+    print("Turn one on or off: badi suggest LANG on|off  (" + " ".join(WRITING) + ")")
+    print("Healing lets the model write the space after your last word itself, so the next word")
+    print("starts naturally: badi suggest LANG healing on|off|auto")
 
 
 # The broker's SpellingLanguage order (broker/src/spelling.rs): its dictionary
@@ -1333,6 +1406,26 @@ def main(arguments):
         language = arguments[1]
         update_settings(lambda document: set_spelling(document, language, arguments[2] == "on"))
         print_spelling(spelling_report(json.loads(control(["settings", "show", "--json"]))))
+        return
+    if arguments[:1] == ["suggest"] and arguments[1:] in ([], ["--json"]):
+        name, model_default = model_healing()
+        report = writing_report(json.loads(control(["settings", "show", "--json"])), model_default)
+        if arguments[1:]:
+            print(json.dumps({"schema": "badi.writing-languages.v1", "model": name, "languages": report}, indent=2))
+        else:
+            print_writing(report, name)
+        return
+    if len(arguments) == 3 and arguments[0] == "suggest" and arguments[2] in ("on", "off"):
+        language = arguments[1]
+        update_settings(lambda document: set_writing(document, language, arguments[2] == "on"))
+        name, model_default = model_healing()
+        print_writing(writing_report(json.loads(control(["settings", "show", "--json"])), model_default), name)
+        return
+    if len(arguments) == 4 and arguments[0] == "suggest" and arguments[2] == "healing":
+        language, choice = arguments[1], arguments[3]
+        update_settings(lambda document: set_healing(document, language, choice))
+        name, model_default = model_healing()
+        print_writing(writing_report(json.loads(control(["settings", "show", "--json"])), model_default), name)
         return
     if len(arguments) == 3 and arguments[0] == "language":
         app, language = arguments[1:]

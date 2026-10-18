@@ -459,6 +459,8 @@ async fn v1_settings_roundtrip_projects_browser_rules_and_preserves_native_rules
                 language_overrides: std::collections::BTreeMap::new(),
                 spelling_languages: vec![crate::spelling::SpellingLanguage::English],
                 writing_model: None,
+                writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+                trailing_space_healing: std::collections::BTreeMap::new(),
                 subjects: vec![
                     SubjectRule {
                         identity: StableIdentity::browser_origin(

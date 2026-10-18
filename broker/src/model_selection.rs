@@ -115,6 +115,10 @@ pub struct ModelArtifact {
     /// of the 2026-10-17 Prediction Lab screen (en, de, fr, es, fa), when
     /// the model took part. A screening score, not a qualification.
     pub screen_useful: Option<u16>,
+    /// Languages whose trailing space is healed with this model by default,
+    /// each promoted by its own blind review against the unhealed prompt;
+    /// `trailing_space_healing` in settings overrides it per language.
+    pub healed_languages: &'static [&'static str],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -192,6 +196,7 @@ const WRITING_MODELS: [ModelArtifact; 4] = [
         runtime_caveat: WRITING_RUNTIME_CAVEAT,
         languages: WRITING_LANGUAGES,
         screen_useful: None,
+        healed_languages: &["en", "fa"],
     },
     ModelArtifact {
         id: "qwen3-1.7b",
@@ -211,6 +216,7 @@ const WRITING_MODELS: [ModelArtifact; 4] = [
         runtime_caveat: WRITING_RUNTIME_CAVEAT,
         languages: WRITING_LANGUAGES,
         screen_useful: Some(33),
+        healed_languages: &["en", "fa"],
     },
     ModelArtifact {
         id: "llama-3.2-1b",
@@ -230,6 +236,7 @@ const WRITING_MODELS: [ModelArtifact; 4] = [
         runtime_caveat: WRITING_RUNTIME_CAVEAT,
         languages: WRITING_LANGUAGES,
         screen_useful: Some(41),
+        healed_languages: &["en", "fa"],
     },
     ModelArtifact {
         id: "gemma-3-1b",
@@ -249,6 +256,11 @@ const WRITING_MODELS: [ModelArtifact; 4] = [
         runtime_caveat: WRITING_RUNTIME_CAVEAT,
         languages: WRITING_LANGUAGES,
         screen_useful: Some(46),
+        // German: 15 useful against 7 of 67, 3 harmful against 2 (user
+        // decision, 2026-10-18). French and Spanish: 12 and 14 useful of 20
+        // boundary requests ending in a space, none harmful, where the
+        // unhealed prompt shows nothing (2026-10-18 small-model screen).
+        healed_languages: &["en", "de", "fa", "fr", "es"],
     },
 ];
 
@@ -271,6 +283,7 @@ const CODE_MODELS: [ModelArtifact; 3] = [
         runtime_caveat: CODE_RUNTIME_CAVEAT,
         languages: CODE_LANGUAGES,
         screen_useful: None,
+        healed_languages: &[],
     },
     ModelArtifact {
         id: "qwen2.5-coder-1.5b",
@@ -290,6 +303,7 @@ const CODE_MODELS: [ModelArtifact; 3] = [
         runtime_caveat: CODE_RUNTIME_CAVEAT,
         languages: CODE_LANGUAGES,
         screen_useful: None,
+        healed_languages: &[],
     },
     ModelArtifact {
         id: "qwen2.5-coder-7b",
@@ -309,6 +323,7 @@ const CODE_MODELS: [ModelArtifact; 3] = [
         runtime_caveat: CODE_RUNTIME_CAVEAT,
         languages: CODE_LANGUAGES,
         screen_useful: None,
+        healed_languages: &[],
     },
 ];
 

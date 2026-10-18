@@ -186,6 +186,31 @@ Item {
     }, on ? "Spelling on" : "Spelling off")
   }
 
+  readonly property var writingOrder: ["en", "de", "fa", "fr", "es"]
+
+  function writingLanguages() {
+    var languages = client.settings.writing_languages
+    return Array.isArray(languages) ? languages : ["en", "de", "fa"]
+  }
+
+  // One language's choice: off, or on with healing auto, forced on or off.
+  function setWriting(code, value) {
+    change(function(document) {
+      var chosen = writingLanguages().filter(function(item) { return item !== code })
+      if (value !== "off") chosen.push(code)
+      chosen = writingOrder.filter(function(item) { return chosen.indexOf(item) >= 0 })
+      if (chosen.join() === "en,de,fa") delete document.writing_languages
+      else document.writing_languages = chosen
+      var healing = client.objectValue(document, "trailing_space_healing")
+      var choices = {}
+      Object.keys(healing).forEach(function(key) { if (key !== code) choices[key] = healing[key] })
+      if (value === "heal") choices[code] = true
+      if (value === "plain") choices[code] = false
+      if (Object.keys(choices).length === 0) delete document.trailing_space_healing
+      else document.trailing_space_healing = choices
+    }, value === "off" ? "Suggestions off" : "Suggestions on")
+  }
+
   function writeRule(identity, decision) {
     var document = client.cloneSettings()
     document.subjects = document.subjects.filter(function(item) { return client.compareIdentities(item.identity, identity) !== 0 })
@@ -290,6 +315,25 @@ Item {
       detail: batteryLabel(battery) + " · explicit requests never change", value: battery, enabled: canChange,
       options: [{value: "quiet", label: "Pause first"}, {value: "normal", label: "As on mains"}, {value: "explicit", label: "Ask only"}],
       choose: function(value) { if (value !== battery) root.setBatteryMode(value) }})
+
+    var writing = writingLanguages()
+    var healingChoices = client.objectValue(client.settings, "trailing_space_healing")
+    var modelHealed = Array.isArray(activeModel.healed_languages) ? activeModel.healed_languages : ["en", "fa"]
+    var writingNames = {en: "English", de: "German", fa: "Persian", fr: "French", es: "Spanish"}
+    writingOrder.forEach(function(code) {
+      var on = writing.indexOf(code) >= 0
+      var choice = healingChoices[code]
+      var value = !on ? "off" : choice === true ? "heal" : choice === false ? "plain" : "auto"
+      var healed = choice === true || (choice !== false && modelHealed.indexOf(code) >= 0)
+      list.push({key: "writing_" + code, section: "Suggestions", kind: "choice", label: writingNames[code],
+        detail: (code === "fr" || code === "es" ? "Experimental · " : "")
+          + (!on ? "No suggestions" : healed ? "Heals the space after a word" : "Nothing after a typed space")
+          + (value === "auto" && modelName ? " · as reviewed for " + modelName : ""),
+        value: value, enabled: canChange,
+        options: [{value: "off", label: "Off"}, {value: "auto", label: "Auto"},
+          {value: "heal", label: "Heal"}, {value: "plain", label: "Keep space"}],
+        choose: function(next) { if (next !== value) root.setWriting(code, next) }})
+    })
 
     var chosen = spellingLanguages()
     var report = {}

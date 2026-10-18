@@ -33,6 +33,8 @@ fn settings(retention: RetentionPermission) -> SettingsV2 {
         language_overrides: std::collections::BTreeMap::new(),
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects: vec![SubjectRule {
             identity: identity("example.com"),
             permissions: SubjectPermissions {

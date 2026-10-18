@@ -244,11 +244,25 @@ pub async fn activate_with_options(
         None => installed_launch(directory).await,
     }
     .map_err(|_| LabError::RuntimeUnavailable)?;
-    configure_launch(launch, prefill_batch, explicit_artifact, memory_map)
+    let runtime = configure_launch(launch, prefill_batch, explicit_artifact, memory_map)
         .map_err(|_| LabError::RuntimeUnavailable)?
         .spawn()
         .await
-        .map_err(|_| LabError::RuntimeUnavailable)
+        .map_err(|_| LabError::RuntimeUnavailable)?;
+    // The Lab measures every language the provider writes, each healed as
+    // the model's review decided; the person's settings never reach it.
+    // `BADI_LAB_HEALING=all` heals every language instead, so models outside
+    // the catalog are screened on equal terms.
+    let mut preferences = writing::LanguagePreferences::all();
+    if std::env::var("BADI_LAB_HEALING").is_ok_and(|value| value == "all") {
+        preferences.healing = preferences
+            .enabled
+            .iter()
+            .map(|language| (*language, true))
+            .collect();
+    }
+    runtime.set_language_preferences(&preferences);
+    Ok(runtime)
 }
 
 /// The installed model's launch. Unlike the broker, the Lab reports a host

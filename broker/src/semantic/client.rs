@@ -391,7 +391,9 @@ pub struct SemanticClient {
     /// First token of each biased word, shared by this client's clones.
     bias_tokens: Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
     /// The languages whose trailing space is healed for the loaded model.
-    healing: &'static [crate::writing::WritingLanguage],
+    healing: Vec<crate::writing::WritingLanguage>,
+    /// The person's language choices, shared by this client's clones.
+    preferences: Arc<std::sync::RwLock<crate::writing::LanguagePreferences>>,
 }
 
 impl SemanticClient {
@@ -402,7 +404,8 @@ impl SemanticClient {
             request_observer: None,
             window_context: None,
             bias_tokens: Arc::default(),
-            healing: crate::writing::TRAILING_SPACE_HEALING,
+            healing: crate::writing::TRAILING_SPACE_HEALING.to_vec(),
+            preferences: Arc::default(),
         })
     }
 
@@ -412,6 +415,14 @@ impl SemanticClient {
     pub fn for_model(mut self, model_sha256: &str) -> Self {
         self.healing = crate::writing::trailing_space_healing(model_sha256);
         self
+    }
+
+    /// Applies the person's language choices to every clone of this client.
+    pub fn set_language_preferences(&self, preferences: &crate::writing::LanguagePreferences) {
+        match self.preferences.write() {
+            Ok(mut guard) => preferences.clone_into(&mut guard),
+            Err(poisoned) => preferences.clone_into(&mut poisoned.into_inner()),
+        }
     }
 
     /// This client with `text` as the window context whose words may bias
@@ -588,7 +599,21 @@ impl SemanticClient {
         // The language boundary deliberately precedes construction and JSON
         // serialization. A rejected request therefore cannot allocate an HTTP
         // payload or send a runtime request/body byte.
-        let plan = crate::writing::completion_plan(&request, self.healing);
+        let preferences = self.preferences.read().map_or_else(
+            |poisoned| poisoned.into_inner().clone(),
+            |guard| guard.clone(),
+        );
+        // A language the person turned off is never sent to the model.
+        if request
+            .language
+            .as_deref()
+            .and_then(crate::writing::WritingLanguage::from_tag)
+            .is_some_and(|language| !preferences.enables(language))
+        {
+            return Ok(ObservedCompletion::language_abstention());
+        }
+        let healed = preferences.healed(&self.healing);
+        let plan = crate::writing::completion_plan(&request, &healed);
         // Healing can consume the whole window (one unfinished English word),
         // and an unhealed language can send only whitespace. Neither carries
         // context, and the runtime answers an empty prompt with a malformed
@@ -912,6 +937,10 @@ impl SemanticClient {
 impl CompletionProvider for SemanticClient {
     fn kind(&self) -> ProviderKind {
         ProviderKind::LocalModel
+    }
+
+    fn set_language_preferences(&self, preferences: &crate::writing::LanguagePreferences) {
+        Self::set_language_preferences(self, preferences);
     }
 
     async fn propose(

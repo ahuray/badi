@@ -512,3 +512,23 @@ fn an_installed_chosen_model_wins_while_it_fits() {
         Ok(Some(gemma))
     );
 }
+
+#[test]
+fn healed_languages_are_writing_languages_and_keep_the_reviewed_defaults() {
+    for model in super::catalog(super::ModelUseCase::Writing) {
+        assert!(
+            model
+                .healed_languages
+                .iter()
+                .all(|tag| super::WRITING_LANGUAGES.contains(tag)),
+            "{}",
+            model.id
+        );
+        // English and Persian were promoted for every model by their own
+        // review; a model may only add to that.
+        assert!(model.healed_languages.contains(&"en") && model.healed_languages.contains(&"fa"));
+    }
+    for model in super::catalog(super::ModelUseCase::Code) {
+        assert!(model.healed_languages.is_empty(), "{}", model.id);
+    }
+}

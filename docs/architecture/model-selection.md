@@ -20,7 +20,18 @@ promotes another.
   screen (Gemma 3 1B 46, Llama 3.2 1B 41, Qwen3 1.7B 33; Qwen3 0.6B was not
   screened and stays the compact choice). That is a screening score, not the
   qualification below. The advice lists the whole catalog, each entry marked
-  whether it fits, for `badi model` and the panel's Model row.
+  whether it fits, for `badi model` and the panel's Model row, and each
+  entry's `healed_languages`, the languages its own review heals.
+- **Lesser-known small models** were screened on 2026-10-18 against Gemma 3
+  1B: 335 development and boundary requests in all five languages, every
+  language healed (`BADI_LAB_HEALING=all`), blind Sonnet review. Useful:
+  Granite 4.0 H-Tiny base (7B MoE, 1B active) 122, Gemma 3 1B 120, Falcon-H1
+  1.5B base 100, Qwen3.5 0.8B base 96. Granite missed 550 ms on 112 requests,
+  peaked at 7.6 GB and wrote almost no Persian (2 useful of 70); Falcon wrote
+  none. Qwen3.5 0.8B was the fastest (p95 301 ms, no miss) with the most
+  harmful (8). A 35-request pre-screen dropped Gemma 3 270M and Falcon-H1
+  0.5B on quality and LFM2.5 8B-A1B on its 9.2 GB peak and licence. None
+  replaces Gemma 3 1B on this laptop.
 - **The Prediction Lab** ([qualification.rs](../../evaluation/writing/lab-worker/src/qualification.rs))
   owns discovery and qualification; the shipped broker does not contain it.
   The [Lab bridge](../../evaluation/writing/lab/device-qualification.mjs) calls

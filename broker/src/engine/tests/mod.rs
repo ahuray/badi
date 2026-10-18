@@ -304,6 +304,8 @@ fn controlled_settings(revision: u64, allowed: bool, learn: bool) -> SettingsV2 
         language_overrides: std::collections::BTreeMap::new(),
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,
@@ -345,6 +347,8 @@ fn controlled_learning_settings(revision: u64, retention: RetentionPermission) -
         language_overrides: std::collections::BTreeMap::new(),
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,

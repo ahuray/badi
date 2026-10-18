@@ -98,6 +98,8 @@ fn settings(battery_mode: BatteryMode) -> SettingsV2 {
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects: vec![SubjectRule {
             identity: StableIdentity::browser_origin(
                 BrowserAdapter::Chromium,

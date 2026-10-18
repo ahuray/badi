@@ -111,6 +111,11 @@ pub trait CompletionProvider: Send + Sync + 'static {
         true
     }
 
+    /// Applies the person's language choices from settings: which languages
+    /// get suggestions and which heal a trailing space. Providers without a
+    /// model ignore them.
+    fn set_language_preferences(&self, _preferences: &crate::writing::LanguagePreferences) {}
+
     /// Completes once [`Self::is_alive`] turns false. Providers that own a
     /// process override both; the default never completes.
     async fn exited(&self) {

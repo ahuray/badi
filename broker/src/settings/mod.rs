@@ -12,7 +12,9 @@ mod store;
 #[cfg(test)]
 mod tests;
 
-pub use document::{BatteryMode, PredictionLanguage, SettingsV2, SettingsValidationError};
+pub use document::{
+    BatteryMode, DEFAULT_WRITING_LANGUAGES, PredictionLanguage, SettingsV2, SettingsValidationError,
+};
 pub use identity::{BrowserAdapter, IdentityError, LinuxAdapter, StableIdentity, WebScheme};
 pub(crate) use paths::PrivateStorage;
 pub use paths::StoragePaths;
