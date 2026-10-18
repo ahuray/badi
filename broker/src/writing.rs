@@ -37,6 +37,8 @@ pub enum WritingLanguage {
     English,
     German,
     Persian,
+    French,
+    Spanish,
 }
 
 impl WritingLanguage {
@@ -47,7 +49,21 @@ impl WritingLanguage {
             "en" => Some(Self::English),
             "de" => Some(Self::German),
             "fa" => Some(Self::Persian),
+            "fr" => Some(Self::French),
+            "es" => Some(Self::Spanish),
             _ => None,
+        }
+    }
+
+    /// The primary language subtag.
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::English => "en",
+            Self::German => "de",
+            Self::Persian => "fa",
+            Self::French => "fr",
+            Self::Spanish => "es",
         }
     }
 
@@ -85,8 +101,8 @@ impl WritingLanguage {
 }
 
 /// Whether `value` is Latin-script text with only the shared punctuation,
-/// digits and combining accents on a Latin base: the English and German
-/// output rule.
+/// digits and combining accents on a Latin base: the English, German,
+/// French and Spanish output rule.
 fn valid_english_output(value: &str) -> bool {
     if value.is_empty() || value.ends_with(char::is_whitespace) {
         return false;
@@ -592,28 +608,87 @@ pub(crate) struct CompletionPlan<'a> {
 pub(crate) const TRAILING_SPACE_HEALING: &[WritingLanguage] =
     &[WritingLanguage::English, WritingLanguage::Persian];
 
-/// Models that also heal German, each by its own blinded review against the
-/// unhealed prompt. Gemma 3 1B: 2026-10-18, Lab `production_boundary`, the
-/// German cases of the frozen boundary set and the development screen, 15
-/// useful against 7 of 67 and 3 harmful against 2, promoted by user decision.
-const GERMAN_HEALING_MODELS: &[&str] = &["gemma-3-1b"];
-const HEALING_WITH_GERMAN: &[WritingLanguage] = &[
-    WritingLanguage::English,
-    WritingLanguage::Persian,
-    WritingLanguage::German,
-];
-
-/// The languages healed for the catalog model whose weights hash to
-/// `model_sha256`; any other model gets [`TRAILING_SPACE_HEALING`].
+/// The languages healed by default for the catalog model whose weights hash
+/// to `model_sha256` (its `healed_languages`); any other model gets
+/// [`TRAILING_SPACE_HEALING`].
 #[must_use]
-pub fn trailing_space_healing(model_sha256: &str) -> &'static [WritingLanguage] {
-    let german = catalog(ModelUseCase::Writing)
+pub fn trailing_space_healing(model_sha256: &str) -> Vec<WritingLanguage> {
+    catalog(ModelUseCase::Writing)
         .iter()
-        .any(|model| model.sha256 == model_sha256 && GERMAN_HEALING_MODELS.contains(&model.id));
-    if german {
-        HEALING_WITH_GERMAN
-    } else {
-        TRAILING_SPACE_HEALING
+        .find(|model| model.sha256 == model_sha256)
+        .map_or_else(
+            || TRAILING_SPACE_HEALING.to_vec(),
+            |model| {
+                model
+                    .healed_languages
+                    .iter()
+                    .filter_map(|tag| WritingLanguage::from_tag(tag))
+                    .collect()
+            },
+        )
+}
+
+/// The person's language choices from settings, as the writing provider
+/// applies them: which languages get suggestions, and per-language healing
+/// choices over the model's reviewed default.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LanguagePreferences {
+    pub enabled: Vec<WritingLanguage>,
+    pub healing: Vec<(WritingLanguage, bool)>,
+}
+
+impl Default for LanguagePreferences {
+    /// What settings without either field mean: English, German and
+    /// Persian, each healed as the model's review decided.
+    fn default() -> Self {
+        Self {
+            enabled: vec![
+                WritingLanguage::English,
+                WritingLanguage::German,
+                WritingLanguage::Persian,
+            ],
+            healing: Vec::new(),
+        }
+    }
+}
+
+impl LanguagePreferences {
+    /// Every language the provider writes, each at the model default: what
+    /// the Prediction Lab measures.
+    #[must_use]
+    pub fn all() -> Self {
+        Self {
+            enabled: vec![
+                WritingLanguage::English,
+                WritingLanguage::German,
+                WritingLanguage::Persian,
+                WritingLanguage::French,
+                WritingLanguage::Spanish,
+            ],
+            healing: Vec::new(),
+        }
+    }
+
+    /// Whether suggestions are on for `language`.
+    #[must_use]
+    pub fn enables(&self, language: WritingLanguage) -> bool {
+        self.enabled.contains(&language)
+    }
+
+    /// `model_default` with each per-language choice applied.
+    #[must_use]
+    pub fn healed(&self, model_default: &[WritingLanguage]) -> Vec<WritingLanguage> {
+        let mut healed: Vec<_> = model_default
+            .iter()
+            .copied()
+            .filter(|language| !self.healing.contains(&(*language, false)))
+            .collect();
+        for (language, heal) in &self.healing {
+            if *heal && !healed.contains(language) {
+                healed.push(*language);
+            }
+        }
+        healed
     }
 }
 

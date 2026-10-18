@@ -102,6 +102,67 @@ async fn unsupported_writing_requests_never_reach_the_runtime() -> Result<(), Bo
 }
 
 #[tokio::test]
+async fn language_choices_gate_and_heal_each_request() -> Result<(), Box<dyn Error>> {
+    use badi_broker::writing::{LanguagePreferences, WritingLanguage};
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let client = SemanticClient::new(SemanticClientConfig::new(
+        listener.local_addr()?,
+        "writing-fixture",
+        "public-fixture-token",
+    )?)?;
+    // A language turned off, or French and Spanish while they are off by
+    // default, never reach the runtime.
+    client.set_language_preferences(&LanguagePreferences {
+        enabled: vec![WritingLanguage::English],
+        healing: Vec::new(),
+    });
+    for (before, language) in [
+        ("Vielen Dank für Ihre", "de"),
+        ("Merci beaucoup pour votre", "fr-FR"),
+    ] {
+        let result = client
+            .complete_observed(request(before, Some(language)), CancellationToken::new())
+            .await?;
+        assert_eq!(
+            (result.no_suggestion_reason(), result.request_body_bytes()),
+            (Some(NoSuggestionReason::RequestAbstained), 0),
+            "{language}"
+        );
+    }
+    // Turned on with healing chosen, French heals its trailing space.
+    client.set_language_preferences(&LanguagePreferences {
+        enabled: vec![WritingLanguage::English, WritingLanguage::French],
+        healing: vec![(WritingLanguage::French, true)],
+    });
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("HTTP connection");
+        let payload = read_payload(&mut socket).await;
+        let _ = socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n\
+                data: {\"index\":0,\"content\":\" r\\u00e9ponse rapide\",\"stop\":false}\n\n\
+                data: {\"index\":0,\"content\":\"\",\"stop\":true,\"stop_type\":\"eos\"}\n\n",
+            )
+            .await;
+        payload
+    });
+    let outcome = client
+        .propose_outcome(
+            request("Merci beaucoup pour votre ", Some("fr")),
+            CancellationToken::new(),
+            false,
+            RequestTrigger::Automatic,
+        )
+        .await?;
+    let payload = server.await?;
+    assert_eq!(payload["prompt"], "Merci beaucoup pour votre");
+    assert_eq!(payload["grammar"], format!("root ::= \" \" {NO_DIGITS}"));
+    let text = outcome.into_proposal().map(|proposal| proposal.text);
+    assert_eq!(text.as_deref(), Some("réponse rapide"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn healing_that_empties_the_prompt_abstains_before_any_request() -> Result<(), Box<dyn Error>>
 {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;

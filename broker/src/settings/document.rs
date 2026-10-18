@@ -16,9 +16,10 @@ use super::permissions::{
 use super::policy::{PolicyResolution, PolicySource};
 use super::{MAX_ESCAPE_QUIET_SECONDS, MAX_SUBJECTS, SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1};
 
-/// Explicit languages already supported by the installed provider. New
-/// languages must pass qualification before they become settings values.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// The languages the writing provider can suggest in, in canonical order.
+/// English, German and Persian are on by default; French and Spanish are
+/// opt-in in [`SettingsV2::writing_languages`] and not yet qualified.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum PredictionLanguage {
     #[serde(rename = "en")]
     English,
@@ -26,7 +27,18 @@ pub enum PredictionLanguage {
     German,
     #[serde(rename = "fa")]
     Persian,
+    #[serde(rename = "fr")]
+    French,
+    #[serde(rename = "es")]
+    Spanish,
 }
+
+/// The writing languages when settings name none.
+pub const DEFAULT_WRITING_LANGUAGES: [PredictionLanguage; 3] = [
+    PredictionLanguage::English,
+    PredictionLanguage::German,
+    PredictionLanguage::Persian,
+];
 
 impl PredictionLanguage {
     #[must_use]
@@ -35,6 +47,21 @@ impl PredictionLanguage {
             Self::English => "en",
             Self::German => "de",
             Self::Persian => "fa",
+            Self::French => "fr",
+            Self::Spanish => "es",
+        }
+    }
+
+    /// The writing language of a BCP 47 `tag`, by its primary subtag.
+    #[must_use]
+    pub fn from_tag(tag: &str) -> Option<Self> {
+        match tag.split('-').next()?.to_ascii_lowercase().as_str() {
+            "en" => Some(Self::English),
+            "de" => Some(Self::German),
+            "fa" => Some(Self::Persian),
+            "fr" => Some(Self::French),
+            "es" => Some(Self::Spanish),
+            _ => None,
         }
     }
 }
@@ -117,11 +144,25 @@ pub struct SettingsV2 {
     /// fits; omitted, the installed model the recommendation prefers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writing_model: Option<String>,
+    /// Languages Badi suggests words in, in canonical order; a request in
+    /// any other language abstains. Omitted when English, German and
+    /// Persian, the default; empty turns suggestions off.
+    #[serde(skip_serializing_if = "default_writing_languages")]
+    pub writing_languages: Vec<PredictionLanguage>,
+    /// Per-language choice to heal a trailing space (true) or keep it in the
+    /// prompt (false), over the running model's reviewed default. A language
+    /// without an entry follows that default. Omitted when empty.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub trailing_space_healing: BTreeMap<PredictionLanguage, bool>,
     pub subjects: Vec<SubjectRule>,
 }
 
 fn only_english(languages: &[SpellingLanguage]) -> bool {
     languages == [SpellingLanguage::English]
+}
+
+fn default_writing_languages(languages: &[PredictionLanguage]) -> bool {
+    languages == DEFAULT_WRITING_LANGUAGES
 }
 
 // Serde's skip_serializing_if dictates the by-reference signature.
@@ -154,6 +195,10 @@ struct SettingsDocument {
     spelling_languages: Option<Vec<SpellingLanguage>>,
     #[serde(default)]
     writing_model: Option<String>,
+    #[serde(default)]
+    writing_languages: Option<Vec<PredictionLanguage>>,
+    #[serde(default)]
+    trailing_space_healing: Option<BTreeMap<PredictionLanguage, bool>>,
     subjects: Vec<SubjectRule>,
 }
 
@@ -223,6 +268,16 @@ impl<'de> Deserialize<'de> for SettingsV2 {
                 "writing_model_requires_settings_v2",
             ));
         }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.writing_languages.is_some() {
+            return Err(serde::de::Error::custom(
+                "writing_languages_requires_settings_v2",
+            ));
+        }
+        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.trailing_space_healing.is_some() {
+            return Err(serde::de::Error::custom(
+                "trailing_space_healing_requires_settings_v2",
+            ));
+        }
         Ok(Self {
             schema: SETTINGS_SCHEMA.to_owned(),
             revision: decoded.revision,
@@ -238,12 +293,32 @@ impl<'de> Deserialize<'de> for SettingsV2 {
                 .spelling_languages
                 .unwrap_or_else(|| vec![SpellingLanguage::English]),
             writing_model: decoded.writing_model,
+            writing_languages: decoded
+                .writing_languages
+                .unwrap_or_else(|| DEFAULT_WRITING_LANGUAGES.to_vec()),
+            trailing_space_healing: decoded.trailing_space_healing.unwrap_or_default(),
             subjects: decoded.subjects,
         })
     }
 }
 
 impl SettingsV2 {
+    /// The writing languages and healing choices, as the provider applies them.
+    #[must_use]
+    pub fn language_preferences(&self) -> crate::writing::LanguagePreferences {
+        let writing = |language: &PredictionLanguage| {
+            crate::writing::WritingLanguage::from_tag(language.tag())
+        };
+        crate::writing::LanguagePreferences {
+            enabled: self.writing_languages.iter().filter_map(writing).collect(),
+            healing: self
+                .trailing_space_healing
+                .iter()
+                .filter_map(|(language, heal)| Some((writing(language)?, *heal)))
+                .collect(),
+        }
+    }
+
     #[must_use]
     pub fn language_override(&self, target: &TargetDescriptor) -> Option<PredictionLanguage> {
         let app = match target.app_id.as_str() {
@@ -271,6 +346,8 @@ impl SettingsV2 {
             language_overrides: BTreeMap::new(),
             spelling_languages: vec![SpellingLanguage::English],
             writing_model: None,
+            writing_languages: DEFAULT_WRITING_LANGUAGES.to_vec(),
+            trailing_space_healing: BTreeMap::new(),
             subjects: Vec::new(),
         }
     }
@@ -295,6 +372,9 @@ impl SettingsV2 {
         }
         if !self.spelling_languages.is_sorted_by(|a, b| a < b) {
             return Err(SettingsValidationError::SpellingLanguagesNotCanonical);
+        }
+        if !self.writing_languages.is_sorted_by(|a, b| a < b) {
+            return Err(SettingsValidationError::WritingLanguagesNotCanonical);
         }
         // A catalog id; one the broker does not know is ignored at start.
         if self.writing_model.as_deref().is_some_and(|id| {
@@ -480,6 +560,8 @@ pub enum SettingsValidationError {
     RevisionOutOfRange,
     #[error("spelling_languages_not_canonical")]
     SpellingLanguagesNotCanonical,
+    #[error("writing_languages_not_canonical")]
+    WritingLanguagesNotCanonical,
     #[error("subjects_not_canonical")]
     SubjectsNotCanonical,
     #[error("too_many_subjects")]

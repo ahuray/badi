@@ -200,6 +200,27 @@ Scope {
       }
       keys.push("spelling_languages")
     }
+    // Suggestion languages: producers omit exactly ["en", "de", "fa"] and keep this order.
+    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "writing_languages")) {
+      var writingOrder = ["en", "de", "fa", "fr", "es"]
+      var writing = value.writing_languages
+      if (!Array.isArray(writing)) return false
+      for (var w = 0; w < writing.length; w += 1) {
+        var place = writingOrder.indexOf(writing[w])
+        if (place < 0 || (w > 0 && place <= writingOrder.indexOf(writing[w - 1]))) return false
+      }
+      keys.push("writing_languages")
+    }
+    // Per-language healing choices over the model's reviewed default.
+    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "trailing_space_healing")) {
+      if (!isObject(value.trailing_space_healing)) return false
+      var healed = Object.keys(value.trailing_space_healing)
+      for (var h = 0; h < healed.length; h += 1) {
+        if (["en", "de", "fa", "fr", "es"].indexOf(healed[h]) < 0
+            || typeof value.trailing_space_healing[healed[h]] !== "boolean") return false
+      }
+      keys.push("trailing_space_healing")
+    }
     // The chosen writing model: a catalog id the broker reads at its start.
     if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "writing_model")) {
       if (typeof value.writing_model !== "string" || !/^[a-z0-9.-]{1,64}$/.test(value.writing_model)) return false
@@ -211,7 +232,7 @@ Scope {
       if (apps.length > 64) return false
       for (var app = 0; app < apps.length; app += 1) {
         if (apps[app].length > 128 || !/^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/.test(apps[app])
-            || ["en", "de", "fa"].indexOf(value.language_overrides[apps[app]]) < 0) return false
+            || ["en", "de", "fa", "fr", "es"].indexOf(value.language_overrides[apps[app]]) < 0) return false
       }
       keys.push("language_overrides")
     }

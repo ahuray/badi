@@ -53,6 +53,8 @@ fn settings(enabled: bool, mut subjects: Vec<SubjectRule>) -> SettingsV2 {
         style_learning: enabled,
         language_overrides: BTreeMap::new(),
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects,
     }
 }

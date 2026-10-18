@@ -359,7 +359,7 @@ impl Broker {
         let (authority_events, _) = broadcast::channel(32);
         let mut state = BrokerState::default();
         if let Some(settings) = settings {
-            state.install_settings(settings);
+            state.install_settings(settings, &*provider);
         }
         Self {
             inner: Arc::new(BrokerInner {

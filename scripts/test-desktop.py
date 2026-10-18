@@ -388,8 +388,11 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(settings['language_overrides'], {'brave-origin': 'de', 'chromium': 'en'})
         desktop.set_language(settings, 'chromium', 'reset')
         self.assertEqual(settings['language_overrides'], {'brave-origin': 'de'})
-        with self.assertRaisesRegex(RuntimeError, 'Lab-only'):
-            desktop.set_language(settings, 'omawrite', 'fr')
+        desktop.set_language(settings, 'omawrite', 'fr')
+        self.assertEqual(settings['language_overrides']['omawrite'], 'fr')
+        with self.assertRaisesRegex(RuntimeError, 'Use en, de, fa, fr, es or reset'):
+            desktop.set_language(settings, 'omawrite', 'it')
+        desktop.set_language(settings, 'omawrite', 'reset')
         desktop.set_app(settings, 'discord', False)
         desktop.set_app(settings, 'omawrite', True)
         desktop.set_site(settings, 'https://bank.example', False)
@@ -745,6 +748,32 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(desktop.compositor_entry([])['ev'], 'preview not on screen')
         failed = lambda *_a, **_k: SimpleNamespace(returncode=1, stdout='')
         self.assertIsNone(desktop.preview_layers(run=failed))
+
+    def test_writing_languages_and_healing_stay_canonical(self):
+        document = {}
+        desktop.set_writing(document, "es", True)
+        desktop.set_writing(document, "fr", True)
+        self.assertEqual(document["writing_languages"], ["en", "de", "fa", "fr", "es"])
+        desktop.set_writing(document, "fr", False)
+        desktop.set_writing(document, "es", False)
+        self.assertNotIn("writing_languages", document, "English, German and Persian are the omitted default")
+        desktop.set_writing(document, "fa", False)
+        self.assertEqual(document["writing_languages"], ["en", "de"])
+        with self.assertRaisesRegex(RuntimeError, "Use one of"):
+            desktop.set_writing(document, "it", True)
+        desktop.set_healing(document, "fr", "on")
+        desktop.set_healing(document, "de", "off")
+        self.assertEqual(document["trailing_space_healing"], {"fr": True, "de": False})
+        report = {entry["language"]: entry for entry in desktop.writing_report(document, ["en", "de", "fa"])}
+        self.assertEqual((report["fr"]["healing"], report["fr"]["healed"], report["fr"]["enabled"]), ("on", True, False))
+        self.assertEqual((report["de"]["healing"], report["de"]["healed"]), ("off", False))
+        self.assertEqual((report["en"]["healing"], report["en"]["healed"]), ("auto", True))
+        self.assertTrue(report["es"]["experimental"] and not report["en"]["experimental"])
+        desktop.set_healing(document, "fr", "auto")
+        desktop.set_healing(document, "de", "auto")
+        self.assertNotIn("trailing_space_healing", document)
+        with self.assertRaisesRegex(RuntimeError, "Usage: badi suggest"):
+            desktop.set_healing(document, "fr", "maybe")
 
     def test_spelling_languages_stay_canonical_and_name_missing_dictionaries(self):
         document = {}

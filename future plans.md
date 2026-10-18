@@ -315,7 +315,8 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       the 550 ms typing budget, where several candidates get no correction;
       a cached spelling prompt slot would close that gap.
 
-- [ ] Qualify French and Spanish before enabling them. Gather independently
+- [ ] Qualify French and Spanish before turning them on by default (they
+      are opt-in with `badi suggest LANG on`). Gather independently
       reviewed confirmation prefixes and full-addition reviews for both,
       alongside the existing English, German and Persian confirmation gate.
 - [ ] Improve short-fragment language coverage without reducing precision.
@@ -337,6 +338,11 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       already replaces the suffix in one undo step. German and Persian stay
       off until the Lab spelling gate passes (the 40-case run was 2 and 4
       useful, with one unwanted change each).
+- [ ] Compare Qwen3.5 0.8B base with Qwen3 0.6B as the compact choice (battery,
+      no AVX2): on 2026-10-18 it was the fastest screened model (p95 301 ms)
+      at 96 useful of 335 against Gemma 3 1B's 120
+      ([screen](docs/architecture/model-selection.md)), but Qwen3 0.6B was not
+      in that screen.
 - [ ] Calibrate token confidence against reviewed full additions per language.
       Gmail Smart Compose shows a suggestion only above a length-normalized
       log-probability threshold set for a target coverage

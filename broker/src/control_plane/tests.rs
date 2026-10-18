@@ -67,6 +67,8 @@ fn learning_settings(revision: u64, retention: RetentionPermission) -> SettingsV
         language_overrides: std::collections::BTreeMap::new(),
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects: vec![SubjectRule {
             identity: identity(),
             permissions: SubjectPermissions {
@@ -269,6 +271,8 @@ fn settings_cas_immediately_reconciles_revoked_personalization() {
         language_overrides: std::collections::BTreeMap::new(),
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects: Vec::new(),
     };
     control
@@ -365,6 +369,8 @@ fn stale_settings_cas_does_not_reconcile_personalization() {
         language_overrides: std::collections::BTreeMap::new(),
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects: Vec::new(),
     };
     assert!(matches!(
@@ -441,6 +447,8 @@ fn over_capacity_settings_are_rejected_before_privacy_reconciliation() {
         language_overrides: std::collections::BTreeMap::new(),
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects,
     };
     assert!(matches!(
@@ -739,6 +747,8 @@ fn corrupt_optional_personalization_accepts_durable_deny_before_explicit_clear()
         language_overrides: std::collections::BTreeMap::new(),
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects: vec![SubjectRule {
             identity: identity(),
             permissions: SubjectPermissions::deny_all(),

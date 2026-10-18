@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#97](https://github.com/ahuray/badi/pull/97) Choose the languages Badi
+  suggests in and whether each heals a typed space: `badi suggest LANG
+  on|off`, `badi suggest LANG healing on|off|auto` and the panel's
+  Suggestions rows. French and Spanish join as experimental, opt-in
+  languages; each catalog model names the languages its review heals.
 - [#96](https://github.com/ahuray/badi/pull/96) With Gemma 3 1B, German
   after a space is healed like English and Persian: 15 against 7 useful of
   67 German development requests, 3 against 2 harmful, by user decision.

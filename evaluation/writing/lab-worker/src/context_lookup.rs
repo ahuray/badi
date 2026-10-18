@@ -419,7 +419,7 @@ mod tests {
             ("style_examples", serde_json::json!(vec!["example"; 9])),
             ("style_examples", serde_json::json!(["x".repeat(1025)])),
             ("before", serde_json::json!("این می‌")),
-            ("language", serde_json::json!("fr")),
+            ("language", serde_json::json!("it")),
         ] {
             let mut changed = valid.clone();
             changed[field] = replacement;

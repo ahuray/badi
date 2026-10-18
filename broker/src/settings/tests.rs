@@ -47,6 +47,8 @@ fn settings_with(rule: SubjectRule) -> SettingsV2 {
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects: vec![rule],
     }
 }
@@ -509,6 +511,8 @@ fn linux_adapters_sort_by_wire_name_like_the_desktop_clients() {
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects: vec![
             rule(LinuxAdapter::Fcitx, "libreoffice"),
             rule(LinuxAdapter::Libreoffice, "libreoffice-writer"),
@@ -543,6 +547,8 @@ fn settings_require_sorted_unique_subjects() {
         style_learning: false,
         language_overrides: std::collections::BTreeMap::new(),
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects: vec![first.clone(), second.clone()],
     };
     valid.validate().expect("canonical settings");
@@ -592,6 +598,8 @@ fn maximum_shape_settings_fit_storage_and_wire_limits() {
             })
             .collect(),
         writing_model: None,
+        writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
+        trailing_space_healing: std::collections::BTreeMap::new(),
         subjects,
     };
     settings.validate().expect("maximum-shape settings");

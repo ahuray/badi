@@ -129,7 +129,7 @@ impl Broker {
             return;
         }
         state.control_plane_condition = ControlPlaneCondition::Healthy;
-        state.install_settings(settings.clone());
+        state.install_settings(settings.clone(), &*self.inner.provider);
         state.advance_authority_epoch();
         self.publish_authority_change(state);
     }
@@ -143,7 +143,7 @@ impl Broker {
         } else {
             ControlPlaneCondition::Healthy
         };
-        state.install_settings(settings);
+        state.install_settings(settings, &*self.inner.provider);
         state.advance_authority_epoch();
         self.publish_authority_change(state);
     }
@@ -186,8 +186,13 @@ impl Broker {
 
 impl BrokerState {
     /// Every settings document the engine uses goes through here.
-    pub(super) fn install_settings(&mut self, settings: SettingsV2) {
+    pub(super) fn install_settings(
+        &mut self,
+        settings: SettingsV2,
+        provider: &dyn crate::provider::CompletionProvider,
+    ) {
         self.settings_revision = settings.revision;
+        provider.set_language_preferences(&settings.language_preferences());
         let spelling = crate::spelling::global();
         let generation = spelling.enable(&settings.spelling_languages);
         // Dictionaries load off the runtime; a newer setting supersedes it.

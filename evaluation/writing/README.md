@@ -83,9 +83,13 @@ Drafts and results live in page and server memory only: no localStorage, logs
 or automatic files.
 
 Prediction experiments and qualification accept English, German, French,
-Spanish and Persian. French and Spanish are **Lab only**: `production_boundary`
-still abstains for them. Their experimental output uses the existing Latin
-script and seam checks; those checks do not prove correct language or quality.
+Spanish and Persian. `production_boundary` measures all five, each healed as
+the model's catalog review decided (`healed_languages`), whatever the
+person's settings say; `BADI_LAB_HEALING=all node evaluation/writing/lab/run.mjs …`
+heals every language instead, so that models outside the catalog are screened
+on equal terms. French and Spanish are opt-in in production and unqualified;
+their output uses the Latin script and seam checks, which do not prove correct
+language or quality.
 Full-addition review remains necessary. The style-fact fence covers weekday
 names in all five languages. Spelling and word lookup retain their own coverage.
 

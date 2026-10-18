@@ -140,7 +140,8 @@
         "prompt_format",
         "runtime_caveat",
         "languages",
-        "screen_useful"
+        "screen_useful",
+        "healed_languages"
       ],
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z0-9.-]{1,64}$" },
@@ -168,6 +169,12 @@
         "screen_useful": {
           "description": "Blind-reviewed useful suggestions of 135 development requests in the 2026-10-17 Prediction Lab screen; null when unmeasured. A screening score, not a qualification.",
           "oneOf": [{ "type": "integer", "minimum": 0, "maximum": 135 }, { "type": "null" }]
+        },
+        "healed_languages": {
+          "description": "Languages whose trailing space is healed with this model by default, each promoted by its own blind review; settings trailing_space_healing overrides it per language.",
+          "type": "array",
+          "items": { "enum": ["en", "de", "fa", "fr", "es"] },
+          "uniqueItems": true
         }
       }
     },

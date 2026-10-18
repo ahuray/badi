@@ -610,6 +610,10 @@ impl CompletionProvider for OwnedRuntime {
         ProviderKind::LocalModel
     }
 
+    fn set_language_preferences(&self, preferences: &crate::writing::LanguagePreferences) {
+        self.client.set_language_preferences(preferences);
+    }
+
     fn is_alive(&self) -> bool {
         matches!(self.try_wait(), Ok(None))
     }

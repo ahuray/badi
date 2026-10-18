@@ -332,8 +332,9 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   (450 ms per word), `quiet` battery scheduling, not the step, set the rate:
   15 of 62 requests showed one, most cancelled by the next word after
   generation had started.
-- **Shape.** At most four words and 64 characters. `en`, `de` and `fa` are
-  routed; English and German must be Latin script, Persian Arabic script, with
+- **Shape.** At most four words and 64 characters. `en`, `de`, `fa`, `fr`
+  and `es` are routed; English, German, French and Spanish must be Latin
+  script, Persian Arabic script, with
   ZWNJ only between the letters in
   [the joiner fixtures](../protocol/orthographic-joiner-fixtures.json).
 - **Partial words.** An English suffix that continues the typed word must form
@@ -344,15 +345,22 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   and require them back (`TRAILING_SPACE_HEALING`). Persian uses that same
   token count. A 2.6× Persian budget missed 550 ms on the development cases.
 - **Abstention.** A continuation abstains when it adds a number absent from the
-  typed text, and every request when the caret splits a word. A German
-  request that ends in a space abstains before any model call, because German
-  is not healed: after a bare space a model must start a word without its
-  usual leading-space token, and neither Qwen3 1.7B (0 useful of 20) nor
-  Gemma 3 1B (0 of 26, markup or fragments such as `uralt.`) continued one
-  usefully. With Gemma 3 1B German is healed instead (`trailing_space_healing`,
-  by the loaded weights' SHA-256): 15 useful against 7 of 67 German
-  development and boundary requests, and 3 harmful against 2, promoted by
-  user decision.
+  typed text, and every request when the caret splits a word.
+- **Languages and healing.** Settings `writing_languages` (default `en`, `de`,
+  `fa`; `fr` and `es` opt-in) decide where Badi suggests; a request in any
+  other language abstains before the model, and detection names French and
+  Spanish so that they are not written as English. Each catalog model's
+  `healed_languages` lists the languages whose trailing space it heals, by
+  its own blind review; the engine hands settings `trailing_space_healing`
+  choices to the provider (`set_language_preferences`), which applies them
+  per language over that default. An unhealed request that ends in a space
+  abstains before any model call: after a bare space a model must start a
+  word without its usual leading-space token, and neither Qwen3 1.7B (0
+  useful of 20) nor Gemma 3 1B (0 of 26, markup or fragments such as
+  `uralt.`) continued one usefully. Gemma 3 1B heals German (15 useful against
+  7 of 67 German development and boundary requests, and 3 harmful against 2,
+  promoted by user decision), French and Spanish (12 and 14 useful of 20
+  boundary requests ending in a space, none harmful).
 - **Generation grammar.** Every continuation request carries a grammar that
   excludes what could never be shown: `<`, `>`, backticks and line breaks,
   and, when the typed text has no digit, digits in any script. Without it

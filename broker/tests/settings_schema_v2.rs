@@ -249,7 +249,8 @@ fn language_overrides_match_the_schema_and_do_not_grant_access() {
         ),
         (json!({}), true),
         (Value::Null, false),
-        (json!({"zen": "fr"}), false),
+        (json!({"zen": "fr", "chromium": "es"}), true),
+        (json!({"zen": "it"}), false),
         (json!({"zen": "de-DE"}), false),
         (json!({"app.1invalid": "en"}), false),
         (Value::Object(oversized), false),
@@ -271,4 +272,67 @@ fn language_overrides_match_the_schema_and_do_not_grant_access() {
         document["schema"] = json!("badi.settings.v1");
         assert!(serde_json::from_value::<SettingsV2>(document).is_err());
     }
+}
+
+#[test]
+fn writing_languages_and_healing_choices_match_the_schema() {
+    let schema = validator(2);
+    for (field, value, valid) in [
+        (
+            "writing_languages",
+            json!(["en", "de", "fa", "fr", "es"]),
+            true,
+        ),
+        ("writing_languages", json!(["en", "fr"]), true),
+        ("writing_languages", json!([]), true),
+        // Only the broker enforces the canonical order, as for spelling.
+        ("writing_languages", json!(["fr", "en"]), false),
+        ("writing_languages", json!(["en", "en"]), false),
+        ("writing_languages", json!(["it"]), false),
+        (
+            "trailing_space_healing",
+            json!({"de": false, "fr": true}),
+            true,
+        ),
+        ("trailing_space_healing", json!({}), true),
+        ("trailing_space_healing", json!({"it": true}), false),
+        ("trailing_space_healing", json!({"de": "on"}), false),
+    ] {
+        let mut document = json!({"schema": SETTINGS_SCHEMA, "revision": 1,
+            "paused": false, "subjects": []});
+        document[field] = value.clone();
+        let unordered = value == json!(["fr", "en"]);
+        assert_eq!(
+            schema.is_valid(&document),
+            valid || unordered,
+            "{field} {value}"
+        );
+        let decoded = serde_json::from_value::<SettingsV2>(document.clone());
+        assert_eq!(
+            decoded.as_ref().is_ok_and(|s| s.validate().is_ok()),
+            valid,
+            "{field} {value}"
+        );
+        if valid {
+            // Producers omit the defaults and keep every other value.
+            let settings = decoded.expect("valid");
+            let written = serde_json::to_value(&settings).expect("serializes");
+            let omitted = (field == "writing_languages" && value == json!(["en", "de", "fa"]))
+                || value == json!({});
+            assert_eq!(written.get(field).is_none(), omitted, "{field} {value}");
+            if !omitted {
+                assert_eq!(written[field], value);
+            }
+        }
+        document["schema"] = json!("badi.settings.v1");
+        assert!(serde_json::from_value::<SettingsV2>(document).is_err());
+    }
+    let default: SettingsV2 = serde_json::from_value(json!({"schema": SETTINGS_SCHEMA,
+        "revision": 1, "paused": false, "subjects": []}))
+    .expect("default");
+    let preferences = default.language_preferences();
+    assert_eq!(
+        preferences,
+        badi_broker::writing::LanguagePreferences::default()
+    );
 }
