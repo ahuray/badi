@@ -50,6 +50,36 @@ promotes another.
   Gemma 3 270M and Falcon-H1 0.5B on quality and LFM2.5 8B-A1B on its 9.2 GB
   peak and licence. Differences of about five points are within the noise
   of 60 to 78 requests.
+- **The larger-model bench** (2026-10-18, [llm-bench](../../evaluation/llm-bench/README.md),
+  llama.cpp `b11719`) screened eight 2–4B base models against Gemma 3 1B
+  and Qwen3 1.7B on 30 synthetic prompts (15 German, 15 English), greedy, 16
+  tokens, one reviewer scoring 1–5 what Badi could show:
+
+  | Model | Quant, file | Arch | DE | EN | Peak RSS¹ | Ceiling² |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | Granite 4.0 Micro base | Q4_K_M, 2.10 GB | dense | 4.27 | 4.07 | 4.09 GB | 30 tok/s |
+  | Gemma 4 E2B base | i1-Q4_K_M, 3.43 GB | dense, sliding window | 4.20 | 4.00 | 4.70 GB | 42 tok/s |
+  | Qwen3.5-4B base | i1-Q4_K_M, 2.71 GB | hybrid | 4.00 | 4.07 | 5.65 GB | 23 tok/s |
+  | Gemma 3 1B pt (production) | Q4_K_M, 0.81 GB | dense, sliding window | 3.13 | 4.20 | 1.23 GB | 79 tok/s |
+  | Qwen3 1.7B | Q4_K_M, 1.28 GB | dense | 3.07 | 3.87 | 2.57 GB | 57 tok/s |
+
+  SmolLM3-3B, Granite 4.0 H-Micro, LFM2.5-2.6B, MiniCPM5-2B and Qwen3.5-2B
+  scored 3.40–3.87 in German and 3.93–4.20 in English and were not kept. No
+  model switched language or wrote chat text. The top three write clearly
+  better German than production; English is level, and differences under
+  about 0.3 are noise at 15 prompts. Speed is **unmeasured**: the CPU was
+  power-clamped that day, so whether 2–4× the bytes per token fit 550 ms is
+  open. After edits, every hybrid (Qwen3.5, LFM2.5, Granite H) reused its
+  cache while typing (about 4 extra tokens per keystroke) but usually re-read
+  the whole prompt after a 10–30-token backspace, and an early edit re-read
+  everything; checkpoint spacing (`-cms 32`) changed nothing. Full-attention
+  models re-read 1–11 tokens after the same backspace. No cached result
+  showed stale context.
+
+  ¹ `llama-server` at `-c 2048` with a 1 GiB host prompt cache, so an upper
+  bound for Badi's `-c 512`. ² At the 62.9 GB/s read bandwidth measured
+  here (LPDDR5-4800, 128-bit); Gemma 4's per-layer embedding lookup is not
+  counted as streamed.
 - **The Prediction Lab** ([qualification.rs](../../evaluation/writing/lab-worker/src/qualification.rs))
   owns discovery and qualification; the shipped broker does not contain it.
   The [Lab bridge](../../evaluation/writing/lab/device-qualification.mjs) calls

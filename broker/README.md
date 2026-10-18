@@ -256,7 +256,9 @@ prints pinned download advice and downloads nothing
 - **Launch.** One 512-token slot reuses the common prompt prefix (KV cache).
   A 128 MiB host cache keeps the previous sentence when the prompt anchor
   moves, and a matching run of at least 16 tokens is shifted instead of
-  recomputed. A second slot would split that 512-token context in half, so
+  recomputed. Sliding-window models such as Gemma 3 cannot shift: the
+  runtime logs `cache_reuse is not supported by this context` and disables
+  it. A second slot would split that 512-token context in half, so
   the server stays at one slot. Prefill batches are 16 tokens so cancellation
   lands quickly; up to four threads. The GPU is not used: Vulkan on the Iris
   Xe was slower for these short requests.
@@ -271,6 +273,16 @@ prints pinned download advice and downloads nothing
   (`9acfc1e001311f34b4252001b626f2e466d592a42065f66571bff3790d4e1b14`, two
   tokens ahead) took 0.5–1.8 s to the first word against 0.15–0.47 s without
   it, so no draft model is loaded.
+- **Measured, not yet adopted: `--swa-full` for Gemma 3** (2026-10-18,
+  llama.cpp `b11719`, [bench](../evaluation/llm-bench/README.md), English
+  disposable documents, `-c 2048`, server counters). At a 128-token prompt
+  the default re-read the whole prompt after a 10–30-token backspace (140
+  tokens, none reused) and read 85 tokens for 35 typed over ten keystrokes;
+  with `--swa-full` the backspace re-read 4 tokens and typing read 35, as a
+  full-attention model does. Peak RSS was 1.14 GB against 1.23 GB. Greedy
+  text matched an uncached run or differed only at near-ties (runner-up
+  within 0.07 probability). Timing was not measured because the CPU was
+  power-clamped that day, so adoption waits for a timed before/after.
 - **Speed sample.** Build `5faafcf` (2026-10-12; the same five prefixes four
   times each, predictions on): first grey word in Omawrite 0.5.0 20/20 at
   209–250 ms, middle 220–223 ms, 19th of 20 at 244 ms; in a Chromium

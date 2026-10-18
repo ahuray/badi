@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#99](https://github.com/ahuray/badi/pull/99) A local LLM bench measures
+  bandwidth, model ceilings, thread and backend sweeps, cache reuse after
+  edits and a German/English screen; Granite 4.0 Micro, Gemma 4 E2B and
+  Qwen3.5-4B write better German than Gemma 3 1B, whose cache survives a
+  backspace only with `--swa-full`. Timing awaits unclamped clocks.
 - [#98](https://github.com/ahuray/badi/pull/98) Portuguese joins French and
   Spanish as an experimental, opt-in suggestion language that Gemma 3 1B
   heals; a European-language screen of eleven small models keeps Gemma 3 1B

@@ -1,0 +1,30 @@
+{"id": "de00", "lang": "de", "category": "umlaut", "prompt": "Könnten Sie mir bitte bis Freitag mitteilen, ob die Änderungen an der Straßenführung", "reference_hint": "schon genehmigt wurden"}
+{"id": "de01", "lang": "de", "category": "umlaut_ss", "prompt": "Wir müssen leider die Größe der Fläche neu berechnen, weil das Grundstück", "reference_hint": "kleiner ist als angenommen"}
+{"id": "de02", "lang": "de", "category": "compound", "prompt": "Die Geschäftsführung hat die neue Datenschutzrichtlinie", "reference_hint": "bereits freigegeben"}
+{"id": "de03", "lang": "de", "category": "compound", "prompt": "Für die Kinderbetreuung während der Sommerferien suchen wir noch", "reference_hint": "eine zweite Betreuerin"}
+{"id": "de04", "lang": "de", "category": "formal", "prompt": "Sehr geehrte Frau Schneider, vielen Dank für Ihre Nachricht. Leider kann ich Ihnen", "reference_hint": "heute noch keine Antwort geben"}
+{"id": "de05", "lang": "de", "category": "formal", "prompt": "Bei Rückfragen stehe ich Ihnen selbstverständlich", "reference_hint": "jederzeit zur Verfügung"}
+{"id": "de06", "lang": "de", "category": "informal", "prompt": "Hey Jonas, hast du heute Abend Lust, mit uns ins Kino", "reference_hint": "zu gehen"}
+{"id": "de07", "lang": "de", "category": "informal", "prompt": "Danke dir für die Fotos, die sind echt", "reference_hint": "schön geworden"}
+{"id": "de08", "lang": "de", "category": "names", "prompt": "Am Montag treffen sich Lena, Murat und Herr Becker in München, um den Vertrag", "reference_hint": "zu unterschreiben"}
+{"id": "de09", "lang": "de", "category": "numbers", "prompt": "Die Lieferung von 250 Stühlen kostet insgesamt 4.300 Euro, und die Rechnung", "reference_hint": "ist bis Monatsende fällig"}
+{"id": "de10", "lang": "de", "category": "midsentence", "prompt": "Nachdem der Zug in Köln fast eine Stunde gestanden hatte, kamen wir", "reference_hint": "erst spät in der Nacht an"}
+{"id": "de11", "lang": "de", "category": "midsentence", "prompt": "Ich habe den Bericht noch einmal gelesen und finde, dass der zweite Abschnitt", "reference_hint": "gekürzt werden sollte"}
+{"id": "de12", "lang": "de", "category": "umlaut", "prompt": "Die Öffnungszeiten der Bücherei ändern sich ab nächster Woche, weil", "reference_hint": "das Personal fehlt"}
+{"id": "de13", "lang": "de", "category": "compound", "prompt": "Wegen der Bauarbeiten am Hauptbahnhof fahren die Straßenbahnen", "reference_hint": "nur bis zur Haltestelle"}
+{"id": "de14", "lang": "de", "category": "formal", "prompt": "Wir bedanken uns für Ihr Interesse an unserem Unternehmen und würden Sie gerne", "reference_hint": "zu einem Gespräch einladen"}
+{"id": "en15", "lang": "en", "category": "plain", "prompt": "Could you let me know by Friday whether the changes to the delivery schedule", "reference_hint": "have been approved"}
+{"id": "en16", "lang": "en", "category": "plain", "prompt": "We need to recalculate the size of the garden because the plot", "reference_hint": "is smaller than we thought"}
+{"id": "en17", "lang": "en", "category": "formal", "prompt": "Dear Ms. Patel, thank you for your message. Unfortunately I am not able to", "reference_hint": "give you an answer today"}
+{"id": "en18", "lang": "en", "category": "formal", "prompt": "If you have any further questions, please do not hesitate", "reference_hint": "to contact me"}
+{"id": "en19", "lang": "en", "category": "informal", "prompt": "Hey Sam, are you up for going to the cinema with us", "reference_hint": "tonight"}
+{"id": "en20", "lang": "en", "category": "informal", "prompt": "Thanks for the photos, they turned out", "reference_hint": "really well"}
+{"id": "en21", "lang": "en", "category": "names", "prompt": "On Monday Priya, Tom and Mr. Okafor are meeting in Boston to sign", "reference_hint": "the contract"}
+{"id": "en22", "lang": "en", "category": "numbers", "prompt": "The delivery of 250 chairs costs 4,300 dollars in total, and the invoice", "reference_hint": "is due at the end of the month"}
+{"id": "en23", "lang": "en", "category": "midsentence", "prompt": "After the train had been stuck outside Chicago for almost an hour, we", "reference_hint": "finally arrived late at night"}
+{"id": "en24", "lang": "en", "category": "midsentence", "prompt": "I read the report again and I think the second section", "reference_hint": "could be shortened"}
+{"id": "en25", "lang": "en", "category": "compound", "prompt": "The customer support team updated the password reset", "reference_hint": "instructions"}
+{"id": "en26", "lang": "en", "category": "plain", "prompt": "Because of the construction work at the central station, the trams", "reference_hint": "only run as far as"}
+{"id": "en27", "lang": "en", "category": "formal", "prompt": "We appreciate your interest in our company and would like to invite you", "reference_hint": "for an interview"}
+{"id": "en28", "lang": "en", "category": "plain", "prompt": "The library will change its opening hours next week because", "reference_hint": "of staff shortages"}
+{"id": "en29", "lang": "en", "category": "informal", "prompt": "No worries at all, I can pick you up from the airport", "reference_hint": "if you like"}
