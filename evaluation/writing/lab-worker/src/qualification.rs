@@ -435,7 +435,7 @@ fn compatibility_reasons(input: &AssessmentInput) -> Vec<String> {
         || settings
             .languages
             .iter()
-            .any(|language| !matches!(language.as_str(), "en" | "de" | "fr" | "es" | "fa"))
+            .any(|language| !matches!(language.as_str(), "en" | "de" | "fr" | "es" | "fa" | "pt"))
         || settings
             .languages
             .iter()

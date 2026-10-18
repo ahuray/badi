@@ -32,8 +32,8 @@ seconds only while open. From the top:
   model use`, which accepts its licence, downloads it and restarts the
   model), Writing (mid-sentence, Escape quiet, battery), Suggestions (each
   language: Off, Auto (heal as the running model's review decided), Heal or
-  Keep space, as `badi suggest` sets them; French and Spanish are marked
-  experimental), Spelling (each language and its dictionary, naming the package when one is
+  Keep space, as `badi suggest` sets them; French, Spanish and Portuguese are
+  marked experimental), Spelling (each language and its dictionary, naming the package when one is
   missing), Apps (the list mode and each supported app), Websites (the list
   mode, each rule, an add field: Enter allows, Shift+Enter blocks) and
   System (start at login, debug trace, restart, start or stop).

@@ -68,7 +68,7 @@ export async function runDiagnostics({ worker, cases, config, makeRequest, signa
   config = structuredClone(config);
   const inputs = cases.map(validateCase);
   if (new Set(inputs.map(row => row.id)).size !== inputs.length
-    || inputs.some(row => !['en', 'de', 'fr', 'es', 'fa'].includes(languageOf(row)))) throw new Error('Diagnostics need unique English, German, French, Spanish or Persian cases.');
+    || inputs.some(row => !['en', 'de', 'fr', 'es', 'fa', 'pt'].includes(languageOf(row)))) throw new Error('Diagnostics need unique English, German, French, Spanish, Persian or Portuguese cases.');
   const representatives = [...new Map(inputs.map(row => [languageOf(row), row])).values()];
   const controller = new AbortController(), sessions = new Set(), cleanupBySession = new Map();
   const capture = () => { if (worker.session) sessions.add(worker.session); };

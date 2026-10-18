@@ -45,14 +45,14 @@
     },
     "writing_languages": {
       "type": "array",
-      "items": { "enum": ["en", "de", "fa", "fr", "es"] },
+      "items": { "enum": ["en", "de", "fa", "fr", "es", "pt"] },
       "uniqueItems": true,
-      "maxItems": 5,
-      "description": "Languages Badi suggests words in, in this enum's order; a request in any other language abstains before the model. French and Spanish are opt-in and not yet qualified. Empty turns suggestions off. Producers omit the property when it is exactly [\"en\", \"de\", \"fa\"], the default."
+      "maxItems": 6,
+      "description": "Languages Badi suggests words in, in this enum's order; a request in any other language abstains before the model. French, Spanish and Portuguese are opt-in and not yet qualified. Empty turns suggestions off. Producers omit the property when it is exactly [\"en\", \"de\", \"fa\"], the default."
     },
     "trailing_space_healing": {
       "type": "object",
-      "propertyNames": { "enum": ["en", "de", "fa", "fr", "es"] },
+      "propertyNames": { "enum": ["en", "de", "fa", "fr", "es", "pt"] },
       "additionalProperties": { "type": "boolean" },
       "description": "Per-language choice to heal a trailing space (true: the prompt ends before it and the model must reproduce it) or keep it in the prompt (false, where a request ending in a space abstains), over the running model's reviewed default (the model advice's healed_languages). A language without an entry follows that default. Producers omit the property when empty."
     },
@@ -72,7 +72,7 @@
         "maxLength": 128,
         "pattern": "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)*$"
       },
-      "additionalProperties": { "enum": ["en", "de", "fa", "fr", "es"] },
+      "additionalProperties": { "enum": ["en", "de", "fa", "fr", "es", "pt"] },
       "description": "Explicit writing language by canonical app id. This never grants context access or suggestions; exact app/site policy still applies. Omitted when empty."
     },
     "subjects": {

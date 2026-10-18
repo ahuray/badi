@@ -186,7 +186,7 @@ Item {
     }, on ? "Spelling on" : "Spelling off")
   }
 
-  readonly property var writingOrder: ["en", "de", "fa", "fr", "es"]
+  readonly property var writingOrder: ["en", "de", "fa", "fr", "es", "pt"]
 
   function writingLanguages() {
     var languages = client.settings.writing_languages
@@ -319,14 +319,14 @@ Item {
     var writing = writingLanguages()
     var healingChoices = client.objectValue(client.settings, "trailing_space_healing")
     var modelHealed = Array.isArray(activeModel.healed_languages) ? activeModel.healed_languages : ["en", "fa"]
-    var writingNames = {en: "English", de: "German", fa: "Persian", fr: "French", es: "Spanish"}
+    var writingNames = {en: "English", de: "German", fa: "Persian", fr: "French", es: "Spanish", pt: "Portuguese"}
     writingOrder.forEach(function(code) {
       var on = writing.indexOf(code) >= 0
       var choice = healingChoices[code]
       var value = !on ? "off" : choice === true ? "heal" : choice === false ? "plain" : "auto"
       var healed = choice === true || (choice !== false && modelHealed.indexOf(code) >= 0)
       list.push({key: "writing_" + code, section: "Suggestions", kind: "choice", label: writingNames[code],
-        detail: (code === "fr" || code === "es" ? "Experimental · " : "")
+        detail: (["fr", "es", "pt"].indexOf(code) >= 0 ? "Experimental · " : "")
           + (!on ? "No suggestions" : healed ? "Heals the space after a word" : "Nothing after a typed space")
           + (value === "auto" && modelName ? " · as reviewed for " + modelName : ""),
         value: value, enabled: canChange,

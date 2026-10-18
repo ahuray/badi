@@ -39,6 +39,7 @@ pub enum WritingLanguage {
     Persian,
     French,
     Spanish,
+    Portuguese,
 }
 
 impl WritingLanguage {
@@ -51,6 +52,7 @@ impl WritingLanguage {
             "fa" => Some(Self::Persian),
             "fr" => Some(Self::French),
             "es" => Some(Self::Spanish),
+            "pt" => Some(Self::Portuguese),
             _ => None,
         }
     }
@@ -64,6 +66,7 @@ impl WritingLanguage {
             Self::Persian => "fa",
             Self::French => "fr",
             Self::Spanish => "es",
+            Self::Portuguese => "pt",
         }
     }
 
@@ -102,7 +105,7 @@ impl WritingLanguage {
 
 /// Whether `value` is Latin-script text with only the shared punctuation,
 /// digits and combining accents on a Latin base: the English, German,
-/// French and Spanish output rule.
+/// French, Spanish and Portuguese output rule.
 fn valid_english_output(value: &str) -> bool {
     if value.is_empty() || value.ends_with(char::is_whitespace) {
         return false;
@@ -664,6 +667,7 @@ impl LanguagePreferences {
                 WritingLanguage::Persian,
                 WritingLanguage::French,
                 WritingLanguage::Spanish,
+                WritingLanguage::Portuguese,
             ],
             healing: Vec::new(),
         }

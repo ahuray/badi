@@ -390,7 +390,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(settings['language_overrides'], {'brave-origin': 'de'})
         desktop.set_language(settings, 'omawrite', 'fr')
         self.assertEqual(settings['language_overrides']['omawrite'], 'fr')
-        with self.assertRaisesRegex(RuntimeError, 'Use en, de, fa, fr, es or reset'):
+        with self.assertRaisesRegex(RuntimeError, 'Use en, de, fa, fr, es, pt or reset'):
             desktop.set_language(settings, 'omawrite', 'it')
         desktop.set_language(settings, 'omawrite', 'reset')
         desktop.set_app(settings, 'discord', False)
@@ -751,11 +751,13 @@ class DesktopTests(unittest.TestCase):
 
     def test_writing_languages_and_healing_stay_canonical(self):
         document = {}
+        desktop.set_writing(document, "pt", True)
         desktop.set_writing(document, "es", True)
         desktop.set_writing(document, "fr", True)
-        self.assertEqual(document["writing_languages"], ["en", "de", "fa", "fr", "es"])
+        self.assertEqual(document["writing_languages"], ["en", "de", "fa", "fr", "es", "pt"])
         desktop.set_writing(document, "fr", False)
         desktop.set_writing(document, "es", False)
+        desktop.set_writing(document, "pt", False)
         self.assertNotIn("writing_languages", document, "English, German and Persian are the omitted default")
         desktop.set_writing(document, "fa", False)
         self.assertEqual(document["writing_languages"], ["en", "de"])

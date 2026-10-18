@@ -315,8 +315,8 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       the 550 ms typing budget, where several candidates get no correction;
       a cached spelling prompt slot would close that gap.
 
-- [ ] Qualify French and Spanish before turning them on by default (they
-      are opt-in with `badi suggest LANG on`). Gather independently
+- [ ] Qualify French, Spanish and Portuguese before turning them on by default
+      (they are opt-in with `badi suggest LANG on`). Gather independently
       reviewed confirmation prefixes and full-addition reviews for both,
       alongside the existing English, German and Persian confirmation gate.
 - [ ] Improve short-fragment language coverage without reducing precision.
@@ -338,11 +338,17 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       already replaces the suffix in one undo step. German and Persian stay
       off until the Lab spelling gate passes (the 40-case run was 2 and 4
       useful, with one unwanted change each).
+- [ ] Lift English with Gemma 3 1B, its weakest language (29% useful against
+      Qwen3 1.7B's 40% and Granite 4.0 H-Tiny's 42% in the
+      [European-language screen](docs/architecture/model-selection.md)):
+      measure a second, English-only resident model (about 2.5 GB together)
+      against prompt and decoding changes before choosing.
+- [ ] Offer Granite 4.0 H-Tiny base on machines that fit it: best English and
+      German in that screen, but 7.7 GB peak and 96 of 325 requests over
+      550 ms here.
 - [ ] Compare Qwen3.5 0.8B base with Qwen3 0.6B as the compact choice (battery,
-      no AVX2): on 2026-10-18 it was the fastest screened model (p95 301 ms)
-      at 96 useful of 335 against Gemma 3 1B's 120
-      ([screen](docs/architecture/model-selection.md)), but Qwen3 0.6B was not
-      in that screen.
+      no AVX2): it was the fastest screened model (p95 301 ms, no miss) at 35%
+      useful against Gemma 3 1B's 46%, but Qwen3 0.6B was not screened.
 - [ ] Calibrate token confidence against reviewed full additions per language.
       Gmail Smart Compose shows a suggestion only above a length-normalized
       log-probability threshold set for a target coverage

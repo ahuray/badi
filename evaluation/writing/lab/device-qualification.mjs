@@ -110,7 +110,7 @@ export class DeviceQualification {
   }
   async inspect(signal) { return this.command('--inspect-device', undefined, { executable: this.executable, cacheDirectory: this.cacheDirectory, signal }); }
   async settings(config = { mode: 'healed', budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 }, languages = ['en', 'de', 'fr', 'es', 'fa']) {
-    if (!Array.isArray(languages) || !languages.length || languages.length > 5 || new Set(languages).size !== languages.length || languages.some(value => !['en', 'de', 'fr', 'es', 'fa'].includes(value))) throw new Error('Select distinct supported evaluation languages.');
+    if (!Array.isArray(languages) || !languages.length || languages.length > 6 || new Set(languages).size !== languages.length || languages.some(value => !['en', 'de', 'fr', 'es', 'fa', 'pt'].includes(value))) throw new Error('Select distinct supported evaluation languages.');
     const workerSha = digest(await readFile(this.executable));
     // Bind the worker (which embeds its pinned llama.cpp archive) and the local
     // evaluator/HTTP/review implementation. A JS-only change invalidates saved

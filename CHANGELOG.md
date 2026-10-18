@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#98](https://github.com/ahuray/badi/pull/98) Portuguese joins French and
+  Spanish as an experimental, opt-in suggestion language that Gemma 3 1B
+  heals; a European-language screen of eleven small models keeps Gemma 3 1B
+  as the recommendation.
 - [#97](https://github.com/ahuray/badi/pull/97) Choose the languages Badi
   suggests in and whether each heals a typed space: `badi suggest LANG
   on|off`, `badi suggest LANG healing on|off|auto` and the panel's

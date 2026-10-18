@@ -50,7 +50,7 @@ pub fn supported_language(tag: &str) -> bool {
             .unwrap_or_default()
             .to_ascii_lowercase()
             .as_str(),
-        "en" | "de" | "fr" | "es" | "fa"
+        "en" | "de" | "fr" | "es" | "fa" | "pt"
     )
 }
 

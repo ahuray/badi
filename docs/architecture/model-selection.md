@@ -22,16 +22,34 @@ promotes another.
   qualification below. The advice lists the whole catalog, each entry marked
   whether it fits, for `badi model` and the panel's Model row, and each
   entry's `healed_languages`, the languages its own review heals.
-- **Lesser-known small models** were screened on 2026-10-18 against Gemma 3
-  1B: 335 development and boundary requests in all five languages, every
-  language healed (`BADI_LAB_HEALING=all`), blind Sonnet review. Useful:
-  Granite 4.0 H-Tiny base (7B MoE, 1B active) 122, Gemma 3 1B 120, Falcon-H1
-  1.5B base 100, Qwen3.5 0.8B base 96. Granite missed 550 ms on 112 requests,
-  peaked at 7.6 GB and wrote almost no Persian (2 useful of 70); Falcon wrote
-  none. Qwen3.5 0.8B was the fastest (p95 301 ms, no miss) with the most
-  harmful (8). A 35-request pre-screen dropped Gemma 3 270M and Falcon-H1
-  0.5B on quality and LFM2.5 8B-A1B on its 9.2 GB peak and licence. None
-  replaces Gemma 3 1B on this laptop.
+- **The European-language screen** (2026-10-19) compared eleven small base
+  models with Gemma 3 1B on 325 development and boundary requests per model
+  (en 78, de 67, fr, es and pt 60 each; Persian set aside by user decision),
+  in Lab `production_boundary` with every language healed
+  (`BADI_LAB_HEALING=all`), run one model at a time, every suggestion
+  blind-reviewed by Sonnet. Useful suggestions, as % of requests:
+
+  | Model | All | en | de | fr | es | pt | p50 ms | > 550 ms | Peak |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | Gemma 3 1B | 46 | 29 | 36 | 53 | 60 | 57 | 247 | 11 | 1.1 GB |
+  | Granite 4.0 H-Tiny (7B MoE) | 44 | 42 | 46 | 53 | 55 | 23 | 453 | 96 | 7.7 GB |
+  | Falcon-H1 1.5B | 44 | 37 | 31 | 58 | 40 | 55 | 396 | 34 | 1.8 GB |
+  | Salamandra 2B | 42 | 24 | 31 | 50 | 55 | 53 | 385 | 82 | 2.6 GB |
+  | EuroLLM 1.7B | 41 | 23 | 37 | 53 | 42 | 55 | 253 | 1 | 1.9 GB |
+  | LFM2.5 1.2B | 39 | 35 | 30 | 53 | 48 | 32 | 214 | 1 | 1.3 GB |
+  | Llama 3.2 1B | 38 | 36 | 25 | 45 | 52 | 33 | 346 | 38 | 1.5 GB |
+  | Granite 4.0 1B | 37 | 32 | 27 | 45 | 45 | 38 | 349 | 14 | 2.0 GB |
+  | Qwen3 1.7B | 36 | 40 | 22 | 40 | 45 | 35 | 374 | 56 | 2.3 GB |
+  | Qwen3.5 0.8B | 35 | 36 | 27 | 35 | 43 | 35 | 155 | 0 | 1.0 GB |
+  | Qwen3.5 2B | 33 | 36 | 24 | 40 | 33 | 30 | 551 | 234 | 2.2 GB |
+
+  Harmful suggestions were 5 to 12 per model (Qwen3.5 2B, which mostly ran
+  out of time, 0). Gemma 3 1B stays the recommendation; English is its
+  weakest language. Granite H-Tiny writes the best English and German but
+  needs a larger machine. A 35-request pre-screen on 2026-10-18 dropped
+  Gemma 3 270M and Falcon-H1 0.5B on quality and LFM2.5 8B-A1B on its 9.2 GB
+  peak and licence. Differences of about five points are within the noise
+  of 60 to 78 requests.
 - **The Prediction Lab** ([qualification.rs](../../evaluation/writing/lab-worker/src/qualification.rs))
   owns discovery and qualification; the shipped broker does not contain it.
   The [Lab bridge](../../evaluation/writing/lab/device-qualification.mjs) calls

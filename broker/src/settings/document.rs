@@ -17,8 +17,8 @@ use super::policy::{PolicyResolution, PolicySource};
 use super::{MAX_ESCAPE_QUIET_SECONDS, MAX_SUBJECTS, SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1};
 
 /// The languages the writing provider can suggest in, in canonical order.
-/// English, German and Persian are on by default; French and Spanish are
-/// opt-in in [`SettingsV2::writing_languages`] and not yet qualified.
+/// English, German and Persian are on by default; French, Spanish and
+/// Portuguese are opt-in in [`SettingsV2::writing_languages`] and not yet qualified.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum PredictionLanguage {
     #[serde(rename = "en")]
@@ -31,6 +31,8 @@ pub enum PredictionLanguage {
     French,
     #[serde(rename = "es")]
     Spanish,
+    #[serde(rename = "pt")]
+    Portuguese,
 }
 
 /// The writing languages when settings name none.
@@ -49,6 +51,7 @@ impl PredictionLanguage {
             Self::Persian => "fa",
             Self::French => "fr",
             Self::Spanish => "es",
+            Self::Portuguese => "pt",
         }
     }
 
@@ -61,6 +64,7 @@ impl PredictionLanguage {
             "fa" => Some(Self::Persian),
             "fr" => Some(Self::French),
             "es" => Some(Self::Spanish),
+            "pt" => Some(Self::Portuguese),
             _ => None,
         }
     }
