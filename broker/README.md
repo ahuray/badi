@@ -344,7 +344,20 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   and require them back (`TRAILING_SPACE_HEALING`). Persian uses that same
   token count. A 2.6× Persian budget missed 550 ms on the development cases.
 - **Abstention.** A continuation abstains when it adds a number absent from the
-  typed text, and every request when the caret splits a word.
+  typed text, and every request when the caret splits a word. A German
+  request that ends in a space abstains before any model call, because German
+  is not healed: after a bare space a model must start a word without its
+  usual leading-space token, and neither Qwen3 1.7B (0 useful of 20) nor
+  Gemma 3 1B (0 of 26, markup or fragments such as `uralt.`) continued one
+  usefully. Healing German on Gemma is an
+  [open decision](<../future plans.md>).
+- **Generation grammar.** Every continuation request carries a grammar that
+  excludes what could never be shown: `<`, `>`, backticks and line breaks,
+  and, when the typed text has no digit, digits in any script. Without it
+  Gemma 3 1B wrote markup such as `<strong>Bezug</strong>` or an invented
+  `town of 1000`, and the whole suggestion was rejected; with it the model
+  writes its next best word. A healed echo keeps its literal ahead of the
+  same class.
 - **Mid-line.** Off by default (`badi mid-line off`; omit `mid_line` in
   settings). A word after the caret then abstains before any model call.
   Punctuation after the caret can still complete the word being typed.

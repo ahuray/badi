@@ -156,7 +156,10 @@ fn token_healing_binds_the_exact_typed_stem() {
     };
     let payload = super::completion_payload(&request);
     assert_eq!(payload["prompt"], "Please review the");
-    assert_eq!(payload["grammar"], "root ::= \" docum\" [^<>\\n\\r`]*");
+    assert_eq!(
+        payload["grammar"],
+        "root ::= \" docum\" [^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]*"
+    );
     let spaced = crate::provider::ProviderRequest {
         before: "Please review the docum ".to_owned(),
         after: String::new(),
@@ -164,7 +167,10 @@ fn token_healing_binds_the_exact_typed_stem() {
     };
     let spaced = super::completion_payload(&spaced);
     assert_eq!(spaced["prompt"], "Please review the");
-    assert_eq!(spaced["grammar"], "root ::= \" docum \" [^<>\\n\\r`]*");
+    assert_eq!(
+        spaced["grammar"],
+        "root ::= \" docum \" [^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]*"
+    );
     assert_eq!(payload["cache_prompt"], true);
     assert_eq!(
         super::strip_healed_prefix("document", Some("docum")),
@@ -392,7 +398,12 @@ fn trailing_space_healing_is_promoted_per_language() {
         };
         let legacy = super::completion_plan(&request, &[]).payload();
         assert_eq!(legacy["prompt"], before);
-        assert!(legacy.get("grammar").is_none());
+        assert!(
+            legacy["grammar"]
+                .as_str()
+                .unwrap()
+                .starts_with("root ::= [^")
+        );
         let promoted = super::completion_plan(&request, &[language]);
         assert_eq!(promoted.prompt, before.trim_end_matches(' '));
         assert_eq!(promoted.echo, Some(" "));
@@ -413,6 +424,55 @@ fn trailing_space_healing_is_promoted_per_language() {
         );
     }
     assert!(!super::heals_trailing_space("ar"));
+}
+
+#[test]
+fn an_unhealed_trailing_space_is_never_sent() {
+    for (before, language, unsent) in [
+        ("Bitte lies das ", "de", true),
+        ("Bitte lies das", "de", false),
+        ("Please review the ", "en", false),
+        ("لطفا این گزارش را ", "fa", false),
+        ("   ", "de", true),
+    ] {
+        let request = crate::provider::ProviderRequest {
+            before: before.to_owned(),
+            after: String::new(),
+            language: Some(language.to_owned()),
+        };
+        let plan = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
+        assert_eq!(plan.sends_nothing(), unsent, "{language} {before:?}");
+    }
+}
+
+#[test]
+fn generation_excludes_what_could_never_be_shown() {
+    let plan = |before: &str, language: &str| {
+        let request = crate::provider::ProviderRequest {
+            before: before.to_owned(),
+            after: String::new(),
+            language: Some(language.to_owned()),
+        };
+        super::completion_plan(&request, super::TRAILING_SPACE_HEALING).payload()["grammar"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    // No digit typed: no digit of any script may be generated; markup,
+    // backticks and line breaks never.
+    assert_eq!(
+        plan("Der zweite Absatz braucht einen klareren", "de"),
+        "root ::= [^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]*"
+    );
+    // A typed digit (any script) lets numbers through to the fact check.
+    for (before, language) in [("We met on 12 May and", "en"), ("در سال ۱۴۰۲", "fa")] {
+        assert_eq!(plan(before, language), "root ::= [^<>\\n\\r`]*");
+    }
+    // A healed echo keeps its literal ahead of the same class.
+    assert_eq!(
+        plan("Please review the ", "en"),
+        "root ::= \" \" [^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]*"
+    );
 }
 
 #[test]

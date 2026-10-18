@@ -371,7 +371,10 @@ async fn explicit_spelling_and_continuation_share_the_explicit_budget() -> Resul
         // The unknown word is healed: the prompt ends before its separating
         // space, and the model must reproduce that space and the word first.
         assert_eq!(payload["prompt"], "This is");
-        assert_eq!(payload["grammar"], "root ::= \" teh\" [^<>\\n\\r`]*");
+        assert_eq!(
+            payload["grammar"],
+            "root ::= \" teh\" [^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]*"
+        );
         next.write_all(
             b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n\
             data: {\"index\":0,\"content\":\" teh review it\",\"stop\":false}\n\n\
