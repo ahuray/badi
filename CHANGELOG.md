@@ -7,6 +7,12 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Spelling corrections that need the model's choice between dictionary
+  candidates work again with Gemma 3 1B: the prompt ends inside an opened
+  quote and the answer is read raw, where the old `Answer:` prompt got only a
+  line break from base models. Writer's automatic hint showed
+  `grasias → gracias` and `vacanses → vacances` live; the debug trace gains a
+  `spelling` line.
 - [#102](https://github.com/ahuray/badi/pull/102) The backlog is compact
   and links to its evidence, which now lives in the runbooks; screening
   Gemma 4 E2B comes before qualification.

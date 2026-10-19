@@ -132,4 +132,25 @@ after the Tab/Ctrl+→ swap: the automatic hint showed `adress → address`;
 Tab is not this extension's key (pressed with the hint showing, it stayed
 Writer's own Tab, inserted a tab character and withdrew the hint), and
 Alt+F7 showed then replaced the whole word, one Ctrl+Z restored `adress`.
+
+On 2026-10-19 (LibreOffice 26.8.1.1, interactive Wayland window, isolated
+profile with this checkout's extension, German, French and Spanish
+dictionaries, disposable text), the installed `5e141ed` broker with Gemma 3 1B
+offered no correction that needed the model: it never answered the choice
+between several candidates (`Hauss`, `grasias`, `Zeitt`), so only
+single-candidate words were corrected
+([cause](../../broker/README.md#suggestion-limits)). With the fixed broker
+from this branch run in its place on the same socket: the automatic hint
+showed `grasias → gracias` in Spanish and `vacanses → vacances` in French
+about 1 s after the space, Alt+F7 replaced each in one undo step (`Badi
+correction`) and one Ctrl+Z restored the typo; Alt+F7 on `lsit` showed `list`
+in 0.27 s. The model abstained on `Hauss` and chose wrongly for
+`cassa → casas` and `Zeitt → Zeigt`; a wrong word stays a proposal until
+Alt+F7. Writer's own AutoCorrect replaced `teh` before the extension saw it.
+An English word that begins a known word, such as `fing` (`finger`), is
+never a correction target, which also keeps abbreviations such as `dept`.
+A French sentence in a paragraph tagged Spanish was corrected from the
+Spanish dictionary (`reponce → repone`): a short sentence gives no confident
+detection, so the paragraph's language decides, as it does for Writer's own
+spelling check.
 Not yet verified: other LibreOffice versions.

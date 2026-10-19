@@ -162,6 +162,25 @@ fn candidates_are_close_words_of_letters_and_the_model_must_name_one() {
 }
 
 #[test]
+fn the_choice_prompt_opens_the_answer_on_its_own_line() {
+    let candidates = vec!["Haus".to_owned(), "Hass".to_owned()];
+    let payload = choice_payload("Wir treffen uns morgen im Hauss ", "Hauss", &candidates);
+    let prompt = payload["prompt"].as_str().expect("prompt");
+    assert_eq!(
+        prompt,
+        "Wir treffen uns morgen im Hauss\nIn this sentence, \"Hauss\" is a typo for one of: Haus, Hass.\nThe intended word is \""
+    );
+    assert_eq!(payload["stop"], json!(["\n"]));
+    assert_eq!(payload["cache_prompt"], json!(false));
+    // The answer is read up to its closing quote; an echoed typo matches no
+    // candidate and abstains.
+    assert_eq!(chosen("Haus\" because", &candidates), Some(&candidates[0]));
+    assert_eq!(chosen("Hass\"", &candidates), Some(&candidates[1]));
+    assert_eq!(chosen("Hauss\" is", &candidates), None);
+    assert_eq!(chosen("\"", &candidates), None);
+}
+
+#[test]
 fn language_tags_name_their_primary_language() {
     assert_eq!(
         SpellingLanguage::from_tag("de-AT"),

@@ -179,7 +179,10 @@ with latency and outcome, and each `carry` decision to the
 them, `model done` also carries content-free `ttft_ms`, `prompt_tokens`
 (llama.cpp `prompt_n`, newly evaluated), `cache_tokens` (`cache_n`, reused)
 and `generated_tokens`; a cancelled, shutdown or timed-out call records
-`cancelled_before_first_token`. Malformed optional timing statistics stay
+`cancelled_before_first_token`. Each located misspelling adds a `spelling`
+line: its language, the number of dictionary candidates, whether the model
+was asked and whether a correction resulted, and with `--text` the word, the
+candidates and the model's answer. Malformed optional timing statistics stay
 unknown rather than invalidating the completion, and no new text is recorded
 ([ADR 0008](../docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
 Unit tests never write to a live trace.
@@ -470,7 +473,16 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   or `/usr/share/myspell/dicts`, loaded off the runtime when enabled. A word
   unknown to it gets at most three candidates of letters, with the same first
   letter and at most two edits; one is proposed without inference, several go
-  to the model, which must answer with one of them. A word without its typed
+  to the model, which must answer with one of them. The choice prompt ends
+  inside an opened quote (`The intended word is "`) and its raw answer is read
+  up to the closing quote; echoing the typo is how the model abstains. After
+  a bare `Answer:`, base models such as Gemma 3 1B start a new line and never
+  answered, so from the Gemma 3 switch until 2026-10-19 no correction with
+  several candidates was made. On 26 disposable development cases (German,
+  Spanish, French, at the 28 W limit) the quote prompt chose the intended word
+  in 18 with Gemma 3 1B (2 wrong, 6 abstained), 15 with Llama 3.2 1B (4 wrong)
+  and 22 with Qwen3 1.7B (3 wrong), at 0.4–0.6 s per choice; the old prompt
+  chose 1, 4 and 20. A word without its typed
   space is checked only on an explicit request, and a capitalized word
   mid-sentence only in German. Replacements are 2-32 cased letters plus the
   optional space, in every validator. The

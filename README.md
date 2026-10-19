@@ -286,7 +286,7 @@ backoff; a missing or oversized model stops it for `badi doctor` to explain.
 
 | Source | Events |
 | --- | --- |
-| `broker` | Each message to and from an adapter (`in context.changed`, `out suggestion.show`, `out suggestion.clear` with its reason, commits), `model start` / `model done` with latency, outcome and content-free token/timing counts, `carry` (type-through kept or the gate that declined) |
+| `broker` | Each message to and from an adapter (`in context.changed`, `out suggestion.show`, `out suggestion.clear` with its reason, commits), `model start` / `model done` with latency, outcome and content-free token/timing counts, `carry` (type-through kept or the gate that declined), `spelling` (language, candidate count, whether the model chose a correction) |
 | `fcitx` | `key` with the action taken and whether a suggestion was showing; `ghost shown` as the `overlay` (grey text at the caret) or the `panel` (Fcitx's popup); `ghost hidden`; every blocked request or display with its reason |
 | `observer` | Each field request; `preview drawn` with its placement (`inline`, `caret_line`, `chip`, `edge_panel`) and box, `preview declined` with its reason, `preview mapped`, `preview hidden` with its cause |
 | `compositor` | While `badi debug watch` runs: whether Hyprland has the grey preview on screen, and where |

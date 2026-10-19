@@ -93,42 +93,37 @@ publish need the user's go-ahead first; the rest can start at once.
    matrix shows zero wrong-field or stale edits and the
    [session helper](adapters/session/README.md) and
    [Fcitx](adapters/fcitx5/README.md) runbooks record it.
-2. **Finish the Writer live checks.** Still open: a model-backed correction of
-   an ambiguous word, and the automatic hint with German, French and Spanish
-   dictionaries installed. *Done when* the
-   [Writer runbook](adapters/libreoffice/README.md) records the result and any
-   defect is fixed.
-3. **Screen Gemma 4 E2B in the Lab.** Run the European-language screen (325
+2. **Screen Gemma 4 E2B in the Lab.** Run the European-language screen (325
    requests, `production_boundary`, `BADI_LAB_HEALING=all`, blind review per
    language) for Gemma 4 E2B base i1-Q4_K_M against Gemma 3 1B at the 28 W
    limit, then decide how a recommendation would know a device's sustained
    power limit ([model fit](docs/architecture/model-selection.md)). *Done
    when* the screen table has its row and the catalog decision is recorded.
-4. **Qualify on the frozen confirmation set.** The user-approved set (UD
+3. **Qualify on the frozen confirmation set.** The user-approved set (UD
    r2.16 test, 100 English and 40 each German, French, Spanish and Persian
    prefixes) is frozen at
    `output/writing/confirmation-ud-r2.16-2026-10-12/suite.json`, SHA-256
    `72a69d10d9ec6b261373a6f382b203b512290eb3bff2b71c3b3ee3efd769c1cc`. Freeze
-   the candidate from step 3 before inference; report usefulness,
+   the candidate from step 2 before inference; report usefulness,
    abstention, errors, useful words, keystroke savings and latency misses
    separately; review full additions, with native Persian review where
    results are ambiguous ([qualification](docs/architecture/model-selection.md)).
    *Done when* the candidate passes or fails every gate per language.
-5. **Evaluate same-window context independently.** Development results so far
+4. **Evaluate same-window context independently.** Development results so far
    are in the [Lab runbook](evaluation/writing/README.md). *Done when*
    independent cases with full-addition review, a fence like
    `style_fact_conflict` for context facts and a measured gain justify
    production use; only then add the source (the observer's accessibility
    context; screen reading only after its own privacy decision), global and
    per-app controls, the wire field and cancellation on focus changes.
-6. **Compare style learning in the Lab.** Feed an explicit `badi style
+5. **Compare style learning in the Lab.** Feed an explicit `badi style
    export` into a Lab suite's `style` field and compare against no style on
    the user's own held-out drafts, with the `style_fact_conflict` fence and
    native review ([broker runbook](broker/README.md#style-learning-opt-in)).
    Linux apps cannot learn under the settings schema; lifting that is a
    separate privacy decision. *Done when* the comparison shows a per-language
    gain without more harm, before any prompt reads samples.
-7. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
+6. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
    *Done when* install, update and removal leave nothing behind; publication
    waits for the naming and licence review.
 
@@ -208,10 +203,14 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 - [ ] Measure dictionary spelling (`badi spelling`, opt-in beyond English)
       on held-out misspellings per language: correction precision, abstention
-      and the model's choice among candidates. That choice is an uncached
-      model call of 1-2.5 s here, so it fits Writer's spelling budget but not
-      the 550 ms typing budget, where several candidates get no correction;
-      a cached spelling prompt slot would close that gap.
+      and the model's choice among candidates. On 26 disposable development
+      cases Gemma 3 1B chose the intended word in 18, a wrong one in 2
+      (`Zeitt → Zeigt`, `cassa → casas`) and abstained on 6
+      ([broker runbook](broker/README.md#suggestion-limits)). That choice is
+      an uncached model call of 0.4–0.6 s at the 28 W limit (1–2.5 s with
+      the earlier Qwen3 1.7B at 15 W), so it fits Writer's spelling budget
+      but often not the 550 ms typing budget; a cached spelling prompt slot
+      would close that gap.
 
 - [ ] Qualify French, Spanish and Portuguese before turning them on by default
       (they are opt-in with `badi suggest LANG on`). Gather independently
