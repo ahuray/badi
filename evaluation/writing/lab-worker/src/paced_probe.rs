@@ -528,6 +528,7 @@ mod tests {
             batch_size: None,
             ubatch_size: None,
             memory_map: true,
+            full_swa_cache: false,
         };
         let mut result = request.result(&identity);
         result.outcome = "suggestion";

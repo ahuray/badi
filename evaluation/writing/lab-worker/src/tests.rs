@@ -35,6 +35,7 @@ fn fixture_identity() -> StableRuntimeIdentity {
         batch_size: None,
         ubatch_size: None,
         memory_map: true,
+        full_swa_cache: false,
     }
 }
 
@@ -703,7 +704,8 @@ const GOLDEN_DEFAULT: &str = concat!(
     ",\"runtime_bundle_manifest_sha256\":null",
     ",\"model_sha256\":\"c7a3a8c7435ef8e4cf1ca2d261f7e09ca85de6cdb70f7c689a836680523a180c\"",
     ",\"model_size\":13,\"model_alias\":\"fixture-en-v1\",\"threads\":1",
-    ",\"context_size\":2048,\"gpu_layers\":0,\"batch_size\":16,\"ubatch_size\":16}",
+    ",\"context_size\":2048,\"gpu_layers\":0,\"batch_size\":16,\"ubatch_size\":16",
+    ",\"full_swa_cache\":true}",
 );
 const GOLDEN_TOKENS64: &str = concat!(
     "{\"launch_contract_id\":\"badi.prediction-lab.owned-2048.v2\"",
@@ -711,7 +713,8 @@ const GOLDEN_TOKENS64: &str = concat!(
     ",\"runtime_bundle_manifest_sha256\":null",
     ",\"model_sha256\":\"c7a3a8c7435ef8e4cf1ca2d261f7e09ca85de6cdb70f7c689a836680523a180c\"",
     ",\"model_size\":13,\"model_alias\":\"fixture-en-v1\",\"threads\":1",
-    ",\"context_size\":2048,\"gpu_layers\":0,\"batch_size\":64,\"ubatch_size\":64}",
+    ",\"context_size\":2048,\"gpu_layers\":0,\"batch_size\":64,\"ubatch_size\":64",
+    ",\"full_swa_cache\":true}",
 );
 const GOLDEN_EXPLICIT_ARTIFACT: &str = concat!(
     "{\"launch_contract_id\":\"badi.prediction-lab.owned-2048.v2\"",
@@ -720,5 +723,6 @@ const GOLDEN_EXPLICIT_ARTIFACT: &str = concat!(
     ",\"model_sha256\":\"c7a3a8c7435ef8e4cf1ca2d261f7e09ca85de6cdb70f7c689a836680523a180c\"",
     ",\"model_size\":13,\"model_alias\":\"fixture-en-v1\"",
     ",\"model_origin\":\"explicit_lab_artifact\",\"threads\":1",
-    ",\"context_size\":2048,\"gpu_layers\":0,\"batch_size\":16,\"ubatch_size\":16}",
+    ",\"context_size\":2048,\"gpu_layers\":0,\"batch_size\":16,\"ubatch_size\":16",
+    ",\"full_swa_cache\":true}",
 );

@@ -35,8 +35,9 @@ class Clock {
   }
 }
 
+// Rust declaration order; the optional launch fields must take part in the receipt digest.
 const identity = { launch_contract_id: 'fixture-only', binary_sha256: '1'.repeat(64),
-  model_sha256: '2'.repeat(64), model_size: 1000, gpu_layers: 0 };
+  model_sha256: '2'.repeat(64), model_size: 1000, gpu_layers: 0, memory_map: false, full_swa_cache: true };
 const wireIdentity = () => Object.fromEntries(Object.entries(identity).sort(([a], [b]) => a.localeCompare(b)));
 const identitySha = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
 class Worker {

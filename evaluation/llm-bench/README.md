@@ -26,9 +26,12 @@ Face repository and file or as a path relative to the repository or `~`.
 | `scripts/membw_read.c`, `scripts/ceilings.py PEAK_GBS` | AVX2 read-bandwidth cross-check; bytes read per token and the ceiling per model (Gemma 4's per-layer embedding lookup excluded) |
 | `scripts/step3_threads.sh LABEL` | CPU thread sweep, Badi's shape (48-token prompt, 8 tokens, 16-token batches) and P-core pinning |
 | `scripts/step4_backends.sh LABEL THREADS` | Same file on the CPU and Vulkan builds, full and partial offload, no op-offload |
-| `scripts/run_latency.sh OUTDIR "ARGS" LABEL[@NAME=EXTRA]...` | `latency.py` per model under a logind idle inhibitor |
+| `scripts/run_latency.sh OUTDIR "ARGS" LABEL[@NAME=EXTRA]...` | `latency.py` per model under a logind idle inhibitor; `LATENCY_BIN` selects another `llama-server`, such as Badi's pinned runtime |
 | `scripts/run_quality.sh [LABEL...]` | `quality.py` per model |
 | `scripts/summarize_latency.py`, `scripts/h4_table.py`, `scripts/summarize_quality.py` | Tables from raw results |
+| `scripts/compare_arms.py DIR PREFIX_A PREFIX_B` | Two arms of latency runs side by side: tokens read, TTFT and total percentiles, and same-prompt text agreement |
+| `scripts/cold_starts.py --arm NAME="ARGS"...` | Short cold prompts on alternating `llama-server` arms at Badi's launch flags, optionally each after a long prompt |
+| `scripts/run_broker_probe.sh ISO BROKER BADICTL LABEL` | Start one broker build in an isolated home (`ISO/{home,run,data}`, settings unpaused) and replay `broker_probe.py`: a disposable typing sequence through `badictl probe`, recording the broker's own latency and outcome |
 
 ## Setup
 

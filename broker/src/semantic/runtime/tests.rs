@@ -30,6 +30,7 @@ const TEST_PROFILE: WritingProfile = WritingProfile {
     batch_size: 64,
     context_checkpoints: Some(0),
     memory_map: false,
+    full_swa_cache: false,
     model_origin: Some("test_artifact"),
 };
 
@@ -83,6 +84,7 @@ fn a_writing_profile_binds_its_launch_and_identity() -> Result<(), Box<dyn Error
     as_production.ubatch_size = Some(16);
     as_production.model_origin = None;
     as_production.memory_map = WritingProfile::PRODUCTION.memory_map;
+    as_production.full_swa_cache = WritingProfile::PRODUCTION.full_swa_cache;
     assert_eq!(as_production, production.identity());
     // An absent origin is omitted from the digest input, not serialized.
     let without_origin = launch
@@ -98,9 +100,9 @@ fn a_writing_profile_binds_its_launch_and_identity() -> Result<(), Box<dyn Error
     );
     assert_ne!(without_origin.sha256(), identity.sha256());
 
-    for (selected, batch, checkpoints, memory_map) in [
-        (production, "16", None, "0"),
-        (profiled, "64", Some("0"), "0"),
+    for (selected, batch, checkpoints, memory_map, swa_full) in [
+        (production, "16", None, "0", Some("1")),
+        (profiled, "64", Some("0"), "0", None),
     ] {
         let environment = launch_environment(&selected);
         assert_eq!(environment["LLAMA_ARG_BATCH"], batch);
@@ -114,6 +116,10 @@ fn a_writing_profile_binds_its_launch_and_identity() -> Result<(), Box<dyn Error
                 .get("LLAMA_ARG_CTX_CHECKPOINTS")
                 .map(String::as_str),
             checkpoints
+        );
+        assert_eq!(
+            environment.get("LLAMA_ARG_SWA_FULL").map(String::as_str),
+            swa_full
         );
     }
     Ok(())
@@ -175,6 +181,7 @@ fn writing_profiles_outside_their_bounds_are_rejected() -> Result<(), Box<dyn Er
         context_checkpoints: Some(64),
         model_origin: Some(&long_origin[1..]),
         memory_map: true,
+        full_swa_cache: true,
     };
     assert!(launch.with_writing_profile(boundary).is_ok());
     Ok(())
@@ -194,7 +201,8 @@ fn production_identity_serialization_is_pinned() -> Result<(), Box<dyn Error>> {
             ",\"runtime_bundle_manifest_sha256\":null",
             ",\"model_sha256\":\"c7a3a8c7435ef8e4cf1ca2d261f7e09ca85de6cdb70f7c689a836680523a180c\"",
             ",\"model_size\":13,\"model_alias\":\"fixture-en-v1\",\"threads\":1",
-            ",\"context_size\":512,\"gpu_layers\":0,\"batch_size\":16,\"ubatch_size\":16,\"memory_map\":false}",
+            ",\"context_size\":512,\"gpu_layers\":0,\"batch_size\":16,\"ubatch_size\":16,\"memory_map\":false",
+            ",\"full_swa_cache\":true}",
         )
     );
     Ok(())
@@ -402,6 +410,7 @@ fn owned_runtime_at(endpoint: std::net::SocketAddr) -> Result<OwnedRuntime, Box<
             batch_size: Some(16),
             ubatch_size: Some(16),
             memory_map: true,
+            full_swa_cache: false,
         },
     })
 }

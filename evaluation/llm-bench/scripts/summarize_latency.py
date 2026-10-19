@@ -30,41 +30,46 @@ def stats(rows, key):
             "p50": pct(v, 0.5), "p90": pct(v, 0.9), "min": round(min(v), 1), "max": round(max(v), 1)}
 
 
-out = {}
-for f in sorted(glob.glob(str(Path(sys.argv[1]) / "*.jsonl"))):
-    rows = [json.loads(line) for line in open(f)]
-    meta = next((r for r in rows if r.get("scenario") == "server"), {})
-    label = meta.get("label") or Path(f).stem
-    model = {"load_s": meta.get("load_s"), "first_request_ms": meta.get("first_request_ms"),
-             "peak_rss_gb": round(meta.get("peak_rss_bytes", 0) / 1e9, 2),
-             "memory_guard_tripped": meta.get("memory_guard_tripped"), "cmd": meta.get("cmd"),
-             "groups": {}}
-    for r in rows:
-        if r.get("scenario") in (None, "server"):
-            continue
-        key = f"{r['lang']}/{r['size']}"
-        g = model["groups"].setdefault(key, {})
-        name = r["scenario"]
-        if name.endswith(":uncached_reference"):
-            d = r.get("divergence") or {}
-            g.setdefault("references", []).append({
-                "scenario": name.split(":")[0], "match": r["text_match"],
-                "class": None if r["text_match"] else d.get("class"),
-                "prob_gap": d.get("prob_gap")})
-            continue
-        s = g.setdefault(name, {"rows": []})
-        s["rows"].append(r)
-    for g in model["groups"].values():
-        for name, s in list(g.items()):
-            if name == "references":
+def main() -> None:
+    out = {}
+    for f in sorted(glob.glob(str(Path(sys.argv[1]) / "*.jsonl"))):
+        rows = [json.loads(line) for line in open(f)]
+        meta = next((r for r in rows if r.get("scenario") == "server"), {})
+        label = meta.get("label") or Path(f).stem
+        model = {"load_s": meta.get("load_s"), "first_request_ms": meta.get("first_request_ms"),
+                 "peak_rss_gb": round(meta.get("peak_rss_bytes", 0) / 1e9, 2),
+                 "memory_guard_tripped": meta.get("memory_guard_tripped"), "cmd": meta.get("cmd"),
+                 "groups": {}}
+        for r in rows:
+            if r.get("scenario") in (None, "server"):
                 continue
-            rs = s.pop("rows")
-            s["n"] = len(rs)
-            s["ttft_ms"] = stats(rs, "ttft_ms")
-            s["total_ms"] = stats(rs, "total_ms")
-            s["prompt_n"] = [r.get("prompt_n") for r in rs]
-            s["cache_n"] = [r.get("cache_n") for r in rs]
-            s["gen_tok_s"] = stats(rs, "predicted_per_second")
-            s["pp_tok_s"] = stats(rs, "prompt_per_second")
-    out[label] = model
-print(json.dumps(out, indent=1))
+            key = f"{r['lang']}/{r['size']}"
+            g = model["groups"].setdefault(key, {})
+            name = r["scenario"]
+            if name.endswith(":uncached_reference"):
+                d = r.get("divergence") or {}
+                g.setdefault("references", []).append({
+                    "scenario": name.split(":")[0], "match": r["text_match"],
+                    "class": None if r["text_match"] else d.get("class"),
+                    "prob_gap": d.get("prob_gap")})
+                continue
+            s = g.setdefault(name, {"rows": []})
+            s["rows"].append(r)
+        for g in model["groups"].values():
+            for name, s in list(g.items()):
+                if name == "references":
+                    continue
+                rs = s.pop("rows")
+                s["n"] = len(rs)
+                s["ttft_ms"] = stats(rs, "ttft_ms")
+                s["total_ms"] = stats(rs, "total_ms")
+                s["prompt_n"] = [r.get("prompt_n") for r in rs]
+                s["cache_n"] = [r.get("cache_n") for r in rs]
+                s["gen_tok_s"] = stats(rs, "predicted_per_second")
+                s["pp_tok_s"] = stats(rs, "prompt_per_second")
+        out[label] = model
+    print(json.dumps(out, indent=1))
+
+
+if __name__ == "__main__":
+    main()
