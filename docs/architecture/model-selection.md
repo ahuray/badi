@@ -69,6 +69,30 @@ promotes another.
   Gemma 3 270M and Falcon-H1 0.5B on quality and LFM2.5 8B-A1B on its 9.2 GB
   peak and licence. Differences of about five points are within the noise
   of 60 to 78 requests.
+
+  Gemma 4 E2B base (i1-Q4_K_M, 3.43 GB) ran the same screen on 2026-10-19
+  with Gemma 3 1B rerun as its paired baseline: the same seven suites,
+  settings and seed, one model at a time at the 28 W limit in the
+  performance profile, on mains (four busy threads held 2.2–2.4 GHz at a
+  60–65 °C package). Both models' 539 unique suggestions were blind-reviewed
+  together by Sonnet, twice with different reviewers; useful %, round 1 /
+  round 2:
+
+  | Model | All | en | de | fr | es | pt | p50 ms | > 550 ms | Peak |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | Gemma 3 1B (paired rerun) | 41 / 40 | 29 / 31 | 21 / 22 | 53 / 45 | 57 / 57 | 48 / 50 | 284 | 4 | 1.1 GB |
+  | Gemma 4 E2B | 42 / 42 | 28 / 31 | 30 / 30 | 47 / 43 | 58 / 58 | 52 / 53 | 487 | 94 | 4.6 GB |
+
+  Harmful suggestions were 7 / 5 for Gemma 4 E2B and 14 / 10 for Gemma 3 1B;
+  consecutive useful words 774 / 772 against 862 / 854, because the 550 ms
+  budget cut Gemma 4's cold prompts short. These reviewers were stricter than
+  the table's (315 of Gemma 3's 325 suggestions were identical to its screen
+  run, which scored 46), so Gemma 4 is compared with its paired baseline
+  only. It writes better German (20 against 14–15 useful of 67) and is level
+  elsewhere, but with four times the memory and a cold prompt over 550 ms in
+  more than a quarter of requests. The bench's typing timing reuses the
+  prompt cache, which the Lab's cold requests do not. No 15 W run was made:
+  lowering the limit needs root. Runs: `output/writing/2026-10-19-gemma4-screen/`.
 - **The larger-model bench** (2026-10-18, [llm-bench](../../evaluation/llm-bench/README.md),
   llama.cpp `b11719`) screened eight 2–4B base models against Gemma 3 1B
   and Qwen3 1.7B on 30 synthetic prompts (15 German, 15 English), greedy, 16

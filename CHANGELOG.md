@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Gemma 4 E2B ran the European-language screen beside a paired Gemma 3 1B
+  rerun at 28 W: level overall (42 against 40–41% useful in two blind
+  rounds), better in German, at 4.6 GB and with 94 of 325 cold requests over
+  550 ms; whether the catalog offers it is the user's decision.
 - The installed flow held across service restarts, pause, composition,
   stale focus, Ghostty's typed line and fractional scale 1.5 with no
   wrong-field or stale edit (2026-10-19); suspend, VT switch and several
