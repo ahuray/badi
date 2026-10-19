@@ -35,8 +35,9 @@ links to it. A tested app version is not a claim about Linux in general.
   there and comfortably at 28 W. The Iris Xe and more than four threads were
   measured and not adopted ([runtime](broker/README.md#writing-model-runtime)).
 - **Quality:** Gemma 3 1B is the recommended model; its weakest languages are
-  English and German. Gemma 4 E2B writes clearly better German and fits 550
-  ms only at a raised power limit
+  English and German. In the paired European-language screen at 28 W,
+  Gemma 4 E2B was level overall (42 against 40–41% useful) and better only
+  in German (30 against 21–22%), at four times the memory
   ([model fit](docs/architecture/model-selection.md)). Mid-sentence
   suggestions rarely help, and longer Tab chains drift; the model, not the
   context window, is the limit ([why](broker/README.md#suggestion-limits)).
@@ -76,6 +77,13 @@ Open decisions, for the user:
   [Suggestion quality](#suggestion-quality).
 - **The `--text` debug trace** keeps typed text in memory for 15 minutes;
   confirm that, or limit it to suggestions.
+- **Gemma 4 E2B in the catalog.** The screen found no overall gain over
+  Gemma 3 1B, better German, fewer harmful suggestions and 4.6 GB peak
+  memory ([model fit](docs/architecture/model-selection.md)). Leave it out
+  (recommended: nothing to gain for most users); offer it through `badi model
+  use` only, never recommended; or recommend it above a sustained power
+  limit, which needs a device-tier input that reads RAPL PL1 and stays
+  unknown on many machines.
 - **The 28 W CPU power limit** is set until reboot; installing
   `output/llm-bench/cpu-sustained-power.service` keeps it (see the
   [bench](evaluation/llm-bench/README.md) conditions).
@@ -92,37 +100,31 @@ publish need the user's go-ahead first; the rest can start at once.
    passed on 2026-10-19 ([matrix](adapters/fcitx5/README.md#tested-with)).
    *Done when* those show zero wrong-field or stale edits and the
    [session helper](adapters/session/README.md) runbook records them.
-2. **Screen Gemma 4 E2B in the Lab.** Run the European-language screen (325
-   requests, `production_boundary`, `BADI_LAB_HEALING=all`, blind review per
-   language) for Gemma 4 E2B base i1-Q4_K_M against Gemma 3 1B at the 28 W
-   limit, then decide how a recommendation would know a device's sustained
-   power limit ([model fit](docs/architecture/model-selection.md)). *Done
-   when* the screen table has its row and the catalog decision is recorded.
-3. **Qualify on the frozen confirmation set.** The user-approved set (UD
+2. **Qualify on the frozen confirmation set.** The user-approved set (UD
    r2.16 test, 100 English and 40 each German, French, Spanish and Persian
    prefixes) is frozen at
    `output/writing/confirmation-ud-r2.16-2026-10-12/suite.json`, SHA-256
    `72a69d10d9ec6b261373a6f382b203b512290eb3bff2b71c3b3ee3efd769c1cc`. Freeze
-   the candidate from step 2 before inference; report usefulness,
-   abstention, errors, useful words, keystroke savings and latency misses
-   separately; review full additions, with native Persian review where
+   the candidate (Gemma 3 1B, or Gemma 4 E2B if the catalog decision adds
+   it) before inference; report usefulness, abstention, errors, useful
+   words, keystroke savings and latency misses separately; review full additions, with native Persian review where
    results are ambiguous ([qualification](docs/architecture/model-selection.md)).
    *Done when* the candidate passes or fails every gate per language.
-4. **Evaluate same-window context independently.** Development results so far
+3. **Evaluate same-window context independently.** Development results so far
    are in the [Lab runbook](evaluation/writing/README.md). *Done when*
    independent cases with full-addition review, a fence like
    `style_fact_conflict` for context facts and a measured gain justify
    production use; only then add the source (the observer's accessibility
    context; screen reading only after its own privacy decision), global and
    per-app controls, the wire field and cancellation on focus changes.
-5. **Compare style learning in the Lab.** Feed an explicit `badi style
+4. **Compare style learning in the Lab.** Feed an explicit `badi style
    export` into a Lab suite's `style` field and compare against no style on
    the user's own held-out drafts, with the `style_fact_conflict` fence and
    native review ([broker runbook](broker/README.md#style-learning-opt-in)).
    Linux apps cannot learn under the settings schema; lifting that is a
    separate privacy decision. *Done when* the comparison shows a per-language
    gain without more harm, before any prompt reads samples.
-6. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
+5. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
    *Done when* install, update and removal leave nothing behind; publication
    waits for the naming and licence review.
 
