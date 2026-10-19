@@ -45,6 +45,10 @@ Linux in general.
   The broker and runtime used 1.43 GB RSS (1.33 GiB)
   ([runtime](broker/README.md#writing-model-runtime)). These are bounded
   samples on this machine, not universal latency or language-quality claims.
+  Since 2026-10-19 Gemma 3 keeps a full sliding-window cache: on the same
+  1,109 disposable keys in Chromium, each model call read 1.5 instead of 6.4
+  new prompt tokens and the suggestion became visible at p50 241 against
+  288 ms after the key ([runtime](broker/README.md#writing-model-runtime)).
   Vulkan on the Iris Xe is slower per keystroke (13–20 against 19–30 tokens/s
   for generation), so Badi stays on the CPU. For one long run-on sentence
   typed into Claude Code in Ghostty, moving the broker's 160-scalar prompt

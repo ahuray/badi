@@ -297,6 +297,14 @@ prints pinned download advice and downloads nothing
   unexplained: the runtime alone started short prompts 11–21 ms faster).
   423 of 504 probes showed a suggestion against 435; most differences sat at
   the deadline, and only 4 steps lost and 1 gained a suggestion in every run.
+  Live, installed `5e141ed` against `3184097` (Chromium 154, isolated
+  profile, a local page, `badi debug on`, the same 1,109 `wtype` keys of
+  disposable English and German with two backspace-and-retype edits per
+  language): each model call read 1.5 instead of 6.4 new prompt tokens and
+  reused 14.9 instead of 10.1, the first token came at p50 23 against 73 ms
+  (p90 105 against 164), and the preview was mapped p50 241 against 288 ms
+  and p90 345 against 396 ms after the key. Proposals were 116 against 115,
+  with 6 abstentions each; no suggestion was accepted.
 - **Speed sample.** Build `5faafcf` (2026-10-12; the same five prefixes four
   times each, predictions on): first grey word in Omawrite 0.5.0 20/20 at
   209–250 ms, middle 220–223 ms, 19th of 20 at 244 ms; in a Chromium
