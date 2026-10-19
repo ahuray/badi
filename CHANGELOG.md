@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Same-window context on 40 independent English cases: the word bias gained
+  nothing, and window text in the prompt helped informative replies but
+  drifted in controls, copied a fact the writer was changing and missed
+  550 ms, so it stays in the Lab.
 - The first qualification on the frozen confirmation set fails Gemma 3 1B
   in every language: 15–25% useful on-time full additions against the 60%
   gate and 1–5 harmful each, so no model is qualified yet.
