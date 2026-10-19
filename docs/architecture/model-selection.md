@@ -202,6 +202,32 @@ measurement.
    frozen review protocol are hashed.
 6. `recommended`: all of the above, currently.
 
+The first qualification (2026-10-19) ran the installed Gemma 3 1B on the
+user-approved confirmation set (UD r2.16 test, 260 prefixes, SHA-256
+`72a69d10…`). The model, settings, Lab worker and source hashes and the
+review protocol were registered before inference. It ran
+`production_boundary` at 550 ms with the catalog's healing at the 28 W
+limit, and one blind Sonnet reviewer per language judged each whole
+displayed addition. It fails every language:
+
+| Language | Cases | Shown | Useful first word | Useful on-time full additions | Harmful | Abstained | Over 550 ms | Useful words | Useful characters |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| English | 100 | 88 | 22 | 19 (19%) | 5 | 12 | 3 | 281 | 385 |
+| German | 40 | 38 | 6 | 6 (15%) | 3 | 2 | 0 | 123 | 147 |
+| French | 40 | 32 | 9 | 8 (20%) | 1 | 8 | 1 | 110 | 170 |
+| Spanish | 40 | 33 | 12 | 10 (25%) | 4 | 7 | 0 | 95 | 201 |
+| Persian | 40 | 33 | 9 | 8 (20%) | 2 | 7 | 3 | 99 | 140 |
+
+There were no errors. Useful words are reviewed consecutive useful words.
+Useful characters are those of useful full additions, a potential saving
+rather than observed typing; the matching reference graphemes were 249, 83,
+113, 92 and 65. The harmful additions invented facts about named people and
+places in the encyclopedic and news prefixes: a murder charge, a place of
+death, an affiliation, a religious title. Two Persian labels had low
+confidence and await native review, though flipping both would not pass.
+`no_qualified_model` therefore stands, and the recommendation stays a
+screening score. Runs: `output/writing/2026-10-19-qualification-gemma3/`.
+
 Errors, timeouts and abstentions stay in each denominator, and the counts must
 sum exactly. Smaller screening sets can reject a candidate but never pass the
 confirmation gate, and a longer diagnostic budget earns no timing credit.

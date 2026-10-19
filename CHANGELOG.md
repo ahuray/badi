@@ -7,6 +7,9 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- The first qualification on the frozen confirmation set fails Gemma 3 1B
+  in every language: 15–25% useful on-time full additions against the 60%
+  gate and 1–5 harmful each, so no model is qualified yet.
 - Gemma 4 E2B ran the European-language screen beside a paired Gemma 3 1B
   rerun at 28 W: level overall (42 against 40–41% useful in two blind
   rounds), better in German, at 4.6 GB and with 94 of 325 cold requests over
