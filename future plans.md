@@ -45,6 +45,10 @@ Linux in general.
   The broker and runtime used 1.43 GB RSS (1.33 GiB)
   ([runtime](broker/README.md#writing-model-runtime)). These are bounded
   samples on this machine, not universal latency or language-quality claims.
+  Since 2026-10-19 Gemma 3 keeps a full sliding-window cache: on the same
+  1,109 disposable keys in Chromium, each model call read 1.5 instead of 6.4
+  new prompt tokens and the suggestion became visible at p50 241 against
+  288 ms after the key ([runtime](broker/README.md#writing-model-runtime)).
   Vulkan on the Iris Xe is slower per keystroke (13–20 against 19–30 tokens/s
   for generation), so Badi stays on the CPU. For one long run-on sentence
   typed into Claude Code in Ghostty, moving the broker's 160-scalar prompt
@@ -264,12 +268,11 @@ Measured alternatives that were not adopted are in the
 
 - [ ] Fewer generated tokens, only after a held-out quality comparison.
 - [ ] Finish the [larger-model bench](evaluation/llm-bench/README.md) on
-      unclamped clocks. On 2026-10-18, on its USB-C supply, this laptop held
-      its cores at 0.4–2.0 GHz under load (rated 4.6), so the thread sweep,
-      CPU against Iris Xe, and warm/cold latency for Granite 4.0 Micro, Gemma 4
-      E2B and Qwen3.5-4B are still to run; also time `--swa-full` against the
-      default for Gemma 3 1B, which reuses the prompt cache after a backspace
-      only with it ([runtime](broker/README.md#writing-model-runtime)).
+      clocks that hold. On 2026-10-18, on its USB-C supply, this laptop held
+      its cores at 0.4–2.0 GHz under load (rated 4.6); on 2026-10-19 one
+      busy thread reached 4.4 GHz and six held 2.1 GHz under the firmware's
+      15 W limit. The thread sweep, CPU against Iris Xe, and warm/cold latency
+      for Granite 4.0 Micro, Gemma 4 E2B and Qwen3.5-4B are still to run.
 - [ ] Pin the runtime's four threads to performance cores (`taskset`/
       `--cpu-mask`): one idle measurement saw 94/30 against 54/21 prompt/
       generate tokens per second for Qwen3-1.7B, a second under load saw no

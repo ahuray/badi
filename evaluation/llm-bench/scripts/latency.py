@@ -31,7 +31,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MIN_FREE_BYTES = 2 * 1024**3
-N_PREDICT = 16
+N_PREDICT = 16  # --n-predict replaces it for a run
 
 
 def mem_available() -> int:
@@ -124,10 +124,11 @@ class Server:
         self.log.close()
 
 
-def complete(server: Server, prompt: str, *, cache: bool = True, n_predict: int = N_PREDICT,
+def complete(server: Server, prompt: str, *, cache: bool = True, n_predict: int | None = None,
              cancel_after_first: bool = False, n_probs: int = 0) -> dict:
     """One streamed /completion. Times are monotonic, from just before send."""
-    body = {"prompt": prompt, "n_predict": n_predict, "temperature": 0.0, "seed": 42,
+    body = {"prompt": prompt, "n_predict": N_PREDICT if n_predict is None else n_predict,
+            "temperature": 0.0, "seed": 42,
             "stream": True, "cache_prompt": cache, "timings_per_token": True,
             "ignore_eos": False}
     if n_probs:
@@ -264,6 +265,8 @@ def check(server: Server, out, base: dict, scenario: str, prompt: str, cached: d
 
 
 def run(args) -> None:
+    global N_PREDICT
+    N_PREDICT = args.n_predict
     sizes = [int(s) for s in args.sizes.split(",")]
     langs = args.langs.split(",")
     # The default 8 GiB host prompt cache could break the 2 GiB free-RAM floor.
@@ -276,7 +279,7 @@ def run(args) -> None:
     server = Server(args.server, args.model, server_args, log_path)
     base = {"label": args.label, "model": os.path.basename(args.model),
             "threads": args.threads, "threads_batch": args.threads_batch or args.threads,
-            "ngl": args.ngl, "ctx": args.ctx, "cache_reuse": args.cache_reuse, "cache_ram": args.cache_ram,
+            "ngl": args.ngl, "n_predict": args.n_predict, "ctx": args.ctx, "cache_reuse": args.cache_reuse, "cache_ram": args.cache_ram,
             "extra": args.extra}
     meta = {**base, "scenario": "server", "cmd": server.cmd, "load_s": round(server.load_s, 3),
             "mem_available_before": mem_available()}
@@ -287,7 +290,8 @@ def run(args) -> None:
             meta["first_request_ms"] = round(first["total_s"] * 1000, 2)
             for lang in langs:
                 for size in sizes:
-                    if size + N_PREDICT + 8 > args.ctx:
+                    # The document grows by up to 5 tokens per typing step, then 4 more.
+                    if size + 5 * args.typing + 4 + N_PREDICT > args.ctx:
                         continue
                     b = {**base, "lang": lang, "size": size}
                     seed = 1000 * sizes.index(size) + (0 if lang == "en" else 500)
@@ -374,6 +378,7 @@ def main() -> None:
     ap.add_argument("--sizes", default="128,512,1024,2000")
     ap.add_argument("--langs", default="en,de")
     ap.add_argument("--typing", type=int, default=20)
+    ap.add_argument("--n-predict", type=int, default=16)
     ap.add_argument("--extra", default="")
     run(ap.parse_args())
 

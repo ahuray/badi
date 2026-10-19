@@ -306,6 +306,9 @@ fn configure_launch(
         // checkpoint copies must not inherit the runtime's default of 32.
         context_checkpoints: Some(0),
         memory_map,
+        // As production, so Lab timings of sliding-window models (Gemma 3)
+        // include the prompt reuse that ships.
+        full_swa_cache: WritingProfile::PRODUCTION.full_swa_cache,
         model_origin: explicit_artifact.then_some("explicit_lab_artifact"),
     };
     Ok(launch.with_writing_profile(profile)?.contained())

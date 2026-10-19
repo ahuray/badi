@@ -14,7 +14,7 @@ const languageOf = row => row.language.toLowerCase().split('-')[0];
 // pass through serde_json::Value and may have alphabetically sorted object keys.
 const RUNTIME_KEYS = ['launch_contract_id', 'binary_sha256', 'runtime_bundle_manifest_sha256',
   'model_sha256', 'model_size', 'model_alias', 'model_origin', 'threads', 'context_size',
-  'gpu_layers', 'batch_size', 'ubatch_size', 'memory_map'];
+  'gpu_layers', 'batch_size', 'ubatch_size', 'memory_map', 'full_swa_cache'];
 const hash = value => createHash('sha256').update(JSON.stringify(Object.fromEntries(
   RUNTIME_KEYS.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])))).digest('hex');
 const percentile = (values, p) => values.length ? [...values].sort((a, b) => a - b)[Math.ceil(values.length * p) - 1] : null;

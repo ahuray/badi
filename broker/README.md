@@ -256,12 +256,13 @@ prints pinned download advice and downloads nothing
 - **Launch.** One 512-token slot reuses the common prompt prefix (KV cache).
   A 128 MiB host cache keeps the previous sentence when the prompt anchor
   moves, and a matching run of at least 16 tokens is shifted instead of
-  recomputed. Sliding-window models such as Gemma 3 cannot shift: the
-  runtime logs `cache_reuse is not supported by this context` and disables
-  it. A second slot would split that 512-token context in half, so
-  the server stays at one slot. Prefill batches are 16 tokens so cancellation
-  lands quickly; up to four threads. The GPU is not used: Vulkan on the Iris
-  Xe was slower for these short requests.
+  recomputed. Sliding-window attention layers keep a full-size cache
+  (`LLAMA_ARG_SWA_FULL`), so a sliding-window model such as Gemma 3 can drop
+  any suffix of its prompt and reuse the rest; other models ignore it. A
+  second slot would split that 512-token context in half, so the server
+  stays at one slot. Prefill batches are 16 tokens so cancellation lands
+  quickly; up to four threads. The GPU is not used: Vulkan on the Iris Xe was
+  slower for these short requests.
 - **Measured and not adopted** (2026-10-12, this machine, five disposable
   prefixes): six threads produced the same greedy text and were not faster.
   Bartowski's Q4_0 of Qwen3-1.7B
@@ -273,16 +274,37 @@ prints pinned download advice and downloads nothing
   (`9acfc1e001311f34b4252001b626f2e466d592a42065f66571bff3790d4e1b14`, two
   tokens ahead) took 0.5–1.8 s to the first word against 0.15–0.47 s without
   it, so no draft model is loaded.
-- **Measured, not yet adopted: `--swa-full` for Gemma 3** (2026-10-18,
-  llama.cpp `b11719`, [bench](../evaluation/llm-bench/README.md), English
-  disposable documents, `-c 2048`, server counters). At a 128-token prompt
-  the default re-read the whole prompt after a 10–30-token backspace (140
-  tokens, none reused) and read 85 tokens for 35 typed over ten keystrokes;
-  with `--swa-full` the backspace re-read 4 tokens and typing read 35, as a
-  full-attention model does. Peak RSS was 1.14 GB against 1.23 GB. Greedy
-  text matched an uncached run or differed only at near-ties (runner-up
-  within 0.07 probability). Timing was not measured because the CPU was
-  power-clamped that day, so adoption waits for a timed before/after.
+- **Full sliding-window cache** (2026-10-19, Gemma 3 1B, pinned `b10726`
+  at this launch, [bench](../evaluation/llm-bench/README.md), disposable
+  English and German text). Without it the runtime cannot roll a
+  sliding-window cache back, so every request re-read part of its prompt.
+  Four alternating runs per arm, 48–256-token prompts, 30 keystrokes each
+  (720 typing requests per arm): typing read 2.5 instead of 7.9 new tokens
+  per request and reached the first token at p50 68 against 158 ms (p90 110
+  against 193); after a rejected suggestion and retype, 6 instead of 68 tokens
+  and p90 249 against 4095 ms. Decode stayed at about 33.5 ms per token and
+  peak RSS fell from 1.08–1.10 to 1.02 GB. In the three runs per arm without
+  background load, eight-token typing requests finished at p50 332 against
+  430 ms and p90 374 against 467 ms; the fourth full-cache run, slowed by
+  another application, raised the pooled p90 to 529 against 476 ms. Each
+  arm's cached text matched an uncached run 100 times of 120, the rest at
+  near-ties. Through the real broker (release builds, an isolated home, three
+  rotated runs of 168 `badictl probe` steps per arm against the installed
+  `3184097` and the same build without the setting) appended words were
+  shown at p50 245 against 327 ms and p90 404 against 550 ms, with 3 against
+  31 deadline misses, and the step after a backspace at p50 200 against 250
+  ms. Sentence starts were slower, p50 441 against 397 ms (36 per arm,
+  unexplained: the runtime alone started short prompts 11–21 ms faster).
+  423 of 504 probes showed a suggestion against 435; most differences sat at
+  the deadline, and only 4 steps lost and 1 gained a suggestion in every run.
+  Live, installed `5e141ed` against `3184097` (Chromium 154, isolated
+  profile, a local page, `badi debug on`, the same 1,109 `wtype` keys of
+  disposable English and German with two backspace-and-retype edits per
+  language): each model call read 1.5 instead of 6.4 new prompt tokens and
+  reused 14.9 instead of 10.1, the first token came at p50 23 against 73 ms
+  (p90 105 against 164), and the preview was mapped p50 241 against 288 ms
+  and p90 345 against 396 ms after the key. Proposals were 116 against 115,
+  with 6 abstentions each; no suggestion was accepted.
 - **Speed sample.** Build `5faafcf` (2026-10-12; the same five prefixes four
   times each, predictions on): first grey word in Omawrite 0.5.0 20/20 at
   209–250 ms, middle 220–223 ms, 19th of 20 at 244 ms; in a Chromium

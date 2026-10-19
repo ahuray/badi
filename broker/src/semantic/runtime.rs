@@ -95,6 +95,11 @@ pub struct WritingProfile {
     pub context_checkpoints: Option<u16>,
     /// Map model weights instead of copying them into owned memory.
     pub memory_map: bool,
+    /// Keep sliding-window attention layers' cache at full context size, so
+    /// the runtime can drop any suffix of the prompt and reuse the rest.
+    /// Without it a sliding-window model (Gemma 3) cannot roll back, and a
+    /// backspace re-reads the whole prompt. Other models ignore it.
+    pub full_swa_cache: bool,
     /// Where the model came from when it is not the installed catalog model.
     pub model_origin: Option<&'static str>,
 }
@@ -109,6 +114,10 @@ impl WritingProfile {
         // Copy once: CPU repacking otherwise retains both mapped and owned
         // weights. The independent loading comparison preserved every output.
         memory_map: false,
+        // 2026-10-19, pinned b10726, Gemma 3 1B at this profile: after a
+        // 10–30-token backspace the default re-read the whole prompt; the
+        // full cache reused it (broker README, writing model runtime).
+        full_swa_cache: true,
         model_origin: None,
     };
 
@@ -384,6 +393,7 @@ impl LlamaCppLaunch {
             batch_size: Some(profile.batch_size),
             ubatch_size: Some(profile.batch_size),
             memory_map: profile.memory_map,
+            full_swa_cache: profile.full_swa_cache,
         }
     }
 
@@ -405,6 +415,10 @@ impl LlamaCppLaunch {
             .env("LLAMA_ARG_BATCH", profile.batch_size.to_string())
             .env("LLAMA_ARG_UBATCH", profile.batch_size.to_string());
         command.env("LLAMA_ARG_MMAP", if profile.memory_map { "1" } else { "0" });
+        // The environment is cleared before launch, so absence is the default.
+        if profile.full_swa_cache {
+            command.env("LLAMA_ARG_SWA_FULL", "1");
+        }
         if let Some(checkpoints) = profile.context_checkpoints {
             command.env("LLAMA_ARG_CTX_CHECKPOINTS", checkpoints.to_string());
         }
@@ -464,11 +478,20 @@ pub struct StableRuntimeIdentity {
     /// Absence in older serialized identities means the pinned mapped default.
     #[serde(skip_serializing_if = "memory_mapping_enabled")]
     pub memory_map: bool,
+    /// Absence in older serialized identities means the runtime's default
+    /// sliding-window cache.
+    #[serde(skip_serializing_if = "default_swa_cache")]
+    pub full_swa_cache: bool,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // Serde's required signature.
 fn memory_mapping_enabled(enabled: &bool) -> bool {
     *enabled
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // Serde's required signature.
+fn default_swa_cache(full: &bool) -> bool {
+    !*full
 }
 
 pub struct OwnedRuntime {

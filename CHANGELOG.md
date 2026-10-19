@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#100](https://github.com/ahuray/badi/pull/100) Gemma 3 keeps a full
+  sliding-window cache, so it reuses its prompt between keystrokes and after
+  a backspace: in Chromium each model call read 1.5 instead of 6.4 new
+  tokens and suggestions became visible at p50 241 against 288 ms.
 - [#99](https://github.com/ahuray/badi/pull/99) A local LLM bench measures
   bandwidth, model ceilings, thread and backend sweeps, cache reuse after
   edits and a German/English screen; Granite 4.0 Micro, Gemma 4 E2B and
