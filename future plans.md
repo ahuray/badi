@@ -85,14 +85,13 @@ Open decisions, for the user:
 Each step ends with its completion test. Steps that install to the desktop or
 publish need the user's go-ahead first; the rest can start at once.
 
-1. **Run the installed-flow matrix.** With disposable text: a real suspend
-   and resume, a VT switch and a Tab right after resume; a service restart,
-   undo, pause, composition and stale focus, including Ghostty's typed line,
-   which must start empty and stay quiet after a restart; fractional scaling
-   and several monitors when a second display is at hand. *Done when* the
-   matrix shows zero wrong-field or stale edits and the
-   [session helper](adapters/session/README.md) and
-   [Fcitx](adapters/fcitx5/README.md) runbooks record it.
+1. **Finish the installed-flow matrix with someone present.** Still open: a
+   real suspend and resume, a VT switch and a Tab right after each, and
+   several monitors when a second display is at hand. Restarts, undo, pause,
+   composition, stale focus, Ghostty's typed line and fractional scaling
+   passed on 2026-10-19 ([matrix](adapters/fcitx5/README.md#tested-with)).
+   *Done when* those show zero wrong-field or stale edits and the
+   [session helper](adapters/session/README.md) runbook records them.
 2. **Screen Gemma 4 E2B in the Lab.** Run the European-language screen (325
    requests, `production_boundary`, `BADI_LAB_HEALING=all`, blind review per
    language) for Gemma 4 E2B base i1-Q4_K_M against Gemma 3 1B at the 28 W
@@ -136,8 +135,8 @@ publish need the user's go-ahead first; the rest can start at once.
       fields are ([observer runbook](adapters/accessibility/README.md)).
       Escape quiet is a broker setting (`escape_quiet_seconds`), covered in
       the [broker runbook](broker/README.md).
-- [ ] Measure overflow frequency per app; fractional-scale and multi-monitor
-      live trials remain open. The implemented placement and fallback behavior
+- [ ] Measure overflow frequency per app; the multi-monitor live trial
+      remains open (scale 1.5 passed on 2026-10-19). The implemented placement and fallback behavior
       is in the [preview contract](adapters/accessibility/README.md#caret-geometry-and-preview).
       Investigate explicit requests in horizontally scrolled, very narrow
       inputs: the installed Chromium trial at 100 CSS px did not establish

@@ -243,8 +243,8 @@ Chromium's surrounding text current. Neither provides an editor transaction.
 ## Tested with
 
 Arch Linux, native Wayland, Hyprland 0.56.2, Fcitx 5.1.22 (5.1.21 for Omawrite
-and Xournal++), input method `keyboard-us`. These are probe cells, not
-toolkit-wide claims.
+and Xournal++; 5.1.23 from 2026-10-19), input method `keyboard-us`. These are
+probe cells, not toolkit-wide claims.
 
 On 2026-10-12, the modified `26eb1d9` checkout installed on this desktop
 showed and accepted 20/20 warm Chromium 152 suggestions across five disposable
@@ -320,6 +320,41 @@ explicit request's grey `the` for a finished `teh ` was taken whole on
 Tab, replacing it with `the `), and Writer again (Tab with the extension's
 hint showing stayed Writer's own key; Alt+F7 replaced whole, one Ctrl+Z
 restored the typo — [details](../libreoffice/README.md#boundaries)).
+
+Installed-flow matrix on 2026-10-19 night (installed `5e141ed`, Fcitx
+5.1.23, real model, `badi debug on --text`, disposable text). Chromium
+154.0.8037.97 ran an isolated profile on a local two-field page that logged
+every field change, and Ghostty 1.3.1 ran `cat` into a file, so each line the
+terminal received was read back. No cell made a wrong-field or stale edit:
+- **Pause:** `badi pause` with a suggestion showing hid it, Tab reached the
+  page and typing made no model call; `badi resume` brought suggestions back.
+- **Restarts:** with a suggestion showing, Tab pressed 0.2 s into a restart
+  of the broker (also 1 s and 3 s, while the model reloads), the observer,
+  the session helper or Fcitx (`omarchy-fcitx5.service`) committed nothing
+  stale and reached the page. A fresh suggestion then showed in the same
+  field, and only that one was accepted. A session-helper restart withholds
+  nothing ([ADR 0005](../../docs/decisions/0005-desktop-signals-withhold-authority.md)),
+  so a suggestion made for the unchanged text stays acceptable across it.
+- **Stale focus:** page script moving focus to the second field closed the
+  first field's session; Tab pressed at the blur committed nothing. A
+  suggestion shown afterwards belonged to the second field and was accepted
+  there, also after a key typed in it.
+- **Composition:** Fcitx direct Unicode entry (Ctrl+Shift+U) hid the
+  suggestion, and Tab during the composition committed nothing.
+- **Undo:** one Ctrl+Z after a Tab acceptance removed it together with the
+  preceding typing, as IME-parity allows.
+- **Ghostty's typed line:** Tab typed one word. Tab during a broker or Fcitx
+  restart reached the terminal as a tab and committed nothing, and afterwards
+  nothing showed until two new words were typed. Without Tab, a broker
+  restart kept the tracked line (it matched what the terminal received),
+  while an Fcitx restart started an empty line: one new word asked nothing,
+  and two asked with only the new words.
+- **Fractional scale 1.5** (eDP-1 at runtime, restored to 2): the inline grey
+  continuation sat on the caret's baseline right after the typed text, and
+  Tab accepted one word into the right field.
+
+A real suspend and resume, a VT switch and several monitors (one display)
+were not exercised.
 
 | Application | Reaches Fcitx through | Boundary |
 | --- | --- | --- |
