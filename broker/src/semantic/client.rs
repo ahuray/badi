@@ -215,6 +215,11 @@ pub struct ObservedCompletion {
     /// Diagnostic class of an abstention; `None` for output or errors.
     no_suggestion: Option<NoSuggestionReason>,
     output: Option<String>,
+    /// The streamed text as the runtime sent it, before it is shaped into
+    /// complete continuation words; `None` when the stream was invalid. Only
+    /// a dictionary choice reads it: its answer follows an opened quote, with
+    /// no space before the word.
+    raw: Option<String>,
     ttft: Option<Duration>,
     elapsed: Duration,
     request_body_bytes: usize,
@@ -292,6 +297,7 @@ impl ObservedCompletion {
             disposition: CompletionDisposition::LanguageAbstained,
             no_suggestion: Some(NoSuggestionReason::RequestAbstained),
             output: None,
+            raw: None,
             ttft: None,
             elapsed: Duration::ZERO,
             request_body_bytes: 0,
@@ -309,6 +315,7 @@ impl ObservedCompletion {
             disposition: CompletionDisposition::ModelAbstained,
             no_suggestion: Some(NoSuggestionReason::BudgetPrefill),
             output: None,
+            raw: None,
             ttft: None,
             elapsed: started.elapsed(),
             request_body_bytes,
@@ -785,20 +792,34 @@ impl SemanticClient {
         };
         let (target, corrected) = match located {
             Located::English(target) => {
-                let corrected = match crate::writing::unambiguous_correction(target.word) {
-                    Some(corrected) => Some(corrected),
-                    None => self
-                        .spelling_completion(
-                            &crate::writing::correction_payload(target.word),
-                            cancellation,
-                            started,
-                            budget,
-                        )
-                        .await?
-                        .filter(|corrected| {
-                            crate::writing::valid_correction(target.word, corrected)
-                        }),
+                let unambiguous = crate::writing::unambiguous_correction(target.word);
+                let asked = unambiguous.is_none();
+                let answer = if asked {
+                    self.spelling_completion(
+                        &crate::writing::correction_payload(target.word),
+                        false,
+                        cancellation,
+                        started,
+                        budget,
+                    )
+                    .await?
+                } else {
+                    None
                 };
+                let corrected = unambiguous.or_else(|| {
+                    answer.clone().filter(|corrected| {
+                        crate::writing::valid_correction(target.word, corrected)
+                    })
+                });
+                trace_spelling(
+                    "en",
+                    target.word,
+                    None,
+                    asked,
+                    answer.as_deref(),
+                    corrected.as_deref(),
+                    started,
+                );
                 (target, corrected)
             }
             Located::Dictionary { language, target } => {
@@ -807,23 +828,35 @@ impl SemanticClient {
                     tokio::task::spawn_blocking(move || spelling.candidates(language, &word))
                         .await
                         .map_err(|_| ProviderError::Unavailable)?;
-                let corrected = match candidates.as_slice() {
-                    [] => None,
-                    [only] => Some(only.clone()),
-                    _ => self
-                        .spelling_completion(
-                            &crate::spelling::choice_payload(
-                                &request.before,
-                                target.word,
-                                &candidates,
-                            ),
-                            cancellation,
-                            started,
-                            budget,
-                        )
-                        .await?
-                        .and_then(|output| crate::spelling::chosen(&output, &candidates).cloned()),
+                let asked = candidates.len() > 1;
+                let answer = if asked {
+                    self.spelling_completion(
+                        &crate::spelling::choice_payload(&request.before, target.word, &candidates),
+                        true,
+                        cancellation,
+                        started,
+                        budget,
+                    )
+                    .await?
+                } else {
+                    None
                 };
+                let corrected = if let [only] = candidates.as_slice() {
+                    Some(only.clone())
+                } else {
+                    answer
+                        .as_deref()
+                        .and_then(|output| crate::spelling::chosen(output, &candidates).cloned())
+                };
+                trace_spelling(
+                    language.tag(),
+                    target.word,
+                    Some(&candidates),
+                    asked,
+                    answer.as_deref(),
+                    corrected.as_deref(),
+                    started,
+                );
                 (target, corrected)
             }
         };
@@ -837,10 +870,12 @@ impl SemanticClient {
     }
 
     /// The model's trimmed answer to a spelling prompt, within the writing
-    /// budget the continuation shares.
+    /// budget the continuation shares: its complete words, or with `raw` the
+    /// streamed text itself.
     async fn spelling_completion(
         &self,
         payload: &serde_json::Value,
+        raw: bool,
         cancellation: &CancellationToken,
         started: Instant,
         budget: Duration,
@@ -858,7 +893,12 @@ impl SemanticClient {
             ClientError::Cancelled => ProviderError::Cancelled,
             _ => ProviderError::Unavailable,
         })?;
-        Ok(observed.output.as_deref().map(str::trim).map(str::to_owned))
+        let answer = if raw { observed.raw } else { observed.output };
+        Ok(answer
+            .as_deref()
+            .map(str::trim)
+            .filter(|answer| !answer.is_empty())
+            .map(str::to_owned))
     }
 
     async fn complete_inner(
@@ -1103,6 +1143,40 @@ fn validate_request(request: &ProviderRequest) -> Result<InputEligibility, Clien
     }
 }
 
+/// One `spelling` trace line per located misspelling: its language, how
+/// many dictionary candidates it had, and whether a correction resulted. The
+/// word, candidates and model answer are text, kept only in a `--text` run.
+fn trace_spelling(
+    language: &str,
+    word: &str,
+    candidates: Option<&[String]>,
+    asked: bool,
+    answer: Option<&str>,
+    corrected: Option<&str>,
+    started: Instant,
+) {
+    crate::debug_trace::emit("spelling", |entry| {
+        entry.put("language", language);
+        if let Some(candidates) = candidates {
+            entry.put("candidates", candidates.len());
+            entry.text("candidate_words", &candidates.join(", "));
+        }
+        entry.put("asked_model", asked);
+        entry.put("corrected", corrected.is_some());
+        entry.put(
+            "ms",
+            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        );
+        entry.text("word", word);
+        if let Some(answer) = answer {
+            entry.text("answer", answer);
+        }
+        if let Some(corrected) = corrected {
+            entry.text("correction", corrected);
+        }
+    });
+}
+
 #[derive(Debug, Deserialize)]
 struct HealthResponse {
     status: String,
@@ -1267,6 +1341,7 @@ fn observed_completion(
         disposition,
         no_suggestion,
         output,
+        raw: (!accumulator.invalid).then(|| accumulator.output.clone()),
         ttft: accumulator.ttft,
         elapsed: started.elapsed(),
         request_body_bytes,

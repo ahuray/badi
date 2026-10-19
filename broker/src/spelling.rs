@@ -385,6 +385,10 @@ fn edit_distance(a: &str, b: &str) -> usize {
 
 /// The model chooses between dictionary candidates in the sentence's context.
 /// The prompt stays short: it is never cached, so its prefill is the cost.
+/// It ends inside an opened quote, so a base model names a word on the same
+/// line; after a bare `Answer:` Gemma 3 1B starts a new line and never
+/// answered (2026-10-19). The answer is read raw up to its closing quote
+/// ([`chosen`]); echoing the typo is how the model abstains.
 pub(crate) fn choice_payload(before: &str, word: &str, candidates: &[String]) -> Value {
     let skip = before
         .chars()
@@ -393,7 +397,7 @@ pub(crate) fn choice_payload(before: &str, word: &str, candidates: &[String]) ->
     let context: String = before.chars().skip(skip).collect();
     json!({
         "prompt": format!(
-            "{}\nCorrect spelling of \"{word}\" here, one of: {}\nAnswer:",
+            "{}\nIn this sentence, \"{word}\" is a typo for one of: {}.\nThe intended word is \"",
             context.trim(),
             candidates.join(", ")
         ),
@@ -406,9 +410,11 @@ pub(crate) fn choice_payload(before: &str, word: &str, candidates: &[String]) ->
     })
 }
 
-/// The candidate the model named, if its answer is exactly one of them.
+/// The candidate the model named, if its answer, up to a closing quote, is
+/// exactly one of them.
 pub(crate) fn chosen<'a>(output: &str, candidates: &'a [String]) -> Option<&'a String> {
-    let answer = output.trim().trim_end_matches(['.', ',', ';', '!', '?']);
+    let answer = output.split('"').next().unwrap_or_default();
+    let answer = answer.trim().trim_end_matches(['.', ',', ';', '!', '?']);
     candidates
         .iter()
         .find(|candidate| candidate.as_str() == answer)
