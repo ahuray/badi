@@ -55,31 +55,44 @@ promotes another.
   and Qwen3 1.7B on 30 synthetic prompts (15 German, 15 English), greedy, 16
   tokens, one reviewer scoring 1–5 what Badi could show:
 
-  | Model | Quant, file | Arch | DE | EN | Peak RSS¹ | Ceiling² |
-  | --- | --- | --- | --- | --- | --- | --- |
-  | Granite 4.0 Micro base | Q4_K_M, 2.10 GB | dense | 4.27 | 4.07 | 4.09 GB | 30 tok/s |
-  | Gemma 4 E2B base | i1-Q4_K_M, 3.43 GB | dense, sliding window | 4.20 | 4.00 | 4.70 GB | 42 tok/s |
-  | Qwen3.5-4B base | i1-Q4_K_M, 2.71 GB | hybrid | 4.00 | 4.07 | 5.65 GB | 23 tok/s |
-  | Gemma 3 1B pt (production) | Q4_K_M, 0.81 GB | dense, sliding window | 3.13 | 4.20 | 1.23 GB | 79 tok/s |
-  | Qwen3 1.7B | Q4_K_M, 1.28 GB | dense | 3.07 | 3.87 | 2.57 GB | 57 tok/s |
+  | Model | Quant, file | Arch | DE | EN | Ceiling¹ | Typing p90 at 15 W / 28 W² | Over 550 ms at 28 W | Peak RSS² |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | Granite 4.0 Micro base | Q4_K_M, 2.10 GB | dense | 4.27 | 4.07 | 30 tok/s | 902 / 566 ms | 21 of 80 | 2.35 GB |
+  | Gemma 4 E2B base | i1-Q4_K_M, 3.43 GB | dense, sliding window | 4.20 | 4.00 | 42 tok/s | 905 / 430 ms | 0 of 80 | 3.94 GB |
+  | Qwen3.5-4B base | i1-Q4_K_M, 2.71 GB | hybrid | 4.00 | 4.07 | 23 tok/s | – / 1029 ms | 80 of 80 | 3.11 GB |
+  | Gemma 3 1B pt (production) | Q4_K_M, 0.81 GB | dense, sliding window | 3.13 | 4.20 | 79 tok/s | 406 / 238 ms | 0 of 80 | 0.95 GB |
+  | Qwen3 1.7B | Q4_K_M, 1.28 GB | dense | 3.07 | 3.87 | 57 tok/s | not timed | | |
 
   SmolLM3-3B, Granite 4.0 H-Micro, LFM2.5-2.6B, MiniCPM5-2B and Qwen3.5-2B
   scored 3.40–3.87 in German and 3.93–4.20 in English and were not kept. No
   model switched language or wrote chat text. The top three write clearly
   better German than production; English is level, and differences under
-  about 0.3 are noise at 15 prompts. Speed is **unmeasured**: the CPU was
-  power-clamped that day, so whether 2–4× the bytes per token fit 550 ms is
-  open. After edits, every hybrid (Qwen3.5, LFM2.5, Granite H) reused its
-  cache while typing (about 4 extra tokens per keystroke) but usually re-read
-  the whole prompt after a 10–30-token backspace, and an early edit re-read
-  everything; checkpoint spacing (`-cms 32`) changed nothing. Full-attention
-  models re-read 1–11 tokens after the same backspace. No cached result
-  showed stale context.
+  about 0.3 are noise at 15 prompts. After edits, every hybrid (Qwen3.5,
+  LFM2.5, Granite H) reused its cache while typing (about 4 extra tokens per
+  keystroke) but usually re-read the whole prompt after a 10–30-token
+  backspace, and an early edit re-read everything; checkpoint spacing
+  (`-cms 32`) changed nothing. Full-attention models re-read 1–11 tokens after
+  the same backspace. No cached result showed stale context.
 
-  ¹ `llama-server` at `-c 2048` with a 1 GiB host prompt cache, so an upper
-  bound for Badi's `-c 512`. ² At the 62.9 GB/s read bandwidth measured
-  here (LPDDR5-4800, 128-bit); Gemma 4's per-layer embedding lookup is not
-  counted as streamed.
+  Timing (2026-10-19) used Badi's own launch: the pinned `b10726` runtime,
+  `-c 512`, 16-token batches, four threads, the full sliding-window cache and
+  8 generated tokens, 80 typing requests per model and power limit over 48-
+  and 128-token English and German prompts, on battery in the performance
+  profile. This
+  laptop's firmware caps sustained CPU power (RAPL PL1) at 15 W, which holds
+  four busy cores near 1.6 GHz; raised to 28 W at runtime they held about
+  2.6 GHz at a 70 °C package. At 15 W only Gemma 3 fits the 550 ms automatic
+  budget. At 28 W Gemma 4 E2B fits too (first token p50 70 ms, decode 24.6
+  tok/s), Granite Micro misses a quarter of keystrokes, and Qwen3.5-4B misses
+  all of them and needs p90 5.0 s after a backspace. Generation ran at
+  55–62% of the bandwidth ceiling at 28 W and 33–44% at 15 W, so on this
+  laptop the CPU power limit, not memory, bounds it.
+
+  ¹ At the 62.9–64.2 GB/s read bandwidth measured here (LPDDR5-4800,
+  128-bit); Gemma 4's per-layer embedding lookup is not counted as streamed.
+  ² 8-token typing requests, 80 per power limit and model in the paced
+  comparison; `llama-server` peak RSS at Badi's launch. The 15 W Qwen3.5-4B
+  run was stopped when conditions changed and is not reported.
 - **The Prediction Lab** ([qualification.rs](../../evaluation/writing/lab-worker/src/qualification.rs))
   owns discovery and qualification; the shipped broker does not contain it.
   The [Lab bridge](../../evaluation/writing/lab/device-qualification.mjs) calls

@@ -49,6 +49,10 @@ Linux in general.
   1,109 disposable keys in Chromium, each model call read 1.5 instead of 6.4
   new prompt tokens and the suggestion became visible at p50 241 against
   288 ms after the key ([runtime](broker/README.md#writing-model-runtime)).
+  This laptop's firmware caps sustained CPU power at 15 W, which holds four
+  busy cores near 1.6 GHz; Gemma 3 still fits 550 ms there (typing p90 406
+  ms), and at 28 W, set at runtime on 2026-10-19, p90 was 238 ms
+  ([model fit](docs/architecture/model-selection.md)).
   Vulkan on the Iris Xe is slower per keystroke (13–20 against 19–30 tokens/s
   for generation), so Badi stays on the CPU. For one long run-on sentence
   typed into Claude Code in Ghostty, moving the broker's 160-scalar prompt
@@ -267,12 +271,13 @@ Measured alternatives that were not adopted are in the
 [runtime runbook](broker/README.md#writing-model-runtime).
 
 - [ ] Fewer generated tokens, only after a held-out quality comparison.
-- [ ] Finish the [larger-model bench](evaluation/llm-bench/README.md) on
-      clocks that hold. On 2026-10-18, on its USB-C supply, this laptop held
-      its cores at 0.4–2.0 GHz under load (rated 4.6); on 2026-10-19 one
-      busy thread reached 4.4 GHz and six held 2.1 GHz under the firmware's
-      15 W limit. The thread sweep, CPU against Iris Xe, and warm/cold latency
-      for Granite 4.0 Micro, Gemma 4 E2B and Qwen3.5-4B are still to run.
+- [ ] Screen Gemma 4 E2B base (i1-Q4_K_M, 3.43 GB) in the Lab's
+      European-language screen. It wrote better German than Gemma 3 1B on
+      the [larger-model bench](docs/architecture/model-selection.md) and met
+      the 550 ms budget at Badi's launch, but only with this laptop's CPU
+      power limit raised from the firmware's 15 W to 28 W; at 15 W it missed
+      77 of 80 keystrokes. It needs about 4 GB resident, so a recommendation
+      would also need a device tier that knows the sustained power limit.
 - [ ] Pin the runtime's four threads to performance cores (`taskset`/
       `--cpu-mask`): one idle measurement saw 94/30 against 54/21 prompt/
       generate tokens per second for Qwen3-1.7B, a second under load saw no

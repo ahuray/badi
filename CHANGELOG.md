@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#101](https://github.com/ahuray/badi/pull/101) The larger models were
+  timed at Badi's launch: on this laptop's firmware 15 W power limit only
+  Gemma 3 fits 550 ms; at 28 W Gemma 4 E2B fits too and is the next Lab
+  candidate. Six threads and the Iris Xe were measured and not adopted.
 - [#100](https://github.com/ahuray/badi/pull/100) Gemma 3 keeps a full
   sliding-window cache, so it reuses its prompt between keystrokes and after
   a backspace: in Chromium each model call read 1.5 instead of 6.4 new

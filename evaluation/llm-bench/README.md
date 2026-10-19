@@ -30,6 +30,7 @@ Face repository and file or as a path relative to the repository or `~`.
 | `scripts/run_quality.sh [LABEL...]` | `quality.py` per model |
 | `scripts/summarize_latency.py`, `scripts/h4_table.py`, `scripts/summarize_quality.py` | Tables from raw results |
 | `scripts/compare_arms.py DIR PREFIX_A PREFIX_B` | Two arms of latency runs side by side: tokens read, TTFT and total percentiles, and same-prompt text agreement |
+| `scripts/models_table.py DIR CEILINGS` | One row per model from runs at Badi's launch: decode against the ceiling, TTFT and 8-token totals by scenario, keystrokes over 550 ms, peak RSS, pass/fail |
 | `scripts/cold_starts.py --arm NAME="ARGS"...` | Short cold prompts on alternating `llama-server` arms at Badi's launch flags, optionally each after a long prompt |
 | `scripts/run_broker_probe.sh ISO BROKER BADICTL LABEL` | Start one broker build in an isolated home (`ISO/{home,run,data}`, settings unpaused) and replay `broker_probe.py`: a disposable typing sequence through `badictl probe`, recording the broker's own latency and outcome |
 
@@ -73,9 +74,12 @@ extracting. `llama-roofline` only reaches the network for `inspect` of a URL;
   a logind idle inhibitor because Omarchy's idle handler switches to
   `power-saver`. Prompts are disposable synthetic text; nothing is uploaded.
 - **Conditions:** record `conditions.sh` before and after each run and probe
-  clocks under load first. On 2026-10-18 this laptop's cores were held at
-  0.4–2.0 GHz under load on its USB-C supply, so no timing from that day is a
-  result; cache counts, peak memory and greedy text do not depend on clocks.
+  clocks under 10 s of sustained load first, and read the sustained power
+  limit (`/sys/class/powercap/intel-rapl-mmio:0/constraint_0_power_limit_uw`).
+  This laptop's firmware sets it to 15 W, so any timing names the limit it
+  ran under. On its USB-C supply the cores were also held at 0.4–2.0 GHz
+  (2026-10-18), so time on battery. Cache counts, peak memory and greedy text
+  do not depend on clocks.
 
 ## Checks
 
