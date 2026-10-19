@@ -274,6 +274,15 @@ prints pinned download advice and downloads nothing
   (`9acfc1e001311f34b4252001b626f2e466d592a42065f66571bff3790d4e1b14`, two
   tokens ahead) took 0.5–1.8 s to the first word against 0.15–0.47 s without
   it, so no draft model is loaded.
+  On 2026-10-19 (pinned `b10726` `llama-bench`, 48-token prompts in 16-token
+  batches, 32 generated tokens, battery, the CPU power limit raised to 28 W)
+  Gemma 3 1B generated 37.6 tok/s at four threads, 41.4 at six and 33.9 at
+  twenty, and Gemma 4 E2B 21.3, 22.3 and 19.2: six threads would gain 5–10%,
+  more threads lose. On the Iris Xe (Vulkan, `b11719`, all layers) Gemma 3
+  read prompts faster (172 against 106 tok/s) but generated slower (28.8
+  against 37.7 on the same build), and so did Gemma 4 E2B against the pinned
+  CPU runtime (77 against 61, 17.1 against 21.3);
+  typing waits mostly on generation, so the GPU stays unused.
 - **Full sliding-window cache** (2026-10-19, Gemma 3 1B, pinned `b10726`
   at this launch, [bench](../evaluation/llm-bench/README.md), disposable
   English and German text). Without it the runtime cannot roll a
