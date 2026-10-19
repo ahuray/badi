@@ -195,6 +195,26 @@ observer would read (16 where it names the next words, 8 controls).
 context for a disposable page's focused field
 ([observer rules](../../adapters/accessibility/README.md#same-window-context-lab-only)).
 
+Same-window context so far (development cases written for it, so not
+independent). As prompt text (2026-10-13, `healed`, 8 tokens, pinned 1.7B on
+battery with power-saver, 3 s diagnostic budget) the expected next words came
+in 15 of 16 informative cases with the context and 4 of 16 without, but 3 of
+the 8 controls drifted onto the page's topic ("I have attached the chapter
+three"), several additions answered for the user ("November? Yes, it's
+available"), and at 550 ms both arms missed the deadline on 23 or 24 cold
+prompts. As a logit bias instead (`context_bias`, 2026-10-17, English only;
+no prompt grows, so 550 ms holds) first-word matches rose from 8 to 11 and
+matching characters from 43 to 64 of 24 cases at bias 2.0 with every
+suggestion still shown, one control drifting; across four suites (65 cases)
+12 became 15. Bias 4.0 reached 13 of 24 but wrote loops ("Thursday,
+Thursday"), and Persian degraded at both, so it is excluded. The field's own
+earlier text as the source measured neutral. For terminals, which expose no
+accessibility text, `window-ocr.py` read a disposable Ghostty screen with no
+character errors in about 0.8 s (capture 0.2 s, OCR 0.56 s), but five replies
+about that screen gained nothing from its words. No live check of the
+observer's context has run: the desktop was locked, and a headless Chromium
+on a private bus exposed no field.
+
 A model artifact descriptor selects weights for the Lab only (bounded to 16 KiB
 and 8 GiB; it cannot supply an executable or flags):
 

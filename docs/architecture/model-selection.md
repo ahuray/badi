@@ -22,6 +22,25 @@ promotes another.
   qualification below. The advice lists the whole catalog, each entry marked
   whether it fits, for `badi model` and the panel's Model row, and each
   entry's `healed_languages`, the languages its own review heals.
+- **The development screen** (2026-10-17) ran eight models on the same 135
+  development cases (20 each en/de/fr/es/fa plus real-text and probe sets;
+  French and Spanish in the Lab `healed` mode) at 550 ms and 8 tokens, with
+  one blind agent reviewer per language over all 674 unique additions. Gemma
+  3 1B pt Q4_K_M (`gguf-org/gemma-3-1b-pt-gguf`, 0.81 GB, Gemma Terms of Use)
+  was useful on 46 against the installed Qwen3-1.7B's 33, at least acceptable
+  on 106 against 87, with 4 harmful against 3, and faster (shown p50 247
+  against 351 ms). Llama 3.2 1B was next (41 useful, 10 harmful);
+  Granite-4.0-1B-Base, LFM2.5-1.2B-Base, EuroLLM-1.7B and Qwen3.5-2B-Base were
+  near or below the installed model; Gemma 4 E2B at its smallest text-only
+  file (2.19 GB, 2-bit) was useful on 19. A second blind round on 2026-10-18
+  (other reviewers, stricter) found no better build: Google's QAT Q4_0 tied
+  on useful additions (38 each) but was worse on acceptable ones and useful
+  words; an imatrix Q4_K_M, the instruct QAT and Llama 3.2 1B's imatrix and
+  instruct builds were worse. Runs: `output/writing/2026-10-17-model-research/`.
+  Development data and agent reviewers, not a qualification; the Gemma terms
+  need the licence review before any distribution.
+  Earlier, the then-installed Qwen3-1.7B was weak on independent sets, and no
+  ~350M candidate passed the English, German and Persian gates.
 - **The European-language screen** (2026-10-19) compared eleven small base
   models with Gemma 3 1B on 325 development and boundary requests per model
   (en 78, de 67, fr, es and pt 60 each; Persian set aside by user decision),
