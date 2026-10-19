@@ -6,84 +6,46 @@ that appear fast, stay quiet and never edit the wrong place.
 
 When an item is done, delete it and record what is now true in the
 [README](README.md) or the affected runbook; [CHANGELOG.md](CHANGELOG.md)
-keeps the history of what shipped. Evidence here names its kind (fixture,
-real broker, real model, live app); a tested app version is not a claim about
-Linux in general.
+keeps the history of what shipped. Evidence lives in the runbooks; this file
+links to it. A tested app version is not a claim about Linux in general.
 
-## Where Badi stands (2026-10-17)
+## Where Badi stands (2026-10-19)
 
 - **Coverage** is ahead of every Linux alternative found: Chromium-based apps
-  and any website, Zen, Omarchy web apps, Telegram, LibreOffice Writer,
-  Obsidian, Bash and, by an opt-in rule, Ghostty's typed line
-  ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)). Neovim
-  also passed live under this workstation's own LazyVim on 2026-10-17, in
-  foot and in Ghostty, where it takes over from the typed line while it holds
-  the terminal's focus.
-  Writer checks spelling as you type and Alt+F7
-  fixes the word at the caret; German, French, Spanish, Italian, Dutch and
-  Polish spelling turn on with `badi spelling` and their Hunspell dictionaries. The closest Omarchy alternative, Oma Tab, replaces the input
-  method and ships a 4.8 GB model.
-- **Interaction:** type-through, Tab next-word acceptance (a quick second
-  Tab is held for the returning remainder) and search-box
-  quieting work, and a typed-through remainder returns within about 50 ms with
-  no model call ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md)).
-  In browsers it now survives the field being admitted again after the
-  keystroke: Chromium, Brave Origin and Zen kept it with no second model call
-  on 2026-10-13 (checkout broker, real model; the installed build predates it).
-  The inline preview ([ADR 0006](docs/decisions/0006-grey-preview-is-an-overlay.md))
-  reaches VS Code, iframe editors, Qt apps (Telegram, Omawrite) and
-  LibreOffice Writer.
-- **Desktop signals:** the [session helper](adapters/session/README.md) holds
-  every grant across sleep and session switches and defers automatic requests
-  on battery ([ADR 0005](docs/decisions/0005-desktop-signals-withhold-authority.md)).
-  Its fake-bus lane passes, and a short run on this desktop's real buses held
-  the sleep inhibitor and registered both shortcuts. It is not installed here
-  yet.
-- **Speed and footprint:** the latest installed Chromium sample showed and
-  accepted 20/20 warm suggestions, p50 228 ms / p95 284 ms, with zero
-  wrong-field edits ([live evidence](adapters/fcitx5/README.md#tested-with)).
-  The broker and runtime used 1.43 GB RSS (1.33 GiB)
-  ([runtime](broker/README.md#writing-model-runtime)). These are bounded
-  samples on this machine, not universal latency or language-quality claims.
-  Since 2026-10-19 Gemma 3 keeps a full sliding-window cache: on the same
-  1,109 disposable keys in Chromium, each model call read 1.5 instead of 6.4
-  new prompt tokens and the suggestion became visible at p50 241 against
-  288 ms after the key ([runtime](broker/README.md#writing-model-runtime)).
-  This laptop's firmware caps sustained CPU power at 15 W, which holds four
-  busy cores near 1.6 GHz; Gemma 3 still fits 550 ms there (typing p90 406
-  ms), and at 28 W, set at runtime on 2026-10-19, p90 was 238 ms
-  ([model fit](docs/architecture/model-selection.md)).
-  Vulkan on the Iris Xe is slower per keystroke (13–20 against 19–30 tokens/s
-  for generation), so Badi stays on the CPU. For one long run-on sentence
-  typed into Claude Code in Ghostty, moving the broker's 160-scalar prompt
-  start in 64-scalar steps changed requests at model inputs of at least
-  160 bytes from 8/31 proposals (13 cancelled before a first token) to
-  27/27 proposals, with 25 distinct first ghosts within 550 ms
-  ([terminal evidence](adapters/fcitx5/README.md#terminals)).
-- **Quality:** the installed Qwen3-1.7B is weak on independent sets, and no
-  ~350M candidate passed the English/German/Persian gates. Persian keeps the
-  8-token automatic budget: on 2026-10-12, 21 tokens missed 550 ms on all 13
-  development cases. Mid-sentence is on for this user since 2026-10-17
-  (`badi mid-line on`), but it rarely helps: on the 41 mid-line development
-  cases at 550 ms, production showed 2 and the Lab's `following_text` prompt 1
-  ([why](broker/README.md#suggestion-limits)). Giving the model the whole
-  160–224-scalar window instead of the current sentence was tried the same
-  day and not kept: cold Lab prompts showed fewer suggestions (10 against 15
-  of 19 real-text cases) with no more matches, and a live paragraph in Ghostty
-  read no better. Long Tab-only chains drift (a run of Tabs turned a
-  sentence into a maths exercise); the model, not the window, is the limit.
-  On 2026-10-18 Granite 4.0 Micro, Gemma 4 E2B and Qwen3.5-4B (2–3.4 GB base
-  models) wrote clearly better German than Gemma 3 1B on a 30-prompt screen,
-  with English level; their speed is unmeasured
-  ([larger-model bench](docs/architecture/model-selection.md)).
+  and any website, Zen, Omarchy web apps, Telegram, LibreOffice Writer
+  (spelling as you type, Alt+F7), Obsidian, Bash, Neovim (live under LazyVim
+  in foot and Ghostty) and, by an opt-in rule, Ghostty's typed line
+  ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)). German,
+  French, Spanish, Italian, Dutch and Polish spelling are opt-in
+  (`badi spelling`). The closest Omarchy alternative, Oma Tab, replaces the
+  input method and ships a 4.8 GB model.
+- **Interaction:** type-through returns a typed-through remainder in about
+  50 ms with no model call, also when a browser re-admits the field
+  ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md));
+  Tab takes a word and Ctrl+→ the rest; search boxes stay quiet; the inline
+  preview ([ADR 0006](docs/decisions/0006-grey-preview-is-an-overlay.md))
+  reaches VS Code, iframe editors, Qt apps and Writer.
+- **Desktop signals:** the installed [session helper](adapters/session/README.md)
+  holds grants across sleep and session switches and defers automatic
+  requests on battery ([ADR 0005](docs/decisions/0005-desktop-signals-withhold-authority.md)).
+- **Speed:** with a full sliding-window cache (2026-10-19), Gemma 3 reads 1.5
+  new prompt tokens per keystroke and a Chromium suggestion shows at p50 241
+  ms after the key ([runtime](broker/README.md#writing-model-runtime)). This
+  laptop's firmware caps sustained CPU power at 15 W; Gemma 3 fits 550 ms
+  there and comfortably at 28 W. The Iris Xe and more than four threads were
+  measured and not adopted ([runtime](broker/README.md#writing-model-runtime)).
+- **Quality:** Gemma 3 1B is the recommended model; its weakest languages are
+  English and German. Gemma 4 E2B writes clearly better German and fits 550
+  ms only at a raised power limit
+  ([model fit](docs/architecture/model-selection.md)). Mid-sentence
+  suggestions rarely help, and longer Tab chains drift; the model, not the
+  context window, is the limit ([why](broker/README.md#suggestion-limits)).
 - **Diagnosis:** `badi debug on [--text]`, `badi debug watch` and `badi debug
-  log` trace every request, suggestion, key and ghost show/hide across the
-  broker, Fcitx and observer ([README](README.md#debug-trace),
+  log` trace every request (with first-token time and new and reused prompt
+  tokens), suggestion, key and ghost ([README](README.md#debug-trace),
   [ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
-  Each `model done` also records time to first token and the runtime's
-  newly evaluated, cache-reused and generated token counts when available.
   Use it for every live trial.
-- **Context and learning:** same-window context is extracted for the Lab only;
+- **Context and learning:** same-window context exists for the Lab only;
   style learning stores sealed samples behind `badi style on`, and no prompt
   reads them yet.
 
@@ -91,20 +53,18 @@ Standing user decisions:
 - IME-parity for Chromium-based apps, Zen and LibreOffice Writer
   ([ADR 0003](docs/decisions/0003-ime-parity-append-only.md));
 - promote a quality fix only without a per-language harm increase;
-- keep the model resident;
-- explicit requests get about 1.2 s;
-- Tab accepts one word and Ctrl+→ all of it, on every surface (changed
-  2026-10-16);
+- keep the model resident; explicit requests get about 1.2 s;
+- Tab accepts one word and Ctrl+→ all of it, on every surface;
 - Ghostty follows the typed line automatically, by exact opt-in rule
   ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md));
 - window context and learning stay on the device, with global and per-app
-  opt-outs; language work prioritizes English, German, French and Spanish,
-  and Persian keeps its regression gates (confirmed 2026-10-12; the
-  [context firewall](VISION.md#context-firewall) owns this contract);
+  opt-outs; language work prioritizes English, German, French, Spanish and
+  Portuguese, and Persian keeps its regression gates
+  ([context firewall](VISION.md#context-firewall));
 - distribution starts with an AUR package; publication and an Omarchy proposal
   still need approval after naming and licence review;
 - Discord uses desktop-wide AT-SPI `ScreenReaderEnabled`, with recorded prior
-  settings and unchanged Badi app/site permissions (confirmed 2026-10-13).
+  settings and unchanged Badi app/site permissions.
 
 Open decisions, for the user:
 - **Terminal privacy.** A terminal cannot mark a password prompt, so a
@@ -116,120 +76,61 @@ Open decisions, for the user:
   [Suggestion quality](#suggestion-quality).
 - **The `--text` debug trace** keeps typed text in memory for 15 minutes;
   confirm that, or limit it to suggestions.
+- **The 28 W CPU power limit** is set until reboot; installing
+  `output/llm-bench/cpu-sustained-power.service` keeps it (see the
+  [bench](evaluation/llm-bench/README.md) conditions).
 
 ## Next steps, in order
 
 Each step ends with its completion test. Steps that install to the desktop or
 publish need the user's go-ahead first; the rest can start at once.
 
-1. **Run the installed-flow matrix.** `scripts/install-desktop.py` installs
-   the broker, addon, observer and the session helper; `main` runs here
-   (`badi doctor` clean, 2026-10-16), and the session helper's Hyprland binds
-   (`SUPER+ALT+B` pause-toggle, `SUPER+ALT+PERIOD` open-settings) are in the
-   user's `badi.lua`. Still to run, with disposable text: a real suspend and
-   resume, a VT switch and a Tab pressed right after resume; a service restart, undo, pause, composition and stale
-   focus, including Ghostty's typed line, which must start empty and stay
-   quiet after a restart; and fractional scaling / several monitors when a
-   second display is at hand. *Done when* the matrix shows zero wrong-field or stale edits and
-   the session helper and Fcitx runbooks record it.
-2. **Try the new editor surfaces live.** Neovim is done: the real model
-   works in an interactive terminal and, through the installer's new
-   lazy.nvim spec, under this workstation's own LazyVim in foot
-   (2026-10-17: display, Tab, Ctrl+→, streamed growth, Insert-leave
-   dismissal and an explicit Ctrl+Shift+Space request). Writer: the grey preview, Tab and
-   Alt+F7 with one Ctrl+Z work (2026-10-14, isolated profile); still open are
-   a model-backed correction of an ambiguous word and the automatic hint with
-   German, French and Spanish dictionaries installed. A dark pill with every
-   character doubled is cotype, a separate autocomplete now disabled on this
-   desktop, not Badi. *Done when* the
-   [Neovim](adapters/neovim/README.md) and
-   [Writer](adapters/libreoffice/README.md) runbooks record the live result
-   and any defect found is fixed.
-3. **Qualify on the frozen confirmation set.** The user-approved public set
-   (UD r2.16 test, 100 English and 40 each German, French, Spanish and
-   Persian prefixes) is frozen privately at
+1. **Run the installed-flow matrix.** With disposable text: a real suspend
+   and resume, a VT switch and a Tab right after resume; a service restart,
+   undo, pause, composition and stale focus, including Ghostty's typed line,
+   which must start empty and stay quiet after a restart; fractional scaling
+   and several monitors when a second display is at hand. *Done when* the
+   matrix shows zero wrong-field or stale edits and the
+   [session helper](adapters/session/README.md) and
+   [Fcitx](adapters/fcitx5/README.md) runbooks record it.
+2. **Finish the Writer live checks.** Still open: a model-backed correction of
+   an ambiguous word, and the automatic hint with German, French and Spanish
+   dictionaries installed. *Done when* the
+   [Writer runbook](adapters/libreoffice/README.md) records the result and any
+   defect is fixed.
+3. **Screen Gemma 4 E2B in the Lab.** Run the European-language screen (325
+   requests, `production_boundary`, `BADI_LAB_HEALING=all`, blind review per
+   language) for Gemma 4 E2B base i1-Q4_K_M against Gemma 3 1B at the 28 W
+   limit, then decide how a recommendation would know a device's sustained
+   power limit ([model fit](docs/architecture/model-selection.md)). *Done
+   when* the screen table has its row and the catalog decision is recorded.
+4. **Qualify on the frozen confirmation set.** The user-approved set (UD
+   r2.16 test, 100 English and 40 each German, French, Spanish and Persian
+   prefixes) is frozen at
    `output/writing/confirmation-ud-r2.16-2026-10-12/suite.json`, SHA-256
-   `72a69d10d9ec6b261373a6f382b203b512290eb3bff2b71c3b3ee3efd769c1cc`, with
-   source hashes, licences and approval. Its runtime-loading equivalence
-   ([runtime](broker/README.md#writing-model-runtime)) and field-language
-   selector ([Lab](evaluation/writing/README.md)) uses are done; neither is a
-   quality qualification. Select and freeze the candidate on development data
-   before inference; report usefulness, abstention, errors, useful words,
-   keystroke savings and latency misses separately; review full additions.
-   Promoting a model needs a new hypothesis, fresh independent cases, native
-   Persian review where results are ambiguous and the full
-   [qualification](docs/architecture/model-selection.md). The candidate is
-   chosen: on 2026-10-17 eight models ran the same 135 development cases
-   (20 each en/de/fr/es/fa plus real-text and probe sets; French and Spanish
-   in the Lab `healed` mode, since production refuses them) at 550 ms and 8
-   tokens, and one blind agent reviewer per language judged all 674 unique
-   additions. Gemma 3 1B pt Q4_K_M (`gguf-org/gemma-3-1b-pt-gguf`, 0.81 GB,
-   Gemma Terms of Use) was useful on 46 requests against the installed
-   Qwen3-1.7B's 33, at least acceptable on 106 against 87, with 4 harmful
-   against 3, and faster (shown p50 247 against 351 ms). Llama 3.2 1B was
-   next (41 useful, but 10 harmful); Granite-4.0-1B-Base, LFM2.5-1.2B-Base,
-   EuroLLM-1.7B and Qwen3.5-2B-Base were near or below the installed model;
-   Gemma 4 E2B, at its smallest text-only file (2.19 GB, 2-bit), was useful
-   on 19. Development data and agent reviewers, not a qualification; the
-   runs are under `output/writing/2026-10-17-model-research/`. The Gemma
-   terms need the licence review before any distribution. A second blind
-   round on 2026-10-18 (other reviewers, stricter overall) found no better
-   build: Google's QAT Q4_0 tied it on useful additions (38 each) but was
-   worse on acceptable additions and useful words; an imatrix Q4_K_M and the
-   instruct QAT were worse, and so were Llama 3.2 1B's imatrix and instruct
-   builds. Since then the catalog recommends by this screen score and this
-   desktop runs Gemma 3 1B by the user's choice (`badi model`). *Done when*
-   Gemma 3 1B pt passes or fails every gate per language on that set.
-4. **Evaluate same-window context independently.** The observer's
-   [`window_context()`](adapters/accessibility/README.md#same-window-context-lab-only)
-   reads the nearest heading and preceding paragraph of the field's own web
-   document, never another field, a password, a hidden node or another frame;
-   it is unit-tested on fake trees only. A live check was not run: the
-   desktop was locked, and a headless Chromium on a private bus exposed no
-   field. On 2026-10-13 the
-   [development set](evaluation/writing/lab/examples/window-context-development.json)
-   (24 cases written for this, so not independent; `healed`, 8 tokens,
-   pinned 1.7B on battery with power-saver) gave the expected next words in 15
-   of 16 informative cases with the context and 4 of 16 without, with a 3 s
-   diagnostic budget. In 3 of the 8 controls the context pulled the
-   continuation onto the page's topic ("I have attached the chapter three"),
-   and several additions answered for the user ("November? Yes, it's
-   available"). At 550 ms both arms missed the deadline on 23 or 24 cold
-   prompts. On 2026-10-17 window words were tried as a logit bias instead of
-   prompt text, so no prompt grows and 550 ms holds (`context_bias`,
-   [Lab](evaluation/writing/README.md), English only): on the same 24 cases
-   first-word matches rose from 8 to 11 and matching characters from 43 to 64
-   at bias 2.0, with every suggestion still shown; one control drifted onto
-   the page's topic. Across four suites (65 cases) 12 became 15. Bias 4.0
-   reached 13 of 24 but wrote loops ("Thursday, Thursday"), and Persian
-   degraded at both, so it is excluded. The field's own earlier text as the
-   source measured neutral. For terminals, which expose no accessibility
-   text, [`window-ocr.py`](evaluation/writing/window-ocr.py) read a
-   disposable Ghostty screen with no character errors in about 0.8 s
-   (capture 0.2 s, OCR 0.56 s at logical scale), but five replies about that
-   screen gained nothing from its words. *Done when* independent cases with
-   full-addition review, a fence like `style_fact_conflict` for context facts
-   and a measured gain justify production use; only then add the source (the
-   observer's accessibility context, and screen reading only after its own
-   privacy decision), the global and per-app controls, the wire field and
-   cancellation on focus changes.
-5. **Compare style learning in the Lab.** `badi style on` keeps the sentence
-   written before each accepted suggestion on sites that allow learning,
-   sealed with a keyring key; revocation, expiry, key loss, forgetting and the
-   locked keyring are tested
-   ([broker runbook](broker/README.md#style-learning-opt-in)). Feed an
-   explicit `badi style export` into a Lab suite's `style` field and compare
-   against no style on the user's own held-out drafts, with the
-   `style_fact_conflict` fence and native review. Linux apps cannot learn
-   under the settings schema (`linux_app` subjects force `learn: block`);
-   lifting that is a separate privacy decision. *Done when* the comparison
-   shows a per-language gain without more harm, before any prompt reads
-   samples.
-6. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
-   It packages the addon, broker, observer and user units; writing assets are
-   a separate pinned, hash-verified download. *Done when* install, update and
-   removal leave nothing behind; publication waits for the naming and licence
-   review.
+   `72a69d10d9ec6b261373a6f382b203b512290eb3bff2b71c3b3ee3efd769c1cc`. Freeze
+   the candidate from step 3 before inference; report usefulness,
+   abstention, errors, useful words, keystroke savings and latency misses
+   separately; review full additions, with native Persian review where
+   results are ambiguous ([qualification](docs/architecture/model-selection.md)).
+   *Done when* the candidate passes or fails every gate per language.
+5. **Evaluate same-window context independently.** Development results so far
+   are in the [Lab runbook](evaluation/writing/README.md). *Done when*
+   independent cases with full-addition review, a fence like
+   `style_fact_conflict` for context facts and a measured gain justify
+   production use; only then add the source (the observer's accessibility
+   context; screen reading only after its own privacy decision), global and
+   per-app controls, the wire field and cancellation on focus changes.
+6. **Compare style learning in the Lab.** Feed an explicit `badi style
+   export` into a Lab suite's `style` field and compare against no style on
+   the user's own held-out drafts, with the `style_fact_conflict` fence and
+   native review ([broker runbook](broker/README.md#style-learning-opt-in)).
+   Linux apps cannot learn under the settings schema; lifting that is a
+   separate privacy decision. *Done when* the comparison shows a per-language
+   gain without more harm, before any prompt reads samples.
+7. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
+   *Done when* install, update and removal leave nothing behind; publication
+   waits for the naming and licence review.
 
 ## Later, by area
 
@@ -271,35 +172,13 @@ Measured alternatives that were not adopted are in the
 [runtime runbook](broker/README.md#writing-model-runtime).
 
 - [ ] Fewer generated tokens, only after a held-out quality comparison.
-- [ ] Screen Gemma 4 E2B base (i1-Q4_K_M, 3.43 GB) in the Lab's
-      European-language screen. It wrote better German than Gemma 3 1B on
-      the [larger-model bench](docs/architecture/model-selection.md) and met
-      the 550 ms budget at Badi's launch, but only with this laptop's CPU
-      power limit raised from the firmware's 15 W to 28 W; at 15 W it missed
-      77 of 80 keystrokes. It needs about 4 GB resident, so a recommendation
-      would also need a device tier that knows the sustained power limit.
 - [ ] Pin the runtime's four threads to performance cores (`taskset`/
       `--cpu-mask`): one idle measurement saw 94/30 against 54/21 prompt/
       generate tokens per second for Qwen3-1.7B, a second under load saw no
       consistent gain. Measure on an idle machine before changing the launch.
-- [ ] Battery scheduling: finish the [paced trial](evaluation/power/battery-trial.py).
-      On 2026-10-13 (this laptop on battery with power-saver, release build,
-      752 disposable keys per mode at 150 ms per key, 450 ms after words and
-      1.5 s after sentences) `quiet` made 122 model calls against 586, used
-      182 against 464 runtime CPU seconds, showed 313 against 257 suggestions
-      with 211 against 190 matching the reference, and had visible p95 latency
-      of 550 against 525 ms. The same trial later that day, charging in the
-      performance profile (the trial still reports battery, one repeat, 376
-      keys per mode), showed the cost on a fast CPU: 45 against 220 calls and
-      50 against 148 runtime CPU seconds, but 27 against 31 distinct reference
-      words covered and p95 456 against 211 ms. On 2026-10-17 in the
-      power-saver profile, a run-on sentence typed at 450 ms per word showed
-      15 suggestions from 62 requests under `quiet`, most cancelled by the
-      next word after generation began
-      ([runtime](broker/README.md#suggestion-limits)). Still open: the balanced
-      profile on battery, real typing intervals, energy from a privileged power
-      counter rather than runtime CPU time, and a reviewed count of fully
-      accepted additions.
+- [ ] Battery scheduling: finish the [paced trial](evaluation/power/battery-trial.py)
+      on the balanced profile, real typing intervals and a privileged energy
+      counter ([results so far](adapters/session/README.md#battery)).
 - [ ] Use [Linux pressure signals](https://www.kernel.org/doc/html/latest/accounting/psi.html)
       to reduce speculative requests while the machine is contended. PSI files
       are available here; `CPUWeight=1000`, `MemoryHigh=3G` and resident-model

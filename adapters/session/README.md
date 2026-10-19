@@ -66,6 +66,21 @@ resident in every mode.
 `badi status` prints the reported session and power state and the resulting
 automatic scheduling.
 
+The [paced battery trial](../../evaluation/power/battery-trial.py) compares
+`quiet` with `normal`. On 2026-10-13 (battery, power-saver, release build,
+752 disposable keys per mode at 150 ms per key, 450 ms after words and 1.5 s
+after sentences) `quiet` made 122 model calls against 586, used 182 against
+464 runtime CPU seconds, showed 313 against 257 suggestions with 211 against
+190 matching the reference, and had visible p95 550 against 525 ms. Charging
+in the performance profile the same day (one repeat, 376 keys per mode) it
+made 45 against 220 calls and used 50 against 148 CPU seconds, but covered 27
+against 31 distinct reference words at p95 456 against 211 ms. On 2026-10-17
+in power-saver, a run-on sentence typed at 450 ms per word showed 15
+suggestions from 62 requests under `quiet`, most cancelled by the next word
+after generation began. Still unmeasured: the balanced profile on battery,
+real typing intervals, energy from a privileged power counter rather than
+runtime CPU time, and a reviewed count of fully accepted additions.
+
 ## Style key
 
 When it connects to a broker, the helper looks up the style-learning key in

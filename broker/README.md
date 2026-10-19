@@ -283,37 +283,22 @@ prints pinned download advice and downloads nothing
   against 37.7 on the same build), and so did Gemma 4 E2B against the pinned
   CPU runtime (77 against 61, 17.1 against 21.3);
   typing waits mostly on generation, so the GPU stays unused.
-- **Full sliding-window cache** (2026-10-19, Gemma 3 1B, pinned `b10726`
-  at this launch, [bench](../evaluation/llm-bench/README.md), disposable
-  English and German text). Without it the runtime cannot roll a
-  sliding-window cache back, so every request re-read part of its prompt.
-  Four alternating runs per arm, 48–256-token prompts, 30 keystrokes each
-  (720 typing requests per arm): typing read 2.5 instead of 7.9 new tokens
-  per request and reached the first token at p50 68 against 158 ms (p90 110
-  against 193); after a rejected suggestion and retype, 6 instead of 68 tokens
-  and p90 249 against 4095 ms. Decode stayed at about 33.5 ms per token and
-  peak RSS fell from 1.08–1.10 to 1.02 GB. In the three runs per arm without
-  background load, eight-token typing requests finished at p50 332 against
-  430 ms and p90 374 against 467 ms; the fourth full-cache run, slowed by
-  another application, raised the pooled p90 to 529 against 476 ms. Each
-  arm's cached text matched an uncached run 100 times of 120, the rest at
-  near-ties. Through the real broker (release builds, an isolated home, three
-  rotated runs of 168 `badictl probe` steps per arm against the installed
-  `3184097` and the same build without the setting) appended words were
-  shown at p50 245 against 327 ms and p90 404 against 550 ms, with 3 against
-  31 deadline misses, and the step after a backspace at p50 200 against 250
-  ms. Sentence starts were slower, p50 441 against 397 ms (36 per arm,
-  unexplained: the runtime alone started short prompts 11–21 ms faster).
-  423 of 504 probes showed a suggestion against 435; most differences sat at
-  the deadline, and only 4 steps lost and 1 gained a suggestion in every run.
-  Live, installed `5e141ed` against `3184097` (Chromium 154, isolated
-  profile, a local page, `badi debug on`, the same 1,109 `wtype` keys of
-  disposable English and German with two backspace-and-retype edits per
-  language): each model call read 1.5 instead of 6.4 new prompt tokens and
-  reused 14.9 instead of 10.1, the first token came at p50 23 against 73 ms
-  (p90 105 against 164), and the preview was mapped p50 241 against 288 ms
-  and p90 345 against 396 ms after the key. Proposals were 116 against 115,
-  with 6 abstentions each; no suggestion was accepted.
+- **Full sliding-window cache** (2026-10-19, Gemma 3 1B, pinned `b10726`,
+  disposable English and German, [bench](../evaluation/llm-bench/README.md)).
+  Without it the runtime cannot roll a sliding-window cache back. At this
+  launch (four alternating runs, 720 typing requests per arm) typing read 2.5
+  instead of 7.9 new tokens per request, first token p50 68 against 158 ms,
+  and after a rejected suggestion p90 249 against 4095 ms; decode speed was
+  unchanged and peak RSS fell to 1.02 from 1.08–1.10 GB. Cached text matched
+  an uncached run as often as before (100 of 120, the rest near-ties).
+  Through the real broker (504 `badictl probe` steps per arm against the
+  installed build and a same-build control) appended words showed at p50 245
+  against 327 ms with 3 against 31 deadline misses; sentence starts were
+  slower (p50 441 against 397 ms, 36 per arm, unexplained), and 423 against
+  435 probes showed a suggestion, mostly at the deadline. Live in Chromium 154
+  (`5e141ed` against `3184097`, the same 1,109 `wtype` keys) each call read
+  1.5 instead of 6.4 new tokens and the preview appeared p50 241 against 288
+  ms (p90 345 against 396) after the key, with 116 against 115 proposals.
 - **Speed sample.** Build `5faafcf` (2026-10-12; the same five prefixes four
   times each, predictions on): first grey word in Omawrite 0.5.0 20/20 at
   209–250 ms, middle 220–223 ms, 19th of 20 at 244 ms; in a Chromium
@@ -375,6 +360,12 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   (450 ms per word), `quiet` battery scheduling, not the step, set the rate:
   15 of 62 requests showed one, most cancelled by the next word after
   generation had started.
+  Giving the model the whole 160–224-scalar window instead of the current
+  sentence was tried on 2026-10-17 and not kept: cold Lab prompts showed
+  fewer suggestions (10 against 15 of 19 real-text cases) with no more
+  matches, and a live paragraph in Ghostty read no better. Long Tab-only
+  chains drift (a run of Tabs turned a sentence into a maths exercise); the
+  model, not the window, is the limit.
 - **Shape.** At most four words and 64 characters. `en`, `de`, `fa`, `fr`,
   `es` and `pt` are routed; every language but Persian must be Latin
   script, Persian Arabic script, with
