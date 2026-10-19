@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- The installed flow held across service restarts, pause, composition,
+  stale focus, Ghostty's typed line and fractional scale 1.5 with no
+  wrong-field or stale edit (2026-10-19); suspend, VT switch and several
+  monitors still need someone present.
 - Spelling corrections that need the model's choice between dictionary
   candidates work again with Gemma 3 1B: the prompt ends inside an opened
   quote and the answer is read raw, where the old `Answer:` prompt got only a

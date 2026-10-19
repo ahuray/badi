@@ -151,4 +151,10 @@ on the real buses: it reported `on_battery=true power_saver=true`, held a
 under `io.github.ahuray.badi` (`hyprctl globalshortcuts`), and
 `hyprctl dispatch 'hl.dsp.global("io.github.ahuray.badi:pause-toggle")'` ran
 the controller command. Stopping it released the inhibitor and the broker
-report. A real suspend and resume, and a real VT switch, were not exercised.
+report. On 2026-10-19 (installed `5e141ed`, real model, Chromium 154 on a
+disposable page) the helper was restarted while a suggestion showed: it
+reconnected within 0.2 s and reported the same active, mains-power state, so
+nothing was withheld, and Tab accepted that suggestion into the same field
+([matrix](../fcitx5/README.md#tested-with)). A real suspend and resume, and a
+real VT switch, were not exercised: the session locks on sleep and needs
+someone present to unlock it.
