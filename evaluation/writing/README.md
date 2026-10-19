@@ -215,6 +215,28 @@ about that screen gained nothing from its words. No live check of the
 observer's context has run: the desktop was locked, and a headless Chromium
 on a private bus exposed no field.
 
+Independent cases (2026-10-19). An agent with no access to the development
+set or its results wrote 40 English cases. In 22, the window names what
+comes next; in 6, copying the window's fact would be wrong (a declined day,
+a corrected total); 12 are controls. The suite was frozen by hash before
+inference and run on the installed Gemma 3 1B at the 28 W limit. One blind
+reviewer saw the window text and judged each whole addition:
+
+| Arm | Useful full additions (all / informative / controls / no-copy) | Harmful | Wrong context fact | Over 550 ms |
+| --- | --- | --- | --- | --- |
+| `production_boundary`, no window text | 9 / 1 / 8 / 0 | 15 | 0 | 1 |
+| `context_bias` | 11 / 2 / 8 / 1 | 14 | 0 | 1 |
+| `context`, window text in the prompt, 1.2 s diagnostic budget | 10 / 7 / 3 / 0 | 16 | 4 | 28 |
+
+The word bias changed the shown text in only 4 of 40 cases, far below its
+development gain. Prompt text found the informative words (an earbud, a
+permission slip, the oat milk), but 9 of 12 controls drifted into invented
+numbers ("60th birthday!", "1000 USD?"). It also copied a fact the writer
+was changing (the postponed event's original "3 February"), and it missed
+550 ms cold. Neither arm justifies production use; a context-fact fence and a
+prompt that keeps controls quiet come first, and these 40 cases now count as
+development data. Runs: `output/writing/2026-10-19-window-context-independent/`.
+
 A model artifact descriptor selects weights for the Lab only (bounded to 16 KiB
 and 8 GiB; it cannot supply an executable or flags):
 

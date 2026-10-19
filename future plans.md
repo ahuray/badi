@@ -102,13 +102,17 @@ publish need the user's go-ahead first; the rest can start at once.
    passed on 2026-10-19 ([matrix](adapters/fcitx5/README.md#tested-with)).
    *Done when* those show zero wrong-field or stale edits and the
    [session helper](adapters/session/README.md) runbook records them.
-2. **Evaluate same-window context independently.** Development results so far
-   are in the [Lab runbook](evaluation/writing/README.md). *Done when*
-   independent cases with full-addition review, a fence like
-   `style_fact_conflict` for context facts and a measured gain justify
-   production use; only then add the source (the observer's accessibility
-   context; screen reading only after its own privacy decision), global and
-   per-app controls, the wire field and cancellation on focus changes.
+2. **Make same-window context safe before measuring it again.** On 40
+   independent English cases (2026-10-19) the word bias gained nothing and
+   prompt text drifted in controls, copied a fact the writer was changing
+   and missed 550 ms ([Lab runbook](evaluation/writing/README.md#terminal-runs)).
+   Next: a fence like `style_fact_conflict` for context facts and a prompt
+   that keeps controls quiet, developed on the cases seen so far, then a
+   fresh independent set with full-addition review. *Done when* a measured
+   gain on that new set justifies production use; only then add the source
+   (the observer's accessibility context; screen reading only after its own
+   privacy decision), global and per-app controls, the wire field and
+   cancellation on focus changes.
 3. **Compare style learning in the Lab.** Feed an explicit `badi style
    export` into a Lab suite's `style` field and compare against no style on
    the user's own held-out drafts, with the `style_fact_conflict` fence and
