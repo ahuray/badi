@@ -7,6 +7,9 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- [#102](https://github.com/ahuray/badi/pull/102) The backlog is compact
+  and links to its evidence, which now lives in the runbooks; screening
+  Gemma 4 E2B comes before qualification.
 - [#101](https://github.com/ahuray/badi/pull/101) The larger models were
   timed at Badi's launch: on this laptop's firmware 15 W power limit only
   Gemma 3 fits 550 ms; at 28 W Gemma 4 E2B fits too and is the next Lab
