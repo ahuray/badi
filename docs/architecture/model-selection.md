@@ -93,6 +93,10 @@ promotes another.
   more than a quarter of requests. The bench's typing timing reuses the
   prompt cache, which the Lab's cold requests do not. No 15 W run was made:
   lowering the limit needs root. Runs: `output/writing/2026-10-19-gemma4-screen/`.
+  By user decision (2026-10-20) the catalog leaves Gemma 4 E2B out: it
+  gains nothing overall for four times the memory, so model advice needs no
+  sustained-power input yet. A later model with a real gain reopens that
+  question.
 - **The larger-model bench** (2026-10-18, [llm-bench](../../evaluation/llm-bench/README.md),
   llama.cpp `b11719`) screened eight 2–4B base models against Gemma 3 1B
   and Qwen3 1.7B on 30 synthetic prompts (15 German, 15 English), greedy, 16

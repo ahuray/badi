@@ -11,6 +11,8 @@ in [future plans](<future plans.md>), and lasting decisions in
   Fcitx 5.1.23 with the upstream fix, Chromium 154 kept its surrounding
   text on the stock frontend, and a complete install removes the old
   launcher and drop-in with a backup.
+- Gemma 4 E2B stays out of the model catalog by user decision: no overall
+  gain over Gemma 3 1B for four times the memory.
 - Same-window context on 40 independent English cases: the word bias gained
   nothing, and window text in the prompt helped informative replies but
   drifted in controls, copied a fact the writer was changing and missed
