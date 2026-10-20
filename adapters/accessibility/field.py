@@ -153,6 +153,7 @@ class FieldBackend:
         result = {"quiet": self.quiet_reason(node, local),
                 "direction": direction, "bus": node.app.bus_name, "path": node.path,
                 "process_id": window["pid"], "app_id": app_id, "uri": uri, "browser": app.browser, "web": app.web,
+                "gecko": app.gecko,
                 "role": role, "tag": attributes.get("tag", ""), "input_type": attributes.get("text-input-type", ""),
                 "xml_roles": attributes.get("xml-roles", ""),
                 **self.states(flags), "caret": caret, "total_chars": count, "selection_count": selections,
@@ -465,6 +466,26 @@ class FieldBackend:
                 return url
         raise Denied("origin_unavailable")
 
+    def field_document(self, metadata):
+        """The address of the web document a field belongs to, or None.
+
+        Each engine names it its own way: Gecko's DocURL (its URI is empty),
+        Chromium's URI. A browser field's must equal the page address its
+        binding holds; a Chromium-based app's page has no browser origin, so
+        its own document's address stands alone. A later walk counts text only
+        once it reaches that document.
+        """
+        if not metadata.get("web"):
+            return None
+        node = metadata["node"]
+        try:
+            address = self.gecko_document_url(node) if metadata.get("gecko") else self.nearest_document_uri(node)
+        except Denied:
+            return None
+        if not address or (metadata.get("uri") and address != metadata["uri"]):
+            return None
+        return address
+
     def window_context(self, metadata):
         """The nearest heading above the field and the end of the paragraph
         just before it, from the field's own web document, or None.
@@ -476,11 +497,9 @@ class FieldBackend:
         gives up rather than guess when the document cannot be found or its
         address differs from the field's binding. Native apps get None.
         """
-        if not metadata.get("web") or not metadata.get("uri"):
+        if self.field_document(metadata) is None:
             return None
         node = metadata["node"]
-        if self.nearest_document_uri(node) != metadata["uri"]:
-            return None
         found = {"heading": None, "paragraph": None}
         visits = [0]
         child, done = node, False
@@ -544,11 +563,9 @@ class FieldBackend:
         VOCABULARY_CHARS, VOCABULARY_NODES or VOCABULARY_SECONDS and returns
         what it found by then. Native apps get None.
         """
-        if not metadata.get("web") or not metadata.get("uri"):
+        if self.field_document(metadata) is None:
             return None
         node = metadata["node"]
-        if self.nearest_document_uri(node) != metadata["uri"]:
-            return None
         # The snapshot itself must still answer inside the operation deadline.
         until = min(time.monotonic() + VOCABULARY_SECONDS, self.deadline - VOCABULARY_HEADROOM_SECONDS)
         found = {"chunks": [], "chars": 0, "visits": 0, "until": until}
