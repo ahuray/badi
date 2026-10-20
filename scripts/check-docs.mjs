@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -154,9 +154,25 @@ for (const file of [...checkoutFiles].filter((file) => file.endsWith(".md"))) {
   }
 }
 
+// The checkout holds sources, small data and its own docs. Model weights,
+// build products, archives and evidence belong outside it (AGENTS.md).
+const MAX_FILE_BYTES = 1024 * 1024;
+const ARTIFACT = /\.(gguf|safetensors|onnx|pt|bin|so|a|o|pyc|zip|zst|xz|tar|tgz|gz|whl|deb|pkg\.tar\.zst)$/iu;
+const hygiene = [];
+for (const file of checkoutFiles) {
+  const relative = path.relative(repository, file);
+  if (ARTIFACT.test(relative)) hygiene.push(`${relative}: build product, archive or model file`);
+  else if ((await stat(file)).size > MAX_FILE_BYTES) hygiene.push(`${relative}: larger than 1 MiB`);
+}
+
 if (failures.length > 0) {
   process.stderr.write(`Broken local Markdown links:\n${failures.join("\n")}\n`);
   process.exitCode = 1;
-} else {
-  process.stdout.write(`Checked ${checked} local Markdown links.\n`);
+}
+if (hygiene.length > 0) {
+  process.stderr.write(`Files that do not belong in the checkout:\n${hygiene.join("\n")}\n`);
+  process.exitCode = 1;
+}
+if (process.exitCode !== 1) {
+  process.stdout.write(`Checked ${checked} local Markdown links and ${checkoutFiles.size} files.\n`);
 }

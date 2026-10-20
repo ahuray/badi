@@ -54,10 +54,10 @@ way while Fcitx is composing.
 
 ## Where it works
 
-Tested on the development workstation (Arch Linux, Hyprland 0.56, Fcitx 5.1.22
-and, from 2026-10-19, 5.1.23) with disposable text in October 2026. A listed
-version is not a claim about Linux in general. Chromium-based apps need Fcitx
-5.1.23 or later on Hyprland: earlier versions stop them sending the text
+Tested on the development workstation (Arch Linux, Hyprland 0.56, Fcitx
+5.1.23) with disposable text in October 2026. A listed version is not a claim
+about Linux in general. Badi needs Fcitx 5.1.23 or later on Hyprland:
+earlier versions stop Chromium-based apps sending the text
 around the caret.
 
 | App | Notes | Tested |
@@ -147,9 +147,7 @@ are kept, and the first backup — the files as they were before Badi — is kep
 as well. `python3 scripts/badi_install.py restore DIR` rolls one back, reloads
 user units when a service file was restored, and updates the install receipt
 to those restored bytes. The desktop install needs an unlocked desktop;
-`--broker-only` updates only the model service while locked. A complete
-install also removes, with a backup, the Fcitx 5.1.22 frontend backport that
-earlier Badi installs added.
+`--broker-only` updates only the model service while locked.
 Without a writing model, the installer offers the one recommended for this
 device: it names the model, its size and any terms that come with it, and
 downloads it (pinned and hash-checked) only after you accept. Unattended,
