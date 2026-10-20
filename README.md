@@ -275,6 +275,7 @@ what you typed:
 | `budget_prefill`, `budget_stream` | The time budget ran out: 550 ms while typing, 1.2 s after an explicit request. |
 | `model_abstained`, `output_rejected` | The model declined, or its words failed a language, dictionary, number or safety check, or did not fit before the text after the caret. |
 | `stale`, `timeout`, `provider_error` | The text changed first, or the model was late or failed. |
+| `low_confidence` | A word of the suggestion was too unlikely for the model to be sure, so it was withheld ([confidence gate](broker/README.md#suggestion-limits)). |
 
 Debug mode expires after 15 minutes. A crashed model service restarts with
 backoff; a missing or oversized model stops it for `badi doctor` to explain.

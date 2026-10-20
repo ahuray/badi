@@ -208,7 +208,8 @@ badictl models writing --json
 
 `status` counts each call that showed nothing once under `no_suggestion`
 (`request_abstained`, `budget_prefill`, `budget_stream`, `model_abstained`,
-`output_rejected`, `stale`, `timeout`, `provider_error`) and names the latest.
+`output_rejected`, `stale`, `timeout`, `provider_error`, `low_confidence`) and
+names the latest.
 Its `type_through` counts requests answered from the carry (`carried`) and,
 for admitted requests that reached the provider although a carry existed,
 the gate that declined it (`scope`, `after_changed`, `language_changed`,
@@ -383,23 +384,31 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   token count. A 2.6× Persian budget missed 550 ms on the development cases.
 - **Abstention.** A continuation abstains when it adds a number absent from the
   typed text, and every request when the caret splits a word.
-- **Token confidence (measured, not used).** No suggestion is gated on the
-  model's confidence. Calibrated on 2026-10-20 by replaying Gemma 3 1B's
-  exact production payloads with `n_probs`: the 301 shown suggestions of
-  the paired European-language screen, with three blind label rounds, and
-  every replay reproduced its text. The lowest pre-sampling token
-  log-probability of a suggestion separates useful from unhelpful or
-  harmful at an AUC of 0.70–0.77 overall, strongly in German and not at
-  all in English. A rule frozen before testing (show only when every token
-  is at least −2.75) was tested once on the held-out confirmation outputs
-  (224 shown). It cut harmful additions from 15 to 10 and unhelpful ones
-  from 18 to 10, with harm falling or holding in every language, but it lost
-  7 of 51 useful full additions (2 in English, 3 in Persian) and showed 19%
-  fewer suggestions. Cutting before the first low-confidence token removes
-  almost no harm, because invented facts are fluent, and the first word's
-  confidence alone is much weaker. A useful gate therefore waits for the
-  whole suggestion, which costs the streamed first word about the
-  remaining decode time.
+- **Token confidence gate.** Each continuation request asks the runtime for
+  `n_probs: 1` (pre-sampling), and a continuation is shown only when every
+  token of its shown text has a log-probability of at least −2.75
+  (`writing::CONFIDENCE_FLOOR`, user decision 2026-10-20). Tokens wholly
+  inside the healed echo and a withheld stop token do not count; a token
+  that straddles the echo does. Missing or misaligned probabilities fail
+  closed. A withheld suggestion is `low_confidence`, and `model done` in the
+  trace carries `min_logprob`. The whole suggestion is judged before
+  display, so no partial streams first. Spelling choices are not gated.
+  The floor was calibrated by replaying Gemma 3 1B's exact production
+  payloads for 301 reviewed development suggestions, each with three blind
+  label rounds; every replay reproduced its text. The lowest token
+  log-probability separates useful from unhelpful or harmful at an AUC of
+  0.70–0.77 overall, strongly in German and not at all in English. On the
+  held-out confirmation outputs (224 shown) the rule, frozen before that
+  test, cut harmful additions from 15 to 10 and unhelpful ones from 18 to
+  10, with harm falling or holding in every language. It lost 7 of 51
+  useful full additions (2 in English, 3 in Persian) and showed 19% fewer
+  suggestions. Cutting before the first low-confidence token removed almost
+  no harm, because invented facts are fluent, and the first word's
+  confidence alone was much weaker. Live in Chromium 154 at the 15 W limit
+  (2026-10-20, 115 paced word pauses of the same disposable text), the
+  preview appeared at p50 294 against 218 ms (p90 395 against 265; 4 against
+  0 over 550 ms) after the last key, and 92 against 112 pauses showed one
+  (17 withheld as `low_confidence`).
 - **Languages and healing.** Settings `writing_languages` (default `en`, `de`,
   `fa`; `fr`, `es` and `pt` opt-in) decide where Badi suggests; a request in
   any other language abstains before the model, and detection names French,
