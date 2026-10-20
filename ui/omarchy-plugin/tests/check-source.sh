@@ -21,10 +21,10 @@ jq -e '
 
 jq -e '
   .status == "disabled_repo_local_feasibility"
-  and .omarchy.package == "4.0.3-1"
+  and .omarchy.package == "4.0.5-1"
   and .omarchy.source_repository == "https://github.com/omacom/omarchy.git"
-  and .omarchy.source_tag == "v4.0.3"
-  and .omarchy.source_commit == "0534987009061cbe2dacdde4ad564092ab698d12"
+  and .omarchy.source_tag == "v4.0.5"
+  and .omarchy.source_commit == "94a8fbc2d67eec5673c7f16b8c5e8a9c8452ffdc"
 ' "$compatibility" >/dev/null
 
 if grep -En 'ShellRoot|execDetached|Qt\.openUrlExternally|/bin/(ba)?sh|(^|[[:space:]])(ba)?sh[[:space:]]+-c|console\.(log|warn|error)' "${qml_files[@]}"; then
@@ -36,6 +36,21 @@ if grep -En 'command[[:space:]]*:' "${qml_files[@]}"; then
   echo "plugin source gate: Process.command is forbidden; keep reviewed fixed exec arrays" >&2
   exit 1
 fi
+
+# Qt 6.12 added a QtQuick Color singleton that shadows the host palette, so a
+# bare Color.accent reads undefined unless Omarchy's patched Quickshell
+# rewrites the import. Qualify the palette the way Omarchy 4.0.5 does.
+if grep -En '(^|[^.[:alnum:]_])Color\.' "${qml_files[@]}"; then
+  echo "plugin source gate: qualify the host palette as Commons.Color; Qt 6.12 QtQuick shadows a bare Color" >&2
+  exit 1
+fi
+for qml_file in "${qml_files[@]}"; do
+  if grep -Fq 'Commons.Color.' "$qml_file" &&
+      ! grep -Fxq 'import qs.Commons as Commons' "$qml_file"; then
+    echo "plugin source gate: ${qml_file##*/} uses Commons.Color without importing qs.Commons as Commons" >&2
+    exit 1
+  fi
+done
 
 if grep -En 'Qt\.callLater' "$artifact_dir/BadiClient.qml"; then
   echo "plugin source gate: client lifecycle callbacks must not defer unguarded work" >&2

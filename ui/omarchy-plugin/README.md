@@ -118,13 +118,27 @@ wrote `battery_mode` through stdin (`h` restored it), `/ghost` left only the
 Ghostty row, and a restart from System showed `◌ LOADING` with
 `Loading the model… 3s` until the broker answered.
 
+On 2026-10-20 it was verified again on Omarchy 4.0.5-1 with Omarchy's
+Quickshell 0.3.2.r7.g2b4501a-1 and Qt declarative 6.12.0-1 (Tokyo Night): the
+ready mark drew in the theme accent, `badi settings` opened the popout, j/k
+and the arrows moved the cursor one row each, `/ghost` left only the Ghostty
+row, the first Escape left the search and the second closed the popout.
+
 ## Pinned host
 
 `compatibility.json` records the Omarchy host files the plugin depends on,
-byte-compared with Omarchy `v4.0.3` (`0534987009061cbe2dacdde4ad564092ab698d12`)
-under Quickshell 0.3.1 and Qt declarative 6.11.2, including every `qs.Ui`
-component the popout uses (unchanged in 4.0.4). The strict check fails when the
-installed host drifts. The manifest declares only the `bar-widget` kind.
+byte-compared with Omarchy `v4.0.5` (`94a8fbc2d67eec5673c7f16b8c5e8a9c8452ffdc`)
+under Quickshell 0.3.2 and Qt declarative 6.12.0, including every `qs.Ui`
+component the popout uses. The strict check fails when the installed host
+drifts. The manifest declares only the `bar-widget` kind.
+
+Qt 6.12 added a QtQuick `Color` singleton that shadows the host palette, so
+under stock Quickshell a bare `Color.accent` reads `undefined`. Omarchy's own
+Quickshell build pins bare `import QtQuick` imports, plugins included, to 6.11
+while its shell carries the `OmarchyLoadPatch` pragma, but that patch is
+temporary. The plugin imports `qs.Commons as Commons` and writes
+`Commons.Color`, as Omarchy 4.0.5 does; the source gate rejects a bare
+`Color`, and CI runs Arch's stock Quickshell 0.3.2-1.
 
 ## Checks
 
