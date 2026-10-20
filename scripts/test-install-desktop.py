@@ -31,6 +31,7 @@ NATIVE_SOURCES = ('target/release/badi-broker', 'target/release/badictl', 'scrip
                   'adapters/accessibility/' + name for name in installer.OBSERVER_MODULES) + tuple(
                   'adapters/session/' + name for name in installer.SESSION_MODULES)
 STOCK = '{ path=/usr/bin/fcitx5 ; argv[]=%s ; ignore_errors=no ; start_time=[n/a] ; pid=0 }\n'
+STOCK_COMMAND = '/usr/bin/fcitx5 --disable notificationitem'
 
 
 def only_backup(home):
@@ -51,35 +52,18 @@ def native_project(project):
         source = project / name
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text('new ' + name)
-    # The pinned selector and manifest define the supported Fcitx cell.
-    for name in ('launch.py', 'manifest.json'):
-        target = project / 'packaging/fcitx5-wayland-compat' / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(CHECKOUT / 'packaging/fcitx5-wayland-compat' / name, target)
 
 
-def compat_fixture(root):
-    """A checked build receipt bound to task-owned stand-ins for system Fcitx files."""
-    runtime = root / 'system'
-    runtime.mkdir()
-    files = []
-    for index in range(5):
-        path = runtime / f'runtime-{index}'
-        path.write_bytes(f'runtime {index}'.encode())
-        files.append(str(path))
-    launcher = SimpleNamespace(VERSION='5.1.22', RUNTIME_FILES=tuple(files),
-                               digest=lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest())
-    build = root / 'build'
-    build.mkdir()
-    (build / 'libwaylandim.so').write_bytes(b'patched frontend')
-    receipt = {'schema': 'badi.fcitx-wayland-compat-build.v1',
-               'source': json.loads((CHECKOUT / 'packaging/fcitx5-wayland-compat/manifest.json').read_text()),
-               'installed_build_versions': {name: '5.1.22' for name in ('Fcitx5Core', 'Fcitx5Config', 'Fcitx5Utils')},
-               'runtime_files_sha256': {path: launcher.digest(path) for path in files},
-               'artifact_sha256': hashlib.sha256(b'patched frontend').hexdigest(),
-               'protocol_checks_passed': True, 'physical_editor_verified': False, 'installed': False}
-    (build / 'build-receipt.json').write_text(json.dumps(receipt))
-    return launcher, build, receipt
+def retired_frontend(home):
+    """What an install from before Fcitx 5.1.23 left: the backport, its drop-in and receipt entries."""
+    library = home / installer.RETIRED_COMPAT_LIBRARY
+    files = {library / name: f'retired {name}'.encode() for name in installer.RETIRED_COMPAT_FILES}
+    files[home / installer.RETIRED_COMPAT_DROPIN] = installer.RETIRED_COMPAT_DROPIN_TEXT.encode()
+    for path, data in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    receipts.write_receipt(home, 'desktop', {'commit': '0' * 40, 'dirty': False}, list(files))
+    return files
 
 
 def broker_only_install(root):
@@ -146,7 +130,7 @@ class DesktopInstallTests(unittest.TestCase):
                 args=SimpleNamespace(broker_only=False, observed_app=['chromium']),
                 home=home, config_home=home / '.config', runtime=root / 'runtime',
                 flag_updates={flags: ('# mine\n', '# mine\n' + installer.OBSERVED_FLAG + '\n')},
-                flags_present=[], broker_updating=True, accessibility_enabled=True, compat=None)
+                flags_present=[], broker_updating=True, accessibility_enabled=True, retired_compat=[])
             flags.write_text('# mine\n# edited while building\n')
             with patch.object(installer, 'ROOT', project), \
                  self.assertRaisesRegex(RuntimeError, 'changed during the build'):
@@ -169,7 +153,7 @@ class DesktopInstallTests(unittest.TestCase):
                 args=SimpleNamespace(broker_only=False, observed_app=[]),
                 home=home, config_home=home / '.config', runtime=root / 'runtime',
                 flag_updates={}, flags_present=[], broker_updating=True,
-                accessibility_enabled=True, compat=None,
+                accessibility_enabled=True, retired_compat=[],
                 hypr_update=(hyprland, original, updated))
             hyprland.write_text(original + '-- edited while building\n')
             with patch.object(installer, 'ROOT', project), \
@@ -192,7 +176,7 @@ class DesktopInstallTests(unittest.TestCase):
                 args=SimpleNamespace(broker_only=False, observed_app=[]),
                 home=home, config_home=home / '.config', runtime=root / 'runtime',
                 flag_updates={}, flags_present=[], broker_updating=True,
-                accessibility_enabled=True, compat=None,
+                accessibility_enabled=True, retired_compat=[],
                 checkout={'commit': '0' * 40, 'dirty': False},
                 hypr_update=(hyprland, original, updated))
             with patch.object(installer, 'ROOT', project), \
@@ -259,7 +243,7 @@ class DesktopInstallTests(unittest.TestCase):
                 args=SimpleNamespace(broker_only=False, observed_app=[], screen_reader_accessibility=False),
                 home=home, config_home=home / '.config', runtime=runtime,
                 flag_updates={}, flags_present=[], broker_updating=True,
-                accessibility_enabled=False, compat=None)
+                accessibility_enabled=False, retired_compat=[])
             installation = receipts.Installation(home, 'desktop')
             with patch.object(installer, 'run', side_effect=execute), \
                  patch.object(installer, 'require_unlocked'), \
@@ -489,6 +473,7 @@ class DesktopInstallTests(unittest.TestCase):
             previous = home / '.local/lib/badi/badi-broker'
             previous.parent.mkdir(parents=True, exist_ok=True)
             previous.write_text('previous broker')
+            retired = retired_frontend(home)
             settings = home / '.config/badi/settings.json'
             settings.parent.mkdir(parents=True)
             settings.write_text('{"paused":true,"user_preference":"preserved"}')
@@ -520,8 +505,8 @@ class DesktopInstallTests(unittest.TestCase):
             self.assertEqual(helper.read_text(), 'keep running helper')
             self.assertEqual(json.loads(settings.read_text())['paused'], True)
             self.assertFalse(any('omarchy-fcitx5.service' in call or call[0] in ('omarchy-shell', 'npm', '/usr/bin/fcitx5') for call in calls))
-            self.assertFalse((home / '.local/lib/badi/compat').exists())
-            self.assertFalse((home / installer.COMPAT_DROPIN).exists())
+            self.assertEqual({path: path.read_bytes() for path in retired}, retired,
+                             'The retired frontend waits for a complete install, which restarts Fcitx')
             self.assertFalse(any('badi-accessibility.service' in call or call[0] == '/usr/bin/python3' for call in calls))
             self.assertNotIn(['systemctl', '--user', 'enable', 'badi-broker.service'], calls)
             backup, document, changed = only_backup(home)
@@ -544,7 +529,8 @@ class DesktopInstallTests(unittest.TestCase):
                      '.local/bin/badi-desktop': '../lib/badi/badi-desktop.py'}
             self.assertEqual({relative: os.readlink(home / relative) for relative in links}, links,
                              'Each command is installed once; PATH names are links')
-            self.assertEqual(sorted(receipt['files']), sorted(set(changed) - set(links)))
+            kept = {str(path.relative_to(home)) for path in retired}
+            self.assertEqual(sorted(receipt['files']), sorted(set(changed) - set(links) | kept))
             # The installed CLI imports its helper module from beside its real path.
             for command in ('badi', 'badi-desktop'):
                 result = subprocess.run([str(home / '.local/bin' / command), '--help'], capture_output=True,
@@ -668,14 +654,14 @@ class DesktopInstallTests(unittest.TestCase):
 
     def test_native_wait_allows_delayed_loading_and_has_a_deadline(self):
         with patch.object(installer, 'native_addon_loaded', side_effect=[False, False, True]) as probe, \
-             patch.object(installer.time, 'monotonic', return_value=0), \
-             patch.object(installer.time, 'sleep') as sleep:
+             patch.object(receipts.time, 'monotonic', return_value=0), \
+             patch.object(receipts.time, 'sleep') as sleep:
             installer.wait_native_addon(Path('/installed/addon.so'))
             self.assertEqual(probe.call_count, 3)
             self.assertEqual(sleep.call_count, 2)
         with patch.object(installer, 'native_addon_loaded', return_value=False), \
-             patch.object(installer.time, 'monotonic', side_effect=[0, 11]), \
-             patch.object(installer.time, 'sleep') as sleep:
+             patch.object(receipts.time, 'monotonic', side_effect=[0, 11]), \
+             patch.object(receipts.time, 'sleep') as sleep:
             with self.assertRaisesRegex(RuntimeError, 'running Fcitx service'):
                 installer.wait_native_addon(Path('/installed/addon.so'))
             sleep.assert_not_called()
@@ -754,14 +740,14 @@ class DesktopInstallTests(unittest.TestCase):
 
     def test_accessibility_wait_is_bounded(self):
         with patch.object(installer, 'probe_accessibility', side_effect=[None, {'ready': True}]) as probe, \
-             patch.object(installer.time, 'monotonic', return_value=0), \
-             patch.object(installer.time, 'sleep') as sleep:
+             patch.object(receipts.time, 'monotonic', return_value=0), \
+             patch.object(receipts.time, 'sleep') as sleep:
             installer.wait_accessibility(Path('/helper'), Path('/endpoint'))
             self.assertEqual(probe.call_count, 2)
             sleep.assert_called_once_with(.2)
         with patch.object(installer, 'probe_accessibility', return_value=None), \
-             patch.object(installer.time, 'monotonic', side_effect=[0, 11]), \
-             patch.object(installer.time, 'sleep') as sleep:
+             patch.object(receipts.time, 'monotonic', side_effect=[0, 11]), \
+             patch.object(receipts.time, 'sleep') as sleep:
             with self.assertRaisesRegex(RuntimeError, 'Fcitx was not restarted'):
                 installer.wait_accessibility(Path('/helper'), Path('/endpoint'))
             sleep.assert_not_called()
@@ -869,46 +855,32 @@ class DesktopInstallTests(unittest.TestCase):
                 self.assertIn('.local/lib/badi/accessibility/health.py', changed)
                 self.assertIn('.config/systemd/user/badi-accessibility.service', changed)
                 self.assertEqual(profile.read_text(), 'preserve keyboard profile')
-                self.assertFalse((home / installer.COMPAT_DROPIN).exists())
-                if helper_ready:
-                    self.assertIn('is not the pinned 5.1.22', output.getvalue())
+                self.assertNotIn('retired', output.getvalue())
 
 
 class FullInstall:
-    def full_install(self, root, argv, *, version='5.1.22', overridden=False, loaded=True, prebuilt=False,
-                     installed=None):
+    def full_install(self, root, argv, *, retired=False, overridden=False):
+        """A complete install; `retired` leaves an earlier backport in place first,
+        and `overridden` adds another drop-in that still starts its launcher."""
         home, project, runtime = root / 'home', root / 'project', root / 'runtime'
         native_project(project)
         profile = home / '.config/fcitx5/profile'
         profile.parent.mkdir(parents=True, exist_ok=True)
         profile.write_text('preserve keyboard profile')
-        launcher, build, _receipt = compat_fixture(root)
-        if prebuilt:
-            argv = [*argv, '--wayland-compat-build', str(build)]
-        if installed is not None:
-            # An earlier installation of this build, then the given change to it.
-            compat = home / '.local/lib/badi/compat/fcitx5-5.1.22'
-            (compat / 'addons').mkdir(parents=True)
-            shutil.copy2(build / 'libwaylandim.so', compat / 'addons/libwaylandim.so')
-            shutil.copy2(build / 'build-receipt.json', compat / 'build-receipt.json')
-            shutil.copy2(project / 'packaging/fcitx5-wayland-compat/launch.py', compat / 'launch.py')
-            installed(launcher, compat)
+        self.retired = retired_frontend(home) if retired else {}
+        retired_command = '/usr/bin/python3 -B %s/.local/lib/badi/compat/fcitx5-5.1.22/launch.py --disable notificationitem' % home
         calls = []
 
         def execute(command, **kwargs):
             calls.append(command)
             if command[0] == 'loginctl':
                 return subprocess.CompletedProcess(command, 0, str(runtime), '')
-            if command == ['/usr/bin/fcitx5', '--version']:
-                return subprocess.CompletedProcess(command, 0, version + '\n', '')
             if '--property=ExecStart' in command:
-                # Model systemd: the managed drop-in applies after daemon-reload.
+                # Model systemd: a removed drop-in stops applying at daemon-reload.
                 reloaded = ['systemctl', '--user', 'daemon-reload'] in calls
-                managed = reloaded and not overridden and (home / installer.COMPAT_DROPIN).exists()
-                argv = installer.compat_command(home, '5.1.22') if managed else installer.STOCK_FCITX_COMMAND
+                dropin = (home / installer.RETIRED_COMPAT_DROPIN).exists() or not reloaded
+                argv = retired_command if overridden or (retired and dropin) else STOCK_COMMAND
                 return subprocess.CompletedProcess(command, 0, STOCK % argv, '')
-            if any(str(part).endswith('fcitx5-wayland-compat/build.py') for part in command):
-                shutil.copytree(build, command[command.index('--work-dir') + 1])
             output = 'loaded' if '--property=LoadState' in command else 'enabled' if '--property=UnitFileState' in command else '{}'
             return subprocess.CompletedProcess(command, 0, output, '')
 
@@ -917,14 +889,12 @@ class FullInstall:
              patch.object(installer, 'require_writing_model'), \
              patch.object(installer.Path, 'home', return_value=home), \
              patch.object(installer.subprocess, 'run', side_effect=execute), \
-             patch.object(installer, 'compat_launcher', return_value=launcher), \
              patch.object(installer, 'require_unlocked'), \
              patch.object(installer, 'require_accessibility_runtime'), \
              patch.object(installer, 'wait_session_helper', return_value=True), \
              patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
              patch.object(installer, 'wait_accessibility'), \
              patch.object(installer, 'wait_native_addon'), \
-             patch.object(installer, 'wait_compat_frontend', return_value=loaded) as frontend, \
              patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(runtime), 'XDG_CONFIG_HOME': str(home / '.config')}), \
              patch('sys.argv', ['install-desktop.py', *argv]), \
              contextlib.redirect_stdout(io.StringIO()) as output:
@@ -932,199 +902,99 @@ class FullInstall:
                 installer.main()
             finally:
                 self.output = output.getvalue()
-        return home, project, calls, frontend
+        return home, project, calls
 
 
-class WaylandCompatTests(FullInstall, unittest.TestCase):
-    def test_full_install_builds_and_activates_the_frontend(self):
+class RetiredFrontendTests(FullInstall, unittest.TestCase):
+    def test_full_install_removes_the_retired_frontend_with_a_restorable_backup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home, _project, calls = self.full_install(Path(temporary), [], retired=True)
+            for path in self.retired:
+                self.assertFalse(os.path.lexists(path))
+            self.assertFalse((home / installer.RETIRED_COMPAT_LIBRARY).exists(), 'Its emptied directories go too')
+            self.assertTrue((home / '.config/systemd/user/omarchy-fcitx5.service.d/50-badi.conf').is_file(),
+                            'The addon drop-in beside it stays')
+            backup, document, _changed = only_backup(home)
+            removed = {entry['path']: entry for entry in document['changes'] if entry['action'] == 'remove'}
+            self.assertEqual(set(removed), {str(path.relative_to(home)) for path in self.retired})
+            for path, data in self.retired.items():
+                self.assertEqual((backup / removed[str(path.relative_to(home))]['saved']).read_bytes(), data)
+            recorded = json.loads((home / '.local/state/badi/receipts/desktop.json').read_text())['files']
+            self.assertFalse(any('compat' in key for key in recorded), 'The receipt no longer claims removed files')
+            self.assertIn('.local/lib/badi/badi-broker', recorded)
+            # The stock command must be effective before the one Fcitx restart.
+            reload = calls.index(['systemctl', '--user', 'daemon-reload'])
+            restart = calls.index(['systemctl', '--user', 'restart', 'omarchy-fcitx5.service'])
+            checks = [index for index, call in enumerate(calls) if '--property=ExecStart' in call]
+            self.assertTrue(checks and all(reload < index < restart for index in checks))
+            self.assertIn('Removed the retired Fcitx 5.1.22 Wayland frontend backport', self.output)
+
+            with patch.object(receipts.subprocess, 'run') as reload_units, contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(receipts.restore(backup, [str(installer.RETIRED_COMPAT_LIBRARY),
+                                                           str(installer.RETIRED_COMPAT_DROPIN)]), [])
+            self.assertEqual({path: path.read_bytes() for path in self.retired}, self.retired)
+            reload_units.assert_called_once()
+
+    def test_install_without_a_retired_frontend_leaves_fcitx_overrides_alone(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home, _project, calls = self.full_install(Path(temporary), [])
+            _backup, _document, changed = only_backup(home)
+            self.assertFalse(any('compat' in path for path in changed))
+            self.assertFalse(any('--property=ExecStart' in call for call in calls))
+            self.assertFalse(any(call[0] == '/usr/bin/fcitx5' for call in calls))
+            self.assertIn(['systemctl', '--user', 'restart', 'omarchy-fcitx5.service'], calls)
+            self.assertNotIn('retired', self.output)
+
+    def test_unexpected_content_stops_before_any_change(self):
+        def extra_file(home):
+            (home / installer.RETIRED_COMPAT_LIBRARY / 'fcitx5-5.1.22/notes.txt').write_text('mine')
+
+        def other_version(home):
+            (home / installer.RETIRED_COMPAT_LIBRARY / 'fcitx5-5.1.24').mkdir()
+
+        def edited_dropin(home):
+            dropin = home / installer.RETIRED_COMPAT_DROPIN
+            dropin.write_text(dropin.read_text() + 'Environment=MINE=1\n')
+
+        def linked_module(home):
+            module = home / installer.RETIRED_COMPAT_LIBRARY / 'fcitx5-5.1.22/addons/libwaylandim.so'
+            module.unlink()
+            module.symlink_to(home / 'elsewhere.so')
+
+        def linked_library(home):
+            library = home / installer.RETIRED_COMPAT_LIBRARY
+            library.rename(home / 'moved')
+            library.symlink_to(home / 'moved')
+
+        for change, message in ((extra_file, 'unexpected files'), (other_version, 'unexpected files'),
+                                (edited_dropin, 'not the drop-in'), (linked_module, 'unexpected files'),
+                                (linked_library, 'symlink')):
+            with self.subTest(change=change.__name__), tempfile.TemporaryDirectory() as temporary:
+                home = Path(temporary) / 'home'
+                retired_frontend(home)
+                change(home)
+                with self.assertRaisesRegex(RuntimeError, message):
+                    installer.retired_compat_files(home)
+
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            home, project, calls, frontend = self.full_install(root, [])
-            build = [call for call in calls if any(str(part).endswith('build.py') for part in call)]
-            self.assertEqual(len(build), 1)
-            self.assertEqual(build[0][-5:], ['--work-dir', build[0][-4], '--jobs', '2', '--check'])
-            self.assertTrue(build[0][-4].startswith(str(project / 'output/extensionless/fcitx-wayland-compat-5.1.22-')))
-            self.assertLess(calls.index(['npm', 'run', 'fcitx5:check']), calls.index(build[0]))
-            compat = home / '.local/lib/badi/compat/fcitx5-5.1.22'
-            self.assertEqual((compat / 'addons/libwaylandim.so').read_bytes(), b'patched frontend')
-            self.assertEqual((compat / 'launch.py').read_bytes(),
-                             (project / 'packaging/fcitx5-wayland-compat/launch.py').read_bytes())
-            self.assertTrue(json.loads((compat / 'build-receipt.json').read_text())['protocol_checks_passed'])
-            dropin = (home / installer.COMPAT_DROPIN).read_text()
-            self.assertEqual(dropin.splitlines()[-2:], ['ExecStart=',
-                'ExecStart=/usr/bin/python3 -B %h/.local/lib/badi/compat/fcitx5-5.1.22/launch.py --disable notificationitem'])
-            backup, document, changed = only_backup(home)
-            for name in installer.COMPAT_FILES:
-                self.assertIn('.local/lib/badi/compat/fcitx5-5.1.22/' + name, changed)
-            self.assertIn(str(installer.COMPAT_DROPIN), changed)
-            recorded = json.loads((home / '.local/state/badi/receipts/desktop.json').read_text())['files']
-            self.assertIn('.local/lib/badi/compat/fcitx5-5.1.22/addons/libwaylandim.so', recorded)
-            self.assertIn(str(installer.COMPAT_DROPIN), recorded)
-            # The managed command must be effective before the one Fcitx restart.
-            restart = calls.index(['systemctl', '--user', 'restart', 'omarchy-fcitx5.service'])
-            reload = calls.index(['systemctl', '--user', 'daemon-reload'])
-            self.assertLess(calls.index(['systemd-analyze', '--user', 'verify', 'omarchy-fcitx5.service']), reload)
-            checks = [index for index, call in enumerate(calls) if '--property=ExecStart' in call]
-            self.assertTrue(any(reload < index < restart for index in checks))
-            frontend.assert_called_once_with(compat / 'addons/libwaylandim.so')
-            self.assertIn('Wayland compatibility frontend verified in the running service', self.output)
-            self.assertFalse(Path(build[0][-4]).exists(), 'The build tree is removed once installed')
+            retired_frontend(root / 'home')
+            extra_file(root / 'home')
+            with self.assertRaisesRegex(RuntimeError, 'unexpected files'):
+                self.full_install(root, [], retired=False)
+            self.assertFalse((root / 'home/.local/state/badi/install-backups').exists(), 'No file changed')
+            self.assertTrue((root / 'home' / installer.RETIRED_COMPAT_DROPIN).exists())
 
-    def test_installed_build_for_this_runtime_is_reused_without_download_or_compile(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            home, _project, calls, frontend = self.full_install(Path(temporary), [], installed=lambda *_: None)
-            self.assertFalse(any(any(str(part).endswith('build.py') for part in call) for call in calls))
-            self.assertIn('Reusing the verified Fcitx 5.1.22 compatibility frontend', self.output)
-            _backup, _document, changed = only_backup(home)
-            self.assertFalse(any('/compat/' in path for path in changed), 'Identical frontend files are not rewritten')
-            recorded = json.loads((home / '.local/state/badi/receipts/desktop.json').read_text())['files']
-            self.assertIn('.local/lib/badi/compat/fcitx5-5.1.22/addons/libwaylandim.so', recorded)
-            frontend.assert_called_once()
-            self.assertFalse((home.parent / 'project/output').exists(), 'No work directory is created')
-
-    def test_installed_build_is_reused_only_while_runtime_source_and_module_match(self):
-        def upgraded_runtime(launcher, _compat):
-            Path(launcher.RUNTIME_FILES[0]).write_bytes(b'upgraded system file')
-
-        def other_source(_launcher, compat):
-            receipt = json.loads((compat / 'build-receipt.json').read_text())
-            receipt['source']['patch_sha256'] = '0' * 64
-            (compat / 'build-receipt.json').write_text(json.dumps(receipt))
-
-        def changed_module(_launcher, compat):
-            (compat / 'addons/libwaylandim.so').write_bytes(b'edited frontend')
-
-        for change in (None, upgraded_runtime, other_source, changed_module):
-            with self.subTest(change=change and change.__name__), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                home = root / 'home'
-                launcher, build, _receipt = compat_fixture(root)
-                compat = home / '.local/lib/badi/compat/fcitx5-5.1.22'
-                (compat / 'addons').mkdir(parents=True)
-                shutil.copy2(build / 'libwaylandim.so', compat / 'addons/libwaylandim.so')
-                shutil.copy2(build / 'build-receipt.json', compat / 'build-receipt.json')
-                (compat / 'launch.py').write_text('installed launcher')
-                if change:
-                    change(launcher, compat)
-                replies = {'/usr/bin/fcitx5': subprocess.CompletedProcess([], 0, '5.1.22\n', ''),
-                           'systemctl': subprocess.CompletedProcess([], 0, STOCK % installer.STOCK_FCITX_COMMAND, '')}
-                with patch.object(installer, 'compat_launcher', return_value=launcher), \
-                     patch.object(installer.Path, 'home', return_value=home), \
-                     patch.object(installer.subprocess, 'run', side_effect=lambda argv, **_: replies[argv[0]]):
-                    plan = installer.plan_wayland_compat(home)
-                if change is None:
-                    self.assertEqual((plan['reused'], plan['module'], plan['work']),
-                                     (True, compat.resolve() / 'addons/libwaylandim.so', None))
-                else:
-                    self.assertEqual((plan['reused'], plan['build'], plan['module']), (False, None, None),
-                                     'A changed runtime, source pin or module is built again')
-
-    def test_overriding_drop_in_stops_before_fcitx_restart(self):
+    def test_another_override_starting_the_retired_launcher_stops_before_fcitx_restart(self):
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaisesRegex(RuntimeError, 'Fcitx was not restarted'), \
                  contextlib.redirect_stderr(io.StringIO()):
-                self.full_install(Path(temporary), [], overridden=True)
+                self.full_install(Path(temporary), [], retired=True, overridden=True)
 
-    def test_unselected_frontend_is_reported_without_claiming_activation(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            self.full_install(Path(temporary), [], loaded=False)
-            self.assertIn('selected the system frontend', self.output)
-            self.assertNotIn('verified in the running service', self.output)
-
-    def test_opt_out_and_other_fcitx_versions_leave_the_frontend_untouched(self):
-        for argv, version in ((['--no-wayland-compat'], '5.1.22'), ([], '5.1.23')):
-            with self.subTest(argv=argv, version=version), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                home, _project, calls, frontend = self.full_install(root, argv, version=version)
-                self.assertFalse(any(any(str(part).endswith('build.py') for part in call) for call in calls))
-                self.assertFalse(any('--property=ExecStart' in call for call in calls))
-                self.assertNotIn(['systemd-analyze', '--user', 'verify', 'omarchy-fcitx5.service'], calls)
-                self.assertEqual(['/usr/bin/fcitx5', '--version'] in calls, not argv)
-                self.assertFalse((home / installer.COMPAT_DROPIN).exists())
-                self.assertFalse((home / '.local/lib/badi/compat/fcitx5-5.1.22').exists())
-                frontend.assert_not_called()
-                self.assertIn('left unchanged' if argv else 'not the pinned 5.1.22', self.output)
-
-    def test_prebuilt_directory_is_reused_after_verification(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            home, _project, calls, _frontend = self.full_install(Path(temporary), [], prebuilt=True)
-            self.assertFalse(any(any(str(part).endswith('build.py') for part in call) for call in calls))
-            self.assertTrue((home / '.local/lib/badi/compat/fcitx5-5.1.22/addons/libwaylandim.so').exists())
-
-    def test_build_verification_binds_source_runtime_artifact_and_checks(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            launcher, build, receipt = compat_fixture(root)
-            self.assertEqual(installer.verify_compat_build(build, launcher), build.resolve())
-            changes = [
-                lambda r: r.update(protocol_checks_passed=False),
-                lambda r: r.update(schema='badi.other'),
-                lambda r: r['source'].update(patch_sha256='0' * 64),
-                lambda r: r['installed_build_versions'].update(Fcitx5Core='5.1.23'),
-                lambda r: r['runtime_files_sha256'].popitem(),
-                lambda r: r.update(artifact_sha256='0' * 64),
-            ]
-            for change in changes:
-                altered = json.loads(json.dumps(receipt))
-                change(altered)
-                (build / 'build-receipt.json').write_text(json.dumps(altered))
-                with self.assertRaisesRegex(RuntimeError, 'pinned source'):
-                    installer.verify_compat_build(build, launcher)
-            (build / 'build-receipt.json').write_text(json.dumps(receipt))
-            Path(launcher.RUNTIME_FILES[0]).write_bytes(b'upgraded system file')
-            with self.assertRaisesRegex(RuntimeError, 'pinned source'):
-                installer.verify_compat_build(build, launcher)
-            Path(launcher.RUNTIME_FILES[0]).write_bytes(b'runtime 0')
-            module = build / 'libwaylandim.so'
-            module.rename(build / 'real.so')
-            module.symlink_to(build / 'real.so')
-            with self.assertRaisesRegex(RuntimeError, 'pinned source'):
-                installer.verify_compat_build(build, launcher)
-            with self.assertRaisesRegex(RuntimeError, 'pinned source'):
-                installer.verify_compat_build(root / 'missing', launcher)
-
-    def test_plan_accepts_only_stock_or_managed_commands(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary) / 'home'
-            launcher = SimpleNamespace(VERSION='5.1.22', RUNTIME_FILES=(), digest=None)
-
-            def plan(command, version='5.1.22', build=None):
-                replies = {'/usr/bin/fcitx5': subprocess.CompletedProcess([], 0, version + '\n', ''),
-                           'systemctl': subprocess.CompletedProcess([], 0, STOCK % command, '')}
-                with patch.object(installer, 'compat_launcher', return_value=launcher), \
-                     patch.object(installer.Path, 'home', return_value=home), \
-                     patch.object(installer.subprocess, 'run', side_effect=lambda argv, **_: replies[argv[0]]):
-                    return installer.plan_wayland_compat(home, build)
-
-            result = plan(installer.STOCK_FCITX_COMMAND)
-            self.assertTrue(result['install'])
-            self.assertEqual(result['root'], home / '.local/lib/badi/compat/fcitx5-5.1.22')
-            managed = installer.compat_command(home, '5.1.22')
-            for command in ('/usr/bin/fcitx5 --replace', '/usr/bin/python3 -B /elsewhere/launch.py --disable notificationitem',
-                            managed):
-                with self.assertRaisesRegex(RuntimeError, 'unrecognized command'):
-                    plan(command)  # The managed one lacks Badi's drop-in file.
-            dropin = home / installer.COMPAT_DROPIN
-            dropin.parent.mkdir(parents=True)
-            dropin.write_text(installer.compat_dropin('5.1.22'))
-            self.assertTrue(plan(managed)['install'])
-            self.assertEqual(plan('ignored', version='5.1.23'), {'install': False, 'version': '5.1.23', 'pinned': '5.1.22'})
-            with self.assertRaisesRegex(RuntimeError, 'not the pinned 5.1.22'):
-                plan('ignored', version='5.1.23', build=Path(temporary))
-            root = result['root']
-            root.mkdir(parents=True)
-            (root / 'user-note').write_text('unexpected')
-            with self.assertRaisesRegex(RuntimeError, 'unexpected files'):
-                plan(installer.STOCK_FCITX_COMMAND)
-            shutil.rmtree(root)
-            root.symlink_to(Path(temporary))
-            with self.assertRaisesRegex(RuntimeError, 'symlink'):
-                plan(installer.STOCK_FCITX_COMMAND)
-
-    def test_compat_flags_are_not_broker_only_side_effects(self):
-        for argv in (['--broker-only', '--wayland-compat-build', '/x'],
-                     ['--broker-only', '--screen-reader-accessibility'],
-                     ['--no-wayland-compat', '--wayland-compat-build', '/x']):
+    def test_rejected_arguments_change_nothing(self):
+        # The retired frontend's opt-out is gone with it.
+        for argv in (['--broker-only', '--screen-reader-accessibility'], ['--no-wayland-compat'],
+                     ['--wayland-compat-build', '/x']):
             with self.subTest(argv=argv), patch('sys.argv', ['install-desktop.py', *argv]), \
                  patch.object(installer.subprocess, 'run') as command, contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as stopped:
@@ -1135,11 +1005,11 @@ class WaylandCompatTests(FullInstall, unittest.TestCase):
 
 class ObservedAppInstallTests(FullInstall, unittest.TestCase):
     def install_observed(self, root, apps):
-        argv = ['--no-wayland-compat']
+        argv = []
         for app in apps:
             argv += ['--observed-app', app]
         with patch.object(installer, 'enable_accessibility') as enabled:
-            home, _project, calls, _frontend = self.full_install(root, argv)
+            home, _project, calls = self.full_install(root, argv)
         return home, calls, enabled
 
     def test_flags_are_backed_up_mode_preserving_and_recorded_in_the_receipt(self):

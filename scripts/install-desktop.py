@@ -10,14 +10,12 @@ import mmap
 import os
 from pathlib import Path
 import re
-import shutil
 import shlex
 import socket
 import stat
 import struct
 import subprocess
 import sys
-import time
 
 import badi_install
 
@@ -48,11 +46,17 @@ OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geome
                     "debugtrace.py")
 SESSION_MODULES = ("daemon.py", "link.py", "style_key.py")
 SESSION_SERVICE = "badi-session.service"
-COMPAT_LIBRARY = Path(".local/lib/badi/compat")
-COMPAT_DROPIN = Path(".config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf")
-COMPAT_MODULE = "addons/libwaylandim.so"
-COMPAT_FILES = ("launch.py", "build-receipt.json", COMPAT_MODULE)
-STOCK_FCITX_COMMAND = "/usr/bin/fcitx5 --disable notificationitem"
+# The retired Fcitx 5.1.22 Wayland frontend backport. Fcitx 5.1.23 ships the
+# upstream fix, so a complete install removes exactly what earlier installs
+# left here, backed up like any replaced file.
+RETIRED_COMPAT_LIBRARY = Path(".local/lib/badi/compat")
+RETIRED_COMPAT_FILES = ("fcitx5-5.1.22/launch.py", "fcitx5-5.1.22/build-receipt.json",
+                        "fcitx5-5.1.22/addons/libwaylandim.so")
+RETIRED_COMPAT_DIRECTORIES = ("fcitx5-5.1.22/addons", "fcitx5-5.1.22", "")
+RETIRED_COMPAT_DROPIN = Path(".config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf")
+RETIRED_COMPAT_DROPIN_TEXT = (
+    "[Service]\n# Badi: pinned Fcitx Wayland frontend; launch.py falls back to /usr/bin/fcitx5.\n"
+    f"ExecStart=\nExecStart=/usr/bin/python3 -B %h/{RETIRED_COMPAT_LIBRARY}/fcitx5-5.1.22/launch.py --disable notificationitem\n")
 
 
 def run(command, **kwargs):
@@ -384,23 +388,6 @@ def wait_accessibility(helper, endpoint):
         raise RuntimeError("The accessibility helper did not become ready. Inspect badi doctor and journalctl --user -u badi-accessibility.service; Fcitx was not restarted.")
 
 
-def compat_launcher():
-    """The pinned frontend selector; its constants define the supported Fcitx cell."""
-    spec = importlib.util.spec_from_file_location("badi_fcitx_compat_launch", ROOT / "packaging/fcitx5-wayland-compat/launch.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def compat_command(home, version):
-    return f"/usr/bin/python3 -B {home}/{COMPAT_LIBRARY}/fcitx5-{version}/launch.py --disable notificationitem"
-
-
-def compat_dropin(version):
-    return ("[Service]\n# Badi: pinned Fcitx Wayland frontend; launch.py falls back to /usr/bin/fcitx5.\n"
-            f"ExecStart=\nExecStart=/usr/bin/python3 -B %h/{COMPAT_LIBRARY}/fcitx5-{version}/launch.py --disable notificationitem\n")
-
-
 def fcitx_command():
     """The effective argv of the Fcitx service's single ExecStart, verbatim."""
     value = badi_install.unit_value("omarchy-fcitx5.service", "ExecStart")
@@ -408,109 +395,34 @@ def fcitx_command():
     return commands[0] if len(commands) == 1 else None
 
 
-def installed_compat_files(home, directory):
-    """The exact files of an installed frontend; None when anything unexpected is present."""
-    for path in (directory, *directory.parents):
+def retired_compat_files(home):
+    """The retired frontend's files an earlier install left, to remove now.
+
+    Only Badi's exact files qualify. Anything else there stops the install
+    before any change, so a file Badi did not write is never deleted.
+    """
+    library = home / RETIRED_COMPAT_LIBRARY
+    for path in (library, *library.parents):
         if path == home:
             break
         if path.is_symlink():
-            raise RuntimeError(f"Inspect existing symlink before replacing {directory}")
-    if not directory.exists():
-        return []
-    expected = {directory / name for name in COMPAT_FILES}
-    files, folders = set(), set()
-    for path in directory.rglob("*"):
-        if path.is_symlink() or not (path.is_file() or path.is_dir()):
-            return None
-        (folders if path.is_dir() else files).add(path)
-    if not directory.is_dir() or files - expected or folders - {directory / "addons"}:
-        return None
-    return sorted(files)
-
-
-def verify_compat_build(directory, launcher, module="libwaylandim.so"):
-    """Accept only a checked build of the pinned source for today's exact runtime.
-
-    `module` is where the directory keeps the artifact: at the top of a build's
-    work directory, or under addons/ in an installed frontend.
-    """
-    directory = Path(directory).expanduser().resolve()
-    module = directory / module
-    try:
-        receipt = json.loads((directory / "build-receipt.json").read_text())
-        manifest = json.loads((ROOT / "packaging/fcitx5-wayland-compat/manifest.json").read_text())
-        runtime = receipt["runtime_files_sha256"]
-        valid = (receipt["schema"] == "badi.fcitx-wayland-compat-build.v1" and receipt["source"] == manifest
-                 and receipt["protocol_checks_passed"] is True
-                 and receipt["installed_build_versions"] == {name: launcher.VERSION for name in ("Fcitx5Core", "Fcitx5Config", "Fcitx5Utils")}
-                 and set(runtime) == set(launcher.RUNTIME_FILES)
-                 and all(launcher.digest(Path(path)) == runtime[path] for path in launcher.RUNTIME_FILES)
-                 and not module.is_symlink() and module.is_file()
-                 and launcher.digest(module) == receipt["artifact_sha256"])
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        valid = False
-    if not valid:
-        raise RuntimeError("The Wayland compatibility build is not a checked build of the pinned source for this system's Fcitx runtime. Rebuild it, or rerun with --no-wayland-compat.")
-    return directory
-
-
-def plan_wayland_compat(home, build=None):
-    """Decide the pinned frontend action before building or changing any file.
-
-    Another Fcitx version gets no frontend: 5.1.23 contains the upstream
-    refresh, and launch.py already falls back to the system frontend.
-    """
-    launcher = compat_launcher()
-    try:
-        version = run(["/usr/bin/fcitx5", "--version"], capture_output=True, text=True, timeout=5).stdout.strip()
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-        raise RuntimeError("Cannot determine the system Fcitx version. Rerun with --no-wayland-compat to leave its frontend unchanged.") from None
-    if version != launcher.VERSION:
-        if build is not None:
-            raise RuntimeError(f"The system Fcitx is {version or 'unknown'}, not the pinned {launcher.VERSION}; the supplied compatibility build was not installed.")
-        return {"install": False, "version": version, "pinned": launcher.VERSION}
-    homes = dict.fromkeys((str(Path.home()), str(home)))
-    command = fcitx_command()
-    managed = {compat_command(item, version) for item in homes}
-    if command != STOCK_FCITX_COMMAND and (command not in managed or not (home / COMPAT_DROPIN).is_file()):
-        raise RuntimeError("omarchy-fcitx5.service runs an unrecognized command. Inspect its overrides, or rerun with --no-wayland-compat.")
-    root = home / COMPAT_LIBRARY / f"fcitx5-{version}"
-    if installed_compat_files(home, root) is None:
-        raise RuntimeError(f"Inspect unexpected files in {root} before installing the compatibility frontend.")
-    # "build" holds the verified build receipt and "module" its artifact;
-    # "work" is a directory this run builds in and removes once installed.
-    plan = {"install": True, "version": version, "pinned": launcher.VERSION, "root": root, "launcher": launcher,
-            "homes": tuple(homes), "build": None, "module": None, "work": None, "reused": False}
-    if build is not None:
-        directory = verify_compat_build(build, launcher)
-        plan.update(build=directory, module=directory / "libwaylandim.so")
-        return plan
-    try:
-        # The frontend already installed for this exact runtime and pinned
-        # source needs no download or compile; its receipt is checked the same way.
-        directory = verify_compat_build(root, launcher, COMPAT_MODULE)
-    except RuntimeError:
-        return plan
-    plan.update(build=directory, module=directory / COMPAT_MODULE, reused=True)
-    return plan
-
-
-def build_wayland_compat(plan):
-    """Build and verify the frontend unless the plan already holds a verified build."""
-    if plan["reused"]:
-        print(f"Reusing the verified Fcitx {plan['version']} compatibility frontend already installed; "
-              "nothing to download or compile.", flush=True)
-    if plan["build"] is None:
-        work = ROOT / "output/extensionless" / f"fcitx-wayland-compat-{plan['version']}-{time.time_ns()}"
-        run([sys.executable, "-B", str(ROOT / "packaging/fcitx5-wayland-compat/build.py"),
-             "--work-dir", str(work), "--jobs", "2", "--check"], cwd=ROOT)
-        directory = verify_compat_build(work, plan["launcher"])
-        plan.update(build=directory, module=directory / "libwaylandim.so", work=directory)
-
-
-def wait_compat_frontend(module):
-    """Report whether launch.py selected the installed frontend; bounded."""
-    return bool(badi_install.poll(lambda: native_addon_loaded(module), 3))
+            raise RuntimeError(f"Inspect the symlink {path} before installing; Badi no longer installs a Fcitx frontend there.")
+    found = []
+    if library.exists():
+        files = {library / name for name in RETIRED_COMPAT_FILES}
+        directories = {library / name for name in RETIRED_COMPAT_DIRECTORIES}
+        for path in sorted(library.rglob("*")):
+            if path.is_symlink() or not ((path in files and path.is_file()) or (path in directories and path.is_dir())):
+                raise RuntimeError(f"Inspect unexpected files in {library} before installing; "
+                                   "Badi no longer installs a Fcitx frontend there.")
+            if path.is_file():
+                found.append(path)
+    dropin = home / RETIRED_COMPAT_DROPIN
+    if os.path.lexists(dropin):
+        if dropin.is_symlink() or not dropin.is_file() or dropin.read_text() != RETIRED_COMPAT_DROPIN_TEXT:
+            raise RuntimeError(f"Inspect {dropin} before installing: it is not the drop-in an earlier Badi install wrote.")
+        found.append(dropin)
+    return found
 
 
 @dataclass
@@ -527,7 +439,8 @@ class Plan:
     # True only when the user unit is enabled. A unit file left behind by an
     # interrupted first install is loaded but not enabled, and must be enabled.
     accessibility_enabled: bool
-    compat: dict | None
+    # Files the retired Fcitx frontend backport left, removed by this run.
+    retired_compat: list
     checkout: dict | None = None
     # hyprland.lua change that loads Badi's layer rule: (target, original, new).
     hypr_update: tuple | None = None
@@ -538,10 +451,6 @@ class Plan:
     @property
     def native(self):
         return not self.args.broker_only
-
-    @property
-    def installs_compat(self):
-        return bool(self.compat and self.compat["install"])
 
 
 HYPR_REQUIRE = 'require("hypr.badi")'
@@ -562,17 +471,9 @@ def parse_arguments():
                         help=f"Add {OBSERVED_FLAG} to this app's user flags file for its next launch (backed up)")
     parser.add_argument("--screen-reader-accessibility", action="store_true",
                         help="Enable desktop-wide AT-SPI ScreenReaderEnabled, including Discord; record prior settings for rollback")
-    parser.add_argument("--no-wayland-compat", action="store_true",
-                        help="Leave omarchy-fcitx5.service on its current frontend (skip the pinned Fcitx 5.1.22 compatibility frontend)")
-    parser.add_argument("--wayland-compat-build", type=Path, metavar="DIR",
-                        help="Install this existing checked compatibility build instead of building one")
     args = parser.parse_args()
     if args.broker_only and (args.observed_app or args.screen_reader_accessibility):
         parser.error("Accessibility options require the complete unlocked native installation")
-    if args.broker_only and args.wayland_compat_build:
-        parser.error("--wayland-compat-build requires the complete unlocked native installation")
-    if args.no_wayland_compat and args.wayland_compat_build:
-        parser.error("--no-wayland-compat and --wayland-compat-build are exclusive")
     return args
 
 
@@ -596,12 +497,11 @@ def preflight(args):
             flag_updates[target] = (original, text)
     runtime = session_runtime()
     broker_updating = service_installed()
-    accessibility_enabled, compat, hypr_update = False, None, None
+    accessibility_enabled, retired_compat, hypr_update = False, [], None
     if not args.broker_only:
         accessibility_enabled = unit_enabled("badi-accessibility.service")
         run(["systemctl", "--user", "is-active", "omarchy-fcitx5.service"], capture_output=True)
-        if not args.no_wayland_compat:
-            compat = plan_wayland_compat(home, args.wayland_compat_build)
+        retired_compat = retired_compat_files(home)
         hyprland = config_home / "hypr/hyprland.lua"
         if hyprland.exists() and not hyprland.is_symlink():
             original = hyprland.read_text()
@@ -610,7 +510,7 @@ def preflight(args):
                 hypr_update = (hyprland, original, updated)
     session_disabled = badi_install.unit_value(SESSION_SERVICE, "UnitFileState", timeout=4) == "disabled"
     return Plan(args, home, config_home, runtime, flag_updates, flags_present,
-                broker_updating, accessibility_enabled, compat, hypr_update=hypr_update,
+                broker_updating, accessibility_enabled, retired_compat, hypr_update=hypr_update,
                 session_disabled=session_disabled)
 
 
@@ -681,8 +581,6 @@ def build(plan):
     require_writing_model(plan.home, ROOT / "target/release/badictl")
     if plan.native:
         run(["npm", "run", "fcitx5:check"], cwd=ROOT)
-        if plan.installs_compat:
-            build_wayland_compat(plan.compat)
         require_unlocked()
 
 
@@ -779,15 +677,17 @@ def install_prepared_files(plan, installation):
             if target.parent.resolve() != target.parent or target.is_symlink() or (target.read_text() if target.exists() else None) != original:
                 raise RuntimeError("App startup configuration changed during the build; newer user settings were preserved.")
             installation.write(target, text.encode(), stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600)
-        if plan.installs_compat:
-            root = plan.compat["root"]
-            install(plan.compat["module"], root / COMPAT_MODULE)
-            install(plan.compat["build"] / "build-receipt.json", root / "build-receipt.json")
-            install(ROOT / "packaging/fcitx5-wayland-compat/launch.py", root / "launch.py")
-            installation.write(home / COMPAT_DROPIN, compat_dropin(plan.compat["version"]).encode(), 0o644)
-            if plan.compat["work"]:
-                # The installed copy and its receipt replace the ~40 MB build tree.
-                shutil.rmtree(plan.compat["work"])
+        # launch.py replaced itself with /usr/bin/fcitx5 when the service
+        # started, so removing it is safe; the Fcitx restart below runs the
+        # stock command.
+        for path in plan.retired_compat:
+            if os.path.lexists(path):
+                installation.remove(path)
+        badi_install.forget(home, "desktop", plan.retired_compat)
+        for name in RETIRED_COMPAT_DIRECTORIES:
+            directory = home / RETIRED_COMPAT_LIBRARY / name
+            if directory.is_dir() and not directory.is_symlink() and not any(directory.iterdir()):
+                directory.rmdir()
     install(ROOT / "packaging/systemd/badi-broker.service", home / ".config/systemd/user/badi-broker.service")
     # The session helper reports suspend, session and power state to the
     # broker and reads no text, so it updates with the broker on both paths.
@@ -820,8 +720,6 @@ def restart(plan, installation):
     run(["systemd-analyze", "--user", "verify", str(units / SESSION_SERVICE)])
     if plan.native:
         run(["systemd-analyze", "--user", "verify", str(units / "badi-accessibility.service")])
-    if plan.installs_compat:
-        run(["systemd-analyze", "--user", "verify", "omarchy-fcitx5.service"])
     run(["systemctl", "--user", "daemon-reload"])
     if not plan.broker_updating:
         run(["systemctl", "--user", "enable", "badi-broker.service"])
@@ -845,9 +743,9 @@ def restart(plan, installation):
         enable_accessibility(installation)
     if plan.args.screen_reader_accessibility:
         enable_screen_reader_accessibility(installation)
-    if plan.installs_compat and fcitx_command() not in {compat_command(item, plan.compat["version"]) for item in plan.compat["homes"]}:
-        raise RuntimeError("Another omarchy-fcitx5.service override replaces the compatibility command, so Fcitx was not restarted. "
-                           "Inspect its drop-ins, restore the newest backup in ~/.local/state/badi/install-backups, or rerun with --no-wayland-compat.")
+    if plan.retired_compat and str(RETIRED_COMPAT_LIBRARY) in (fcitx_command() or ""):
+        raise RuntimeError("Another omarchy-fcitx5.service override still starts the retired Badi frontend launcher, so Fcitx was not restarted. "
+                           "Inspect its drop-ins, or restore the newest backup in ~/.local/state/badi/install-backups.")
     require_unlocked()
     profile = home / ".config/fcitx5/profile"
     previous = hashlib.sha256(profile.read_bytes()).digest()
@@ -873,15 +771,9 @@ def report(plan, probe):
         print("Local model ready. Broker and controls updated; native input addon was not restarted." + pause_note)
         return
     print("Local model and accessibility helper ready. Desktop addon loaded by the normal Fcitx service. Keyboard profile preserved. Application accessibility and exact target policy determine coverage; use badi doctor to inspect setup." + pause_note)
-    compat = plan.compat
-    if compat is None:
-        print("Fcitx Wayland frontend left unchanged (--no-wayland-compat).")
-    elif not compat["install"]:
-        print(f"System Fcitx {compat['version'] or 'unknown'} is not the pinned {compat['pinned']}, so the Wayland compatibility frontend was not installed; Fcitx 5.1.23 and later include the upstream refresh.")
-    elif wait_compat_frontend(compat["root"] / "addons/libwaylandim.so"):
-        print(f"Pinned Fcitx {compat['version']} Wayland compatibility frontend verified in the running service.")
-    else:
-        print("The Wayland compatibility frontend is installed, but launch.py selected the system frontend for this runtime. Inspect journalctl --user -u omarchy-fcitx5.service; input continues with stock Fcitx.")
+    if plan.retired_compat:
+        print("Removed the retired Fcitx 5.1.22 Wayland frontend backport and its service drop-in; "
+              "Fcitx 5.1.23 and later include the upstream fix, and Fcitx now runs its own frontend.")
     if plan.args.observed_app:
         prepared = [app for app in dict.fromkeys(plan.args.observed_app) if app not in plan.flags_present]
         if prepared:

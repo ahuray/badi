@@ -198,9 +198,10 @@ grants remain fresh after invalidation; the observer's own epoch-bound target
 still corroborates every snapshot and preview.
 
 The [accessibility observer](../accessibility/README.md) supplies field identity
-and corroboration. On Fcitx 5.1.22 the
-[frontend backport](../../packaging/fcitx5-wayland-compat/README.md) keeps
-Chromium's surrounding text current. Neither provides an editor transaction.
+and corroboration. Fcitx 5.1.23 and later keep Chromium's surrounding text
+current on Hyprland: the frontend answers each `done` with a commit
+([upstream PR #1690](https://github.com/fcitx/fcitx5/pull/1690)). Neither
+provides an editor transaction.
 
 - **Display.** A preview request carries the input context's `caret_rect`
   when the frontend declares `RelativeRect` (Qt's Fcitx module); the observer
@@ -244,7 +245,8 @@ Chromium's surrounding text current. Neither provides an editor transaction.
 
 Arch Linux, native Wayland, Hyprland 0.56.2, Fcitx 5.1.22 (5.1.21 for Omawrite
 and Xournal++; 5.1.23 from 2026-10-19), input method `keyboard-us`. These are
-probe cells, not toolkit-wide claims.
+probe cells, not toolkit-wide claims. Chromium cells before 2026-10-19 ran on
+Badi's since-retired 5.1.22 backport of that upstream frontend fix.
 
 On 2026-10-12, the modified `26eb1d9` checkout installed on this desktop
 showed and accepted 20/20 warm Chromium 152 suggestions across five disposable
@@ -360,7 +362,7 @@ were not exercised.
 | --- | --- | --- |
 | Omawrite 0.5.0 (Qt 6) | `QT_IM_MODULE=fcitx` | 20/20 trials; one native undo restores the exact prefix |
 | Xournal++ 1.3.7 (GTK 3 text tool) | `GTK_IM_MODULE=fcitx` launcher override | 20/20 trials; after Escape leaves text editing, one document undo restores the prefix |
-| Chromium 152, Brave Origin, Electron apps | text-input-v3 (`wayland_v2`), Wayland app id | Page fields carry no purpose hints, so the observer's checks deny passwords. The omnibox sends the `Url` purpose and is denied before any observer request. Surrounding text is exact only with the frontend backport. |
+| Chromium 152, Brave Origin, Electron apps | text-input-v3 (`wayland_v2`), Wayland app id | Page fields carry no purpose hints, so the observer's checks deny passwords. The omnibox sends the `Url` purpose and is denied before any observer request. Surrounding text stays current only on Fcitx 5.1.23 or later. |
 | VS Code 1.140 | as above | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. Its caret-wide hidden textarea gets the inline preview bounded by the editor widget. |
 | Zen 1.23b (Gecko 157) | `wayland_v2`, `zen` | Fields and the urlbar share one context with no `Url` hint, so the observer denies the urlbar. Gecko sends only the caret's paragraph. One Ctrl+Z undoes an acceptance alone. |
 | Telegram (Qt) | `dbus`, `Telegram` | Canonicalized to `telegram` |
@@ -379,6 +381,13 @@ model health, addon loading and an unchanged keyboard profile. It needs the
 provisioned model, an active Omarchy session and an unlocked desktop. Xournal++
 gets a launcher override with `GTK_IM_MODULE=fcitx` for its exact identity.
 `--broker-only` updates only the broker and commands, while locked.
+
+A complete install also retires the Fcitx 5.1.22 frontend backport that
+earlier installs added: it removes `~/.local/lib/badi/compat` and the
+`omarchy-fcitx5.service.d/60-badi-wayland-compat.conf` drop-in, backed up
+like any replaced file, and restarts Fcitx on its stock command. If either
+holds anything Badi did not write, the install stops before changing a file.
+`--broker-only` leaves them for the next complete install.
 
 Each run that changes something backs up what it replaced under
 `~/.local/state/badi/install-backups/<UTC time>/`. There, `changes.json` lists

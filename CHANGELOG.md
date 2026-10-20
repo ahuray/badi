@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- The Fcitx 5.1.22 Wayland frontend backport is retired: Arch ships
+  Fcitx 5.1.23 with the upstream fix, Chromium 154 kept its surrounding
+  text on the stock frontend, and a complete install removes the old
+  launcher and drop-in with a backup.
 - Same-window context on 40 independent English cases: the word bias gained
   nothing, and window text in the prompt helped informative replies but
   drifted in controls, copied a fact the writer was changing and missed
