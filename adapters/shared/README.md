@@ -76,7 +76,6 @@ event to the shared [debug trace](../../README.md#debug-trace).
 npm run editors:check
 npm run editors:integration
 node adapters/obsidian/live.mjs --headless --local   # real Obsidian, temporary vault and profile
-node adapters/shared/evaluate-writing.mjs            # 20-prefix model smoke, not a quality score
 ```
 
 The live runner uses the installed Obsidian with its own temporary vault,

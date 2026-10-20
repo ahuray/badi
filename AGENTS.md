@@ -12,8 +12,8 @@ Preserve exact editing authority and prove the affected user flow.
    and the ADRs it links. The top of [CHANGELOG.md](CHANGELOG.md) shows what
    changed last.
 3. Run `git status` and `git log --oneline -5`. Preserve existing changes,
-   untracked files and deletions. `output/` holds ignored local evaluation
-   evidence; leave it alone.
+   untracked files and deletions. `output/` holds ignored evidence that docs
+   cite ([Keep the workspace lean](#keep-the-workspace-lean)).
 4. Set up once: `npm ci`. Cargo installs the pinned toolchain from
    [rust-toolchain.toml](rust-toolchain.toml) on first use.
 5. Before reasoning about live behavior, check what is installed: `badi doctor`
@@ -32,6 +32,27 @@ Each fact has one home:
 
 Link to a fact instead of repeating it. Delete stale material instead of
 archiving it, and never add parallel planning, handoff or report documents.
+
+## Keep the workspace lean
+
+The checkout and the project folder are a working desk: everything on them
+should serve current work.
+
+- Every tracked file earns its place: a check, installer, CI job or runbook
+  runs, installs, tests or links it. When an experiment fails its gate,
+  record the result in one line in its runbook and delete its code; keep no
+  dormant path for later. Remove a migration once every known install ran it.
+- `npm run docs:check` refuses files over 1 MiB and model, archive or build
+  files anywhere in the checkout.
+- `output/` holds only evidence a doc cites. Model weights go to
+  `~/.local/share/badi/models` or a scratch folder; builds, virtualenvs and
+  caches are disposable; older research moves, text only, to
+  `~/.local/state/badi/archive`.
+- Runbooks state the current contract and a current tested-with matrix.
+  Dated trial narrative belongs in the pull request and one CHANGELOG line.
+- Parallel sessions each work in their own worktree (`git worktree add
+  ../badi-<topic> -b <agent>/<topic> origin/main`), take turns installing to
+  the desktop, and remove their worktree and branch once merged.
 
 ## How to work
 

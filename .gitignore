@@ -1,4 +1,5 @@
 # Editors and local agent state
+.claude/
 .cursor/
 .idea/
 .vscode/

@@ -283,189 +283,61 @@ provides an editor transaction.
 
 ## Tested with
 
-Arch Linux, native Wayland, Hyprland 0.56.2, Fcitx 5.1.22 (5.1.21 for Omawrite
-and Xournal++; 5.1.23 from 2026-10-19), input method `keyboard-us`. These are
-probe cells, not toolkit-wide claims. Chromium cells before 2026-10-19 ran on
-Badi's since-retired 5.1.22 backport of that upstream frontend fix.
+Live on the development workstation: Arch Linux, native Wayland, Hyprland
+0.56.2, Fcitx 5.1.23, input method `keyboard-us`, the real local model and
+disposable text in isolated profiles or scratch files, traced with
+`badi debug on --text`. A cell is evidence for that app version, not for its
+toolkit in general.
 
-On 2026-10-12, the modified `26eb1d9` checkout installed on this desktop
-showed and accepted 20/20 warm Chromium 152 suggestions across five disposable
-prefixes repeated four times. On 2026-10-13, after the independently checked
-weight-loading change, the same twenty trials all showed and accepted:
-visible p50 228.0 ms, nearest-rank p95 283.6 ms, zero wrong-field edits.
-Two focus-interrupted attempts were retained separately and are not part of
-that completed timing sample. Timing ran from last key release
-to the addon's display acknowledgement. Three further trials passed timed
-Escape quiet across same-field edits, explicit requests during quiet, and
-narrow-field quiet before acquisition. Moving focus before Tab dispatched no
-commit. Native undo could merge acceptance with preceding typing, as permitted
-by IME-parity. These are live samples, not held-out language quality evidence;
-Omawrite 0.5.0’s native Open File location field also reported `file_dialog`,
-made no automatic model call after typing, and displayed an explicit request.
+| App (version, date) | Reaches Fcitx through | Result | Boundary |
+| --- | --- | --- | --- |
+| Chromium 154 (2026-10-19/20) | text-input-v3 (`wayland_v2`); observed, IME-parity | The installed-flow matrix below; as an Omarchy web app (`chrome-<site>__-Default`) 4/4 inline in 168–321 ms, with window words | Page fields carry no purpose hints, so the observer's checks deny passwords; the omnibox's `Url` purpose is denied before any observer request. Needs Fcitx 5.1.23 |
+| Brave Origin 1.97 (2026-10-20) | as above | 5/5 in a textarea, 3/3 in a contenteditable, 4/4 as an `--app` web app; Ctrl+→ takes all, Escape hides without editing | as above |
+| Zen 1.23.3b, Gecko 158 (2026-10-20) | `wayland_v2`, `zen` | Suggestions and window words | The urlbar shares the page's context with no `Url` hint, so the observer denies it. Gecko sends only the caret's paragraph. One Ctrl+Z undoes an acceptance alone. A fresh profile once showed the suggestion in Fcitx's candidate box |
+| VS Code 1.142 (2026-10-20) | as Chromium | 3/3; the saved file read back exactly | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. `wtype` trials need `"keyboard.dispatch": "keyCode"` |
+| LibreOffice Writer 26.8.1, GTK 3 (2026-10-20) | observed sentence | 2/3 inline in 169 and 241 ms; Tab commits one word | Writer sends only the caret's sentence. Spelling goes through the [extension](../libreoffice/README.md): Alt+F7 replaces, one Ctrl+Z restores |
+| Ghostty 1.3.1 (2026-10-20) | typed line ([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.md)) | 3/3 in the panel; one word per Tab; corrections erase the typo with DELs | Exact opt-in rule |
+| foot 1.28.0 (2026-10-20) | typed line | 4/4 in the panel in 118–307 ms; `adress → address` with DELs | Exact opt-in rule |
+| Omawrite 0.7.0, Qt 6.12, fcitx5-qt 5.1.16 (2026-10-20) | `QT_IM_MODULE=fcitx`; observed native exact | 6/7 in 248–426 ms; Ctrl+→ takes all; one Ctrl+Z restores the exact prefix | Suggestions through the [surrounding echo](#contract); no spelling replacement until fcitx5-qt is fixed. 0.5.0 replaced a typo in two undo steps |
+| Xournal++ 1.3.7, GTK 3 text tool | `GTK_IM_MODULE=fcitx` launcher override | 20/20 | Tab requests; after Escape leaves text editing, one document undo restores the prefix |
+| Telegram (Qt) | `dbus`, canonicalized to `telegram` | Not retried since fcitx5-qt 5.1.16 | Probably needs the echo handling, like Omawrite |
 
-On 2026-10-20 (installed `e1fa107`, Chromium 154.0.8037.97 on
-`wayland_v2`, Fcitx 5.1.23, Hyprland 0.56.2, real model, a disposable
-two-field page on `http://127.0.0.1`), Ctrl+Shift+Tab while ` interest in the`
-showed after `Thank you for your` reached the page as one plain Tab (its
-`keydown` had Ctrl and Shift false), moved focus to the second field and left
-the first field's text unchanged. That held for a uinput keyboard pressing
-Ctrl, Shift and Tab as keys, the way a physical keyboard does, and for wtype
-setting them as state. With no suggestion showing, the chord stayed
-Chromium's (trace action `cancel`) and switched to the previous tab. The
-first installed build forwarded nothing in both cases, which the keycode and
-state-only fixes above address. Other apps, Ghostty's typed line and the
-manual path were not tried live.
+What the live trials established, beyond those cells:
 
-The 2026-10-13 inline-preview handoff reports grey text and Tab acceptance in
-Brave Origin's DuckDuckGo box and a disposable local textarea. Zen's
-DuckDuckGo box showed inline text on Ctrl+Shift+Space; automatic suggestions
-stayed quiet, and acceptance was not established in that trial. Google was
-not tested because of its consent wall; no Google result is inferred from
-DuckDuckGo. The earlier Chromium and Omawrite captures recorded zero physical
-pixels between typed and ghost glyph-bottom modes at scale 2
-([ADR 0006](../../docs/decisions/0006-grey-preview-is-an-overlay.md)).
-These are prior live observations, separate from the merge's automated checks.
+- **Display and timing** (Chromium 152, 2026-10-13): 20/20 warm suggestions
+  shown and accepted, visible p50 228 ms and p95 284 ms from the last key
+  release; a 280 CSS px input used the overflow panel above the field.
+- **Type-through** (Chromium, Brave Origin, Zen, 2026-10-13): the remainder
+  returned within about 300 ms with no model call.
+- **Tab** (Ghostty, Chromium, Omawrite, 2026-10-16): Tab takes one word,
+  quick Tabs are held for the remainder, and Tab with nothing showing stays
+  the app's.
+- **Installed-flow matrix** (Chromium 154 and Ghostty, 2026-10-19), with no
+  wrong-field or stale edit:
+  - `badi pause` hides a suggestion and lets Tab reach the page.
+  - Tab 0.2, 1 or 3 s into a restart of the broker, observer, session
+    helper or Fcitx commits nothing stale.
+  - Page script moving focus closes the first field's session.
+  - Fcitx's Unicode composition hides the suggestion and Tab commits
+    nothing.
+  - One Ctrl+Z after an acceptance also removes the preceding typing, as
+    IME-parity allows.
+  - Ghostty's typed line survives a broker restart; an Fcitx restart starts
+    a new line.
+  - At fractional scale 1.5 the grey text sits on the caret's baseline.
+- **Literal Tab** (Chromium 154, 2026-10-20): Ctrl+Shift+Tab with a
+  suggestion showing reached the page as one plain Tab; with none showing,
+  the chord stayed Chromium's.
+- **Quiet**: Escape quiet across edits, a request during quiet,
+  narrow-field quiet before acquisition, and Omawrite's Open File dialog
+  (`file_dialog`, explicit requests only).
 
-The merged `25fde96` build was installed on 2026-10-13 and exercised through
-the running local model, observer and addon in Chromium 152.0.7977.82 on native
-Wayland. Two disposable fields retained their grey suggestion for six seconds
-before Tab: a textarea accepted inline text, and a 280 CSS px input accepted
-the quiet overflow panel shown above the field. Neither edited the second
-field. Undo merged with preceding typing in both cases. A horizontally scrolled
-100 CSS px input showed no suggestion in two explicit-request attempts, so
-that boundary remains unverified. These are acceptance samples, not latency
-or language-quality scores. The disposable browser profile was removed; the
-installed settings and keyboard profile remained byte-identical.
-
-Type-through on 2026-10-13 night: the installed `b492c0a` broker, then the
-checkout broker run in its place (same socket, real model, not installed),
-with isolated profiles of Chromium 152, Brave Origin and Zen and `wtype` keys
-on a disposable page. The installed broker carried the typed `l` of "latest",
-then made a second model call: Chromium's text change also ended the
-observer's epoch, so the addon admitted the same context again under a new
-session and the carry, which then needed newly typed characters, declined
-(`prefix_mismatch`). The fixed broker answered both admissions from the carry:
-the remainder stayed on screen within about 300 ms and `provider_calls` did
-not move, in Chromium (a typed letter, then three more), Brave Origin and Zen
-(a typed space after "Thank you"). In that fresh Zen profile the suggestion
-showed in Fcitx's candidate box, not the overlay. One Ctrl+Z in Chromium
-undid the accepted text together with the preceding typing, as IME-parity
-allows. `wtype` cannot start a call with a space on this desktop (it is
-dropped even while Badi is paused), so the trial sent a Shift tap first.
-
-Tab-takes-a-word on 2026-10-16 night (installed `d74c238`, `badi debug on
---text`, disposable text): in Ghostty 1.3.1, Chromium 152.0.7977.82 (isolated
-profile, a local page) and Omawrite 0.5.0, Tab took one word, three quick
-Tabs typed three words with no Tab reaching the app, and Ctrl+→ took the
-rest; the trace recorded `tab_held` and `tab_held_accepted` in Chromium and
-Omawrite, while in Ghostty the remainder returned before the second Tab
-landed. Tab with nothing showing stayed the application's (shell completion
-in Ghostty, a focus move in Chromium). An automatic Ghostty miss showed no
-notice, while the same miss after Ctrl+Shift+Space showed "Badi has no
-continuation". The automatic misses that night were `budget_prefill` and
-`budget_stream` at 550 ms even for short lines; trimming the typed line
-further would not change the broker's sentence-window prompt (`badictl
-probe`: a 423-character line and its last sentence alone answered the same),
-and explicit 1.2 s requests proposed once warm, so no budget or context
-change followed. Writer 26.8's `adress → address` hint still replaced the
-whole word on Alt+F7. Completed on 2026-10-17 (installed `78ff8ca`):
-Omawrite in full with no window in the way (`the opportunity to speak`:
-three Tabs typed `the`, `opportunity`, `to`, Ctrl+→ the rest, and an
-explicit request's grey `the` for a finished `teh ` was taken whole on
-Tab, replacing it with `the `), and Writer again (Tab with the extension's
-hint showing stayed Writer's own key; Alt+F7 replaced whole, one Ctrl+Z
-restored the typo — [details](../libreoffice/README.md#boundaries)).
-
-Installed-flow matrix on 2026-10-19 night (installed `5e141ed`, Fcitx
-5.1.23, real model, `badi debug on --text`, disposable text). Chromium
-154.0.8037.97 ran an isolated profile on a local two-field page that logged
-every field change, and Ghostty 1.3.1 ran `cat` into a file, so each line the
-terminal received was read back. No cell made a wrong-field or stale edit:
-- **Pause:** `badi pause` with a suggestion showing hid it, Tab reached the
-  page and typing made no model call; `badi resume` brought suggestions back.
-- **Restarts:** with a suggestion showing, Tab pressed 0.2 s into a restart
-  of the broker (also 1 s and 3 s, while the model reloads), the observer,
-  the session helper or Fcitx (`omarchy-fcitx5.service`) committed nothing
-  stale and reached the page. A fresh suggestion then showed in the same
-  field, and only that one was accepted. A session-helper restart withholds
-  nothing ([ADR 0005](../../docs/decisions/0005-desktop-signals-withhold-authority.md)),
-  so a suggestion made for the unchanged text stays acceptable across it.
-- **Stale focus:** page script moving focus to the second field closed the
-  first field's session; Tab pressed at the blur committed nothing. A
-  suggestion shown afterwards belonged to the second field and was accepted
-  there, also after a key typed in it.
-- **Composition:** Fcitx direct Unicode entry (Ctrl+Shift+U) hid the
-  suggestion, and Tab during the composition committed nothing.
-- **Undo:** one Ctrl+Z after a Tab acceptance removed it together with the
-  preceding typing, as IME-parity allows.
-- **Ghostty's typed line:** Tab typed one word. Tab during a broker or Fcitx
-  restart reached the terminal as a tab and committed nothing, and afterwards
-  nothing showed until two new words were typed. Without Tab, a broker
-  restart kept the tracked line (it matched what the terminal received),
-  while an Fcitx restart started an empty line: one new word asked nothing,
-  and two asked with only the new words.
-- **Fractional scale 1.5** (eDP-1 at runtime, restored to 2): the inline grey
-  continuation sat on the caret's baseline right after the typed text, and
-  Tab accepted one word into the right field.
-
-A real suspend and resume, a VT switch and several monitors (one display)
-were not exercised.
-
-App sweep on 2026-10-20 (installed `f180653`, Fcitx 5.1.23, real model at
-15 W, context on, `badi debug on --text`, disposable text in isolated
-profiles and scratch files). Each cell typed a prefix, waited for the
-suggestion and pressed Tab once:
-- **Brave Origin 1.97**, a local mail-style page: 5 of 5 in a textarea and 3
-  of 3 in a contenteditable, inline, mostly 160–360 ms after the last key.
-  As an `--app` web app: 4 of 4; Ctrl+→ took all of it and Escape hid it
-  without editing.
-- **Zen 1.23.3b:** suggestions and, after `f180653`, window words.
-- **Ghostty 1.3.1**, `cat` into a file: 3 of 3 in the panel (220–540 ms);
-  the file received one word per Tab. **foot 1.28.0**, Omarchy's default
-  terminal, the same way with installed `f7fcaed` and `badi app foot on`: 4
-  of 4 in the panel (118–307 ms), one word per Tab, and `adress → address`
-  erased the typo with DELs before typing the fix.
-- **Chromium 154 as an Omarchy web app** (`chromium --app`, isolated
-  profile, window `chrome-127.0.0.1__-Default`, installed `f7fcaed`): 4 of 4
-  inline in 168–321 ms, "Okonk" finished from 395 characters of window text,
-  and the page received one word per Tab.
-- **Neovim 0.12.6** (LazyVim in Ghostty) and **Obsidian 1.14.4**
-  (`node adapters/obsidian/live.mjs --local`, all eight checks, English,
-  German and Persian) through their plugins.
-- **LibreOffice Writer 26.8.1** (GTK 3): 2 of 3 inline in 169 and 241 ms;
-  Tab committed one word (`dispatched-unverified`). Writer sends only the
-  caret's sentence, so "Okonk" could not finish from an earlier sentence.
-  The extension's Alt+F7 replaced `recieve`, and one Ctrl+Z restored it.
-- **VS Code 1.142:** 3 of 3, Tab took one word, and the saved file read
-  back exactly. `wtype` sends its own keymap, and VS Code's default key-code
-  dispatch then read letters as Tab or Backspace ("sending" became
-  "se    ng") and ignored Ctrl+S, so the trial profile sets
-  `"keyboard.dispatch": "keyCode"`.
-- **Omawrite 0.7.0: nothing at first.** Since fcitx5-qt 5.1.16 (installed here
-  2026-10-18 with Qt 6.12), Qt's input module withdraws the
-  `SurroundingText` capability after every key: an input-method update that
-  does not ask for the surrounding text now clears it. The addon then
-  treated the field as unreadable, so no automatic or explicit request was
-  made. A bare Qt Quick `TextArea` (`qml6`) does the same, and since
-  fcitx5-qt sends that update itself after every key, Qt Widgets apps such
-  as Telegram are likely affected too; they were not tested. Retried the
-  same day with the [surrounding echo](#contract) handled (installed `5a4aac8`, then
-  `9ae6571`): 6 of 7 prefixes showed in 248–426 ms, Tab took one word into
-  the saved file, Ctrl+→ took all of it and one Ctrl+Z restored the exact
-  prefix, Escape hid it, and Ctrl+Shift+Space asked again. In the one
-  miss, "…Please ask Okonk", the model gave nothing usable, and draft
-  finishing never uses the field's first word ("Okonkwo"). An accepted
-  `teh` → `the` correction first became an append (`teh the`); `9ae6571` withholds such
-  replacements while the echo holds, and Tab then stayed Omawrite's own.
-
-| Application | Reaches Fcitx through | Boundary |
-| --- | --- | --- |
-| Omawrite 0.5.0, 0.7.0 (Qt 6) | `QT_IM_MODULE=fcitx` | 0.5.0: 20/20 trials; one native undo restores the exact prefix. 0.7.0 with fcitx5-qt 5.1.16: suggestions through the surrounding echo, no spelling replacement |
-| Xournal++ 1.3.7 (GTK 3 text tool) | `GTK_IM_MODULE=fcitx` launcher override | 20/20 trials; after Escape leaves text editing, one document undo restores the prefix |
-| Chromium 152, Brave Origin, Electron apps | text-input-v3 (`wayland_v2`), Wayland app id | Page fields carry no purpose hints, so the observer's checks deny passwords. The omnibox sends the `Url` purpose and is denied before any observer request. Surrounding text stays current only on Fcitx 5.1.23 or later. |
-| VS Code 1.140, 1.142 | as above | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. Its caret-wide hidden textarea gets the inline preview bounded by the editor widget. |
-| Zen 1.23b (Gecko 157), 1.23.3b (Gecko 158) | `wayland_v2`, `zen` | Fields and the urlbar share one context with no `Url` hint, so the observer denies the urlbar. Gecko sends only the caret's paragraph. One Ctrl+Z undoes an acceptance alone. |
-| Telegram (Qt) | `dbus`, `Telegram` | Canonicalized to `telegram` |
+Not yet tried live:
+- a real suspend and resume, and a VT switch;
+- several monitors, and non-US keyboard groups;
+- a horizontally scrolled 100 CSS px input, which showed nothing on two
+  explicit requests;
+- Google's search box (consent wall).
 
 Fcitx supplies process identity and text but no stable widget identity, so
 manual context declares field identity and purpose unknown, and only the
@@ -481,13 +353,6 @@ model health, addon loading and an unchanged keyboard profile. It needs the
 provisioned model, an active Omarchy session and an unlocked desktop. Xournal++
 gets a launcher override with `GTK_IM_MODULE=fcitx` for its exact identity.
 `--broker-only` updates only the broker and commands, while locked.
-
-A complete install also retires the Fcitx 5.1.22 frontend backport that
-earlier installs added: it removes `~/.local/lib/badi/compat` and the
-`omarchy-fcitx5.service.d/60-badi-wayland-compat.conf` drop-in, backed up
-like any replaced file, and restarts Fcitx on its stock command. If either
-holds anything Badi did not write, the install stops before changing a file.
-`--broker-only` leaves them for the next complete install.
 
 Each run that changes something backs up what it replaced under
 `~/.local/state/badi/install-backups/<UTC time>/`. There, `changes.json` lists

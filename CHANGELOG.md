@@ -7,6 +7,13 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- A leaner workspace: AGENTS.md sets the rules (every tracked file earns its
+  place, `output/` holds only cited evidence, parallel sessions use their own
+  worktrees), and `docs:check` refuses model, archive and build files and
+  anything over 1 MiB. Gone: the retired Fcitx 5.1.22 backport's migration
+  code, the unused screen-OCR probe, an old smoke script, unreferenced type
+  stubs and stale backlog items; the Fcitx runbook's tested-with diary is now
+  a current matrix, and Dependabot and CI target `main`.
 - Two Cotypist gaps closed: `badi snooze [MINUTES]` and the session helper's
   `snooze` portal shortcut turn Badi off in the focused field's app or site
   for 10 minutes (runtime broker state keyed by the exact app id or origin,
