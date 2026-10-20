@@ -291,3 +291,8 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       docs-only change) and passed on rerun and in three local runs. If it
       recurs, find the timing that `cleanupRuntime` races after the
       fixture's exit.
+- [ ] `adapters/neovim/broker.test.mjs` timed out once in CI waiting for
+      `paused` after `badi pause` and an explicit request (#118, a change
+      outside Neovim), and passed on rerun and in three local runs. If it
+      recurs, find whether the plugin's status or the broker's pause
+      reaches it late.
