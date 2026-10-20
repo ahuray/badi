@@ -22,7 +22,7 @@ links to it. A tested app version is not a claim about Linux in general.
   Brave Origin, a web app, Zen, Writer, Obsidian, Neovim, Ghostty and VS
   Code. Omawrite and other observed Qt fields suggest again despite a
   fcitx5-qt 5.1.16 bug, but cannot replace a typo until it is fixed
-  (step 3). German,
+  (step 2). German,
   French, Spanish, Italian, Dutch and Polish spelling are opt-in
   (`badi spelling`). The closest Omarchy alternative, Oma Tab, replaces the
   input method and ships a 4.8 GB model.
@@ -88,7 +88,7 @@ Standing user decisions:
 - Gemma 4 E2B stays out of the catalog: no overall gain for four times the
   memory ([model fit](docs/architecture/model-selection.md));
 - distribution starts with an AUR package; publication and an Omarchy proposal
-  still need approval after naming and licence review;
+  still need approval after the naming review (the licence review is done);
 - Discord uses desktop-wide AT-SPI `ScreenReaderEnabled`, with recorded prior
   settings and unchanged Badi app/site permissions.
 
@@ -111,23 +111,7 @@ Open decisions, for the user:
 Each step ends with its completion test. Steps that install to the desktop or
 publish need the user's go-ahead first; the rest can start at once.
 
-1. **Finish licence and packaging for publication.** Badi is MIT and no
-   shipped dependency is GPL or unknown (audit, 2026-10-20), but:
-   - a binary package needs a third-party notices file (BSD-3-Clause
-     `subtle`, MPL-2.0 `spellbook`'s source location, Zlib, MIT and Apache
-     texts, nlohmann-json) and a wider `license=` array;
-   - Gemma, the recommended model, is downloaded with its terms shown only
-     by `badi model use`: the installer's first-model hint and the panel
-     skip them, and no acceptance is recorded;
-   - `.SRCINFO` is stale (`fcitx5>=5.1.22`, no `libsecret`), the desktop
-     launcher, `hypr/badi.lua` and the theme hook are not packaged, and the
-     addon builds with `-Werror` under makepkg's flags;
-   - CI never builds the package, and the plugin manifests carry no licence.
-   *Done when* CI builds a namcap-clean package that installs the notices,
-   no model downloads before its terms are shown and accepted, and the
-   [AUR README](packaging/aur/README.md) lists exactly what is packaged.
-   Publishing still waits for the naming review.
-2. **Close the Cotypist gaps that fit Badi.** Cotypist 0.22 (researched
+1. **Close the Cotypist gaps that fit Badi.** Cotypist 0.22 (researched
    2026-10-20 from its site, help pages and reviews) offers these, and Badi
    does not yet:
    - a suggestion length setting, from 1–2 to 10–15 words (Badi shows up
@@ -137,7 +121,7 @@ publish need the user's go-ahead first; the rest can start at once.
    - words completed per day and per app (Badi counts since model start,
      content-free, and should keep it that way);
    - global and per-app instructions, and personalized word choice (Badi's
-     style samples are stored but not yet read, step 6);
+     style samples are stored but not yet read, step 5);
    - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
      4B–30B): a llama.cpp Vulkan or CUDA runtime for machines with a GPU,
      measured with the [bench](evaluation/llm-bench/README.md) and the Lab.
@@ -156,7 +140,7 @@ publish need the user's go-ahead first; the rest can start at once.
    (Firefox, VS Code's default EditContext, Google Docs, Slack, Discord)
    are under [Remaining surfaces](#remaining-surfaces). *Done when* each
    item ships or is declined in a recorded user decision.
-3. **Get the fcitx5-qt surrounding-text bug fixed upstream.** Since
+2. **Get the fcitx5-qt surrounding-text bug fixed upstream.** Since
    fcitx5-qt 5.1.16
    ([upstream change](https://github.com/fcitx/fcitx5-qt/commit/bac684ce07d9df78ee37dab1cbdcebfa71bf24ec),
    unchanged on its `master` branch), an input-method update that does not ask
@@ -170,14 +154,14 @@ publish need the user's go-ahead first; the rest can start at once.
    2026-10-20. *Done when* a fixed fcitx5-qt
    restores the replacement in Omawrite (two native undos), and a Qt
    Widgets app (Telegram) has been checked.
-4. **Finish the installed-flow matrix with someone present.** Still open: a
+3. **Finish the installed-flow matrix with someone present.** Still open: a
    real suspend and resume, a VT switch and a Tab right after each, and
    several monitors when a second display is at hand. Restarts, undo, pause,
    composition, stale focus, Ghostty's typed line and fractional scaling
    passed on 2026-10-19 ([matrix](adapters/fcitx5/README.md#tested-with)).
    *Done when* those show zero wrong-field or stale edits and the
    [session helper](adapters/session/README.md) runbook records them.
-5. **Check context in a real mail client and the Claude desktop app.** Opt-in
+4. **Check context in a real mail client and the Claude desktop app.** Opt-in
    context shipped ([ADR 0010](docs/decisions/0010-context-finishes-words.md)).
    A disposable mail-style page in Chromium 154 passed every check live on
    2026-10-20 ([observer runbook](adapters/accessibility/README.md#window-words-context-on)),
@@ -189,16 +173,20 @@ publish need the user's go-ahead first; the rest can start at once.
    *Done when* both show a window or learned word finished, and
    `window_chars` appears on their `context.changed` in a `badi debug on`
    trace.
-6. **Compare style learning in the Lab.** Feed an explicit `badi style
+5. **Compare style learning in the Lab.** Feed an explicit `badi style
    export` into a Lab suite's `style` field and compare against no style on
    the user's own held-out drafts, with the `style_fact_conflict` fence and
    native review ([broker runbook](broker/README.md#style-learning-opt-in)).
    Linux apps cannot learn under the settings schema; lifting that is a
    separate privacy decision. *Done when* the comparison shows a per-language
    gain without more harm, before any prompt reads samples.
-7. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
-   *Done when* install, update and removal leave nothing behind; publication
-   waits for the naming and licence review.
+6. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
+   CI builds and namcap-checks the package on every change, and the licence
+   review is done: [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) ships
+   with it and every model download shows its terms first. *Done when*
+   install, update and removal on a fresh Omarchy leave nothing behind, the
+   panel's model-terms row has been tried live, and publication then waits
+   only for the naming review.
 
 ## Later, by area
 

@@ -7,6 +7,13 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Ready for publication review: `THIRD-PARTY-NOTICES.txt` lists every
+  component compiled into the binaries with its licence text (generated from
+  Cargo.lock and checked in CI) and ships with both installs; the AUR
+  candidate names MPL-2.0, BSD-3-Clause and Zlib, packages the launcher,
+  preview rule and Omarchy hooks, builds without `-Werror`, and a new CI job
+  builds and namcap-checks it. The installer, `badi model use` and the panel
+  all show a model's terms before downloading it and record the acceptance.
 - A fresh Omarchy 4.0.6 works out of the box: its Chromium web apps and foot,
   its default terminal, get suggestions; `badi repair` and an Omarchy
   login/update hook restore what Omarchy's refresh commands drop; the
