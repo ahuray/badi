@@ -100,8 +100,9 @@ model instead.
 
 The optional panel files are in `/usr/share/badi/omarchy`. For a fresh panel,
 create a new `io.github.ahuray.badi` directory under `~/.config/omarchy/plugins`,
-copy the seven files `manifest.json`, `BarWidget.qml`, `BadiMark.qml`,
-`DesktopPanel.qml`, `SettingsView.qml`, `BadiClient.qml` and `KeyModel.js`,
+copy the eight files `manifest.json`, `BarWidget.qml`, `BadiMark.qml`,
+`DesktopPanel.qml`, `SettingsView.qml`, `BadiClient.qml`, `KeyModel.js` and
+`StatsModel.js`,
 run `omarchy plugin validate` on it, then
 `omarchy plugin enable io.github.ahuray.badi`. The panel runs `badi-desktop`
 from `PATH`, so it finds `/usr/bin/badi-desktop`.

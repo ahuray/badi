@@ -341,6 +341,12 @@ pub enum MessageType {
     ContextForget,
     #[serde(rename = "context.status")]
     ContextStatus,
+    #[serde(rename = "stats.query")]
+    StatsQuery,
+    #[serde(rename = "stats.forget")]
+    StatsForget,
+    #[serde(rename = "stats.status")]
+    StatsStatus,
     #[serde(rename = "editor.focus")]
     EditorFocus,
     #[serde(rename = "editor.status")]
@@ -1357,6 +1363,15 @@ pub struct ContextStatusPayload {
     /// Learned words; absent without a usable key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub words: Option<u64>,
+}
+
+/// Content-free usage statistics: counts per local day and per app or site.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatsStatusPayload {
+    /// The statistics file is readable; false until `stats.forget` repairs it.
+    pub available: bool,
+    pub summary: crate::stats::StatsSummary,
 }
 
 /// An explicit export, bounded by the store to fit one frame.

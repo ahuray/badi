@@ -198,8 +198,8 @@ still ask the keyring or the broker ([ADR 0001](../docs/decisions/0001-same-uid-
 ## Debug trace
 
 While `badi debug on` runs, `debug_trace.rs` appends each wire frame in and
-out of the broker (allowlisted fields; settings, style and memory frames by
-type only; health polls not at all), each `model start` and `model done`
+out of the broker (allowlisted fields; settings, style, memory and
+statistics frames by type only; health and statistics polls not at all), each `model start` and `model done`
 with latency and outcome, and each `carry` decision to the
 [debug trace](../README.md#debug-trace). When the local runtime reports
 them, `model done` also carries content-free `ttft_ms`, `prompt_tokens`
@@ -225,6 +225,7 @@ badictl settings show
 badictl settings replace --if-revision N --json -   # read the document from stdin
 badictl memory clear      # text-free origin and day aggregates
 badictl style status|forget|export   # style learning; style key - reads the key from stdin
+badictl stats status|forget   # usage counts per day and per app or site
 badictl pause [on|off|toggle]
 badictl snooze [MINUTES] | snooze end   # the focused app or site, runtime only
 badictl request | accept-word | accept-all | dismiss   # the sole active session
@@ -245,7 +246,8 @@ no counter moving while `provider_calls` rises means no carry existed.
 Its optional v2 `word_savings` counts space-delimited word parts after a valid
 commit result, separately for `applied` and `dispatched_unverified`. Spelling
 replacements, failed, stale and expired results add nothing. Partial words
-count; later undo is unknown. All health counters reset at broker restart.
+count; later undo is unknown. All health counters reset at broker restart;
+the per-day counts that persist are under [Usage statistics](#usage-statistics).
 The frozen v1 health response omits the new counters.
 
 Settings replacements accept a bounded UTF-8 document on stdin with `--json -`;
@@ -416,6 +418,39 @@ is on and the subject may suggest, the broker does four things:
 `context.query` reports content-free counts and `context.forget` deletes
 every learned word but keeps the key; both need the CLI settings capability
 (`badictl context status|forget`, or `badi context`).
+
+## Usage statistics
+
+[src/stats.rs](src/stats.rs) keeps `stats.json` (`badi.stats.v1`) in the
+private data directory, mode 0600 and written atomically: per local calendar
+day and per exact app id or site origin, the suggestions shown, the
+acceptances the adapter reported `applied` or `dispatched_unverified` and the
+word parts they inserted (as `word_savings` counts them). No text,
+fingerprint, field or window detail is kept.
+
+- **What counts.** A show counts where `suggestions_shown` does, so growing
+  versions and type-through remainders are the same suggestion. Every landed
+  acceptance counts, so a suggestion taken word by word counts once per word;
+  a failed, stale or expired one counts nothing.
+- **What never counts.** The outcome worker keeps a count only under the
+  settings revision it was admitted under, and only while those settings let
+  that app or site suggest and do not pause Badi; a runtime pause or desktop
+  hold admits nothing to count. Turning an app off keeps its earlier counts
+  until they expire or are forgotten.
+- **Bounded.** 90 days, today included, plus tomorrow, so moving west across
+  a time zone keeps the day just counted; 64 apps and sites a day, further
+  ones adding to that day's total. The day is the system time zone's
+  ([jiff](https://github.com/BurntSushi/jiff); UTC when it is unknown).
+- **Written.** Counts collect in memory and reach the disk with the worker's
+  one-minute sweep, before a pause is acknowledged and at shutdown, so a
+  restart keeps them and a crash loses at most a minute. Expired days go at
+  startup and with each sweep. An unreadable file is preserved, counts
+  nothing and reports `available: false` until `stats.forget` replaces it.
+- **Read.** `stats.query` returns each kept day's totals, exact totals for
+  today, the last 7 days and every kept day, and the apps and sites among the
+  16 that lead any of those windows; `stats.forget` deletes everything. Both
+  need the CLI settings capability (`badictl stats status|forget`, or `badi
+  stats`).
 
 ## Context word bias
 

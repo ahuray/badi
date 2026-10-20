@@ -214,11 +214,15 @@ pub fn session(id: SessionId) -> String {
     id.to_string().chars().take(8).collect()
 }
 
-/// One wire frame, by allowlisted field. Health polls are left out.
+/// One wire frame, by allowlisted field. Health and statistics polls, which
+/// the open panel sends every few seconds, are left out.
 pub fn wire(direction: &str, adapter: AdapterKind, envelope: &WireEnvelope) {
     if matches!(
         envelope.message_type,
-        MessageType::HealthRequest | MessageType::HealthStatus
+        MessageType::HealthRequest
+            | MessageType::HealthStatus
+            | MessageType::StatsQuery
+            | MessageType::StatsStatus
     ) {
         return;
     }
@@ -306,7 +310,8 @@ fn describe(entry: &mut Entry, adapter: AdapterKind, envelope: &WireEnvelope) {
         MessageType::EditorStatus => {
             entry.copy(payload, &[("native_withheld", "/native_withheld")]);
         }
-        // Settings, style keys and samples, memory and probes: the type only.
+        // Settings, style keys and samples, memory, statistics and probes:
+        // the type only.
         _ => {}
     }
 }

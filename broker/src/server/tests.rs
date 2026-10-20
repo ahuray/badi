@@ -1150,6 +1150,32 @@ async fn desktop_reports_need_the_negotiated_capability_and_protocol_v2() {
 }
 
 #[tokio::test]
+async fn only_a_settings_client_reads_or_forgets_usage_statistics() {
+    // Only the settings capability reads which apps were used.
+    for (kind, capabilities) in [
+        (AdapterKind::Cli, vec![Capability::Control]),
+        (AdapterKind::Cli, vec![Capability::Health]),
+        (AdapterKind::Session, vec![Capability::DesktopSignals]),
+    ] {
+        for message_type in [MessageType::StatsQuery, MessageType::StatsForget] {
+            let (mut client, connection) =
+                connect_test_client(kind, CURRENT_PROTOCOL_VERSION, capabilities.clone()).await;
+            let reply = exchange(
+                &mut client,
+                message_type,
+                CURRENT_PROTOCOL_VERSION,
+                &EmptyPayload {},
+            )
+            .await;
+            assert_eq!(reply.message_type, MessageType::Error, "{message_type:?}");
+            assert_eq!(reply.payload["code"], "invalid_capability");
+            drop(client);
+            let _ = connection.await;
+        }
+    }
+}
+
+#[tokio::test]
 async fn only_the_cli_reads_style_samples_and_only_style_key_delivers_a_key() {
     let key = StyleKeyPayload {
         key_id: "5a".repeat(16),

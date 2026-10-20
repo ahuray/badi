@@ -19,6 +19,23 @@ desktop = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(desktop)
 REAL_INSTALL_STATE = desktop.install_state
 ORIGINAL_VSCODE_NOTE = desktop.vscode_edit_context_note
+STATS = {'available': True, 'summary': {
+    'today': '2026-10-20', 'retention_days': 90,
+    'totals': {'today': {'shown': 3, 'accepted': 2, 'words': 5},
+               'last_7_days': {'shown': 12, 'accepted': 6, 'words': 12},
+               'retained': {'shown': 12, 'accepted': 6, 'words': 12}},
+    'days': [{'day': '2026-10-19', 'shown': 9, 'accepted': 4, 'words': 7},
+             {'day': '2026-10-20', 'shown': 3, 'accepted': 2, 'words': 5}],
+    'subjects': [
+        {'identity': {'kind': 'browser_origin', 'adapter': 'chromium', 'scheme': 'https', 'host': 'example.com',
+                      'port': 443},
+         'today': {'shown': 0, 'accepted': 0, 'words': 0},
+         'last_7_days': {'shown': 9, 'accepted': 4, 'words': 7},
+         'retained': {'shown': 9, 'accepted': 4, 'words': 7}},
+        {'identity': {'kind': 'linux_app', 'adapter': 'fcitx', 'app_id': 'com.mitchellh.ghostty'},
+         'today': {'shown': 3, 'accepted': 2, 'words': 5},
+         'last_7_days': {'shown': 3, 'accepted': 2, 'words': 5},
+         'retained': {'shown': 3, 'accepted': 2, 'words': 5}}]}}
 BREAKDOWN = {'request_abstained': 0, 'budget_prefill': 2, 'budget_stream': 1, 'model_abstained': 0,
              'output_rejected': 0, 'stale': 0, 'timeout': 0, 'provider_error': 0, 'last': 'budget_prefill'}
 
@@ -101,15 +118,79 @@ class DesktopTests(unittest.TestCase):
         metrics = {'provider_calls': 4, 'suggestions_shown': 3, 'provider_errors': 1}
         with patch.object(desktop, 'runtime_directory', return_value=self.directory), \
              patch.object(desktop, 'control', side_effect=[json.dumps({'schema': 'badi.overview.v2'}),
-                                                           json.dumps({'metrics': metrics})]) as command, \
+                                                           json.dumps({'metrics': metrics}),
+                                                           json.dumps(STATS)]) as command, \
              contextlib.redirect_stdout(io.StringIO()) as output:
             desktop.main(['ctl', 'overview', '--json'])
-        self.assertEqual([call.args[1] for call in command.call_args_list], [self.directory / 'broker.sock'] * 2)
+        self.assertEqual([call.args[1] for call in command.call_args_list], [self.directory / 'broker.sock'] * 3)
+        self.assertEqual(command.call_args_list[2].args[0], ['stats', 'status'])
         overview = json.loads(output.getvalue())
         self.assertEqual(overview['schema'], 'badi.overview.v2')
         self.assertEqual({key: overview['desktop'][key] for key in ('requests', 'suggestions', 'errors')},
                          {'requests': 4, 'suggestions': 3, 'errors': 1})
         self.assertFalse(overview['desktop']['activity']['enabled'])
+        self.assertEqual(overview['desktop']['stats'], STATS)
+
+    def test_overview_survives_a_broker_without_statistics(self):
+        self.desktop_socket()
+        metrics = {'provider_calls': 4, 'suggestions_shown': 3, 'provider_errors': 1}
+        with patch.object(desktop, 'runtime_directory', return_value=self.directory), \
+             patch.object(desktop, 'control', side_effect=[json.dumps({'schema': 'badi.overview.v2'}),
+                                                           json.dumps({'metrics': metrics}),
+                                                           RuntimeError('error_code=rejected:invalid_message')]), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['ctl', 'overview', '--json'])
+        self.assertIsNone(json.loads(output.getvalue())['desktop']['stats'])
+
+    def test_stats_show_today_the_week_and_the_leading_apps_without_text(self):
+        calls = []
+
+        def control(arguments, endpoint=None, *, input_text=None):
+            calls.append(arguments)
+            return json.dumps(STATS)
+        with patch.object(desktop, 'control', side_effect=control), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['stats'])
+        text = output.getvalue()
+        self.assertEqual(calls, [['stats', 'status']])
+        lines = text.splitlines()
+        self.assertEqual(lines[2].split(), ['Today', '3', '2', '5'])
+        self.assertEqual(lines[3].split(), ['Last', '7', 'days', '12', '6', '12'])
+        self.assertIn('2026-10-14 Wed', text, 'seven days, the empty ones too')
+        self.assertEqual([line.split()[:2] for line in lines if line.startswith('  2026-10-19')],
+                         [['2026-10-19', 'Mon']])
+        leaders = text.split('Apps and sites, last 7 days:\n')[1].splitlines()
+        self.assertTrue(leaders[0].strip().startswith('https://example.com'), leaders)
+        self.assertIn('≈ 7 words · 9 shown · 4 accepted', leaders[0])
+        self.assertTrue(leaders[1].strip().startswith('com.mitchellh.ghostty'), leaders)
+
+        with patch.object(desktop, 'control', side_effect=control), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['stats', '--json'])
+        self.assertEqual(json.loads(output.getvalue()), STATS)
+
+        empty = {'available': True, 'summary': dict(STATS['summary'], days=[], subjects=[], totals={
+            window: {'shown': 0, 'accepted': 0, 'words': 0} for window in ('today', 'last_7_days', 'retained')})}
+        with patch.object(desktop, 'control', return_value=json.dumps(empty)), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['stats'])
+        self.assertIn('Nothing counted yet', output.getvalue())
+
+        unreadable = {'available': False, 'summary': empty['summary']}
+        with patch.object(desktop, 'control', return_value=json.dumps(unreadable)), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['stats'])
+        self.assertIn('badi stats forget', output.getvalue())
+
+        calls.clear()
+        with patch.object(desktop, 'control', side_effect=control), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['stats', 'forget'])
+        self.assertEqual(calls, [['stats', 'forget']])
+        self.assertIn('deleted', output.getvalue())
+        for invalid in (['stats', 'clear'], ['stats', 'forget', 'now'], ['stats', '--text']):
+            with self.subTest(invalid=invalid), self.assertRaises(RuntimeError):
+                desktop.main(invalid)
 
     def test_launcher_uses_normal_desktop_service_and_toolkit_modules(self):
         with patch.object(desktop.subprocess, 'run') as command:

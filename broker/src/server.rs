@@ -542,6 +542,8 @@ impl MessageHandler<'_> {
             MessageType::StyleExport => self.style_export(envelope).await,
             MessageType::ContextQuery => self.context_query(envelope).await,
             MessageType::ContextForget => self.context_forget(envelope).await,
+            MessageType::StatsQuery => self.stats_query(envelope).await,
+            MessageType::StatsForget => self.stats_forget(envelope).await,
             MessageType::Hello
             | MessageType::HelloAck
             | MessageType::SuggestionShow
@@ -559,6 +561,7 @@ impl MessageHandler<'_> {
             | MessageType::StyleStatus
             | MessageType::StyleSamples
             | MessageType::ContextStatus
+            | MessageType::StatsStatus
             | MessageType::Error => Err(ServerError::InvalidMessage),
         }
     }
@@ -828,6 +831,20 @@ impl MessageHandler<'_> {
             words: status.and_then(|status| status.words),
         };
         self.reply(MessageType::ContextStatus, request_id, &payload)
+    }
+
+    async fn stats_query(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_settings_authority(self.authority)?;
+        let _: EmptyPayload = envelope.decode_payload()?;
+        let status = self.broker.stats_status().await?;
+        self.reply(MessageType::StatsStatus, envelope.id, &status)
+    }
+
+    async fn stats_forget(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_settings_authority(self.authority)?;
+        let _: EmptyPayload = envelope.decode_payload()?;
+        let status = self.broker.forget_stats().await?;
+        self.reply(MessageType::StatsStatus, envelope.id, &status)
     }
 
     async fn desktop_state(&self, envelope: WireEnvelope) -> Result<(), ServerError> {

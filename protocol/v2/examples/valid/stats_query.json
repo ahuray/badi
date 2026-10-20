@@ -1,0 +1,7 @@
+{
+  "v": 2,
+  "id": "ctl:stats",
+  "type": "stats.query",
+  "mono_ms": 53,
+  "payload": {}
+}
