@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { open, readFile, readdir, mkdir, lstat, realpath } from 'node:fs/promises';
 import { resolve, relative, join, sep } from 'node:path';
@@ -13,8 +14,8 @@ export const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 export const OUTPUT_ROOT = resolve(ROOT, 'output/writing');
 export const WORKER_BINARY = resolve(ROOT, 'target/release/badi-writing-lab');
 // Run provenance: the Lab's own scripts, every file of the Lab worker crate
-// (expanded and sorted, so a new module cannot escape the record) and the
-// broker sources that crate builds on.
+// and of the broker's `src` (expanded and sorted, so a new module cannot
+// escape the record), and the manifests and data the worker builds with.
 const LAB_SCRIPTS = ['evaluation/writing/lab/run.mjs', 'evaluation/writing/lab/paced.mjs', 'evaluation/writing/lab/server.mjs',
   'evaluation/writing/lab/worker.mjs', 'evaluation/writing/lab/cases.mjs', 'evaluation/writing/lab/model-artifact.mjs',
   'evaluation/writing/lab/device-qualification.mjs', 'evaluation/writing/lab/gguf.mjs',
@@ -23,11 +24,8 @@ const LAB_SCRIPTS = ['evaluation/writing/lab/run.mjs', 'evaluation/writing/lab/p
   'evaluation/writing/lab/qualification-server.mjs',
   'evaluation/writing/lab/public/confidence.mjs'];
 export const LAB_CRATE = 'evaluation/writing/lab-worker';
-const BROKER_SOURCES = ['broker/src/writing.rs', 'broker/src/semantic/mod.rs', 'broker/src/semantic/client.rs',
-  'broker/src/semantic/wire.rs', 'broker/src/semantic/runtime.rs', 'broker/src/semantic/process.rs',
-  'broker/src/semantic/provenance.rs', 'broker/src/semantic/pinned_runtime.rs', 'broker/src/provider.rs',
-  'broker/src/segment.rs', 'broker/src/language.rs', 'broker/src/protocol.rs', 'broker/src/model_selection.rs', 'broker/src/lib.rs',
-  'broker/Cargo.toml', 'Cargo.toml', 'Cargo.lock', 'broker/data/writing-lexicon/en.txt'];
+const BUILD_INPUTS = ['broker/Cargo.toml', 'Cargo.toml', 'Cargo.lock', 'broker/data/writing-lexicon/en.txt'];
+export const WORKER_BUILD = ['build', '--release', '--locked', '-p', 'badi-writing-lab'];
 const hash = value => createHash('sha256').update(value).digest('hex');
 const jsonBytes = value => JSON.stringify(value, null, 2) + '\n';
 
@@ -110,23 +108,48 @@ export async function fileIdentity(path, cache = new Map()) {
   } finally { await handle.close(); }
 }
 
-/** The Lab worker crate's manifest and every file under its `src`, sorted. */
-export async function labCrateSources(root = ROOT) {
+/** Every regular file under `directory`, sorted; anything else is an error. */
+async function treeFiles(directory, root) {
   const files = [];
-  const visit = async directory => {
-    for (const entry of await readdir(resolve(root, directory), { withFileTypes: true })) {
-      const path = `${directory}/${entry.name}`;
+  const visit = async folder => {
+    for (const entry of await readdir(resolve(root, folder), { withFileTypes: true })) {
+      const path = `${folder}/${entry.name}`;
       if (entry.isDirectory()) await visit(path);
       else if (entry.isFile()) files.push(path);
       else throw new Error(`Lab worker sources must be regular files: ${path}`);
     }
   };
-  await visit(`${LAB_CRATE}/src`);
-  return [`${LAB_CRATE}/Cargo.toml`, ...files.sort()];
+  await visit(directory);
+  return files.sort();
+}
+
+/** The Lab worker crate's manifest and every file under its `src`, sorted. */
+export async function labCrateSources(root = ROOT) {
+  return [`${LAB_CRATE}/Cargo.toml`, ...await treeFiles(`${LAB_CRATE}/src`, root)];
+}
+
+/** Every broker source the worker links, and its build inputs. */
+export async function brokerSources(root = ROOT) {
+  return [...await treeFiles('broker/src', root), ...BUILD_INPUTS];
+}
+
+/**
+ * Builds the worker the run will execute, as `npm run writing:lab` does, so a
+ * run never uses a binary older than its sources; cargo does nothing when it
+ * is current. `run` is injectable for tests.
+ */
+export function buildWorker(run = (command, args) => new Promise((done, failed) => {
+  const child = spawn(command, args, { cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'] });
+  child.once('error', failed);
+  child.once('exit', code => done(code));
+})) {
+  return Promise.resolve(run('cargo', WORKER_BUILD)).then(code => {
+    if (code !== 0) throw new Error(`Building the Lab worker failed (cargo ${WORKER_BUILD.join(' ')}).`);
+  });
 }
 
 export async function sourceHashes(paths, root = ROOT) {
-  paths ??= [...LAB_SCRIPTS, ...await labCrateSources(root), ...BROKER_SOURCES];
+  paths ??= [...LAB_SCRIPTS, ...await labCrateSources(root), ...await brokerSources(root)];
   return Object.fromEntries(await Promise.all(paths.map(async path => [path, hash(await readFile(resolve(root, path)))])));
 }
 
@@ -325,7 +348,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const cancel = () => cancellation.abort();
   process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
   try {
-    const result = await runSuite(parseOptions(process.argv.slice(2)), { signal: cancellation.signal,
+    const options = parseOptions(process.argv.slice(2));
+    await buildWorker();
+    const result = await runSuite(options, { signal: cancellation.signal,
       onProgress: progress => process.stdout.write(`${progress.completed}/${progress.total} ${progress.case_id} ${progress.config_id}\n`) });
     process.stdout.write(JSON.stringify({ output: result.output, complete: result.report.complete,
       requests: result.report.completed_requests, valid_executed_identity: result.report.provenance.valid_executed_identity }) + '\n');

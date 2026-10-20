@@ -1,15 +1,16 @@
-//! Exact word reuse from one explicit, bounded snapshot. No model or dictionary.
+//! The Lab's word completion: the broker's vocabulary rule
+//! (`badi_broker::vocabulary`, ADR 0010) on one explicit, bounded snapshot,
+//! with the case's context as window words and its style examples as learned
+//! words. No model or dictionary.
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::{BufRead, Read, Write};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use unicode_segmentation::UnicodeSegmentation;
 
-use super::attestation::{lexical_separator, word_scalars};
-use badi_broker::writing::{self, WritingLanguage};
+use badi_broker::vocabulary::{self, Vocabulary};
+use badi_broker::writing::WritingLanguage;
 
 pub const REQUEST_SCHEMA: &str = "badi.context-lookup.request.v1";
 pub const ERROR_SCHEMA: &str = "badi.context-lookup.error.v1";
@@ -51,6 +52,11 @@ impl Request {
     }
 }
 
+pub const RESULT_SCHEMA: &str = "badi.context-lookup.result.v2";
+pub const CONTRACT_ID: &str = "badi.vocabulary.v1";
+
+/// Where the finished word was found, in the Lab's names for the broker's
+/// window, learned and draft sources.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
@@ -59,12 +65,12 @@ pub enum Source {
     Draft,
 }
 
-impl Source {
-    const fn bit(self) -> u8 {
-        match self {
-            Self::Context => 1,
-            Self::Style => 2,
-            Self::Draft => 4,
+impl From<vocabulary::Source> for Source {
+    fn from(source: vocabulary::Source) -> Self {
+        match source {
+            vocabulary::Source::Window => Self::Context,
+            vocabulary::Source::Learned => Self::Style,
+            vocabulary::Source::Draft => Self::Draft,
         }
     }
 }
@@ -78,117 +84,36 @@ pub struct ResultRecord {
     pub reason: &'static str,
     pub text: Option<String>,
     pub matched_word: Option<String>,
-    pub matched_candidate_count: usize,
     pub sources: Vec<Source>,
     pub latency_ms: f64,
     pub warnings: [&'static str; 1],
 }
 
-fn stem(before: &str, language: WritingLanguage) -> Option<(usize, &str)> {
-    let (start, word) = before.unicode_word_indices().next_back()?;
-    (start != 0
-        && start + word.len() == before.len()
-        && (3..=24).contains(&word.chars().count())
-        && before[..start]
-            .chars()
-            .next_back()
-            .is_some_and(lexical_separator)
-        && word.chars().next_back().is_some_and(char::is_alphabetic)
-        && word_scalars(word)
-        && language.accepts_output(word))
-    .then_some((start, word))
-}
-
-fn collect<'a>(
-    candidates: &mut BTreeMap<&'a str, u8>,
-    text: &'a str,
-    stem: &str,
-    language: WritingLanguage,
-    source: Source,
-) {
-    for (start, word) in text.unicode_word_indices() {
-        let end = start + word.len();
-        if word.len() <= stem.len()
-            || !word.starts_with(stem)
-            || !word_scalars(word)
-            || !language.accepts_output(word)
-            || (start == 0 && source == Source::Draft)
-            || (start > 0
-                && !text[..start]
-                    .chars()
-                    .next_back()
-                    .is_some_and(lexical_separator))
-            || !text[end..].chars().next().is_some_and(lexical_separator)
-        {
-            continue;
-        }
-        *candidates.entry(word).or_default() |= source.bit();
-    }
-}
-
 pub fn lookup(request: &Request) -> Result<ResultRecord, &'static str> {
     let started = Instant::now();
     let language = request.validate()?;
+    let words = Vocabulary::from_texts(&request.context, &request.style_examples);
     let mut result = ResultRecord {
-        schema: "badi.context-lookup.result.v1",
+        schema: RESULT_SCHEMA,
         id: request.id.clone(),
-        contract_id: "badi.context-lookup.exact.v1",
+        contract_id: CONTRACT_ID,
         outcome: "abstention",
-        reason: "no_eligible_stem",
+        reason: "no_stem",
         text: None,
         matched_word: None,
-        matched_candidate_count: 0,
         sources: Vec::new(),
         latency_ms: 0.0,
         warnings: ["context_match_does_not_prove_intent"],
     };
-    if let Some((start, stem)) = stem(&request.before, language) {
-        let mut candidates = BTreeMap::new();
-        collect(
-            &mut candidates,
-            &request.context,
-            stem,
-            language,
-            Source::Context,
-        );
-        for example in &request.style_examples {
-            collect(&mut candidates, example, stem, language, Source::Style);
+    match vocabulary::complete(&request.before, "", language, &words) {
+        Ok(completion) => {
+            result.outcome = "suggestion";
+            result.reason = "vocabulary_word";
+            result.text = Some(completion.suffix);
+            result.matched_word = Some(completion.word);
+            result.sources = completion.sources.into_iter().map(Source::from).collect();
         }
-        // The current stem is never evidence, and a clipped leading fragment
-        // of the authorized draft never gains an invented left boundary.
-        collect(
-            &mut candidates,
-            &request.before[..start],
-            stem,
-            language,
-            Source::Draft,
-        );
-        result.matched_candidate_count = candidates.len();
-        result.reason = match candidates.len() {
-            0 => "no_matching_word",
-            1 => "unsupported_suffix",
-            _ => "ambiguous_matches",
-        };
-        if candidates.len() == 1 {
-            let (word, sources) = candidates.first_key_value().expect("one candidate");
-            let suffix = &word[stem.len()..];
-            // Count all competing whole words first. An unsafe display seam
-            // must not turn two plausible source words into a unique choice.
-            if suffix.chars().next().is_some_and(char::is_alphabetic)
-                && language.accepts_output(suffix)
-                && badi_broker::segment::sanitize_suggestion(suffix).is_ok()
-                && writing::validate_suggestion_shape(&request.before, "", suffix).is_ok()
-            {
-                result.outcome = "suggestion";
-                result.reason = "unique_source_word";
-                result.text = Some(suffix.to_owned());
-                result.matched_word = Some((*word).to_owned());
-                result.sources = [Source::Context, Source::Style, Source::Draft]
-                    .into_iter()
-                    .filter(|source| sources & source.bit() != 0)
-                    .collect();
-            }
-        }
+        Err(abstention) => result.reason = abstention.as_str(),
     }
     result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
     Ok(result)
@@ -241,157 +166,62 @@ mod tests {
         }
     }
     #[test]
-    fn exact_multilingual_lookup_returns_only_the_untyped_suffix() {
-        for (before, language, context, suffix, word) in [
+    fn the_brokers_rule_finishes_a_word_from_each_source() {
+        let window = lookup(&request(
+            "Please use the sched",
+            "en",
+            "The schedule is ready.",
+        ))
+        .unwrap();
+        assert_eq!(
             (
-                "Please use the sched",
-                "en",
-                "The schedule is ready.",
-                "ule",
-                "schedule",
+                window.outcome,
+                window.reason,
+                window.text.as_deref(),
+                window.matched_word.as_deref()
             ),
             (
-                "Die Tagesord",
-                "de-DE",
-                "Tagesordnung liegt vor.",
-                "nung",
-                "Tagesordnung",
-            ),
-            (
-                "Die Tagesordnung",
-                "de",
-                "Tagesordnungsentwurf liegt vor.",
-                "sentwurf",
-                "Tagesordnungsentwurf",
-            ),
-            ("من هر روز می‌ر", "FA-ir", "من هر روز می‌روم.", "وم", "می‌روم"),
-        ] {
-            let result = lookup(&request(before, language, context)).unwrap();
-            assert_eq!(result.outcome, "suggestion");
-            assert_eq!(result.text.as_deref(), Some(suffix));
-            assert_eq!(result.matched_word.as_deref(), Some(word));
-            assert_eq!(result.sources, vec![Source::Context]);
-            assert_eq!(result.matched_candidate_count, 1);
-        }
+                "suggestion",
+                "vocabulary_word",
+                Some("ule"),
+                Some("schedule")
+            )
+        );
+        assert_eq!(window.sources, vec![Source::Context]);
+        let mut learned = request("Hi Okonk", "en", "");
+        learned.style_examples.push("Okonkwo agreed.".to_owned());
+        assert_eq!(lookup(&learned).unwrap().sources, vec![Source::Style]);
+        let draft = lookup(&request("Die Tagesordnung und Tagesord", "de", "")).unwrap();
+        assert_eq!(
+            (draft.text.as_deref(), draft.sources),
+            (Some("nung"), vec![Source::Draft])
+        );
+        let persian = lookup(&request("من هر روز می‌رو", "fa", "من هر روز می‌روم.")).unwrap();
+        assert_eq!(persian.text.as_deref(), Some("م"));
     }
     #[test]
-    fn repeated_words_dedupe_and_retain_original_field_provenance() {
-        let mut value = request(
-            "Die Tagesordnung und Tagesord",
-            "de",
-            "Tagesordnung. Tagesordnung.",
-        );
-        value
-            .style_examples
-            .push("Tagesordnung liegt vor.".to_owned());
-        let result = lookup(&value).unwrap();
-        assert_eq!(result.matched_candidate_count, 1);
-        assert_eq!(
-            result.sources,
-            vec![Source::Context, Source::Style, Source::Draft]
-        );
-        value.context.clear();
-        value.style_examples.clear();
-        assert_eq!(lookup(&value).unwrap().sources, vec![Source::Draft]);
-    }
-    #[test]
-    fn unknown_draft_start_and_unclosed_or_connected_source_words_are_not_evidence() {
-        assert_eq!(
-            lookup(&request("Tagesord", "de", "Tagesordnung."))
-                .unwrap()
-                .reason,
-            "no_eligible_stem"
-        );
-        assert_eq!(
-            lookup(&request("Tagesordnung und Tagesord", "de", ""))
-                .unwrap()
-                .reason,
-            "no_matching_word"
-        );
-        for context in [
-            "Tagesordnung",
-            "XTagesordnung.",
-            "Tagesordnung-Entwurf.",
-            "Tagesordnung's",
-            "Tagesordnung/Entwurf.",
-            "Tagesordnung_Entwurf.",
-            "Tagesordnung1.",
-            "1Tagesordnung.",
+    fn abstentions_carry_the_brokers_reason() {
+        for (before, context, reason) in [
+            ("Please use the sch", "The schedule is ready.", "no_stem"),
+            ("I told them about", "aboutness", "known_word"),
+            ("Please use the sched", "Nothing fits.", "no_match"),
+            ("Hi Marin", "Marinella and Marinette", "ambiguous"),
         ] {
-            let result = lookup(&request("Die Tagesord", "de", context)).unwrap();
-            assert!(result.text.is_none(), "{context}");
-        }
-        let mut value = request("Die Tagesord", "de", "Tagesordnung");
-        value.style_examples = vec![".".to_owned(), "Tagesordnung".to_owned(), ".".to_owned()];
-        assert_eq!(lookup(&value).unwrap().matched_candidate_count, 0);
-    }
-    #[test]
-    fn ambiguity_precedes_unsafe_suffix_filtering() {
-        for (before, language, context) in [
-            ("Die Fran", "de", "Frankfurt. Frankreich."),
-            ("Das Caf", "de", "Caf\u{301}e. Cafe."),
-            ("این میخ", "fa", "میخ‌ها. میخک."),
-        ] {
-            let result = lookup(&request(before, language, context)).unwrap();
-            assert_eq!(result.reason, "ambiguous_matches");
-            assert_eq!(result.matched_candidate_count, 2);
+            let result = lookup(&request(before, "en", context)).unwrap();
+            assert_eq!(
+                (result.outcome, result.reason),
+                ("abstention", reason),
+                "{before}"
+            );
             assert!(
                 result.text.is_none() && result.matched_word.is_none() && result.sources.is_empty()
             );
         }
         assert_eq!(
-            lookup(&request("این میخ", "fa", "میخ‌ها.")).unwrap().reason,
-            "unsupported_suffix"
-        );
-        let long = lookup(&request(
-            "The abc",
-            "en",
-            &format!("abc{}.", "d".repeat(65)),
-        ))
-        .unwrap();
-        assert_eq!(
-            (long.reason, long.matched_candidate_count),
-            ("unsupported_suffix", 1)
-        );
-    }
-    #[test]
-    fn case_diacritics_and_joiners_are_never_normalized() {
-        for (before, language, context) in [
-            ("Die Tagesord", "de", "tagesordnung."),
-            ("Die Übertr", "de", "U\u{308}berträge."),
-            ("برای کیا", "fa", "كيان آماده است."),
-            ("من می‌ر", "fa", "من میروم."),
-        ] {
-            assert_eq!(
-                lookup(&request(before, language, context))
-                    .unwrap()
-                    .matched_candidate_count,
-                0
-            );
-        }
-        for before in [
-            "Die Ta",
-            "Die Tagesord ",
-            "Die Tagesord-",
-            "Die/Tagesord",
-            "Die Tagesord\n",
-        ] {
-            assert_eq!(
-                lookup(&request(before, "de", "Tagesordnung."))
-                    .unwrap()
-                    .reason,
-                "no_eligible_stem"
-            );
-        }
-        assert_eq!(
-            lookup(&request(
-                &format!("Die {}", "T".repeat(25)),
-                "de",
-                "Tagesordnung."
-            ))
-            .unwrap()
-            .reason,
-            "no_eligible_stem"
+            lookup(&request("این دفترچه", "fa", "دفترچه‌ها."))
+                .unwrap()
+                .reason,
+            "unsafe_suffix"
         );
     }
     #[test]

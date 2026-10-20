@@ -7,7 +7,6 @@
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
 pub mod artifact;
-mod attestation;
 pub mod context_lookup;
 mod field_context;
 mod midline;

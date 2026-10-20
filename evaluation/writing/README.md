@@ -125,10 +125,16 @@ names in all five languages. Spelling and word lookup retain their own coverage.
 
 ## Word completion and spelling
 
-**Word completion** is model-free. For a partial word of 3–24 characters, it
-returns the untyped suffix only when exactly one longer whole word in the
-supplied context, style or earlier draft matches. Exact reuse is not intent: a
-unique match can still turn `Marin` into `Marinella`.
+**Word completion** runs the broker's vocabulary rule
+([broker runbook](../../broker/README.md#vocabulary-completion)), the one
+production uses with context on. The case's context stands for the window's
+words and its style examples for the writer's learned words. With five or
+more typed letters, it returns the untyped rest of the one longer whole word
+there, or earlier in the draft, that starts with them. When several fit, it
+returns one only if that word begins all the others. Otherwise it gives the
+broker's reason: `no_stem`, `known_word`, `no_match`, `ambiguous` or
+`unsafe_suffix`. Exact reuse is not intent: a unique match can still turn
+`Marin` into `Marinella`.
 
 **Spelling** checks the last completed German or Persian word with a native
 Hunspell worker and needs a local artifact manifest:
@@ -172,7 +178,10 @@ Options: `--modes` (default `production_boundary,context`), `--budget-ms`
 `--warm-prefix true` (one runtime per configuration, so a repeated prompt
 prefix can stay cached; not a counterbalanced cold comparison),
 `--prefill-batch 16|64`, `--memory-map true|false` (default true),
-`--model-artifact DESCRIPTOR`. The memory-loading experiment changes only how
+`--model-artifact DESCRIPTOR`. The command first builds the worker as
+`npm run writing:lab` does, so a run never executes a binary older than its
+sources (`paced.mjs` does the same). The report hashes the Lab scripts, the
+worker crate and every broker source before and after. The memory-loading experiment changes only how
 the runtime loads weights, and records that choice in its verified identity
 and qualification identity. It does not change installed broker settings.
 The installed broker now uses copied weights; the Lab retains an explicit

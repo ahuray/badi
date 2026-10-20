@@ -286,17 +286,16 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 ### Engineering upkeep
 
 - [ ] `observed-desktop.py` timed out once at "candidate before timed quiet"
-      (#81) and passed on rerun. If it recurs, give that wait its neighbours'
-      bound or find the timing it races.
+      (#81) and failed once more on 2026-10-20 (1 of 3 runs, with an empty
+      diagnostics folder); both passed on rerun. Give that wait its
+      neighbours' bound or find the timing it races, and make a failure keep
+      its diagnostics.
 - [ ] The Lab test "process exit rejects the active request and a later
       request starts a fresh process" (`worker.test.mjs`) failed once in CI
       with "Could not confirm cleanup of the owned model process" (#110, a
       docs-only change) and passed on rerun and in three local runs. If it
       recurs, find the timing that `cleanupRuntime` races after the
       fixture's exit.
-- [ ] No test covers `SettingsView.qml`'s keyboard model; a headless `qs`
-      test with a fake controller driving `move()` and `activate()` would
-      guard j/k, h/l and search.
 - [ ] One replacement-shape rule lives in `protocol.rs`, the schema,
       `text-safety.mjs` and `text.py`; a shared fixture file, like
       `orthographic-joiner-fixtures.json`, would stop them drifting.

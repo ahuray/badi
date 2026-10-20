@@ -14,6 +14,7 @@ scripts=(
   "$tests_dir/fake-bin/badictl"
   "$tests_dir/fake-bin/term-ignoring-group"
 )
+# key-model.test.mjs is Node, run below when Node is present.
 
 for command_name in jq ps setsid shellcheck; do
   command -v "$command_name" >/dev/null 2>&1 || {
@@ -26,6 +27,11 @@ shellcheck "${scripts[@]}"
 bash "$tests_dir/check-source.sh"
 bash "$tests_dir/check-term-ignoring.sh"
 bash "$tests_dir/check-process-group.sh"
+if command -v node >/dev/null 2>&1; then
+  node --test "$tests_dir/key-model.test.mjs"
+else
+  echo "Badi Omarchy keyboard model not run (Node unavailable; the repository job runs it)"
+fi
 if command -v qs >/dev/null 2>&1; then
   bash "$tests_dir/run-client-lifecycle.sh"
 else
