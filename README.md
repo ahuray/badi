@@ -61,7 +61,7 @@ around the caret.
 
 | App | Notes | Tested |
 | --- | --- | --- |
-| Chromium and Brave Origin, including Omarchy's web apps (HEY, X, Basecamp, Zoom) | Any website you allow, including rich editors (ProseMirror, Lexical, Slate, Draft.js, Quill, CKEditor 5, TinyMCE, CodeMirror), iframes and shadow roots | Chromium 152–154, Brave Origin 1.96–1.97 |
+| Chromium and Brave Origin, including Omarchy's web apps (HEY, X, Basecamp, Zoom) in either browser | Any website you allow, including rich editors (ProseMirror, Lexical, Slate, Draft.js, Quill, CKEditor 5, TinyMCE, CodeMirror), iframes and shadow roots | Chromium 152–154, Brave Origin 1.96–1.97 |
 | Zen | Grey preview; Ctrl+Z undoes an acceptance alone | Zen 1.23b, 1.23.3b |
 | VS Code, Cursor | Needs `"editor.editContext": false` in VS Code | VS Code 1.140 and 1.142, Cursor 3.21 |
 | Codex desktop | Composer | 26.930 |
@@ -72,6 +72,7 @@ around the caret.
 | Obsidian | Badi plugin; inline preview, Tab, Ctrl+→, one-step undo and recovery after a broker restart (live runner, real model) | 1.13.7, 1.14.4 |
 | Bash | Grey Readline preview and narrow English spelling fixes | Bash 5.3.15 in Ghostty 1.3.1 |
 | Ghostty (any TUI, such as a coding agent's prompt) | `badi app com.mitchellh.ghostty on`; suggestions follow the line you type and show in a panel at the cursor; Tab types a word, Ctrl+→ all of it, a correction shows as `teh → the` and Tab fixes the typo, and an automatic miss stays quiet ([how](docs/decisions/0009-terminals-use-the-typed-line.md)) | Ghostty 1.3.1 |
+| foot (Omarchy's default terminal) | `badi app foot on`; the line you type, as in Ghostty, including `teh → the` corrections | foot 1.28.0 |
 | Neovim | Badi plugin; prose buffers, inline preview, one-step undo; no spelling fixes yet. Live with the real model under LazyVim in foot and Ghostty, including Ctrl+Shift+Space; in Ghostty it takes over from the typed line while focused | 0.12.5, 0.12.6 |
 | Grok Bot | Ready, but its composer is untested | 0.35 |
 | Claude desktop | Ready, but its composer is untested; `badi app com.anthropic.claude on`, then relaunch it with the flag below | 2.42304 (Electron 44) |
@@ -82,7 +83,7 @@ around the caret.
 - Editors built on Chromium's EditContext (VS Code's default, CodeMirror on
   recent Chromium).
 - A caret inside a list or quote.
-- Terminals other than Ghostty, and Fish/Zsh line editing.
+- Terminals other than Ghostty and foot, and Fish/Zsh line editing.
 
 See [future plans](<future plans.md>).
 
@@ -292,7 +293,14 @@ badi debug on                # then: badi debug watch, and type in another app
 badi debug on --text         # the same trace with context and suggestion text
 badictl probe -              # run a disposable phrase through the live model
 badi service restart
+badi repair                  # restore Badi's lines that an Omarchy refresh dropped
 ```
+
+Omarchy's refresh commands (`omarchy-refresh-hyprland`,
+`omarchy-refresh-chromium`, a browser switch) replace `hyprland.lua` and the
+browsers' flag files, which drops Badi's preview rule and accessibility flag.
+`badi doctor` reports it, and the desktop installer adds an Omarchy hook that
+restores those lines at each login and after `omarchy-update`.
 
 `badi status` and `badi debug` name why nothing was shown, without recording
 what you typed:

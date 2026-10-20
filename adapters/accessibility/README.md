@@ -14,7 +14,7 @@ editing works ([coverage](../../README.md#where-it-works)).
 
 | App id | Executable | Window class | Broker target |
 | --- | --- | --- | --- |
-| `chromium` | `/usr/lib/chromium/chromium` | `chromium` | browser origin |
+| `chromium` | `/usr/lib/chromium/chromium` | `chromium`, or an `--app` window `chrome-<host>__<path>-<profile>` (Omarchy's web apps) | browser origin |
 | `chromium-browser` | as above, started without `/usr/bin/chromium`'s `CHROME_DESKTOP` | `chromium-browser` | browser origin |
 | `brave-origin` | `/opt/brave-origin-bin/brave` | `brave-origin`, or an `--app` window `brave-<host>__<path>-<profile>` | browser origin |
 | `zen` (Gecko) | `/opt/zen-browser-bin/zen-bin` | `zen` | browser origin |

@@ -20,6 +20,7 @@ Item {
   readonly property var supportedApps: [
     {name: "Omawrite", appId: "omawrite", context: "learned", detail: "Markdown editor"},
     {name: "Ghostty", appId: "com.mitchellh.ghostty", context: "line", detail: "Terminal · follows the line you type", manual: true},
+    {name: "foot", appId: "foot", context: "line", detail: "Terminal · follows the line you type", manual: true},
     {name: "Xournal++", appId: "com.github.xournalpp.xournalpp", context: "learned", detail: "Text tool · Tab requests, Tab again accepts a word", manual: true},
     {name: "Obsidian", appId: "obsidian", context: "learned", detail: "Badi plugin · Tab a word, Ctrl+Right all"},
     {name: "Neovim", appId: "nvim", context: "learned", detail: "Badi plugin · prose buffers"},
