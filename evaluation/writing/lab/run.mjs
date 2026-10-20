@@ -57,7 +57,7 @@ export function parseOptions(args, cwd = process.cwd()) {
   // normal keeps the plain id and request, so earlier runs stay comparable.
   const lengths = (values.lengths ?? 'normal').split(',');
   if (!lengths.length || new Set(lengths).size !== lengths.length || lengths.some(length => !LENGTHS.includes(length))) {
-    throw new Error('Use --lengths with distinct values from short, normal and long.');
+    throw new Error('Use --lengths with distinct values from short and normal.');
   }
   const configs = validateConfigs(values.modes.split(',').flatMap(mode => {
     const fixed = mode === 'production_boundary' || mode === 'framed' || mode === 'field_context' || mode === 'following_text' ||

@@ -37,7 +37,7 @@ export function renderLabPage(source, capability) {
     .replace('id="lab-ui" hidden', 'id="lab-ui"');
 }
 /** Production suggestion lengths (`suggestion_length` in settings). */
-export const LENGTHS = ['short', 'normal', 'long'];
+export const LENGTHS = ['short', 'normal'];
 
 export function validateConfigs(configs) {
   if (!Array.isArray(configs) || !configs.length || configs.length > MODES.length) throw new Error(`Select between one and ${MODES.length} configurations.`);

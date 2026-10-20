@@ -89,10 +89,9 @@ Standing user decisions:
 - Gemma 4 E2B stays out of the catalog: no overall gain for four times the
   memory ([model fit](docs/architecture/model-selection.md));
 - suggestions show one or two words (`short`) or up to four (`normal`, the
-  default); up to eight (`long`) stays Lab-only: with Gemma 3 1B it doubled
-  harmful additions (16 to 32 and 20 to 39 in two blind rounds), rising in
-  five of six languages, while short halved them (2026-10-21,
-  [comparison](broker/README.md#suggestion-limits));
+  default); up to eight was removed after it doubled harmful additions with
+  Gemma 3 1B, and a longer length returns only with a model that writes it
+  without more harm (2026-10-21, [comparison](broker/README.md#suggestion-limits));
 - distribution starts with an AUR package; publication and an Omarchy proposal
   still need approval after the naming review (the licence review is done);
 - Discord uses desktop-wide AT-SPI `ScreenReaderEnabled`, with recorded prior
@@ -143,8 +142,7 @@ publish need the user's go-ahead first; the rest can start at once.
    Left out on purpose: clipboard awareness and screen recording (the
    [context firewall](VISION.md#context-firewall)), sync and telemetry
    (non-goals), colon emoji (Fcitx owns emoji) and suggestions longer than
-   four words, which stay Lab-only until a model writes them without more
-   harm (standing user decision above). Its app list's gaps here
+   four words (standing user decision above). Its app list's gaps here
    (Firefox, VS Code's default EditContext, Google Docs, Slack, Discord)
    are under [Remaining surfaces](#remaining-surfaces). *Done when* each
    item ships or is declined in a recorded user decision.

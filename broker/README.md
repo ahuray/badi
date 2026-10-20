@@ -497,45 +497,22 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   chains drift (a run of Tabs turned a sentence into a maths exercise); the
   model, not the window, is the limit.
 - **Shape.** At most four words (two with `short`, below) and 64
-  characters; a continuation that would pass 64 characters or the wire's
-  eight words ends at its last word that fits. `en`, `de`, `fa`, `fr`,
+  characters. `en`, `de`, `fa`, `fr`,
   `es` and `pt` are routed; every language but Persian must be Latin
   script, Persian Arabic script, with
   ZWNJ only between the letters in
   [the joiner fixtures](../protocol/orthographic-joiner-fixtures.json).
 - **Length.** `suggestion_length` in settings (`badi length short|normal`
-  or the panel; omitted when `normal`, the default) sets how many words a
-  continuation shows: one or two, or up to four. Both use the same token
-  budget; a short stream ends as soon as its two words are complete. The
-  provider also writes `long`, up to eight words with eight more tokens,
-  cut at the writing budget, where its complete words are shown through the
-  gate. Only the [Prediction Lab](../evaluation/writing/README.md#terminal-runs)
-  uses it: settings refuse it (`unqualified_suggestion_length`). Settings
-  changes retire live sessions, so a type-through carry never outlives a
-  change of length. Corrections, vocabulary completions and the phrase
-  fixture ignore it.
-  The paired comparison (2026-10-21) ran the 325 development and boundary
-  requests of the [European-language screen](../docs/architecture/model-selection.md)
-  and 70 Persian ones, each length its own counterbalanced
-  `production_boundary` configuration, on the installed Gemma 3 1B at the
-  15 W limit (performance profile, on mains, while other builds ran: load
-  average 2–15, so absolute times are high). Two blind Sonnet rounds per
-  language judged the 705 unique additions:
-
-  | Length | Shown of 395 | Useful full additions | Harmful, all (en de fr es pt fa) | Useful words | Shown p50 / p90 | Ran to the 550 ms deadline |
-  | --- | --- | --- | --- | --- | --- | --- |
-  | short | 330 | 120 / 132 | 8 / 9 (1 0 3 1 1 2 / 2 1 2 1 1 2) | 567 / 564 | 201 / 323 ms | 11 |
-  | normal | 307 | 103 / 114 | 16 / 20 (1 0 3 3 3 6 / 3 2 4 2 3 6) | 864 / 855 | 259 / 423 ms | 21 |
-  | long | 288 | 86 / 96 | 32 / 39 (4 2 5 9 3 9 / 5 4 9 8 3 10) | 965 / 959 | 331 / 551 ms | 80 |
-
-  Short raised harm in no language in either round, showed more useful
-  full additions in every language but English (11 against 13 in one
-  round), and appeared sooner, while offering fewer words to take. Long
-  doubled harmful additions, rising in five of six languages in both rounds
-  (Portuguese level): its extra words were invented facts such as a
-  meeting's end time, a birthplace or a derailment with deaths, and 38 of
-  its suggestions waited for the deadline. By the standing rule (no
-  per-language harm increase) short ships and long does not. Runs:
+  or the panel; omitted when `normal`, the default) shows one or two words
+  or up to four, with the same token budget; a short stream ends as
+  soon as its second word is complete. Settings changes retire live
+  sessions, so a type-through carry never outlives a change of length.
+  Corrections, vocabulary completions and the phrase fixture ignore it.
+  In the paired Lab comparison of 2026-10-21 (395 requests in six
+  languages, two blind rounds, 15 W) short cut harmful additions from 16/20
+  to 8/9 with more useful full additions and a p50 of 201 against 259 ms;
+  up to eight words (`f9515e0`) doubled them to 32/39, rising in five
+  languages, and was removed. Runs:
   `output/writing/2026-10-20-suggestion-length/`.
 - **Partial words.** An English suffix that continues the typed word must form
   a word in the pinned [SCOWL lexicon](data/writing-lexicon/README.md); German

@@ -96,9 +96,9 @@ impl BatteryMode {
     }
 }
 
-/// How many words a model continuation may show. Every length keeps the
-/// writing budget: a longer one shows the complete words it has when the
-/// budget ends. Corrections and the deterministic fixture ignore it.
+/// How many words a model continuation may show, within the same token and
+/// time budget. Corrections, vocabulary completions and the deterministic
+/// fixture ignore it.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum SuggestionLength {
     /// One or two words.
@@ -108,12 +108,6 @@ pub enum SuggestionLength {
     #[default]
     #[serde(rename = "normal")]
     Normal,
-    /// Up to eight words, the wire's limit, within its 64 characters. The
-    /// Prediction Lab measures it, and settings refuse it: in the paired
-    /// comparison of 2026-10-21 it doubled harmful additions, rising in five
-    /// of six languages (user decision: no per-language harm increase).
-    #[serde(rename = "long")]
-    Long,
 }
 
 impl SuggestionLength {
@@ -122,19 +116,12 @@ impl SuggestionLength {
         matches!(self, Self::Normal)
     }
 
-    /// Whether settings may choose this length.
-    #[must_use]
-    pub const fn is_qualified(self) -> bool {
-        !matches!(self, Self::Long)
-    }
-
     /// The most words a continuation of this length shows.
     #[must_use]
     pub const fn max_words(self) -> usize {
         match self {
             Self::Short => 2,
             Self::Normal => 4,
-            Self::Long => crate::protocol::MAX_SUGGESTION_WORDS,
         }
     }
 }
@@ -453,9 +440,6 @@ impl SettingsV2 {
         if self.escape_quiet_seconds > MAX_ESCAPE_QUIET_SECONDS {
             return Err(SettingsValidationError::EscapeQuietOutOfRange);
         }
-        if !self.suggestion_length.is_qualified() {
-            return Err(SettingsValidationError::UnqualifiedSuggestionLength);
-        }
         if self.language_overrides.len() > MAX_SUBJECTS
             || self
                 .language_overrides
@@ -677,6 +661,4 @@ pub enum SettingsValidationError {
     TooManySubjects,
     #[error("unsupported_schema")]
     UnsupportedSchema,
-    #[error("unqualified_suggestion_length")]
-    UnqualifiedSuggestionLength,
 }

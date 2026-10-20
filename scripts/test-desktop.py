@@ -321,7 +321,6 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(sent.get('suggestion_length'), expected)
             self.assertEqual((sent['revision'], sent['subjects']), (8, []))
             self.assertIn(said, output.getvalue())
-        # Long is measured in the Lab only; settings refuse it.
         for invalid in (['length'], ['length', 'long'], ['length', 'medium'], ['length', '4'],
                         ['length', 'short', 'now']):
             with patch.object(desktop, 'control') as command, self.assertRaises(RuntimeError):

@@ -8,10 +8,9 @@ in [future plans](<future plans.md>), and lasting decisions in
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
 - `badi length short` (or the panel's Writing row) shows one or two words
-  per suggestion instead of up to four. In a paired Lab comparison it
-  halved harmful additions and appeared sooner; up to eight words doubled
-  them, so `long` stays in the Lab (`run.mjs --lengths`) and settings
-  refuse it.
+  per suggestion instead of up to four. In a paired Lab comparison
+  (`run.mjs --lengths`) it halved harmful additions and appeared sooner; up
+  to eight words doubled them and was removed.
 - A leaner workspace: AGENTS.md sets the rules (every tracked file earns its
   place, `output/` holds only cited evidence, parallel sessions use their own
   worktrees), and `docs:check` refuses model, archive and build files and

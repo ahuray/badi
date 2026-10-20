@@ -649,7 +649,7 @@ impl SemanticClient {
         }
         let healed = preferences.healed(&self.healing);
         let length = self.suggestion_length();
-        let plan = crate::writing::completion_plan(&request, &healed).for_length(length);
+        let plan = crate::writing::completion_plan(&request, &healed);
         // Healing can consume the whole window (one unfinished English word),
         // and an unhealed language can send only whitespace. Neither carries
         // context, and the runtime answers an empty prompt with a malformed

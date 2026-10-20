@@ -33,8 +33,8 @@ BATTERY_TEXT = {
     "explicit": ("On battery or in the power-saver profile, suggestions appear only when you ask "
                  "(Ctrl+Shift+Space, Tab in manual fields). Explicit requests are unchanged."),
 }
-# Longer suggestions doubled harmful additions in the Prediction Lab
-# (broker/README.md#suggestion-limits), so settings offer only these.
+# Up to eight words doubled harmful additions in the Prediction Lab
+# (broker/README.md#suggestion-limits), so these are the lengths.
 LENGTH_TEXT = {
     "short": "Suggestions show one or two words.",
     "normal": "Suggestions show up to four words.",

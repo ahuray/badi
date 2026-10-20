@@ -98,10 +98,10 @@ fn only_the_production_provider_takes_a_suggestion_length() {
             "style_examples":[],"config":{"mode":"production_boundary","budget_ms":550,"max_tokens":8,
             "cache_prompt":true,"temperature":0.0,"seed":42,"length":length}})
     };
-    let long: Request = serde_json::from_value(raw("long")).expect("long");
-    long.validate().expect("production takes a length");
-    assert_eq!(long.config.length, SuggestionLength::Long);
-    assert!(serde_json::from_value::<Request>(raw("medium")).is_err());
+    let short: Request = serde_json::from_value(raw("short")).expect("short");
+    short.validate().expect("production takes a length");
+    assert_eq!(short.config.length, SuggestionLength::Short);
+    assert!(serde_json::from_value::<Request>(raw("long")).is_err());
     let mut lab_only = request(Mode::Healed);
     lab_only.config.length = SuggestionLength::Short;
     assert!(lab_only.validate().is_err());

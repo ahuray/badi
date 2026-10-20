@@ -221,10 +221,10 @@ test('configuration and inference request allowlists keep arbitrary model parame
     config({ mode: 'instructed', cache_prompt: 'true' })]) assert.throws(() => validateConfigs([invalid]));
   assert.throws(() => validateConfigs([config(), config()]));
   // Only the production provider takes a suggestion length, and only a known one.
-  const production = { id: 'production_boundary-long', mode: 'production_boundary', budget_ms: 550, max_tokens: 8,
-    cache_prompt: true, temperature: 0, seed: 42, length: 'long' };
-  assert.equal(validateConfigs([production])[0].length, 'long');
-  for (const invalid of [{ ...production, length: 'medium' }, { ...config({ mode: 'instructed' }), length: 'short' }]) {
+  const production = { id: 'production_boundary-short', mode: 'production_boundary', budget_ms: 550, max_tokens: 8,
+    cache_prompt: true, temperature: 0, seed: 42, length: 'short' };
+  assert.equal(validateConfigs([production])[0].length, 'short');
+  for (const invalid of [{ ...production, length: 'long' }, { ...config({ mode: 'instructed' }), length: 'short' }]) {
     assert.throws(() => validateConfigs([invalid]));
   }
   assert.equal(JSON.stringify(workerRequest(testCase({ expected: ['NEVER_FORWARD_THIS'] }), config())).includes('NEVER_FORWARD_THIS'), false);

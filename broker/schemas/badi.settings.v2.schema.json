@@ -38,7 +38,7 @@
     },
     "suggestion_length": {
       "enum": ["short", "normal"],
-      "description": "How many words a model continuation shows: short one or two, normal (the default) up to four. Each length keeps the writing budget. Longer lengths are measured in the Prediction Lab and not yet qualified. Producers omit the property when normal."
+      "description": "How many words a model continuation shows: short one or two, normal (the default) up to four, within the same token and time budget. Producers omit the property when normal."
     },
     "spelling_languages": {
       "type": "array",

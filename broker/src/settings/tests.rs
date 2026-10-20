@@ -301,7 +301,7 @@ fn battery_mode_round_trips_omits_quiet_and_rejects_v1() {
 }
 
 #[test]
-fn suggestion_length_round_trips_omits_normal_refuses_long_and_survives_a_v1_write() {
+fn suggestion_length_round_trips_omits_normal_and_survives_a_v1_write() {
     let mut settings = settings_with(SubjectRule {
         identity: identity("mail.example"),
         permissions: allowed(None),
@@ -312,24 +312,13 @@ fn suggestion_length_round_trips_omits_normal_refuses_long_and_survives_a_v1_wri
         encoded.get("suggestion_length").is_none(),
         "normal is omitted"
     );
-    settings.validate().expect("normal is qualified");
-    // Long is the Lab's: it decodes, so a stored document can name it, but
-    // validation refuses it, so no store or replace accepts it.
-    settings.suggestion_length = SuggestionLength::Long;
-    let decoded: SettingsV2 =
-        serde_json::from_value(serde_json::to_value(&settings).expect("encode")).expect("decode");
-    assert_eq!(decoded.suggestion_length, SuggestionLength::Long);
-    assert_eq!(
-        decoded.validate(),
-        Err(SettingsValidationError::UnqualifiedSuggestionLength)
-    );
-    assert_eq!(SuggestionLength::Long.max_words(), 8);
+    settings.validate().expect("normal");
     settings.suggestion_length = SuggestionLength::Short;
     let encoded = serde_json::to_value(&settings).expect("encode settings");
     assert_eq!(encoded["suggestion_length"], "short");
     let decoded: SettingsV2 = serde_json::from_value(encoded).expect("decode settings");
     assert_eq!(decoded, settings);
-    decoded.validate().expect("short is qualified");
+    decoded.validate().expect("short");
     assert_eq!(SuggestionLength::Short.max_words(), 2);
     let mut explicit_normal = serde_json::to_value(&settings).expect("encode settings");
     explicit_normal["suggestion_length"] = serde_json::json!("normal");
@@ -349,7 +338,12 @@ fn suggestion_length_round_trips_omits_normal_refuses_long_and_survives_a_v1_wri
         serde_json::from_value::<SettingsV2>(legacy).is_err(),
         "v1 cannot name it"
     );
-    for value in [serde_json::json!("medium"), serde_json::json!(4)] {
+    // Longer suggestions doubled harmful additions in the Lab; none decode.
+    for value in [
+        serde_json::json!("long"),
+        serde_json::json!("medium"),
+        serde_json::json!(4),
+    ] {
         let unknown = serde_json::json!({
             "schema": SETTINGS_SCHEMA, "revision": 1, "paused": false,
             "suggestion_length": value, "subjects": [],

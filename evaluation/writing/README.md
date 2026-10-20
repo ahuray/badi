@@ -165,11 +165,10 @@ Options: `--modes` (default `production_boundary,context`), `--budget-ms`
 `--warm-prefix true` (one runtime per configuration, so a repeated prompt
 prefix can stay cached; not a counterbalanced cold comparison),
 `--prefill-batch 16|64`, `--memory-map true|false` (default true),
-`--model-artifact DESCRIPTOR`, `--lengths short,normal,long` (default
-`normal`: each suggestion length becomes its own `production_boundary`
-configuration, `production_boundary-short` and so on, while normal keeps
-the plain id and request; `long` is Lab-only, see the
-[length comparison](../../broker/README.md#suggestion-limits)). The command first builds the worker as
+`--model-artifact DESCRIPTOR`, `--lengths short,normal` (default `normal`:
+each [suggestion length](../../broker/README.md#suggestion-limits) becomes
+its own `production_boundary` configuration, `production_boundary-short`,
+while normal keeps the plain id and request). The command first builds the worker as
 `npm run writing:lab` does, so a run never executes a binary older than its
 sources (`paced.mjs` does the same). The report hashes the Lab scripts, the
 worker crate and every broker source before and after. The memory-loading experiment changes only how

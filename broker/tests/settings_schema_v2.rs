@@ -214,12 +214,7 @@ fn suggestion_length_is_an_optional_v2_only_choice() {
         badi_broker::settings::SuggestionLength::Short
     );
     assert_eq!(serde_json::to_value(&decoded).expect("encoded"), document);
-    // Long is measured in the Lab only: the schema omits it and validation
-    // refuses it.
-    document["suggestion_length"] = json!("long");
-    assert!(!validator(2).is_valid(&document));
-    let long: SettingsV2 = serde_json::from_value(document.clone()).expect("typed");
-    assert!(long.validate().is_err());
+
     document["suggestion_length"] = json!("normal");
     assert!(validator(2).is_valid(&document));
     let encoded = serde_json::to_value(
@@ -230,7 +225,7 @@ fn suggestion_length_is_an_optional_v2_only_choice() {
         encoded.get("suggestion_length").is_none(),
         "normal is the canonical absence"
     );
-    for invalid in [json!("medium"), json!(8)] {
+    for invalid in [json!("long"), json!("medium"), json!(8)] {
         document["suggestion_length"] = invalid;
         assert!(!validator(2).is_valid(&document));
         assert!(serde_json::from_value::<SettingsV2>(document.clone()).is_err());

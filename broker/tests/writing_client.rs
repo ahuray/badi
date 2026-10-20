@@ -1617,28 +1617,24 @@ async fn length_exchange(
 }
 
 #[tokio::test]
-async fn each_suggestion_length_shows_its_words_and_long_ends_at_the_budget()
+async fn each_suggestion_length_shows_its_words_within_the_same_budget()
 -> Result<(), Box<dyn Error>> {
     use badi_broker::settings::SuggestionLength;
-    let words = [
-        " one", " two", " three", " four", " five", " six", " seven", " eight", " nine",
-    ];
-    for (length, tokens, shown) in [
-        (SuggestionLength::Short, 8, " one two"),
-        (SuggestionLength::Normal, 8, " one two three four"),
-        (
-            SuggestionLength::Long,
-            16,
-            " one two three four five six seven eight",
-        ),
+    let words = [" one", " two", " three", " four", " five"];
+    for (length, shown) in [
+        (SuggestionLength::Short, " one two"),
+        (SuggestionLength::Normal, " one two three four"),
     ] {
         let (payload, text) = length_exchange(length, &words, false).await?;
-        assert_eq!(payload["n_predict"], tokens, "{length:?}");
+        assert_eq!(payload["n_predict"], 8, "{length:?}");
         assert_eq!(text.as_deref(), Some(shown), "{length:?}");
+        // Cut short at the budget, the complete words still keep the limit.
+        let (_, text) = length_exchange(length, &words[..4], true).await?;
+        let salvaged = match length {
+            SuggestionLength::Short => " one two",
+            SuggestionLength::Normal => " one two three",
+        };
+        assert_eq!(text.as_deref(), Some(salvaged), "{length:?} at the budget");
     }
-    // A long continuation never extends past the 550 ms budget: when the
-    // stream stalls, its complete words then are shown, through the gate.
-    let (_, text) = length_exchange(SuggestionLength::Long, &words[..6], true).await?;
-    assert_eq!(text.as_deref(), Some(" one two three four five"));
     Ok(())
 }

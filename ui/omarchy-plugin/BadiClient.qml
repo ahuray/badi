@@ -189,8 +189,7 @@ Scope {
       if (["normal", "quiet", "explicit"].indexOf(value.battery_mode) < 0) return false
       keys.push("battery_mode")
     }
-    // Suggestion length: producers omit the default, normal. Longer lengths
-    // are measured in the Prediction Lab only, and the broker refuses them.
+    // Suggestion length: producers omit the default, normal.
     if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "suggestion_length")) {
       if (["short", "normal"].indexOf(value.suggestion_length) < 0) return false
       keys.push("suggestion_length")
