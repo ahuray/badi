@@ -14,7 +14,7 @@ editing works ([coverage](../../README.md#where-it-works)).
 
 | App id | Executable | Window class | Broker target |
 | --- | --- | --- | --- |
-| `chromium` | `/usr/lib/chromium/chromium` | `chromium` | browser origin |
+| `chromium` | `/usr/lib/chromium/chromium` | `chromium`, or an `--app` window `chrome-<host>__<path>-<profile>` (Omarchy's web apps) | browser origin |
 | `chromium-browser` | as above, started without `/usr/bin/chromium`'s `CHROME_DESKTOP` | `chromium-browser` | browser origin |
 | `brave-origin` | `/opt/brave-origin-bin/brave` | `brave-origin`, or an `--app` window `brave-<host>__<path>-<profile>` | browser origin |
 | `zen` (Gecko) | `/opt/zen-browser-bin/zen-bin` | `zen` | browser origin |
@@ -93,14 +93,15 @@ asks the running Omarchy shell for fresh `lock.status`, overlapping the field
 inspection and waiting at most 150 ms within its operation budget. Unless all
 five lock flags are explicitly false, the lock denial wins; errors fail closed.
 
-On Quickshell 0.3.1, the observer caches the discovered IPC endpoint and sends
+On Quickshell 0.3.1 and 0.3.2, the observer caches the discovered IPC endpoint and sends
 the query directly. It never caches an unlocked answer. Peer UID and PID must
 match discovery; instance-directory or executable changes invalidate the
 endpoint and an overlapping reply. Other versions use `qs ipc -n -p
 $OMARCHY_PATH/shell call -- lock status` as before. The small wire subset is
 pinned to upstream [command tags](https://github.com/quickshell-mirror/quickshell/blob/v0.3.1/src/ipc/ipccommand.hpp),
 [call replies](https://github.com/quickshell-mirror/quickshell/blob/v0.3.1/src/io/ipccomm.cpp)
-and Qt's length-prefixed UTF-16 `QString`. Unknown replies are denied.
+and Qt's length-prefixed UTF-16 `QString`; 0.3.2, checked at Omarchy's
+revision 2b4501a, changed neither file. Unknown replies are denied.
 
 ### Browser fields
 

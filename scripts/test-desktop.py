@@ -24,6 +24,21 @@ BREAKDOWN = {'request_abstained': 0, 'budget_prefill': 2, 'budget_stream': 1, 'm
 
 
 class DesktopTests(unittest.TestCase):
+    def test_repair_reports_what_it_restored_and_the_hook_stays_quiet(self):
+        for arguments, omarchy, restored, expected in (
+                (['repair'], False, ['hypr/hyprland.lua'], 'Restored Badi\'s lines in hypr/hyprland.lua'),
+                (['repair'], False, [], 'Nothing to repair'),
+                (['repair', '--omarchy'], True, ['chromium-flags.conf'], 'Restored Badi\'s lines in chromium-flags.conf'),
+                (['repair', '--omarchy'], True, [], '')):
+            with self.subTest(arguments=arguments, restored=restored), \
+                 patch.object(desktop.badi_install, 'repair', return_value=restored) as repair, \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                desktop.main(arguments)
+            repair.assert_called_once_with(Path.home(), omarchy_only=omarchy)
+            self.assertEqual(output.getvalue().strip()[:len(expected)], expected)
+            if not expected:
+                self.assertEqual(output.getvalue(), '', 'the login hook prints nothing when nothing was dropped')
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

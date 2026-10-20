@@ -10,7 +10,9 @@ import "KeyModel.js" as KeyModel
 Item {
   id: root
 
-  readonly property string helper: Quickshell.env("HOME") + "/.local/bin/badi-desktop"
+  // Found on the shell's PATH: /usr/bin from a package, ~/.local/bin from
+  // the user-local installer (the two are not meant to be mixed).
+  readonly property string helper: "badi-desktop"
   // Supported apps; `manual` apps need an exact rule even in blocklist mode.
   // `context` says what context finishes words from there (ADR 0010): the
   // window and learned words (web content), learned words only (native
@@ -18,6 +20,7 @@ Item {
   readonly property var supportedApps: [
     {name: "Omawrite", appId: "omawrite", context: "learned", detail: "Markdown editor"},
     {name: "Ghostty", appId: "com.mitchellh.ghostty", context: "line", detail: "Terminal · follows the line you type", manual: true},
+    {name: "foot", appId: "foot", context: "line", detail: "Terminal · follows the line you type", manual: true},
     {name: "Xournal++", appId: "com.github.xournalpp.xournalpp", context: "learned", detail: "Text tool · Tab requests, Tab again accepts a word", manual: true},
     {name: "Obsidian", appId: "obsidian", context: "learned", detail: "Badi plugin · Tab a word, Ctrl+Right all"},
     {name: "Neovim", appId: "nvim", context: "learned", detail: "Badi plugin · prose buffers"},

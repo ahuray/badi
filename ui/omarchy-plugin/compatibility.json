@@ -3,10 +3,10 @@
   "artifact": "io.github.ahuray.badi@0.1.0",
   "status": "disabled_repo_local_feasibility",
   "omarchy": {
-    "package": "4.0.5-1",
+    "package": "4.0.6-1",
     "source_repository": "https://github.com/omacom/omarchy.git",
-    "source_tag": "v4.0.5",
-    "source_commit": "94a8fbc2d67eec5673c7f16b8c5e8a9c8452ffdc",
+    "source_tag": "v4.0.6",
+    "source_commit": "237f1b4071a0bff2296c6d740ba2b9fd695ebfa0",
     "contract_files": {
       "shell/shell.qml": "sha256:1c390bb1703a8372a7d3a614bc44513b6cc91eee21f4bd507198e8601310e617",
       "shell/services/PluginRegistry.qml": "sha256:8466127c53037b80b582544610b0bdf78a86764e4f037a3b9ce360d107359803",

@@ -21,12 +21,16 @@ from field import FieldBackend
 
 # An unrecognized executable never inherits another application's permission.
 APPS = {
-    "chromium": App(frozenset({"/usr/lib/chromium/chromium"}), frozenset({"chromium"}), browser=True, web=True),
+    # Omarchy web apps open as Chromium --app windows unless Brave is the default
+    # browser; the addon maps them to this id.
+    "chromium": App(frozenset({"/usr/lib/chromium/chromium"}), frozenset({"chromium"}), browser=True, web=True,
+                    web_apps="chrome-"),
     # /usr/bin/chromium exports CHROME_DESKTOP=chromium.desktop; started any
     # other way, the same executable's Wayland app id is chromium-browser.
     "chromium-browser": App(frozenset({"/usr/lib/chromium/chromium"}), frozenset({"chromium-browser"}),
                             browser=True, web=True),
-    # Omarchy web apps open as Brave --app windows; the addon maps them to this id.
+    # Omarchy web apps open as Brave --app windows when Brave is the default
+    # browser; the addon maps them to this id.
     "brave-origin": App(frozenset({"/opt/brave-origin-bin/brave"}), frozenset({"brave-origin"}), browser=True, web=True,
                         web_apps="brave-"),
     # /usr/bin/zen-browser execs this binary; its Wayland app id and Fcitx program() are both "zen".

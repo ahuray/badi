@@ -1245,6 +1245,19 @@ void canonicalAppIdsFoldAsciiCase() {
     }
     check(!braveWebAppWindow("brave-" + std::string(240, 'a') + "__-Default"),
           "an overlong web-app window name is rejected");
+    for (const auto program : {"chrome-app.hey.com__-Default", "chrome-app.basecamp.com__-Default",
+                               "chrome-web.whatsapp.com__-Profile_1", "chrome-127.0.0.1__0123abc_fixture-Default"}) {
+        check(chromiumWebAppWindow(program) && programAppId(program) == "chromium",
+              "Omarchy's Chromium --app windows keep the browser identity");
+    }
+    for (const auto program : {"chrome-nngceckbapebfimnlniiiahkandclblb-Default", "chrome", "google-chrome",
+                               "chrome-x.com__-Profile 1", "chrome-x.com__/-Default", "brave-app.hey.com__-Default",
+                               "chromium-app.hey.com__-Default", "chrome-app.hey.com_-Default"}) {
+        check(!chromiumWebAppWindow(program) && programAppId(program) != "chromium",
+              "installed PWAs, other names and malformed names are not Chromium web-app windows");
+    }
+    check(!chromiumWebAppWindow("chrome-" + std::string(240, 'a') + "__-Default"),
+          "an overlong Chromium web-app window name is rejected");
     check(classifyNativeApp("grok-bot") == NativeAppClass::ImeParityDesktop && imeParityApp("grok-bot"),
           "Grok Bot accepts only through its observed field");
     check(programAppId("com.anthropic.Claude") == "com.anthropic.claude" &&
@@ -1491,13 +1504,19 @@ void observerRepliesFailClosed() {
 
     {
         // A terminal's only context is the line typed into it (ADR 0009).
-        check(classifyNativeApp("com.mitchellh.ghostty") == NativeAppClass::Terminal &&
-                  nativeEditingAvailable("com.mitchellh.ghostty", NativeEditTarget::DesktopApplication,
-                                         NativeEditPath::TypedLine) &&
-                  !nativeEditingAvailable("com.mitchellh.ghostty", NativeEditTarget::DesktopApplication,
-                                          NativeEditPath::Manual) &&
-                  !nativeObservationAvailable("com.mitchellh.ghostty"),
-              "terminals edit only through their typed line and are never observed");
+        // Ghostty and foot, Omarchy's default terminal, were tried live.
+        for (const auto terminal : {"com.mitchellh.ghostty", "foot"}) {
+            check(classifyNativeApp(terminal) == NativeAppClass::Terminal &&
+                      nativeEditingAvailable(terminal, NativeEditTarget::DesktopApplication,
+                                             NativeEditPath::TypedLine) &&
+                      !nativeEditingAvailable(terminal, NativeEditTarget::DesktopApplication,
+                                              NativeEditPath::Manual) &&
+                      !nativeObservationAvailable(terminal),
+                  "terminals edit only through their typed line and are never observed");
+        }
+        check(classifyNativeApp("footclient") != NativeAppClass::Terminal &&
+                  classifyNativeApp("kitty") != NativeAppClass::Terminal,
+              "a terminal is listed only after its own live trial");
         TypedLine line;
         line.type("git");
         check(!line.prose(), "a single token is never a request");

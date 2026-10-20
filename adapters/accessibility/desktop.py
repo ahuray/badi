@@ -114,9 +114,15 @@ class Desktop:
         return raw
 
 
+# Versions whose IPC wire matches the pinned subset: 0.3.2 (checked at
+# revision 2b4501a) changed neither ipccommand.hpp nor ipccomm.cpp since 0.3.1.
+PINNED_QUICKSHELL = (b"Quickshell 0.3.1 (", b"Quickshell 0.3.2 (")
+
+
 class LockEndpoint:
-    """Cache discovery, never an unlocked answer. Quickshell 0.3.1's wire
-    format is pinned; other versions keep using the supported CLI.
+    """Cache discovery, never an unlocked answer. The wire format of
+    Quickshell 0.3.1 and 0.3.2 is pinned; other versions keep using the
+    supported CLI.
 
     Creating or removing any shell instance, or replacing qs, invalidates the
     cache. The same stamp is checked after each query, including a query that
@@ -151,7 +157,7 @@ class LockEndpoint:
                 return subprocess.run((executable, *args), stdin=subprocess.DEVNULL,
                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                       check=True, timeout=remaining(IPC_SECONDS)).stdout
-            if run("--version").startswith(b"Quickshell 0.3.1 ("):
+            if run("--version").startswith(PINNED_QUICKSHELL):
                 instances = json.loads(run("list", "-j", "-n", "-p", os.path.join(shell, "shell")))
                 if not isinstance(instances, list) or len(instances) != 1:
                     raise Denied("desktop_unavailable")

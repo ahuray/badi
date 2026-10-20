@@ -7,6 +7,12 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- A fresh Omarchy 4.0.6 works out of the box: its Chromium web apps and foot,
+  its default terminal, get suggestions; `badi repair` and an Omarchy
+  login/update hook restore what Omarchy's refresh commands drop; the
+  installer checks for Fcitx 5.1.23; the panel works from a package and is
+  re-pinned to Omarchy 4.0.6; Quickshell 0.3.2 keeps the fast lock check.
+  The backlog gains a publication step and the Cotypist gaps.
 - Omawrite and other observed Qt fields suggest again under fcitx5-qt
   5.1.16, which withdraws the surrounding text after every key: the Fcitx
   addon recognizes exactly that echo, keeps the observer's checks, leaves

@@ -66,4 +66,5 @@ input context since its last boundary, in memory, and uses it as the context:
   the local model. This is why terminals need an exact, opt-in rule.
 - A line that already had text when it gained focus is followed only from
   that point, so suggestions there continue just the newly typed part.
-- Only Ghostty is listed; another terminal is added after a live trial.
+- Ghostty and foot (live 2026-10-20) are listed; another terminal is added
+  after a live trial.

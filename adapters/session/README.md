@@ -98,11 +98,12 @@ The helper registers the host application id `io.github.ahuray.badi` with the
 portal and binds `pause-toggle` (runs `badi pause toggle`, the same
 compare-and-swap settings write as the bar's right-click) and `open-settings`
 (runs `badi settings`). The compositor chooses the keys; on Hyprland 0.56,
-for example in `~/.config/hypr/bindings.lua`:
+for example in `~/.config/hypr/bindings.lua` (both are free in Omarchy
+4.0.6, whose `SUPER + ALT + COMMA` invokes the last notification):
 
 ```lua
 hl.bind("SUPER + ALT + B", hl.dsp.global("io.github.ahuray.badi:pause-toggle"))
-hl.bind("SUPER + ALT + COMMA", hl.dsp.global("io.github.ahuray.badi:open-settings"))
+hl.bind("SUPER + ALT + PERIOD", hl.dsp.global("io.github.ahuray.badi:open-settings"))
 ```
 
 A pause or resume shows a desktop notification. Interface version 1 is all

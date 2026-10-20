@@ -12,7 +12,10 @@ observer wire details.
 - **Identity.** `InputContext::program()` counts only as an ASCII identifier
   (`^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)*$`, at most 128 bytes),
   folded to lowercase once at focus-in (`Telegram` becomes `telegram`). Brave
-  `--app` windows (`brave-<host>__<path>-<profile>`) map to `brave-origin`, VS
+  `--app` windows (`brave-<host>__<path>-<profile>`) map to `brave-origin` and
+  Chromium's (`chrome-<host>__<path>-<profile>`, how Omarchy opens web apps
+  when Chromium is the default browser) to `chromium`; the observer admits only
+  that browser's own executable under each, so Google Chrome stays out. VS
   Code 1.140's `com.microsoft.VSCode` to `code` and every `libreoffice-*` to
   `libreoffice`. That one id serves policy, sessions, debug and the observer.
 - **Policy.** Each focus or authority epoch queries broker policy before any
@@ -383,7 +386,14 @@ suggestion and pressed Tab once:
   without editing.
 - **Zen 1.23.3b:** suggestions and, after `f180653`, window words.
 - **Ghostty 1.3.1**, `cat` into a file: 3 of 3 in the panel (220–540 ms);
-  the file received one word per Tab.
+  the file received one word per Tab. **foot 1.28.0**, Omarchy's default
+  terminal, the same way with installed `f7fcaed` and `badi app foot on`: 4
+  of 4 in the panel (118–307 ms), one word per Tab, and `adress → address`
+  erased the typo with DELs before typing the fix.
+- **Chromium 154 as an Omarchy web app** (`chromium --app`, isolated
+  profile, window `chrome-127.0.0.1__-Default`, installed `f7fcaed`): 4 of 4
+  inline in 168–321 ms, "Okonk" finished from 395 characters of window text,
+  and the page received one word per Tab.
 - **Neovim 0.12.6** (LazyVim in Ghostty) and **Obsidian 1.14.4**
   (`node adapters/obsidian/live.mjs --local`, all eight checks, English,
   German and Persian) through their plugins.

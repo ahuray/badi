@@ -27,7 +27,7 @@ NATIVE_SOURCES = ('target/release/badi-broker', 'target/release/badictl', 'scrip
                   'broker/data/writing-lexicon/README.md', 'adapters/fcitx5/build/libbadi-fcitx5.so',
                   'adapters/fcitx5/build/badi.conf', 'packaging/systemd/fcitx-badi.conf',
                   'packaging/systemd/badi-accessibility.service', 'packaging/hypr/badi.lua',
-                  'packaging/systemd/badi-session.service') + tuple(
+                  'packaging/systemd/badi-session.service', 'packaging/omarchy/badi-repair.hook') + tuple(
                   'adapters/accessibility/' + name for name in installer.OBSERVER_MODULES) + tuple(
                   'adapters/session/' + name for name in installer.SESSION_MODULES)
 STOCK = '{ path=/usr/bin/fcitx5 ; argv[]=%s ; ignore_errors=no ; start_time=[n/a] ; pid=0 }\n'
@@ -252,6 +252,34 @@ class DesktopInstallTests(unittest.TestCase):
                  patch.object(installer, 'wait_native_addon'):
                 installer.restart(plan, installation)
             self.assertIn(['systemctl', '--user', 'enable', 'badi-accessibility.service'], calls)
+
+    def test_a_fresh_fcitx_without_a_profile_does_not_stop_the_restart(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            units = home / '.config/systemd/user'
+            units.mkdir(parents=True)
+            (units / 'badi-broker.service').write_text('[Service]\n')
+            (units / 'badi-accessibility.service').write_text('[Service]\n')
+            profile = home / '.config/fcitx5/profile'
+
+            def execute(command, **kwargs):
+                if command[-1] == 'omarchy-fcitx5.service' and 'restart' in command:
+                    profile.parent.mkdir(parents=True, exist_ok=True)
+                    profile.write_text('written by Fcitx on first start')
+                return subprocess.CompletedProcess(command, 0, '', '')
+
+            plan = installer.Plan(
+                args=SimpleNamespace(broker_only=False, observed_app=[], screen_reader_accessibility=False),
+                home=home, config_home=home / '.config', runtime=home / 'runtime',
+                flag_updates={}, flags_present=[], broker_updating=True,
+                accessibility_enabled=True, retired_compat=[])
+            with patch.object(installer, 'run', side_effect=execute), \
+                 patch.object(installer, 'require_unlocked'), \
+                 patch.object(installer, 'wait_model', return_value={'paused': False}), \
+                 patch.object(installer, 'wait_accessibility'), \
+                 patch.object(installer, 'wait_native_addon'):
+                installer.restart(plan, receipts.Installation(home, 'desktop'))
+            self.assertEqual(profile.read_text(), 'written by Fcitx on first start')
 
     def test_every_observer_module_is_installed(self):
         modules = {path.name for path in (CHECKOUT / 'adapters/accessibility').glob('*.py')}
@@ -683,6 +711,25 @@ class DesktopInstallTests(unittest.TestCase):
                 self.assertFalse(installer.native_addon_loaded(addon),
                                  'An old deleted mapping cannot verify a new installed file')
 
+    def test_fcitx_older_than_5_1_23_or_unreadable_stops_the_install(self):
+        self.assertEqual(installer.fcitx_version('5.1.23\n'), (5, 1, 23))
+        self.assertEqual(installer.fcitx_version('5.2.0-git\n'), (5, 2, 0))
+        self.assertIsNone(installer.fcitx_version('fcitx5 version unknown'))
+        for output, error in (('5.1.23\n', None), ('6.0.1\n', None),
+                              ('5.1.22\n', 'needs Fcitx 5.1.23 or later; this desktop has 5.1.22'),
+                              ('garbled', 'Could not read the Fcitx version')):
+            with self.subTest(output=output), \
+                 patch.object(installer.subprocess, 'run',
+                              return_value=subprocess.CompletedProcess(['fcitx5'], 0, output, '')):
+                if error is None:
+                    installer.require_fcitx_version()
+                else:
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        installer.require_fcitx_version()
+        with patch.object(installer.subprocess, 'run', side_effect=FileNotFoundError('fcitx5')), \
+             self.assertRaisesRegex(RuntimeError, 'Could not read the Fcitx version'):
+            installer.require_fcitx_version()
+
     def test_accessibility_preflight_uses_service_interpreter_and_loads_libraries(self):
         with patch.dict(os.environ, {'HYPRLAND_INSTANCE_SIGNATURE': 'fixture'}), \
              patch.object(installer.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as command:
@@ -827,6 +874,7 @@ class DesktopInstallTests(unittest.TestCase):
                      patch.object(installer, 'require_writing_model'), \
                      patch.object(installer, 'require_unlocked'), \
                      patch.object(installer, 'require_accessibility_runtime'), \
+                     patch.object(installer, 'require_fcitx_version'), \
                      patch.object(installer, 'wait_session_helper', return_value=True), \
                      patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
                      patch.object(installer, 'wait_accessibility', side_effect=ready), \
@@ -891,6 +939,7 @@ class FullInstall:
              patch.object(installer.subprocess, 'run', side_effect=execute), \
              patch.object(installer, 'require_unlocked'), \
              patch.object(installer, 'require_accessibility_runtime'), \
+             patch.object(installer, 'require_fcitx_version'), \
              patch.object(installer, 'wait_session_helper', return_value=True), \
              patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
              patch.object(installer, 'wait_accessibility'), \
@@ -944,6 +993,23 @@ class RetiredFrontendTests(FullInstall, unittest.TestCase):
             self.assertFalse(any(call[0] == '/usr/bin/fcitx5' for call in calls))
             self.assertIn(['systemctl', '--user', 'restart', 'omarchy-fcitx5.service'], calls)
             self.assertNotIn('retired', self.output)
+
+    def test_omarchy_hooks_get_the_repair_only_where_omarchy_keeps_hooks(self):
+        for omarchy in (True, False):
+            with self.subTest(omarchy=omarchy), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                hooks = root / 'home/.config/omarchy/hooks'
+                if omarchy:
+                    for name in installer.OMARCHY_REPAIR_HOOKS:
+                        (hooks / name).mkdir(parents=True)
+                home, _project, _calls = self.full_install(root, [])
+                for name in installer.OMARCHY_REPAIR_HOOKS:
+                    hook = hooks / name / 'badi-repair'
+                    self.assertEqual(hook.exists(), omarchy)
+                    if omarchy:
+                        self.assertEqual(hook.read_text(), 'new packaging/omarchy/badi-repair.hook')
+                if not omarchy:
+                    self.assertFalse((home / '.config/omarchy').exists(), 'no Omarchy, no hook folder')
 
     def test_unexpected_content_stops_before_any_change(self):
         def extra_file(home):

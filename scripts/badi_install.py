@@ -19,6 +19,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -46,6 +47,38 @@ VERSION_LINE = re.compile(r"[a-z][a-z-]* \S+ commit=([0-9a-f]{40}|unknown) dirty
 UNKNOWN = {"commit": "unknown", "dirty": None}
 # Omarchy's lock status is permission only when every flag is explicitly false.
 LOCK_FLAGS = ("locked", "secure", "requested", "pending", "sessionLocked")
+
+# Each launcher's user flags file and how that wrapper turns it into arguments:
+# "glib" is /usr/bin/chromium's GLib shell parsing, "words" strips # comments
+# and splits on whitespace without quote handling (Codex and Claude: read -a;
+# VS Code and Grok Bot: sed plus unquoted expansion), and "line" passes every non-comment
+# line as one argument (mapfile). Discord has no such file; see the
+# accessibility runbook.
+OBSERVED_APP_FLAGS = {
+    "chromium": ("chromium-flags.conf", "glib"),
+    "brave-origin": ("brave-origin-flags.conf", "line"),
+    "chatgpt": ("codex-flags.conf", "words"),
+    "code": ("code-flags.conf", "words"),
+    "com.anthropic.claude": ("claude-desktop-flags.conf", "words"),
+    "cursor": ("cursor-flags.conf", "line"),
+    "grok-bot": ("grok-bot-flags.conf", "words"),
+}
+# Measured on Chromium 152: "basic" and "form-controls" omit the HTML tag the
+# observer's purpose gate needs and the character extents its caret geometry
+# needs. The bare switch also selects the complete mode. Native Wayland
+# text-input-v3 is the Chromium 152 / Electron 42 default, so no input flags.
+OBSERVED_FLAG = "--force-renderer-accessibility=complete"
+ACCESSIBILITY_SWITCH = "--force-renderer-accessibility"
+COMPLETE_ACCESSIBILITY = (ACCESSIBILITY_SWITCH, OBSERVED_FLAG)
+# The line hyprland.lua needs to load Badi's preview layer rule.
+HYPR_REQUIRE = 'require("hypr.badi")'
+
+
+def hyprland_with_badi(text):
+    """hyprland.lua loading Badi's layer rule, or None when it already does."""
+    if HYPR_REQUIRE in text:
+        return None
+    return text.rstrip() + "\n\n-- Badi writing preview layer rule (no entrance animation).\n" + HYPR_REQUIRE + "\n"
 
 
 def config_home(home):
@@ -603,3 +636,106 @@ def main(arguments=None):
 
 if __name__ == "__main__":
     main()
+
+
+def chromium_line_tokens(line):
+    # GLib starts comments at an unquoted token boundary. shlex's built-in
+    # commenters would also truncate a literal hash within an option value.
+    quote, escaped, boundary = None, False, True
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote != "'":
+            escaped, boundary = True, False
+        elif quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "\"'":
+            quote, boundary = char, False
+        elif char == "#" and boundary:
+            line = line[:index]
+            break
+        else:
+            boundary = char.isspace()
+    return shlex.split(line, comments=False, posix=True)
+
+
+def observed_tokens(text, parser):
+    """The arguments a launcher's flags file supplies, as that wrapper parses it."""
+    if parser == "glib":
+        try:
+            return [token for line in text.splitlines() for token in chromium_line_tokens(line)]
+        except ValueError:
+            raise RuntimeError("Inspect unbalanced quoting in Chromium startup flags before changing them.") from None
+    # Bash reads lines at \n and splits words at the default IFS only.
+    if parser == "words":
+        return [token for line in text.split("\n") for token in re.split(r"[ \t]+", line.split("#", 1)[0]) if token]
+    if parser == "line":
+        return [line for line in text.split("\n") if line.strip(" \t") and not line.lstrip(" \t").startswith("#")]
+    raise RuntimeError("Unknown observed application startup parser")
+
+
+def observed_flags(text, app="chromium"):
+    """Add only the renderer accessibility switch; None when it is already effective.
+
+    Comments and every other option stay byte-identical. A reduced or disabled
+    accessibility choice is the user's and is reported instead of overridden.
+    """
+    tokens = observed_tokens(text, OBSERVED_APP_FLAGS[app][1])
+    if any(token.split("=", 1)[0] == "--disable-renderer-accessibility" for token in tokens):
+        raise RuntimeError(f"Existing --disable-renderer-accessibility in {OBSERVED_APP_FLAGS[app][0]} conflicts with the observer's accessibility requirement; startup flags were not changed.")
+    current = [token for token in tokens if token.split("=", 1)[0] == ACCESSIBILITY_SWITCH]
+    if any(token not in COMPLETE_ACCESSIBILITY for token in current):
+        raise RuntimeError(f"Existing {ACCESSIBILITY_SWITCH} value in {OBSERVED_APP_FLAGS[app][0]} conflicts with the measured complete accessibility mode; startup flags were not changed.")
+    if current:
+        return None
+    return text + ("\n" if text and not text.endswith("\n") else "") + \
+        "# Badi: renderer accessibility for the focused-field observer\n" + OBSERVED_FLAG + "\n"
+
+
+# Omarchy's own commands replace these files wholesale (omarchy-refresh-hyprland,
+# omarchy-refresh-chromium, omarchy-install-browser and its migrations), so its
+# hooks restore Badi's lines in them; other files are the user's to change.
+OMARCHY_REWRITTEN = ("hypr/hyprland.lua", "chromium-flags.conf", "brave-origin-flags.conf")
+
+
+def dropped_lines(home):
+    """Badi's lines missing from files the desktop install changed, as
+    (name, path, repaired text): each observed app's accessibility flag and
+    the require in hyprland.lua. A file that is gone, a symlink, or now
+    conflicts with the flag is left alone."""
+    home = Path(home)
+    try:
+        files = set(json.loads(receipt_path(home, "desktop").read_text()).get("files", []))
+    except (OSError, ValueError, AttributeError):
+        return []
+    config = config_home(home)
+    found = []
+    for name, app in [*((filename, app) for app, (filename, _) in OBSERVED_APP_FLAGS.items()),
+                      ("hypr/hyprland.lua", None)]:
+        path = config / name
+        if home_relative(home, path) not in files or not path.is_file() or path.is_symlink():
+            continue
+        try:
+            text = path.read_text()
+            if app is None:
+                updated = hyprland_with_badi(text) if (config / "hypr/badi.lua").is_file() else None
+            else:
+                updated = observed_flags(text, app)
+        except (OSError, UnicodeDecodeError, RuntimeError):
+            continue
+        if updated is not None:
+            found.append((name, path, updated))
+    return found
+
+
+def repair(home, omarchy_only=False):
+    """Restore the dropped lines, appending only Badi's; the names restored."""
+    restored = []
+    for name, path, updated in dropped_lines(home):
+        if omarchy_only and name not in OMARCHY_REWRITTEN:
+            continue
+        atomic_write(path, updated.encode(), stat.S_IMODE(path.stat().st_mode))
+        restored.append(name)
+    return restored
