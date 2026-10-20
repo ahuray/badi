@@ -92,6 +92,15 @@ serialized.
   IME-parity field's after-caret text is exactly Chromium's paragraph end
   (`"\n\n"` or `"\n"`) and the snapshot agrees, `context.changed` carries
   `after: ""` with the unchanged selection.
+- **Window text** ([ADR 0010](../../docs/decisions/0010-context-finishes-words.md)):
+  when the policy reply for the binding carries `context_words: true`, the
+  first observer `snapshot` of a field visit asks `window: true`. The reply's
+  `window_text`, if well-formed and at most 2,048 scalars, is kept for that
+  visit and sent as `window_text` on its observed `context.changed` frames. A
+  new field visit asks again; a denial, a retired session or an unobserved
+  path sends none. A policy reply with `context_words: true` but suggestions
+  denied, or a non-boolean value, closes the connection like any malformed
+  policy.
 
 The addon relies on these observer semantics: `snapshot` returns
 `before`/`after`/`caret`/`total_chars` for the exact binding; a `preview` reply

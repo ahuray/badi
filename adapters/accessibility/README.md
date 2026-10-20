@@ -193,6 +193,28 @@ the focused field of an allowed web app, the window context and the text
 before the caret as JSON, under the observer's identity and lock rules. It is
 a capture aid for Lab cases from disposable pages; it writes no file.
 
+## Window words (context on)
+
+With `window: true`, which the Fcitx module sends once per field visit while
+the broker's policy reply says `context_words`, a `snapshot` adds
+`FieldBackend.vocabulary_text()` as `window_text`
+([ADR 0010](../../docs/decisions/0010-context-finishes-words.md)). It reads
+the text displayed near a web field so the broker can finish a typed word with
+a word in view, such as a name from the thread or a term from a coding session.
+
+- **Scope.** Web fields only, in their own `document web`, under the same
+  address check as the same-window context above. Native apps get nothing.
+- **Walk.** From the field: each ancestor's earlier siblings, last first, then
+  its later siblings, until that document. Each node's text is read with its
+  embedded objects dropped, then its children's.
+- **Never read:** anything editable (another field, such as a subject line),
+  a password, a node that is not showing, or a nested `document web`.
+- **Bounds.** 2,000 characters, 400 nodes and 120 ms, always leaving 50 ms of
+  the operation's deadline, so a slow page shortens the text instead of
+  failing the snapshot. The text is spacing-collapsed and cut at a word.
+
+The debug trace records only `window_text_chars`.
+
 ## Socket contract
 
 `python3 adapters/accessibility/daemon.py` serves
@@ -214,7 +236,7 @@ Requests carry `schema: "badi.accessibility.v1"`, an ASCII `id` and an `op`:
 | Op | Request adds | Reply `focus` adds |
 | --- | --- | --- |
 | `inspect` | `app_id` | `binding` `{epoch,bus,path,process_id,app_id,uri}`, `target` (browser targets keep the exact app id and origin; `target_id` hashes bus, path and epoch), `purpose`, `caret`, `selection_count`, `geometry: null`, optional `quiet` |
-| `snapshot` | `binding`, `policy_target` | `before`, `after`, `total_chars`, optional `scope: "block"`, optional `quiet` |
+| `snapshot` | `binding`, `policy_target`, optional `window: true` | `before`, `after`, `total_chars`, optional `scope: "block"`, optional `quiet`, with `window` an optional `window_text` |
 | `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–160 characters), `ttl_ms` (1–15000), optional `caret_rect` `{x,y,width,height,scale}` | `total_chars`, `rendered`, optional `quiet` |
 
 `preview` compares the current caret and length with the expected ones before

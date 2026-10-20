@@ -52,10 +52,11 @@ links to it. A tested app version is not a claim about Linux in general.
   tokens), suggestion, key and ghost ([README](README.md#debug-trace),
   [ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
   Use it for every live trial.
-- **Context and learning:** same-window context exists for the Lab only.
-  Finishing the typed word from words in view gains strongly there but turns
-  some traps into the wrong word (open decision below). Style learning stores
-  sealed samples behind `badi style on`, and no prompt reads them yet.
+- **Context and learning:** `badi context on` (or the panel's one-time
+  question) lets Badi finish a typed word from words in the same window and
+  words learned in that app ([ADR 0010](docs/decisions/0010-context-finishes-words.md));
+  prompt-text window context stays Lab-only. Style learning stores sealed
+  samples behind `badi style on`, and no prompt reads them yet.
 
 Standing user decisions:
 - IME-parity for Chromium-based apps, Zen and LibreOffice Writer
@@ -69,6 +70,10 @@ Standing user decisions:
   opt-outs; language work prioritizes English, German, French, Spanish and
   Portuguese, and Persian keeps its regression gates
   ([context firewall](VISION.md#context-firewall));
+- opt-in context finishes words from the window and learned words although
+  a trap word in view can show wrongly: harmful additions rose from 4 to 7
+  on the second independent set, for 23 useful ones against 1 (2026-10-20,
+  [ADR 0010](docs/decisions/0010-context-finishes-words.md));
 - Gemma 4 E2B stays out of the catalog: no overall gain for four times the
   memory ([model fit](docs/architecture/model-selection.md));
 - distribution starts with an AUR package; publication and an Omarchy proposal
@@ -84,13 +89,6 @@ Open decisions, for the user:
 - **Spelling beyond English is unqualified.** It is opt-in; decide whether that
   is enough or each language first needs the held-out measurement under
   [Suggestion quality](#suggestion-quality).
-- **Finishing words from context.** On two independent 60-case sets the
-  vocabulary rule gave 39 and 23 useful additions against 5 and 1 without
-  it, but traps became the wrong word: harmful additions rose from 3 to 13
-  with three typed letters, and from 4 to 7 with five (English 4 to 6,
-  German 0 to 1), so the registered gates fail
-  ([Lab runbook](evaluation/writing/README.md#terminal-runs)). Accept that
-  cost and build the opt-in (step 2), or keep it in the Lab.
 - **The `--text` debug trace** keeps typed text in memory for 15 minutes;
   confirm that, or limit it to suggestions.
 - **The 28 W CPU power limit** is set until reboot; installing

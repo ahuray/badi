@@ -212,6 +212,31 @@ for value in '"off"' null true; do
   [[ $(ipc validateSettings "$document") == $([[ $value == true ]] && echo true || echo false) ]]
 done
 
+# Opt-in context: a boolean once chosen, and a canonical list of apps and
+# sites where it stays off.
+for value in true false; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, context_words: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == true ]]
+done
+for value in '"on"' null 1; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, context_words: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == false ]]
+done
+site='{"kind": "browser_origin", "adapter": "chromium", "scheme": "https", "host": "mail.example", "port": 443}'
+app='{"kind": "linux_app", "adapter": "fcitx", "app_id": "com.anthropic.claude"}'
+for value in "[$site]" "[$site, $app]"; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, context_words: true, context_words_off: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == true ]]
+done
+for value in '[]' "[$app, $site]" "[$app, $app]" '[{"kind": "linux_app"}]' '"all"'; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, context_words: true, context_words_off: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == false ]]
+done
+
 # Spelling languages: known codes in the broker's order, no repeats.
 for value in '[]' '["en"]' '["en","de","fr"]' '["de","pl"]'; do
   document=$(jq -cn --argjson value "$value" \

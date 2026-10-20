@@ -240,6 +240,32 @@ The service also offers **Pause or resume** and **Open settings** shortcuts
 through the desktop portal; bind them in Hyprland with `hl.dsp.global("io.github.ahuray.badi:pause-toggle")`
 and `...:open-settings` ([session helper](adapters/session/README.md)).
 
+### Context (opt-in)
+
+```sh
+badi context on                             # or answer the settings panel's question
+badi context app com.anthropic.claude off   # per app; badi context site ORIGIN off per site
+badi context status | forget | off
+```
+
+With context on, once you have typed five letters of a word Badi can finish it
+from words in view:
+
+- **The window:** text near the field in web pages and Chromium-based apps,
+  never another field or a password, read when you start typing there and
+  never kept.
+- **Your earlier writing in that app:** words of six letters or more that you
+  wrote in two separate fields, kept sealed with a key in your keyring until
+  they go 90 days unused.
+- **Your own draft.**
+
+It finishes a name from an email's thread or a term from a coding session. A
+different word in view that starts with the same five letters can also show as
+a wrong suggestion; Tab is still needed to accept it
+([decision](docs/decisions/0010-context-finishes-words.md)). Terminals never
+teach it words. Turning context off for an app or site deletes its learned
+words; `badi context forget` deletes them all.
+
 ### Style learning (opt-in)
 
 ```sh
@@ -288,7 +314,7 @@ backoff; a missing or oversized model stops it for `badi doctor` to explain.
 
 | Source | Events |
 | --- | --- |
-| `broker` | Each message to and from an adapter (`in context.changed`, `out suggestion.show`, `out suggestion.clear` with its reason, commits), `model start` / `model done` with latency, outcome and content-free token/timing counts, `carry` (type-through kept or the gate that declined), `spelling` (language, candidate count, whether the model chose a correction) |
+| `broker` | Each message to and from an adapter (`in context.changed`, `out suggestion.show`, `out suggestion.clear` with its reason, commits), `model start` / `model done` with latency, outcome and content-free token/timing counts, `carry` (type-through kept or the gate that declined), `spelling` (language, candidate count, whether the model chose a correction), `vocabulary` with context on (window and learned word counts, the outcome and its sources; the finished word only with `--text`) and `window_chars` on `context.changed` |
 | `fcitx` | `key` with the action taken and whether a suggestion was showing; `ghost shown` as the `overlay` (grey text at the caret) or the `panel` (Fcitx's popup); `ghost hidden`; every blocked request or display with its reason |
 | `observer` | Each field request; `preview drawn` with its placement (`inline`, `caret_line`, `chip`, `edge_panel`) and box, `preview declined` with its reason, `preview mapped`, `preview hidden` with its cause |
 | `compositor` | While `badi debug watch` runs: whether Hyprland has the grey preview on screen, and where |

@@ -112,6 +112,15 @@ Item {
     return null
   }
 
+  // Context is off for this app (badi context app ID off).
+  function contextOff(appId) {
+    var off = client.settings.context_words_off || []
+    for (var i = 0; i < off.length; i++) {
+      if (off[i].kind === "linux_app" && off[i].adapter === appAdapter(appId) && off[i].app_id === appId) return true
+    }
+    return false
+  }
+
   function allows(permissions) {
     return permissions.context_read === "allow" && permissions.suggest === "allow" && permissions.display === "allow"
   }
@@ -301,6 +310,37 @@ Item {
         choose: function(value) {
           if (value !== activeModel.id) root.runAction(["model", "use", value, "--accept-license"], "Switching the model", "Model switched", 900000)
         }})
+    }
+    // Opt-in context (ADR 0010): asked once while unchosen, then a switch,
+    // one row per allowed app and a way to forget the learned words.
+    var context = client.settings.context_words
+    if (reachable && typeof context !== "boolean") {
+      list.push({key: "context_prompt", section: "Context", kind: "choice", label: "Finish words from what you see?",
+        detail: "Five letters in, Badi can finish a word from the same window or one you wrote before in that app · kept on this device",
+        value: "", enabled: !controlsBusy,
+        options: [{value: "on", label: "Turn on"}, {value: "off", label: "Not now"}],
+        choose: function(value) { root.runAction(["context", value], value === "on" ? "Turning context on" : "Saving your choice",
+          value === "on" ? "Context on · badi context status" : "Context stays off") }})
+    } else {
+      list.push({key: "context", section: "Context", kind: "toggle", label: "Words from context",
+        detail: context === true ? "Window words and words you wrote before · sealed in your keyring"
+          : "Off · finish words from the window and your own writing", checked: context === true,
+        enabled: !controlsBusy, activate: function() {
+          root.runAction(["context", context === true ? "off" : "on"], "Updating context",
+            context === true ? "Context off" : "Context on") }})
+    }
+    if (context === true) {
+      supportedApps.filter(function(app) { return appEnabled(app.appId) }).forEach(function(app) {
+        var on = !contextOff(app.appId)
+        list.push({key: "context_app_" + app.appId, section: "Context", kind: "toggle", label: app.name,
+          detail: on ? "Uses and learns words here" : "Off here · its learned words are deleted",
+          checked: on, enabled: !controlsBusy,
+          activate: function() { root.runAction(["context", "app", app.appId, on ? "off" : "on"], "Updating context",
+            app.name + (on ? ": context off" : ": context on")) }})
+      })
+      list.push({key: "context_forget", section: "Context", kind: "action", label: "Forget learned words",
+        detail: "Deletes every learned word; the keyring key stays", enabled: !controlsBusy,
+        activate: function() { root.runAction(["context", "forget"], "Forgetting learned words", "Learned words deleted") }})
     }
     list.push({key: "mid_line", section: "Writing", kind: "toggle", label: "Mid-sentence suggestions",
       detail: "Also suggest when a word follows the caret", checked: client.settings.mid_line === true,
