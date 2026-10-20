@@ -118,8 +118,9 @@ publish need the user's go-ahead first; the rest can start at once.
    through that echo, but Qt drops Fcitx's delete request against the
    cleared copy, so Omawrite gets no spelling replacement
    ([contract](adapters/fcitx5/README.md#contract)). Removing the text only
-   when the query asked for it would fix it upstream. Filing the issue
-   needs the user's approval of its text. *Done when* a fixed fcitx5-qt
+   when the query asked for it would fix it upstream; reported as
+   [fcitx/fcitx5-qt#91](https://github.com/fcitx/fcitx5-qt/issues/91) on
+   2026-10-20. *Done when* a fixed fcitx5-qt
    restores the replacement in Omawrite (two native undos), and a Qt
    Widgets app (Telegram) has been checked.
 2. **Finish the installed-flow matrix with someone present.** Still open: a
