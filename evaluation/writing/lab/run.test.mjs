@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { parseOptions, validateOutputPath, prepareOutput, fileIdentity, sourceHashes, labCrateSources, validateCleanup, decodeEvents, runSuite, ObservedWorker } from './run.mjs';
+import { parseOptions, validateOutputPath, prepareOutput, fileIdentity, sourceHashes, labCrateSources, brokerSources, buildWorker, WORKER_BUILD, validateCleanup, decodeEvents, runSuite, ObservedWorker } from './run.mjs';
 import { createLabServer } from './server.mjs';
 import { readModelArtifact } from './model-artifact.mjs';
 
@@ -185,6 +185,27 @@ test('run provenance hashes every Lab worker source file in a stable order', asy
   const sources = await sourceHashes();
   for (const path of listed) assert.match(sources[path], /^[a-f0-9]{64}$/u, path);
   assert.equal(Object.keys(sources).some(path => path.startsWith('broker/src/writing_lab')), false);
+});
+
+test('run provenance hashes every broker source the worker links', async () => {
+  const root = fileURLToPath(new URL('../../../', import.meta.url));
+  const onDisk = (await readdir(new URL('../../../broker/src/', import.meta.url), { recursive: true, withFileTypes: true }))
+    .filter(entry => entry.isFile())
+    .map(entry => relative(root, join(entry.parentPath, entry.name)));
+  assert.ok(onDisk.includes('broker/src/vocabulary.rs') && onDisk.includes('broker/src/vocabulary/learned.rs'));
+  const listed = await brokerSources();
+  assert.deepEqual(listed.slice(0, onDisk.length), [...onDisk].sort());
+  const sources = await sourceHashes();
+  for (const path of listed) assert.match(sources[path], /^[a-f0-9]{64}$/u, path);
+});
+
+test('a terminal run builds its worker first and stops when the build fails', async () => {
+  const calls = [];
+  await buildWorker((command, args) => { calls.push([command, ...args]); return 0; });
+  assert.deepEqual(calls, [['cargo', ...WORKER_BUILD]]);
+  assert.deepEqual(WORKER_BUILD, ['build', '--release', '--locked', '-p', 'badi-writing-lab']);
+  await assert.rejects(buildWorker(() => 101), /Building the Lab worker failed/u);
+  await assert.rejects(buildWorker(() => Promise.reject(new Error('spawn cargo ENOENT'))), /ENOENT/u);
 });
 
 test('cleanup receipts preserve runtime identity and reject malformed lifecycle observations', () => {

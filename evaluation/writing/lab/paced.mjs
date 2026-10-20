@@ -9,7 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { validateSuite, planComparison, scorePrediction, scoreCompleteWordPrefixes } from './cases.mjs';
 import { workerRequest } from './server.mjs';
 import { processIdentity } from './worker.mjs';
-import { OUTPUT_ROOT, WORKER_BINARY, fileIdentity, sourceHashes, prepareOutput, validateCleanup } from './run.mjs';
+import { OUTPUT_ROOT, WORKER_BINARY, buildWorker, fileIdentity, sourceHashes, prepareOutput, validateCleanup } from './run.mjs';
 import { modelArtifactPath, readModelArtifact, modelArtifactProvenance, modelArtifactArgs,
   assertModelArtifactUnchanged, assertModelArtifactIdentity } from './model-artifact.mjs';
 
@@ -396,7 +396,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const controller = new AbortController(); const cancel = () => controller.abort();
   process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
   try {
-    const result = await runPacedSuite(parsePacedOptions(process.argv.slice(2)), { signal: controller.signal,
+    const options = parsePacedOptions(process.argv.slice(2));
+    await buildWorker();
+    const result = await runPacedSuite(options, { signal: controller.signal,
       onProgress: value => process.stdout.write(`${value.completed}/${value.total} ${value.trace_id} ${value.arm}\n`) });
     process.stdout.write(JSON.stringify({ output: result.output, complete: result.report.complete,
       valid_executed_identity: result.report.provenance.valid_executed_identity }) + '\n');

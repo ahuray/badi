@@ -172,7 +172,10 @@ Options: `--modes` (default `production_boundary,context`), `--budget-ms`
 `--warm-prefix true` (one runtime per configuration, so a repeated prompt
 prefix can stay cached; not a counterbalanced cold comparison),
 `--prefill-batch 16|64`, `--memory-map true|false` (default true),
-`--model-artifact DESCRIPTOR`. The memory-loading experiment changes only how
+`--model-artifact DESCRIPTOR`. The command first builds the worker as
+`npm run writing:lab` does, so a run never executes a binary older than its
+sources (`paced.mjs` does the same). The report hashes the Lab scripts, the
+worker crate and every broker source before and after. The memory-loading experiment changes only how
 the runtime loads weights, and records that choice in its verified identity
 and qualification identity. It does not change installed broker settings.
 The installed broker now uses copied weights; the Lab retains an explicit
