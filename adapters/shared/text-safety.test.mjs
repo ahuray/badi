@@ -20,6 +20,13 @@ test('all editor text guards share the exact Persian orthographic joiner contrac
   assert.equal(validSuggestion('final\u00a0'), false);
 });
 
+test('corrections follow the shared spelling replacement fixture', async () => {
+  const corpus = JSON.parse(await readFile(new URL('../../protocol/spelling-replacement-fixtures.json', import.meta.url), 'utf8'));
+  for (const { name, original, replacement, valid } of corpus.fixtures) {
+    assert.equal(validCorrection(`Fix ${original}`, original, replacement), valid, name);
+  }
+});
+
 test('corrections preserve one exact whole-word suffix and its optional space', () => {
   for (const [before, original, replacement] of [
     ['Use this adress', 'adress', 'address'], ['Use this adress ', 'adress ', 'address '],

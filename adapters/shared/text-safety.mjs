@@ -16,11 +16,13 @@ export function hasUnsafeText(value, allowContextWhitespace = false) {
   });
 }
 
-// A correction owns one exact word of 2-32 cased letters, including at most
+// A correction owns one exact word of 2-32 characters with case (Unicode
+// Lowercase or Uppercase, protocol/spelling-replacement-fixtures.json),
+// including at most
 // its newly typed space. It never broadens into an arbitrary document range.
 export function validCorrection(before, original, replacement) {
   if (typeof before !== 'string' || typeof original !== 'string' || typeof replacement !== 'string' ||
-      !/^[\p{Ll}\p{Lu}]{2,32} ?$/u.test(original) || !/^[\p{Ll}\p{Lu}]{2,32} ?$/u.test(replacement) ||
+      !/^[\p{Lowercase}\p{Uppercase}]{2,32} ?$/u.test(original) || !/^[\p{Lowercase}\p{Uppercase}]{2,32} ?$/u.test(replacement) ||
       original === replacement || original.endsWith(' ') !== replacement.endsWith(' ') ||
       !before.endsWith(original)) return false;
   const start = before.length - original.length;

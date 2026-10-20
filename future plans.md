@@ -285,17 +285,14 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 ### Engineering upkeep
 
-- [ ] `observed-desktop.py` timed out once at "candidate before timed quiet"
-      (#81) and failed once more on 2026-10-20 (1 of 3 runs, with an empty
-      diagnostics folder); both passed on rerun. Give that wait its
-      neighbours' bound or find the timing it races, and make a failure keep
-      its diagnostics.
 - [ ] The Lab test "process exit rejects the active request and a later
       request starts a fresh process" (`worker.test.mjs`) failed once in CI
       with "Could not confirm cleanup of the owned model process" (#110, a
       docs-only change) and passed on rerun and in three local runs. If it
       recurs, find the timing that `cleanupRuntime` races after the
       fixture's exit.
-- [ ] One replacement-shape rule lives in `protocol.rs`, the schema,
-      `text-safety.mjs` and `text.py`; a shared fixture file, like
-      `orthographic-joiner-fixtures.json`, would stop them drifting.
+- [ ] `adapters/neovim/broker.test.mjs` timed out once in CI waiting for
+      `paused` after `badi pause` and an explicit request (#118, a change
+      outside Neovim), and passed on rerun and in three local runs. If it
+      recurs, find whether the plugin's status or the broker's pause
+      reaches it late.

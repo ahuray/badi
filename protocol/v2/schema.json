@@ -929,26 +929,26 @@
     },
     "spellingSuffixPair": {
       "type": "object",
-      "description": "A negotiated spelling edit replaces one word of 2-32 cased letters and optionally preserves its one trailing ASCII space. Producers and consumers additionally require different words and, for suggestions, accept_word equal to text.",
+      "description": "A negotiated spelling edit replaces one word of 2-32 characters with case (Unicode Lowercase or Uppercase; protocol/spelling-replacement-fixtures.json) and optionally preserves its one trailing ASCII space. Producers and consumers additionally require different words and, for suggestions, accept_word equal to text.",
       "required": ["replace_before", "text"],
       "properties": {
-        "replace_before": { "type": "string", "not": { "pattern": "[^\\p{Ll}\\p{Lu} ]" } },
-        "text": { "type": "string", "not": { "pattern": "[^\\p{Ll}\\p{Lu} ]" } },
-        "accept_word": { "type": "string", "not": { "pattern": "[^\\p{Ll}\\p{Lu} ]" } }
+        "replace_before": { "type": "string", "not": { "pattern": "[^\\p{Lowercase}\\p{Uppercase} ]" } },
+        "text": { "type": "string", "not": { "pattern": "[^\\p{Lowercase}\\p{Uppercase} ]" } },
+        "accept_word": { "type": "string", "not": { "pattern": "[^\\p{Lowercase}\\p{Uppercase} ]" } }
       },
       "oneOf": [
         {
           "properties": {
-            "replace_before": { "type": "string", "pattern": "^[\\p{Ll}\\p{Lu}]{2,32}$" },
-            "text": { "type": "string", "pattern": "^[\\p{Ll}\\p{Lu}]{2,32}$" },
-            "accept_word": { "type": "string", "pattern": "^[\\p{Ll}\\p{Lu}]{2,32}$" }
+            "replace_before": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32}$" },
+            "text": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32}$" },
+            "accept_word": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32}$" }
           }
         },
         {
           "properties": {
-            "replace_before": { "type": "string", "pattern": "^[\\p{Ll}\\p{Lu}]{2,32} $" },
-            "text": { "type": "string", "pattern": "^[\\p{Ll}\\p{Lu}]{2,32} $" },
-            "accept_word": { "type": "string", "pattern": "^[\\p{Ll}\\p{Lu}]{2,32} $" }
+            "replace_before": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32} $" },
+            "text": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32} $" },
+            "accept_word": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32} $" }
           }
         }
       ]
@@ -967,7 +967,7 @@
       "properties": {
         "fingerprint": { "$ref": "#/$defs/fingerprint" },
         "suggestion_id": { "$ref": "#/$defs/opaqueId" },
-        "replace_before": { "type": "string", "pattern": "^[\\p{Ll}\\p{Lu}]{2,32} ?$", "description": "Exact suffix replaced only by adapters negotiating text_replacement; bound to the original context and commit grant." },
+        "replace_before": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32} ?$", "description": "Exact suffix replaced only by adapters negotiating text_replacement; bound to the original context and commit grant." },
         "text": { "type": "string" },
         "accept_word": { "type": "string" },
         "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 15000, "description": "Relative receiver-local lifetime starting when this frame is received. Native and editor clients negotiating long_reading_window receive up to 15 seconds; other native and editor clients retain five seconds, and browser leases remain 600 ms. Extensions and type-through never renew the original expiry." },
@@ -1051,7 +1051,7 @@
       "properties": {
         "fingerprint": { "$ref": "#/$defs/fingerprint" },
         "suggestion_id": { "$ref": "#/$defs/opaqueId" },
-        "replace_before": { "type": "string", "pattern": "^[\\p{Ll}\\p{Lu}]{2,32} ?$", "description": "Exact suffix replaced only by adapters negotiating text_replacement; bound to the original context and commit grant." },
+        "replace_before": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32} ?$", "description": "Exact suffix replaced only by adapters negotiating text_replacement; bound to the original context and commit grant." },
         "text": { "type": "string" },
         "acceptance": { "enum": ["word", "all"] }
       },
@@ -1231,7 +1231,7 @@
         "outcome": { "enum": ["suggested", "no_suggestion", "paused"] },
         "provider": { "enum": ["phrase_v1", "local_model"] },
         "text": { "type": "string" },
-        "replace_before": { "type": "string", "pattern": "^[\\p{Ll}\\p{Lu}]{2,32} ?$" },
+        "replace_before": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32} ?$" },
         "reason": { "$ref": "#/$defs/noSuggestionReason" },
         "latency_ms": { "$ref": "#/$defs/counter" }
       },

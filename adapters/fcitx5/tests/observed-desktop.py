@@ -1085,7 +1085,9 @@ def session(root, report):
         daemon.observer.invalidate('fixture_field_changed')
         open_context('cursor')
         context.text(PREFIX, len(PREFIX))
-        wait(lambda: context.candidate() == SHOWN, 'default-allowed observed app suggestion')
+        # A settings change starts a new authority epoch first: the bound of
+        # the other waits that follow one (#81 timed out here at 4 s).
+        wait(lambda: context.candidate() == SHOWN, 'default-allowed observed app suggestion', timeout=8)
         assert context.key(desktop.ESCAPE)
         quiet(.2)
         restored = control('settings', 'show', '--json')
@@ -1102,7 +1104,7 @@ def session(root, report):
         open_context('chatgpt')
         backend.apps.add('chatgpt')
         change(PREFIX, new_field=True)
-        wait(lambda: context.candidate() == SHOWN, 'candidate before timed quiet')
+        wait(lambda: context.candidate() == SHOWN, 'candidate before timed quiet', timeout=8)
         assert context.key(desktop.ESCAPE)
         quiet(.1)
         calls = control('status')['metrics']['provider_calls']
@@ -1304,6 +1306,10 @@ def main():
     for command in ['fcitx5', 'dbus-run-session']:
         if not shutil.which(command):
             raise RuntimeError('Missing fixture prerequisite: ' + command)
+    # The session runs under this interpreter and needs PyGObject; a virtual
+    # environment's python3 first on PATH has none.
+    if importlib.util.find_spec('gi') is None:
+        raise RuntimeError(f'{sys.executable} cannot import gi (PyGObject); run this with the system python3')
     if not args.addon.is_file():
         raise RuntimeError('Build required fixture addon: ' + str(args.addon))
     for path in ['adapters/fcitx5/build/badi.conf',
@@ -1353,18 +1359,34 @@ def main():
             environment.pop(name, None)
         command = ['dbus-run-session', f'--config-file={root / "bus.conf"}', '--', sys.executable,
                    str(Path(__file__).resolve()), '--session-root', str(root), '--report', str(report)]
-        child = subprocess.Popen(command, env=environment, start_new_session=True)
-        try:
-            if child.wait(timeout=150):
-                raise RuntimeError('Observed addon integration failed; diagnostics: ' + str(report))
-        finally:
-            if child.poll() is None:
-                os.killpg(child.pid, signal.SIGTERM)
-                try:
-                    child.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL)
-                    child.wait(timeout=5)
+        # The session's own output stays with its report, so a failure before
+        # its logs open (an import, the bus) still explains itself.
+        session_log = report / 'session.log'
+        ended = 'timeout'
+        with session_log.open('w') as output:
+            child = subprocess.Popen(command, env=environment, start_new_session=True,
+                                     stdout=output, stderr=subprocess.STDOUT)
+            try:
+                code = child.wait(timeout=150)
+                ended = 'passed' if code == 0 else f'exit {code}'
+            except subprocess.TimeoutExpired:
+                pass
+            finally:
+                if child.poll() is None:
+                    os.killpg(child.pid, signal.SIGTERM)
+                    try:
+                        child.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(child.pid, signal.SIGKILL)
+                        child.wait(timeout=5)
+    log = session_log.read_text(errors='replace')
+    if ended != 'passed':
+        if not (report / 'result.json').exists():
+            (report / 'result.json').write_text(json.dumps(
+                {'passed': False, 'completed': [], 'ended': ended, 'log': 'session.log'}, indent=2) + '\n')
+        sys.stderr.write(''.join(log.splitlines(keepends=True)[-40:]))
+        raise RuntimeError(f'Observed addon integration failed ({ended}); diagnostics: {report}')
+    sys.stdout.write(log)
     print('Disposable observed addon integration passed; report: ' + str(report))
 
 

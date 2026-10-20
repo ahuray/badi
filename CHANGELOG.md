@@ -7,6 +7,17 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- The spelling replacement shape has one shared fixture
+  (`protocol/spelling-replacement-fixtures.json`) that Rust, the v2 schema,
+  `text-safety.mjs` and the Writer extension all test against. The schema and
+  `text-safety.mjs` now count letters as Rust does (Unicode's Lowercase or
+  Uppercase property), and the Writer extension follows suit for symbols with
+  case.
+- `observed-desktop.py` keeps the session's own output and a `result.json`
+  even when the session dies before its logs open. It stops at once when its
+  python3 cannot import PyGObject (the 2026-10-20 empty report came from a
+  virtualenv's python3). The waits after a settings change get the 8 s bound
+  of their neighbours (#81).
 - The settings panel's keyboard model (j/k, h/l, Enter, x and search) lives in
   `KeyModel.js` with its own tests. Prediction Lab terminal runs build their
   worker first, so they never run a stale binary, and record every broker

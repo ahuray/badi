@@ -574,8 +574,10 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   and 22 with Qwen3 1.7B (3 wrong), at 0.4–0.6 s per choice; the old prompt
   chose 1, 4 and 20. A word without its typed
   space is checked only on an explicit request, and a capitalized word
-  mid-sentence only in German. Replacements are 2-32 cased letters plus the
-  optional space, in every validator. The
+  mid-sentence only in German. Replacements are 2-32 characters with case
+  (Unicode Lowercase or Uppercase) plus the optional space, in every
+  validator, each tested against
+  [the shared fixture](../protocol/spelling-replacement-fixtures.json). The
   [LibreOffice Writer extension](../adapters/libreoffice/README.md) (adapter and
   target kind `libreoffice`, app id `libreoffice-writer`, settings adapter
   `libreoffice`) gets corrections only, automatic or explicit, under its own
