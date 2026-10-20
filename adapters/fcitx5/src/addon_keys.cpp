@@ -5,13 +5,21 @@
 #include <fcitx/event.h>
 #include <fcitx/inputcontext.h>
 
+#include <algorithm>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace badi::fcitx5 {
 
 void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
-    if (event.isRelease() || event.isVirtual()) return;
+    if (event.isVirtual()) return;
+    if (event.rawKey().isModifier()) {
+        const auto states = ::fcitx::Key::keySymToStates(event.rawKey().sym());
+        if (event.isRelease()) heldModifierKeys_ &= ~states;
+        else heldModifierKeys_ |= states;
+    }
+    if (event.isRelease()) return literalTabRelease(event);
     const auto key = event.key().normalize();
     const bool tab = key.check(::fcitx::Key(FcitxKey_Tab));
     const auto app = canonicalProgram(*event.inputContext());
@@ -19,6 +27,14 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     auto *binding = bindingFor(*event.inputContext());
     if (!binding || !binding->state.focused()) return;
     if (!key.isModifier()) binding->inspection.input();
+    const bool literalChord = key.check(literalTabChord());
+    if (binding->literalTabs && !literalChord) {
+        // A key after the chord's modifiers came up, even a modifier whose
+        // own update follows it, lets the waiting Tabs go first; another key
+        // pressed while they are still down drops them.
+        if (binding->literalTabTimer && binding->literalTabTimer->isEnabled()) sendLiteralTabs(*binding);
+        else if (!key.isModifier()) dropLiteralTabs(*binding);
+    }
     if (!binding->state.editingAvailable()) {
         debug_.record("request_blocked", app,
             editingUnavailableReason(binding->state.appId(), binding->observed()));
@@ -36,6 +52,11 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
         .escape = key.check(::fcitx::Key(FcitxKey_Escape)),
         .chord = key.check(invokeChord()) || key.check(acceptChord()),
         .all = key.check(allKey()) && unclaimed,
+        .literalTab = literalChord && unclaimed,
+        .tabTaken = binding->heldTab ||
+                    tabMayHoldForRest(!binding->typeThroughRest.empty(), binding->typeThroughAutomatic,
+                                      hasForeignImeUi(panel), binding->state.suggestionVisible()) ||
+                    (binding->state.editingAvailable() && binding->state.editPath() == NativeEditPath::Manual),
         .typesSuggestion = typesSuggestionStart(typed, expected),
     };
     const auto action = decidePreKey(pressed, binding->state.editingAvailable(), !binding->ownedAuxiliary.empty(),
@@ -69,8 +90,8 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     }
     if (!pressed.modifier && !pressed.tab) dropHeldTab(*binding);
     // Every key the terminal receives edits Badi's record of its line.
-    const bool reachesApp = !pressed.chord && action != PreKeyAction::Tab &&
-                            action != PreKeyAction::Dismiss && action != PreKeyAction::AcceptAll;
+    const bool reachesApp = !pressed.chord && action != PreKeyAction::Tab && action != PreKeyAction::Dismiss &&
+                            action != PreKeyAction::AcceptAll && action != PreKeyAction::LiteralTab;
     if (reachesApp && binding->state.editPath() == NativeEditPath::TypedLine) lineKey(*binding, key, typed);
     switch (action) {
     case PreKeyAction::PassThrough:
@@ -79,12 +100,7 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
         declineContext(*binding);
         [[fallthrough]];
     case PreKeyAction::Cancel:
-        binding->typedThrough = false;
-        binding->typeThroughAutomatic = false;
-        binding->typeThroughRest.clear();
-        binding->typeThroughBase.clear();
-        binding->typeThroughTyped.clear();
-        binding->typeThroughWaits = 0;
+        clearTypeThrough(*binding);
         cancelForInput(*binding);
         return;
     case PreKeyAction::CancelTypingThrough: {
@@ -112,8 +128,75 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     case PreKeyAction::AcceptAll:
         requestAcceptance(*binding);
         break;
+    case PreKeyAction::LiteralTab:
+        literalTab(*binding, event.rawKey().code());
+        break;
     }
     event.filterAndAccept();
+}
+
+void BadiAddon::clearTypeThrough(Binding &binding) {
+    binding.typedThrough = false;
+    binding.typeThroughAutomatic = false;
+    binding.typeThroughRest.clear();
+    binding.typeThroughBase.clear();
+    binding.typeThroughTyped.clear();
+    binding.typeThroughWaits = 0;
+}
+
+// Ctrl+Shift+Tab where Badi would take Tab: the suggestion retires like it
+// would for any edit, and the app gets a real Tab once the chord's
+// modifiers are up (see lastModifierReleased).
+void BadiAddon::literalTab(Binding &binding, int code) {
+    clearTypeThrough(binding);
+    cancelForInput(binding);
+    // A Tab may complete or indent invisibly; follow what comes next.
+    binding.typedLine.restart();
+    binding.literalTabs = std::min(binding.literalTabs + 1, kMaxLiteralTabs);
+    binding.literalTabOnKeyRelease = !heldModifierKeys_.testAny(literalTabChord().states());
+    binding.literalTabCode = code;
+    debug_.record("decision", binding.state.appId(), "literal_tab_waiting");
+}
+
+void BadiAddon::literalTabRelease(::fcitx::KeyEvent &event) {
+    auto *binding = bindingFor(*event.inputContext());
+    if (!binding || binding->literalTabs == 0) return;
+    const auto &released = event.rawKey();
+    if (binding->literalTabOnKeyRelease ? released.isModifier() : !lastModifierReleased(released)) return;
+    binding->literalTabTimer = oneShot(kLiteralTabDelayUs, [this, context = binding->inputContext] {
+        if (auto *current = bindingFor(*context)) sendLiteralTabs(*current);
+    });
+}
+
+void BadiAddon::sendLiteralTabs(Binding &binding) {
+    const auto count = std::exchange(binding.literalTabs, 0U);
+    if (binding.literalTabTimer) binding.literalTabTimer->setEnabled(false);
+    if (count == 0) return;
+    if (!binding.state.focused() || !binding.inputContext->hasFocus()) {
+        debug_.record("decision", binding.state.appId(), "literal_tab_dropped");
+        return;
+    }
+    // Wayland's input-method-v2 frontend sends the release with the press.
+    // Without the chord's keycode it would look Tab up under the modifier
+    // state it last heard, where Shift turns Tab into ISO_Left_Tab.
+    const bool pressReleases = binding.inputContext->frontendName() == "wayland_v2";
+    const ::fcitx::Key tab(FcitxKey_Tab, ::fcitx::KeyStates(), binding.literalTabCode);
+    for (unsigned int sent = 0; sent < count; ++sent) {
+        binding.inputContext->forwardKey(tab, false);
+        if (!pressReleases) binding.inputContext->forwardKey(tab, true);
+    }
+    // A suggestion shown again while the Tab waited is for the field as it
+    // was; the Tab changes it, so retire it like any edit.
+    clearTypeThrough(binding);
+    cancelForInput(binding);
+    binding.typedLine.restart();
+    debug_.record("decision", binding.state.appId(), "literal_tab_sent");
+}
+
+void BadiAddon::dropLiteralTabs(Binding &binding) {
+    if (binding.literalTabTimer) binding.literalTabTimer->setEnabled(false);
+    if (std::exchange(binding.literalTabs, 0U) == 0) return;
+    debug_.record("decision", binding.state.appId(), "literal_tab_dropped");
 }
 
 void BadiAddon::holdTab(Binding &binding) {

@@ -694,8 +694,10 @@
         "matched_default",
         "suggestions_disabled",
         "unknown_identity",
-        "editor_focused"
-      ]
+        "editor_focused",
+        "snoozed"
+      ],
+      "description": "snoozed: the user snoozed this target's app or site for a few minutes (control action snooze); every grant there is withheld until it runs out or snooze_end."
     },
     "policyQueryPayload": {
       "type": "object",
@@ -1014,7 +1016,7 @@
       }
     },
     "globalControlAction": {
-      "enum": ["pause", "resume", "pause_toggle"]
+      "enum": ["pause", "resume", "pause_toggle", "snooze", "snooze_end"]
     },
     "sessionControlAction": {
       "enum": ["request", "accept_word", "accept_all", "dismiss"]
@@ -1024,8 +1026,17 @@
       "additionalProperties": false,
       "required": ["action"],
       "properties": {
-        "action": { "$ref": "#/$defs/globalControlAction" }
-      }
+        "action": { "$ref": "#/$defs/globalControlAction" },
+        "minutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1440,
+          "description": "How long a snooze withholds the focused field's app or site. Present exactly for snooze."
+        }
+      },
+      "if": { "properties": { "action": { "const": "snooze" } } },
+      "then": { "required": ["minutes"] },
+      "else": { "properties": { "minutes": false } }
     },
     "sessionControlRequestPayload": {
       "oneOf": [
@@ -1051,7 +1062,17 @@
       ]
     },
     "controlAction": {
-      "enum": ["request", "accept_word", "accept_all", "dismiss", "pause", "resume", "pause_toggle"]
+      "enum": [
+        "request",
+        "accept_word",
+        "accept_all",
+        "dismiss",
+        "pause",
+        "resume",
+        "pause_toggle",
+        "snooze",
+        "snooze_end"
+      ]
     },
     "controlResultPayload": {
       "type": "object",
@@ -1061,7 +1082,68 @@
         "action": { "$ref": "#/$defs/controlAction" },
         "accepted": { "type": "boolean" },
         "reason": { "$ref": "#/$defs/reasonCode" },
-        "paused": { "type": "boolean" }
+        "paused": { "type": "boolean" },
+        "snooze": { "$ref": "#/$defs/snoozeStatus" }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["snooze"] },
+          "then": {
+            "properties": {
+              "action": { "const": "snooze" },
+              "accepted": { "const": true },
+              "reason": { "const": "accepted" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "action": { "const": "snooze" }, "accepted": { "const": true } },
+            "required": ["action", "accepted"]
+          },
+          "then": { "required": ["snooze"] }
+        }
+      ]
+    },
+    "snoozeSubject": {
+      "description": "The exact settings identity a snooze withholds: a site origin or an app id, never a window title.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter", "scheme", "host", "port"],
+          "properties": {
+            "kind": { "const": "browser_origin" },
+            "adapter": { "const": "chromium" },
+            "scheme": { "enum": ["http", "https"] },
+            "host": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[a-z0-9.:-]+$" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter", "app_id"],
+          "properties": {
+            "kind": { "const": "linux_app" },
+            "adapter": { "enum": ["fcitx", "obsidian", "shell", "neovim", "libreoffice"] },
+            "app_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)*$"
+            }
+          }
+        }
+      ]
+    },
+    "snoozeStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "remaining_ms"],
+      "properties": {
+        "subject": { "$ref": "#/$defs/snoozeSubject" },
+        "remaining_ms": { "type": "integer", "minimum": 0, "maximum": 86400000 }
       }
     },
     "commitPreparePayload": {
@@ -1320,7 +1402,13 @@
         "max_frame_bytes": { "const": 65536 },
         "metrics": { "$ref": "#/$defs/metrics" },
         "active": { "$ref": "#/$defs/activeLocator" },
-        "desktop": { "$ref": "#/$defs/desktopStatusPayload" }
+        "desktop": { "$ref": "#/$defs/desktopStatusPayload" },
+        "snoozes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/snoozeStatus" },
+          "description": "Every app or site snoozed now, in identity order; omitted when none is."
+        }
       },
       "allOf": [
         {

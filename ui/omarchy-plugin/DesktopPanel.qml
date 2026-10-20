@@ -59,6 +59,14 @@ Item {
     ? (serviceState.active === "active" ? "Model starting or unavailable" : "Model offline")
     : client.controlPlaneDegraded ? "Settings need attention" : paused ? "Predictions paused"
     : !anyAppEnabled ? "Applications disabled" : "Model ready"
+  // Apps and sites snoozed now (badi snooze or its shortcut; runtime only),
+  // each a settings identity and the milliseconds left.
+  readonly property var snoozes: Array.isArray(client.broker.snoozes)
+    ? client.broker.snoozes.filter(function(item) {
+        return client.isObject(item) && client.isIdentity(item.subject) && Number.isSafeInteger(item.remaining_ms)
+      })
+    : []
+  readonly property string snoozeLabel: snoozes.map(function(item) { return identityLabel(item.subject) }).join(", ")
   readonly property var desktop: client.objectValue(client.overview, "desktop")
   readonly property var activity: client.objectValue(desktop, "activity")
   readonly property var misses: client.objectValue(desktop, "no_suggestion")
@@ -133,6 +141,8 @@ Item {
 
   function togglePause() {
     if (!client.canMutateSettings || action.running) return
+    // Resuming ends every snooze too, as badi resume does.
+    if (client.brokerPaused && snoozes.length > 0) return runAction(["resume"], "Resuming", "Resumed · snooze ended")
     actionMessage = ""
     var document = client.cloneSettings()
     document.paused = !client.brokerPaused
@@ -181,6 +191,16 @@ Item {
         origin: identity.scheme + "://" + identity.host + (identity.port === standard ? "" : ":" + identity.port)})
     }
     return rules
+  }
+
+  // A supported app's name, another app's id, or a site's origin.
+  function identityLabel(identity) {
+    if (identity.kind === "linux_app") {
+      var app = supportedApps.find(function(item) { return item.appId === identity.app_id })
+      return app ? app.name : identity.app_id
+    }
+    var standard = identity.scheme === "https" ? 443 : 80
+    return identity.scheme + "://" + identity.host + (identity.port === standard ? "" : ":" + identity.port)
   }
 
   function appAdapter(appId) {
@@ -330,6 +350,16 @@ Item {
   function rows() {
     var list = []
     var reachable = client.brokerReachable
+
+    // A snooze withholds one app or site for a few minutes; ending it
+    // early is one key away while it runs.
+    if (snoozes.length > 0) {
+      var left = Math.max.apply(null, snoozes.map(function(item) { return Math.max(1, Math.round(item.remaining_ms / 60000)) }))
+      list.push({key: "snooze", section: "Snoozed", kind: "action", label: "Snoozed in " + snoozeLabel,
+        detail: (snoozes.length === 1 ? left + " min left" : "Up to " + left + " min left") + " · Enter resumes now",
+        enabled: !controlsBusy,
+        activate: function() { root.runAction(["snooze", "end"], "Ending the snooze", "Snooze ended") }})
+    }
 
     // The writing model: every model that fits this device, the best
     // measured one marked; picking one downloads it (pinned) and restarts.

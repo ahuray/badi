@@ -132,6 +132,32 @@ reach the editor ([ADR 0009](../docs/decisions/0009-terminals-use-the-typed-line
 Starting or ending the hold advances the authority epoch. The report belongs
 to its connection and ends with it; it withholds only and never grants.
 
+## Snooze
+
+`badi snooze [MINUTES]` (the session helper's `snooze` shortcut, 10 minutes
+by default, at most 1440) sends the v2 global control `snooze {minutes}`. The
+broker snoozes the settings identity of the one focused field it follows: the
+exact app id, or the site origin, which every browser shares as it shares
+site rules. It refuses with `no_context` when no session has focused context,
+`ambiguous_session` when focused fields belong to different apps or sites,
+and `paused` while every grant is already withheld; `badictl` prints these as
+`error_code=rejected:REASON`.
+
+- **Withhold only** ([ADR 0005](../docs/decisions/0005-desktop-signals-withhold-authority.md)).
+  Starting a snooze advances the authority epoch and revokes the context,
+  pending inference, visible suggestion and pending commit of every session
+  on that identity, and ends the type-through carry. Policy for it resolves
+  to `snoozed` (not `paused`): no session opens, open ones lose their data
+  access, and every other app and site keeps its policy. Protocol v1 policy
+  clients see `suggestions_disabled`.
+- **Runtime only.** Snoozes live in the broker's memory, never in settings,
+  and end with a broker restart. When one runs out, a timer advances the
+  epoch again so adapters resolve their policy afresh. `snooze_end` (`badi
+  snooze end`, `badi resume` and a resuming `badi pause toggle`) ends every
+  snooze at once.
+- v2 `health.status`, `badictl status` and `badictl overview` (under
+  `broker`) list `snoozes`: each `subject` identity and its `remaining_ms`.
+
 ## Style learning (opt-in)
 
 Off by default (`style_learning` omitted). With `badi style on` and a site
@@ -201,6 +227,7 @@ badictl memory clear      # text-free origin and day aggregates
 badictl style status|forget|export   # style learning; style key - reads the key from stdin
 badictl stats status|forget   # usage counts per day and per app or site
 badictl pause [on|off|toggle]
+badictl snooze [MINUTES] | snooze end   # the focused app or site, runtime only
 badictl request | accept-word | accept-all | dismiss   # the sole active session
 badictl probe [--language TAG] [--after TEXT] [--replace] [--explicit] [--] TEXT|-
 badictl hardware --json   # offline

@@ -91,11 +91,15 @@ void BadiAddon::onPolicy(std::string_view session, bool allowed, const std::stri
         debug_.record("policy", binding->state.appId(), "app_rule_required");
         return;
     }
-    binding->broker.answer(allowed, std::move(language), contextWords);
+    binding->broker.answer(allowed, std::move(language), contextWords, reason == "snoozed");
     // An editor with its own Badi integration (Neovim) holds the focused
-    // terminal: Tab, the chord and every request stay the editor's.
+    // terminal: Tab, the chord and every request stay the editor's. A
+    // snooze withholds this app or site for a few minutes.
     debug_.record("policy", binding->state.appId(),
-                  allowed ? "app_allowed" : reason == "editor_focused" ? "editor_focused" : "app_disabled");
+                  allowed                       ? "app_allowed"
+                  : reason == "editor_focused" ? "editor_focused"
+                  : reason == "snoozed"        ? "snoozed"
+                                               : "app_disabled");
     if (!allowed) return;
     if (binding->observed()) requestObservedContext(*binding);
     open(*binding);

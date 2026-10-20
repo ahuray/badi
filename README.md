@@ -15,6 +15,7 @@ machine. Badi is pre-release software.
 | Keep typing | Typing the suggestion's next letters keeps the rest. |
 | **Escape** | Dismiss. |
 | **Ctrl+Shift+Space** | Ask for a suggestion. |
+| **Ctrl+Shift+Tab** | Type a real Tab instead of accepting: the suggestion goes away and the app gets Tab. Where Badi would not take Tab, it stays the app's key (a browser's previous tab). |
 
 Every surface uses that order: Obsidian with Ctrl/Command+→ for all of it,
 Neovim in prose buffers after a typing pause (leaving Insert mode dismisses
@@ -182,6 +183,7 @@ otherwise ([how](docs/architecture/model-selection.md)).
 badi status
 badi pause                          # persists across restarts; badi resume
 badi pause toggle                   # what the session helper's shortcut runs
+badi snooze                         # off in the focused app or site for 10 minutes; badi resume ends it
 badi battery normal                 # on battery: keep mains scheduling (default: quiet)
 badi mid-line on                    # suggestions when a word follows the caret; off by default
 badi escape-quiet 60                # a dismissal keeps its field quiet for a minute; off by default
@@ -242,9 +244,13 @@ acquired afresh. On battery or in the power-saver profile, Badi by default
 starts the model only once you pause typing for 300 ms instead of on every
 key; `badi battery explicit` shows suggestions only when you ask and `badi
 battery normal` keeps mains behavior. The model stays loaded in every mode.
-The service also offers **Pause or resume** and **Open settings** shortcuts
-through the desktop portal; bind them in Hyprland with `hl.dsp.global("io.github.ahuray.badi:pause-toggle")`
-and `...:open-settings` ([session helper](adapters/session/README.md)).
+The service also offers **Pause or resume**, **Snooze** and **Open
+settings** shortcuts through the desktop portal; bind them in Hyprland with
+`hl.dsp.global("io.github.ahuray.badi:pause-toggle")`, `...:snooze` and
+`...:open-settings` ([session helper](adapters/session/README.md)). A snooze
+turns Badi off for 10 minutes in the app or website of the field you are
+typing in, like Cotypist's snooze; it lasts until the model restarts at most,
+and `badi resume` or the settings panel's Snoozed row ends it sooner.
 
 ### Context (opt-in)
 

@@ -125,7 +125,7 @@ bool policyStatus(const Json &value, const Json &payload) {
         payload["activation"] != "never") return false;
     static constexpr std::array reasons{"default_policy", "global_disabled", "context_disabled",
         "matched_rule", "matched_default", "suggestions_disabled", "unknown_identity",
-        "editor_focused"};
+        "editor_focused", "snoozed"};
     if (!payload["reason"].is_string() ||
         std::find(reasons.begin(), reasons.end(), payload["reason"].get<std::string>()) == reasons.end()) return false;
     if (payload["learning_allowed"] == true ||

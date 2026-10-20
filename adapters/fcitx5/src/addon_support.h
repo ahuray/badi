@@ -28,6 +28,10 @@ inline constexpr std::uint64_t kNoticeLifetimeUs = 5'000'000;
 // One Tab may wait this long for the type-through remainder of a word
 // acceptance to be displayed again; then it is dropped, never replayed.
 inline constexpr std::uint64_t kHeldTabTimeoutUs = 700'000;
+// A literal Tab leaves this long after the chord's last modifier comes up,
+// so the compositor's modifier update reaches the input method first.
+inline constexpr std::uint64_t kLiteralTabDelayUs = 20'000;
+inline constexpr unsigned int kMaxLiteralTabs = 8;
 // Fcitx's sd-event loop treats a timer accuracy of 0 as its 250 ms default
 // slack, which delayed the 120 ms typing pause by up to 250 ms.
 inline constexpr std::uint64_t kTimerAccuracyUs = 1'000;

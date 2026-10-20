@@ -169,6 +169,11 @@ struct PreKey {
     bool escape = false;
     bool chord = false;  // Badi's invoke or accept chord, handled after the input method
     bool all = false;    // Ctrl+Right that no earlier handler took
+    // Ctrl+Shift+Tab that no earlier handler took: a real Tab for the app.
+    bool literalTab = false;
+    // A plain Tab would not reach the app even without a visible suggestion:
+    // one is held for a returning remainder, or the manual path requests.
+    bool tabTaken = false;
     // The key types the next characters of Badi's suggestion, visible or
     // hidden by an earlier typed-through key.
     bool typesSuggestion = false;
@@ -185,6 +190,7 @@ enum class PreKeyAction {
     CloseNotice,      // Escape closes Badi's notice and still reaches the application
     Dismiss,          // Escape dismisses Badi's candidate
     AcceptAll,        // Ctrl+Right accepts the whole candidate
+    LiteralTab,       // Ctrl+Shift+Tab: retire the candidate and send the app a real Tab
 };
 
 // The action's name in the debug trace.
@@ -198,6 +204,7 @@ constexpr std::string_view preKeyActionName(PreKeyAction action) {
     case PreKeyAction::CloseNotice: return "close_notice";
     case PreKeyAction::Dismiss: return "dismiss";
     case PreKeyAction::AcceptAll: return "accept_all";
+    case PreKeyAction::LiteralTab: return "literal_tab";
     }
     return "unknown";
 }
@@ -212,6 +219,7 @@ inline constexpr std::string_view kReconnecting = "Badi is reconnecting — chec
 inline constexpr std::string_view kCheckingPermission = "Badi is checking this application's permission";
 inline constexpr std::string_view kPaused = "Badi paused — resume from the tray";
 inline constexpr std::string_view kDisabled = "Badi is disabled for this application";
+inline constexpr std::string_view kSnoozed = "Badi is snoozed here — badi resume ends it";
 inline constexpr std::string_view kModelNotConnected = "Badi model is not connected";
 inline constexpr std::string_view kThinking = "Badi is thinking…";
 inline constexpr std::string_view kLineUnknown = "Badi lost track of this line — press Enter or Ctrl+U";
@@ -234,6 +242,7 @@ struct RequestFacts {
     bool paused = false;
     bool policyKnown = false;
     bool policyAllowed = false;
+    bool snoozed = false;       // the denial is the user's snooze of this app or site
     bool fresh = false;         // surrounding text arrived since focus or changed authority
     bool fieldAllowed = false;  // allowsNativeContext()
     bool foreignIme = false;
@@ -259,6 +268,8 @@ struct BrokerSession {
     std::string languageOverride;
     // The broker turned context on for this target (ADR 0010).
     bool contextWords = false;
+    // The denial is a snooze of this app or site, not a setting.
+    bool snoozed = false;
 
     void open(const Coordinates &session) {
         coordinates = session;
@@ -266,11 +277,12 @@ struct BrokerSession {
         coordinates.fingerprint.clear();
         opened = true;
     }
-    void answer(bool allowed, std::string language = {}, bool words = false) {
+    void answer(bool allowed, std::string language = {}, bool words = false, bool snoozedHere = false) {
         policyKnown = true;
         policyAllowed = allowed;
         languageOverride = allowed ? std::move(language) : std::string{};
         contextWords = allowed && words;
+        snoozed = !allowed && snoozedHere;
     }
     void retire() {
         opened = false;
@@ -278,6 +290,7 @@ struct BrokerSession {
         policyAllowed = false;
         languageOverride.clear();
         contextWords = false;
+        snoozed = false;
     }
 };
 
@@ -374,6 +387,21 @@ bool tabMayHoldForRest(bool restPending, bool restAutomatic, bool foreignIme,
 // the broker's next word of the display is the pending remainder's start.
 // A spelling replacement is never taken on a held Tab.
 bool heldTabMatchesRest(std::string_view rest, const Suggestion &suggestion);
+
+// Badi's literal-Tab chord. Omarchy keeps Alt+Tab for windows, and a lone
+// Alt tap opens the menu bar in Zen, VS Code and Writer, so it is the
+// Ctrl+Shift family of Badi's other chords.
+inline const ::fcitx::Key &literalTabChord() {
+    static const ::fcitx::Key key("Control+Shift+Tab");
+    return key;
+}
+
+// A forwarded key carries the modifiers still held: Wayland's
+// input-method-v2 frontend sends it through its virtual keyboard under the
+// current modifier state, so a Tab sent at once would reach the app as
+// Ctrl+Shift+Tab. A literal Tab waits for the release that leaves none of
+// Ctrl, Alt, Shift and Super down.
+bool lastModifierReleased(const ::fcitx::Key &release);
 // The panel's two parts of a suggestion: the word Tab takes (`strong`) and
 // the rest. The leading space is dropped, since the panel is its own box. A
 // spelling replacement is taken whole: `teh → the`, the correction strong.

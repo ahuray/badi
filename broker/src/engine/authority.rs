@@ -132,7 +132,7 @@ impl Broker {
         if let Some(settings) = state.settings.as_ref() {
             policy_status(
                 state.runtime_paused(),
-                state.editor_withholds(target),
+                state.withheld_reason(target),
                 state.authority_epoch,
                 settings,
                 target,
@@ -181,7 +181,7 @@ pub(super) fn settings_allow_data(
 
 pub(super) fn policy_status(
     runtime_paused: bool,
-    editor_withholds: bool,
+    withheld: Option<PolicyResolutionReason>,
     authority_epoch: u64,
     settings: &SettingsV2,
     target: &TargetDescriptor,
@@ -195,13 +195,8 @@ pub(super) fn policy_status(
             PolicyResolutionReason::GlobalDisabled,
         );
     }
-    if editor_withholds {
-        return denied_policy_status(
-            authority_epoch,
-            settings.revision,
-            false,
-            PolicyResolutionReason::EditorFocused,
-        );
+    if let Some(reason) = withheld {
+        return denied_policy_status(authority_epoch, settings.revision, false, reason);
     }
     if let Some(reason) = denial_reason(resolution) {
         return denied_policy_status(authority_epoch, settings.revision, false, reason);

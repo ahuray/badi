@@ -97,6 +97,16 @@ private:
         bool heldTab = false;
         std::string heldTabRest;
         std::unique_ptr<::fcitx::EventSourceTime> heldTabTimer;
+        // Ctrl+Shift+Tab presses that reach the app as plain Tabs once the
+        // chord's modifiers are up, and the timer that sends them.
+        unsigned int literalTabs = 0;
+        std::unique_ptr<::fcitx::EventSourceTime> literalTabTimer;
+        // The chord's modifiers were state, not keys: no modifier release
+        // will come, so the chord key's own release sends the Tab.
+        bool literalTabOnKeyRelease = false;
+        // The chord's Tab key in the sending keyboard's keymap, so the
+        // frontend need not look Tab up under modifiers still in effect.
+        int literalTabCode = 0;
         // Show a suggestion that arrives during the typing pause only after
         // that pause, and only if this keystroke is still the latest.
         std::uint64_t showAfterUs = 0;
@@ -128,6 +138,11 @@ private:
     void preKeyEvent(::fcitx::KeyEvent &event);
     void holdTab(Binding &binding);
     void dropHeldTab(Binding &binding);
+    void clearTypeThrough(Binding &binding);
+    void literalTab(Binding &binding, int code);
+    void literalTabRelease(::fcitx::KeyEvent &event);
+    void sendLiteralTabs(Binding &binding);
+    void dropLiteralTabs(Binding &binding);
     void tabKey(::fcitx::KeyEvent &event, Binding &binding, const PanelObservation &panel);
     void keyEvent(::fcitx::KeyEvent &event);
     void invoke(Binding &binding);
@@ -204,6 +219,9 @@ private:
     std::unordered_map<std::string, Binding> bindings_;
     AuthorityContinuity authorityContinuity_;
     bool authorityPaused_ = true;
+    // Modifiers held as keys (a physical keyboard's Ctrl, Shift, Alt, Super).
+    // A virtual keyboard may set modifiers as state alone, without key events.
+    ::fcitx::KeyStates heldModifierKeys_;
     bool previewMayBeVisible_ = false;
 };
 

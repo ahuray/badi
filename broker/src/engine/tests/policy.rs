@@ -1028,7 +1028,7 @@ fn the_policy_reply_says_context_words_only_where_context_is_on_and_suggestions_
     };
     let words = |settings: &SettingsV2, host: &str| {
         let status =
-            super::super::authority::policy_status(false, false, 1, settings, &target(host));
+            super::super::authority::policy_status(false, None, 1, settings, &target(host));
         status.validate().expect("valid policy reply");
         status.context_words
     };

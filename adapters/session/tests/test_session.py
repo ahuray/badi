@@ -311,10 +311,41 @@ class SleepOrderTests(unittest.TestCase):
 
 class ShortcutTests(unittest.TestCase):
     def test_actions_are_fixed_controller_commands(self):
-        self.assertEqual(daemon.ACTIONS, {"pause-toggle": ("pause", "toggle"), "open-settings": ("settings",)})
+        self.assertEqual(daemon.ACTIONS, {"pause-toggle": ("pause", "toggle"), "snooze": ("snooze",),
+                                          "open-settings": ("settings",)})
         self.assertEqual({shortcut for shortcut, _description in daemon.SHORTCUTS}, set(daemon.ACTIONS))
         self.assertEqual(daemon.controller_path({"BADI_SESSION_CONTROLLER": "/x/badi-desktop.py"}),
                          Path("/x/badi-desktop.py"))
+
+    def test_a_snooze_notification_repeats_the_controllers_own_line(self):
+        notes = []
+        shortcuts = daemon.Shortcuts.__new__(daemon.Shortcuts)
+        shortcuts._running = {"snooze"}
+        shortcuts._notification = lambda summary, body: notes.append((summary, body))
+
+        class Process:
+            def __init__(self, successful, output, error):
+                self.successful, self.output, self.error = successful, output, error
+
+            def communicate_utf8_finish(self, _result):
+                return True, self.output, self.error
+
+            def get_successful(self):
+                return self.successful
+
+        shortcuts._finished(Process(True, "Badi is snoozed in telegram for 10 minutes. badi resume ends it sooner.\n",
+                                    ""), None, "snooze")
+        shortcuts._running.add("snooze")
+        shortcuts._finished(Process(False, "", "Nothing to snooze: type in a field where Badi suggests.\n"),
+                            None, "snooze")
+        shortcuts._running.add("snooze")
+        shortcuts._finished(Process(False, "", ""), None, "snooze")
+        self.assertEqual(notes, [
+            ("Badi snoozed", "Badi is snoozed in telegram for 10 minutes. badi resume ends it sooner."),
+            ("Badi did not snooze", "Nothing to snooze: type in a field where Badi suggests."),
+            ("Badi did not snooze", "Run badi doctor in a terminal."),
+        ])
+        self.assertEqual(shortcuts._running, set())
 
 
 if __name__ == "__main__":
