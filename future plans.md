@@ -18,8 +18,9 @@ links to it. A tested app version is not a claim about Linux in general.
   ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)); the
   [app sweep](adapters/fcitx5/README.md#tested-with) of 2026-10-20 passed in
   Brave Origin, a web app, Zen, Writer, Obsidian, Neovim, Ghostty and VS
-  Code. Qt Quick apps such as Omawrite get
-  nothing since fcitx5-qt 5.1.16 (step 1). German,
+  Code. Omawrite and other observed Qt fields suggest again despite a
+  fcitx5-qt 5.1.16 bug, but cannot replace a typo until it is fixed
+  (step 1). German,
   French, Spanish, Italian, Dutch and Polish spelling are opt-in
   (`badi spelling`). The closest Omarchy alternative, Oma Tab, replaces the
   input method and ships a 4.8 GB model.
@@ -78,6 +79,10 @@ Standing user decisions:
   a trap word in view can show wrongly: harmful additions rose from 4 to 7
   on the second independent set, for 23 useful ones against 1 (2026-10-20,
   [ADR 0010](docs/decisions/0010-context-finishes-words.md));
+- observed Qt fields keep reading the text fcitx5-qt 5.1.16 withdraws right
+  after sending it, while the manual path stays closed and spelling
+  replacement is withheld there (2026-10-20,
+  [Fcitx contract](adapters/fcitx5/README.md#contract));
 - Gemma 4 E2B stays out of the catalog: no overall gain for four times the
   memory ([model fit](docs/architecture/model-selection.md));
 - distribution starts with an AUR package; publication and an Omarchy proposal
@@ -86,10 +91,6 @@ Standing user decisions:
   settings and unchanged Badi app/site permissions.
 
 Open decisions, for the user:
-- **Qt apps after fcitx5-qt 5.1.16** (step 1). Either the addon tolerates
-  Qt withdrawing the surrounding text right after sending it, relying on
-  the observer's snapshot and caret agreement, which loosens a fail-closed
-  check; or Badi reports the bug upstream and waits for a fixed fcitx5-qt.
 - **Terminal privacy.** A terminal cannot mark a password prompt, so a
   passphrase of two or more words in an allowed terminal can reach the local
   model. Keep it, make terminals explicit-only, or pause after prompts such as
@@ -108,18 +109,19 @@ Open decisions, for the user:
 Each step ends with its completion test. Steps that install to the desktop or
 publish need the user's go-ahead first; the rest can start at once.
 
-1. **Get Qt apps back after fcitx5-qt 5.1.16.** Since that release
-   (installed here on 2026-10-18 with Qt 6.12), an input-method update that
-   does not ask for the surrounding text clears it and withdraws the
-   `SurroundingText` capability
+1. **Get the fcitx5-qt surrounding-text bug fixed upstream.** Since
+   fcitx5-qt 5.1.16
    ([upstream change](https://github.com/fcitx/fcitx5-qt/commit/bac684ce07d9df78ee37dab1cbdcebfa71bf24ec),
-   unchanged on its main branch). Qt Quick sends such an update after every
-   key, so Omawrite 0.7.0 and a bare `TextArea` get nothing
-   ([matrix](adapters/fcitx5/README.md#tested-with)). Upstream, removing the
-   text only when the query asked for it would fix it. Fcitx itself keeps
-   the last text, so the addon could tolerate this; the open decision above
-   chooses. *Done when* Omawrite shows and accepts a suggestion again and a
-   Qt Widgets app (Telegram) has been checked.
+   unchanged on its `master` branch), an input-method update that does not ask
+   for the surrounding text clears fcitx5-qt's copy and withdraws
+   `SurroundingText`. The addon now keeps observed Qt fields suggesting
+   through that echo, but Qt drops Fcitx's delete request against the
+   cleared copy, so Omawrite gets no spelling replacement
+   ([contract](adapters/fcitx5/README.md#contract)). Removing the text only
+   when the query asked for it would fix it upstream. Filing the issue
+   needs the user's approval of its text. *Done when* a fixed fcitx5-qt
+   restores the replacement in Omawrite (two native undos), and a Qt
+   Widgets app (Telegram) has been checked.
 2. **Finish the installed-flow matrix with someone present.** Still open: a
    real suspend and resume, a VT switch and a Tab right after each, and
    several monitors when a second display is at hand. Restarts, undo, pause,

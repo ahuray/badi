@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Omawrite and other observed Qt fields suggest again under fcitx5-qt
+  5.1.16, which withdraws the surrounding text after every key: the Fcitx
+  addon recognizes exactly that echo, keeps the observer's checks, leaves
+  the manual path closed and withholds spelling replacement, which Qt would
+  turn into an append.
 - Window words now reach Zen and Chromium-based apps such as VS Code, Codex
   and Claude: the observer finds each engine's document (Gecko's `DocURL`)
   and bounds an app without a page address by its own document. The

@@ -53,6 +53,21 @@ observer wire details.
   input-method language or explicit app override (English, German or Persian),
   and a surrounding-text update since focus or the last authority change.
   Until a request, text events only invalidate local state.
+- **fcitx5-qt's surrounding echo.** Since fcitx5-qt 5.1.16
+  ([upstream change](https://github.com/fcitx/fcitx5-qt/commit/bac684ce07d9df78ee37dab1cbdcebfa71bf24ec)),
+  fcitx5-qt withdraws `SurroundingText` after every key: its own
+  cursor-rectangle update follows the key's text update, and an update that
+  does not ask for the text now clears it. Fcitx keeps that text.
+  `SurroundingEcho` (`state.h`) recognizes exactly that: `SurroundingText` alone withdrawn after text
+  arrived under it, and alone granted back while withdrawn. Any other
+  capability change or a focus change ends it, and the trace records the
+  echo as `surrounding_echo`. Only an observed field keeps reading the text,
+  so its observer still has to agree with the text and caret before request,
+  display and dispatch. The manual path above keeps Fcitx's flags and stays
+  closed. fcitx5-qt applies Fcitx's delete request to its own copy of the
+  text, which the echo cleared, so a spelling replacement would only append:
+  while the echo holds, a replacement is not shown and its commit is refused
+  (`replacement_unavailable`).
 - **Quiet fields.** When the observer reports a file dialog or a very narrow
   field (`quiet` in the [observer contract](../accessibility/README.md#socket-contract)),
   automatic work stops before a snapshot, so the field's text is not read;
@@ -381,19 +396,26 @@ suggestion and pressed Tab once:
   dispatch then read letters as Tab or Backspace ("sending" became
   "se    ng") and ignored Ctrl+S, so the trial profile sets
   `"keyboard.dispatch": "keyCode"`.
-- **Omawrite 0.7.0: nothing.** Since fcitx5-qt 5.1.16 (installed here
+- **Omawrite 0.7.0: nothing at first.** Since fcitx5-qt 5.1.16 (installed here
   2026-10-18 with Qt 6.12), Qt's input module withdraws the
   `SurroundingText` capability after every key: an input-method update that
-  does not ask for the surrounding text now clears it
-  ([upstream change](https://github.com/fcitx/fcitx5-qt/commit/bac684ce07d9df78ee37dab1cbdcebfa71bf24ec)).
-  The addon then treats the field as unreadable, so no automatic or explicit
-  request is made. A bare Qt Quick `TextArea` (`qml6`) does the same, so
-  every Qt Quick field is affected; Qt Widgets apps such as Telegram were not
-  tested ([backlog](<../../future plans.md>)).
+  does not ask for the surrounding text now clears it. The addon then
+  treated the field as unreadable, so no automatic or explicit request was
+  made. A bare Qt Quick `TextArea` (`qml6`) does the same, and since
+  fcitx5-qt sends that update itself after every key, Qt Widgets apps such
+  as Telegram are likely affected too; they were not tested. Retried the
+  same day with the [surrounding echo](#contract) handled (installed `5a4aac8`, then
+  `9ae6571`): 6 of 7 prefixes showed in 248–426 ms, Tab took one word into
+  the saved file, Ctrl+→ took all of it and one Ctrl+Z restored the exact
+  prefix, Escape hid it, and Ctrl+Shift+Space asked again. In the one
+  miss, "…Please ask Okonk", the model gave nothing usable, and draft
+  finishing never uses the field's first word ("Okonkwo"). An accepted
+  `teh` → `the` correction first became an append (`teh the`); `9ae6571` withholds such
+  replacements while the echo holds, and Tab then stayed Omawrite's own.
 
 | Application | Reaches Fcitx through | Boundary |
 | --- | --- | --- |
-| Omawrite 0.5.0 (Qt 6) | `QT_IM_MODULE=fcitx` | 20/20 trials; one native undo restores the exact prefix. 0.7.0 with fcitx5-qt 5.1.16 gets nothing (see above) |
+| Omawrite 0.5.0, 0.7.0 (Qt 6) | `QT_IM_MODULE=fcitx` | 0.5.0: 20/20 trials; one native undo restores the exact prefix. 0.7.0 with fcitx5-qt 5.1.16: suggestions through the surrounding echo, no spelling replacement |
 | Xournal++ 1.3.7 (GTK 3 text tool) | `GTK_IM_MODULE=fcitx` launcher override | 20/20 trials; after Escape leaves text editing, one document undo restores the prefix |
 | Chromium 152, Brave Origin, Electron apps | text-input-v3 (`wayland_v2`), Wayland app id | Page fields carry no purpose hints, so the observer's checks deny passwords. The omnibox sends the `Url` purpose and is denied before any observer request. Surrounding text stays current only on Fcitx 5.1.23 or later. |
 | VS Code 1.140, 1.142 | as above | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. Its caret-wide hidden textarea gets the inline preview bounded by the editor widget. |
