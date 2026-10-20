@@ -149,10 +149,11 @@ to those restored bytes. The desktop install needs an unlocked desktop;
 `--broker-only` updates only the model service while locked. A complete
 install also removes, with a backup, the Fcitx 5.1.22 frontend backport that
 earlier Badi installs added.
-At least one writing model from Badi's catalog must already be present.
-`badictl models writing` recommends one for this device and prints its pinned
-`hf download` with `--local-dir ~/.local/share/badi/models`; after the install,
-`badi model` switches models ([below](#choose-the-writing-model)). The pinned
+Without a writing model, the installer offers the one recommended for this
+device: it names the model, its size and any terms that come with it, and
+downloads it (pinned and hash-checked) only after you accept. Unattended,
+`--model ID` picks the model and `--accept-model-license` accepts its terms.
+After the install, `badi model` switches models ([below](#choose-the-writing-model)). The pinned
 llama.cpp runtime is `~/.local/share/badi/runtimes/llama-b10726`, with its
 archive in `runtimes/downloads/`. `install-desktop.py` checks those pinned
 hashes before it builds, and the broker checks them again before it starts.
@@ -169,7 +170,9 @@ Badi recommends, among the models that fit this device's memory and power
 state, the one that gave the most useful suggestions in its blind development
 screen; the panel's Model row offers the same choice. Gemma and Llama come
 with their own licences (the Gemma Terms of Use, the Llama 3.2 Community
-License), which `badi model use` shows and asks you to accept. The broker
+License), which `badi model use`, the installer and the settings panel show
+and ask you to accept before downloading; each acceptance is noted in
+`~/.local/state/badi/model-terms.json`. The broker
 uses your choice when it is installed and fits, and the recommendation
 otherwise ([how](docs/architecture/model-selection.md)).
 
@@ -367,5 +370,9 @@ npm run check
 cargo test --workspace --all-features --locked
 ```
 
-Badi's source and documentation are MIT-licensed ([LICENSE](LICENSE)); model
-weights and other third-party files keep their own licenses.
+Badi's source and documentation are MIT-licensed ([LICENSE](LICENSE)). Its
+binaries also contain open-source components under MIT, Apache-2.0,
+MPL-2.0, BSD-3-Clause and Zlib licences, listed with their texts in
+[THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) (regenerate it with
+`python3 scripts/third-party-notices.py` after a dependency changes; CI
+checks it). Model weights and other third-party files keep their own licences.

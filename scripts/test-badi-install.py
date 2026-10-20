@@ -386,5 +386,29 @@ class RepairTests(unittest.TestCase):
             self.assertEqual(badi_install.dropped_lines(home), [], 'without Badi\'s layer rule there is nothing to load')
 
 
+class ModelTermsTests(unittest.TestCase):
+    def test_terms_are_named_and_each_acceptance_is_recorded_privately(self):
+        import datetime
+        self.assertIsNone(badi_install.model_terms({'license': 'Apache-2.0'}))
+        self.assertIn('https://ai.google.dev/gemma/terms', badi_install.model_terms({'license': 'Gemma'}))
+        self.assertIn('Llama 3.2 Community License', badi_install.model_terms({'license': 'Llama-3.2-Community'}))
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            self.assertIsNone(badi_install.record_model_terms(home, {'id': 'qwen3-1.7b', 'license': 'Apache-2.0'}))
+            moment = datetime.datetime(2026, 10, 20, 12, 0, tzinfo=datetime.timezone.utc)
+            path = badi_install.record_model_terms(home, {'id': 'gemma-3-1b', 'license': 'Gemma'}, now=moment)
+            badi_install.record_model_terms(home, {'id': 'llama-3.2-1b', 'license': 'Llama-3.2-Community'}, now=moment)
+            document = json.loads(path.read_text())
+            self.assertEqual(document['schema'], 'badi.model-terms.v1')
+            self.assertEqual([entry['model'] for entry in document['accepted']], ['gemma-3-1b', 'llama-3.2-1b'])
+            self.assertEqual(document['accepted'][0], {'model': 'gemma-3-1b', 'license': 'Gemma',
+                                                       'terms': 'https://ai.google.dev/gemma/terms',
+                                                       'accepted_at': '2026-10-20T12:00:00Z'})
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            path.write_text('not json')
+            badi_install.record_model_terms(home, {'id': 'gemma-3-1b', 'license': 'Gemma'}, now=moment)
+            self.assertEqual(len(json.loads(path.read_text())['accepted']), 1, 'an unreadable record starts again')
+
+
 if __name__ == '__main__':
     unittest.main()

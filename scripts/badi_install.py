@@ -739,3 +739,70 @@ def repair(home, omarchy_only=False):
         atomic_write(path, updated.encode(), stat.S_IMODE(path.stat().st_mode))
         restored.append(name)
     return restored
+
+
+# Writing models that are not Apache-2.0 come with terms a person accepts
+# before the download; the catalog's licence names them (badi.model-advice.v3).
+MODEL_TERMS = {
+    "Gemma": ("the Gemma Terms of Use", "https://ai.google.dev/gemma/terms"),
+    "Llama-3.2-Community": ("the Llama 3.2 Community License", "https://www.llama.com/llama3_2/license/"),
+}
+MODEL_TERMS_RECORD = STATE_DIRECTORY / "model-terms.json"
+
+
+def model_terms(model):
+    """'<name>, <url>' of the terms that come with a catalog model, or None."""
+    terms = MODEL_TERMS.get(model.get("license"))
+    return f"{terms[0]}, {terms[1]}" if terms else None
+
+
+def record_model_terms(home, model, now=None):
+    """Note that the user accepted a model's terms: the model, its licence,
+    the terms' address and when. Nothing is recorded for an Apache-2.0 model."""
+    terms = MODEL_TERMS.get(model.get("license"))
+    if terms is None:
+        return None
+    path = Path(home) / MODEL_TERMS_RECORD
+    try:
+        document = json.loads(path.read_text())
+        accepted = document["accepted"]
+        if not isinstance(accepted, list):
+            raise ValueError
+    except (OSError, ValueError, KeyError, TypeError):
+        accepted = []
+    moment = (now or datetime.datetime.now(datetime.timezone.utc)).astimezone(datetime.timezone.utc)
+    accepted.append({"model": model["id"], "license": model["license"], "terms": terms[1],
+                     "accepted_at": moment.strftime("%Y-%m-%dT%H:%M:%SZ")})
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    atomic_write(path, (json.dumps({"schema": "badi.model-terms.v1", "accepted": accepted}, indent=2) + "\n").encode())
+    return path
+
+
+def download_model(model, directory):
+    """The pinned file at its pinned revision, checked by size and SHA-256
+    before it becomes visible to the broker."""
+    import urllib.request
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target = directory / model["filename"]
+    partial = target.with_name(target.name + ".part")
+    url = f"https://huggingface.co/{model['repository']}/resolve/{model['revision']}/{model['filename']}"
+    digest = hashlib.sha256()
+    received = 0
+    with urllib.request.urlopen(url, timeout=60) as response, open(partial, "wb") as out:
+        os.fchmod(out.fileno(), 0o600)
+        while chunk := response.read(1 << 20):
+            out.write(chunk)
+            digest.update(chunk)
+            received += len(chunk)
+            if received > model["download_bytes"]:
+                break
+            if sys.stdout.isatty():
+                print(f"\rDownloading {model['name']}: {100 * received // model['download_bytes']}%", end="", flush=True)
+    if sys.stdout.isatty():
+        print()
+    if received != model["download_bytes"] or digest.hexdigest() != model["sha256"]:
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(f"{model['filename']} did not match its pinned size and hash; nothing was installed.")
+    partial.rename(target)
+    return target

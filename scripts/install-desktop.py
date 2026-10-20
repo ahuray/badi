@@ -412,6 +412,11 @@ def parse_arguments():
                         help=f"Add {OBSERVED_FLAG} to this app's user flags file for its next launch (backed up)")
     parser.add_argument("--screen-reader-accessibility", action="store_true",
                         help="Enable desktop-wide AT-SPI ScreenReaderEnabled, including Discord; record prior settings for rollback")
+    parser.add_argument("--model", metavar="ID",
+                        help="When no writing model is installed, download this catalog model (pinned, hash-checked) "
+                             "instead of the one recommended for this device")
+    parser.add_argument("--accept-model-license", action="store_true",
+                        help="Accept the terms that come with the downloaded model (Gemma, Llama) without asking")
     args = parser.parse_args()
     if args.broker_only and (args.observed_app or args.screen_reader_accessibility):
         parser.error("Accessibility options require the complete unlocked native installation")
@@ -497,9 +502,14 @@ def require_writing_assets(home):
         )
 
 
-def require_writing_model(home, badictl):
+def require_writing_model(home, badictl, model_id=None, accept_license=False):
     """At least one model of the freshly built broker's writing catalog is
-    installed with its pinned size and hash; the broker picks among them."""
+    installed with its pinned size and hash; the broker picks among them.
+
+    Without one, the recommended model (or `model_id`) is downloaded, pinned
+    and hash-checked, after its size and any terms that come with it were
+    shown and accepted: asked on a terminal, otherwise only with
+    --model and --accept-model-license."""
     advice = json.loads(subprocess.run([str(badictl), "models", "writing", "--json"], capture_output=True,
                                        text=True, check=True, timeout=15).stdout)
     models = Path(home) / ".local/share/badi/models"
@@ -508,10 +518,30 @@ def require_writing_model(home, badictl):
         if (path.is_file() and path.stat().st_size == model["download_bytes"]
                 and badi_install.file_sha256(path) == model["sha256"]):
             return model
-    recommended = (advice.get("recommended") or {}).get("name", "a catalog model")
-    raise RuntimeError(f"No pinned writing model is installed in {models}. `{badictl} models writing` prints "
-                       f"the pinned download of {recommended}, the one recommended for this device; "
-                       "rerun the installer after it. Later, `badi model use ID` switches models.")
+    wanted = model_id or (advice.get("recommended") or {}).get("id")
+    model = next((entry for entry in advice["catalog"] if entry["id"] == wanted), None)
+    if model is None or not model.get("fits", True):
+        choices = " ".join(entry["id"] for entry in advice["catalog"] if entry.get("fits", True))
+        raise RuntimeError(f"No writing model is installed in {models}, and {wanted or 'no model'} cannot be "
+                           f"downloaded for this device. Rerun with --model ID, one of: {choices}")
+    terms = badi_install.model_terms(model)
+    offer = f"{model['name']} ({model['download_bytes'] / 1e9:.2f} GB)" + (f", provided under {terms}" if terms else "")
+    # Only an explicit --model, with --accept-model-license for a model with
+    # terms, downloads without asking.
+    consented = model_id is not None and (accept_license or not terms)
+    if not consented:
+        if not sys.stdin.isatty():
+            raise RuntimeError(f"No writing model is installed in {models}. Badi recommends {offer}. "
+                               f"Rerun with --model {model['id']}" + (" --accept-model-license" if terms else "")
+                               + " to download it.")
+        question = "Do you accept its terms and download it?" if terms else "Download it?"
+        if input(f"Badi needs a writing model. Recommended for this device: {offer}. {question} [y/N] "
+                 ).strip().lower() not in ("y", "yes"):
+            raise RuntimeError("No writing model was downloaded; nothing was installed.")
+    if terms:
+        badi_install.record_model_terms(home, model)
+    badi_install.download_model(model, models)
+    return model
 
 
 def build(plan):
@@ -520,7 +550,7 @@ def build(plan):
     plan.checkout = badi_install.source_identity(ROOT)
     # Build only the shipped package: installs never compile the Prediction Lab.
     run(["cargo", "build", "--release", "--locked", "-p", "badi-broker", "--bins"], cwd=ROOT)
-    require_writing_model(plan.home, ROOT / "target/release/badictl")
+    require_writing_model(plan.home, ROOT / "target/release/badictl", plan.args.model, plan.args.accept_model_license)
     if plan.native:
         run(["npm", "run", "fcitx5:check"], cwd=ROOT)
         require_unlocked()
@@ -602,6 +632,8 @@ def install_prepared_files(plan, installation):
     for name in ("LICENSE", "README.md"):
         install(ROOT / "broker/data/writing-lexicon" / name,
                 home / ".local/share/badi/licenses/writing-lexicon" / name)
+    # The licences of the open-source code compiled into the binaries.
+    install(ROOT / "THIRD-PARTY-NOTICES.txt", home / ".local/share/badi/licenses/THIRD-PARTY-NOTICES.txt")
     if native:
         install(ROOT / "adapters/fcitx5/build/libbadi-fcitx5.so", home / ".local/lib/fcitx5/libbadi-fcitx5.so")
         install(ROOT / "adapters/fcitx5/build/badi.conf", home / ".local/share/fcitx5/addon/badi.conf")

@@ -5,6 +5,9 @@ pkgbase = badi-git
 	url = https://github.com/ahuray/badi
 	arch = x86_64
 	license = MIT
+	license = MPL-2.0
+	license = BSD-3-Clause
+	license = Zlib
 	license = LicenseRef-SCOWL
 	makedepends = git
 	makedepends = cargo
@@ -22,12 +25,14 @@ pkgbase = badi-git
 	depends = glib2
 	depends = pango
 	depends = systemd
-	depends = fcitx5>=5.1.22
+	depends = fcitx5>=5.1.23
 	depends = hyprland
 	depends = quickshell
 	depends = qt6-declarative
 	depends = hicolor-icon-theme
 	optdepends = curl: download the separately verified writing assets
+	optdepends = libsecret: keep the opt-in style-learning key in the desktop keyring
+	optdepends = xdg-desktop-portal: pause and settings shortcuts through the desktop portal
 	provides = badi
 	conflicts = badi
 	options = !debug

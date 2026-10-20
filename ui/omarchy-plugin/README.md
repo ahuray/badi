@@ -29,9 +29,11 @@ seconds only while open. From the top:
   no-suggestion reason (`⎿ last miss: …`).
 - **Search:** `/` filters every row by name, description or section.
 - **Rows**, in sections: Model (the writing model: a chip for each model
-  that fits this device, ★ on the recommendation; picking one runs `badi
-  model use`, which accepts its licence, downloads it and restarts the
-  model), Context ([ADR 0010](../../docs/decisions/0010-context-finishes-words.md):
+  that fits this device, ★ on the recommendation; picking an Apache-2.0
+  model runs `badi model use`, which downloads it and restarts the model,
+  while a Gemma or Llama model first adds a row naming its terms and their
+  address, and only Enter or a click on that row accepts them and downloads
+  it), Context ([ADR 0010](../../docs/decisions/0010-context-finishes-words.md):
   until you choose, one question, "Finish words from what you see?", with
   Turn on and Not now; afterwards a switch, and while it is on a row per
   allowed app and Forget learned words, each running `badi context`, which
