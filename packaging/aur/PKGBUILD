@@ -6,7 +6,7 @@ arch=('x86_64')
 url='https://github.com/ahuray/badi'
 license=('MIT' 'LicenseRef-SCOWL')
 depends=('gcc-libs' 'glibc' 'python' 'python-gobject' 'python-cairo' 'at-spi2-core'
-         'gtk4' 'gtk4-layer-shell' 'glib2' 'pango' 'systemd' 'fcitx5>=5.1.22'
+         'gtk4' 'gtk4-layer-shell' 'glib2' 'pango' 'systemd' 'fcitx5>=5.1.23'
          'hyprland' 'quickshell' 'qt6-declarative' 'hicolor-icon-theme')
 makedepends=('git' 'cargo' 'cmake' 'ninja' 'nlohmann-json')
 optdepends=('curl: download the separately verified writing assets'

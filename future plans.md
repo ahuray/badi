@@ -188,8 +188,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       (`--enable-wayland-ime` by default); keep the per-app flags until it lands.
 - [ ] Signed updates. The broker service is already sandboxed: `PrivateNetwork=yes`,
       a Unix-only runtime socket, and a read-only model directory.
-- [ ] Retire the [Fcitx 5.1.22 frontend backport](packaging/fcitx5-wayland-compat/README.md)
-      once Omarchy ships Fcitx 5.1.23.
 
 ### Suggestion quality
 

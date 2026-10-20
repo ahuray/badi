@@ -65,7 +65,7 @@ archiving it, and never add parallel planning, handoff or report documents.
 | `adapters/obsidian/`, `adapters/shell/`, `adapters/neovim/`, `adapters/shared/` | Editor-owned clients with exact acquisition, mutation and native undo. [Editors](adapters/shared/README.md), [Bash](adapters/shell/README.md), [Neovim](adapters/neovim/README.md). |
 | `adapters/libreoffice/` | Python UNO Writer extension: explicit English spelling replacement in one undo context, verified by reading back. [Runbook](adapters/libreoffice/README.md). |
 | `ui/omarchy-plugin/` | Omarchy bar mark and settings panel. [Runbook](ui/omarchy-plugin/README.md). |
-| `scripts/`, `packaging/` | `badi` desktop controller, user-local installers, service units, [Fcitx frontend backport](packaging/fcitx5-wayland-compat/README.md). |
+| `scripts/`, `packaging/` | `badi` desktop controller, user-local installers, service units, the [Arch package candidate](packaging/aur/README.md). |
 | `evaluation/` | Prediction Lab and its worker crate `badi-writing-lab`, which uses only the broker's public API. The broker never references the Lab. [Runbook](evaluation/writing/README.md), [model fit](docs/architecture/model-selection.md). `evaluation/power/` holds the paced battery trial; `evaluation/llm-bench/` the [local LLM bench](evaluation/llm-bench/README.md) for runtime and model speed. |
 
 Where code lives inside the larger components:

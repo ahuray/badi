@@ -44,7 +44,7 @@ animation. At a field edge, overflow appears as a compact grey line just below
 or above the field. If that cannot fit either, Fcitx uses one unhighlighted
 candidate without the help banner
 ([preview contract](adapters/accessibility/README.md#caret-geometry-and-preview)).
-Fcitx 5.1.22
+Fcitx 5.1.23
 on this machine already supplies emoji: QuickPhrase (Super+semicolon, then a
 word such as `smile`) and the Emoji module. They do not expand a colon
 shortcode while you type. Badi does not add one. Replacing `:smile` would
@@ -53,9 +53,11 @@ way while Fcitx is composing.
 
 ## Where it works
 
-Tested on the development workstation (Arch Linux, Hyprland 0.56, Fcitx 5.1.22)
-with disposable text in October 2026. A listed version is not a claim about
-Linux in general.
+Tested on the development workstation (Arch Linux, Hyprland 0.56, Fcitx 5.1.22
+and, from 2026-10-19, 5.1.23) with disposable text in October 2026. A listed
+version is not a claim about Linux in general. Chromium-based apps need Fcitx
+5.1.23 or later on Hyprland: earlier versions stop them sending the text
+around the caret.
 
 | App | Notes | Tested |
 | --- | --- | --- |
@@ -132,8 +134,7 @@ python3 scripts/install-editors.py --libreoffice   # optional: Writer spelling; 
 ```
 
 Prerequisites on the machine: Rust, Node.js, cmake, ninja, a C++20 compiler,
-Fcitx 5 headers, PyGObject, GTK 4 and gtk4-layer-shell, plus a network path
-for the pinned Fcitx compatibility source.
+Fcitx 5 headers, PyGObject, GTK 4 and gtk4-layer-shell.
 
 The installers build user-local files, back up everything they replace and
 restart Badi's services and Fcitx. The newest three backups of each installer
@@ -141,10 +142,9 @@ are kept, and the first backup — the files as they were before Badi — is kep
 as well. `python3 scripts/badi_install.py restore DIR` rolls one back, reloads
 user units when a service file was restored, and updates the install receipt
 to those restored bytes. The desktop install needs an unlocked desktop;
-`--broker-only` updates only the model service while locked. On Fcitx 5.1.22
-it also installs a
-[backported Fcitx frontend](packaging/fcitx5-wayland-compat/README.md) so
-Chromium-based apps keep sending their text (`--no-wayland-compat` skips it).
+`--broker-only` updates only the model service while locked. A complete
+install also removes, with a backup, the Fcitx 5.1.22 frontend backport that
+earlier Badi installs added.
 At least one writing model from Badi's catalog must already be present.
 `badictl models writing` recommends one for this device and prints its pinned
 `hf download` with `--local-dir ~/.local/share/badi/models`; after the install,
@@ -321,7 +321,7 @@ installed model.
 | [future plans.md](<future plans.md>) | The only backlog, with the ordered next steps |
 | [CHANGELOG.md](CHANGELOG.md) | What shipped, by pull request |
 | [docs/decisions](docs/decisions/) | Durable architecture decisions |
-| Component runbooks | [broker](broker/README.md), [Fcitx addon](adapters/fcitx5/README.md), [observer](adapters/accessibility/README.md), [session helper](adapters/session/README.md), [editors](adapters/shared/README.md), [Bash](adapters/shell/README.md), [Neovim](adapters/neovim/README.md), [LibreOffice Writer](adapters/libreoffice/README.md), [Omarchy panel](ui/omarchy-plugin/README.md), [Fcitx frontend backport](packaging/fcitx5-wayland-compat/README.md), [Prediction Lab](evaluation/writing/README.md) |
+| Component runbooks | [broker](broker/README.md), [Fcitx addon](adapters/fcitx5/README.md), [observer](adapters/accessibility/README.md), [session helper](adapters/session/README.md), [editors](adapters/shared/README.md), [Bash](adapters/shell/README.md), [Neovim](adapters/neovim/README.md), [LibreOffice Writer](adapters/libreoffice/README.md), [Omarchy panel](ui/omarchy-plugin/README.md), [Prediction Lab](evaluation/writing/README.md) |
 
 ```sh
 npm ci

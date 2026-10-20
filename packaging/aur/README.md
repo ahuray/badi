@@ -14,10 +14,9 @@ editor plugins. No install hook starts a service, changes accessibility,
 edits a home directory or downloads anything.
 
 The current desktop contract still requires Omarchy/Hyprland and its lock
-IPC. This is not general Linux desktop support. Fcitx 5.1.22 needs the
-[verified Wayland frontend backport](https://github.com/ahuray/badi/blob/main/packaging/fcitx5-wayland-compat/README.md)
-for reliable Chromium surrounding-text updates; Fcitx 5.1.23 includes that
-fix. This package does not replace the system frontend.
+IPC. This is not general Linux desktop support. The package requires Fcitx
+5.1.23 or later, whose Wayland frontend keeps Chromium's surrounding text
+current; it does not replace the system frontend.
 
 ## Writing assets
 
