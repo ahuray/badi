@@ -209,6 +209,7 @@ fn fcitx_append_only_app(app_id: &str) -> bool {
             | "zen"
             | "chatgpt"
             | "code"
+            | "com.anthropic.claude"
             | "cursor"
             | "discord"
             | "grok-bot"

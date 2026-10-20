@@ -96,7 +96,7 @@ observer wire details.
 | --- | --- | --- |
 | Native exact | Any other granted id, e.g. `omawrite`, `com.github.xournalpp.xournalpp`, `telegram` | The manual unknown-identity contract, or an observed desktop field |
 | IME-parity browser | `chromium`, `chromium-browser`, `brave-origin`, `zen` | Observed browser field only; origin policy; append-only |
-| IME-parity desktop | `chatgpt` (Codex), `code`, `cursor`, `discord`, `grok-bot`, `libreoffice` | Observed field of the same app only; app policy; append-only |
+| IME-parity desktop | `chatgpt` (Codex), `code`, `com.anthropic.claude` (Claude), `cursor`, `discord`, `grok-bot`, `libreoffice` | Observed field of the same app only; app policy; append-only |
 | Unavailable | Other Gecko browsers (Firefox, other Zen builds, LibreWolf, Floorp, PWAsForFirefox, …), Chromium-family ids without an observer rule (Chrome, `brave`, `chrome-*`/`crx_*` web apps, Flatpak ids, Edge, Vivaldi, Opera, `electron*`, `code-oss`, `vscodium`, `vesktop`, …) and `obsidian`, whose plugin owns its fields | None |
 
 Gecko mail clients such as Thunderbird stay native exact. An Electron app with

@@ -1164,6 +1164,12 @@ void canonicalAppIdsFoldAsciiCase() {
           "an overlong web-app window name is rejected");
     check(classifyNativeApp("grok-bot") == NativeAppClass::ImeParityDesktop && imeParityApp("grok-bot"),
           "Grok Bot accepts only through its observed field");
+    check(programAppId("com.anthropic.Claude") == "com.anthropic.claude" &&
+              classifyNativeApp("com.anthropic.claude") == NativeAppClass::ImeParityDesktop &&
+              imeParityApp("com.anthropic.claude") &&
+              !nativeEditingAvailable("com.anthropic.claude", NativeEditTarget::DesktopApplication,
+                                      NativeEditPath::Manual),
+          "the Claude desktop app accepts only through its observed field");
     for (const auto program : {"libreoffice-startcenter", "libreoffice-writer", "libreoffice-calc", "LibreOffice-Impress"}) {
         check(programAppId(program) == "libreoffice", "every LibreOffice window keeps one identity");
     }

@@ -34,6 +34,9 @@ APPS = {
     "chatgpt": App(frozenset({"/usr/lib/chatgpt/ChatGPT"}), frozenset({"chatgpt"}), web=True),
     # VS Code 1.140 renamed its Wayland app id; the addon maps both to "code".
     "code": App(frozenset({"/usr/share/code/code"}), frozenset({"code", "com.microsoft.VSCode"}), web=True),
+    # The Claude desktop app bundles its own Electron; Fcitx folds its Wayland id.
+    "com.anthropic.claude": App(frozenset({"/usr/lib/claude-desktop/claude-desktop"}),
+                                frozenset({"com.anthropic.Claude"}), web=True),
     "cursor": App(frozenset({"/usr/lib/electron42/electron"}), frozenset({"cursor"}), web=True,
                   entry="/usr/share/cursor/resources/app/cursor.mjs"),
     "discord": App(classes=frozenset({"discord"}), web=True, per_user=True),
