@@ -64,6 +64,8 @@ Standing user decisions:
   opt-outs; language work prioritizes English, German, French, Spanish and
   Portuguese, and Persian keeps its regression gates
   ([context firewall](VISION.md#context-firewall));
+- Gemma 4 E2B stays out of the catalog: no overall gain for four times the
+  memory ([model fit](docs/architecture/model-selection.md));
 - distribution starts with an AUR package; publication and an Omarchy proposal
   still need approval after naming and licence review;
 - Discord uses desktop-wide AT-SPI `ScreenReaderEnabled`, with recorded prior
@@ -79,13 +81,6 @@ Open decisions, for the user:
   [Suggestion quality](#suggestion-quality).
 - **The `--text` debug trace** keeps typed text in memory for 15 minutes;
   confirm that, or limit it to suggestions.
-- **Gemma 4 E2B in the catalog.** The screen found no overall gain over
-  Gemma 3 1B, better German, fewer harmful suggestions and 4.6 GB peak
-  memory ([model fit](docs/architecture/model-selection.md)). Leave it out
-  (recommended: nothing to gain for most users); offer it through `badi model
-  use` only, never recommended; or recommend it above a sustained power
-  limit, which needs a device-tier input that reads RAPL PL1 and stays
-  unknown on many machines.
 - **The 28 W CPU power limit** is set until reboot; installing
   `output/llm-bench/cpu-sustained-power.service` keeps it (see the
   [bench](evaluation/llm-bench/README.md) conditions).
