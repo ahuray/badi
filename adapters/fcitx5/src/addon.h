@@ -104,6 +104,9 @@ private:
         // The chord's modifiers were state, not keys: no modifier release
         // will come, so the chord key's own release sends the Tab.
         bool literalTabOnKeyRelease = false;
+        // The chord's Tab key in the sending keyboard's keymap, so the
+        // frontend need not look Tab up under modifiers still in effect.
+        int literalTabCode = 0;
         // Show a suggestion that arrives during the typing pause only after
         // that pause, and only if this keystroke is still the latest.
         std::uint64_t showAfterUs = 0;
@@ -136,7 +139,7 @@ private:
     void holdTab(Binding &binding);
     void dropHeldTab(Binding &binding);
     void clearTypeThrough(Binding &binding);
-    void literalTab(Binding &binding);
+    void literalTab(Binding &binding, int code);
     void literalTabRelease(::fcitx::KeyEvent &event);
     void sendLiteralTabs(Binding &binding);
     void dropLiteralTabs(Binding &binding);

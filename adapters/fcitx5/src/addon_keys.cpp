@@ -129,7 +129,7 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
         requestAcceptance(*binding);
         break;
     case PreKeyAction::LiteralTab:
-        literalTab(*binding);
+        literalTab(*binding, event.rawKey().code());
         break;
     }
     event.filterAndAccept();
@@ -147,13 +147,14 @@ void BadiAddon::clearTypeThrough(Binding &binding) {
 // Ctrl+Shift+Tab where Badi would take Tab: the suggestion retires like it
 // would for any edit, and the app gets a real Tab once the chord's
 // modifiers are up (see lastModifierReleased).
-void BadiAddon::literalTab(Binding &binding) {
+void BadiAddon::literalTab(Binding &binding, int code) {
     clearTypeThrough(binding);
     cancelForInput(binding);
     // A Tab may complete or indent invisibly; follow what comes next.
     binding.typedLine.restart();
     binding.literalTabs = std::min(binding.literalTabs + 1, kMaxLiteralTabs);
     binding.literalTabOnKeyRelease = !heldModifierKeys_.testAny(literalTabChord().states());
+    binding.literalTabCode = code;
     debug_.record("decision", binding.state.appId(), "literal_tab_waiting");
 }
 
@@ -176,10 +177,13 @@ void BadiAddon::sendLiteralTabs(Binding &binding) {
         return;
     }
     // Wayland's input-method-v2 frontend sends the release with the press.
+    // Without the chord's keycode it would look Tab up under the modifier
+    // state it last heard, where Shift turns Tab into ISO_Left_Tab.
     const bool pressReleases = binding.inputContext->frontendName() == "wayland_v2";
+    const ::fcitx::Key tab(FcitxKey_Tab, ::fcitx::KeyStates(), binding.literalTabCode);
     for (unsigned int sent = 0; sent < count; ++sent) {
-        binding.inputContext->forwardKey(::fcitx::Key(FcitxKey_Tab), false);
-        if (!pressReleases) binding.inputContext->forwardKey(::fcitx::Key(FcitxKey_Tab), true);
+        binding.inputContext->forwardKey(tab, false);
+        if (!pressReleases) binding.inputContext->forwardKey(tab, true);
     }
     // A suggestion shown again while the Tab waited is for the field as it
     // was; the Tab changes it, so retire it like any edit.
