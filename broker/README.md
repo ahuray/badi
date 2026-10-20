@@ -52,23 +52,14 @@ and whether they were dirty (`--version` prints both; packagers may set
   Update the broker before clients advertising the new capability; an older
   broker rejects it. Fcitx, Obsidian, Neovim and the LibreOffice Writer
   extension opt in; Bash keeps its existing lease.
-- **Growing previews.** Each extension has an immutable id and text. Earlier
-  versions remain acceptable only within the same generation, exact field
-  revision and original expiry, so a new word crossing Tab on the socket
-  cannot swallow the acceptance. Accepting or dismissing any version retires
-  them all; cancellation, focus changes and expiry revoke the whole group.
-  At most 64 versions fit the protocol's 64-character limit. When the final
-  result is rejected (by the display checks, or by the provider's own
-  validation, which it reports as a no-suggestion outcome) or arrives late,
-  the last shown partial stays if it ends at a word boundary
-  (`ends_at_word_boundary`): it
-  was already checked before display, so it counts as the shown suggestion,
-  not as a no-suggestion miss, and only an edit, a focus change, Escape or
-  its expiry withdraws it. Live in Ghostty on 2026-10-17, ten
-  provider-rejected finals followed two or three shown partials and none
-  produced a `no_suggestion` clear; the next broker clear was `superseded`
-  46–280 ms later, and in the row inspected key-by-key the ghost was still
-  marked visible when the next printable key arrived 129 ms after rejection.
+- **Growing previews.** The protocol lets a suggestion grow in versions,
+  each with an immutable id and text. An earlier version stays acceptable
+  only within the same generation, field revision and original expiry, so a
+  word crossing Tab on the socket cannot swallow the acceptance; accepting or
+  dismissing any version retires them all. The local model's
+  [confidence gate](#suggestion-limits) now holds each suggestion until it is
+  judged whole, so every suggestion arrives as one version and the partial
+  path is dormant ([backlog](<../future plans.md>)).
 - **Type-through** ([ADR 0004](../docs/decisions/0004-type-through-carries-text-not-authority.md)).
   The last shown continuation is kept as text only.
   - When a later admitted request in the same app or site keeps `after` and

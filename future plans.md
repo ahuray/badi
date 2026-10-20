@@ -341,6 +341,12 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 ### Engineering upkeep
 
+- [ ] The partial-suggestion path (`KeepPartial`, `shown_partial` in
+      `broker/src/engine/generation.rs`) no longer runs: the confidence gate
+      delivers each suggestion whole, and only test fakes send partials.
+      Delete it, or reuse it for showing the first word once its own tokens
+      pass the gate (Speed and footprint).
+
 - [ ] Carry out [ADR 0007](docs/decisions/0007-retire-protocol-v1.md),
       accepted on 2026-10-13: `PROTOCOL_VERSION` is still 1, the v1 surface is
       live in the broker, and `protocol/v1/` and the v1 settings schema are
