@@ -676,6 +676,63 @@ def session(root, report):
         checks.append('Unchanged-authority reconnect republishes no observed prose automatically; the explicit chord '
                       'requests afresh while plain Tab stays the application Tab')
 
+        # fcitx5-qt 5.1.16 (fcitx/fcitx5-qt@bac684ce07d9) withdraws
+        # SurroundingText right after every text update. An observed field
+        # keeps that text; its observer must still agree with it.
+        surrounding, password = 1 << 6, 1 << 3
+
+        def context_updates():
+            return control('status')['metrics']['context_updates']
+
+        def qt_text(value):
+            context.ic('SetCapability', '(t)', (desktop.CAPABILITIES,))
+            context.text(value)
+            context.ic('SetCapability', '(t)', (desktop.CAPABILITIES & ~surrounding,))
+
+        context.close()
+        context = desktop.InputContext(FIXTURE_APP)
+        backend.value, backend.caret = PREFIX, None
+        backend.field += 1
+        daemon.observer.invalidate('fixture_field_changed')
+        echoes = reason_count('surrounding_echo')
+        qt_text(PREFIX)
+        wait(lambda: context.candidate() == SHOWN, 'observed suggestion under the fcitx5-qt echo', timeout=6)
+        assert reason_count('surrounding_echo') > echoes
+        assert context.key(RIGHT, CONTROL)
+        wait(lambda: context.commits() == [SUFFIX], 'dispatch under the fcitx5-qt echo')
+        checks.append('fcitx5-qt withdrawing SurroundingText after each text update keeps an observed field '
+                      'suggesting and dispatching after observer corroboration')
+
+        mismatch, before = reason_count('observer_context_mismatch'), context_updates()
+        backend.value = PREFIX + ' mismatched'
+        daemon.observer.invalidate('fixture_field_changed')
+        qt_text(PREFIX)
+        wait(lambda: reason_count('observer_context_mismatch') > mismatch, 'observer disagreement under the echo')
+        quiet(.2)
+        assert context_updates() == before and context.candidate() is None
+        backend.value = PREFIX
+        daemon.observer.invalidate('fixture_field_changed')
+        qt_text(PREFIX)
+        wait(lambda: context.candidate() == SHOWN, 'agreement restores the suggestion under the echo')
+        context.ic('SetCapability', '(t)', ((desktop.CAPABILITIES & ~surrounding) | password,))
+        wait(lambda: context.candidate() is None, 'a password capability ends the echo')
+        context.text(PREFIX)
+        quiet(.3)
+        assert not context.key(desktop.TAB) and context.candidate() is None and context.commits() == [SUFFIX]
+        checks.append('Under the echo, observer disagreement still blocks context, and any other capability '
+                      'change, such as a password field, ends it')
+
+        context.close()
+        context = desktop.InputContext('omawrite')
+        before, reads = context_updates(), backend.reads
+        qt_text(PREFIX)
+        quiet(.3)
+        context.key(desktop.TAB)
+        quiet(.3)
+        assert context.candidate() is None and context.commits() == []
+        assert context_updates() == before and backend.reads == reads
+        checks.append('Without an observed field, the echo leaves the unknown-identity manual path closed')
+
         context.close()
         context = desktop.InputContext('omawrite')
         context.text(PREFIX)

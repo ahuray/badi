@@ -112,6 +112,33 @@ bool allowsNativeContext(::fcitx::CapabilityFlags capabilities) {
                         });
 }
 
+bool SurroundingEcho::capabilityChanged(::fcitx::CapabilityFlags before, ::fcitx::CapabilityFlags after) {
+    // Fcitx reports the old flags without preedit bits it disabled and the
+    // new ones as the client sent them; neither preedit bit gates a field.
+    const auto changed = (before ^ after)
+                             .unset(::fcitx::CapabilityFlag::Preedit)
+                             .unset(::fcitx::CapabilityFlag::FormattedPreedit);
+    if (changed == ::fcitx::CapabilityFlag::SurroundingText) {
+        const bool granted = after.test(::fcitx::CapabilityFlag::SurroundingText);
+        if (!granted && textUnderGrant_) {
+            textUnderGrant_ = false;
+            withdrawn_ = true;
+            return true;
+        }
+        if (granted && withdrawn_) {
+            withdrawn_ = false;
+            return true;
+        }
+    }
+    reset();
+    return false;
+}
+
+::fcitx::CapabilityFlags observedFieldCapabilities(::fcitx::CapabilityFlags current,
+                                                   const SurroundingEcho &echo) {
+    return echo.withdrawn() ? current | ::fcitx::CapabilityFlag::SurroundingText : current;
+}
+
 NativeAppClass classifyNativeApp(std::string_view appId) {
     // Browser/Electron commitString behaves like a typed keystroke: page script
     // can retarget it during beforeinput and undo may coalesce it with typing.

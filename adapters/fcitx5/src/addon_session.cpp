@@ -81,9 +81,17 @@ RequestFacts BadiAddon::requestFacts(const Binding &binding) const {
                                                                        : binding.surroundingFreshness.fresh(),
         .fieldAllowed = binding.state.editPath() == NativeEditPath::TypedLine
             ? !(binding.inputContext->capabilityFlags() & ::fcitx::CapabilityFlag::PasswordOrSensitive)
-            : allowsNativeContext(binding.inputContext->capabilityFlags()),
+            : allowsNativeContext(fieldCapabilities(binding)),
         .foreignIme = hasForeignImeUi(observePanel(binding)),
     };
+}
+
+// An observed field is judged with fcitx5-qt's withdrawal echo undone
+// (SurroundingEcho): its observer still corroborates text and caret before
+// display and dispatch. The unobserved manual path keeps Fcitx's flags.
+::fcitx::CapabilityFlags BadiAddon::fieldCapabilities(const Binding &binding) const {
+    const auto flags = binding.inputContext->capabilityFlags();
+    return binding.observed() ? observedFieldCapabilities(flags, binding.surroundingEcho) : flags;
 }
 
 // Surrounding text may be read only from an editable, focused, permitted,
@@ -98,7 +106,7 @@ bool BadiAddon::contextReadable(const Binding &binding) const {
     }
     return binding.state.editingAvailable() && input.hasFocus() && binding.state.focused() &&
         binding.broker.policyAllowed && binding.surroundingFreshness.fresh() &&
-        allowsNativeContext(input.capabilityFlags()) && !instance_->isComposing(&input);
+        allowsNativeContext(fieldCapabilities(binding)) && !instance_->isComposing(&input);
 }
 
 bool BadiAddon::safeToObserve(const Binding &binding) const {
@@ -147,7 +155,7 @@ std::string_view BadiAddon::unavailableContextReason(const Binding &binding) con
     if (!input.hasFocus() || !binding.state.focused() || !binding.broker.policyAllowed)
         return "native_authority_changed";
     if (!binding.surroundingFreshness.fresh()) return "native_context_stale";
-    if (!allowsNativeContext(input.capabilityFlags())) return "native_field_denied";
+    if (!allowsNativeContext(fieldCapabilities(binding))) return "native_field_denied";
     if (instance_->isComposing(&input)) return "foreign_ime_active";
     const auto &surrounding = input.surroundingText();
     if (!surrounding.isValid()) return "native_surrounding_invalid";

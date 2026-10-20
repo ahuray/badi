@@ -333,6 +333,72 @@ void sensitiveCompositionAndSelectionAreZeroContext() {
           "invalid UTF-8 anywhere in the toolkit text, even outside the window, serializes nothing");
 }
 
+void qtSurroundingEchoIsNarrow() {
+    using ::fcitx::CapabilityFlag;
+    using ::fcitx::CapabilityFlags;
+    const auto base = CapabilityFlags(CapabilityFlag::Preedit) | CapabilityFlag::Multiline;
+    const auto granted = base | CapabilityFlag::SurroundingText;
+    const auto withdrawnEcho = [&] {
+        SurroundingEcho echo;
+        echo.capabilityChanged(base, granted);
+        echo.surroundingTextUpdated(granted);
+        echo.capabilityChanged(granted, base);
+        return echo;
+    };
+
+    // One key in a Qt Quick field under fcitx5-qt 5.1.16: grant, text, withdrawal.
+    SurroundingEcho echo;
+    check(!echo.capabilityChanged(base, granted), "a first grant is an ordinary capability change");
+    echo.surroundingTextUpdated(granted);
+    check(echo.capabilityChanged(granted, base) && echo.withdrawn(),
+          "SurroundingText alone withdrawn right after text arrived under it is the echo");
+    check(allowsNativeContext(observedFieldCapabilities(base, echo)),
+          "an observed field keeps the surrounding text the echo withdrew");
+    check(!allowsNativeContext(base), "Fcitx's own flags still fail closed");
+    check(echo.capabilityChanged(base, granted) && !echo.withdrawn(),
+          "SurroundingText granted back while withdrawn undoes the echo");
+    echo.surroundingTextUpdated(granted);
+    check(echo.capabilityChanged(granted, base) && echo.withdrawn(), "every key repeats the echo");
+    echo.reset();
+    check(!echo.withdrawn() && !allowsNativeContext(observedFieldCapabilities(base, echo)),
+          "focus ends the echo");
+
+    SurroundingEcho bare;
+    bare.capabilityChanged(base, granted);
+    check(!bare.capabilityChanged(granted, base) && !bare.withdrawn(),
+          "a withdrawal with no text since the grant is an ordinary change");
+    SurroundingEcho late;
+    late.surroundingTextUpdated(base);
+    late.capabilityChanged(base, granted);
+    check(!late.capabilityChanged(granted, base) && !late.withdrawn(),
+          "text that arrived without SurroundingText arms nothing");
+    SurroundingEcho twice = withdrawnEcho();
+    check(!twice.capabilityChanged(granted, base) && !twice.withdrawn(),
+          "a withdrawal while already withdrawn is not the echo");
+
+    for (const auto other : {CapabilityFlag::Password, CapabilityFlag::Sensitive, CapabilityFlag::Disable,
+                             CapabilityFlag::Email, CapabilityFlag::Url, CapabilityFlag::Number,
+                             CapabilityFlag::Multiline}) {
+        auto changed = withdrawnEcho();
+        check(!changed.capabilityChanged(base, base ^ other) && !changed.withdrawn(),
+              "any other capability change ends the echo");
+        SurroundingEcho together;
+        together.capabilityChanged(base, granted);
+        together.surroundingTextUpdated(granted);
+        check(!together.capabilityChanged(granted, base ^ other) && !together.withdrawn(),
+              "a withdrawal together with another flag is not the echo");
+    }
+    check(!allowsNativeContext(observedFieldCapabilities(base | CapabilityFlag::Password, withdrawnEcho())),
+          "the echo restores only SurroundingText; denied purposes stay denied");
+
+    // Fcitx reports the old flags without preedit bits the user disabled.
+    SurroundingEcho preedit;
+    preedit.capabilityChanged(base.unset(CapabilityFlag::Preedit), granted);
+    preedit.surroundingTextUpdated(granted);
+    check(preedit.capabilityChanged(granted.unset(CapabilityFlag::Preedit), base) && preedit.withdrawn(),
+          "disabled preedit bits do not hide the echo");
+}
+
 void contextWindowIsBoundedInScalarValues() {
     std::string text;
     for (int index = 0; index < 600; ++index) text += "\u0622";
@@ -1759,6 +1825,7 @@ int main(int argc, char **argv) {
         {"optional suggestion clear field",
          suggestionClearMatchesOptionalWireField},
         {"sensitive zero context", sensitiveCompositionAndSelectionAreZeroContext},
+        {"fcitx5-qt surrounding echo", qtSurroundingEchoIsNarrow},
         {"context window scalar bounds", contextWindowIsBoundedInScalarValues},
         {"transport reconnect keeps Fcitx text but no broker grant",
          transportReconnectKeepsFcitxTextButNoBrokerGrant},

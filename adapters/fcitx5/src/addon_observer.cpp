@@ -34,8 +34,11 @@ void BadiAddon::observeLater(Binding &binding, bool explicitRequest, bool retry,
 }
 
 void BadiAddon::inspectField(Binding &binding) {
+    // Inspection reads only the focused accessible, so fcitx5-qt's
+    // withdrawal echo does not stop it; reading text waits for observation.
     if (!nativeObservationAvailable(binding.state.appId()) ||
-        !allowsNativeContext(binding.inputContext->capabilityFlags()) ||
+        !allowsNativeContext(observedFieldCapabilities(binding.inputContext->capabilityFlags(),
+                                                       binding.surroundingEcho)) ||
         !binding.surroundingFreshness.fresh()) return;
     if (accessibility_->pending()) {
         // Bounded, so an absent service or a denied field never loops the timer.
