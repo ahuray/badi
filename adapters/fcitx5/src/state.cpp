@@ -31,7 +31,8 @@ std::uint64_t mix(std::string_view value, std::uint64_t seed) {
 // rule could never be observed.
 constexpr std::array<std::string_view, 4> kImeParityBrowsers{
     "chromium", "chromium-browser", "brave-origin", "zen"};
-constexpr std::array<std::string_view, 5> kImeParityDesktopApps{"chatgpt", "code", "cursor", "discord", "grok-bot"};
+constexpr std::array<std::string_view, 6> kImeParityDesktopApps{"chatgpt", "code", "com.anthropic.claude", "cursor",
+                                                                 "discord", "grok-bot"};
 // Native apps on the same observed, append-only contract: one Fcitx program
 // id serves modules or fields the observer must tell apart (LibreOffice Calc
 // cells must keep Tab), so no manual path may exist.

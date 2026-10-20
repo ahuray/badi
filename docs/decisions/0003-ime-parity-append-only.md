@@ -1,10 +1,10 @@
 # ADR 0003: extension-free editing accepts one append-only IME commit
 
 - Status: accepted
-- Date: 2026-09-26, extended 2026-10-06, 2026-10-07 and 2026-10-12
+- Date: 2026-09-26, extended 2026-10-06, 2026-10-07, 2026-10-12 and 2026-10-20
 - Scope: Fcitx IME-parity apps: Chromium, Brave Origin and its `--app` windows
-  (Omarchy web apps), Zen (exact `zen` identity only), Codex desktop, VS Code,
-  Cursor, Discord, Grok Bot and LibreOffice Writer
+  (Omarchy web apps), Zen (exact `zen` identity only), Codex desktop, Claude
+  desktop, VS Code, Cursor, Discord, Grok Bot and LibreOffice Writer
 
 ## Context
 
