@@ -1563,3 +1563,78 @@ async fn a_token_inside_the_healed_echo_does_not_count_but_one_that_straddles_it
     ));
     Ok(())
 }
+
+/// Serves `pieces` as one streamed completion to a client set to `length`,
+/// ending with EOS unless `stall` holds the stream past the writing budget,
+/// and returns the payload the client sent with the text it showed.
+async fn length_exchange(
+    length: badi_broker::settings::SuggestionLength,
+    pieces: &[&str],
+    stall: bool,
+) -> Result<(serde_json::Value, Option<String>), Box<dyn Error>> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let endpoint = listener.local_addr()?;
+    let pieces: Vec<_> = pieces.iter().map(|value| (*value).to_owned()).collect();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("HTTP connection");
+        let payload = read_payload(&mut socket).await;
+        let _ = socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .await;
+        for piece in pieces {
+            let value = token_event(&piece);
+            let _ = socket
+                .write_all(format!("data: {value}\n\n").as_bytes())
+                .await;
+        }
+        if stall {
+            tokio::time::sleep(Duration::from_millis(650)).await;
+        } else {
+            let value = serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"eos"});
+            let _ = socket
+                .write_all(format!("data: {value}\n\n").as_bytes())
+                .await;
+        }
+        payload
+    });
+    let client = SemanticClient::new(SemanticClientConfig::new(
+        endpoint,
+        "length-fixture",
+        "public-fixture-token",
+    )?)?;
+    client.set_suggestion_length(length);
+    let outcome = client
+        .propose_outcome(
+            request("Please send the report", Some("en")),
+            CancellationToken::new(),
+            false,
+            RequestTrigger::Automatic,
+        )
+        .await?;
+    Ok((server.await?, shown_text(outcome)))
+}
+
+#[tokio::test]
+async fn each_suggestion_length_shows_its_words_within_the_same_budget()
+-> Result<(), Box<dyn Error>> {
+    use badi_broker::settings::SuggestionLength;
+    let words = [" one", " two", " three", " four", " five"];
+    for (length, shown) in [
+        (SuggestionLength::Short, " one two"),
+        (SuggestionLength::Normal, " one two three four"),
+    ] {
+        let (payload, text) = length_exchange(length, &words, false).await?;
+        assert_eq!(payload["n_predict"], 8, "{length:?}");
+        assert_eq!(text.as_deref(), Some(shown), "{length:?}");
+        // Cut short at the budget, the complete words still keep the limit.
+        let (_, text) = length_exchange(length, &words[..4], true).await?;
+        let salvaged = match length {
+            SuggestionLength::Short => " one two",
+            SuggestionLength::Normal => " one two three",
+        };
+        assert_eq!(text.as_deref(), Some(salvaged), "{length:?} at the budget");
+    }
+    Ok(())
+}
