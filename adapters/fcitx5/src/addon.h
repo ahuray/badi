@@ -43,6 +43,7 @@ private:
         SessionState state;
         BrokerSession broker;
         SurroundingFreshness surroundingFreshness;
+        SurroundingEcho surroundingEcho;
         std::size_t surroundingDigest = 0;
         // Badi's own panel content, and the timer that retires it.
         std::shared_ptr<::fcitx::CandidateList> ownedCandidates;
@@ -119,7 +120,8 @@ private:
     void focusOut(::fcitx::InputContext &inputContext);
     void destroy(::fcitx::InputContext &inputContext);
     void surroundingTextUpdated(::fcitx::InputContext &inputContext);
-    void capabilityChanged(::fcitx::InputContext &inputContext);
+    void capabilityChanged(::fcitx::InputContext &inputContext, ::fcitx::CapabilityFlags before,
+                           ::fcitx::CapabilityFlags after);
     void foreignUiUpdated(::fcitx::InputContext &input);
 
     // Keys.
@@ -181,6 +183,7 @@ private:
     PanelObservation observePanel(const Binding &binding) const;
     bool foreignImeActive(const Binding &binding) const;
     RequestFacts requestFacts(const Binding &binding) const;
+    ::fcitx::CapabilityFlags fieldCapabilities(const Binding &binding) const;
     bool contextReadable(const Binding &binding) const;
     bool safeToObserve(const Binding &binding) const;
     std::optional<ContextWindow> currentContext(const Binding &binding) const;

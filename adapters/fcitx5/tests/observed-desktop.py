@@ -676,6 +676,63 @@ def session(root, report):
         checks.append('Unchanged-authority reconnect republishes no observed prose automatically; the explicit chord '
                       'requests afresh while plain Tab stays the application Tab')
 
+        # fcitx5-qt 5.1.16 (fcitx/fcitx5-qt@bac684ce07d9) withdraws
+        # SurroundingText right after every text update. An observed field
+        # keeps that text; its observer must still agree with it.
+        surrounding, password = 1 << 6, 1 << 3
+
+        def context_updates():
+            return control('status')['metrics']['context_updates']
+
+        def qt_text(value):
+            context.ic('SetCapability', '(t)', (desktop.CAPABILITIES,))
+            context.text(value)
+            context.ic('SetCapability', '(t)', (desktop.CAPABILITIES & ~surrounding,))
+
+        context.close()
+        context = desktop.InputContext(FIXTURE_APP)
+        backend.value, backend.caret = PREFIX, None
+        backend.field += 1
+        daemon.observer.invalidate('fixture_field_changed')
+        echoes = reason_count('surrounding_echo')
+        qt_text(PREFIX)
+        wait(lambda: context.candidate() == SHOWN, 'observed suggestion under the fcitx5-qt echo', timeout=6)
+        assert reason_count('surrounding_echo') > echoes
+        assert context.key(RIGHT, CONTROL)
+        wait(lambda: context.commits() == [SUFFIX], 'dispatch under the fcitx5-qt echo')
+        checks.append('fcitx5-qt withdrawing SurroundingText after each text update keeps an observed field '
+                      'suggesting and dispatching after observer corroboration')
+
+        mismatch, before = reason_count('observer_context_mismatch'), context_updates()
+        backend.value = PREFIX + ' mismatched'
+        daemon.observer.invalidate('fixture_field_changed')
+        qt_text(PREFIX)
+        wait(lambda: reason_count('observer_context_mismatch') > mismatch, 'observer disagreement under the echo')
+        quiet(.2)
+        assert context_updates() == before and context.candidate() is None
+        backend.value = PREFIX
+        daemon.observer.invalidate('fixture_field_changed')
+        qt_text(PREFIX)
+        wait(lambda: context.candidate() == SHOWN, 'agreement restores the suggestion under the echo')
+        context.ic('SetCapability', '(t)', ((desktop.CAPABILITIES & ~surrounding) | password,))
+        wait(lambda: context.candidate() is None, 'a password capability ends the echo')
+        context.text(PREFIX)
+        quiet(.3)
+        assert not context.key(desktop.TAB) and context.candidate() is None and context.commits() == [SUFFIX]
+        checks.append('Under the echo, observer disagreement still blocks context, and any other capability '
+                      'change, such as a password field, ends it')
+
+        context.close()
+        context = desktop.InputContext('omawrite')
+        before, reads = context_updates(), backend.reads
+        qt_text(PREFIX)
+        quiet(.3)
+        context.key(desktop.TAB)
+        quiet(.3)
+        assert context.candidate() is None and context.commits() == []
+        assert context_updates() == before and backend.reads == reads
+        checks.append('Without an observed field, the echo leaves the unknown-identity manual path closed')
+
         context.close()
         context = desktop.InputContext('omawrite')
         context.text(PREFIX)
@@ -1214,6 +1271,50 @@ def session(root, report):
             assert fake.client_closes == closes and context.commits() == []
             assert fake.last('commit.result')['payload']['status'] == 'stale'
             checks.append(app + ': an injected replacement is not shown or applied, and the transport stays open')
+
+        # Under fcitx5-qt's echo the client has dropped its copy of the text
+        # and applies Fcitx's delete request to that copy, so a native
+        # replacement would only append: it is neither shown nor dispatched.
+        backend.browser, backend.uri = False, ALLOWED_URI
+        open_context(FIXTURE_APP)
+        fake_wait(lambda: fake.count('authority.ack') >= fake.connections > 0 and fake.peer is not None,
+                  'fake broker handshake')
+        replacement = {'text': SUFFIX, 'accept_word': ' for', 'ttl_ms': 3000, 'provider': 'phrase_v1',
+                       'replace_before': 'you'}
+
+        def native_request(send_text):
+            requests = fake.count('suggest.request')
+            backend.value, backend.caret = PREFIX, None
+            backend.field += 1
+            daemon.observer.invalidate('fixture_field_changed')
+            send_text(PREFIX)
+            fake_wait(lambda: fake.count('suggest.request') > requests, 'native observed request')
+            return fake.last('suggest.request')
+
+        blocked = reason_count('replacement_unavailable')
+        fake.respond(native_request(qt_text), 'suggestion.show', {'suggestion_id': 'echo-replace', **replacement})
+        fake_wait(lambda: reason_count('replacement_unavailable') > blocked, 'replacement withheld under the echo')
+        assert context.candidate() is None and context.commits() == []
+
+        def granted_text(value):
+            context.ic('SetCapability', '(t)', (desktop.CAPABILITIES,))
+            context.text(value)
+
+        fake.respond(native_request(granted_text), 'suggestion.show', {'suggestion_id': 'shown-replace', **replacement})
+        fake_wait(lambda: context.candidate() is not None, 'replacement shown while SurroundingText is set')
+        context.ic('SetCapability', '(t)', (desktop.CAPABILITIES & ~surrounding,))
+        controls, blocked = fake.count('control.request'), reason_count('replacement_unavailable')
+        assert context.key(RIGHT, CONTROL)
+        fake_wait(lambda: fake.count('control.request') > controls, 'replacement acceptance request')
+        results = fake.count('commit.result')
+        fake.respond(fake.last('control.request'), 'commit.prepare', {
+            'suggestion_id': 'shown-replace', 'text': SUFFIX, 'acceptance': 'all', 'replace_before': 'you'})
+        fake_wait(lambda: fake.count('commit.result') > results, 'replacement refused once the echo starts')
+        fake_quiet(.3)
+        assert fake.last('commit.result')['payload']['status'] == 'stale' and context.commits() == []
+        assert reason_count('replacement_unavailable') > blocked
+        checks.append('Under the fcitx5-qt echo a native replacement is neither shown nor dispatched, since the '
+                      'client would drop the delete and only append')
 
         backend.browser, backend.uri = False, ALLOWED_URI
         open_context('chatgpt')

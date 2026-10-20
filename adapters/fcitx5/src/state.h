@@ -302,6 +302,40 @@ private:
     bool automatic_ = false;
 };
 
+// fcitx5-qt 5.1.16 (fcitx/fcitx5-qt@bac684ce07d9) withdraws SurroundingText
+// after every input-method update that does not query it, and fcitx5-qt
+// sends one itself (for the cursor rectangle) after every key, right after
+// the update that sent the text. Fcitx keeps that text. This recognises exactly that echo: SurroundingText alone
+// withdrawn after text arrived under it, and SurroundingText alone granted
+// back while withdrawn. Any other change ends it. The addon honours it only
+// for an observed field, whose observer must still agree with the text and
+// caret before display and dispatch. fcitx5-qt applies Fcitx's delete
+// request to its own copy of the text, which the echo clears, so a
+// replacement is neither shown nor dispatched while withdrawn.
+class SurroundingEcho {
+public:
+    // True when the change is the echo or its undo, so the field keeps its
+    // freshness and observation.
+    bool capabilityChanged(::fcitx::CapabilityFlags before, ::fcitx::CapabilityFlags after);
+    void surroundingTextUpdated(::fcitx::CapabilityFlags current) {
+        if (current.test(::fcitx::CapabilityFlag::SurroundingText)) textUnderGrant_ = true;
+    }
+    void reset() {
+        textUnderGrant_ = false;
+        withdrawn_ = false;
+    }
+    [[nodiscard]] bool withdrawn() const { return withdrawn_; }
+
+private:
+    bool textUnderGrant_ = false;
+    bool withdrawn_ = false;
+};
+
+// The flags an observed field is judged by: Fcitx's, with SurroundingText
+// while only the echo above withdrew it.
+::fcitx::CapabilityFlags observedFieldCapabilities(::fcitx::CapabilityFlags current,
+                                                   const SurroundingEcho &echo);
+
 bool hasForeignImeUi(const PanelObservation &panel);
 bool hasOwnedCandidate(const PanelObservation &panel);
 bool allowsNativeContext(::fcitx::CapabilityFlags capabilities);

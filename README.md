@@ -67,7 +67,7 @@ around the caret.
 | Codex desktop | Composer | 26.930 |
 | LibreOffice Writer | Document paragraphs; Calc gets nothing. Spelling: the [Badi extension](adapters/libreoffice/README.md) shows a correction after a finished word, Alt+F7 shows one for the word at the caret, Alt+F7 again replaces it in one undo step | 26.8, 26.8.1 |
 | Telegram | Qt Widgets; not retried since fcitx5-qt 5.1.16 | Telegram desktop (Qt) |
-| Omawrite | Gets nothing since fcitx5-qt 5.1.16 (here from 2026-10-18): Qt's input module now withdraws the text around the caret after every key, in any Qt Quick field ([details](adapters/fcitx5/README.md#tested-with)) | 0.5.0; 0.7.0 gets nothing |
+| Omawrite | With fcitx5-qt 5.1.16 (here from 2026-10-18), Qt's input module withdraws the text around the caret after every key; Badi keeps suggesting in Qt fields it observes, but cannot replace a typo there ([details](adapters/fcitx5/README.md#tested-with)) | 0.5.0, 0.7.0 |
 | Xournal++ text tool | Tab requests, exact native undo | 1.3.7 |
 | Obsidian | Badi plugin; inline preview, Tab, Ctrl+→, one-step undo and recovery after a broker restart (live runner, real model) | 1.13.7, 1.14.4 |
 | Bash | Grey Readline preview and narrow English spelling fixes | Bash 5.3.15 in Ghostty 1.3.1 |
@@ -110,7 +110,9 @@ it through Writer's own text and undo APIs; one Ctrl+Z restores the typo. The ap
 grey preview, VS Code, Cursor, Codex, Claude, Discord and Grok Bot, stay append-only,
 so a typo there is not deleted. In Omawrite 0.5.0 a spelling
 replacement is two native undos: the first removes the correction and the
-second restores the mistyped word. Telegram and Xournal++ have not been retried.
+second restores the mistyped word. With fcitx5-qt 5.1.16, Qt drops the
+deletion, so Omawrite 0.7.0 gets no spelling replacement. Telegram and
+Xournal++ have not been retried.
 
 Chromium-based apps must start with `--force-renderer-accessibility=complete`.
 `install-desktop.py --observed-app chromium|brave-origin|chatgpt|code|com.anthropic.claude|cursor|grok-bot`

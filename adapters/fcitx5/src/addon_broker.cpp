@@ -125,6 +125,9 @@ void BadiAddon::onSuggestion(Suggestion suggestion) {
 
 void BadiAddon::presentSuggestion(Binding &binding, Suggestion suggestion) {
     if (!safeToObserve(binding) || binding.state.acceptancePending()) return;
+    if (suggestion.replaceBefore && binding.surroundingEcho.withdrawn()) {
+        return debug_.record("suggestion_blocked", binding.state.appId(), "replacement_unavailable");
+    }
     // SessionState keeps IME-parity apps off this unobserved display path.
     if (!binding.observed()) return displaySuggestion(std::move(suggestion));
     binding.pendingSuggestion = suggestion.suggestionId;
@@ -379,6 +382,12 @@ void BadiAddon::applyCommitPrepare(const CommitPrepare &prepare) {
     std::string terminalErase;
     if (dispatch->replaceBefore) {
         if (imeParityApp(binding->state.appId())) return refuseCommit(prepare, binding);
+        // fcitx5-qt applies the delete request to its own copy of the text,
+        // which its echo cleared (SurroundingEcho): the typo would stay.
+        if (binding->surroundingEcho.withdrawn()) {
+            debug_.record("commit_blocked", binding->state.appId(), "replacement_unavailable");
+            return refuseCommit(prepare, binding);
+        }
         const auto context = currentContext(*binding);
         const auto count = context ? nativeReplacementChars(
                                         false, context->before, *dispatch->replaceBefore)

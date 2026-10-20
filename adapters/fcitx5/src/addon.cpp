@@ -58,12 +58,11 @@ WireCallbacks BadiAddon::callbacksFor(BadiAddon *addon) {
 void BadiAddon::watchInputContexts() {
     using ::fcitx::EventType;
     using Handler = void (BadiAddon::*)(::fcitx::InputContext &);
-    const std::array<std::pair<EventType, Handler>, 6> inputContextEvents{{
+    const std::array<std::pair<EventType, Handler>, 5> inputContextEvents{{
         {EventType::InputContextFocusIn, &BadiAddon::focusIn},
         {EventType::InputContextFocusOut, &BadiAddon::focusOut},
         {EventType::InputContextDestroyed, &BadiAddon::destroy},
         {EventType::InputContextSurroundingTextUpdated, &BadiAddon::surroundingTextUpdated},
-        {EventType::InputContextCapabilityChanged, &BadiAddon::capabilityChanged},
         {EventType::InputContextUpdatePreedit, &BadiAddon::foreignUiUpdated},
     }};
     for (const auto &entry : inputContextEvents) {
@@ -72,6 +71,11 @@ void BadiAddon::watchInputContexts() {
                   (this->*handler)(*static_cast<::fcitx::InputContextEvent &>(event).inputContext());
               });
     }
+    watch(EventType::InputContextCapabilityChanged, ::fcitx::EventWatcherPhase::PostInputMethod,
+          [this](::fcitx::Event &event) {
+              auto &change = static_cast<::fcitx::CapabilityChangedEvent &>(event);
+              capabilityChanged(*change.inputContext(), change.oldFlags(), change.newFlags());
+          });
     watch(EventType::InputContextUpdateUI, ::fcitx::EventWatcherPhase::PostInputMethod,
           [this](::fcitx::Event &event) {
               auto &update = static_cast<::fcitx::InputContextUpdateUIEvent &>(event);
@@ -126,6 +130,7 @@ void BadiAddon::focusIn(::fcitx::InputContext &inputContext) {
     binding.typeThroughWaits = 0;
     binding.inspection.input();
     binding.surroundingFreshness.focusIn();
+    binding.surroundingEcho.reset();
     binding.typedLine.clear();
     const auto path = classifyNativeApp(appId) == NativeAppClass::Terminal ? NativeEditPath::TypedLine
                                                                             : NativeEditPath::Manual;
@@ -147,6 +152,7 @@ void BadiAddon::focusOut(::fcitx::InputContext &inputContext) {
     clearOwnedPanel(*binding);
     binding->state.focusOut();
     binding->surroundingFreshness.focusOut();
+    binding->surroundingEcho.reset();
     stopObserving(*binding);
 }
 
@@ -160,11 +166,13 @@ void BadiAddon::destroy(::fcitx::InputContext &inputContext) {
 
 void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     const auto app = canonicalProgram(inputContext);
-    debug_.record("context", app, app.empty() ? "unidentified_app" :
-        allowsNativeContext(inputContext.capabilityFlags()) ? "context_received" : "field_denied");
     auto *binding = bindingFor(inputContext);
+    debug_.record("context", app, app.empty() ? "unidentified_app" :
+        allowsNativeContext(binding ? fieldCapabilities(*binding) : inputContext.capabilityFlags())
+            ? "context_received" : "field_denied");
     if (!binding) return;
     binding->surroundingFreshness.surroundingTextUpdated();
+    binding->surroundingEcho.surroundingTextUpdated(inputContext.capabilityFlags());
     const auto digest = surroundingDigest(inputContext.surroundingText());
     if (digest != binding->surroundingDigest) {
         binding->surroundingDigest = digest;
@@ -206,10 +214,17 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     }
 }
 
-void BadiAddon::capabilityChanged(::fcitx::InputContext &inputContext) {
+void BadiAddon::capabilityChanged(::fcitx::InputContext &inputContext, ::fcitx::CapabilityFlags before,
+                                  ::fcitx::CapabilityFlags after) {
     const auto app = canonicalProgram(inputContext);
-    debug_.record("authority", app, "capabilities_changed");
     auto *binding = bindingFor(inputContext);
+    // fcitx5-qt's withdrawal right after sending the text changes nothing
+    // the field is judged by; see SurroundingEcho.
+    if (binding && !app.empty() && binding->surroundingEcho.capabilityChanged(before, after)) {
+        debug_.record("authority", app, "surrounding_echo");
+        return;
+    }
+    debug_.record("authority", app, "capabilities_changed");
     if (!binding || app.empty()) return;
     // Capability changes can leave the previous widget's buffer cached.
     binding->surroundingFreshness.capabilityChanged();
