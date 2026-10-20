@@ -13,7 +13,6 @@ _ARABIC_LETTER = re.compile(
     "[ؠ-ؿف-يٮ-ٯٱ-ۓەۥ-ۦ"
     "ۮ-ۯۺ-ۼۿ]")
 _UNSAFE_CATEGORIES = {"Cc", "Cf", "Zl", "Zp", "Cs"}
-_CORRECTION_WORD = re.compile(r"[^\W\d_]{2,32} ?")
 _LANGUAGE_TAG = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
 # U+FFFC stands in for an anchored object or other non-text content; such a
 # paragraph's string is not the text the user sees.
@@ -45,10 +44,12 @@ def has_unsafe_text(value, allow_context_whitespace=False):
 
 
 def _correction_word(value):
-    """2-32 cased letters (as the broker and text-safety.mjs require) and at
-    most one trailing space."""
-    return (_CORRECTION_WORD.fullmatch(value) is not None
-            and all(character.islower() or character.isupper() for character in value.rstrip(" ")))
+    """2-32 characters with case and at most one trailing space, as the
+    broker and text-safety.mjs require (protocol/spelling-replacement-fixtures.json).
+    A one-character str's islower and isupper test Unicode's Lowercase and
+    Uppercase properties, like Rust's char::is_lowercase and is_uppercase."""
+    word = value[:-1] if value.endswith(" ") else value
+    return 2 <= len(word) <= 32 and all(character.islower() or character.isupper() for character in word)
 
 
 def valid_correction(before, original, replacement):

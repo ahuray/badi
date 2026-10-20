@@ -291,6 +291,3 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       docs-only change) and passed on rerun and in three local runs. If it
       recurs, find the timing that `cleanupRuntime` races after the
       fixture's exit.
-- [ ] One replacement-shape rule lives in `protocol.rs`, the schema,
-      `text-safety.mjs` and `text.py`; a shared fixture file, like
-      `orthographic-joiner-fixtures.json`, would stop them drifting.

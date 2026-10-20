@@ -34,6 +34,13 @@ class TextTest(unittest.TestCase):
         self.assertTrue(text.has_unsafe_text("normal\ncontext\ttext"))
         self.assertTrue(text.has_unsafe_text("unsafe‮context", True))
 
+    def test_corrections_follow_the_shared_spelling_replacement_fixture(self):
+        corpus = json.loads((ROOT / "protocol" / "spelling-replacement-fixtures.json").read_text())
+        for fixture in corpus["fixtures"]:
+            original, replacement = fixture["original"], fixture["replacement"]
+            self.assertEqual(text.valid_correction("Fix " + original, original, replacement), fixture["valid"],
+                             fixture["name"])
+
     def test_corrections_own_one_exact_word_and_its_typed_space(self):
         # The same cases as adapters/shared/text-safety.test.mjs.
         for case in (("Use this adress", "adress", "address"),

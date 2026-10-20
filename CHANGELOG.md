@@ -7,6 +7,12 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- The spelling replacement shape has one shared fixture
+  (`protocol/spelling-replacement-fixtures.json`) that Rust, the v2 schema,
+  `text-safety.mjs` and the Writer extension all test against. The schema and
+  `text-safety.mjs` now count letters as Rust does (Unicode's Lowercase or
+  Uppercase property), and the Writer extension follows suit for symbols with
+  case.
 - `observed-desktop.py` keeps the session's own output and a `result.json`
   even when the session dies before its logs open. It stops at once when its
   python3 cannot import PyGObject (the 2026-10-20 empty report came from a

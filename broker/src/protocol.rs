@@ -1021,9 +1021,11 @@ pub struct SuggestionShowPayload {
     pub provider: ProviderKind,
 }
 
-/// The replacement route owns exactly one word of 2-32 cased letters and,
-/// optionally, the one space just typed after it. Neither form can add,
-/// remove, or alter spacing.
+/// The replacement route owns exactly one word of 2-32 characters with case
+/// (Unicode's Lowercase or Uppercase property) and, optionally, the one space
+/// just typed after it. Neither form can add, remove, or alter spacing. The
+/// schema, `text-safety.mjs` and the Writer extension's `text.py` follow
+/// `protocol/spelling-replacement-fixtures.json` with this function.
 #[must_use]
 pub fn valid_spelling_replacement(original: &str, corrected: &str) -> bool {
     fn parts(value: &str) -> Option<(&str, bool)> {

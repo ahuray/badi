@@ -34,8 +34,8 @@ fn protocol_v2_root() -> PathBuf {
 
 fn rust_scalar_schema(mut schema: Value) -> Value {
     // serde_json strings cannot contain lone UTF-16 surrogates. Keep the ECMA-only
-    // exclusion normative, assert its presence, and compile the scalar-representable
-    // remainder here; the browser/Ajv suite exercises the unmodified pattern.
+    // exclusion normative for ECMA consumers, assert its presence, and compile
+    // the scalar-representable remainder here.
     for pointer in [
         "/$defs/safeSuggestionText/allOf/0/pattern",
         "/$defs/contextText/pattern",
@@ -75,6 +75,47 @@ fn fixture_files(kind: &str) -> Vec<PathBuf> {
 
 fn decode<T: DeserializeOwned>(envelope: &WireEnvelope) -> T {
     envelope.decode_payload().expect("typed payload")
+}
+
+#[test]
+fn spelling_replacements_match_the_shared_fixture_in_rust_and_the_schema() {
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../protocol/spelling-replacement-fixtures.json"
+    ))
+    .expect("spelling replacement fixtures");
+    let schema = rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("wire schema"),
+        )
+        .expect("wire schema JSON"),
+    );
+    let validator = jsonschema::validator_for(&schema).expect("v2 schema compiles");
+    let base: Value = serde_json::from_str(
+        &fs::read_to_string(
+            protocol_v2_root().join("examples/valid/suggestion_show_spelling_space.json"),
+        )
+        .expect("fixture"),
+    )
+    .expect("fixture JSON");
+    for fixture in fixtures["fixtures"].as_array().expect("fixtures") {
+        let name = fixture["name"].as_str().expect("name");
+        let original = fixture["original"].as_str().expect("original");
+        let replacement = fixture["replacement"].as_str().expect("replacement");
+        let valid = fixture["valid"].as_bool().expect("verdict");
+        let shape = fixture
+            .get("shape")
+            .map_or(valid, |shape| shape.as_bool().expect("shape"));
+        assert_eq!(
+            badi_broker::protocol::valid_spelling_replacement(original, replacement),
+            valid,
+            "rust: {name}"
+        );
+        let mut frame = base.clone();
+        frame["payload"]["replace_before"] = original.into();
+        frame["payload"]["text"] = replacement.into();
+        frame["payload"]["accept_word"] = replacement.into();
+        assert_eq!(validator.is_valid(&frame), shape, "schema: {name}");
+    }
 }
 
 #[test]
