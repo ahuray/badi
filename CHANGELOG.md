@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- The Omarchy panel's accent and urgent colors read `Commons.Color`, as
+  Omarchy 4.0.5 does: on Qt 6.12 a bare `Color` names QtQuick's new singleton
+  and worked only through Omarchy's temporary Quickshell patch. The pinned
+  host, and CI's Arch snapshot, moved to Omarchy 4.0.5, Quickshell 0.3.2 and
+  Qt declarative 6.12.0.
 - A suggestion now shows only when every token is likely enough (log-probability
   ≥ −2.75, user decision): held-out harmful additions fell from 15 to 10 and
   unhelpful ones from 18 to 10, at 7 of 51 useful ones; at 15 W the preview

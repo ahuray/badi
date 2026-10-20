@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Ui
 import qs.Commons
+import qs.Commons as Commons
 
 // The Badi bar mark and its settings popout, in Omarchy's own panel form:
 // the popout hangs under the mark, takes the keyboard, and Tab moves on to
@@ -50,7 +51,7 @@ Panel {
     }
     tooltipText: "Badi · " + badi.statusLabel + "\nClick: settings · Right-click: pause / resume"
     active: badi.ready
-    activeColor: Color.accent
+    activeColor: Commons.Color.accent
     dimmed: badi.paused
     onPressed: function(mouseButton) {
       if (mouseButton === Qt.RightButton) badi.togglePause()

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // The settings popout's content: a hero with Badi's mode and a pause
@@ -22,7 +23,7 @@ Item {
 
   readonly property var client: controller.client
   readonly property var rows: controller.rows()
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.45)
   readonly property string fontFamily: bar && bar.fontFamily ? bar.fontFamily : Style.font.family
   readonly property int shown: controller.count("suggestions")
@@ -106,7 +107,7 @@ Item {
         BadiMark {
           implicitWidth: Style.space(30)
           implicitHeight: Style.space(30)
-          ink: view.mode.tone === "accent" ? Color.accent : view.foreground
+          ink: view.mode.tone === "accent" ? Commons.Color.accent : view.foreground
         }
       }
       trailingControl: Component {
@@ -153,8 +154,8 @@ Item {
         width: Style.space(14)
         text: activityLine.working ? activityLine.frames[activityLine.frame]
           : client.brokerReachable ? "●" : "○"
-        color: activityLine.working || view.mode.tone === "accent" ? Color.accent
-          : view.mode.tone === "urgent" ? Color.urgent : view.dim
+        color: activityLine.working || view.mode.tone === "accent" ? Commons.Color.accent
+          : view.mode.tone === "urgent" ? Commons.Color.urgent : view.dim
         font.family: view.fontFamily
         font.pixelSize: Style.font.body
         horizontalAlignment: Text.AlignHCenter
@@ -169,7 +170,7 @@ Item {
           : !client.brokerReachable ? "Start the model in System below, or run badi service start"
           : view.shown >= 0 ? view.shown + " shown · " + Math.max(0, view.accepted) + " accepted since the model started"
           : controller.statusLabel
-        color: activityLine.working ? view.foreground : controller.serviceError !== "" ? Color.urgent : view.dim
+        color: activityLine.working ? view.foreground : controller.serviceError !== "" ? Commons.Color.urgent : view.dim
         font.family: view.fontFamily
         font.pixelSize: Style.font.bodySmall
       }
@@ -194,7 +195,7 @@ Item {
               height: Style.space(9)
               radius: Style.cornerRadius > 0 ? Style.space(2) : 0
               readonly property real ratio: view.shown > 0 ? Math.min(1, Math.max(0, view.accepted) / view.shown) : 0
-              color: index < Math.round(ratio * 10) ? Color.accent
+              color: index < Math.round(ratio * 10) ? Commons.Color.accent
                 : Qt.rgba(view.foreground.r, view.foreground.g, view.foreground.b, 0.14)
             }
           }
@@ -305,7 +306,7 @@ Item {
             Rectangle {
               anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
               width: Style.space(2)
-              color: Color.accent
+              color: Commons.Color.accent
               opacity: rowItem.hasCursor ? 1 : 0
               Behavior on opacity { NumberAnimation { duration: 120 } }
             }
@@ -398,7 +399,7 @@ Item {
               iconText: "󰅖"
               tooltipText: "Remove this rule (x)"
               foreground: view.foreground
-              hoverColor: Color.urgent
+              hoverColor: Commons.Color.urgent
               fontFamily: view.fontFamily
               enabled: rowItem.modelData.enabled
               onClicked: rowItem.modelData.remove()
@@ -501,7 +502,7 @@ Item {
       textFormat: Text.PlainText
       text: footer.message !== "" ? (footer.failed ? "✗ " : "✓ ") + footer.message
         : "j/k move · space toggle · h/l choose · / search · esc close"
-      color: footer.message === "" ? view.dim : footer.failed ? Color.urgent : view.foreground
+      color: footer.message === "" ? view.dim : footer.failed ? Commons.Color.urgent : view.foreground
       font.family: view.fontFamily
       font.pixelSize: Style.font.caption
     }
