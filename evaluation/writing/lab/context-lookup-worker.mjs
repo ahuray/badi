@@ -53,46 +53,52 @@ export function validateContextLookupRequest(value) {
   return request;
 }
 
+// The broker's vocabulary rule (ADR 0010), re-checked from the request alone:
+// a suggestion's word must start with a typed stem of five to 23 letters and
+// stand whole in every source it names.
+const ABSTENTIONS = ['no_stem', 'known_word', 'no_match', 'ambiguous', 'unsafe_suffix'];
 export function validateContextLookupResult(value, request) {
   requireValue(keys(value, ['schema', 'id', 'contract_id', 'outcome', 'reason', 'text', 'matched_word',
-    'matched_candidate_count', 'sources', 'latency_ms', 'warnings'])
-    && value.schema === 'badi.context-lookup.result.v1' && value.id === request.id
-    && value.contract_id === 'badi.context-lookup.exact.v1' && ['suggestion', 'abstention'].includes(value.outcome)
-    && Number.isInteger(value.matched_candidate_count) && value.matched_candidate_count >= 0 && value.matched_candidate_count <= 14336
+    'sources', 'latency_ms', 'warnings'])
+    && value.schema === 'badi.context-lookup.result.v2' && value.id === request.id
+    && value.contract_id === 'badi.vocabulary.v1' && ['suggestion', 'abstention'].includes(value.outcome)
     && Number.isFinite(value.latency_ms) && value.latency_ms >= 0
     && isDeepStrictEqual(value.warnings, ['context_match_does_not_prove_intent'])
     && Array.isArray(value.sources) && isDeepStrictEqual(value.sources, ['context', 'style', 'draft'].filter(source => value.sources.includes(source))),
   'context_lookup_invalid_result');
   if (value.outcome === 'abstention') {
     requireValue(value.text === null && value.matched_word === null && value.sources.length === 0
-      && ['no_eligible_stem', 'no_matching_word', 'ambiguous_matches', 'unsupported_suffix'].includes(value.reason), 'context_lookup_invalid_result');
-    requireValue(['no_eligible_stem', 'no_matching_word'].includes(value.reason) ? value.matched_candidate_count === 0
-      : value.reason === 'ambiguous_matches' ? value.matched_candidate_count > 1 : value.matched_candidate_count === 1,
-    'context_lookup_invalid_result');
+      && ABSTENTIONS.includes(value.reason), 'context_lookup_invalid_result');
   } else {
-    requireValue(value.reason === 'unique_source_word' && value.matched_candidate_count === 1 && value.sources.length > 0
+    requireValue(value.reason === 'vocabulary_word' && value.sources.length > 0
       && typeof value.text === 'string' && value.text.length > 0 && [...value.text].length <= 64 && !/\s/u.test(value.text)
       && typeof value.matched_word === 'string' && value.matched_word.isWellFormed()
       && value.matched_word.endsWith(value.text) && value.matched_word !== value.text
-      && validText(value.matched_word, 2048), 'context_lookup_invalid_result');
+      && [...value.matched_word].length <= 24 && validText(value.matched_word, 2048), 'context_lookup_invalid_result');
     const stem = value.matched_word.slice(0, -value.text.length);
     const language = request.language.split('-')[0].toLowerCase();
-    requireValue(request.before.endsWith(stem) && [...stem].length >= 3 && [...stem].length <= 24
+    requireValue(request.before.endsWith(stem) && [...stem].length >= 5 && [...stem].length <= 23
       && separator([...request.before.slice(0, -stem.length)].at(-1))
       && /\p{Alphabetic}/u.test([...stem].at(-1)) && /\p{Alphabetic}/u.test([...value.text][0])
       && /^[\p{Alphabetic}\u200c\u0300-\u036f\u064b-\u065f\u0670]+$/u.test(value.matched_word)
       && validText(value.text, 64) && languageWord(value.matched_word, language) && languageWord(value.text, language),
     'context_lookup_invalid_result');
-    const closed = (source, allowStart) => {
+    // Whole: a separator or the text's edge on both sides. The draft's own
+    // first word may be clipped, so it never counts from the draft's start.
+    const whole = (source, allowStart) => {
       for (let start = source.indexOf(value.matched_word); start >= 0; start = source.indexOf(value.matched_word, start + 1)) {
+        const after = [...source.slice(start + value.matched_word.length)][0];
         if ((start === 0 ? allowStart : separator([...source.slice(0, start)].at(-1)))
-          && separator([...source.slice(start + value.matched_word.length)][0])) return true;
+          && (after === undefined || separator(after))) return true;
       }
       return false;
     };
-    requireValue(isDeepStrictEqual(value.sources, [closed(request.context, true) && 'context',
-      request.style_examples.some(source => closed(source, true)) && 'style', closed(request.before, false) && 'draft'].filter(Boolean)),
-    'context_lookup_invalid_result');
+    const draft = request.before.slice(0, request.before.length - stem.length);
+    for (const source of value.sources) {
+      requireValue(source === 'context' ? whole(request.context, true)
+        : source === 'style' ? request.style_examples.some(text => whole(text, true)) : whole(draft, false),
+      'context_lookup_invalid_result');
+    }
   }
   return value;
 }

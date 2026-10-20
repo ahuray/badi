@@ -125,10 +125,16 @@ names in all five languages. Spelling and word lookup retain their own coverage.
 
 ## Word completion and spelling
 
-**Word completion** is model-free. For a partial word of 3–24 characters, it
-returns the untyped suffix only when exactly one longer whole word in the
-supplied context, style or earlier draft matches. Exact reuse is not intent: a
-unique match can still turn `Marin` into `Marinella`.
+**Word completion** runs the broker's vocabulary rule
+([broker runbook](../../broker/README.md#vocabulary-completion)), the one
+production uses with context on. The case's context stands for the window's
+words and its style examples for the writer's learned words. With five or
+more typed letters, it returns the untyped rest of the one longer whole word
+there, or earlier in the draft, that starts with them. When several fit, it
+returns one only if that word begins all the others. Otherwise it gives the
+broker's reason: `no_stem`, `known_word`, `no_match`, `ambiguous` or
+`unsafe_suffix`. Exact reuse is not intent: a unique match can still turn
+`Marin` into `Marinella`.
 
 **Spelling** checks the last completed German or Persian word with a native
 Hunspell worker and needs a local artifact manifest:

@@ -5,10 +5,10 @@ import { createLabServer } from './server.mjs';
 
 const deferred = () => { let resolve; let reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const input = (overrides = {}) => ({ schema: 'badi.context-lookup.request.v1', id: 'http-fixture',
-  before: 'Use the note', language: 'en', context: 'The notebook is ready.', style_examples: [], ...overrides });
-const envelope = request => ({ result: { schema: 'badi.context-lookup.result.v1', id: request.id,
-  contract_id: 'badi.context-lookup.exact.v1', outcome: 'suggestion', reason: 'unique_source_word',
-  text: 'book', matched_word: 'notebook', matched_candidate_count: 1, sources: ['context'], latency_ms: 1,
+  before: 'Use the noteb', language: 'en', context: 'The notebook is ready.', style_examples: [], ...overrides });
+const envelope = request => ({ result: { schema: 'badi.context-lookup.result.v2', id: request.id,
+  contract_id: 'badi.vocabulary.v1', outcome: 'suggestion', reason: 'vocabulary_word',
+  text: 'ook', matched_word: 'notebook', sources: ['context'], latency_ms: 1,
   warnings: ['context_match_does_not_prove_intent'] }, worker: { sha256: 'a'.repeat(64), bytes: 100 },
 cleanup: { process_id: 12345, reaped: true, exit_code: 0, forced: false } });
 const predictionBody = { suite: { schema: 'badi.prediction-suite.v1', name: 'fixture', cases: [

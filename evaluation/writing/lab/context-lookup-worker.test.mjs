@@ -6,11 +6,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { ContextLookupWorker, validateContextLookupRequest, validateContextLookupResult } from './context-lookup-worker.mjs';
 import { processIdentity } from './worker.mjs';
 
-const input = (overrides = {}) => ({ schema: 'badi.context-lookup.request.v1', id: 'fixture', before: 'Use the note',
+const input = (overrides = {}) => ({ schema: 'badi.context-lookup.request.v1', id: 'fixture', before: 'Use the noteb',
   language: 'en', context: 'The notebook is ready.', style_examples: [], ...overrides });
-const result = (overrides = {}) => ({ schema: 'badi.context-lookup.result.v1', id: 'fixture',
-  contract_id: 'badi.context-lookup.exact.v1', outcome: 'suggestion', reason: 'unique_source_word',
-  text: 'book', matched_word: 'notebook', matched_candidate_count: 1, sources: ['context'], latency_ms: 1,
+const result = (overrides = {}) => ({ schema: 'badi.context-lookup.result.v2', id: 'fixture',
+  contract_id: 'badi.vocabulary.v1', outcome: 'suggestion', reason: 'vocabulary_word',
+  text: 'ook', matched_word: 'notebook', sources: ['context'], latency_ms: 1,
   warnings: ['context_match_does_not_prove_intent'], ...overrides });
 
 const fixture = `
@@ -22,8 +22,8 @@ process.stdin.on('end',()=>{
 if(mode==='hang'||mode==='forced'){setInterval(()=>{},1000);return}
 const raw=Buffer.concat(chunks).toString();const value=JSON.parse(raw);
 if(!raw.endsWith('\\n')||raw.indexOf('\\n')!==raw.length-1||Object.keys(value).sort().join(',')!=='before,context,id,language,schema,style_examples')process.exit(9);
-const out={schema:'badi.context-lookup.result.v1',id:value.id,contract_id:'badi.context-lookup.exact.v1',
-outcome:'suggestion',reason:'unique_source_word',text:'book',matched_word:'notebook',matched_candidate_count:1,sources:['context'],latency_ms:1,warnings:['context_match_does_not_prove_intent']};
+const out={schema:'badi.context-lookup.result.v2',id:value.id,contract_id:'badi.vocabulary.v1',
+outcome:'suggestion',reason:'vocabulary_word',text:'ook',matched_word:'notebook',sources:['context'],latency_ms:1,warnings:['context_match_does_not_prove_intent']};
 if(mode==='wrong-id')out.id='foreign';if(mode==='wrong-word')out.matched_word='notepaper';
 if(mode==='malformed'){process.stdout.write('invalid\\n');return}
 if(mode==='oversized'){process.stdout.write('x'.repeat(70000));return}
@@ -63,20 +63,25 @@ test('lookup input boundary rejects references, unknown fields and malformed bou
   }
 });
 
-test('lookup reply proves exact suffix, closed source field, script and original provenance', () => {
+test('lookup reply proves exact suffix, a five-letter stem, a whole source word, script and provenance', () => {
   validateContextLookupResult(result(), input());
-  for (const [reply, request] of [[result({ text: ' book' }), input()], [result({ matched_word: 'notepaper' }), input()],
-    [result(), input({ context: 'notebook' })], [result(), input({ context: 'notebook-word.' })],
-    [result(), input({ context: 'xnotebook.' })], [result(), input({ before: 'note' })],
-    [result(), input({ before: 'Use/note' })], [result({ sources: ['draft'] }), input()],
-    [result({ matched_candidate_count: 2 }), input()], [result({ sources: ['context', 'context'] }), input()],
-    [result({ text: 'بوک', matched_word: 'noteبوک' }), input({ context: 'noteبوک.' })]]) {
+  validateContextLookupResult(result(), input({ context: 'notebook' }));
+  for (const [reply, request] of [[result({ text: ' ook' }), input()], [result({ matched_word: 'notepaper' }), input()],
+    [result({ text: 'book' }), input({ before: 'Use the note' })], [result(), input({ context: 'notebook-word.' })],
+    [result(), input({ context: 'xnotebook.' })], [result(), input({ before: 'noteb' })],
+    [result(), input({ before: 'Use/noteb' })], [result({ sources: ['draft'] }), input()],
+    [result({ matched_candidate_count: 1 }), input()], [result({ sources: ['context', 'context'] }), input()],
+    [result({ reason: 'unique_source_word' }), input()],
+    [result({ text: 'بوک', matched_word: 'notebبوک' }), input({ context: 'notebبوک.' })]]) {
     assert.throws(() => validateContextLookupResult(reply, request), /context_lookup_invalid_result/u);
   }
-  validateContextLookupResult(result({ sources: ['style', 'draft'] }), input({ before: 'A notebook and note', context: '', style_examples: ['notebook.'] }));
-  assert.throws(() => validateContextLookupResult(result({ sources: ['draft'] }), input({ before: 'notebook and note', context: '' })));
-  validateContextLookupResult(result({ outcome: 'abstention', reason: 'ambiguous_matches', text: null,
-    matched_word: null, matched_candidate_count: 2, sources: [] }), input());
+  validateContextLookupResult(result({ sources: ['style', 'draft'] }), input({ before: 'A notebook and noteb', context: '', style_examples: ['notebook.'] }));
+  assert.throws(() => validateContextLookupResult(result({ sources: ['draft'] }), input({ before: 'notebook and noteb', context: '' })));
+  for (const reason of ['no_stem', 'known_word', 'no_match', 'ambiguous', 'unsafe_suffix']) {
+    validateContextLookupResult(result({ outcome: 'abstention', reason, text: null, matched_word: null, sources: [] }), input());
+  }
+  assert.throws(() => validateContextLookupResult(result({ outcome: 'abstention', reason: 'ambiguous_matches', text: null,
+    matched_word: null, sources: [] }), input()), /context_lookup_invalid_result/u);
 });
 
 test('one-shot lookup verifies direct process/executable, sends only one frame+EOF, and reaps before success', async t => {

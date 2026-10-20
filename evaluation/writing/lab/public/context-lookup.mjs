@@ -20,7 +20,7 @@ export function lookupParts(input, result) {
   const stem = input.before.match(/[\p{Alphabetic}\p{Mark}\u200c]+$/u)?.[0];
   if (result.outcome !== 'suggestion' || typeof result.text !== 'string' || !result.text
     || !result.text.isWellFormed() || /\s/u.test(result.text)
-    || !stem || result.matched_word !== stem + result.text || result.matched_candidate_count !== 1) {
+    || !stem || result.matched_word !== stem + result.text) {
     throw new Error('The completion does not match the submitted partial word.');
   }
   return { before: input.before, suffix: result.text };
@@ -51,10 +51,11 @@ export function attachLookupUI(document, fetchRequest = globalThis.fetch) {
   };
   const empty = message => $('lookup-preview').replaceChildren(node('p', message, 'empty'));
   const reason = result => ({
-    no_eligible_stem: 'Leave at least three letters of an unfinished word after a space.',
-    no_matching_word: 'No complete matching word was found in the supplied text.',
-    ambiguous_matches: 'More than one word matches, so no completion is proposed.',
-    unsupported_suffix: 'The matching word could not be safely joined to this draft.',
+    no_stem: 'Leave at least five letters of an unfinished word after a space.',
+    known_word: 'The typed letters may already be a finished English word, so nothing is proposed.',
+    no_match: 'No longer whole word in the supplied text starts with these letters.',
+    ambiguous: 'More than one word matches and none begins the others, so no completion is proposed.',
+    unsafe_suffix: 'The matching word could not be safely joined to this draft.',
   })[result.reason] ?? 'No completion was proposed. Inspect the result for its reason.';
   const preview = record => {
     const parts = lookupParts(record.input, record.response.result);
@@ -139,7 +140,7 @@ export function attachLookupUI(document, fetchRequest = globalThis.fetch) {
         context_lookup_cleanup_unverified: 'Worker cleanup could not be confirmed. Export your tests, then restart the Lab server.',
       })[body.error] ?? 'The lookup could not complete. Clear the word tests before retrying.');
       if (body.schema !== 'badi.context-lookup.response.v1' || body.result?.id !== input.id
-        || body.result?.schema !== 'badi.context-lookup.result.v1' || body.cleanup?.reaped !== true) {
+        || body.result?.schema !== 'badi.context-lookup.result.v2' || body.cleanup?.reaped !== true) {
         throw new Error('The lookup returned an invalid result.');
       }
       lookupParts(input, body.result);
@@ -161,7 +162,7 @@ export function attachLookupUI(document, fetchRequest = globalThis.fetch) {
   $('lookup-example').onchange = () => {
     const examples = {
       en: { before: 'Please send the updated sched', context: 'The schedule is ready.', expected: 'ule' },
-      de: { before: 'Wir treffen uns am Bahnhof. Treffpunkt ist der Bahn', context: '', expected: 'hof' },
+      de: { before: 'Wir treffen uns am Bahnhof. Treffpunkt ist der Bahnh', context: '', expected: 'of' },
       fa: { before: 'قرار ما در کتابخانه است. می‌روم به کتابخ', context: '', expected: 'انه' },
     };
     const language = $('lookup-example').value; const value = examples[language];

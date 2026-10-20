@@ -170,8 +170,8 @@ test('file/source provenance hashes exact bytes and cached hashing notices conte
     'evaluation/writing/lab-worker/src/qualification/device.rs', 'evaluation/writing/lab-worker/Cargo.toml',
     'evaluation/writing/lab/model-artifact.mjs', 'broker/src/semantic/wire.rs', 'broker/src/segment.rs',
     'broker/data/writing-lexicon/en.txt']) assert.match(sources[path], /^[a-f0-9]{64}$/u);
-  assert.equal(sources['evaluation/writing/lab-worker/src/attestation.rs'],
-    hash(await readFile(new URL('../lab-worker/src/attestation.rs', import.meta.url))));
+  assert.equal(sources['evaluation/writing/lab-worker/src/context_lookup.rs'],
+    hash(await readFile(new URL('../lab-worker/src/context_lookup.rs', import.meta.url))));
 });
 
 test('run provenance hashes every Lab worker source file in a stable order', async () => {

@@ -67,8 +67,8 @@ fn lookup_waits_for_one_snapshot_eof_without_starting_threads_or_children()
     let output = worker.finish()?;
     assert!(output.status.success() && output.stderr.is_empty());
     let result: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    assert_eq!(result["schema"], "badi.context-lookup.result.v1");
-    assert_eq!(result["contract_id"], "badi.context-lookup.exact.v1");
+    assert_eq!(result["schema"], "badi.context-lookup.result.v2");
+    assert_eq!(result["contract_id"], "badi.vocabulary.v1");
     assert_eq!(result["text"], "ule");
     assert_eq!(result["matched_word"], "schedule");
     assert_eq!(result["sources"], serde_json::json!(["context"]));

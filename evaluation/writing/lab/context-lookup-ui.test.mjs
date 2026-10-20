@@ -15,10 +15,10 @@ test('only explicit lookup fields are submitted; references and judgments are ex
 
 test('grey preview appends the exact suffix without changing Persian joins or the draft', () => {
   const input = { before: 'او هر روز می‌نوی' };
-  const result = { outcome: 'suggestion', text: 'سد', matched_word: 'می‌نویسد', matched_candidate_count: 1 };
+  const result = { outcome: 'suggestion', text: 'سد', matched_word: 'می‌نویسد' };
   assert.deepEqual(lookupParts(input, result), { before: input.before, suffix: 'سد' });
   assert.equal(input.before, 'او هر روز می‌نوی');
-  for (const changed of [{ matched_word: 'مینویسد' }, { matched_candidate_count: 2 }, { text: 'سد ' }, { text: '' }]) {
+  for (const changed of [{ matched_word: 'مینویسد' }, { text: 'سد ' }, { text: '' }]) {
     assert.throws(() => lookupParts(input, { ...result, ...changed }));
   }
   assert.equal(lookupParts(input, { outcome: 'abstention' }), null);
@@ -56,8 +56,8 @@ function harness() {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const responseFor = request => ({ schema: 'badi.context-lookup.response.v1', cleanup: { reaped: true },
-  result: { schema: 'badi.context-lookup.result.v1', id: JSON.parse(request.options.body).id,
-    outcome: 'suggestion', text: 'ule', matched_word: 'schedule', matched_candidate_count: 1 } });
+  result: { schema: 'badi.context-lookup.result.v2', id: JSON.parse(request.options.body).id,
+    outcome: 'suggestion', text: 'ule', matched_word: 'schedule' } });
 
 test('editing cancels an in-flight lookup and ignores a successful late result', async () => {
   const ui = harness(); const running = ui.submit();
