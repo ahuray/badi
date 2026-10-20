@@ -285,11 +285,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 ### Engineering upkeep
 
-- [ ] `observed-desktop.py` timed out once at "candidate before timed quiet"
-      (#81) and failed once more on 2026-10-20 (1 of 3 runs, with an empty
-      diagnostics folder); both passed on rerun. Give that wait its
-      neighbours' bound or find the timing it races, and make a failure keep
-      its diagnostics.
 - [ ] The Lab test "process exit rejects the active request and a later
       request starts a fresh process" (`worker.test.mjs`) failed once in CI
       with "Could not confirm cleanup of the owned model process" (#110, a
