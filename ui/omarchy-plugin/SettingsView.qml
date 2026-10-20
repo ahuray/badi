@@ -232,7 +232,7 @@ Item {
       readonly property var week: controller.statsWeek()
       readonly property var today: controller.statsTotals("today")
       readonly property var lastWeek: controller.statsTotals("last_7_days")
-      readonly property var top: controller.statsLeaders(3)
+      readonly property var leaders: controller.statsLeaders(3)
       readonly property int peak: week.reduce(function(most, day) { return Math.max(most, day.words) }, 0)
 
       Row {
@@ -270,8 +270,8 @@ Item {
         width: parent.width
         elide: Text.ElideRight
         textFormat: Text.PlainText
-        text: history.top.length > 0
-          ? "⎿ most this week: " + history.top.map(function(app) { return app.label + " " + app.words }).join(" · ")
+        text: history.leaders.length > 0
+          ? "⎿ most this week: " + history.leaders.map(function(app) { return app.label + " " + app.words }).join(" · ")
           : "⎿ " + history.lastWeek.shown + " shown · " + history.lastWeek.accepted + " accepted in 7 days"
         color: view.dim
         font.family: view.fontFamily
