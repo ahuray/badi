@@ -36,6 +36,8 @@ const MAX_MODEL_ALIAS_BYTES: usize = 256;
 const MAX_RUNTIME_PATH_BYTES: usize = 32;
 const MAX_TOKEN_BYTES: usize = 4_096;
 const MAX_RAW_OUTPUT_BYTES: usize = 1_024;
+/// Token probabilities kept per stream; generation asks for far fewer tokens.
+const MAX_PROBABILITY_TOKENS: usize = 64;
 // After the writing budget, the outer deadline still lets the reader return
 // words salvaged at the budget, and the HTTP timeout never ends it first.
 const WRITING_RESULT_GRACE: Duration = Duration::from_millis(20);
@@ -220,6 +222,9 @@ pub struct ObservedCompletion {
     /// a dictionary choice reads it: its answer follows an opened quote, with
     /// no space before the word.
     raw: Option<String>,
+    /// The lowest pre-sampling log-probability among the shown text's
+    /// tokens, when the request asked for probabilities and all were read.
+    min_logprob: Option<f64>,
     ttft: Option<Duration>,
     elapsed: Duration,
     request_body_bytes: usize,
@@ -289,6 +294,11 @@ impl ObservedCompletion {
             prompt_tokens: self.prompt_tokens,
             cache_tokens: self.cache_tokens,
             generated_tokens: self.generated_tokens,
+            // Clamped to the i32 range, so the conversion cannot overflow.
+            #[allow(clippy::cast_possible_truncation)]
+            min_logprob_hundredths: self
+                .min_logprob
+                .map(|minimum| (minimum * 100.0).round().clamp(-1.0e6, 0.0) as i32),
         }
     }
 
@@ -298,6 +308,7 @@ impl ObservedCompletion {
             no_suggestion: Some(NoSuggestionReason::RequestAbstained),
             output: None,
             raw: None,
+            min_logprob: None,
             ttft: None,
             elapsed: Duration::ZERO,
             request_body_bytes: 0,
@@ -316,6 +327,7 @@ impl ObservedCompletion {
             no_suggestion: Some(NoSuggestionReason::BudgetPrefill),
             output: None,
             raw: None,
+            min_logprob: None,
             ttft: None,
             elapsed: started.elapsed(),
             request_body_bytes,
@@ -639,14 +651,20 @@ impl SemanticClient {
         if let Some(bias) = self.context_bias(&words).await {
             payload["logit_bias"] = bias;
         }
+        // The confidence gate needs each token's probability before sampling.
+        payload["n_probs"] = serde_json::json!(1);
+        payload["post_sampling_probs"] = serde_json::json!(false);
         let payload = serde_json::to_vec(&payload).map_err(|_| ClientError::InvalidRequest)?;
         let operation = self.complete_inner(
             payload,
             started,
             budget,
             cancellation.clone(),
-            plan.echo,
-            partials,
+            StreamShape {
+                echoed_prefix: plan.echo,
+                partials: partials.as_ref(),
+                confidence_floor: Some(crate::writing::CONFIDENCE_FLOOR),
+            },
         );
         let deadline = started + budget + WRITING_RESULT_GRACE;
         let observed = tokio::select! {
@@ -886,7 +904,7 @@ impl SemanticClient {
             () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
             result = tokio::time::timeout_at(
                 (started + budget + WRITING_RESULT_GRACE).into(),
-                self.complete_inner(payload, started, budget, cancellation.clone(), None, None),
+                self.complete_inner(payload, started, budget, cancellation.clone(), StreamShape::default()),
             ) => result.unwrap_or(Err(ClientError::Timeout)),
         }
         .map_err(|error| match error {
@@ -907,8 +925,7 @@ impl SemanticClient {
         started: Instant,
         budget: Duration,
         cancellation: CancellationToken,
-        echoed_prefix: Option<&str>,
-        partials: Option<UnboundedSender<String>>,
+        shape: StreamShape<'_>,
     ) -> Result<ObservedCompletion, ClientError> {
         if cancellation.is_cancelled() {
             return Err(ClientError::Cancelled);
@@ -946,8 +963,7 @@ impl SemanticClient {
             started,
             budget,
             cancellation,
-            echoed_prefix,
-            partials.as_ref(),
+            shape,
         )
         .await
     }
@@ -1223,6 +1239,13 @@ struct StreamAccumulator {
     tokens: u32,
     /// The latest per-token timings the runtime reported.
     timings: Option<NativeTimings>,
+    /// Byte length and pre-sampling log-probability of each content token,
+    /// in order, when the request asked for probabilities.
+    token_logprobs: Vec<(usize, f64)>,
+    /// Bytes of streamed content, before a stop period the provider appends.
+    content_bytes: usize,
+    /// A content token arrived without a readable probability.
+    probabilities_unknown: bool,
 }
 
 impl StreamAccumulator {
@@ -1242,6 +1265,67 @@ impl StreamAccumulator {
 }
 
 impl StreamAccumulator {
+    /// Records each streamed token's probability. A stop token whose text
+    /// the runtime withholds (no bytes) is not part of the output.
+    fn accept_probabilities(&mut self, value: Option<&serde_json::Value>, content: &str) {
+        let Some(entries) = value.and_then(serde_json::Value::as_array) else {
+            if !content.is_empty() {
+                self.probabilities_unknown = true;
+            }
+            return;
+        };
+        for entry in entries {
+            let bytes = entry
+                .get("bytes")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                .or_else(|| {
+                    entry
+                        .get("token")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::len)
+                });
+            let logprob = entry.get("logprob").and_then(serde_json::Value::as_f64);
+            match (bytes, logprob) {
+                (Some(0), _) => {}
+                (Some(bytes), Some(logprob))
+                    if logprob.is_finite()
+                        && logprob <= 0.0
+                        && self.token_logprobs.len() < MAX_PROBABILITY_TOKENS =>
+                {
+                    self.token_logprobs.push((bytes, logprob));
+                }
+                _ => self.probabilities_unknown = true,
+            }
+        }
+    }
+
+    /// The lowest log-probability among the tokens that make up `shown_bytes`
+    /// of output after an `echo_bytes` healed echo; a token that straddles
+    /// the echo counts. `None` when any probability is missing or the tokens
+    /// do not cover the streamed content exactly.
+    fn shown_min_logprob(&self, echo_bytes: usize, shown_bytes: usize) -> Option<f64> {
+        let covered: usize = self.token_logprobs.iter().map(|(bytes, _)| bytes).sum();
+        if self.probabilities_unknown || covered != self.content_bytes {
+            return None;
+        }
+        let end = echo_bytes.saturating_add(shown_bytes);
+        let mut offset = 0;
+        let mut minimum: Option<f64> = None;
+        for &(bytes, logprob) in &self.token_logprobs {
+            let begin = offset;
+            offset += bytes;
+            if offset <= echo_bytes {
+                continue;
+            }
+            if begin >= end {
+                break;
+            }
+            minimum = Some(minimum.map_or(logprob, |minimum| minimum.min(logprob)));
+        }
+        minimum
+    }
+
     fn accept_event(&mut self, data: &str, started: Instant) -> Result<bool, ClientError> {
         let chunk: NativeStreamChunk =
             serde_json::from_str(data).map_err(|_| ClientError::MalformedStream)?;
@@ -1267,6 +1351,8 @@ impl StreamAccumulator {
         if chunk.timings.is_some() {
             self.timings = chunk.timings;
         }
+        self.accept_probabilities(chunk.completion_probabilities.as_ref(), &chunk.content);
+        self.content_bytes = self.content_bytes.saturating_add(chunk.content.len());
         if self.output.len().saturating_add(chunk.content.len()) > MAX_RAW_OUTPUT_BYTES {
             self.invalid = true;
         } else {
@@ -1342,6 +1428,7 @@ fn observed_completion(
         no_suggestion,
         output,
         raw: (!accumulator.invalid).then(|| accumulator.output.clone()),
+        min_logprob: None,
         ttft: accumulator.ttft,
         elapsed: started.elapsed(),
         request_body_bytes,
@@ -1352,15 +1439,66 @@ fn observed_completion(
     }
 }
 
+/// How a streamed completion becomes a suggestion: the healed echo to strip,
+/// where partial suggestions go, and the confidence floor when gated.
+#[derive(Clone, Copy, Default)]
+struct StreamShape<'a> {
+    echoed_prefix: Option<&'a str>,
+    partials: Option<&'a UnboundedSender<String>>,
+    confidence_floor: Option<f64>,
+}
+
+/// What the stream had produced when the writing budget ran out: its
+/// complete words, if any, through the same confidence gate.
+fn deadline_observation(
+    accumulator: &StreamAccumulator,
+    shape: StreamShape<'_>,
+    started: Instant,
+    request_body_bytes: usize,
+    response_body_bytes: usize,
+) -> ObservedCompletion {
+    let output = (!accumulator.invalid)
+        .then(|| {
+            crate::writing::strip_healed_prefix(&accumulator.output, shape.echoed_prefix)
+                .and_then(crate::writing::available_complete_words)
+        })
+        .flatten();
+    let disposition = if output.is_some() {
+        CompletionDisposition::Suggested
+    } else {
+        CompletionDisposition::ModelAbstained
+    };
+    let no_suggestion = output.is_none().then_some(NoSuggestionReason::BudgetStream);
+    gate_confidence(
+        observed_completion(
+            accumulator,
+            disposition,
+            no_suggestion,
+            output,
+            started,
+            request_body_bytes,
+            response_body_bytes,
+        ),
+        accumulator,
+        shape.echoed_prefix,
+        shape.confidence_floor,
+    )
+}
+
 async fn read_stream(
     mut response: Response,
     request_body_bytes: usize,
     started: Instant,
     budget: Duration,
     cancellation: CancellationToken,
-    echoed_prefix: Option<&str>,
-    partials: Option<&UnboundedSender<String>>,
+    shape: StreamShape<'_>,
 ) -> Result<ObservedCompletion, ClientError> {
+    let echoed_prefix = shape.echoed_prefix;
+    // A gated suggestion is judged whole, so no partial may show first.
+    let partials = shape.partials.filter(|_| shape.confidence_floor.is_none());
+    let gate = |observed: ObservedCompletion, accumulator: &StreamAccumulator| {
+        gate_confidence(observed, accumulator, echoed_prefix, shape.confidence_floor)
+    };
     let mut shown_partial = String::new();
     let mut pending = Vec::new();
     let mut response_body_bytes = 0_usize;
@@ -1374,20 +1512,8 @@ async fn read_stream(
             biased;
             () = cancellation.cancelled() => return Err(ClientError::Cancelled),
             () = &mut writing_deadline => {
-                let output = (!accumulator.invalid)
-                    .then(|| crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
-                        .and_then(crate::writing::available_complete_words))
-                    .flatten();
-                let disposition = if output.is_some() {
-                    CompletionDisposition::Suggested
-                } else {
-                    CompletionDisposition::ModelAbstained
-                };
-                let no_suggestion =
-                    output.is_none().then_some(NoSuggestionReason::BudgetStream);
-                return Ok(observed_completion(
-                    &accumulator, disposition, no_suggestion, output, started,
-                    request_body_bytes, response_body_bytes,
+                return Ok(deadline_observation(
+                    &accumulator, shape, started, request_body_bytes, response_body_bytes,
                 ));
             },
             result = response.chunk() => result?,
@@ -1431,14 +1557,17 @@ async fn read_stream(
                     crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
                         .and_then(|raw| crate::writing::complete_word_prefix(raw, 4, false))
                 {
-                    return Ok(observed_completion(
+                    return Ok(gate(
+                        observed_completion(
+                            &accumulator,
+                            CompletionDisposition::Suggested,
+                            None,
+                            Some(output),
+                            started,
+                            request_body_bytes,
+                            response_body_bytes,
+                        ),
                         &accumulator,
-                        CompletionDisposition::Suggested,
-                        None,
-                        Some(output),
-                        started,
-                        request_body_bytes,
-                        response_body_bytes,
                     ));
                 }
             }
@@ -1454,13 +1583,41 @@ async fn read_stream(
     if !saw_done || accumulator.finish.is_none() || !pending.iter().all(u8::is_ascii_whitespace) {
         return Err(ClientError::MalformedStream);
     }
-    Ok(finish_observed_stream(
+    Ok(gate(
+        finish_observed_stream(
+            &accumulator,
+            echoed_prefix,
+            started,
+            request_body_bytes,
+            response_body_bytes,
+        ),
         &accumulator,
-        echoed_prefix,
-        started,
-        request_body_bytes,
-        response_body_bytes,
     ))
+}
+
+/// Applies the confidence floor to a finished observation: a suggestion is
+/// kept only when every token of its shown text was at least as likely as
+/// `floor`; unknown likelihood fails closed. Without a floor nothing changes.
+fn gate_confidence(
+    mut observed: ObservedCompletion,
+    accumulator: &StreamAccumulator,
+    echoed_prefix: Option<&str>,
+    floor: Option<f64>,
+) -> ObservedCompletion {
+    let Some(floor) = floor else {
+        return observed;
+    };
+    let Some(output) = observed.output.as_deref() else {
+        return observed;
+    };
+    let minimum = accumulator.shown_min_logprob(echoed_prefix.map_or(0, str::len), output.len());
+    observed.min_logprob = minimum;
+    if minimum.is_none_or(|minimum| minimum < floor) {
+        observed.disposition = CompletionDisposition::ModelAbstained;
+        observed.no_suggestion = Some(NoSuggestionReason::LowConfidence);
+        observed.output = None;
+    }
+    observed
 }
 
 fn finish_observed_stream(
@@ -1626,7 +1783,13 @@ mod tests {
         let budget = RequestTrigger::Explicit.writing_budget();
         assert!(matches!(
             client
-                .complete_inner(Vec::new(), expired, budget, cancellation, None, None)
+                .complete_inner(
+                    Vec::new(),
+                    expired,
+                    budget,
+                    cancellation,
+                    StreamShape::default()
+                )
                 .await,
             Err(ClientError::Cancelled)
         ));
@@ -1636,8 +1799,7 @@ mod tests {
                 expired,
                 budget,
                 CancellationToken::new(),
-                None,
-                None,
+                StreamShape::default(),
             )
             .await
             .expect("expired budget");

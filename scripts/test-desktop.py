@@ -852,6 +852,15 @@ class DesktopTests(unittest.TestCase):
         self.assertLess(note.index('budget_prefill=2'), note.index('budget_stream=1'))
         self.assertIn('Last: budget_prefill.', note)
         self.assertEqual(report['problems'], [])
+        gated = {**broker, 'metrics': {**broker['metrics'],
+                                       'no_suggestion': {**BREAKDOWN, 'low_confidence': 4, 'last': 'low_confidence'}}}
+        with patch.object(desktop, 'service_state', return_value=service), \
+             patch.object(desktop, 'accessibility_state', return_value={'loaded': False, 'ready': False}), \
+             patch.object(desktop, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+             patch.object(desktop, 'control', return_value=json.dumps(gated)):
+            note = next(item for item in desktop.health_report()['notes'] if 'showed no suggestion' in item)
+        self.assertIn('low_confidence=4: a word of the suggestion was too unlikely', note)
+        self.assertIn('Last: low_confidence.', note)
         older = {**broker, 'metrics': {'provider_calls': 5}}
         with patch.object(desktop, 'service_state', return_value=service), \
              patch.object(desktop, 'accessibility_state', return_value={'loaded': False, 'ready': False}), \

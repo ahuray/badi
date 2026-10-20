@@ -140,7 +140,7 @@ async fn language_choices_gate_and_heal_each_request() -> Result<(), Box<dyn Err
         let _ = socket
             .write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n\
-                data: {\"index\":0,\"content\":\" r\\u00e9ponse rapide\",\"stop\":false}\n\n\
+                data: {\"index\":0,\"content\":\" r\\u00e9ponse rapide\",\"stop\":false,\"completion_probabilities\":[{\"token\":\" r\\u00e9ponse rapide\",\"logprob\":-0.1}]}\n\n\
                 data: {\"index\":0,\"content\":\"\",\"stop\":true,\"stop_type\":\"eos\"}\n\n",
             )
             .await;
@@ -302,7 +302,7 @@ async fn stream_outcome_until(
             .await
             .expect("HTTP headers");
         for piece in pieces {
-            let value = serde_json::json!({"index":0,"content":piece,"stop":false});
+            let value = token_event(&piece);
             socket
                 .write_all(format!("data: {value}\n\n").as_bytes())
                 .await
@@ -497,7 +497,7 @@ async fn spelling_and_continuation_share_one_deadline() -> Result<(), Box<dyn Er
             }
             tokio::time::sleep(Duration::from_millis(delay)).await;
             socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").await.expect("headers");
-            let token = serde_json::json!({"index":0,"content":text,"stop":false});
+            let token = token_event(text);
             socket
                 .write_all(format!("data: {token}\n\n").as_bytes())
                 .await
@@ -946,7 +946,7 @@ async fn runtime_exchange(
             )
             .await;
         for piece in pieces {
-            let value = serde_json::json!({"index":0,"content":piece,"stop":false});
+            let value = token_event(&piece);
             let _ = socket
                 .write_all(format!("data: {value}\n\n").as_bytes())
                 .await;
@@ -1178,7 +1178,8 @@ async fn a_request_observer_sees_each_runtime_body_exactly_as_sent() -> Result<(
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("continuation request");
         let payload = read_payload(&mut socket).await;
-        let stop = serde_json::json!({"index":0,"content":" report","stop":true,"stop_type":"eos"});
+        let stop = serde_json::json!({"index":0,"content":" report","stop":true,"stop_type":"eos","completion_probabilities":[
+            {"id":1,"token":" report","bytes":" report".as_bytes(),"logprob":-0.1,"top_logprobs":[]}]});
         socket
             .write_all(
                 format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {stop}\n\n")
@@ -1311,5 +1312,165 @@ async fn the_word_limit_never_displays_part_of_a_hyphenated_word() -> Result<(),
         let text = outcome.into_proposal().map(|proposal| proposal.text);
         assert_eq!(text.as_deref(), Some(shown), "{before:?}");
     }
+    Ok(())
+}
+
+/// A streamed token as the pinned runtime sends it when the request sets
+/// `n_probs`: its text and its pre-sampling log-probability.
+fn token_event(piece: &str) -> serde_json::Value {
+    token_event_with(piece, -0.1)
+}
+
+fn token_event_with(piece: &str, logprob: f64) -> serde_json::Value {
+    serde_json::json!({"index":0,"content":piece,"stop":false,"completion_probabilities":[
+        {"id":1,"token":piece,"bytes":piece.as_bytes(),"logprob":logprob,"top_logprobs":[]}]})
+}
+
+/// Serves `events` verbatim as one streamed completion of an English
+/// continuation, and returns the payload the client sent with its outcome.
+async fn event_exchange(
+    before: &str,
+    events: Vec<serde_json::Value>,
+) -> Result<(serde_json::Value, ProviderOutcome), Box<dyn Error>> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let endpoint = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("HTTP connection");
+        let payload = read_payload(&mut socket).await;
+        let mut response =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
+                .to_owned();
+        for event in events {
+            response.push_str("data: ");
+            response.push_str(&event.to_string());
+            response.push_str("\n\n");
+        }
+        let _ = socket.write_all(response.as_bytes()).await;
+        payload
+    });
+    let client = SemanticClient::new(SemanticClientConfig::new(
+        endpoint,
+        "confidence-fixture",
+        "public-fixture-token",
+    )?)?;
+    let outcome = client
+        .propose_outcome(
+            request(before, Some("en")),
+            CancellationToken::new(),
+            false,
+            RequestTrigger::Automatic,
+        )
+        .await?;
+    Ok((server.await?, outcome))
+}
+
+fn shown_text(outcome: ProviderOutcome) -> Option<String> {
+    outcome.into_proposal().map(|proposal| proposal.text)
+}
+
+#[tokio::test]
+async fn the_confidence_gate_shows_a_suggestion_only_when_every_shown_token_is_likely()
+-> Result<(), Box<dyn Error>> {
+    let before = "Please send me the";
+    let eos = serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"eos"});
+    // Every token at or above the floor: shown, and probabilities were asked for.
+    let (payload, outcome) = event_exchange(
+        before,
+        vec![
+            token_event_with(" final", -2.75),
+            token_event_with(" report", -0.2),
+            eos.clone(),
+        ],
+    )
+    .await?;
+    assert_eq!(payload["n_probs"], 1);
+    assert_eq!(payload["post_sampling_probs"], false);
+    assert_eq!(shown_text(outcome).as_deref(), Some(" final report"));
+    // One shown token under the floor withholds the whole suggestion.
+    let (_, outcome) = event_exchange(
+        before,
+        vec![
+            token_event_with(" final", -0.1),
+            token_event_with(" report", -2.76),
+            eos.clone(),
+        ],
+    )
+    .await?;
+    assert!(matches!(
+        outcome,
+        ProviderOutcome::NoSuggestion(NoSuggestionReason::LowConfidence)
+    ));
+    // Unknown likelihood fails closed.
+    let (_, outcome) = event_exchange(
+        before,
+        vec![
+            serde_json::json!({"index":0,"content":" final report","stop":false}),
+            eos.clone(),
+        ],
+    )
+    .await?;
+    assert!(matches!(
+        outcome,
+        ProviderOutcome::NoSuggestion(NoSuggestionReason::LowConfidence)
+    ));
+    // A token the length limit cuts from the shown text does not count.
+    let (_, outcome) = event_exchange(
+        before,
+        vec![
+            token_event_with(" final", -0.1),
+            token_event_with(" report", -0.1),
+            token_event_with(" tom", -6.0),
+            serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"limit"}),
+        ],
+    )
+    .await?;
+    assert_eq!(shown_text(outcome).as_deref(), Some(" final report"));
+    // A stop token whose text the runtime withholds is not part of the output.
+    let (_, outcome) = event_exchange(
+        before,
+        vec![
+            token_event_with(" final", -0.1),
+            token_event_with(" report", -0.1),
+            serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"word",
+                "stopping_word":".","completion_probabilities":[
+                    {"id":9,"token":"","bytes":[],"logprob":-7.0,"top_logprobs":[]}]}),
+        ],
+    )
+    .await?;
+    assert_eq!(shown_text(outcome).as_deref(), Some(" final report."));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_token_inside_the_healed_echo_does_not_count_but_one_that_straddles_it_does()
+-> Result<(), Box<dyn Error>> {
+    let before = "Please review the docum";
+    let eos = serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"eos"});
+    let (_, outcome) = event_exchange(
+        before,
+        vec![
+            token_event_with(" doc", -9.0),
+            token_event_with("ument", -0.1),
+            token_event_with(" and", -0.1),
+            token_event_with(" provide", -0.1),
+            eos.clone(),
+        ],
+    )
+    .await?;
+    assert_eq!(shown_text(outcome).as_deref(), Some("ent and provide"));
+    let (_, outcome) = event_exchange(
+        before,
+        vec![
+            token_event_with(" doc", -0.1),
+            token_event_with("ument", -5.0),
+            token_event_with(" and", -0.1),
+            eos,
+        ],
+    )
+    .await?;
+    assert!(matches!(
+        outcome,
+        ProviderOutcome::NoSuggestion(NoSuggestionReason::LowConfidence)
+    ));
     Ok(())
 }

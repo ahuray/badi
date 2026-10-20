@@ -26,10 +26,13 @@ pub enum NoSuggestionReason {
     Timeout,
     /// The runtime failed or returned a malformed response.
     ProviderError,
+    /// A token of the suggestion was less likely than the confidence floor
+    /// (`writing::CONFIDENCE_FLOOR`), or its likelihood was unknown.
+    LowConfidence,
 }
 
 impl NoSuggestionReason {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::RequestAbstained,
         Self::BudgetPrefill,
         Self::BudgetStream,
@@ -38,6 +41,7 @@ impl NoSuggestionReason {
         Self::Stale,
         Self::Timeout,
         Self::ProviderError,
+        Self::LowConfidence,
     ];
 
     const fn index(self) -> usize {
@@ -50,6 +54,7 @@ impl NoSuggestionReason {
             Self::Stale => 5,
             Self::Timeout => 6,
             Self::ProviderError => 7,
+            Self::LowConfidence => 8,
         }
     }
 }
@@ -115,7 +120,7 @@ pub struct Metrics {
     words_dispatched: AtomicU64,
     commit_failures: AtomicU64,
     provider_errors: AtomicU64,
-    no_suggestion: [AtomicU64; 8],
+    no_suggestion: [AtomicU64; 9],
     /// Zero until the first no-suggestion outcome; otherwise its index plus one.
     last_no_suggestion: AtomicU8,
     type_through_carried: AtomicU64,
@@ -135,6 +140,9 @@ pub struct NoSuggestionSnapshot {
     pub stale: u64,
     pub timeout: u64,
     pub provider_error: u64,
+    /// Absent from brokers that predate the confidence gate.
+    #[serde(default)]
+    pub low_confidence: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last: Option<NoSuggestionReason>,
 }
@@ -151,6 +159,7 @@ impl NoSuggestionSnapshot {
             NoSuggestionReason::Stale => self.stale,
             NoSuggestionReason::Timeout => self.timeout,
             NoSuggestionReason::ProviderError => self.provider_error,
+            NoSuggestionReason::LowConfidence => self.low_confidence,
         }
     }
 
@@ -376,6 +385,7 @@ impl Metrics {
                 stale: count(NoSuggestionReason::Stale),
                 timeout: count(NoSuggestionReason::Timeout),
                 provider_error: count(NoSuggestionReason::ProviderError),
+                low_confidence: count(NoSuggestionReason::LowConfidence),
                 last,
             }),
             type_through: Some(TypeThroughSnapshot {
@@ -419,8 +429,22 @@ mod tests {
         }
         assert_eq!(
             metrics.snapshot().no_suggestion.expect("breakdown").total(),
-            36
+            45
         );
+    }
+
+    #[test]
+    fn a_breakdown_from_before_the_confidence_gate_still_decodes() {
+        let metrics = Metrics::default();
+        metrics.record_no_suggestion(NoSuggestionReason::LowConfidence);
+        let mut value = serde_json::to_value(metrics.snapshot()).expect("metrics JSON");
+        assert_eq!(value["no_suggestion"]["low_confidence"], 1);
+        assert_eq!(value["no_suggestion"]["last"], "low_confidence");
+        let breakdown = value["no_suggestion"].as_object_mut().expect("breakdown");
+        breakdown.remove("low_confidence");
+        breakdown.remove("last");
+        let decoded: MetricsSnapshot = serde_json::from_value(value).expect("older broker");
+        assert_eq!(decoded.no_suggestion.expect("breakdown").low_confidence, 0);
     }
 
     #[test]

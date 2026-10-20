@@ -119,8 +119,8 @@ fn respond(mut stream: UnixStream, token: &str, health: &[u8]) -> io::Result<()>
                 b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
             )?;
             for event in [
-                json!({"index": 0, "content": " for", "stop": false}),
-                json!({"index": 0, "content": " your time", "stop": false}),
+                json!({"index": 0, "content": " for", "stop": false, "completion_probabilities": [{"id": 1, "token": " for", "bytes": b" for", "logprob": -0.1, "top_logprobs": []}]}),
+                json!({"index": 0, "content": " your time", "stop": false, "completion_probabilities": [{"id": 2, "token": " your", "bytes": b" your", "logprob": -0.2, "top_logprobs": []}, {"id": 3, "token": " time", "bytes": b" time", "logprob": -0.3, "top_logprobs": []}]}),
                 json!({"index": 0, "content": "", "stop": true, "stop_type": "word", "stopping_word": "."}),
             ] {
                 write!(stream, "data: {event}\n\n")?;

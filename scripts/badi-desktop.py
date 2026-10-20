@@ -147,6 +147,7 @@ NO_SUGGESTION = {
     "stale": "the text, focus or pause state changed before display",
     "timeout": "the broker deadline (600 ms while typing, 1.25 s after Tab) expired",
     "provider_error": "the local model runtime failed or answered malformed",
+    "low_confidence": "a word of the suggestion was too unlikely for the model to be sure, so it was withheld",
 }
 
 

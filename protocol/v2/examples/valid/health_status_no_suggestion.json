@@ -37,6 +37,7 @@
         "stale": 0,
         "timeout": 0,
         "provider_error": 0,
+        "low_confidence": 2,
         "last": "budget_prefill"
       },
       "type_through": {

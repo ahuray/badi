@@ -1101,7 +1101,8 @@
         "output_rejected",
         "stale",
         "timeout",
-        "provider_error"
+        "provider_error",
+        "low_confidence"
       ]
     },
     "carryMiss": {
@@ -1161,6 +1162,10 @@
         "stale": { "$ref": "#/$defs/counter" },
         "timeout": { "$ref": "#/$defs/counter" },
         "provider_error": { "$ref": "#/$defs/counter" },
+        "low_confidence": {
+          "$ref": "#/$defs/counter",
+          "description": "Suggestions withheld because a token was less likely than the confidence floor. Optional for brokers that predate the confidence gate."
+        },
         "last": { "$ref": "#/$defs/noSuggestionReason" }
       }
     },
