@@ -1069,6 +1069,11 @@ impl CompletionProvider for SemanticClient {
         if cancellation.is_cancelled() {
             return Err(ProviderError::Cancelled);
         }
+        // Typed letters that begin a word in the window or the writer's earlier
+        // writing are no typo, so the vocabulary answers before spelling.
+        if let Some(proposal) = self.vocabulary_completion(&request, started) {
+            return Ok(ProviderOutcome::Proposal(proposal).into());
+        }
         // A correction replaces the last word of the field; mid-text it stays
         // editor-owned. It needs a well-formed request, not a language the
         // model continues in: spelling has its own languages.
@@ -1085,9 +1090,6 @@ impl CompletionProvider for SemanticClient {
             {
                 return Ok(ProviderOutcome::Proposal(proposal).into());
             }
-        }
-        if let Some(proposal) = self.vocabulary_completion(&request, started) {
-            return Ok(ProviderOutcome::Proposal(proposal).into());
         }
         let before = request.before.clone();
         let after = request.after.clone();

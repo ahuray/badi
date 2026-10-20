@@ -119,7 +119,8 @@ async fn vocabulary_finishes_a_word_before_any_model_request() -> Result<(), Box
         vocabulary: Some(vocabulary),
     };
     let nothing: &[&str] = &[];
-    // A window, an earlier-writing and a draft word each finish the word.
+    // A window, an earlier-writing and a draft word each finish the word,
+    // before spelling could ask the model about the unfinished one.
     for (request, suffix) in [
         (
             with(
@@ -141,12 +142,20 @@ async fn vocabulary_finishes_a_word_before_any_model_request() -> Result<(), Box
             with("Die Tagesordnung und Tagesord", "de", Vocabulary::default()),
             "nung",
         ),
+        (
+            with(
+                "then run kubec",
+                "en",
+                Vocabulary::from_texts("Run kubectl first.", nothing),
+            ),
+            "tl",
+        ),
     ] {
         let outcome = client
             .propose_outcome(
                 request,
                 CancellationToken::new(),
-                false,
+                true,
                 RequestTrigger::Automatic,
             )
             .await?;
