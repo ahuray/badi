@@ -61,18 +61,18 @@ around the caret.
 
 | App | Notes | Tested |
 | --- | --- | --- |
-| Chromium and Brave Origin, including Omarchy's web apps (HEY, X, Basecamp, Zoom) | Any website you allow, including rich editors (ProseMirror, Lexical, Slate, Draft.js, Quill, CKEditor 5, TinyMCE, CodeMirror), iframes and shadow roots | Chromium 152, Brave Origin 1.96 |
-| Zen | Grey preview; Ctrl+Z undoes an acceptance alone | Zen 1.23b |
-| VS Code, Cursor | Needs `"editor.editContext": false` in VS Code | VS Code 1.140, Cursor 3.21 |
+| Chromium and Brave Origin, including Omarchy's web apps (HEY, X, Basecamp, Zoom) | Any website you allow, including rich editors (ProseMirror, Lexical, Slate, Draft.js, Quill, CKEditor 5, TinyMCE, CodeMirror), iframes and shadow roots | Chromium 152–154, Brave Origin 1.96–1.97 |
+| Zen | Grey preview; Ctrl+Z undoes an acceptance alone | Zen 1.23b, 1.23.3b |
+| VS Code, Cursor | Needs `"editor.editContext": false` in VS Code | VS Code 1.140 and 1.142, Cursor 3.21 |
 | Codex desktop | Composer | 26.930 |
-| LibreOffice Writer | Document paragraphs; Calc gets nothing. Spelling: the [Badi extension](adapters/libreoffice/README.md) shows a correction after a finished word, Alt+F7 shows one for the word at the caret, Alt+F7 again replaces it in one undo step | 26.8 |
-| Telegram | | Telegram desktop (Qt) |
-| Omawrite | | 0.5.0 |
+| LibreOffice Writer | Document paragraphs; Calc gets nothing. Spelling: the [Badi extension](adapters/libreoffice/README.md) shows a correction after a finished word, Alt+F7 shows one for the word at the caret, Alt+F7 again replaces it in one undo step | 26.8, 26.8.1 |
+| Telegram | Qt Widgets; not retried since fcitx5-qt 5.1.16 | Telegram desktop (Qt) |
+| Omawrite | Gets nothing since fcitx5-qt 5.1.16 (here from 2026-10-18): Qt's input module now withdraws the text around the caret after every key, in any Qt Quick field ([details](adapters/fcitx5/README.md#tested-with)) | 0.5.0; 0.7.0 gets nothing |
 | Xournal++ text tool | Tab requests, exact native undo | 1.3.7 |
-| Obsidian | Badi plugin; the 1.14.4 handoff reports inline preview and Tab acceptance | 1.13.7, 1.14.4 |
+| Obsidian | Badi plugin; inline preview, Tab, Ctrl+→, one-step undo and recovery after a broker restart (live runner, real model) | 1.13.7, 1.14.4 |
 | Bash | Grey Readline preview and narrow English spelling fixes | Bash 5.3.15 in Ghostty 1.3.1 |
 | Ghostty (any TUI, such as a coding agent's prompt) | `badi app com.mitchellh.ghostty on`; suggestions follow the line you type and show in a panel at the cursor; Tab types a word, Ctrl+→ all of it, a correction shows as `teh → the` and Tab fixes the typo, and an automatic miss stays quiet ([how](docs/decisions/0009-terminals-use-the-typed-line.md)) | Ghostty 1.3.1 |
-| Neovim | Badi plugin; prose buffers, inline preview, one-step undo; no spelling fixes yet. Live with the real model under LazyVim in foot and Ghostty, including Ctrl+Shift+Space; in Ghostty it takes over from the typed line while focused | 0.12.5 |
+| Neovim | Badi plugin; prose buffers, inline preview, one-step undo; no spelling fixes yet. Live with the real model under LazyVim in foot and Ghostty, including Ctrl+Shift+Space; in Ghostty it takes over from the typed line while focused | 0.12.5, 0.12.6 |
 | Grok Bot | Ready, but its composer is untested | 0.35 |
 | Claude desktop | Ready, but its composer is untested; `badi app com.anthropic.claude on`, then relaunch it with the flag below | 2.42304 (Electron 44) |
 

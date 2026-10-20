@@ -401,7 +401,7 @@ pieces, capped at 60 ms and cached per client; a first token of one or two
 letters is skipped, and any failure sends the request unbiased. The prompt
 never grows, so prefill and the 550 ms budget are unchanged. Only the
 Prediction Lab supplies window text today, so production requests carry no
-bias; the measurements are in [future plans](<../future plans.md>), step 4.
+bias; the measurements are in the [Lab runbook](../evaluation/writing/README.md#terminal-runs).
 
 ## Suggestion limits
 
