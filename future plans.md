@@ -12,7 +12,8 @@ links to it. A tested app version is not a claim about Linux in general.
 ## Where Badi stands (2026-10-20)
 
 - **Coverage** is ahead of every Linux alternative found: Chromium-based apps
-  and any website, Zen, Omarchy web apps, Telegram, LibreOffice Writer
+  and any website, Zen, Omarchy web apps in Brave (Chromium's are step 1),
+  Telegram, LibreOffice Writer
   (spelling as you type, Alt+F7), Obsidian, Bash, Neovim (live under LazyVim
   in foot and Ghostty) and, by an opt-in rule, Ghostty's typed line
   ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)); the
@@ -20,7 +21,7 @@ links to it. A tested app version is not a claim about Linux in general.
   Brave Origin, a web app, Zen, Writer, Obsidian, Neovim, Ghostty and VS
   Code. Omawrite and other observed Qt fields suggest again despite a
   fcitx5-qt 5.1.16 bug, but cannot replace a typo until it is fixed
-  (step 1). German,
+  (step 4). German,
   French, Spanish, Italian, Dutch and Polish spelling are opt-in
   (`badi spelling`). The closest Omarchy alternative, Oma Tab, replaces the
   input method and ships a 4.8 GB model.
@@ -109,7 +110,70 @@ Open decisions, for the user:
 Each step ends with its completion test. Steps that install to the desktop or
 publish need the user's go-ahead first; the rest can start at once.
 
-1. **Get the fcitx5-qt surrounding-text bug fixed upstream.** Since
+1. **Make a fresh Omarchy 4.0.6 work out of the box.** A read-only audit
+   on 2026-10-20 found gaps that only this workstation's setup hides:
+   - Omarchy's web apps open in Chromium by default, as `chrome-<site>`
+     windows, which Badi denies; only Brave web apps are mapped.
+   - foot, Omarchy's default terminal, has no typed-line support
+     ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)).
+   - `omarchy-refresh-hyprland`, `omarchy-refresh-chromium` and
+     `omarchy-install-browser` replace `hyprland.lua` and the browser flag
+     files, silently dropping Badi's `require` and accessibility flag.
+   - The installer never checks for Fcitx 5.1.23, reads the Fcitx profile
+     without checking that it exists, and the suggested `SUPER + ALT +
+     COMMA` is Omarchy's "invoke last notification".
+   - The observer's fast lock check is pinned to Quickshell 0.3.1 (0.3.2 is
+     installed), and the panel plugin is pinned to Omarchy 4.0.5-1.
+   - The panel runs `~/.local/bin/badi-desktop`, which a package install
+     does not have.
+   *Done when* each is fixed or refused with a clear message, live where it
+   touches an app, and `badi doctor` reports a dropped line with its repair.
+2. **Finish licence and packaging for publication.** Badi is MIT and no
+   shipped dependency is GPL or unknown (audit, 2026-10-20), but:
+   - a binary package needs a third-party notices file (BSD-3-Clause
+     `subtle`, MPL-2.0 `spellbook`'s source location, Zlib, MIT and Apache
+     texts, nlohmann-json) and a wider `license=` array;
+   - Gemma, the recommended model, is downloaded with its terms shown only
+     by `badi model use`: the installer's first-model hint and the panel
+     skip them, and no acceptance is recorded;
+   - `.SRCINFO` is stale (`fcitx5>=5.1.22`, no `libsecret`), the desktop
+     launcher, `hypr/badi.lua` and the theme hook are not packaged, and the
+     addon builds with `-Werror` under makepkg's flags;
+   - CI never builds the package, and the plugin manifests carry no licence.
+   *Done when* CI builds a namcap-clean package that installs the notices,
+   no model downloads before its terms are shown and accepted, and the
+   [AUR README](packaging/aur/README.md) lists exactly what is packaged.
+   Publishing still waits for the naming review.
+3. **Close the Cotypist gaps that fit Badi.** Cotypist 0.22 (researched
+   2026-10-20 from its site, help pages and reviews) offers these, and Badi
+   does not yet:
+   - a suggestion length setting, from 1–2 to 10–15 words (Badi shows up
+     to four), each length measured in the Lab before it ships;
+   - a shortcut that turns the current app off for a few minutes, and a way
+     to send a literal Tab while a suggestion shows;
+   - words completed per day and per app (Badi counts since model start,
+     content-free, and should keep it that way);
+   - global and per-app instructions, and personalized word choice (Badi's
+     style samples are stored but not yet read, step 7);
+   - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
+     4B–30B): a llama.cpp Vulkan or CUDA runtime for machines with a GPU,
+     measured with the [bench](evaluation/llm-bench/README.md) and the Lab.
+
+   Badi already matches or beats it on:
+   - inline grey text in the field's font, Tab for a word, a key for all
+     of it, Escape quiet and a request key;
+   - mid-line completion and typo correction where the editor allows it;
+   - terminal agent prompts, and on-screen words through accessibility
+     rather than screen recording;
+   - learned words, battery modes, no telemetry, no account, MIT.
+
+   Left out on purpose: clipboard awareness and screen recording (the
+   [context firewall](VISION.md#context-firewall)), sync and telemetry
+   (non-goals) and colon emoji (Fcitx owns emoji). Its app list's gaps here
+   (Firefox, VS Code's default EditContext, Google Docs, Slack, Discord)
+   are under [Remaining surfaces](#remaining-surfaces). *Done when* each
+   item ships or is declined in a recorded user decision.
+4. **Get the fcitx5-qt surrounding-text bug fixed upstream.** Since
    fcitx5-qt 5.1.16
    ([upstream change](https://github.com/fcitx/fcitx5-qt/commit/bac684ce07d9df78ee37dab1cbdcebfa71bf24ec),
    unchanged on its `master` branch), an input-method update that does not ask
@@ -123,14 +187,14 @@ publish need the user's go-ahead first; the rest can start at once.
    2026-10-20. *Done when* a fixed fcitx5-qt
    restores the replacement in Omawrite (two native undos), and a Qt
    Widgets app (Telegram) has been checked.
-2. **Finish the installed-flow matrix with someone present.** Still open: a
+5. **Finish the installed-flow matrix with someone present.** Still open: a
    real suspend and resume, a VT switch and a Tab right after each, and
    several monitors when a second display is at hand. Restarts, undo, pause,
    composition, stale focus, Ghostty's typed line and fractional scaling
    passed on 2026-10-19 ([matrix](adapters/fcitx5/README.md#tested-with)).
    *Done when* those show zero wrong-field or stale edits and the
    [session helper](adapters/session/README.md) runbook records them.
-3. **Check context in a real mail client and the Claude desktop app.** Opt-in
+6. **Check context in a real mail client and the Claude desktop app.** Opt-in
    context shipped ([ADR 0010](docs/decisions/0010-context-finishes-words.md)).
    A disposable mail-style page in Chromium 154 passed every check live on
    2026-10-20 ([observer runbook](adapters/accessibility/README.md#window-words-context-on)),
@@ -142,14 +206,14 @@ publish need the user's go-ahead first; the rest can start at once.
    *Done when* both show a window or learned word finished, and
    `window_chars` appears on their `context.changed` in a `badi debug on`
    trace.
-4. **Compare style learning in the Lab.** Feed an explicit `badi style
+7. **Compare style learning in the Lab.** Feed an explicit `badi style
    export` into a Lab suite's `style` field and compare against no style on
    the user's own held-out drafts, with the `style_fact_conflict` fence and
    native review ([broker runbook](broker/README.md#style-learning-opt-in)).
    Linux apps cannot learn under the settings schema; lifting that is a
    separate privacy decision. *Done when* the comparison shows a per-language
    gain without more harm, before any prompt reads samples.
-5. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
+8. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
    *Done when* install, update and removal leave nothing behind; publication
    waits for the naming and licence review.
 
