@@ -107,18 +107,17 @@ publish need the user's go-ahead first; the rest can start at once.
    passed on 2026-10-19 ([matrix](adapters/fcitx5/README.md#tested-with)).
    *Done when* those show zero wrong-field or stale edits and the
    [session helper](adapters/session/README.md) runbook records them.
-2. **Finish typed words from the window and earlier writing, once decided.**
-   The rule and its Lab mode exist ([broker runbook](broker/README.md#vocabulary-completion));
-   production requests carry no vocabulary. If the user accepts the trap
-   cost (open decision), add the opt-in: a `badi context` switch, off until
-   chosen, with per-app off, a panel row and a first-run prompt; the
-   observer's window words for web fields (text near the field, never
-   another field), sent once per focus and dropped when it changes; and
-   learned words, sealed with the keyring key like style samples, with
-   retention and one-step deletion, never from terminals. Prompt-text window
-   context stays out: on 2026-10-19 it drifted in controls and copied a fact
-   the writer was changing. *Done when* that ships with a live trial in a web
-   mail client and the Claude desktop app.
+2. **Check context in a real mail client and the Claude desktop app.** Opt-in
+   context shipped ([ADR 0010](docs/decisions/0010-context-finishes-words.md)).
+   A disposable mail-style page in Chromium 154 passed every check live on
+   2026-10-20 ([observer runbook](adapters/accessibility/README.md#window-words-context-on)).
+   Still unchecked:
+   - the user's own web mail, where only they can open a draft;
+   - the Claude desktop app's composer, after a relaunch picks up
+     `--force-renderer-accessibility=complete`.
+   *Done when* both show a window or learned word finished, and
+   `window_chars` appears on their `context.changed` in a `badi debug on`
+   trace.
 3. **Compare style learning in the Lab.** Feed an explicit `badi style
    export` into a Lab suite's `style` field and compare against no style on
    the user's own held-out drafts, with the `style_fact_conflict` fence and

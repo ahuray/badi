@@ -215,6 +215,24 @@ a word in view, such as a name from the thread or a term from a coding session.
 
 The debug trace records only `window_text_chars`.
 
+Tested live on 2026-10-20 with installed `26f4366` in Chromium 154, on a
+disposable mail-style page (a thread, a To input, a reply field and three
+note fields):
+
+- **Window words.** The reply field's first snapshot read 385 characters of
+  the thread. "Hi Marin" showed "ella" from the thread, and Tab made
+  "Hi Marinella"; "Okonk" showed "wo".
+- **Never another field.** A name only in the To input was never offered.
+- **Learned words.** "Brightwater", written in two note fields, finished
+  "Brigh" in the reply as "twater", whose own text never had it.
+- **Per-site off.** `badi context site … off` stopped the window text,
+  stopped finishing words, and deleted the site's learned words.
+- **Panel.** It asked "Finish words from what you see?" while context was
+  unchosen; Turn on replaced the question with the switch and per-app rows.
+
+A real mail client and the Claude desktop app are not yet tested
+([backlog](<../../future plans.md>)).
+
 ## Socket contract
 
 `python3 adapters/accessibility/daemon.py` serves
