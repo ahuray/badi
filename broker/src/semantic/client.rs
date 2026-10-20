@@ -692,6 +692,35 @@ impl SemanticClient {
         Ok(observed)
     }
 
+    /// The rest of the word at the caret from the request's vocabulary, in a
+    /// language the person turned on. It needs no model, so it answers at
+    /// once, and the model runs only when it abstains.
+    fn vocabulary_completion(
+        &self,
+        request: &ProviderRequest,
+        started: Instant,
+    ) -> Option<WritingProposal> {
+        let vocabulary = request.vocabulary.as_ref()?;
+        let language = request
+            .language
+            .as_deref()
+            .and_then(crate::writing::WritingLanguage::from_tag)?;
+        let enabled = self
+            .preferences
+            .read()
+            .is_ok_and(|preferences| preferences.enables(language));
+        if !enabled || !matches!(validate_request(request), Ok(InputEligibility::Eligible)) {
+            return None;
+        }
+        let outcome =
+            crate::vocabulary::complete(&request.before, &request.after, language, vocabulary);
+        trace_vocabulary(language.tag(), vocabulary, &outcome, started);
+        outcome.ok().map(|completion| WritingProposal {
+            text: completion.suffix,
+            replace_before: None,
+        })
+    }
+
     async fn complete_started(
         &self,
         request: ProviderRequest,
@@ -1057,6 +1086,9 @@ impl CompletionProvider for SemanticClient {
                 return Ok(ProviderOutcome::Proposal(proposal).into());
             }
         }
+        if let Some(proposal) = self.vocabulary_completion(&request, started) {
+            return Ok(ProviderOutcome::Proposal(proposal).into());
+        }
         let before = request.before.clone();
         let after = request.after.clone();
         let language = request.language.clone();
@@ -1157,6 +1189,41 @@ fn validate_request(request: &ProviderRequest) -> Result<InputEligibility, Clien
     } else {
         Ok(InputEligibility::Eligible)
     }
+}
+
+/// One `vocabulary` trace line per request with vocabulary: how many window
+/// and learned words it carried, and the outcome with its sources. The word
+/// itself is text, kept only in a `--text` run.
+fn trace_vocabulary(
+    language: &str,
+    vocabulary: &crate::vocabulary::Vocabulary,
+    outcome: &Result<crate::vocabulary::Completion, crate::vocabulary::Abstention>,
+    started: Instant,
+) {
+    crate::debug_trace::emit("vocabulary", |entry| {
+        entry.put("language", language);
+        entry.put("window_words", vocabulary.window.len());
+        entry.put("learned_words", vocabulary.learned.len());
+        match outcome {
+            Ok(completion) => {
+                entry.put("outcome", "completed");
+                entry.put(
+                    "sources",
+                    completion
+                        .sources
+                        .iter()
+                        .map(|source| source.as_str())
+                        .collect::<Vec<_>>(),
+                );
+                entry.text("word", &completion.word);
+            }
+            Err(abstention) => entry.put("outcome", abstention.as_str()),
+        }
+        entry.put(
+            "ms",
+            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        );
+    });
 }
 
 /// One `spelling` trace line per located misspelling: its language, how
@@ -1733,6 +1800,7 @@ mod tests {
             before: before.to_owned(),
             after: after.to_owned(),
             language: Some("en".to_owned()),
+            vocabulary: None,
         };
         for (before, after, expected) in [
             ("Please find the", "", InputEligibility::Eligible),

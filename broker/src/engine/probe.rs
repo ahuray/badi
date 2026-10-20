@@ -72,6 +72,7 @@ impl Broker {
             before: before.clone(),
             after: after.clone(),
             language,
+            vocabulary: None,
         };
         let result = tokio::select! {
             () = self.inner.shutdown.cancelled() => {

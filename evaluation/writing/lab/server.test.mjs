@@ -224,17 +224,17 @@ test('configuration and inference request allowlists keep arbitrary model parame
 });
 
 test('production-boundary mode requires the production budget, nominal tokens, cache and decoding settings', () => {
-  for (const mode of ['production_boundary', 'framed', 'field_context', 'following_text', 'context_bias']) {
+  for (const mode of ['production_boundary', 'framed', 'field_context', 'following_text', 'context_bias', 'vocabulary']) {
     const fixed = config({ id: mode, mode });
     assert.deepEqual(validateConfigs([fixed]), [fixed]);
     for (const changed of [{ budget_ms: 551 }, { max_tokens: 9 }, { cache_prompt: false }, { temperature: .1 }, { seed: 43 }]) {
       assert.throws(() => validateConfigs([{ ...fixed, ...changed }]), /fixed production settings/u);
     }
   }
-  const modes = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'framed', 'field_context', 'probability_rejoin', 'following_text', 'context_bias'];
+  const modes = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'framed', 'field_context', 'probability_rejoin', 'following_text', 'context_bias', 'vocabulary'];
   const all = modes.map(mode => config({ id: mode, mode }));
-  assert.equal(validateConfigs(all).length, 12);
-  assert.throws(() => validateConfigs([...all, config({ id: 'extra' })]), /12 configurations/u);
+  assert.equal(validateConfigs(all).length, 13);
+  assert.throws(() => validateConfigs([...all, config({ id: 'extra' })]), /13 configurations/u);
   for (const mode of ['instructed_word', 'healed_attested']) {
     assert.throws(() => validateConfigs([config({ mode })]), /supported limits/u);
   }

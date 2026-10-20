@@ -21,6 +21,7 @@ pub mod server;
 pub mod settings;
 pub mod spelling;
 pub mod style;
+pub mod vocabulary;
 #[cfg(feature = "local-model")]
 pub mod writing;
 

@@ -125,6 +125,11 @@ pub enum Mode {
     /// The production provider with the case's context as window text: its
     /// words bias the continuation's first tokens; the prompt is unchanged.
     ContextBias,
+    /// The production provider with context on: the case's context gives the
+    /// window's words and its style examples the earlier writing's, and a
+    /// unique word starting with the typed letters is finished before any
+    /// model runs.
+    Vocabulary,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -366,6 +371,7 @@ impl Request {
             before: self.before.clone(),
             after: self.after.clone(),
             language: Some(self.language.clone()),
+            vocabulary: None,
         }
     }
 
@@ -497,7 +503,7 @@ pub async fn run(
     let started = Instant::now();
     if matches!(
         request.config.mode,
-        Mode::ProductionBoundary | Mode::ContextBias
+        Mode::ProductionBoundary | Mode::ContextBias | Mode::Vocabulary
     ) {
         return baseline(runtime, &request, cancellation, started).await;
     }
@@ -614,21 +620,36 @@ async fn baseline(
         seed: 42,
     };
     let bias_context = request.config.mode == Mode::ContextBias;
-    if (!bias_context && !request.context.is_empty()) || !request.style_examples.is_empty() {
+    let vocabulary = (request.config.mode == Mode::Vocabulary).then(|| {
+        badi_broker::vocabulary::Vocabulary::from_texts(&request.context, &request.style_examples)
+    });
+    if vocabulary.is_none()
+        && ((!bias_context && !request.context.is_empty()) || !request.style_examples.is_empty())
+    {
         result
             .warnings
             .push("context_and_style_ignored_by_production");
     }
     result.warnings.push("production_raw_and_ttft_not_retained");
-    result.used_context = bias_context && !request.context.is_empty();
+    result.used_context = (bias_context || vocabulary.is_some()) && !request.context.is_empty();
+    result.used_style = vocabulary.is_some() && !request.style_examples.is_empty();
+    // The same rule the provider runs first, so a result says which path answered.
+    let finished_word = vocabulary.as_ref().and_then(|vocabulary| {
+        badi_broker::writing::WritingLanguage::from_tag(&request.language).and_then(|language| {
+            badi_broker::vocabulary::complete(&request.before, &request.after, language, vocabulary)
+                .ok()
+        })
+    });
     let trace = Arc::new(RequestTrace::default());
     let client = runtime
         .client()
         .clone()
         .with_request_observer(Arc::clone(&trace) as _)
         .with_window_context(if bias_context { &request.context } else { "" });
+    let mut provider_request = request.provider_request();
+    provider_request.vocabulary = vocabulary;
     let proposal = client
-        .propose(request.provider_request(), cancellation, true)
+        .propose(provider_request, cancellation, true)
         .await
         .map_err(|error| match error {
             badi_broker::provider::ProviderError::Cancelled => LabError::Cancelled,
@@ -653,6 +674,11 @@ async fn baseline(
         result.outcome = "suggestion";
         result.reason = if proposal.replace_before.is_some() {
             "production_correction"
+        } else if finished_word
+            .as_ref()
+            .is_some_and(|completion| completion.suffix == proposal.text)
+        {
+            "vocabulary_completion"
         } else {
             "production_continuation"
         };

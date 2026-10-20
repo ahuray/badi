@@ -18,6 +18,7 @@ fn request() -> ProviderRequest {
         before: "Thanks for this. I will".to_owned(),
         after: String::new(),
         language: Some("en".to_owned()),
+        vocabulary: None,
     }
 }
 
