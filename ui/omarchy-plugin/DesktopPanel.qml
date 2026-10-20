@@ -478,7 +478,7 @@ Item {
     // Usage statistics: counts only, per day and app or site (badi stats).
     if (reachable && statsReported) {
       list.push({key: "stats_forget", section: "Statistics", kind: "action", label: "Forget usage statistics",
-        detail: statsAvailable ? "Shown, accepted and words saved per day and app · kept 90 days · badi stats"
+        detail: statsAvailable ? "Counts per day and app, kept 90 days · badi stats"
           : "⚠ Unreadable and kept as it is · forgetting starts the count again",
         enabled: !controlsBusy,
         activate: function() { root.runAction(["stats", "forget"], "Forgetting usage statistics", "Usage statistics deleted") }})
