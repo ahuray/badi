@@ -11,8 +11,10 @@ use unicode_segmentation::UnicodeSegmentation;
 #[cfg(feature = "local-model")]
 use crate::writing::WritingLanguage;
 
-/// Fewer typed letters match too many unrelated words.
-pub const MIN_STEM_SCALARS: usize = 3;
+/// Fewer typed letters too often start an unrelated word: on the 2026-10-20
+/// independent set, three or four letters finished 13 of 25 words wrongly,
+/// five or more none of 25.
+pub const MIN_STEM_SCALARS: usize = 5;
 /// Longer words are identifiers or run-together text, not vocabulary.
 pub const MAX_WORD_SCALARS: usize = 24;
 /// Words one request may carry from the window.
@@ -111,7 +113,7 @@ pub struct Completion {
 /// Why no word was finished.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Abstention {
-    /// The caret does not end a partial word of at least three letters.
+    /// The caret does not end a partial word of at least five letters.
     NoStem,
     /// The typed letters form an English function word, or the one fitting
     /// word only inflects the typed one: the writer may be done.

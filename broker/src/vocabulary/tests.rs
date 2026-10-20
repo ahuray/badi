@@ -23,7 +23,7 @@ fn a_unique_word_returns_only_its_untyped_rest() {
             "ule",
             "schedule",
         ),
-        ("Hi Mar", "en", "To: Marinella Costa", "inella", "Marinella"),
+        ("Hi Marin", "en", "To: Marinella Costa", "ella", "Marinella"),
         (
             "Die Tagesord",
             "de-DE",
@@ -38,7 +38,7 @@ fn a_unique_word_returns_only_its_untyped_rest() {
             "sentwurf",
             "Tagesordnungsentwurf",
         ),
-        ("من هر روز می‌ر", "FA-ir", "من هر روز می‌روم.", "وم", "می‌روم"),
+        ("من هر روز می‌رو", "FA-ir", "من هر روز می‌روم.", "م", "می‌روم"),
         (
             "Gracias, Ximen",
             "es",
@@ -64,7 +64,7 @@ fn every_source_counts_and_a_repeated_word_is_one_candidate() {
     );
     let learned = Vocabulary::from_texts("", &["Ask Okonkwo first."]);
     assert_eq!(
-        finish("I will ask Okon", "en", &learned).unwrap().sources,
+        finish("I will ask Okonk", "en", &learned).unwrap().sources,
         vec![Source::Learned]
     );
     assert_eq!(
@@ -103,18 +103,18 @@ fn the_drafts_first_word_and_words_joined_to_others_are_not_evidence() {
         );
     }
     assert_eq!(
-        Vocabulary::words("read client.rs and x-ray don't"),
-        vec!["read"]
+        Vocabulary::words("reading client.rs and x-rayed shouldn't"),
+        vec!["reading"]
     );
 }
 
 #[test]
 fn two_fitting_words_abstain_before_any_suffix_check() {
     for (before, language, context) in [
-        ("Die Fran", "de", "Frankfurt. Frankreich."),
-        ("Das Caf", "de", "Caf\u{301}e. Cafe."),
-        ("این میخ", "fa", "میخ‌ها. میخک."),
-        ("Hi Mar", "en", "Marinella and Marisol"),
+        ("Die Frank", "de", "Frankfurt. Frankreich."),
+        ("Das Fahrr", "de", "Fahrrad. Fahrrinne."),
+        ("این کتابخ", "fa", "کتابخانه. کتابخوان."),
+        ("Hi Marin", "en", "Marinella and Marinette"),
     ] {
         assert_eq!(
             finish(before, language, &window(context)),
@@ -123,7 +123,7 @@ fn two_fitting_words_abstain_before_any_suffix_check() {
         );
     }
     assert_eq!(
-        finish("این میخ", "fa", &window("میخ‌ها.")),
+        finish("این دفترچه", "fa", &window("دفترچه‌ها.")),
         Err(Abstention::UnsafeSuffix)
     );
 }
@@ -131,17 +131,17 @@ fn two_fitting_words_abstain_before_any_suffix_check() {
 #[test]
 fn a_word_that_begins_every_other_fitting_word_is_offered() {
     let completion = finish(
-        "Add the alm",
+        "Add the almon",
         "en",
         &window("Toasted almonds, or one almond"),
     )
     .unwrap();
     assert_eq!(
         (completion.suffix.as_str(), completion.word.as_str()),
-        ("ond", "almond")
+        ("d", "almond")
     );
     assert_eq!(
-        finish("Add the alm", "en", &window("almonds, almond, alms")),
+        finish("Add the almon", "en", &window("almonds, almond, almonry")),
         Err(Abstention::Ambiguous)
     );
 }
@@ -151,8 +151,8 @@ fn case_diacritics_and_joiners_are_never_normalized() {
     for (before, language, context) in [
         ("Die Tagesord", "de", "tagesordnung."),
         ("Die Übertr", "de", "U\u{308}berträge."),
-        ("برای کیا", "fa", "كيان آماده است."),
-        ("من می‌ر", "fa", "من میروم."),
+        ("برای کیانو", "fa", "كيانوش آماده است."),
+        ("من می‌رو", "fa", "من میروم."),
     ] {
         assert_eq!(
             finish(before, language, &window(context)),
@@ -163,10 +163,11 @@ fn case_diacritics_and_joiners_are_never_normalized() {
 }
 
 #[test]
-fn only_a_partial_word_of_three_to_twenty_three_letters_is_finished() {
+fn only_a_partial_word_of_five_to_twenty_three_letters_is_finished() {
     let vocabulary = window("Tagesordnung.");
     for before in [
         "Die Ta",
+        "Die Tage",
         "Die Tagesord ",
         "Die Tagesord-",
         "Die/Tagesord",
@@ -184,7 +185,11 @@ fn only_a_partial_word_of_three_to_twenty_three_letters_is_finished() {
         Err(Abstention::NoStem)
     );
     assert_eq!(
-        finish("The abc", "en", &window(&format!("abc{}.", "d".repeat(30)))),
+        finish(
+            "The abcde",
+            "en",
+            &window(&format!("abcde{}.", "f".repeat(30)))
+        ),
         Err(Abstention::NoMatch),
         "an overlong token is not vocabulary"
     );
@@ -206,22 +211,33 @@ fn a_caret_before_a_letter_finishes_nothing_but_one_before_punctuation_may() {
 
 #[test]
 fn a_typed_english_word_may_be_finished_unless_its_capital_marks_a_name() {
-    let vocabulary = window("Format the Marinella report.");
+    let vocabulary = window("Aboutness, crashes and Gracemary.");
     assert_eq!(
-        finish("This is for", "en", &vocabulary),
-        Err(Abstention::KnownWord)
+        finish("I told them about", "en", &window("aboutness")),
+        Err(Abstention::KnownWord),
+        "a function word"
     );
     assert_eq!(
-        finish("Thanks. For", "en", &window("Format.")),
-        Err(Abstention::KnownWord)
+        finish("Thanks. Their", "en", &window("Theirs.")),
+        Err(Abstention::KnownWord),
+        "a capital that starts a sentence marks nothing"
     );
     assert_eq!(
-        finish("Hi Mar", "en", &vocabulary).map(|done| done.word),
-        Ok("Marinella".to_owned()),
-        "mar is a word, but a capital mid-sentence marks a name"
+        finish("We had a crash", "en", &vocabulary),
+        Err(Abstention::KnownWord),
+        "a finished word with an ending"
     );
     assert_eq!(
-        finish("Die Tag", "de", &window("Tagesordnung.")).map(|done| done.word),
+        finish("We had a crash", "en", &window("crashworthy")).map(|done| done.word),
+        Ok("crashworthy".to_owned())
+    );
+    assert_eq!(
+        finish("Hi Grace", "en", &vocabulary).map(|done| done.word),
+        Ok("Gracemary".to_owned()),
+        "grace is a word, but a capital mid-sentence marks a name"
+    );
+    assert_eq!(
+        finish("Die Tages", "de", &window("Tagesordnung.")).map(|done| done.word),
         Ok("Tagesordnung".to_owned()),
         "only English has a lexicon to tell"
     );
@@ -230,12 +246,13 @@ fn a_typed_english_word_may_be_finished_unless_its_capital_marks_a_name() {
 #[test]
 fn texts_become_bounded_distinct_word_lists() {
     assert_eq!(
-        Vocabulary::words("Re: Venue deposit — the venue, the Venue. Okonkwo!"),
-        vec!["Venue", "deposit", "venue", "Okonkwo"]
+        Vocabulary::words("Re: Venues deposit — the venues, the Venues. Okonkwo, Anna!"),
+        vec!["Venues", "deposit", "venues", "Okonkwo"],
+        "only words longer than five letters can be finished"
     );
-    // Distinct letter-only words: "word" plus the index written in letters.
+    // Distinct letter-only words: "words" plus the index written in letters.
     let lettered = |index: usize| -> String {
-        let mut word = String::from("word");
+        let mut word = String::from("words");
         let mut rest = index;
         loop {
             word.push(char::from(b'a' + u8::try_from(rest % 26).unwrap()));

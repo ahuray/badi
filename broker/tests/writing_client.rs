@@ -124,19 +124,19 @@ async fn vocabulary_finishes_a_word_before_any_model_request() -> Result<(), Box
     for (request, suffix) in [
         (
             with(
-                "Hi Mar",
+                "Hi Marin",
                 "en",
                 Vocabulary::from_texts("To: Marinella Costa", nothing),
             ),
-            "inella",
+            "ella",
         ),
         (
             with(
-                "I will ask Okon",
+                "I will ask Okonk",
                 "en",
                 Vocabulary::from_texts("", &["Okonkwo agreed."]),
             ),
-            "kwo",
+            "wo",
         ),
         (
             with("Die Tagesordnung und Tagesord", "de", Vocabulary::default()),
