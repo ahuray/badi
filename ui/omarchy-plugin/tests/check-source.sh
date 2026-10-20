@@ -4,6 +4,8 @@ set -euo pipefail
 
 artifact_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 qml_files=("$artifact_dir/BadiClient.qml" "$artifact_dir/BarWidget.qml" "$artifact_dir/BadiMark.qml" "$artifact_dir/DesktopPanel.qml" "$artifact_dir/SettingsView.qml")
+# Every installed source, QML and its JavaScript library, for the text gates.
+source_files=("${qml_files[@]}" "$artifact_dir/KeyModel.js")
 compatibility="$artifact_dir/compatibility.json"
 omarchy_root=${BADI_OMARCHY_ROOT:-/usr/share/omarchy}
 require_host_checks=${BADI_OMARCHY_REQUIRE_HOST_CHECKS:-0}
@@ -27,12 +29,12 @@ jq -e '
   and .omarchy.source_commit == "94a8fbc2d67eec5673c7f16b8c5e8a9c8452ffdc"
 ' "$compatibility" >/dev/null
 
-if grep -En 'ShellRoot|execDetached|Qt\.openUrlExternally|/bin/(ba)?sh|(^|[[:space:]])(ba)?sh[[:space:]]+-c|console\.(log|warn|error)' "${qml_files[@]}"; then
+if grep -En 'ShellRoot|execDetached|Qt\.openUrlExternally|/bin/(ba)?sh|(^|[[:space:]])(ba)?sh[[:space:]]+-c|console\.(log|warn|error)' "${source_files[@]}"; then
   echo "plugin source gate: forbidden shell root, execution, or logging surface" >&2
   exit 1
 fi
 
-if grep -En 'command[[:space:]]*:' "${qml_files[@]}"; then
+if grep -En 'command[[:space:]]*:' "${source_files[@]}"; then
   echo "plugin source gate: Process.command is forbidden; keep reviewed fixed exec arrays" >&2
   exit 1
 fi
@@ -57,7 +59,7 @@ if grep -En 'Qt\.callLater' "$artifact_dir/BadiClient.qml"; then
   exit 1
 fi
 
-if grep -En 'localhost|4173|fixture' "${qml_files[@]}"; then
+if grep -En 'localhost|4173|fixture' "${source_files[@]}"; then
   echo "plugin source gate: development target leaked into the installed plugin" >&2
   exit 1
 fi

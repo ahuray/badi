@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- The settings panel's keyboard model (j/k, h/l, Enter, x and search) lives in
+  `KeyModel.js` with its own tests. Prediction Lab terminal runs build their
+  worker first, so they never run a stale binary, and record every broker
+  source.
 - Opt-in context (`badi context on`, or the panel's one-time question)
   finishes a typed word, five letters in, from words in the same window and
   words learned in that app. Learned words are sealed with the keyring key and

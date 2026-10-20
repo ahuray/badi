@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "KeyModel.js" as KeyModel
 
 // The panel's state and actions, without any visuals: the broker client,
 // the desktop helper's processes, every settings change (compare-and-swap
@@ -443,11 +444,7 @@ Item {
       activate: function() { root.runAction(["service", running ? "stop" : "start"], running ? "Stopping the model" : "Starting the model",
         running ? "Model stopped" : "Model started") }})
 
-    var needle = query.trim().toLowerCase()
-    if (!needle) return list
-    return list.filter(function(row) {
-      return (row.label + " " + row.detail + " " + row.section).toLowerCase().indexOf(needle) >= 0
-    })
+    return KeyModel.filter(list, query)
   }
 
   BadiClient {

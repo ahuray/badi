@@ -3,6 +3,7 @@ import QtQuick.Controls
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import "KeyModel.js" as KeyModel
 
 // The settings popout's content: a hero with Badi's mode and a pause
 // switch, a live activity line, usage, a settings search and one keyboard
@@ -48,27 +49,24 @@ Item {
   function move(dx, dy) {
     if (rows.length === 0) return
     if (dy !== 0) {
-      cursor = cursor < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, cursor + dy))
+      cursor = KeyModel.step(cursor, rows.length, dy)
       reveal()
       return
     }
-    var row = rows[cursor]
-    if (!row || row.kind !== "choice" || !row.enabled) return
-    var values = row.options.map(function(option) { return option.value })
-    var next = values.indexOf(row.value) + dx
-    if (next >= 0 && next < values.length) row.choose(values[next])
+    var value = KeyModel.choice(rows[cursor], dx)
+    if (value !== null) rows[cursor].choose(value)
   }
 
   function activate() {
     var row = rows[cursor]
-    if (!row || !row.enabled) return
-    if (row.kind === "field") { if (siteInput) siteInput.forceActiveFocus() }
-    else if (row.activate) row.activate()
+    var action = KeyModel.action(row)
+    if (action === "focus") { if (siteInput) siteInput.forceActiveFocus() }
+    else if (action === "activate") row.activate()
   }
 
   function remove() {
     var row = rows[cursor]
-    if (row && row.kind === "site" && row.enabled) row.remove()
+    if (KeyModel.removable(row)) row.remove()
   }
 
   function focusSearch() {

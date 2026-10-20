@@ -8,6 +8,7 @@ The Omarchy plugin `io.github.ahuray.badi`:
 | `BadiMark.qml` | The **b** speech-bubble mark |
 | `DesktopPanel.qml` | State and actions without visuals: the client, helper processes, every settings change and the typed rows |
 | `SettingsView.qml` | The popout's content |
+| `KeyModel.js` | The keyboard model (j/k, h/l, Enter, x, search) without QML, tested by `tests/key-model.test.mjs` |
 | `BadiClient.qml` | The shared `badictl` client |
 
 It uses only the host's `qs.Ui` and `qs.Commons` modules, `badictl` and the
