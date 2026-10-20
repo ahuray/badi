@@ -359,4 +359,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       `paused` after `badi pause` and an explicit request (#118, a change
       outside Neovim), and passed on rerun and in three local runs. If it
       recurs, find whether the plugin's status or the broker's pause
-      reaches it late.
+      reaches it late. On #123 (no Neovim change) `plugin.test.mjs:38`
+      failed once the same way: after the pause the virtual text was still
+      `thank you`, not the suggestion; it passed on rerun and five local runs.
