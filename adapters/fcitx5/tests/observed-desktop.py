@@ -1272,6 +1272,50 @@ def session(root, report):
             assert fake.last('commit.result')['payload']['status'] == 'stale'
             checks.append(app + ': an injected replacement is not shown or applied, and the transport stays open')
 
+        # Under fcitx5-qt's echo the client has dropped its copy of the text
+        # and applies Fcitx's delete request to that copy, so a native
+        # replacement would only append: it is neither shown nor dispatched.
+        backend.browser, backend.uri = False, ALLOWED_URI
+        open_context(FIXTURE_APP)
+        fake_wait(lambda: fake.count('authority.ack') >= fake.connections > 0 and fake.peer is not None,
+                  'fake broker handshake')
+        replacement = {'text': SUFFIX, 'accept_word': ' for', 'ttl_ms': 3000, 'provider': 'phrase_v1',
+                       'replace_before': 'you'}
+
+        def native_request(send_text):
+            requests = fake.count('suggest.request')
+            backend.value, backend.caret = PREFIX, None
+            backend.field += 1
+            daemon.observer.invalidate('fixture_field_changed')
+            send_text(PREFIX)
+            fake_wait(lambda: fake.count('suggest.request') > requests, 'native observed request')
+            return fake.last('suggest.request')
+
+        blocked = reason_count('replacement_unavailable')
+        fake.respond(native_request(qt_text), 'suggestion.show', {'suggestion_id': 'echo-replace', **replacement})
+        fake_wait(lambda: reason_count('replacement_unavailable') > blocked, 'replacement withheld under the echo')
+        assert context.candidate() is None and context.commits() == []
+
+        def granted_text(value):
+            context.ic('SetCapability', '(t)', (desktop.CAPABILITIES,))
+            context.text(value)
+
+        fake.respond(native_request(granted_text), 'suggestion.show', {'suggestion_id': 'shown-replace', **replacement})
+        fake_wait(lambda: context.candidate() is not None, 'replacement shown while SurroundingText is set')
+        context.ic('SetCapability', '(t)', (desktop.CAPABILITIES & ~surrounding,))
+        controls, blocked = fake.count('control.request'), reason_count('replacement_unavailable')
+        assert context.key(RIGHT, CONTROL)
+        fake_wait(lambda: fake.count('control.request') > controls, 'replacement acceptance request')
+        results = fake.count('commit.result')
+        fake.respond(fake.last('control.request'), 'commit.prepare', {
+            'suggestion_id': 'shown-replace', 'text': SUFFIX, 'acceptance': 'all', 'replace_before': 'you'})
+        fake_wait(lambda: fake.count('commit.result') > results, 'replacement refused once the echo starts')
+        fake_quiet(.3)
+        assert fake.last('commit.result')['payload']['status'] == 'stale' and context.commits() == []
+        assert reason_count('replacement_unavailable') > blocked
+        checks.append('Under the fcitx5-qt echo a native replacement is neither shown nor dispatched, since the '
+                      'client would drop the delete and only append')
+
         backend.browser, backend.uri = False, ALLOWED_URI
         open_context('chatgpt')
         requests = fake.count('suggest.request')

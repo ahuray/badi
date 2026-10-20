@@ -309,7 +309,9 @@ private:
 // withdrawn after text arrived under it, and SurroundingText alone granted
 // back while withdrawn. Any other change ends it. The addon honours it only
 // for an observed field, whose observer must still agree with the text and
-// caret before display and dispatch.
+// caret before display and dispatch. fcitx5-qt applies Fcitx's delete
+// request to its own copy of the text, which the echo clears, so a
+// replacement is neither shown nor dispatched while withdrawn.
 class SurroundingEcho {
 public:
     // True when the change is the echo or its undo, so the field keeps its
