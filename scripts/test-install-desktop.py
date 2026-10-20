@@ -27,7 +27,8 @@ NATIVE_SOURCES = ('target/release/badi-broker', 'target/release/badictl', 'scrip
                   'broker/data/writing-lexicon/README.md', 'adapters/fcitx5/build/libbadi-fcitx5.so',
                   'adapters/fcitx5/build/badi.conf', 'packaging/systemd/fcitx-badi.conf',
                   'packaging/systemd/badi-accessibility.service', 'packaging/hypr/badi.lua',
-                  'packaging/systemd/badi-session.service', 'packaging/omarchy/badi-repair.hook') + tuple(
+                  'packaging/systemd/badi-session.service', 'packaging/omarchy/badi-repair.hook',
+                  'THIRD-PARTY-NOTICES.txt') + tuple(
                   'adapters/accessibility/' + name for name in installer.OBSERVER_MODULES) + tuple(
                   'adapters/session/' + name for name in installer.SESSION_MODULES)
 STOCK = '{ path=/usr/bin/fcitx5 ; argv[]=%s ; ignore_errors=no ; start_time=[n/a] ; pid=0 }\n'
@@ -105,18 +106,63 @@ class DesktopInstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             data = b'model bytes'
-            catalog = {'recommended': {'name': 'Gemma 3 1B'}, 'catalog': [
-                {'filename': 'a.gguf', 'download_bytes': 1, 'sha256': '0' * 64},
-                {'filename': 'b.gguf', 'download_bytes': len(data),
-                 'sha256': hashlib.sha256(data).hexdigest()}]}
+            catalog = {'recommended': {'id': 'gemma-3-1b', 'name': 'Gemma 3 1B'}, 'catalog': [
+                {'id': 'gemma-3-1b', 'name': 'Gemma 3 1B', 'license': 'Gemma', 'fits': True,
+                 'filename': 'a.gguf', 'download_bytes': 1, 'sha256': '0' * 64},
+                {'id': 'qwen3-1.7b', 'name': 'Qwen3 1.7B', 'license': 'Apache-2.0', 'fits': True,
+                 'filename': 'b.gguf', 'download_bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}]}
             reply = unittest.mock.Mock(stdout=json.dumps(catalog))
-            with patch.object(installer.subprocess, 'run', return_value=reply):
-                with self.assertRaisesRegex(RuntimeError, 'prints the pinned download of Gemma 3 1B'):
+            with patch.object(installer.subprocess, 'run', return_value=reply), \
+                 patch.object(installer.sys.stdin, 'isatty', return_value=False), \
+                 patch.object(installer.badi_install, 'download_model') as download:
+                with self.assertRaisesRegex(RuntimeError, 'Gemma Terms of Use.*--model gemma-3-1b --accept-model-license'):
                     installer.require_writing_model(home, 'badictl')
+                with self.assertRaisesRegex(RuntimeError, '--accept-model-license'):
+                    installer.require_writing_model(home, 'badictl', 'gemma-3-1b')
+                download.assert_not_called()
                 models = home / '.local/share/badi/models'
                 models.mkdir(parents=True)
                 (models / 'b.gguf').write_bytes(data)
                 self.assertEqual(installer.require_writing_model(home, 'badictl')['filename'], 'b.gguf')
+                download.assert_not_called()
+
+    def test_the_first_model_downloads_only_after_its_terms_are_accepted(self):
+        catalog = {'recommended': {'id': 'gemma-3-1b'}, 'catalog': [
+            {'id': 'gemma-3-1b', 'name': 'Gemma 3 1B', 'license': 'Gemma', 'fits': True,
+             'filename': 'a.gguf', 'download_bytes': 7, 'sha256': '0' * 64},
+            {'id': 'qwen3-1.7b', 'name': 'Qwen3 1.7B', 'license': 'Apache-2.0', 'fits': True,
+             'filename': 'b.gguf', 'download_bytes': 7, 'sha256': '1' * 64},
+            {'id': 'too-big', 'name': 'Too big', 'license': 'Apache-2.0', 'fits': False,
+             'filename': 'c.gguf', 'download_bytes': 7, 'sha256': '2' * 64}]}
+        reply = unittest.mock.Mock(stdout=json.dumps(catalog))
+        record = Path('.local/state/badi/model-terms.json')
+        for model_id, accept, tty, answer, downloaded in (
+                ('gemma-3-1b', True, False, None, 'gemma-3-1b'),
+                ('qwen3-1.7b', False, False, None, 'qwen3-1.7b'),
+                (None, False, True, 'y', 'gemma-3-1b'),
+                (None, False, True, 'n', None),
+                ('too-big', True, False, None, None)):
+            with self.subTest(model=model_id, tty=tty, answer=answer), tempfile.TemporaryDirectory() as temporary, \
+                 patch.object(installer.subprocess, 'run', return_value=reply), \
+                 patch.object(installer.sys.stdin, 'isatty', return_value=tty), \
+                 patch('builtins.input', return_value=answer) as asked, \
+                 patch.object(installer.badi_install, 'download_model') as download:
+                home = Path(temporary)
+                if downloaded is None:
+                    with self.assertRaises(RuntimeError):
+                        installer.require_writing_model(home, 'badictl', model_id, accept)
+                    download.assert_not_called()
+                    self.assertFalse((home / record).exists())
+                    continue
+                self.assertEqual(installer.require_writing_model(home, 'badictl', model_id, accept)['id'], downloaded)
+                self.assertEqual(download.call_args.args[0]['id'], downloaded)
+                self.assertEqual(download.call_args.args[1], home / '.local/share/badi/models')
+                self.assertEqual(asked.called, tty)
+                if downloaded == 'gemma-3-1b':
+                    accepted, = json.loads((home / record).read_text())['accepted']
+                    self.assertEqual((accepted['model'], accepted['terms']), ('gemma-3-1b', 'https://ai.google.dev/gemma/terms'))
+                else:
+                    self.assertFalse((home / record).exists(), 'an Apache-2.0 model records no terms')
 
     def test_changed_flags_abort_before_any_file_is_copied(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -484,7 +530,7 @@ class DesktopInstallTests(unittest.TestCase):
                        'packaging/systemd/badi-broker.service', 'broker/data/writing-lexicon/LICENSE',
                        'broker/data/writing-lexicon/README.md', 'packaging/systemd/badi-session.service',
                        'adapters/session/daemon.py', 'adapters/session/link.py',
-                       'adapters/session/style_key.py')
+                       'adapters/session/style_key.py', 'THIRD-PARTY-NOTICES.txt')
             for name in sources:
                 source = project / name
                 source.parent.mkdir(parents=True, exist_ok=True)

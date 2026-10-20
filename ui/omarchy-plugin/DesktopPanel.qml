@@ -64,6 +64,13 @@ Item {
   readonly property var spelling: Array.isArray(desktop.spelling) ? desktop.spelling : []
   readonly property var modelAdvice: client.objectValue(client.objectValue(client.objectValue(client.overview, "models"), "writing"), "advice")
   readonly property var modelCatalog: Array.isArray(modelAdvice.catalog) ? modelAdvice.catalog : []
+  // Terms that come with a model's licence; a model with terms is chosen,
+  // then downloaded only from the row that names them.
+  readonly property var modelTerms: ({
+    "Gemma": {name: "the Gemma Terms of Use", url: "ai.google.dev/gemma/terms"},
+    "Llama-3.2-Community": {name: "the Llama 3.2 Community License", url: "llama.com/llama3_2/license"}
+  })
+  property string pendingModel: ""
   // The model the running broker loaded, else the device recommendation.
   readonly property var activeModel: {
     for (var i = 0; i < modelCatalog.length; i++)
@@ -307,16 +314,32 @@ Item {
     var recommendedId = client.objectValue(modelAdvice, "recommended").id
     if (fitting.length > 0) {
       var licences = {"Gemma": "Gemma terms", "Llama-3.2-Community": "Llama 3.2 licence", "Apache-2.0": "Apache-2.0"}
+      var pending = fitting.filter(function(model) { return model.id === root.pendingModel })[0]
       list.push({key: "model", section: "Model", kind: "choice", label: "Writing model",
         detail: (activeModel.id === recommendedId ? "Recommended for this device" : "Recommended: " + (client.objectValue(modelAdvice, "recommended").name || "none"))
-          + " · " + (licences[activeModel.license] || activeModel.license || "") + " · choosing one accepts its licence",
-        value: activeModel.id || "", enabled: !controlsBusy,
+          + " · " + (licences[activeModel.license] || activeModel.license || ""),
+        value: pending ? pending.id : activeModel.id || "", enabled: !controlsBusy,
         options: fitting.map(function(model) {
           return {value: model.id, label: model.name + (model.id === recommendedId ? " ★" : "")}
         }),
         choose: function(value) {
-          if (value !== activeModel.id) root.runAction(["model", "use", value, "--accept-license"], "Switching the model", "Model switched", 900000)
+          var chosen = fitting.filter(function(model) { return model.id === value })[0]
+          if (value === activeModel.id || !chosen) { root.pendingModel = ""; return }
+          if (root.modelTerms[chosen.license]) { root.pendingModel = value; return }
+          root.pendingModel = ""
+          root.runAction(["model", "use", value], "Switching the model", "Model switched", 900000)
         }})
+      if (pending && root.modelTerms[pending.license]) {
+        var terms = root.modelTerms[pending.license]
+        list.push({key: "model-terms", section: "Model", kind: "action",
+          label: "Accept " + terms.name + " and download " + pending.name,
+          detail: terms.url + " · " + (pending.download_bytes / 1e9).toFixed(1) + " GB, pinned and hash-checked",
+          enabled: !controlsBusy,
+          activate: function() {
+            root.pendingModel = ""
+            root.runAction(["model", "use", pending.id, "--accept-license"], "Switching the model", "Model switched", 900000)
+          }})
+      }
     }
     // Opt-in context (ADR 0010): asked once while unchosen, then a switch,
     // one row per allowed app and a way to forget the learned words.

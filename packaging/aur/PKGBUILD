@@ -4,13 +4,16 @@ pkgrel=1
 pkgdesc='Local writing suggestions for Linux, Omarchy first'
 arch=('x86_64')
 url='https://github.com/ahuray/badi'
-license=('MIT' 'LicenseRef-SCOWL')
+# Badi is MIT; its binaries also contain MPL-2.0 (spellbook), BSD-3-Clause
+# (subtle) and Zlib (foldhash) code, listed in THIRD-PARTY-NOTICES.txt.
+license=('MIT' 'MPL-2.0' 'BSD-3-Clause' 'Zlib' 'LicenseRef-SCOWL')
 depends=('gcc-libs' 'glibc' 'python' 'python-gobject' 'python-cairo' 'at-spi2-core'
          'gtk4' 'gtk4-layer-shell' 'glib2' 'pango' 'systemd' 'fcitx5>=5.1.23'
          'hyprland' 'quickshell' 'qt6-declarative' 'hicolor-icon-theme')
 makedepends=('git' 'cargo' 'cmake' 'ninja' 'nlohmann-json')
 optdepends=('curl: download the separately verified writing assets'
-            'libsecret: keep the opt-in style-learning key in the desktop keyring')
+            'libsecret: keep the opt-in style-learning key in the desktop keyring'
+            'xdg-desktop-portal: pause and settings shortcuts through the desktop portal')
 provides=('badi')
 conflicts=('badi')
 # The repository's release profile strips Rust symbols; do not emit an empty
@@ -36,7 +39,7 @@ build() {
     RUSTUP_TOOLCHAIN=stable cargo build --frozen --release -p badi-broker --bins
     cmake -S adapters/fcitx5 -B build-fcitx -G Ninja \
         -DCMAKE_BUILD_TYPE=None -DCMAKE_INSTALL_PREFIX=/usr \
-        -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_TESTING=ON
+        -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_TESTING=ON -DBADI_WERROR=OFF
     cmake --build build-fcitx
 }
 
@@ -71,9 +74,15 @@ package() {
     for file in manifest.json BarWidget.qml BadiMark.qml DesktopPanel.qml SettingsView.qml BadiClient.qml KeyModel.js; do
         install -Dm644 "ui/omarchy-plugin/$file" "$pkgdir/usr/share/badi/omarchy/$file"
     done
+    install -Dm644 ui/omarchy-plugin/fcitx-theme.py "$pkgdir/usr/share/badi/omarchy/fcitx-theme.py"
+    install -Dm644 packaging/omarchy/badi-repair.hook "$pkgdir/usr/share/badi/omarchy/badi-repair.hook"
+    install -Dm644 packaging/hypr/badi.lua "$pkgdir/usr/share/badi/hypr/badi.lua"
+    install -Dm644 packaging/io.github.ahuray.badi.desktop \
+        "$pkgdir/usr/share/applications/io.github.ahuray.badi.desktop"
     install -Dm644 packaging/io.github.ahuray.badi.svg \
         "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.ahuray.badi.svg"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 THIRD-PARTY-NOTICES.txt "$pkgdir/usr/share/licenses/$pkgname/THIRD-PARTY-NOTICES.txt"
     install -Dm644 broker/data/writing-lexicon/LICENSE "$pkgdir/usr/share/licenses/$pkgname/SCOWL"
     install -Dm644 broker/data/writing-lexicon/README.md "$pkgdir/usr/share/licenses/$pkgname/SCOWL-README.md"
     install -Dm644 packaging/aur/README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
