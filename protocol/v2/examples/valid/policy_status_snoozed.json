@@ -1,0 +1,17 @@
+{
+  "v": 2,
+  "id": "fcitx.policy.7",
+  "type": "policy.status",
+  "mono_ms": 52,
+  "payload": {
+    "authority_epoch": 4,
+    "settings_revision": 3,
+    "paused": false,
+    "activation": "never",
+    "context_allowed": false,
+    "display_allowed": false,
+    "suggestions_allowed": false,
+    "learning_allowed": false,
+    "reason": "snoozed"
+  }
+}

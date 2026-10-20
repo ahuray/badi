@@ -1,0 +1,9 @@
+{
+  "v": 2,
+  "id": "ctl:snooze",
+  "type": "control.request",
+  "mono_ms": 40,
+  "payload": {
+    "action": "snooze"
+  }
+}

@@ -76,6 +76,7 @@ RequestFacts BadiAddon::requestFacts(const Binding &binding) const {
         .paused = authorityPaused_,
         .policyKnown = binding.broker.policyKnown,
         .policyAllowed = binding.broker.policyAllowed,
+        .snoozed = binding.broker.snoozed,
         // A terminal has no surrounding text; its typed line is the context.
         .fresh = binding.state.editPath() == NativeEditPath::TypedLine ? binding.typedLine.tracking()
                                                                        : binding.surroundingFreshness.fresh(),

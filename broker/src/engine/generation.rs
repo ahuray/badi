@@ -31,6 +31,7 @@ use crate::segment::{
     accept_word, ends_at_word_boundary, sanitize_suggestion, validate_suggestion_shape,
 };
 use crate::settings::{SettingsV2, StableIdentity};
+use crate::stats::StatsEvent;
 
 type ProviderResult = Result<Result<ProviderReply, ProviderError>, time::error::Elapsed>;
 /// A carried remainder with its deadline and outcome day, or its declining gate.
@@ -666,6 +667,7 @@ impl Broker {
         // A carried remainder is the same suggestion, not another show.
         if carried.is_none() {
             metrics.record_suggestion_shown();
+            self.queue_stats(&session.target.target, settings_revision, StatsEvent::Shown);
         }
         let aggregate_day = match carried {
             Some(carried) => carried.aggregate_day,

@@ -12,6 +12,9 @@ use crate::settings::{
     SettingsStoreError, SettingsV2, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule,
     read_private_limited, remove_private_file, remove_private_temporary_files,
 };
+use crate::stats::{
+    STATS_FILE_NAME, StatsError, StatsEvent, StatsStore, StatsSummary, local_today,
+};
 use crate::style::{STYLE_FILE_NAME, StyleError, StyleKey, StyleSample, StyleStatus, StyleStore};
 use crate::vocabulary::learned::{LEARNED_FILE_NAME, LearnedStatus, LearnedStore};
 
@@ -44,6 +47,9 @@ struct ControlPlaneState {
     /// Learned words, likewise; only `forget_learned` repairs an unreadable
     /// file.
     learned: Option<LearnedStore>,
+    /// Usage statistics, likewise; only `forget_stats` repairs an unreadable
+    /// file.
+    stats: Option<StatsStore>,
 }
 
 impl ControlPlane {
@@ -94,6 +100,19 @@ impl ControlPlane {
                 None
             }
         };
+        let stats = match StatsStore::open(storage.paths().data_dir().join(STATS_FILE_NAME))
+            .and_then(|mut store| {
+                store.reconcile(local_today());
+                store.persist().map(|_| store)
+            }) {
+            Ok(store) => Some(store),
+            Err(error) => {
+                eprintln!(
+                    "badi-broker: usage statistics unavailable and preserved; badi stats forget required: {error}"
+                );
+                None
+            }
+        };
         Ok(Self {
             storage,
             state: Mutex::new(ControlPlaneState {
@@ -102,8 +121,67 @@ impl ControlPlane {
                 personalization,
                 style,
                 learned,
+                stats,
             }),
         })
+    }
+
+    /// Counts one shown suggestion or landed acceptance in memory when the
+    /// settings it was admitted under are still current and still let that
+    /// app or site suggest. [`Self::persist_stats`] writes it.
+    pub fn record_stats_at_settings_revision(
+        &self,
+        expected_settings_revision: u64,
+        identity: &StableIdentity,
+        event: StatsEvent,
+    ) -> Result<bool, ControlPlaneError> {
+        let mut state = self.lock_state()?;
+        if state.settings.revision != expected_settings_revision {
+            return Ok(false);
+        }
+        let ControlPlaneState {
+            settings, stats, ..
+        } = &mut *state;
+        let store = stats.as_mut().ok_or(ControlPlaneError::StatsUnavailable)?;
+        Ok(store.record(settings, local_today(), identity, event))
+    }
+
+    /// Deletes days past retention and writes pending counts. Returns whether
+    /// the file changed.
+    pub fn persist_stats(&self) -> Result<bool, ControlPlaneError> {
+        let mut state = self.lock_state()?;
+        let Some(store) = state.stats.as_mut() else {
+            return Ok(false);
+        };
+        store.reconcile(local_today());
+        Ok(store.persist()?)
+    }
+
+    /// The counts kept now, or `None` while the file is unreadable.
+    pub fn stats_summary(&self) -> Result<Option<StatsSummary>, ControlPlaneError> {
+        let today = local_today();
+        Ok(self
+            .lock_state()?
+            .stats
+            .as_ref()
+            .map(|store| store.summary(today)))
+    }
+
+    /// Deletes every count, repairing an unreadable file.
+    pub fn forget_stats(&self) -> Result<StatsSummary, ControlPlaneError> {
+        let today = local_today();
+        let mut state = self.lock_state()?;
+        let path = self.storage.paths().data_dir().join(STATS_FILE_NAME);
+        if let Some(store) = state.stats.as_mut() {
+            store.forget()?;
+            return Ok(store.summary(today));
+        }
+        remove_private_temporary_files(&path)?;
+        remove_private_file(&path)?;
+        let store = StatsStore::open(path)?;
+        let summary = store.summary(today);
+        state.stats = Some(store);
+        Ok(summary)
     }
 
     /// Holds the keyring's key for this broker's lifetime; style samples and
@@ -761,6 +839,10 @@ pub enum ControlPlaneError {
     StyleUnavailable,
     #[error("style store: {0}")]
     Style(#[from] StyleError),
+    #[error("usage statistics are unavailable; badi stats forget repairs them")]
+    StatsUnavailable,
+    #[error("usage statistics: {0}")]
+    Stats(#[from] StatsError),
     #[error("private storage: {0}")]
     Storage(#[from] PrivateStorageError),
     #[error("settings store: {0}")]
@@ -785,6 +867,8 @@ impl ControlPlaneError {
             Self::PersonalizationUnavailable => "personalization_unavailable".to_owned(),
             Self::StyleUnavailable => "style_unavailable".to_owned(),
             Self::Style(error) => error.to_string(),
+            Self::StatsUnavailable => "stats_unavailable".to_owned(),
+            Self::Stats(error) => error.to_string(),
             Self::Personalization(error) => error.to_string(),
             Self::Storage(error) => error.to_string(),
             Self::Settings(error) => error.to_string(),

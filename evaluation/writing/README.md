@@ -151,19 +151,6 @@ with paths, sizes and SHA-256. A correction needs one Unicode edit, keeps the
 first letter, case and Persian joiners, and passes a second native check within
 550 ms. Spelling never starts the language model.
 
-## Window text from the screen
-
-[`window-ocr.py`](window-ocr.py) captures the focused window (Hyprland
-geometry, `grim`) and recognises its text in memory with Tesseract, keeping
-the last 800 characters, nearest a terminal prompt or a chat composer. It
-prints timings and sizes only, or with `--expect FILE` a character error rate
-against text known to be shown, and writes the text only to an `--output`
-file for disposable trials. Nothing installs or calls it; reading the screen
-needs its own privacy decision. On 2026-10-17 a disposable Ghostty window
-(1416×850 logical, JetBrainsMono 9) read with no errors at native scale in
-about 1.25 s and with one character wrong in 547 at `--scale 1` in about
-0.8 s.
-
 ## Terminal runs
 
 ```sh
@@ -223,9 +210,9 @@ suggestion still shown, one control drifting; across four suites (65 cases)
 12 became 15. Bias 4.0 reached 13 of 24 but wrote loops ("Thursday,
 Thursday"), and Persian degraded at both, so it is excluded. The field's own
 earlier text as the source measured neutral. For terminals, which expose no
-accessibility text, `window-ocr.py` read a disposable Ghostty screen with no
-character errors in about 0.8 s (capture 0.2 s, OCR 0.56 s), but five replies
-about that screen gained nothing from its words. No live check of the
+accessibility text, reading the screen with OCR (a 2026-10-17 trial tool,
+since removed) cost about 0.8 s and five replies gained nothing from its
+words; screen reading stays out (the [context firewall](../../VISION.md#context-firewall)). No live check of the
 observer's context has run: the desktop was locked, and a headless Chromium
 on a private bus exposed no field.
 

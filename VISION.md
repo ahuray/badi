@@ -46,7 +46,11 @@ interaction, the exact editing authority and the policy around them.
 - Activation, context, inference, learning and retention are separate
   decisions; deny wins. Ordinary context is ephemeral. Enabled style learning
   uses only authorized samples, stays encrypted locally, and supports one-step
-  deletion; opting out stops further acquisition and learning. Typed text and
+  deletion; opting out stops further acquisition and learning. Usage
+  statistics are counts only (suggestions shown, accepted and words saved per
+  day and per app or site), kept on the device for 90 days, never counted
+  while paused or where suggestions are off, and deleted with `badi stats
+  forget`. Typed text and
   credentials stay out of diagnostics, which record content-free counts and reasons;
   only an explicit, expiring, memory-only `badi debug on --text` run records text
   ([ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).

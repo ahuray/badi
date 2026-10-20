@@ -25,7 +25,7 @@ Panel {
     function close(): void { root.close() }
     function state(): string {
       return JSON.stringify({visible: root.opened, status: badi.statusLabel, page: view.cursor,
-        paused: badi.paused, service: badi.serviceState})
+        paused: badi.paused, snoozed: badi.snoozeLabel, service: badi.serviceState})
     }
   }
 
@@ -49,7 +49,8 @@ Panel {
     iconComponent: BadiMark {
       ink: button.active ? button.activeColor : button.foreground
     }
-    tooltipText: "Badi · " + badi.statusLabel + "\nClick: settings · Right-click: pause / resume"
+    tooltipText: "Badi · " + badi.statusLabel + (badi.snoozeLabel ? "\nSnoozed in " + badi.snoozeLabel : "")
+      + "\nClick: settings · Right-click: pause / resume"
     active: badi.ready
     activeColor: Commons.Color.accent
     dimmed: badi.paused

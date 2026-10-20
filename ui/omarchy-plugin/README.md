@@ -9,6 +9,7 @@ The Omarchy plugin `io.github.ahuray.badi`:
 | `DesktopPanel.qml` | State and actions without visuals: the client, helper processes, every settings change and the typed rows |
 | `SettingsView.qml` | The popout's content |
 | `KeyModel.js` | The keyboard model (j/k, h/l, Enter, x, search) without QML, tested by `tests/key-model.test.mjs` |
+| `StatsModel.js` | The history's numbers (the week's bars, the leading apps) without QML, tested by `tests/stats-model.test.mjs` |
 | `BadiClient.qml` | The shared `badictl` client |
 
 It uses only the host's `qs.Ui` and `qs.Commons` modules, `badictl` and the
@@ -27,7 +28,17 @@ seconds only while open. From the top:
   the counts since model start.
 - **Usage:** a ten-cell acceptance meter, words saved and the last
   no-suggestion reason (`⎿ last miss: …`).
+- **History:** seven bars of words saved per day, today's in the accent,
+  today's and the week's words saved, and the apps and sites that saved the
+  most this week (`⎿ most this week: …`), from `badi stats`; hidden while the
+  broker reports none.
 - **Search:** `/` filters every row by name, description or section.
+- **Snoozed:** while a snooze keeps an app or site quiet (`badi snooze` or
+  the session helper's shortcut, [broker runbook](../../broker/README.md#snooze)),
+  the first row names it with the minutes left, and Enter ends every snooze
+  (`badi snooze end`). The mark's tooltip adds the same name, and the
+  `badi-writing` IPC `state()` reports it as `snoozed`. Resuming from the
+  switch, `p` or a right-click runs `badi resume`, which ends it too.
 - **Rows**, in sections: Model (the writing model: a chip for each model
   that fits this device, ★ on the recommendation; picking an Apache-2.0
   model runs `badi model use`, which downloads it and restarts the model,
@@ -42,7 +53,8 @@ seconds only while open. From the top:
   Keep space, as `badi suggest` sets them; French, Spanish and Portuguese are
   marked experimental), Spelling (each language and its dictionary, naming the package when one is
   missing), Apps (the list mode and each supported app), Websites (the list
-  mode, each rule, an add field: Enter allows, Shift+Enter blocks) and
+  mode, each rule, an add field: Enter allows, Shift+Enter blocks),
+  Statistics (Forget usage statistics, which runs `badi stats forget`) and
   System (start at login, debug trace, restart, start or stop).
 
 Keys: j/k or arrows move one cursor through the rows, space or Enter toggles
@@ -119,6 +131,11 @@ An older broker without word counters shows `—`, never a fabricated zero.
 Restarting the model resets these counters. The broker retains verified and
 unverified word counts separately in `word_savings`.
 
+The history keeps its counts across restarts, per local day and per app or
+site, for 90 days ([broker runbook](../../broker/README.md#usage-statistics)).
+Shown and words saved mean the same as above; **accepted** there counts
+acceptances the adapter reported landed (each word Tab took), not requests.
+
 On 2026-10-15 the popout was rendered in the real Omarchy session (Tokyo
 Night, square corners): j/k moved the cursor and scrolled, `l` on "On battery"
 wrote `battery_mode` through stdin (`h` restored it), `/ghost` left only the
@@ -156,9 +173,10 @@ BADI_OMARCHY_REQUIRE_HOST_CHECKS=1 bash ui/omarchy-plugin/tests/check-source.sh
 bash ui/omarchy-plugin/tests/run-client-lifecycle.sh      # needs qs
 ```
 
-- **`omarchy:check`** runs ShellCheck, the JSON and source contracts and
-  process-group escalation against a fake `badictl` that ignores TERM. When
-  `qs` is present it also runs the headless client lifecycle.
+- **`omarchy:check`** runs ShellCheck, the JSON and source contracts, the
+  keyboard and statistics models under Node, and process-group escalation
+  against a fake `badictl` that ignores TERM. When `qs` is present it also
+  runs the headless client lifecycle.
 - **`run-client-lifecycle.sh`** loads the real `BadiClient.qml` offscreen with
   a fake `badictl`. It covers settings validation, a compare-and-swap write that
   keeps every subject and both list flags, teardown during a write, and

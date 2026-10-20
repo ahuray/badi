@@ -121,6 +121,30 @@ fn broker_commands_print_their_replies_and_refusals() {
 }
 
 #[test]
+fn snooze_names_why_nothing_was_snoozed_and_ends_at_once() {
+    let broker = PhraseBroker::start();
+    // A snooze names the focused field's app or site; with none, it says so.
+    broker.fails(&["snooze"], "error_code=rejected:paused\n");
+    let unpaused = r#"{"schema":"badi.settings.v2","revision":1,"paused":false,"subjects":[]}"#;
+    broker.succeeds(&[
+        "settings",
+        "replace",
+        "--if-revision",
+        "0",
+        "--json",
+        unpaused,
+    ]);
+    broker.fails(&["snooze"], "error_code=rejected:no_context\n");
+    broker.fails(&["snooze", "0"], "error_code=arguments\n");
+    let reply: Value =
+        serde_json::from_str(&broker.succeeds(&["snooze", "end"])).expect("snooze end JSON");
+    assert_eq!(
+        reply["payload"],
+        json!({"accepted": true, "action": "snooze_end", "paused": false, "reason": "accepted"})
+    );
+}
+
+#[test]
 fn style_commands_keep_the_key_out_of_argv_and_output() {
     let broker = PhraseBroker::start();
     // The key arrives on stdin, never in argv, and is never printed.
@@ -151,6 +175,62 @@ fn style_commands_keep_the_key_out_of_argv_and_output() {
     );
 }
 
+#[test]
+fn stats_commands_read_counts_a_previous_broker_kept_and_forget_them() {
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+    // A previous broker left these counts; the next one reads them at start.
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let data = directory.path().join("data/badi");
+    std::fs::create_dir_all(directory.path().join("data")).expect("data home");
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&data)
+        .expect("private data directory");
+    let today = badi_broker::stats::local_today();
+    let yesterday = today.yesterday().expect("yesterday");
+    let ghostty = r#"{"kind":"linux_app","adapter":"fcitx","app_id":"com.mitchellh.ghostty"}"#;
+    let site = r#"{"kind":"browser_origin","adapter":"chromium","scheme":"https","host":"example.com","port":443}"#;
+    let kept = format!(
+        r#"{{"schema":"badi.stats.v1","days":[{{"day":"{yesterday}","subjects":[{{"identity":{site},"shown":9,"accepted":4,"words":7}}]}},{{"day":"{today}","subjects":[{{"identity":{ghostty},"shown":3,"accepted":2,"words":5}}]}}]}}"#
+    );
+    let path = data.join("stats.json");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .expect("statistics file")
+        .write_all(kept.as_bytes())
+        .expect("write");
+    let broker = PhraseBroker::start_in(directory);
+
+    let status: Value =
+        serde_json::from_str(&broker.succeeds(&["stats", "status"])).expect("stats JSON");
+    assert_eq!(status["available"], true);
+    let summary = &status["summary"];
+    assert_eq!(summary["today"], today.to_string());
+    assert_eq!(
+        summary["totals"]["today"],
+        json!({"shown": 3, "accepted": 2, "words": 5})
+    );
+    assert_eq!(
+        summary["totals"]["last_7_days"],
+        json!({"shown": 12, "accepted": 6, "words": 12})
+    );
+    assert_eq!(summary["days"].as_array().expect("days").len(), 2);
+    assert_eq!(summary["subjects"][0]["identity"]["host"], "example.com");
+    assert_eq!(
+        summary["subjects"][1]["identity"]["app_id"],
+        "com.mitchellh.ghostty"
+    );
+
+    let forgotten: Value =
+        serde_json::from_str(&broker.succeeds(&["stats", "forget"])).expect("stats JSON");
+    assert_eq!(forgotten["summary"]["days"], json!([]));
+    assert!(!path.exists(), "forget deletes the file");
+    broker.fails(&["stats"], "error_code=arguments\n");
+}
+
 fn object_keys(value: &Value) -> Vec<&str> {
     let mut keys: Vec<&str> = value
         .as_object()
@@ -170,7 +250,12 @@ struct PhraseBroker {
 
 impl PhraseBroker {
     fn start() -> Self {
-        let directory = tempfile::tempdir().expect("temporary directory");
+        Self::start_in(tempfile::tempdir().expect("temporary directory"))
+    }
+
+    /// A broker whose XDG config and data homes are `config/` and `data/`
+    /// in `directory`.
+    fn start_in(directory: tempfile::TempDir) -> Self {
         let socket = directory.path().join("private/broker.sock");
         let process = Command::new(env!("CARGO_BIN_EXE_badi-broker"))
             .args(["--provider", "phrase", "--socket"])

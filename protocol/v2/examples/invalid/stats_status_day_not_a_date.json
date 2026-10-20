@@ -1,0 +1,92 @@
+{
+  "v": 2,
+  "id": "ctl:stats",
+  "type": "stats.status",
+  "mono_ms": 54,
+  "payload": {
+    "available": true,
+    "summary": {
+      "today": "2026-10-20",
+      "retention_days": 90,
+      "totals": {
+        "today": {
+          "shown": 12,
+          "accepted": 5,
+          "words": 9
+        },
+        "last_7_days": {
+          "shown": 85,
+          "accepted": 30,
+          "words": 64
+        },
+        "retained": {
+          "shown": 85,
+          "accepted": 30,
+          "words": 64
+        }
+      },
+      "days": [
+        {
+          "day": "Monday",
+          "shown": 73,
+          "accepted": 25,
+          "words": 55
+        },
+        {
+          "day": "2026-10-20",
+          "shown": 12,
+          "accepted": 5,
+          "words": 9
+        }
+      ],
+      "subjects": [
+        {
+          "identity": {
+            "kind": "browser_origin",
+            "adapter": "chromium",
+            "scheme": "https",
+            "host": "example.com",
+            "port": 443
+          },
+          "today": {
+            "shown": 12,
+            "accepted": 5,
+            "words": 9
+          },
+          "last_7_days": {
+            "shown": 60,
+            "accepted": 22,
+            "words": 48
+          },
+          "retained": {
+            "shown": 60,
+            "accepted": 22,
+            "words": 48
+          }
+        },
+        {
+          "identity": {
+            "kind": "linux_app",
+            "adapter": "fcitx",
+            "app_id": "com.mitchellh.ghostty"
+          },
+          "today": {
+            "shown": 0,
+            "accepted": 0,
+            "words": 0
+          },
+          "last_7_days": {
+            "shown": 25,
+            "accepted": 8,
+            "words": 16
+          },
+          "retained": {
+            "shown": 25,
+            "accepted": 8,
+            "words": 16
+          }
+        }
+      ]
+    }
+  }
+}

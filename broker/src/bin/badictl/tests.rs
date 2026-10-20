@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use super::{
-    CLI_CAPABILITIES, CliError, Command, LocalCommand, ParsedCommand, build_overview,
-    parse_arguments, read_probe_text, redact_health_status, validate_control_response,
+    CLI_CAPABILITIES, CliError, Command, LocalCommand, ParsedCommand, StatsCommand, build_overview,
+    global, parse_arguments, read_probe_text, redact_health_status, validate_control_response,
     validate_correlated_response, validate_handshake, validate_health_response,
     validate_probe_response, validate_settings_response,
 };
@@ -10,11 +10,12 @@ use badi_broker::metrics::MetricsSnapshot;
 use badi_broker::model_selection::ModelUseCase;
 use badi_broker::protocol::{
     ActiveLocator, CURRENT_PROTOCOL_VERSION, ControlAction, ControlResultPayload,
-    HealthStatusPayload, HelloAckPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES,
-    MAX_SUGGESTION_CHARS, MAX_SUGGESTION_WORDS, MessageType, ProbeRequestPayload,
-    ProbeResultPayload, ProviderKind, ReasonCode, SessionId, SettingsStatusPayload, WireEnvelope,
+    GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, MAX_AFTER_CHARS,
+    MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SUGGESTION_CHARS, MAX_SUGGESTION_WORDS, MessageType,
+    ProbeRequestPayload, ProbeResultPayload, ProviderKind, ReasonCode, SessionId,
+    SettingsStatusPayload, SnoozeStatus, WireEnvelope,
 };
-use badi_broker::settings::SettingsV2;
+use badi_broker::settings::{LinuxAdapter, SettingsV2, StableIdentity};
 use jsonschema::Registry;
 use serde_json::json;
 
@@ -63,6 +64,7 @@ fn overview_matches_its_versioned_schema() {
         metrics: MetricsSnapshot::default(),
         active: None,
         desktop: None,
+        snoozes: Vec::new(),
     };
     let settings = SettingsV2::deny_by_default();
     let status = SettingsStatusPayload {
@@ -104,6 +106,17 @@ fn overview_matches_its_versioned_schema() {
     let mut widened = overview.clone();
     widened["privacy"]["network"] = json!(true);
     assert!(!validator.is_valid(&widened));
+    let mut snoozed = overview.clone();
+    snoozed["broker"]["snoozes"] = json!([{
+        "subject": {"kind": "linux_app", "adapter": "fcitx", "app_id": "telegram"},
+        "remaining_ms": 600_000,
+    }]);
+    assert!(validator.is_valid(&snoozed));
+    snoozed["broker"]["snoozes"][0]["subject"]["app_id"] = json!("Inbox - Mail");
+    assert!(
+        !validator.is_valid(&snoozed),
+        "a snooze names an exact app id"
+    );
     let mut extended = overview;
     extended["support"] = json!({});
     assert!(!validator.is_valid(&extended));
@@ -137,6 +150,7 @@ fn overview_requires_one_settings_revision_but_allows_runtime_pause() {
         metrics: MetricsSnapshot::default(),
         active: None,
         desktop: None,
+        snoozes: Vec::new(),
     };
     assert!(build_overview(health.clone(), status.clone()).is_ok());
 
@@ -259,6 +273,7 @@ fn control_response(request_id: &str, action: ControlAction) -> WireEnvelope {
             accepted: true,
             reason: ReasonCode::Accepted,
             paused: action == ControlAction::Pause,
+            snooze: None,
         },
     )
     .expect("control response")
@@ -333,6 +348,7 @@ fn health_response_requires_correlated_type_and_fixed_transport_limits() {
             metrics: MetricsSnapshot::default(),
             active: None,
             desktop: None,
+            snoozes: Vec::new(),
         },
     )
     .expect("health response")
@@ -376,9 +392,102 @@ fn parses_commands_with_absolute_socket() {
             .expect("pause off"),
         ParsedCommand::Remote {
             socket_path: PathBuf::from("/tmp/broker.sock"),
-            command: Command::Global(ControlAction::Resume),
+            command: global(ControlAction::Resume),
         }
     );
+    for (word, command) in [
+        ("status", StatsCommand::Status),
+        ("forget", StatsCommand::Forget),
+    ] {
+        assert_eq!(
+            parse_arguments(arguments(&["--socket", "/tmp/broker.sock", "stats", word]))
+                .expect("stats"),
+            ParsedCommand::Remote {
+                socket_path: PathBuf::from("/tmp/broker.sock"),
+                command: Command::Stats(command),
+            }
+        );
+    }
+    for rejected in [
+        &["stats"][..],
+        &["stats", "clear"],
+        &["stats", "status", "--json"],
+    ] {
+        assert!(matches!(
+            parse_arguments(arguments(rejected)),
+            Err(CliError::Arguments)
+        ));
+    }
+}
+
+#[test]
+fn parses_snooze_minutes_with_cotypists_default() {
+    let snooze = |values: &[&str]| {
+        let mut command = vec!["--socket", "/tmp/broker.sock", "snooze"];
+        command.extend_from_slice(values);
+        parse_arguments(arguments(&command))
+    };
+    let remote = |action, minutes| ParsedCommand::Remote {
+        socket_path: PathBuf::from("/tmp/broker.sock"),
+        command: Command::Global(GlobalControlRequestPayload { action, minutes }),
+    };
+    assert_eq!(
+        snooze(&[]).expect("default"),
+        remote(ControlAction::Snooze, Some(10))
+    );
+    assert_eq!(
+        snooze(&["1440"]).expect("a day"),
+        remote(ControlAction::Snooze, Some(1440))
+    );
+    assert_eq!(
+        snooze(&["end"]).expect("end"),
+        remote(ControlAction::SnoozeEnd, None)
+    );
+    for invalid in [
+        &["0"][..],
+        &["1441"],
+        &["ten"],
+        &["-5"],
+        &["5", "6"],
+        &["end", "now"],
+    ] {
+        assert!(
+            matches!(snooze(invalid), Err(CliError::Arguments)),
+            "{invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn snooze_replies_name_the_subject_or_why_there_was_none() {
+    let subject = StableIdentity::linux_app(LinuxAdapter::Fcitx, "telegram").expect("app");
+    let mut accepted = control_response("ctl:snooze", ControlAction::Snooze);
+    accepted.payload["snooze"] = json!({"subject": subject, "remaining_ms": 600_000});
+    let payload = validate_control_response(&accepted, "ctl:snooze", ControlAction::Snooze)
+        .expect("accepted snooze");
+    assert_eq!(payload.snooze.expect("status").subject, subject);
+
+    let bare = control_response("ctl:snooze", ControlAction::Snooze);
+    assert!(matches!(
+        validate_control_response(&bare, "ctl:snooze", ControlAction::Snooze),
+        Err(CliError::UnexpectedResponse)
+    ));
+    for reason in ["no_context", "ambiguous_session", "paused"] {
+        let mut refused = control_response("ctl:snooze", ControlAction::Snooze);
+        refused.payload["accepted"] = json!(false);
+        refused.payload["reason"] = json!(reason);
+        assert!(matches!(
+            validate_control_response(&refused, "ctl:snooze", ControlAction::Snooze),
+            Err(CliError::Rejected(code)) if code == reason
+        ));
+    }
+    let mut stray = control_response("ctl:end", ControlAction::SnoozeEnd);
+    assert!(validate_control_response(&stray, "ctl:end", ControlAction::SnoozeEnd).is_ok());
+    stray.payload["snooze"] = json!({"subject": subject, "remaining_ms": 1});
+    assert!(matches!(
+        validate_control_response(&stray, "ctl:end", ControlAction::SnoozeEnd),
+        Err(CliError::UnexpectedResponse)
+    ));
 }
 
 #[test]
@@ -505,12 +614,24 @@ fn status_json_redacts_all_active_locator_tokens() {
             suggestion_id: Some("s:secret".to_owned()),
         }),
         desktop: None,
+        snoozes: vec![SnoozeStatus {
+            subject: StableIdentity::linux_app(LinuxAdapter::Fcitx, "telegram").expect("app"),
+            remaining_ms: 540_000,
+        }],
     };
 
     let value = serde_json::to_value(redact_health_status(&status)).expect("redacted JSON");
     assert_eq!(
         value["active"],
         json!({ "present": true, "has_suggestion": true })
+    );
+    assert_eq!(
+        value["snoozes"],
+        json!([{
+            "subject": {"kind": "linux_app", "adapter": "fcitx", "app_id": "telegram"},
+            "remaining_ms": 540_000,
+        }]),
+        "status names what the user snoozed, as a settings identity"
     );
     let encoded = serde_json::to_string(&value).expect("encoded redacted JSON");
     for secret in [

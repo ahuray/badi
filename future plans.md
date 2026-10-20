@@ -120,10 +120,6 @@ publish need the user's go-ahead first; the rest can start at once.
 1. **Close the Cotypist gaps that fit Badi.** Cotypist 0.22 (researched
    2026-10-20 from its site, help pages and reviews) offers these, and Badi
    does not yet:
-   - a shortcut that turns the current app off for a few minutes, and a way
-     to send a literal Tab while a suggestion shows;
-   - words completed per day and per app (Badi counts since model start,
-     content-free, and should keep it that way);
    - global and per-app instructions, and personalized word choice (Badi's
      style samples are stored but not yet read, step 5);
    - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
@@ -131,6 +127,8 @@ publish need the user's go-ahead first; the rest can start at once.
      measured with the [bench](evaluation/llm-bench/README.md) and the Lab.
 
    Badi already matches or beats it on:
+   - words saved per day and per app or site, as counts only
+     ([`badi stats`](README.md#usage-statistics));
    - inline grey text in the field's font, Tab for a word, a key for all
      of it, Escape quiet and a request key;
    - a length setting for one or two words (`badi length short`) or up to
@@ -138,7 +136,9 @@ publish need the user's go-ahead first; the rest can start at once.
    - mid-line completion and typo correction where the editor allows it;
    - terminal agent prompts, and on-screen words through accessibility
      rather than screen recording;
-   - learned words, battery modes, no telemetry, no account, MIT.
+   - learned words, battery modes, no telemetry, no account, MIT;
+   - a snooze for the focused app or site (`badi snooze`, a portal
+     shortcut) and Ctrl+Shift+Tab for a real Tab while a suggestion shows.
 
    Left out on purpose: clipboard awareness and screen recording (the
    [context firewall](VISION.md#context-firewall)), sync and telemetry
@@ -205,9 +205,8 @@ publish need the user's go-ahead first; the rest can start at once.
       fields are ([observer runbook](adapters/accessibility/README.md)).
       Escape quiet is a broker setting (`escape_quiet_seconds`), covered in
       the [broker runbook](broker/README.md).
-- [ ] Measure overflow frequency per app; the multi-monitor live trial
-      remains open (scale 1.5 passed on 2026-10-19). The implemented placement and fallback behavior
-      is in the [preview contract](adapters/accessibility/README.md#caret-geometry-and-preview).
+- [ ] Measure overflow frequency per app; the placement and fallback are in
+      the [preview contract](adapters/accessibility/README.md#caret-geometry-and-preview).
       Investigate explicit requests in horizontally scrolled, very narrow
       inputs: the installed Chromium trial at 100 CSS px did not establish
       coverage ([tested boundary](adapters/fcitx5/README.md#tested-with)).
@@ -223,10 +222,6 @@ publish need the user's go-ahead first; the rest can start at once.
       a zero glyph box, so its overlay keeps the caret-size fallback.
 - [ ] Browser event cost on large pages (`daemon.py` focus handling and
       `field.py` serialization).
-- [ ] Each streamed partial suggestion hides the overlay and draws it again
-      about 1 ms later (`preview hidden cause=replaced` in the
-      [debug trace](README.md#debug-trace), Chromium, 2026-10-14). Check
-      whether that flickers, and move the shown surface instead of hiding it.
 
 ### Speed and footprint
 
@@ -235,11 +230,10 @@ reported, resident memory about 1.3 GB, and no quality regression in the Lab.
 Measured alternatives that were not adopted are in the
 [runtime runbook](broker/README.md#writing-model-runtime).
 
-- [ ] Fewer generated tokens, only after a held-out quality comparison.
 - [ ] Win back the confidence gate's wait: it holds each suggestion until its
       last token (p50 +76 ms, 4 of 92 shown past 550 ms at 15 W). Fewer
       generated tokens, or showing the first word once its own tokens and
-      the rest pass, are candidates; each needs the held-out comparison.
+      the rest pass, are candidates; each needs a held-out quality comparison.
 - [ ] Pin the runtime's four threads to performance cores (`taskset`/
       `--cpu-mask`): one idle measurement saw 94/30 against 54/21 prompt/
       generate tokens per second for Qwen3-1.7B, a second under load saw no
@@ -290,14 +284,14 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 - [ ] Qualify French, Spanish and Portuguese before turning them on by default
       (they are opt-in with `badi suggest LANG on`). Gather independently
-      reviewed confirmation prefixes and full-addition reviews for both,
+      reviewed confirmation prefixes and full-addition reviews for each,
       alongside the existing English, German and Persian confirmation gate.
 - [ ] Improve short-fragment language coverage without reducing precision.
       The conservative field selector keeps the adapter hint for short or
       uncertain text; explicit per-app overrides remain available
       ([contract](broker/README.md#writing-model-runtime)).
-- [ ] Global and per-app instructions, and a strength setting that trades
-      frequency for confidence.
+- [ ] A strength setting that trades frequency for confidence (instructions
+      are in step 1).
 - [ ] Cut the latency of the combined instruction/boundary mode (18/22 useful
       in development, 2.8 s cold median) and confirm it independently.
 - [ ] Keep facts in style examples from overriding the draft; confirm the Lab's
@@ -308,9 +302,7 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Spelling replacement undo in Telegram and Xournal++. Omawrite 0.5.0
       (2026-10-12, disposable `teh ` → `the `) needed two Ctrl+Z steps: the
       first removed the correction and the second restored the typo. Obsidian
-      already replaces the suffix in one undo step. German and Persian stay
-      off until the Lab spelling gate passes (the 40-case run was 2 and 4
-      useful, with one unwanted change each).
+      already replaces the suffix in one undo step.
 - [ ] Lift English with Gemma 3 1B, its weakest language (29% useful against
       Qwen3 1.7B's 40% and Granite 4.0 H-Tiny's 42% in the
       [European-language screen](docs/architecture/model-selection.md)):
@@ -356,6 +348,11 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       colon shortcode.
 
 ### Engineering upkeep
+
+- [ ] Carry out [ADR 0007](docs/decisions/0007-retire-protocol-v1.md),
+      accepted on 2026-10-13: `PROTOCOL_VERSION` is still 1, the v1 surface is
+      live in the broker, and `protocol/v1/` and the v1 settings schema are
+      still loaded by tests. Every client already sends `min_v: 2`.
 
 - [ ] The Lab test "process exit rejects the active request and a later
       request starts a fresh process" (`worker.test.mjs`) failed once in CI

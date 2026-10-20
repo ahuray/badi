@@ -15,6 +15,7 @@ machine. Badi is pre-release software.
 | Keep typing | Typing the suggestion's next letters keeps the rest. |
 | **Escape** | Dismiss. |
 | **Ctrl+Shift+Space** | Ask for a suggestion. |
+| **Ctrl+Shift+Tab** | Type a real Tab instead of accepting: the suggestion goes away and the app gets Tab. Where Badi would not take Tab, it stays the app's key (a browser's previous tab). |
 
 Every surface uses that order: Obsidian with Ctrl/Command+→ for all of it,
 Neovim in prose buffers after a typing pause (leaving Insert mode dismisses
@@ -53,10 +54,10 @@ way while Fcitx is composing.
 
 ## Where it works
 
-Tested on the development workstation (Arch Linux, Hyprland 0.56, Fcitx 5.1.22
-and, from 2026-10-19, 5.1.23) with disposable text in October 2026. A listed
-version is not a claim about Linux in general. Chromium-based apps need Fcitx
-5.1.23 or later on Hyprland: earlier versions stop them sending the text
+Tested on the development workstation (Arch Linux, Hyprland 0.56, Fcitx
+5.1.23) with disposable text in October 2026. A listed version is not a claim
+about Linux in general. Badi needs Fcitx 5.1.23 or later on Hyprland:
+earlier versions stop Chromium-based apps sending the text
 around the caret.
 
 | App | Notes | Tested |
@@ -146,9 +147,7 @@ are kept, and the first backup — the files as they were before Badi — is kep
 as well. `python3 scripts/badi_install.py restore DIR` rolls one back, reloads
 user units when a service file was restored, and updates the install receipt
 to those restored bytes. The desktop install needs an unlocked desktop;
-`--broker-only` updates only the model service while locked. A complete
-install also removes, with a backup, the Fcitx 5.1.22 frontend backport that
-earlier Badi installs added.
+`--broker-only` updates only the model service while locked.
 Without a writing model, the installer offers the one recommended for this
 device: it names the model, its size and any terms that come with it, and
 downloads it (pinned and hash-checked) only after you accept. Unattended,
@@ -182,6 +181,7 @@ otherwise ([how](docs/architecture/model-selection.md)).
 badi status
 badi pause                          # persists across restarts; badi resume
 badi pause toggle                   # what the session helper's shortcut runs
+badi snooze                         # off in the focused app or site for 10 minutes; badi resume ends it
 badi battery normal                 # on battery: keep mains scheduling (default: quiet)
 badi length short                   # one or two words per suggestion; normal (default) up to four
 badi mid-line on                    # suggestions when a word follows the caret; off by default
@@ -215,8 +215,8 @@ autocomplete hint. The **b** mark in the
 Omarchy bar opens the same settings as a keyboard-driven popout (j/k, space,
 h/l, `/` to search), and right-clicking it pauses Badi. It shows the model's
 live state, content-free shown and accepted counts, an acceptance meter and
-estimated words saved since model start
-([counter definitions](ui/omarchy-plugin/README.md#statistics)).
+estimated words saved since model start, and the words saved on each of the
+last seven days and by app ([counter definitions](ui/omarchy-plugin/README.md#statistics)).
 
 A language override takes precedence over detection and the adapter's hint
 without granting access to an app or website. `badi language APP reset`
@@ -243,9 +243,13 @@ acquired afresh. On battery or in the power-saver profile, Badi by default
 starts the model only once you pause typing for 300 ms instead of on every
 key; `badi battery explicit` shows suggestions only when you ask and `badi
 battery normal` keeps mains behavior. The model stays loaded in every mode.
-The service also offers **Pause or resume** and **Open settings** shortcuts
-through the desktop portal; bind them in Hyprland with `hl.dsp.global("io.github.ahuray.badi:pause-toggle")`
-and `...:open-settings` ([session helper](adapters/session/README.md)).
+The service also offers **Pause or resume**, **Snooze** and **Open
+settings** shortcuts through the desktop portal; bind them in Hyprland with
+`hl.dsp.global("io.github.ahuray.badi:pause-toggle")`, `...:snooze` and
+`...:open-settings` ([session helper](adapters/session/README.md)). A snooze
+turns Badi off for 10 minutes in the app or website of the field you are
+typing in, like Cotypist's snooze; it lasts until the model restarts at most,
+and `badi resume` or the settings panel's Snoozed row ends it sooner.
 
 ### Context (opt-in)
 
@@ -287,6 +291,22 @@ digits, email addresses or links are skipped. No suggestion uses the samples
 yet: they are for measuring, in the Lab, whether your own style helps.
 `badi style forget` deletes them and the key. Apps other than websites cannot
 learn ([details](broker/README.md#style-learning-opt-in)).
+
+### Usage statistics
+
+```sh
+badi stats                 # today, the last 7 days, each day and the leading apps and sites
+badi stats --json          # the same counts for scripts
+badi stats forget          # delete them
+```
+
+Badi counts, per day and per app or site, the suggestions it showed, the
+acceptances that landed and the words they saved, and keeps those counts 90
+days in `~/.local/share/badi/stats.json` (mode 0600). It keeps no text: no
+word you typed, no suggestion and no window title. Nothing is counted while
+Badi is paused or in an app or site it may not suggest in. Counts reach the
+disk within a minute and whenever Badi pauses or stops, so a restart keeps
+them ([details](broker/README.md#usage-statistics)).
 
 ## When nothing appears
 

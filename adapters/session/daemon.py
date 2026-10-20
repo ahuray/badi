@@ -4,7 +4,7 @@
 Tells the broker, without any text, whether the login session is in the
 foreground or the machine is going to sleep (logind), and whether it runs on
 battery or in the power-saver profile (UPower, power-profiles-daemon). It also
-offers pause and settings shortcuts through the GlobalShortcuts portal.
+offers pause, snooze and settings shortcuts through the GlobalShortcuts portal.
 
 It never reads a field, opens a suggestion session or edits anything. A
 report can only withhold authority: an inactive or sleeping session holds
@@ -54,6 +54,7 @@ PORTAL_PATH = "/org/freedesktop/portal/desktop"
 SHORTCUTS_IFACE = "org.freedesktop.portal.GlobalShortcuts"
 SHORTCUTS = (
     ("pause-toggle", "Pause or resume Badi suggestions"),
+    ("snooze", "Snooze Badi in the focused app or site for 10 minutes"),
     ("open-settings", "Open Badi settings"),
 )
 # The controller is installed beside this directory; in the checkout it is
@@ -62,6 +63,7 @@ INSTALLED_CONTROLLER = Path(__file__).resolve().parent.parent / "badi-desktop.py
 CHECKOUT_CONTROLLER = Path(__file__).resolve().parents[2] / "scripts/badi-desktop.py"
 ACTIONS = {
     "pause-toggle": ("pause", "toggle"),
+    "snooze": ("snooze",),
     "open-settings": ("settings",),
 }
 BACKOFF_SECONDS = (1, 2, 5, 10, 30)
@@ -73,6 +75,11 @@ KEY_RETRY_SECONDS = 120
 def log(message):
     """Fixed, content-free diagnostics for the user journal."""
     print(f"badi-session: {message}", file=sys.stderr, flush=True)
+
+
+def first_line(text, limit=200):
+    """The first line of a controller message, bounded for a notification."""
+    return ((text or "").strip().splitlines() or [""])[0][:limit]
 
 
 def controller_path(environment=os.environ):
@@ -353,11 +360,13 @@ class Power:
 
 
 class Shortcuts:
-    """Registers pause and settings shortcuts with the GlobalShortcuts portal.
+    """Registers pause, snooze and settings shortcuts with the GlobalShortcuts
+    portal.
 
     The compositor decides the keys (Hyprland: ``hl.dsp.global``). A shortcut
     runs the same controller command as the terminal and grants no access to
-    any application or field.
+    any application or field; a snooze only withholds, in the app or site the
+    broker already follows.
     """
 
     def __init__(self, bus, controller, notify=True):
@@ -461,7 +470,7 @@ class Shortcuts:
         try:
             process = Gio.Subprocess.new(
                 [sys.executable, "-B", str(self.controller), *ACTIONS[shortcut_id]],
-                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE)
         except GLib.Error:
             self._running.discard(shortcut_id)
             log(f"{shortcut_id} could not start the controller")
@@ -471,9 +480,18 @@ class Shortcuts:
     def _finished(self, process, result, shortcut_id):
         self._running.discard(shortcut_id)
         try:
-            _ok, output, _error = process.communicate_utf8_finish(result)
+            _ok, output, error = process.communicate_utf8_finish(result)
         except GLib.Error:
-            output = ""
+            output = error = ""
+        if shortcut_id == "snooze":
+            # The controller's own line names the app or site, or why nothing
+            # was snoozed (no focused field Badi follows); never any text.
+            if not process.get_successful():
+                log("snooze refused or failed")
+            line = first_line(output if process.get_successful() else error)
+            self._notification("Badi snoozed" if process.get_successful() else "Badi did not snooze",
+                               line or "Run badi doctor in a terminal.")
+            return
         if not process.get_successful():
             log(f"{shortcut_id} failed")
             self._notification("Badi could not change pause", "Run badi doctor in a terminal.")

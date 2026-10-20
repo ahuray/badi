@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "KeyModel.js" as KeyModel
+import "StatsModel.js" as StatsModel
 
 // The panel's state and actions, without any visuals: the broker client,
 // the desktop helper's processes, every settings change (compare-and-swap
@@ -58,10 +59,24 @@ Item {
     ? (serviceState.active === "active" ? "Model starting or unavailable" : "Model offline")
     : client.controlPlaneDegraded ? "Settings need attention" : paused ? "Predictions paused"
     : !anyAppEnabled ? "Applications disabled" : "Model ready"
+  // Apps and sites snoozed now (badi snooze or its shortcut; runtime only),
+  // each a settings identity and the milliseconds left.
+  readonly property var snoozes: Array.isArray(client.broker.snoozes)
+    ? client.broker.snoozes.filter(function(item) {
+        return client.isObject(item) && client.isIdentity(item.subject) && Number.isSafeInteger(item.remaining_ms)
+      })
+    : []
+  readonly property string snoozeLabel: snoozes.map(function(item) { return identityLabel(item.subject) }).join(", ")
   readonly property var desktop: client.objectValue(client.overview, "desktop")
   readonly property var activity: client.objectValue(desktop, "activity")
   readonly property var misses: client.objectValue(desktop, "no_suggestion")
   readonly property var spelling: Array.isArray(desktop.spelling) ? desktop.spelling : []
+  // Usage statistics (badi stats): counts per local day and per app or site,
+  // kept 90 days. Absent from a broker that has none.
+  readonly property var stats: client.objectValue(desktop, "stats")
+  readonly property bool statsReported: typeof stats.available === "boolean"
+  readonly property bool statsAvailable: stats.available === true
+  readonly property var statsSummary: client.objectValue(stats, "summary")
   readonly property var modelAdvice: client.objectValue(client.objectValue(client.objectValue(client.overview, "models"), "writing"), "advice")
   readonly property var modelCatalog: Array.isArray(modelAdvice.catalog) ? modelAdvice.catalog : []
   // Terms that come with a model's licence; a model with terms is chosen,
@@ -97,6 +112,22 @@ Item {
     return applied >= 0 && dispatched >= 0 ? applied + dispatched : -1
   }
 
+  // The history's numbers (StatsModel.js): a window's counts, the week's
+  // words per day and the apps and sites that saved the most this week.
+  function statsTotals(window) {
+    return StatsModel.totals(statsSummary, window)
+  }
+
+  function statsWeek() {
+    return StatsModel.week(statsSummary)
+  }
+
+  function statsLeaders(count) {
+    var names = {}
+    supportedApps.forEach(function(app) { names[app.appId] = app.name })
+    return StatsModel.leaders(statsSummary, names, count)
+  }
+
   function refresh() {
     actionMessage = ""
     client.refresh()
@@ -110,6 +141,8 @@ Item {
 
   function togglePause() {
     if (!client.canMutateSettings || action.running) return
+    // Resuming ends every snooze too, as badi resume does.
+    if (client.brokerPaused && snoozes.length > 0) return runAction(["resume"], "Resuming", "Resumed · snooze ended")
     actionMessage = ""
     var document = client.cloneSettings()
     document.paused = !client.brokerPaused
@@ -158,6 +191,16 @@ Item {
         origin: identity.scheme + "://" + identity.host + (identity.port === standard ? "" : ":" + identity.port)})
     }
     return rules
+  }
+
+  // A supported app's name, another app's id, or a site's origin.
+  function identityLabel(identity) {
+    if (identity.kind === "linux_app") {
+      var app = supportedApps.find(function(item) { return item.appId === identity.app_id })
+      return app ? app.name : identity.app_id
+    }
+    var standard = identity.scheme === "https" ? 443 : 80
+    return identity.scheme + "://" + identity.host + (identity.port === standard ? "" : ":" + identity.port)
   }
 
   function appAdapter(appId) {
@@ -319,6 +362,16 @@ Item {
     var list = []
     var reachable = client.brokerReachable
 
+    // A snooze withholds one app or site for a few minutes; ending it
+    // early is one key away while it runs.
+    if (snoozes.length > 0) {
+      var left = Math.max.apply(null, snoozes.map(function(item) { return Math.max(1, Math.round(item.remaining_ms / 60000)) }))
+      list.push({key: "snooze", section: "Snoozed", kind: "action", label: "Snoozed in " + snoozeLabel,
+        detail: (snoozes.length === 1 ? left + " min left" : "Up to " + left + " min left") + " · Enter resumes now",
+        enabled: !controlsBusy,
+        activate: function() { root.runAction(["snooze", "end"], "Ending the snooze", "Snooze ended") }})
+    }
+
     // The writing model: every model that fits this device, the best
     // measured one marked; picking one downloads it (pinned) and restarts.
     var fitting = modelCatalog.filter(function(model) { return model.fits === true })
@@ -468,6 +521,15 @@ Item {
     })
     list.push({key: "site_add", section: "Websites", kind: "field", label: "Add a site",
       detail: "Enter allows · Shift+Enter blocks", enabled: canChange})
+
+    // Usage statistics: counts only, per day and app or site (badi stats).
+    if (reachable && statsReported) {
+      list.push({key: "stats_forget", section: "Statistics", kind: "action", label: "Forget usage statistics",
+        detail: statsAvailable ? "Counts per day and app, kept 90 days · badi stats"
+          : "⚠ Unreadable and kept as it is · forgetting starts the count again",
+        enabled: !controlsBusy,
+        activate: function() { root.runAction(["stats", "forget"], "Forgetting usage statistics", "Usage statistics deleted") }})
+    }
 
     var autostart = serviceState.autostart
     list.push({key: "autostart", section: "System", kind: "toggle", label: "Start at login",

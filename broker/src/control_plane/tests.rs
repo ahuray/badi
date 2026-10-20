@@ -926,3 +926,90 @@ fn unix_day_uses_complete_utc_days_and_rejects_pre_epoch_time() {
         Err(ControlPlaneError::ClockBeforeUnixEpoch)
     ));
 }
+
+#[test]
+fn usage_statistics_survive_a_restart_and_drop_counts_from_old_settings() {
+    use crate::stats::{STATS_FILE_NAME, StatsEvent};
+    let temporary = tempdir().expect("temporary directory");
+    let control_plane = ControlPlane::open(paths(temporary.path())).expect("control plane");
+    control_plane
+        .replace_settings(0, granted_settings(1))
+        .expect("allow the site");
+    assert!(
+        control_plane
+            .record_stats_at_settings_revision(1, &identity(), StatsEvent::Shown)
+            .expect("record")
+    );
+    assert!(
+        control_plane
+            .record_stats_at_settings_revision(1, &identity(), StatsEvent::Accepted { words: 2 })
+            .expect("record")
+    );
+    // Admitted under settings that are no longer current: not counted.
+    assert!(
+        !control_plane
+            .record_stats_at_settings_revision(0, &identity(), StatsEvent::Shown)
+            .expect("stale")
+    );
+    // Not allowed to suggest there: not counted.
+    assert!(
+        !control_plane
+            .record_stats_at_settings_revision(1, &other_identity(), StatsEvent::Shown)
+            .expect("blocked")
+    );
+    let before = control_plane
+        .stats_summary()
+        .expect("summary")
+        .expect("available");
+    assert_eq!(before.totals.today.shown, 1);
+    assert_eq!(before.totals.today.words, 2);
+    let path = temporary.path().join("data/badi").join(STATS_FILE_NAME);
+    assert!(!path.exists(), "counts wait in memory for the next sweep");
+    assert!(control_plane.persist_stats().expect("persist"));
+    drop(control_plane);
+
+    let reopened = ControlPlane::open(paths(temporary.path())).expect("restart");
+    let after = reopened
+        .stats_summary()
+        .expect("summary")
+        .expect("available");
+    assert_eq!(after.totals, before.totals);
+    assert_eq!(after.subjects, before.subjects);
+}
+
+#[test]
+fn unreadable_usage_statistics_are_preserved_until_forget() {
+    use crate::stats::{STATS_FILE_NAME, StatsEvent};
+    let temporary = tempdir().expect("temporary directory");
+    let path = temporary.path().join("data/badi").join(STATS_FILE_NAME);
+    {
+        let control_plane = ControlPlane::open(paths(temporary.path())).expect("control plane");
+        control_plane
+            .replace_settings(0, granted_settings(1))
+            .expect("allow the site");
+    }
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .expect("create");
+    fs::write(&path, b"{not json").expect("corrupt");
+    let control_plane = ControlPlane::open(paths(temporary.path())).expect("control plane");
+    assert_eq!(control_plane.stats_summary().expect("summary"), None);
+    assert!(matches!(
+        control_plane.record_stats_at_settings_revision(1, &identity(), StatsEvent::Shown),
+        Err(ControlPlaneError::StatsUnavailable)
+    ));
+    assert!(!control_plane.persist_stats().expect("nothing to write"));
+    assert_eq!(fs::read(&path).expect("preserved"), b"{not json");
+
+    let summary = control_plane.forget_stats().expect("forget repairs");
+    assert_eq!(summary.days, Vec::new());
+    assert!(!path.exists());
+    assert!(
+        control_plane
+            .record_stats_at_settings_revision(1, &identity(), StatsEvent::Shown)
+            .expect("counts again")
+    );
+}
