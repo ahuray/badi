@@ -22,8 +22,8 @@ import badi_install
 ROOT = Path(__file__).resolve().parents[1]
 # Each launcher's user flags file and how that wrapper turns it into arguments:
 # "glib" is /usr/bin/chromium's GLib shell parsing, "words" strips # comments
-# and splits on whitespace without quote handling (Codex: read -a; VS Code and
-# Grok Bot: sed plus unquoted expansion), and "line" passes every non-comment
+# and splits on whitespace without quote handling (Codex and Claude: read -a;
+# VS Code and Grok Bot: sed plus unquoted expansion), and "line" passes every non-comment
 # line as one argument (mapfile). Discord has no such file; see the
 # accessibility runbook.
 OBSERVED_APP_FLAGS = {
@@ -31,6 +31,7 @@ OBSERVED_APP_FLAGS = {
     "brave-origin": ("brave-origin-flags.conf", "line"),
     "chatgpt": ("codex-flags.conf", "words"),
     "code": ("code-flags.conf", "words"),
+    "com.anthropic.claude": ("claude-desktop-flags.conf", "words"),
     "cursor": ("cursor-flags.conf", "line"),
     "grok-bot": ("grok-bot-flags.conf", "words"),
 }

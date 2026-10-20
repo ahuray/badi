@@ -74,6 +74,7 @@ around the caret.
 | Ghostty (any TUI, such as a coding agent's prompt) | `badi app com.mitchellh.ghostty on`; suggestions follow the line you type and show in a panel at the cursor; Tab types a word, Ctrl+→ all of it, a correction shows as `teh → the` and Tab fixes the typo, and an automatic miss stays quiet ([how](docs/decisions/0009-terminals-use-the-typed-line.md)) | Ghostty 1.3.1 |
 | Neovim | Badi plugin; prose buffers, inline preview, one-step undo; no spelling fixes yet. Live with the real model under LazyVim in foot and Ghostty, including Ctrl+Shift+Space; in Ghostty it takes over from the typed line while focused | 0.12.5 |
 | Grok Bot | Ready, but its composer is untested | 0.35 |
+| Claude desktop | Ready, but its composer is untested; `badi app com.anthropic.claude on`, then relaunch it with the flag below | 2.42304 (Electron 44) |
 
 **Not yet:**
 - Discord: desktop-wide accessibility can be enabled, but its composer is unverified.
@@ -106,13 +107,13 @@ confidently in a language that is not turned on is never corrected. In LibreOffi
 [Badi extension](adapters/libreoffice/README.md) shows a correction after you
 finish a misspelled word, or on Alt+F7 for the word at the caret, and replaces
 it through Writer's own text and undo APIs; one Ctrl+Z restores the typo. The apps in the section above, plus Writer's
-grey preview, VS Code, Cursor, Codex, Discord and Grok Bot, stay append-only,
+grey preview, VS Code, Cursor, Codex, Claude, Discord and Grok Bot, stay append-only,
 so a typo there is not deleted. In Omawrite 0.5.0 a spelling
 replacement is two native undos: the first removes the correction and the
 second restores the mistyped word. Telegram and Xournal++ have not been retried.
 
 Chromium-based apps must start with `--force-renderer-accessibility=complete`.
-`install-desktop.py --observed-app chromium|brave-origin|chatgpt|code|cursor|grok-bot`
+`install-desktop.py --observed-app chromium|brave-origin|chatgpt|code|com.anthropic.claude|cursor|grok-bot`
 adds it to that app's flags file; Zen needs nothing.
 For Discord, `install-desktop.py --screen-reader-accessibility` opts into
 desktop-wide accessibility with recorded rollback values

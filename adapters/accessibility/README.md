@@ -23,6 +23,7 @@ editing works ([coverage](../../README.md#where-it-works)).
 | `cursor` | `/usr/lib/electron42/electron` running exactly `/usr/share/cursor/resources/app/cursor.mjs` | `cursor` | desktop app |
 | `discord` | `$XDG_CONFIG_HOME/discord/app-<version>/Discord` | `discord` | desktop app |
 | `grok-bot` | `/opt/Grok Bot/grok-bot` | `grok-bot` | desktop app |
+| `com.anthropic.claude` (Claude) | `/usr/lib/claude-desktop/claude-desktop` | `com.anthropic.Claude` | desktop app |
 | `telegram` | `/usr/bin/Telegram` | `org.telegram.desktop` | desktop app |
 | `omawrite` | `/usr/bin/omawrite` | `omawrite` | desktop app |
 | `libreoffice` | `/usr/lib/libreoffice/program/soffice.bin` | `libreoffice-writer`, `paragraph` fields only | desktop app |
@@ -357,6 +358,7 @@ app's flags file:
 | `code` | `code-flags.conf` |
 | `cursor` | `cursor-flags.conf` |
 | `grok-bot` | `grok-bot-flags.conf` |
+| `com.anthropic.claude` | `claude-desktop-flags.conf` |
 
 A file that already has the flag is left alone. A reduced mode or
 `--disable-renderer-accessibility` is the user's choice and stops the installer

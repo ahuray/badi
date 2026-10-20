@@ -25,6 +25,7 @@ Item {
     {name: "VS Code", appId: "code", detail: "Needs \"editor.editContext\": false"},
     {name: "Cursor", appId: "cursor", detail: "Editor"},
     {name: "Grok Bot", appId: "grok-bot", detail: "Chat composer"},
+    {name: "Claude", appId: "com.anthropic.claude", detail: "Desktop app composer"},
     {name: "Discord", appId: "discord", detail: "Needs renderer accessibility"}]
 
   property alias client: client

@@ -445,7 +445,8 @@ class IdentityTests(unittest.TestCase):
 
     def test_supported_ids_match_the_fcitx_addon(self):
         self.assertEqual(set(APPS), {"chromium", "chromium-browser", "brave-origin", "zen", "chatgpt", "code",
-                                     "cursor", "discord", "grok-bot", "telegram", "omawrite", "libreoffice"})
+                                     "com.anthropic.claude", "cursor", "discord", "grok-bot", "telegram",
+                                     "omawrite", "libreoffice"})
         self.assertEqual({app for app, rule in APPS.items() if rule.browser},
                          {"chromium", "chromium-browser", "brave-origin", "zen"})
         self.assertEqual({app for app, rule in APPS.items() if rule.gecko}, {"zen"})
@@ -462,6 +463,7 @@ class IdentityTests(unittest.TestCase):
                                    ("zen", "/opt/zen-browser-bin/zen-bin"),
                                    ("chatgpt", "/usr/lib/chatgpt/ChatGPT"), ("code", "/usr/share/code/code"),
                                    ("grok-bot", "/opt/Grok Bot/grok-bot"),
+                                   ("com.anthropic.claude", "/usr/lib/claude-desktop/claude-desktop"),
                                    ("libreoffice", "/usr/lib/libreoffice/program/soffice.bin"),
                                    ("telegram", "/usr/bin/Telegram"), ("omawrite", "/usr/bin/omawrite")):
             with self.subTest(app_id=app_id):

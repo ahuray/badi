@@ -12,6 +12,9 @@ in [future plans](<future plans.md>), and lasting decisions in
   two independent 60-case sets it gave 39 and 23 useful additions against 5
   and 1, but traps became the wrong word (harmful 13 against 3, then 7
   against 4), so the gates fail and production requests carry no vocabulary.
+- The Claude desktop app (`com.anthropic.claude`) joins the IME-parity apps:
+  its composer accepts through one append-only commit once the app runs with
+  renderer accessibility (`--observed-app com.anthropic.claude`).
 - The Omarchy panel's accent and urgent colors read `Commons.Color`, as
   Omarchy 4.0.5 does: on Qt 6.12 a bare `Color` names QtQuick's new singleton
   and worked only through Omarchy's temporary Quickshell patch. The pinned
