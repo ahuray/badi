@@ -816,6 +816,9 @@ fn trace_model_done(
                 entry.put("cache_tokens", cache_tokens);
             }
             entry.put("generated_tokens", stats.generated_tokens);
+            if let Some(minimum) = stats.min_logprob_hundredths {
+                entry.put("min_logprob", f64::from(minimum) / 100.0);
+            }
         }
         if matches!(outcome, "cancelled" | "shutdown" | "timeout") {
             entry.put("cancelled_before_first_token", cancelled_before_first_token);

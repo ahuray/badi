@@ -57,6 +57,9 @@ pub struct ProviderStats {
     pub prompt_tokens: Option<u32>,
     pub cache_tokens: Option<u32>,
     pub generated_tokens: u32,
+    /// The lowest token log-probability of a gated suggestion in hundredths,
+    /// when known (an integer, so stats stay comparable).
+    pub min_logprob_hundredths: Option<i32>,
 }
 
 /// One provider reply: the outcome and, when the provider measured the

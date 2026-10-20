@@ -601,6 +601,11 @@ pub struct NativeStreamChunk {
     pub stopping_word: Option<String>,
     #[serde(default, deserialize_with = "deserialize_native_timings")]
     pub timings: Option<NativeTimings>,
+    /// The streamed tokens' pre-sampling probabilities when the request set
+    /// `n_probs`; read leniently, so a malformed value leaves confidence
+    /// unknown instead of failing the stream.
+    #[serde(default)]
+    pub completion_probabilities: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

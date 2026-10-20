@@ -69,7 +69,7 @@ async fn write_completion(socket: &mut TcpStream) {
     socket
         .write_all(
             b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n\
-            data: {\"index\":0,\"content\":\" review it\",\"stop\":false}\n\n\
+            data: {\"index\":0,\"content\":\" review it\",\"stop\":false,\"completion_probabilities\":[{\"token\":\" review it\",\"logprob\":-0.1}]}\n\n\
             data: {\"index\":0,\"content\":\"\",\"stop\":true,\"stop_type\":\"eos\"}\n\n",
         )
         .await
@@ -256,7 +256,7 @@ async fn serve_delayed(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
             .to_owned();
     for piece in pieces {
-        let value = serde_json::json!({"index":0,"content":piece,"stop":false});
+        let value = token_event(piece);
         write!(response, "data: {value}\n\n").expect("event");
     }
     if !stall {
@@ -377,7 +377,7 @@ async fn explicit_spelling_and_continuation_share_the_explicit_budget() -> Resul
         );
         next.write_all(
             b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n\
-            data: {\"index\":0,\"content\":\" teh review it\",\"stop\":false}\n\n\
+            data: {\"index\":0,\"content\":\" teh review it\",\"stop\":false,\"completion_probabilities\":[{\"token\":\" teh review it\",\"logprob\":-0.1}]}\n\n\
             data: {\"index\":0,\"content\":\"\",\"stop\":true,\"stop_type\":\"eos\"}\n\n",
         )
         .await
@@ -406,4 +406,15 @@ async fn explicit_spelling_and_continuation_share_the_explicit_budget() -> Resul
     );
     server.await?;
     Ok(())
+}
+
+/// A streamed token as the pinned runtime sends it when the request sets
+/// `n_probs`: its text and its pre-sampling log-probability.
+fn token_event(piece: &str) -> serde_json::Value {
+    token_event_with(piece, -0.1)
+}
+
+fn token_event_with(piece: &str, logprob: f64) -> serde_json::Value {
+    serde_json::json!({"index":0,"content":piece,"stop":false,"completion_probabilities":[
+        {"id":1,"token":piece,"bytes":piece.as_bytes(),"logprob":logprob,"top_logprobs":[]}]})
 }

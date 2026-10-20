@@ -29,8 +29,12 @@ links to it. A tested app version is not a claim about Linux in general.
   holds grants across sleep and session switches and defers automatic
   requests on battery ([ADR 0005](docs/decisions/0005-desktop-signals-withhold-authority.md)).
 - **Speed:** with a full sliding-window cache (2026-10-19), Gemma 3 reads 1.5
-  new prompt tokens per keystroke and a Chromium suggestion shows at p50 241
-  ms after the key ([runtime](broker/README.md#writing-model-runtime)). This
+  new prompt tokens per keystroke and a Chromium suggestion showed at p50 241
+  ms after the key ([runtime](broker/README.md#writing-model-runtime)). The
+  confidence gate (2026-10-20) judges each suggestion whole before showing
+  it: at 15 W the preview now appears at p50 294 against 218 ms, and a
+  sixth fewer word pauses show one
+  ([gate](broker/README.md#suggestion-limits)). This
   laptop's firmware caps sustained CPU power at 15 W; Gemma 3 fits 550 ms
   there and comfortably at 28 W. The Iris Xe and more than four threads were
   measured and not adopted ([runtime](broker/README.md#writing-model-runtime)).
@@ -159,6 +163,10 @@ Measured alternatives that were not adopted are in the
 [runtime runbook](broker/README.md#writing-model-runtime).
 
 - [ ] Fewer generated tokens, only after a held-out quality comparison.
+- [ ] Win back the confidence gate's wait: it holds each suggestion until its
+      last token (p50 +76 ms, 4 of 92 shown past 550 ms at 15 W). Fewer
+      generated tokens, or showing the first word once its own tokens and
+      the rest pass, are candidates; each needs the held-out comparison.
 - [ ] Pin the runtime's four threads to performance cores (`taskset`/
       `--cpu-mask`): one idle measurement saw 94/30 against 54/21 prompt/
       generate tokens per second for Qwen3-1.7B, a second under load saw no
@@ -236,12 +244,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Compare Qwen3.5 0.8B base with Qwen3 0.6B as the compact choice (battery,
       no AVX2): it was the fastest screened model (p95 301 ms, no miss) at 35%
       useful against Gemma 3 1B's 46%, but Qwen3 0.6B was not screened.
-- [ ] Decide whether quiet beats speed for token confidence: a gate that
-      waits for the whole suggestion and hides it when any token falls under
-      log-probability −2.75 removed a third of harmful and almost half of
-      unhelpful held-out suggestions, at the cost of about one useful
-      suggestion in seven and about the remaining decode time before display
-      ([measurement](broker/README.md#suggestion-limits)).
 - [ ] Spelling for Persian, which has no cased letters and needs its own word
       shape rather than the European one.
 - [ ] Measure Cotypist parity with the same tasks on a named Cotypist version on

@@ -870,6 +870,14 @@ const CONTEXT_CUT_STEP_SCALARS: usize = 64;
 /// Logit bias for the first token of each context word: enough to tip a
 /// near tie toward a word already in the text, not to force it.
 pub(crate) const CONTEXT_BIAS: f64 = 2.0;
+
+/// A continuation is shown only when every token of the shown text has at
+/// least this pre-sampling log-probability, so the whole suggestion must be
+/// generated before it appears. Calibrated on Gemma 3 1B's blind-reviewed
+/// suggestions; on held-out confirmation outputs it removed 5 of 15 harmful
+/// and 8 of 18 unhelpful suggestions at the cost of 7 of 51 useful ones
+/// (2026-10-20, user decision).
+pub(crate) const CONFIDENCE_FLOOR: f64 = -2.75;
 const BIAS_MIN_SCALARS: usize = 5;
 const BIAS_MAX_WORDS: usize = 24;
 /// The words just typed are left out, so the bias never invites a repeat.

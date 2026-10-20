@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- A suggestion now shows only when every token is likely enough (log-probability
+  ≥ −2.75, user decision): held-out harmful additions fell from 15 to 10 and
+  unhelpful ones from 18 to 10, at 7 of 51 useful ones; at 15 W the preview
+  appears at p50 294 against 218 ms. Withheld suggestions count as
+  `low_confidence`.
 - Token confidence was calibrated on Gemma 3 1B's reviewed suggestions: a
   frozen whole-suggestion rule cut held-out harmful additions from 15 to 10
   but lost 7 of 51 useful ones and needs the full suggestion before display,
