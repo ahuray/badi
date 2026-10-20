@@ -86,14 +86,16 @@ pub fn learnable(word: &str) -> bool {
 }
 
 /// The finished words of a draft worth learning, in order and each once:
-/// [`Vocabulary::words`] without the first word, which may be the clipped
-/// end of a longer one, and without the word still being typed at its end.
+/// [`Vocabulary::words`] without the word still being typed at its end, and
+/// without the first word when the draft fills the wire's 512 scalars, where
+/// it may be the clipped end of a longer one.
 #[must_use]
 pub fn written_words(before: &str) -> Vec<String> {
+    let clipped = before.chars().count() >= crate::protocol::MAX_BEFORE_CHARS;
     let mut words: Vec<String> = Vec::new();
     for (start, word) in before.unicode_word_indices() {
         let end = start + word.len();
-        if start > 0
+        if (start > 0 || !clipped)
             && end < before.len()
             && bounded_word(before, start, word)
             && !words.iter().any(|seen| seen == word)

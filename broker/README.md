@@ -371,7 +371,8 @@ is on and the subject may suggest, the broker does four things:
   generation task reads the learned words after the state lock is released.
 - **Learns.** The finished words of a `normal`-purpose field's text are
   counted toward that subject's learned words: letters only, six to 24 long,
-  without the draft's first and last word. Each word counts once per field
+  without the word still being typed, and without the first word when the
+  draft fills the 512-scalar cap, where it may be clipped. Each word counts once per field
   visit, keyed by target; an observed field reopens its session as it changes,
   but its target id stays for the visit. A terminal field never learns. The
   words go through the outcome worker, like style samples.
