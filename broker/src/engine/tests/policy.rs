@@ -988,3 +988,54 @@ async fn concurrent_settings_replacements_are_serialized_through_authority_insta
         3
     );
 }
+
+#[test]
+fn the_policy_reply_says_context_words_only_where_context_is_on_and_suggestions_allowed() {
+    use crate::protocol::{Origin, OriginScheme, TargetDescriptor, TargetKind};
+    use crate::settings::{
+        BrowserAdapter, PermissionDecision, RetentionPermission, SettingsV2, StableIdentity,
+        SubjectPermissions, SubjectRule, WebScheme,
+    };
+    let target = |host: &str| TargetDescriptor {
+        kind: TargetKind::Browser,
+        app_id: "chromium".to_owned(),
+        target_id: "field".to_owned(),
+        origin: Some(Origin {
+            scheme: OriginScheme::Https,
+            host: host.to_owned(),
+            port: None,
+        }),
+    };
+    let site = |host: &str| {
+        StableIdentity::browser_origin(BrowserAdapter::Chromium, WebScheme::Https, host, None)
+            .expect("identity")
+    };
+    let allow = SubjectPermissions {
+        suggest: PermissionDecision::Allow,
+        display: PermissionDecision::Allow,
+        context_read: PermissionDecision::Allow,
+        learn: PermissionDecision::Block,
+        retention: RetentionPermission::None,
+    };
+    let mut settings = SettingsV2 {
+        revision: 3,
+        paused: false,
+        subjects: vec![SubjectRule {
+            identity: site("mail.example"),
+            permissions: allow,
+        }],
+        ..SettingsV2::deny_by_default()
+    };
+    let words = |settings: &SettingsV2, host: &str| {
+        let status =
+            super::super::authority::policy_status(false, false, 1, settings, &target(host));
+        status.validate().expect("valid policy reply");
+        status.context_words
+    };
+    assert!(!words(&settings, "mail.example"), "unchosen");
+    settings.context_words = Some(true);
+    assert!(words(&settings, "mail.example"));
+    assert!(!words(&settings, "other.example"), "no suggestions there");
+    settings.context_words_off = vec![site("mail.example")];
+    assert!(!words(&settings, "mail.example"), "off for this site");
+}

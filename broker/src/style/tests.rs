@@ -51,6 +51,8 @@ fn settings(enabled: bool, mut subjects: Vec<SubjectRule>) -> SettingsV2 {
         battery_mode: BatteryMode::Quiet,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: enabled,
+        context_words: None,
+        context_words_off: Vec::new(),
         language_overrides: BTreeMap::new(),
         writing_model: None,
         writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),

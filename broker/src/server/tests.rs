@@ -456,6 +456,8 @@ async fn v1_settings_roundtrip_projects_browser_rules_and_preserves_native_rules
                 escape_quiet_seconds: 0,
                 battery_mode: crate::settings::BatteryMode::Normal,
                 style_learning: false,
+                context_words: None,
+                context_words_off: Vec::new(),
                 language_overrides: std::collections::BTreeMap::new(),
                 spelling_languages: vec![crate::spelling::SpellingLanguage::English],
                 writing_model: None,
@@ -869,6 +871,7 @@ async fn outbound_event_does_not_cancel_a_partially_read_inbound_frame() {
         activation: Activation::Always,
         explicit: false,
         language: Some("en".to_owned()),
+        window_text: None,
     };
     let context_envelope =
         WireEnvelope::session(MessageType::ContextChanged, coordinates, 2, &context)

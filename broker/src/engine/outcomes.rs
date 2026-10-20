@@ -15,6 +15,7 @@ use crate::personalization::{PersonalizationProvider, PersonalizationSignal};
 use crate::protocol::TargetDescriptor;
 use crate::settings::StableIdentity;
 use crate::style::{StyleKey, StyleSample, StyleStatus};
+use crate::vocabulary::learned::LearnedStatus;
 
 const OUTCOME_QUEUE_CAPACITY: usize = 256;
 const OUTCOME_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
@@ -67,6 +68,17 @@ pub(super) enum OutcomeCommand {
     },
     StyleExport {
         response: oneshot::Sender<Result<Vec<StyleSample>, ControlPlaneError>>,
+    },
+    /// Words one field newly shows, to count if the settings they were
+    /// admitted under are still current (ADR 0010).
+    Learned {
+        expected_settings_revision: u64,
+        identity: StableIdentity,
+        words: Vec<String>,
+    },
+    /// Ordered behind every queued word, so none is kept after a forget.
+    LearnedForget {
+        response: oneshot::Sender<Result<LearnedStatus, ControlPlaneError>>,
     },
 }
 
@@ -125,6 +137,61 @@ impl Broker {
             identity,
             text,
         })
+    }
+
+    /// Must be called under the broker state lock, like [`Self::queue_outcome`].
+    pub(super) fn queue_learned_words(
+        &self,
+        identity: StableIdentity,
+        expected_settings_revision: u64,
+        words: Vec<String>,
+    ) -> bool {
+        let Some(recorder) = self.inner.outcome_recorder.as_ref() else {
+            return false;
+        };
+        recorder.try_signal(OutcomeCommand::Learned {
+            expected_settings_revision,
+            identity,
+            words,
+        })
+    }
+
+    /// The learned words `identity` offers now; empty without a control
+    /// plane, key or readable file.
+    pub(super) fn learned_words(&self, identity: &StableIdentity) -> Vec<String> {
+        self.inner
+            .control_plane
+            .as_ref()
+            .and_then(|control_plane| control_plane.learned_words(identity).ok())
+            .unwrap_or_default()
+    }
+
+    /// Content-free learned-word counts; `None` without a control plane or
+    /// while the sealed file is unreadable.
+    #[must_use]
+    pub fn learned_status(&self) -> Option<LearnedStatus> {
+        self.inner
+            .control_plane
+            .as_ref()?
+            .learned_status()
+            .ok()
+            .flatten()
+    }
+
+    pub async fn forget_learned(&self) -> Result<LearnedStatus, BrokerError> {
+        let recorder = self
+            .inner
+            .outcome_recorder
+            .as_ref()
+            .ok_or(BrokerError::ControlPlaneUnavailable)?;
+        let (response, receiver) = oneshot::channel();
+        recorder
+            .send_waiting(OutcomeCommand::LearnedForget { response })
+            .await?;
+        receiver
+            .await
+            .map_err(|_| BrokerError::ControlPlaneTask)?
+            .map_err(BrokerError::from)
     }
 
     /// Holds the keyring's style key; it is never written anywhere.
@@ -408,6 +475,25 @@ impl OutcomeWorker {
             }
             OutcomeCommand::StyleExport { response } => {
                 let _ = response.send(self.control_plane.export_style());
+            }
+            OutcomeCommand::Learned {
+                expected_settings_revision,
+                identity,
+                words,
+            } => {
+                if let Err(error) = self.control_plane.record_learned_at_settings_revision(
+                    expected_settings_revision,
+                    &identity,
+                    &words,
+                ) {
+                    // No key yet or an unreadable file: the words are dropped
+                    // and the reason is content-free.
+                    self.dropped_signals.fetch_add(1, Ordering::Relaxed);
+                    eprintln!("badi-broker: learned words not kept: {error}");
+                }
+            }
+            OutcomeCommand::LearnedForget { response } => {
+                let _ = response.send(self.control_plane.forget_learned());
             }
         }
     }

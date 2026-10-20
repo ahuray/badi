@@ -17,6 +17,8 @@ pub const MAX_SAFE_COUNTER: u64 = 9_007_199_254_740_991;
 pub const MAX_FRAME_BYTES: usize = 65_536;
 pub const MAX_BEFORE_CHARS: usize = 512;
 pub const MAX_AFTER_CHARS: usize = 128;
+/// Window text an observed field may carry for finishing words (ADR 0010).
+pub const MAX_WINDOW_TEXT_CHARS: usize = 2048;
 pub const MAX_SUGGESTION_CHARS: usize = 64;
 pub const MAX_SUGGESTION_WORDS: usize = 8;
 pub const MAX_ID_CHARS: usize = 128;
@@ -322,6 +324,12 @@ pub enum MessageType {
     StyleStatus,
     #[serde(rename = "style.samples")]
     StyleSamples,
+    #[serde(rename = "context.query")]
+    ContextQuery,
+    #[serde(rename = "context.forget")]
+    ContextForget,
+    #[serde(rename = "context.status")]
+    ContextStatus,
     #[serde(rename = "editor.focus")]
     EditorFocus,
     #[serde(rename = "editor.status")]
@@ -749,6 +757,10 @@ pub struct PolicyStatusPayload {
     /// Optional v2 quality preference; never grants acquisition or editing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_override: Option<crate::settings::PredictionLanguage>,
+    /// Context is on for this target: an observed field may send the text
+    /// near it as `window_text` (ADR 0010). It grants nothing else.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub context_words: bool,
 }
 
 impl PolicyStatusPayload {
@@ -765,6 +777,7 @@ impl PolicyStatusPayload {
                     || self.learning_allowed
                     || self.activation != Activation::Never)
             || !self.context_allowed && self.activation == Activation::Always
+            || self.context_words && !self.suggestions_allowed
         {
             Err(ProtocolError::InvalidPayload)
         } else {
@@ -931,6 +944,11 @@ pub struct ContextChangedPayload {
     pub explicit: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// Text near an observed field in the same window, for finishing the word
+    /// being typed when context is on (ADR 0010). Never sent for a denied,
+    /// sensitive or unobserved field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_text: Option<String>,
 }
 
 impl ContextChangedPayload {
@@ -949,6 +967,11 @@ impl ContextChangedPayload {
         if self.before.chars().count() > MAX_BEFORE_CHARS
             || self.after.chars().count() > MAX_AFTER_CHARS
             || (hard_denied && (!self.before.is_empty() || !self.after.is_empty()))
+            || self.window_text.as_ref().is_some_and(|text| {
+                hard_denied
+                    || !self.field.identity_known
+                    || text.chars().count() > MAX_WINDOW_TEXT_CHARS
+            })
             || self.selection.anchor > MAX_SAFE_COUNTER
             || self.selection.head > MAX_SAFE_COUNTER
             || self
@@ -1266,6 +1289,24 @@ pub struct StyleStatusPayload {
     pub subjects: u64,
 }
 
+/// Content-free state of opt-in context (ADR 0010).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextStatusPayload {
+    /// The `context_words` setting is true.
+    pub enabled: bool,
+    /// The user has chosen either way; false until then.
+    pub chosen: bool,
+    /// The learned-word file is readable; false until `context.forget`.
+    pub available: bool,
+    /// The keyring key learned words are sealed with (shared with style).
+    pub key: crate::style::StyleKeyState,
+    pub subjects: u64,
+    /// Learned words; absent without a usable key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<u64>,
+}
+
 /// An explicit export, bounded by the store to fit one frame.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -1580,6 +1621,52 @@ mod tests {
             ],
         };
         hello.validate().expect("all schema capabilities");
+    }
+
+    #[test]
+    fn window_text_is_bounded_and_only_for_an_observed_unrestricted_field() {
+        let context = |window_text: &str| super::ContextChangedPayload {
+            fingerprint: "fingerprint_window_01".to_owned(),
+            before: "Hi Marin".to_owned(),
+            after: String::new(),
+            selection: super::Selection {
+                anchor: 8,
+                head: 8,
+                unit: super::OffsetUnit::UnicodeScalarValues,
+            },
+            field: super::FieldDescriptor {
+                purpose: super::FieldPurpose::Normal,
+                editable: true,
+                multiline: true,
+                composing: false,
+                sensitive: false,
+                identity_known: true,
+                focused: true,
+                lock_screen: false,
+            },
+            activation: super::Activation::Always,
+            explicit: false,
+            language: Some("en".to_owned()),
+            window_text: Some(window_text.to_owned()),
+        };
+        context("To: Marinella Costa")
+            .validate()
+            .expect("observed field");
+        context(&"é".repeat(super::MAX_WINDOW_TEXT_CHARS))
+            .validate()
+            .expect("at the bound");
+        assert!(
+            context(&"é".repeat(super::MAX_WINDOW_TEXT_CHARS + 1))
+                .validate()
+                .is_err()
+        );
+        let mut unobserved = context("To: Marinella Costa");
+        unobserved.field.identity_known = false;
+        assert!(unobserved.validate().is_err());
+        let mut sensitive = context("To: Marinella Costa");
+        sensitive.field.sensitive = true;
+        sensitive.before.clear();
+        assert!(sensitive.validate().is_err());
     }
 
     #[test]

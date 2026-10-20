@@ -246,6 +246,7 @@ impl SessionState {
             visible: None,
             pending: None,
             escape_quiet: None,
+            written: std::collections::BTreeSet::new(),
             sink,
         }
     }

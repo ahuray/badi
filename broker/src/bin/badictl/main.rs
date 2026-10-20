@@ -8,8 +8,8 @@ use badi_broker::metrics::MetricsSnapshot;
 use badi_broker::model_selection::{ModelAdvice, ModelUseCase, detect_hardware, recommend_model};
 use badi_broker::protocol::{
     ActiveLocator, AdapterDescriptor, AdapterKind, CURRENT_PROTOCOL_VERSION, Capability,
-    ControlAction, ControlResultPayload, Coordinates, DesktopStatusPayload, ErrorPayload,
-    GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
+    ContextStatusPayload, ControlAction, ControlResultPayload, Coordinates, DesktopStatusPayload,
+    ErrorPayload, GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
     MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_SAFE_COUNTER, MemoryStatusPayload, MessageType,
     ProbeRequestPayload, ProbeResultPayload, ProtocolError, ProviderKind, ReasonCode,
     SessionControlRequestPayload, SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload,
@@ -130,6 +130,14 @@ async fn broker_report(stream: &mut UnixStream, command: Command) -> Result<Stri
             let request = cli_global(MessageType::StyleExport, &serde_json::json!({}))?;
             serde_json::to_string_pretty(&exchange(stream, request, validate_style_samples).await?)?
         }
+        Command::Context(command) => {
+            let message = match command {
+                ContextCommand::Status => MessageType::ContextQuery,
+                ContextCommand::Forget => MessageType::ContextForget,
+            };
+            let request = cli_global(message, &serde_json::json!({}))?;
+            serde_json::to_string(&exchange(stream, request, validate_context_status).await?)?
+        }
         Command::Style(StyleCommand::Key(Some(payload))) => {
             let request = cli_global(MessageType::StyleKey, &payload)?;
             serde_json::to_string(&exchange(stream, request, validate_style_status).await?)?
@@ -142,6 +150,13 @@ fn validate_style_status(
     request_id: &str,
 ) -> Result<StyleStatusPayload, CliError> {
     decode_reply(response, request_id, MessageType::StyleStatus, |_| Ok(()))
+}
+
+fn validate_context_status(
+    response: &WireEnvelope,
+    request_id: &str,
+) -> Result<ContextStatusPayload, CliError> {
+    decode_reply(response, request_id, MessageType::ContextStatus, |_| Ok(()))
 }
 
 fn validate_style_samples(
@@ -745,6 +760,8 @@ const CLI_USAGE: &str = "Usage: badictl [--socket ABSOLUTE] COMMAND\n\
 Local commands:\n  hardware [--json]       Inspect content-free hardware capabilities\n  models [USE] [--json]   Recommend pinned local models; USE is writing or code\n\
 Broker commands:\n  status [--json]  Show content-free broker status as JSON\n  request          Request a suggestion for the sole active session\n  accept-word      Accept the authorized first word-part\n  accept-all       Accept the authorized full suggestion\n  dismiss          Dismiss the current suggestion\n  pause [MODE]     MODE is on, off, or toggle (default)\n\
   overview [--json]  Show broker, policy, privacy, and model readiness\n  settings show [--json]\n                    Show the strict badi.settings.v2 document\n  settings replace --if-revision N --json DOCUMENT|-\n                    Replace settings with compare-and-swap protection; - reads\n                    a bounded document from stdin, keeping it out of argv\n  memory clear      Clear local text-free origin/day interaction aggregates\n\
+  context status    Show content-free context state and learned-word counts\n\
+  context forget    Delete every learned word (the keyring key stays)\n\
   style status      Show content-free style-learning state\n\
   style forget      Delete every style sample and forget the key in memory\n\
   style export      Print decrypted style samples as JSON (explicit; for the Lab)\n\
@@ -834,6 +851,11 @@ where
         Some("probe") => parse_probe_command(rest)?,
         Some("memory") if rest == ["clear"] => Command::MemoryClear,
         Some("style") => parse_style_command(&rest)?,
+        Some("context") => match rest.as_slice() {
+            [value] if value == "status" => Command::Context(ContextCommand::Status),
+            [value] if value == "forget" => Command::Context(ContextCommand::Forget),
+            _ => return Err(CliError::Arguments),
+        },
         Some("request") if rest.is_empty() => Command::Session(ControlAction::Request),
         Some("accept-word") if rest.is_empty() => Command::Session(ControlAction::AcceptWord),
         Some("accept-all") if rest.is_empty() => Command::Session(ControlAction::AcceptAll),
@@ -980,6 +1002,13 @@ enum Command {
     SettingsShow,
     Status,
     Style(StyleCommand),
+    Context(ContextCommand),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ContextCommand {
+    Status,
+    Forget,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -56,6 +56,8 @@ fn settings(revision: u64, style_learning: bool, learn: bool) -> SettingsV2 {
         battery_mode: BatteryMode::Quiet,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning,
+        context_words: None,
+        context_words_off: Vec::new(),
         language_overrides: std::collections::BTreeMap::new(),
         writing_model: None,
         writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
@@ -177,19 +179,11 @@ async fn accept(broker: &Broker, status: CommitStatus) {
                     head: u64::try_from(BEFORE.chars().count()).expect("length"),
                     unit: OffsetUnit::UnicodeScalarValues,
                 },
-                field: FieldDescriptor {
-                    purpose: FieldPurpose::Normal,
-                    editable: true,
-                    multiline: true,
-                    composing: false,
-                    sensitive: false,
-                    identity_known: true,
-                    focused: true,
-                    lock_screen: false,
-                },
+                field: field(),
                 activation: Activation::Always,
                 explicit: true,
                 language: Some("en".to_owned()),
+                window_text: None,
             },
         )
         .await
@@ -234,6 +228,19 @@ async fn accept(broker: &Broker, status: CommitStatus) {
         )
         .await
         .expect("commit result");
+}
+
+fn field() -> FieldDescriptor {
+    FieldDescriptor {
+        purpose: FieldPurpose::Normal,
+        editable: true,
+        multiline: true,
+        composing: false,
+        sensitive: false,
+        identity_known: true,
+        focused: true,
+        lock_screen: false,
+    }
 }
 
 async fn next(events: &mut mpsc::Receiver<BrokerEvent>) -> BrokerEvent {

@@ -207,7 +207,9 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         | MessageType::MemoryClear
         | MessageType::StyleQuery
         | MessageType::StyleForget
-        | MessageType::StyleExport => {
+        | MessageType::StyleExport
+        | MessageType::ContextQuery
+        | MessageType::ContextForget => {
             let _: EmptyPayload = decode(envelope);
         }
         MessageType::HealthStatus => {
@@ -262,6 +264,9 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         }
         MessageType::StyleStatus => {
             let _: StyleStatusPayload = decode(envelope);
+        }
+        MessageType::ContextStatus => {
+            let _: badi_broker::protocol::ContextStatusPayload = decode(envelope);
         }
         MessageType::StyleSamples => {
             let payload: StyleSamplesPayload = decode(envelope);

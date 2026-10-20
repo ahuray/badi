@@ -21,8 +21,8 @@ use crate::ipc::{FrameError, read_envelope, verify_peer_uid, write_envelope};
 use crate::policy::PolicyReason;
 use crate::protocol::{
     AdapterKind, AuthorityAckPayload, AuthorityChangedPayload, CURRENT_PROTOCOL_VERSION,
-    Capability, CommitResultPayload, ContextChangedPayload, ControlAction, ControlResultPayload,
-    DesktopStatePayload, EditorFocusPayload, EmptyPayload, ErrorPayload,
+    Capability, CommitResultPayload, ContextChangedPayload, ContextStatusPayload, ControlAction,
+    ControlResultPayload, DesktopStatePayload, EditorFocusPayload, EmptyPayload, ErrorPayload,
     GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
     MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SAFE_COUNTER, MAX_SUGGESTION_CHARS,
     MAX_SUGGESTION_WORDS, MemoryStatusPayload, MessageType, PROTOCOL_VERSION, PolicyQueryPayload,
@@ -540,6 +540,8 @@ impl MessageHandler<'_> {
             MessageType::StyleQuery => self.style_query(envelope).await,
             MessageType::StyleForget => self.style_forget(envelope).await,
             MessageType::StyleExport => self.style_export(envelope).await,
+            MessageType::ContextQuery => self.context_query(envelope).await,
+            MessageType::ContextForget => self.context_forget(envelope).await,
             MessageType::Hello
             | MessageType::HelloAck
             | MessageType::SuggestionShow
@@ -556,6 +558,7 @@ impl MessageHandler<'_> {
             | MessageType::EditorStatus
             | MessageType::StyleStatus
             | MessageType::StyleSamples
+            | MessageType::ContextStatus
             | MessageType::Error => Err(ServerError::InvalidMessage),
         }
     }
@@ -771,6 +774,38 @@ impl MessageHandler<'_> {
             subjects: status.map_or(0, |status| status.subjects),
         };
         self.reply(MessageType::StyleStatus, request_id, &payload)
+    }
+
+    async fn context_query(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_settings_authority(self.authority)?;
+        let _: EmptyPayload = envelope.decode_payload()?;
+        self.reply_context_status(envelope.id).await
+    }
+
+    async fn context_forget(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        require_settings_authority(self.authority)?;
+        let _: EmptyPayload = envelope.decode_payload()?;
+        self.broker.forget_learned().await?;
+        self.reply_context_status(envelope.id).await
+    }
+
+    async fn reply_context_status(&self, request_id: Option<String>) -> Result<(), ServerError> {
+        let chosen = self
+            .broker
+            .control_plane_snapshot()
+            .await?
+            .settings
+            .context_words;
+        let status = self.broker.learned_status();
+        let payload = ContextStatusPayload {
+            enabled: chosen == Some(true),
+            chosen: chosen.is_some(),
+            available: status.is_some(),
+            key: status.map_or(StyleKeyState::Absent, |status| status.key),
+            subjects: status.map_or(0, |status| status.subjects),
+            words: status.and_then(|status| status.words),
+        };
+        self.reply(MessageType::ContextStatus, request_id, &payload)
     }
 
     async fn desktop_state(&self, envelope: WireEnvelope) -> Result<(), ServerError> {

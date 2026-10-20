@@ -282,6 +282,9 @@ struct SessionState {
     visible: Option<VisibleSuggestion>,
     pending: Option<PendingCommit>,
     escape_quiet: Option<EscapeQuiet>,
+    /// Words of this field visit already counted toward learned words, so
+    /// each counts once per field (ADR 0010).
+    written: std::collections::BTreeSet<String>,
     sink: BrokerEventSink,
 }
 

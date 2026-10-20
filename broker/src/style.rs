@@ -31,14 +31,15 @@ pub const MAX_STYLE_SAMPLES: usize = 64;
 pub const MAX_SAMPLES_PER_SUBJECT: usize = 16;
 pub const MAX_SAMPLE_CHARS: usize = 240;
 pub const MIN_SAMPLE_CHARS: usize = 24;
-const KEY_ID_BYTES: usize = 16;
+pub(crate) const KEY_ID_BYTES: usize = 16;
 const KEY_BYTES: usize = 32;
-const NONCE_BYTES: usize = 24;
+pub(crate) const NONCE_BYTES: usize = 24;
 /// Sentence ends that close an authored sample (Latin and Persian).
 const SENTENCE_ENDS: [char; 5] = ['.', '!', '?', '؟', '…'];
 
 /// The key the keyring holds: a random id that names it in the store, and 32
 /// random bytes. Both arrive as lowercase hex.
+#[derive(Clone)]
 pub struct StyleKey {
     id: String,
     cipher: XChaCha20Poly1305,
@@ -355,25 +356,31 @@ fn remove_oldest(records: &mut Vec<SealedSample>, identity: Option<&StableIdenti
     }
 }
 
+/// Binds a ciphertext to its store's schema, key id, subject and day, so no
+/// record can move to another store, subject or day.
 fn associated_data(
+    schema: &str,
     key_id: &str,
     identity: &StableIdentity,
     day: u64,
 ) -> Result<Vec<u8>, StyleError> {
     serde_json::to_vec(&serde_json::json!({
-        "schema": STYLE_SCHEMA, "key_id": key_id, "identity": identity, "day": day,
+        "schema": schema, "key_id": key_id, "identity": identity, "day": day,
     }))
     .map_err(|_| StyleError::Encryption)
 }
 
-fn seal_sample(
+/// Seals `text` for one subject and day under `schema`; returns the hex
+/// nonce and ciphertext.
+pub(crate) fn seal_text(
     key: &StyleKey,
+    schema: &str,
     identity: &StableIdentity,
     day: u64,
     text: &str,
-) -> Result<SealedSample, StyleError> {
+) -> Result<(String, String), StyleError> {
     let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-    let aad = associated_data(&key.id, identity, day)?;
+    let aad = associated_data(schema, &key.id, identity, day)?;
     let ciphertext = key
         .cipher
         .encrypt(
@@ -384,20 +391,24 @@ fn seal_sample(
             },
         )
         .map_err(|_| StyleError::Encryption)?;
-    Ok(SealedSample {
-        identity: identity.clone(),
-        day,
-        nonce: encode_hex(&nonce),
-        ciphertext: encode_hex(&ciphertext),
-    })
+    Ok((encode_hex(&nonce), encode_hex(&ciphertext)))
 }
 
-fn open_sample(key: &StyleKey, record: &SealedSample) -> Result<String, StyleError> {
-    let nonce = decode_hex(&record.nonce)
+/// Opens what [`seal_text`] sealed; another key, store, subject or day fails
+/// as [`StyleError::KeyMismatch`].
+pub(crate) fn open_text(
+    key: &StyleKey,
+    schema: &str,
+    identity: &StableIdentity,
+    day: u64,
+    nonce: &str,
+    ciphertext: &str,
+) -> Result<String, StyleError> {
+    let nonce = decode_hex(nonce)
         .filter(|bytes| bytes.len() == NONCE_BYTES)
         .ok_or(StyleError::Corrupt)?;
-    let ciphertext = decode_hex(&record.ciphertext).ok_or(StyleError::Corrupt)?;
-    let aad = associated_data(&key.id, &record.identity, record.day)?;
+    let ciphertext = decode_hex(ciphertext).ok_or(StyleError::Corrupt)?;
+    let aad = associated_data(schema, &key.id, identity, day)?;
     let plaintext = key
         .cipher
         .decrypt(
@@ -409,6 +420,32 @@ fn open_sample(key: &StyleKey, record: &SealedSample) -> Result<String, StyleErr
         )
         .map_err(|_| StyleError::KeyMismatch)?;
     String::from_utf8(plaintext).map_err(|_| StyleError::Corrupt)
+}
+
+fn seal_sample(
+    key: &StyleKey,
+    identity: &StableIdentity,
+    day: u64,
+    text: &str,
+) -> Result<SealedSample, StyleError> {
+    let (nonce, ciphertext) = seal_text(key, STYLE_SCHEMA, identity, day, text)?;
+    Ok(SealedSample {
+        identity: identity.clone(),
+        day,
+        nonce,
+        ciphertext,
+    })
+}
+
+fn open_sample(key: &StyleKey, record: &SealedSample) -> Result<String, StyleError> {
+    open_text(
+        key,
+        STYLE_SCHEMA,
+        &record.identity,
+        record.day,
+        &record.nonce,
+        &record.ciphertext,
+    )
 }
 
 fn validate_document(document: &StyleDocument) -> Result<(), StyleError> {
@@ -496,7 +533,7 @@ fn encode_hex(bytes: &[u8]) -> String {
     text
 }
 
-fn decode_hex(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn decode_hex(text: &str) -> Option<Vec<u8>> {
     if text.len() % 2 != 0 || text.bytes().any(|byte| byte.is_ascii_uppercase()) {
         return None;
     }

@@ -13,6 +13,7 @@ use crate::settings::{
     read_private_limited, remove_private_file, remove_private_temporary_files,
 };
 use crate::style::{STYLE_FILE_NAME, StyleError, StyleKey, StyleSample, StyleStatus, StyleStore};
+use crate::vocabulary::learned::{LEARNED_FILE_NAME, LearnedStatus, LearnedStore};
 
 const SECONDS_PER_DAY: u64 = 86_400;
 
@@ -40,6 +41,9 @@ struct ControlPlaneState {
     /// `None` when the sealed file is unreadable: it is preserved, nothing
     /// is learned, and only `forget_style` repairs it.
     style: Option<StyleStore>,
+    /// Learned words, likewise; only `forget_learned` repairs an unreadable
+    /// file.
+    learned: Option<LearnedStore>,
 }
 
 impl ControlPlane {
@@ -79,6 +83,17 @@ impl ControlPlane {
                 None
             }
         };
+        let learned = match LearnedStore::open(storage.paths().data_dir().join(LEARNED_FILE_NAME))
+            .and_then(|mut store| store.reconcile(&settings, today).map(|_| store))
+        {
+            Ok(store) => Some(store),
+            Err(error) => {
+                eprintln!(
+                    "badi-broker: learned words unavailable and preserved; badi context forget required: {error}"
+                );
+                None
+            }
+        };
         Ok(Self {
             storage,
             state: Mutex::new(ControlPlaneState {
@@ -86,13 +101,18 @@ impl ControlPlane {
                 settings,
                 personalization,
                 style,
+                learned,
             }),
         })
     }
 
-    /// Holds the keyring's style key for this broker's lifetime.
+    /// Holds the keyring's key for this broker's lifetime; style samples and
+    /// learned words share it.
     pub fn deliver_style_key(&self, key: StyleKey) -> Result<StyleStatus, ControlPlaneError> {
         let mut state = self.lock_state()?;
+        if let Some(learned) = state.learned.as_mut() {
+            learned.set_key(key.clone());
+        }
         let store = state
             .style
             .as_mut()
@@ -103,6 +123,69 @@ impl ControlPlane {
 
     pub fn style_status(&self) -> Result<Option<StyleStatus>, ControlPlaneError> {
         Ok(self.lock_state()?.style.as_ref().map(StyleStore::status))
+    }
+
+    /// Content-free learned-word counts; `None` while the file is unreadable.
+    pub fn learned_status(&self) -> Result<Option<LearnedStatus>, ControlPlaneError> {
+        Ok(self
+            .lock_state()?
+            .learned
+            .as_ref()
+            .map(LearnedStore::status))
+    }
+
+    /// The learned words `identity` offers now; empty while context is off
+    /// there, without a key, or with an unreadable file.
+    pub fn learned_words(
+        &self,
+        identity: &StableIdentity,
+    ) -> Result<Vec<String>, ControlPlaneError> {
+        let today = unix_day_now()?;
+        let state = self.lock_state()?;
+        Ok(state
+            .learned
+            .as_ref()
+            .map(|store| store.offered(&state.settings, today, identity))
+            .unwrap_or_default())
+    }
+
+    /// Counts the words of one field when the settings the request was
+    /// admitted under are still current and still keep context on there.
+    pub fn record_learned_at_settings_revision(
+        &self,
+        expected_settings_revision: u64,
+        identity: &StableIdentity,
+        words: &[String],
+    ) -> Result<bool, ControlPlaneError> {
+        let today = unix_day_now()?;
+        let mut state = self.lock_state()?;
+        if state.settings.revision != expected_settings_revision {
+            return Ok(false);
+        }
+        let ControlPlaneState {
+            settings, learned, ..
+        } = &mut *state;
+        let store = learned
+            .as_mut()
+            .ok_or(ControlPlaneError::StyleUnavailable)?;
+        Ok(store.record(settings, today, identity, words)?)
+    }
+
+    /// Deletes every learned word, repairing an unreadable file. The key
+    /// stays for style learning.
+    pub fn forget_learned(&self) -> Result<LearnedStatus, ControlPlaneError> {
+        let mut state = self.lock_state()?;
+        let path = self.storage.paths().data_dir().join(LEARNED_FILE_NAME);
+        if let Some(store) = state.learned.as_mut() {
+            store.forget()?;
+            return Ok(store.status());
+        }
+        remove_private_temporary_files(&path)?;
+        remove_private_file(&path)?;
+        let store = LearnedStore::open(path)?;
+        let status = store.status();
+        state.learned = Some(store);
+        Ok(status)
     }
 
     /// Seals one authored sample when the settings the event was admitted
@@ -574,6 +657,19 @@ fn personalization_privacy_floor(current: &SettingsV2, next: &SettingsV2) -> Set
         escape_quiet_seconds: current.escape_quiet_seconds,
         battery_mode: current.battery_mode,
         style_learning: current.style_learning && next.style_learning,
+        // Context stays on only where both documents keep it on.
+        context_words: match (current.context_words, next.context_words) {
+            (Some(true), Some(true)) => Some(true),
+            (Some(false), _) | (_, Some(false)) | (Some(true), None) => Some(false),
+            (None, _) => None,
+        },
+        context_words_off: {
+            let mut off = current.context_words_off.clone();
+            off.extend(next.context_words_off.iter().cloned());
+            off.sort();
+            off.dedup();
+            off
+        },
         language_overrides: current.language_overrides.clone(),
         spelling_languages: current.spelling_languages.clone(),
         // A degraded control plane accepts only reductions; the model stays.
@@ -591,8 +687,9 @@ fn personalization_commit_state_unknown(error: &PersonalizationStoreError) -> bo
     )
 }
 
-/// Drops style samples the given settings no longer allow. A failure leaves
-/// the sealed file preserved and the store unavailable until `forget_style`.
+/// Drops style samples and learned words the given settings no longer allow.
+/// A failure leaves that sealed file preserved and its store unavailable
+/// until its forget command.
 fn reconcile_style_locked(state: &mut ControlPlaneState, settings: &SettingsV2, today: u64) {
     if let Some(store) = state.style.as_mut() {
         if let Err(error) = store.reconcile(settings, today) {
@@ -600,6 +697,14 @@ fn reconcile_style_locked(state: &mut ControlPlaneState, settings: &SettingsV2, 
                 "badi-broker: style reconciliation failed; store preserved and disabled until badi style forget: {error}"
             );
             state.style = None;
+        }
+    }
+    if let Some(store) = state.learned.as_mut() {
+        if let Err(error) = store.reconcile(settings, today) {
+            eprintln!(
+                "badi-broker: learned-word reconciliation failed; file preserved and disabled until badi context forget: {error}"
+            );
+            state.learned = None;
         }
     }
 }

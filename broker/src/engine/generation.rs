@@ -19,8 +19,9 @@ use crate::metrics::{CarryMiss, Metrics, NoSuggestionReason};
 use crate::personalization::PersonalizationSignal;
 use crate::policy::PolicyDecision;
 use crate::protocol::{
-    Coordinates, ProviderKind, ReasonCode, SuggestCancelPayload, SuggestRequestPayload,
-    SuggestionShowPayload,
+    ContextChangedPayload, Coordinates, FieldPurpose, ProviderKind, ReasonCode,
+    SuggestCancelPayload, SuggestRequestPayload, SuggestionShowPayload, TargetDescriptor,
+    TargetKind,
 };
 use crate::provider::{
     ProviderError, ProviderOutcome, ProviderReply, ProviderRequest, ProviderStats, RequestTrigger,
@@ -29,6 +30,7 @@ use crate::provider::{
 use crate::segment::{
     accept_word, ends_at_word_boundary, sanitize_suggestion, validate_suggestion_shape,
 };
+use crate::settings::{SettingsV2, StableIdentity};
 
 type ProviderResult = Result<Result<ProviderReply, ProviderError>, time::error::Elapsed>;
 /// A carried remainder with its deadline and outcome day, or its declining gate.
@@ -44,6 +46,9 @@ struct AdmittedGeneration {
     provider_permit: OwnedSemaphorePermit,
     /// Quiet battery scheduling: the model starts only after this wait.
     start_delay: Duration,
+    /// With context on: the subject whose learned words apply and the text
+    /// near the field. Learned words are read after the state lock is gone.
+    vocabulary: Option<(StableIdentity, String)>,
 }
 
 /// What a finished generation must still match before it may be shown.
@@ -136,6 +141,7 @@ impl Broker {
         let generation_timeout = self.inner.config.generation_timeout_for(trigger);
         session.ensure_coordinates(coordinates)?;
         let context = session.context.clone().ok_or(BrokerError::NoContext)?;
+        let target = session.target.target.clone();
         if context.fingerprint != payload.fingerprint {
             return Err(BrokerError::Stale);
         }
@@ -160,6 +166,7 @@ impl Broker {
             .settings
             .as_ref()
             .is_some_and(|settings| settings.mid_line);
+        let context_on = context_on(state.settings.as_ref(), &target);
         let escape_quiet = state.quiet_request(coordinates, payload.explicit)?;
         let power_start_delay = state.power_start_delay(trigger);
         let session = state.session_with_data_access(coordinates.session_id)?;
@@ -178,20 +185,8 @@ impl Broker {
                 .await;
             return Ok(None);
         }
-        if let Some((text, expires_at, aggregate_day)) = carried {
-            session.generation = binding.generation;
-            self.renew_context_authority_lease(session, generation_timeout);
-            let proposal = WritingProposal {
-                text,
-                replace_before: None,
-            };
-            let carried = Carried {
-                expires_at,
-                aggregate_day,
-            };
-            record_carry(metrics, &binding, None);
-            let cancellation = CancellationToken::new();
-            self.show_if_current(state, binding, &cancellation, proposal, Some(carried), true);
+        if let Some(carried) = carried {
+            self.show_carried(state, binding, carried, generation_timeout)?;
             return Ok(None);
         }
         // A carried remainder above needs no model call, so power never
@@ -223,6 +218,8 @@ impl Broker {
         session.cancellation = Some(cancellation.clone());
         self.renew_context_authority_lease(session, generation_timeout);
         Ok(Some(AdmittedGeneration {
+            // Before `request` moves the context's text.
+            vocabulary: context_on.map(|on| self.learn_and_scope(on, &context, &target, session)),
             allow_replacement: session.allows_text_replacement(),
             binding,
             request: ProviderRequest {
@@ -236,6 +233,54 @@ impl Broker {
             provider_permit,
             start_delay,
         }))
+    }
+
+    /// Shows a type-through remainder at once: it needs no model call.
+    fn show_carried(
+        &self,
+        mut state: MutexGuard<'_, BrokerState>,
+        binding: GenerationBinding,
+        (text, expires_at, aggregate_day): (String, Instant, Option<u64>),
+        generation_timeout: Duration,
+    ) -> Result<(), BrokerError> {
+        let session = state.session_with_data_access(binding.coordinates.session_id)?;
+        session.generation = binding.generation;
+        self.renew_context_authority_lease(session, generation_timeout);
+        record_carry(&self.inner.metrics, &binding, None);
+        let proposal = WritingProposal {
+            text,
+            replace_before: None,
+        };
+        let carried = Carried {
+            expires_at,
+            aggregate_day,
+        };
+        let cancellation = CancellationToken::new();
+        self.show_if_current(state, binding, &cancellation, proposal, Some(carried), true);
+        Ok(())
+    }
+
+    /// Queues the field's newly written words for learning, once each per
+    /// field and only from prose fields, and returns what the provider
+    /// request needs to finish words with context on.
+    fn learn_and_scope(
+        &self,
+        (identity, revision): (StableIdentity, u64),
+        context: &ContextChangedPayload,
+        target: &TargetDescriptor,
+        session: &mut SessionState,
+    ) -> (StableIdentity, String) {
+        // A terminal's typed line may hold a passphrase: never learned.
+        if context.field.purpose == FieldPurpose::Normal && target.kind != TargetKind::Terminal {
+            let fresh: Vec<String> = crate::vocabulary::written_words(&context.before)
+                .into_iter()
+                .filter(|word| session.written.insert(word.clone()))
+                .collect();
+            if !fresh.is_empty() {
+                self.queue_learned_words(identity.clone(), revision, fresh);
+            }
+        }
+        (identity, context.window_text.clone().unwrap_or_default())
     }
 
     /// Settles an admitted binding without a provider call: the adapter is
@@ -261,14 +306,20 @@ impl Broker {
     #[allow(clippy::too_many_lines)]
     async fn run_generation(self, admitted: AdmittedGeneration) {
         let AdmittedGeneration {
-            request,
+            mut request,
             allow_replacement,
             trigger,
             binding,
             cancellation,
             provider_permit,
             start_delay,
+            vocabulary,
         } = admitted;
+        if let Some((identity, window_text)) = vocabulary {
+            let mut words = crate::vocabulary::Vocabulary::from_texts(&window_text, &[] as &[&str]);
+            words.learned = self.learned_words(&identity);
+            request.vocabulary = Some(words);
+        }
         // Admission occurs before spawning, so there can never be more
         // generation tasks than permits. The permit is released on every
         // return path, including cancellation and timeout.
@@ -947,4 +998,16 @@ fn admit_policy(
             Err(BrokerError::Denied(reason))
         }
     }
+}
+
+/// The subject and settings revision when context is on for `target`.
+fn context_on(
+    settings: Option<&SettingsV2>,
+    target: &TargetDescriptor,
+) -> Option<(StableIdentity, u64)> {
+    let settings = settings?;
+    let identity = StableIdentity::from_target(target).ok()?;
+    settings
+        .context_words_for(&identity)
+        .then_some((identity, settings.revision))
 }

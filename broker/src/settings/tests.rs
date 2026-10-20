@@ -45,6 +45,8 @@ fn settings_with(rule: SubjectRule) -> SettingsV2 {
         battery_mode: BatteryMode::Normal,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
+        context_words: None,
+        context_words_off: Vec::new(),
         language_overrides: std::collections::BTreeMap::new(),
         writing_model: None,
         writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
@@ -509,6 +511,8 @@ fn linux_adapters_sort_by_wire_name_like_the_desktop_clients() {
         battery_mode: BatteryMode::Normal,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
+        context_words: None,
+        context_words_off: Vec::new(),
         language_overrides: std::collections::BTreeMap::new(),
         writing_model: None,
         writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
@@ -545,6 +549,8 @@ fn settings_require_sorted_unique_subjects() {
         battery_mode: BatteryMode::Normal,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
+        context_words: None,
+        context_words_off: Vec::new(),
         language_overrides: std::collections::BTreeMap::new(),
         writing_model: None,
         writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
@@ -589,6 +595,8 @@ fn maximum_shape_settings_fit_storage_and_wire_limits() {
         battery_mode: BatteryMode::Normal,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
+        context_words: None,
+        context_words_off: Vec::new(),
         language_overrides: (0..MAX_SUBJECTS)
             .map(|index| {
                 (
@@ -918,4 +926,47 @@ fn clear_retry_requires_a_successful_directory_sync_after_visible_absence() {
         !remove_private_file_with_sync(&path, super::private_file::sync_directory)
             .expect("durably acknowledge absence")
     );
+}
+
+#[test]
+fn context_words_need_v2_keep_per_subject_off_canonical_and_stay_off_until_chosen() {
+    let site = identity("mail.example");
+    let other = identity("docs.example");
+    let mut settings = settings_with(SubjectRule {
+        identity: site.clone(),
+        permissions: allowed(None),
+    });
+    assert!(!settings.context_words_for(&site), "unchosen means off");
+    let unchosen = serde_json::to_value(&settings).expect("json");
+    assert!(unchosen.get("context_words").is_none() && unchosen.get("context_words_off").is_none());
+    settings.context_words = Some(false);
+    assert!(!settings.context_words_for(&site));
+    settings.context_words = Some(true);
+    assert!(settings.context_words_for(&site) && settings.context_words_for(&other));
+    settings.context_words_off = vec![site.clone()];
+    settings.validate().expect("valid");
+    assert!(!settings.context_words_for(&site) && settings.context_words_for(&other));
+    settings.paused = true;
+    assert!(
+        !settings.context_words_for(&other),
+        "a pause stops it everywhere"
+    );
+    settings.paused = false;
+
+    let round: SettingsV2 =
+        serde_json::from_value(serde_json::to_value(&settings).expect("json")).expect("decode");
+    assert_eq!(round, settings);
+    let mut unsorted = settings.clone();
+    unsorted.context_words_off = vec![site.clone(), other.clone()];
+    unsorted.context_words_off.sort();
+    unsorted.context_words_off.reverse();
+    assert_eq!(
+        unsorted.validate(),
+        Err(crate::settings::SettingsValidationError::ContextWordsOffNotCanonical)
+    );
+    let v1 = serde_json::json!({
+        "schema": crate::settings::SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
+        "context_words": true, "subjects": [],
+    });
+    assert!(serde_json::from_value::<SettingsV2>(v1).is_err());
 }

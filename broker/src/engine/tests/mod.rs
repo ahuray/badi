@@ -33,6 +33,7 @@ use crate::settings::{
 };
 
 mod commit;
+mod context;
 mod desktop;
 mod editor;
 mod generation;
@@ -195,6 +196,7 @@ fn context(revision: u64, purpose: FieldPurpose) -> ContextChangedPayload {
         activation: Activation::Always,
         explicit: false,
         language: Some("en".to_owned()),
+        window_text: None,
     }
 }
 
@@ -301,6 +303,8 @@ fn controlled_settings(revision: u64, allowed: bool, learn: bool) -> SettingsV2 
         escape_quiet_seconds: 0,
         battery_mode: crate::settings::BatteryMode::Normal,
         style_learning: false,
+        context_words: None,
+        context_words_off: Vec::new(),
         language_overrides: std::collections::BTreeMap::new(),
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         writing_model: None,
@@ -344,6 +348,8 @@ fn controlled_learning_settings(revision: u64, retention: RetentionPermission) -
         escape_quiet_seconds: 0,
         battery_mode: crate::settings::BatteryMode::Normal,
         style_learning: false,
+        context_words: None,
+        context_words_off: Vec::new(),
         language_overrides: std::collections::BTreeMap::new(),
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         writing_model: None,

@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 
 use unicode_segmentation::UnicodeSegmentation;
 
+pub mod learned;
+
 #[cfg(feature = "local-model")]
 use crate::writing::WritingLanguage;
 
@@ -73,6 +75,33 @@ impl Vocabulary {
         }
         words
     }
+}
+
+/// Whether `word` could ever finish a typed word: letters only, more than
+/// [`MIN_STEM_SCALARS`] and at most [`MAX_WORD_SCALARS`] long.
+#[must_use]
+pub fn learnable(word: &str) -> bool {
+    let count = word.chars().count();
+    count > MIN_STEM_SCALARS && count <= MAX_WORD_SCALARS && word_scalars(word)
+}
+
+/// The finished words of a draft worth learning, in order and each once:
+/// [`Vocabulary::words`] without the first word, which may be the clipped
+/// end of a longer one, and without the word still being typed at its end.
+#[must_use]
+pub fn written_words(before: &str) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    for (start, word) in before.unicode_word_indices() {
+        let end = start + word.len();
+        if start > 0
+            && end < before.len()
+            && bounded_word(before, start, word)
+            && !words.iter().any(|seen| seen == word)
+        {
+            words.push(word.to_owned());
+        }
+    }
+    words
 }
 
 /// Where a completing word was found.
