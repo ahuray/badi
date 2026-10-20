@@ -39,10 +39,16 @@ observer wire details.
   release that leaves no Ctrl, Alt, Shift or Super down, plus 20 ms for the
   compositor's modifier update: over Wayland's input-method-v2,
   `forwardKey` goes through Fcitx's virtual keyboard under the modifiers
-  still held, so an immediate Tab would reach the app as Ctrl+Shift+Tab.
+  still held, so an immediate Tab would reach the app as Ctrl+Shift+Tab. A
+  keyboard that sets modifiers as state without key events (wtype, an
+  on-screen keyboard) sends no such release, so there the chord key's own
+  release starts the wait. The Tab is forwarded with the chord key's own
+  keycode: Fcitx 5.1.23 otherwise looks Tab up under the modifier state it
+  last heard, where Shift turns it into ISO_Left_Tab and no key is sent.
   Another key typed first sends the waiting Tab ahead of it; a key pressed
   while the chord's modifiers are still down, or a focus change, drops it
-  (`literal_tab_dropped`). The trace records `literal_tab_waiting` and
+  (`literal_tab_dropped`). A suggestion shown again while the Tab waited is
+  retired when it leaves. The trace records `literal_tab_waiting` and
   `literal_tab_sent`. The Tab is the user's own key for the focused input
   context, never a suggestion's text, so it needs no grant.
 - **Dismissal.** Unchanged native publications keep the context declined.
@@ -296,6 +302,19 @@ commit. Native undo could merge acceptance with preceding typing, as permitted
 by IME-parity. These are live samples, not held-out language quality evidence;
 Omawrite 0.5.0’s native Open File location field also reported `file_dialog`,
 made no automatic model call after typing, and displayed an explicit request.
+
+On 2026-10-20 (installed `e1fa107`, Chromium 154.0.8037.97 on
+`wayland_v2`, Fcitx 5.1.23, Hyprland 0.56.2, real model, a disposable
+two-field page on `http://127.0.0.1`), Ctrl+Shift+Tab while ` interest in the`
+showed after `Thank you for your` reached the page as one plain Tab (its
+`keydown` had Ctrl and Shift false), moved focus to the second field and left
+the first field's text unchanged. That held for a uinput keyboard pressing
+Ctrl, Shift and Tab as keys, the way a physical keyboard does, and for wtype
+setting them as state. With no suggestion showing, the chord stayed
+Chromium's (trace action `cancel`) and switched to the previous tab. The
+first installed build forwarded nothing in both cases, which the keycode and
+state-only fixes above address. Other apps, Ghostty's typed line and the
+manual path were not tried live.
 
 The 2026-10-13 inline-preview handoff reports grey text and Tab acceptance in
 Brave Origin's DuckDuckGo box and a disposable local textarea. Zen's

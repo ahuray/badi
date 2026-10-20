@@ -167,3 +167,16 @@ nothing was withheld, and Tab accepted that suggestion into the same field
 ([matrix](../fcitx5/README.md#tested-with)). A real suspend and resume, and a
 real VT switch, were not exercised: the session locks on sleep and needs
 someone present to unlock it.
+
+On 2026-10-20 (installed `e1fa107`, xdg-desktop-portal 1.22.1,
+xdg-desktop-portal-hyprland 1.4.1, Chromium 154, real model),
+`hyprctl globalshortcuts` listed `io.github.ahuray.badi:snooze`, and
+`hyprctl eval 'hl.dispatch(hl.dsp.global("io.github.ahuray.badi:snooze"))'`
+while a suggestion showed in a disposable page on `http://127.0.0.1:47811`
+hid it, made the policy `snoozed`, showed the notification "Badi is snoozed in
+http://127.0.0.1:47811 for 10 minutes. badi resume ends it sooner." and listed
+the origin in `badi status` and the panel's Snoozed row. Typing there showed
+nothing, while the same page on port 47812 in the next tab still suggested.
+`badi resume` restored suggestions at once, and `badi snooze 1` ran out on its
+own 60.0 s later. A key bound with `hl.bind` was not tried; the dispatch
+reaches the same portal signal.
