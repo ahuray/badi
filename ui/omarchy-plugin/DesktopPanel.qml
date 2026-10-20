@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "KeyModel.js" as KeyModel
+import "StatsModel.js" as StatsModel
 
 // The panel's state and actions, without any visuals: the broker client,
 // the desktop helper's processes, every settings change (compare-and-swap
@@ -62,6 +63,12 @@ Item {
   readonly property var activity: client.objectValue(desktop, "activity")
   readonly property var misses: client.objectValue(desktop, "no_suggestion")
   readonly property var spelling: Array.isArray(desktop.spelling) ? desktop.spelling : []
+  // Usage statistics (badi stats): counts per local day and per app or site,
+  // kept 90 days. Absent from a broker that has none.
+  readonly property var stats: client.objectValue(desktop, "stats")
+  readonly property bool statsReported: typeof stats.available === "boolean"
+  readonly property bool statsAvailable: stats.available === true
+  readonly property var statsSummary: client.objectValue(stats, "summary")
   readonly property var modelAdvice: client.objectValue(client.objectValue(client.objectValue(client.overview, "models"), "writing"), "advice")
   readonly property var modelCatalog: Array.isArray(modelAdvice.catalog) ? modelAdvice.catalog : []
   // Terms that come with a model's licence; a model with terms is chosen,
@@ -95,6 +102,22 @@ Item {
     var applied = client.integerValue(savings, "applied", -1)
     var dispatched = client.integerValue(savings, "dispatched_unverified", -1)
     return applied >= 0 && dispatched >= 0 ? applied + dispatched : -1
+  }
+
+  // The history's numbers (StatsModel.js): a window's counts, the week's
+  // words per day and the apps and sites that saved the most this week.
+  function statsTotals(window) {
+    return StatsModel.totals(statsSummary, window)
+  }
+
+  function statsWeek() {
+    return StatsModel.week(statsSummary)
+  }
+
+  function statsLeaders(count) {
+    var names = {}
+    supportedApps.forEach(function(app) { names[app.appId] = app.name })
+    return StatsModel.leaders(statsSummary, names, count)
   }
 
   function refresh() {
@@ -451,6 +474,15 @@ Item {
     })
     list.push({key: "site_add", section: "Websites", kind: "field", label: "Add a site",
       detail: "Enter allows · Shift+Enter blocks", enabled: canChange})
+
+    // Usage statistics: counts only, per day and app or site (badi stats).
+    if (reachable && statsReported) {
+      list.push({key: "stats_forget", section: "Statistics", kind: "action", label: "Forget usage statistics",
+        detail: statsAvailable ? "Counts per day and app, kept 90 days · badi stats"
+          : "⚠ Unreadable and kept as it is · forgetting starts the count again",
+        enabled: !controlsBusy,
+        activate: function() { root.runAction(["stats", "forget"], "Forgetting usage statistics", "Usage statistics deleted") }})
+    }
 
     var autostart = serviceState.autostart
     list.push({key: "autostart", section: "System", kind: "toggle", label: "Start at login",

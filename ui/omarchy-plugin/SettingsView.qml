@@ -6,8 +6,8 @@ import qs.Ui
 import "KeyModel.js" as KeyModel
 
 // The settings popout's content: a hero with Badi's mode and a pause
-// switch, a live activity line, usage, a settings search and one keyboard
-// cursor over the controller's typed rows. Keys arrive from the host's
+// switch, a live activity line, usage, the week's history, a settings search
+// and one keyboard cursor over the controller's typed rows. Keys arrive from the host's
 // PanelKeyCatcher through move(), activate(), remove() and focusSearch().
 Item {
   id: view
@@ -85,7 +85,7 @@ Item {
 
   onRowsChanged: if (cursor >= rows.length) cursor = rows.length - 1
 
-  // ---- Header: hero, activity, usage, search --------------------------------
+  // ---- Header: hero, activity, usage, history, search -----------------------
 
   Column {
     id: header
@@ -215,6 +215,64 @@ Item {
         elide: Text.ElideRight
         textFormat: Text.PlainText
         text: "⎿ last miss: " + (controller.misses.last_meaning || controller.misses.last || "")
+        color: view.dim
+        font.family: view.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+    }
+
+    // History (badi stats): words saved on each of the last seven days,
+    // today's and the week's counts and the apps and sites that saved most.
+    // Counts only, kept 90 days; they survive a model restart.
+    Column {
+      id: history
+      width: parent.width
+      spacing: Style.space(4)
+      visible: client.brokerReachable && controller.statsAvailable
+      readonly property var week: controller.statsWeek()
+      readonly property var today: controller.statsTotals("today")
+      readonly property var lastWeek: controller.statsTotals("last_7_days")
+      readonly property var leaders: controller.statsLeaders(3)
+      readonly property int peak: week.reduce(function(most, day) { return Math.max(most, day.words) }, 0)
+
+      Row {
+        spacing: Style.space(10)
+        Row {
+          id: weekBars
+          height: Style.space(14)
+          spacing: Style.space(2)
+          anchors.verticalCenter: parent.verticalCenter
+          Accessible.name: "Words saved on each of the last seven days"
+          Repeater {
+            model: history.week
+            Rectangle {
+              required property var modelData
+              required property int index
+              anchors.bottom: parent.bottom
+              width: Style.space(9)
+              height: Style.space(2) + Math.round(Style.space(12) * (history.peak > 0 ? modelData.words / history.peak : 0))
+              radius: Style.cornerRadius > 0 ? Style.space(1) : 0
+              color: index === history.week.length - 1 ? Commons.Color.accent
+                : Qt.rgba(view.foreground.r, view.foreground.g, view.foreground.b, modelData.words > 0 ? 0.45 : 0.14)
+            }
+          }
+        }
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: "≈ " + history.today.words + " words today · " + history.lastWeek.words + " in 7 days"
+          color: view.foreground
+          font.family: view.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+      }
+      Text {
+        width: parent.width
+        elide: Text.ElideRight
+        textFormat: Text.PlainText
+        text: history.leaders.length > 0
+          ? "⎿ most this week: " + history.leaders.map(function(app) { return app.label + " " + app.words }).join(" · ")
+          : "⎿ " + history.lastWeek.shown + " shown · " + history.lastWeek.accepted + " accepted in 7 days"
         color: view.dim
         font.family: view.fontFamily
         font.pixelSize: Style.font.caption

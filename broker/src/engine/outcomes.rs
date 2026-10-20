@@ -1,6 +1,6 @@
 //! The content-free outcome recorder: a bounded queue to one worker thread
-//! that owns every personalization-store write, so suggestion traffic never
-//! waits for the disk.
+//! that owns every personalization, style, learned-word and usage-statistics
+//! write, so suggestion traffic never waits for the disk.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc as std_mpsc};
@@ -12,8 +12,9 @@ use tokio::time;
 use super::{Broker, BrokerError};
 use crate::control_plane::{ControlPlane, ControlPlaneError, ControlPlaneSnapshot};
 use crate::personalization::{PersonalizationProvider, PersonalizationSignal};
-use crate::protocol::TargetDescriptor;
+use crate::protocol::{StatsStatusPayload, TargetDescriptor};
 use crate::settings::StableIdentity;
+use crate::stats::{StatsEvent, StatsStore, StatsSummary, local_today};
 use crate::style::{StyleKey, StyleSample, StyleStatus};
 use crate::vocabulary::learned::LearnedStatus;
 
@@ -79,6 +80,21 @@ pub(super) enum OutcomeCommand {
     /// Ordered behind every queued word, so none is kept after a forget.
     LearnedForget {
         response: oneshot::Sender<Result<LearnedStatus, ControlPlaneError>>,
+    },
+    /// One content-free usage count, if the settings it was admitted under
+    /// are still current.
+    Stats {
+        expected_settings_revision: u64,
+        identity: StableIdentity,
+        event: StatsEvent,
+    },
+    /// Ordered behind every queued count, so the summary includes them.
+    StatsQuery {
+        response: oneshot::Sender<Result<Option<StatsSummary>, ControlPlaneError>>,
+    },
+    /// Ordered behind every queued count, so none is kept after a forget.
+    StatsForget {
+        response: oneshot::Sender<Result<StatsSummary, ControlPlaneError>>,
     },
 }
 
@@ -153,6 +169,68 @@ impl Broker {
             expected_settings_revision,
             identity,
             words,
+        })
+    }
+
+    /// Must be called under the broker state lock, like [`Self::queue_outcome`].
+    pub(super) fn queue_stats(
+        &self,
+        target: &TargetDescriptor,
+        expected_settings_revision: u64,
+        event: StatsEvent,
+    ) -> bool {
+        let Some(recorder) = self.inner.outcome_recorder.as_ref() else {
+            return false;
+        };
+        let Ok(identity) = StableIdentity::from_target(target) else {
+            return false;
+        };
+        recorder.try_signal(OutcomeCommand::Stats {
+            expected_settings_revision,
+            identity,
+            event,
+        })
+    }
+
+    /// Usage statistics, including every count queued before the call.
+    pub async fn stats_status(&self) -> Result<StatsStatusPayload, BrokerError> {
+        let recorder = self
+            .inner
+            .outcome_recorder
+            .as_ref()
+            .ok_or(BrokerError::ControlPlaneUnavailable)?;
+        let (response, receiver) = oneshot::channel();
+        recorder
+            .send_waiting(OutcomeCommand::StatsQuery { response })
+            .await?;
+        let summary = receiver
+            .await
+            .map_err(|_| BrokerError::ControlPlaneTask)?
+            .map_err(BrokerError::from)?;
+        Ok(StatsStatusPayload {
+            available: summary.is_some(),
+            summary: summary.unwrap_or_else(|| StatsStore::empty_summary(local_today())),
+        })
+    }
+
+    /// Deletes every usage count, including those queued before the call.
+    pub async fn forget_stats(&self) -> Result<StatsStatusPayload, BrokerError> {
+        let recorder = self
+            .inner
+            .outcome_recorder
+            .as_ref()
+            .ok_or(BrokerError::ControlPlaneUnavailable)?;
+        let (response, receiver) = oneshot::channel();
+        recorder
+            .send_waiting(OutcomeCommand::StatsForget { response })
+            .await?;
+        let summary = receiver
+            .await
+            .map_err(|_| BrokerError::ControlPlaneTask)?
+            .map_err(BrokerError::from)?;
+        Ok(StatsStatusPayload {
+            available: true,
+            summary,
         })
     }
 
@@ -452,6 +530,8 @@ impl OutcomeWorker {
                 let _ = response.send(self.control_plane.snapshot());
             }
             OutcomeCommand::Flush { response } => {
+                // A pause or shutdown fence also puts the counts on disk.
+                self.persist_stats();
                 let _ = response.send(());
             }
             OutcomeCommand::Style {
@@ -495,6 +575,43 @@ impl OutcomeWorker {
             OutcomeCommand::LearnedForget { response } => {
                 let _ = response.send(self.control_plane.forget_learned());
             }
+            OutcomeCommand::Stats {
+                expected_settings_revision,
+                identity,
+                event,
+            } => self.record_stats(expected_settings_revision, &identity, event),
+            OutcomeCommand::StatsQuery { response } => {
+                let _ = response.send(self.control_plane.stats_summary());
+            }
+            OutcomeCommand::StatsForget { response } => {
+                let _ = response.send(self.control_plane.forget_stats());
+            }
+        }
+    }
+
+    fn record_stats(
+        &self,
+        expected_settings_revision: u64,
+        identity: &StableIdentity,
+        event: StatsEvent,
+    ) {
+        if let Err(error) = self.control_plane.record_stats_at_settings_revision(
+            expected_settings_revision,
+            identity,
+            event,
+        ) {
+            // An unreadable statistics file: the count is dropped.
+            self.dropped_signals.fetch_add(1, Ordering::Relaxed);
+            eprintln!("badi-broker: usage count not kept: {error}");
+        }
+    }
+
+    /// Counts reach the disk at most a sweep interval late, and at every
+    /// pause or shutdown fence; a failed write keeps them for the next try.
+    fn persist_stats(&self) {
+        if let Err(error) = self.control_plane.persist_stats() {
+            self.write_failures.fetch_add(1, Ordering::Relaxed);
+            eprintln!("badi-broker: usage statistics write failed: {error}");
         }
     }
 
@@ -516,6 +633,7 @@ impl OutcomeWorker {
                 "badi-broker: periodic personalization retention reconciliation failed: {error}"
             );
         }
+        self.persist_stats();
     }
 }
 

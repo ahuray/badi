@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Control the persistent desktop broker, its settings and its diagnostics."""
 
+import datetime
 import importlib.util
 import json
 import os
@@ -37,6 +38,10 @@ DESKTOP_AUTOMATIC = {"normal": "as on mains", "deferred": "after the typing paus
 HELP = """Badi — local writing controls
 
   badi status [--json]          Model health and counters
+  badi stats [--json]          Suggestions shown, accepted and words saved
+                               today, in the last 7 days and per app or site
+                               (counts only, kept 90 days on this device)
+  badi stats forget            Delete every usage count
   badi settings                Open the Omarchy settings panel
   badi settings --json          Read the current settings document
   badi pause | resume          Persistently pause or resume predictions
@@ -331,6 +336,15 @@ def no_suggestion_summary(metrics):
               if isinstance(breakdown.get(reason), int) and breakdown[reason] > 0}
     last = breakdown.get("last") if breakdown.get("last") in NO_SUGGESTION else None
     return {"total": sum(counts.values()), "counts": counts, "last": last}
+
+
+def usage_stats(endpoint):
+    """The broker's usage statistics, or None when it cannot report them."""
+    try:
+        status = json.loads(control(["stats", "status"], endpoint))
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return status if isinstance(status, dict) else None
 
 
 def receipt(name):
@@ -938,6 +952,55 @@ def context_command(arguments):
         raise RuntimeError("Usage: badi context on|off|status|forget, or badi context app ID|site ORIGIN on|off")
 
 
+def stats_text(status):
+    """Content-free usage counts: the windows, the last seven days and the leading apps and sites."""
+    if not status.get("available"):
+        return ("Usage statistics are unreadable and kept as they are; "
+                "badi stats forget deletes them and counting starts again.")
+    summary = status["summary"]
+    totals = summary["totals"]
+    def row(label, counts):
+        return f"{label:16}{counts['shown']:>8}{counts['accepted']:>10}{counts['words']:>13}"
+    lines = [f"Usage on this device (counts only, kept {summary['retention_days']} days; badi stats forget deletes them)",
+             f"{'':16}{'Shown':>8}{'Accepted':>10}{'Words saved':>13}"]
+    for label, key in (("Today", "today"), ("Last 7 days", "last_7_days"),
+                       (f"{summary['retention_days']} days", "retained")):
+        lines.append(row(label, totals[key]))
+    if not summary["days"]:
+        lines.extend(["", "Nothing counted yet: suggestions shown and accepted in allowed apps and sites appear here."])
+        return "\n".join(lines)
+    today = datetime.date.fromisoformat(summary["today"])
+    by_day = {day["day"]: day for day in summary["days"]}
+    lines.extend(["", "Per day:"])
+    for offset in range(6, -1, -1):
+        day = today - datetime.timedelta(days=offset)
+        counts = by_day.get(day.isoformat(), {"shown": 0, "accepted": 0, "words": 0})
+        lines.append(row(f"  {day.isoformat()} {day.strftime('%a')}", counts))
+    leaders = sorted((subject for subject in summary["subjects"] if subject["last_7_days"]["shown"]
+                      or subject["last_7_days"]["accepted"]),
+                     key=lambda subject: (-subject["last_7_days"]["words"], -subject["last_7_days"]["shown"]))[:8]
+    if leaders:
+        lines.extend(["", "Apps and sites, last 7 days:"])
+        width = max(len(identity_text(subject["identity"])) for subject in leaders)
+        for subject in leaders:
+            counts = subject["last_7_days"]
+            lines.append(f"  {identity_text(subject['identity']):{width}}  ≈ {counts['words']} words · "
+                         f"{counts['shown']} shown · {counts['accepted']} accepted")
+    lines.extend(["", "Words saved counts the word parts Badi inserted; a later undo is not known."])
+    return "\n".join(lines)
+
+
+def stats_command(arguments):
+    if arguments in ([], ["--json"]):
+        status = json.loads(control(["stats", "status"]))
+        print(json.dumps(status, indent=2) if arguments else stats_text(status))
+    elif arguments == ["forget"]:
+        control(["stats", "forget"])
+        print("Every usage count was deleted. Counting continues from now.")
+    else:
+        raise RuntimeError("Usage: badi stats [--json] | badi stats forget")
+
+
 def set_battery_mode(document, mode):
     # Absent is the canonical quiet state, the default.
     if mode == "quiet":
@@ -1440,6 +1503,9 @@ def main(arguments):
     if arguments[:1] == ["context"]:
         context_command(arguments[1:])
         return
+    if arguments[:1] == ["stats"]:
+        stats_command(arguments[1:])
+        return
     if len(arguments) == 2 and arguments[0] == "battery" and arguments[1] in BATTERY_TEXT:
         update_settings(lambda document: set_battery_mode(document, arguments[1]))
         print(BATTERY_TEXT[arguments[1]])
@@ -1623,6 +1689,8 @@ def main(arguments):
             "activity": debug_activity(),
             # The file the running broker loaded; the advice's catalog names it.
             "model_file": active_model_file(),
+            # Counts per day and app or site; None from a broker without them.
+            "stats": usage_stats(endpoint),
         }
         print(json.dumps(overview))
     else:

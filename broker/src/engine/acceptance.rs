@@ -15,6 +15,7 @@ use crate::protocol::{
     Acceptance, AdapterKind, Capability, CommitPreparePayload, CommitResultPayload, CommitStatus,
     ControlAction, Coordinates, ReasonCode, SessionControlRequestPayload, SuggestRequestPayload,
 };
+use crate::stats::StatsEvent;
 
 /// The UTC day and signal of one outcome aggregate to record.
 type OutcomeSignal = Option<(u64, PersonalizationSignal)>;
@@ -185,6 +186,7 @@ impl Broker {
         payload.validate()?;
         let metrics = &self.inner.metrics;
         let mut state = self.inner.state.lock().await;
+        let settings_revision = state.settings_revision;
         let style_revision = state
             .settings
             .as_ref()
@@ -220,6 +222,19 @@ impl Broker {
             }
             CommitStatus::Stale | CommitStatus::Blocked | CommitStatus::Failed => {}
         }
+        // Usage statistics count an acceptance once the adapter says it landed.
+        let landed = matches!(
+            payload.status,
+            CommitStatus::Applied | CommitStatus::DispatchedUnverified
+        )
+        .then(|| {
+            (
+                session.target.target.clone(),
+                StatsEvent::Accepted {
+                    words: pending.saved_words,
+                },
+            )
+        });
         // Style learning keeps only what the user wrote before the accepted
         // text, and only after the adapter reports the edit landed.
         let style_sample = style_revision
@@ -236,6 +251,9 @@ impl Broker {
             });
         session.pending = None;
         retire_committed_context(session, payload.status, metrics);
+        if let Some((target, event)) = landed {
+            self.queue_stats(&target, settings_revision, event);
+        }
         if let Some((target, revision, text)) = style_sample {
             self.queue_style_sample(&target, revision, text);
         }
