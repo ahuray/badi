@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Token confidence was calibrated on Gemma 3 1B's reviewed suggestions: a
+  frozen whole-suggestion rule cut held-out harmful additions from 15 to 10
+  but lost 7 of 51 useful ones and needs the full suggestion before display,
+  so no gate ships yet.
 - The Fcitx 5.1.22 Wayland frontend backport is retired: Arch ships
   Fcitx 5.1.23 with the upstream fix, Chromium 154 kept its surrounding
   text on the stock frontend, and a complete install removes the old

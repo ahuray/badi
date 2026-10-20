@@ -236,14 +236,12 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Compare Qwen3.5 0.8B base with Qwen3 0.6B as the compact choice (battery,
       no AVX2): it was the fastest screened model (p95 301 ms, no miss) at 35%
       useful against Gemma 3 1B's 46%, but Qwen3 0.6B was not screened.
-- [ ] Calibrate token confidence against reviewed full additions per language.
-      Gmail Smart Compose shows a suggestion only above a length-normalized
-      log-probability threshold set for a target coverage
-      ([arXiv 1906.00080](https://arxiv.org/abs/1906.00080)). With Gemma 3 1B
-      on 2026-10-18, 62 of 215 English, German and Persian development
-      requests were useful, 67 acceptable but generic and 44 unhelpful; such
-      a gate, or cutting a suggestion before its first low-confidence word,
-      targets the last two.
+- [ ] Decide whether quiet beats speed for token confidence: a gate that
+      waits for the whole suggestion and hides it when any token falls under
+      log-probability −2.75 removed a third of harmful and almost half of
+      unhelpful held-out suggestions, at the cost of about one useful
+      suggestion in seven and about the remaining decode time before display
+      ([measurement](broker/README.md#suggestion-limits)).
 - [ ] Spelling for Persian, which has no cased letters and needs its own word
       shape rather than the European one.
 - [ ] Measure Cotypist parity with the same tasks on a named Cotypist version on

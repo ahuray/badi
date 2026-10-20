@@ -383,6 +383,23 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   token count. A 2.6× Persian budget missed 550 ms on the development cases.
 - **Abstention.** A continuation abstains when it adds a number absent from the
   typed text, and every request when the caret splits a word.
+- **Token confidence (measured, not used).** No suggestion is gated on the
+  model's confidence. Calibrated on 2026-10-20 by replaying Gemma 3 1B's
+  exact production payloads with `n_probs`: the 301 shown suggestions of
+  the paired European-language screen, with three blind label rounds, and
+  every replay reproduced its text. The lowest pre-sampling token
+  log-probability of a suggestion separates useful from unhelpful or
+  harmful at an AUC of 0.70–0.77 overall, strongly in German and not at
+  all in English. A rule frozen before testing (show only when every token
+  is at least −2.75) was tested once on the held-out confirmation outputs
+  (224 shown). It cut harmful additions from 15 to 10 and unhelpful ones
+  from 18 to 10, with harm falling or holding in every language, but it lost
+  7 of 51 useful full additions (2 in English, 3 in Persian) and showed 19%
+  fewer suggestions. Cutting before the first low-confidence token removes
+  almost no harm, because invented facts are fluent, and the first word's
+  confidence alone is much weaker. A useful gate therefore waits for the
+  whole suggestion, which costs the streamed first word about the
+  remaining decode time.
 - **Languages and healing.** Settings `writing_languages` (default `en`, `de`,
   `fa`; `fr`, `es` and `pt` opt-in) decide where Badi suggests; a request in
   any other language abstains before the model, and detection names French,
