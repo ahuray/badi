@@ -101,6 +101,9 @@ private:
         // chord's modifiers are up, and the timer that sends them.
         unsigned int literalTabs = 0;
         std::unique_ptr<::fcitx::EventSourceTime> literalTabTimer;
+        // The chord's modifiers were state, not keys: no modifier release
+        // will come, so the chord key's own release sends the Tab.
+        bool literalTabOnKeyRelease = false;
         // Show a suggestion that arrives during the typing pause only after
         // that pause, and only if this keystroke is still the latest.
         std::uint64_t showAfterUs = 0;
@@ -213,6 +216,9 @@ private:
     std::unordered_map<std::string, Binding> bindings_;
     AuthorityContinuity authorityContinuity_;
     bool authorityPaused_ = true;
+    // Modifiers held as keys (a physical keyboard's Ctrl, Shift, Alt, Super).
+    // A virtual keyboard may set modifiers as state alone, without key events.
+    ::fcitx::KeyStates heldModifierKeys_;
     bool previewMayBeVisible_ = false;
 };
 

@@ -14,6 +14,11 @@ namespace badi::fcitx5 {
 
 void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     if (event.isVirtual()) return;
+    if (event.rawKey().isModifier()) {
+        const auto states = ::fcitx::Key::keySymToStates(event.rawKey().sym());
+        if (event.isRelease()) heldModifierKeys_ &= ~states;
+        else heldModifierKeys_ |= states;
+    }
     if (event.isRelease()) return literalTabRelease(event);
     const auto key = event.key().normalize();
     const bool tab = key.check(::fcitx::Key(FcitxKey_Tab));
@@ -148,12 +153,15 @@ void BadiAddon::literalTab(Binding &binding) {
     // A Tab may complete or indent invisibly; follow what comes next.
     binding.typedLine.restart();
     binding.literalTabs = std::min(binding.literalTabs + 1, kMaxLiteralTabs);
+    binding.literalTabOnKeyRelease = !heldModifierKeys_.testAny(literalTabChord().states());
     debug_.record("decision", binding.state.appId(), "literal_tab_waiting");
 }
 
 void BadiAddon::literalTabRelease(::fcitx::KeyEvent &event) {
     auto *binding = bindingFor(*event.inputContext());
-    if (!binding || binding->literalTabs == 0 || !lastModifierReleased(event.rawKey())) return;
+    if (!binding || binding->literalTabs == 0) return;
+    const auto &released = event.rawKey();
+    if (binding->literalTabOnKeyRelease ? released.isModifier() : !lastModifierReleased(released)) return;
     binding->literalTabTimer = oneShot(kLiteralTabDelayUs, [this, context = binding->inputContext] {
         if (auto *current = bindingFor(*context)) sendLiteralTabs(*current);
     });
@@ -173,6 +181,11 @@ void BadiAddon::sendLiteralTabs(Binding &binding) {
         binding.inputContext->forwardKey(::fcitx::Key(FcitxKey_Tab), false);
         if (!pressReleases) binding.inputContext->forwardKey(::fcitx::Key(FcitxKey_Tab), true);
     }
+    // A suggestion shown again while the Tab waited is for the field as it
+    // was; the Tab changes it, so retire it like any edit.
+    clearTypeThrough(binding);
+    cancelForInput(binding);
+    binding.typedLine.restart();
     debug_.record("decision", binding.state.appId(), "literal_tab_sent");
 }
 
