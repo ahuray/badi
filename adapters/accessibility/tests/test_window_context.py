@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from contract import Denied  # noqa: E402
 from field import (EMBEDDED_OBJECT, MAX_WINDOW_NODES, VOCABULARY_CHARS, VOCABULARY_NODES,  # noqa: E402
                    WINDOW_HEADING_CHARS, WINDOW_PARAGRAPH_CHARS, FieldBackend, window_text)
 
@@ -86,8 +87,8 @@ def field():
     return Node("entry", "", states=frozenset({"showing", "editable", "focused"}))
 
 
-def metadata(node, uri=PAGE, web=True):
-    return {"node": node, "uri": uri, "web": web}
+def metadata(node, uri=PAGE, web=True, gecko=False):
+    return {"node": node, "uri": uri, "web": web, "gecko": gecko}
 
 
 class WindowContextTests(unittest.TestCase):
@@ -129,7 +130,7 @@ class WindowContextTests(unittest.TestCase):
         target = field()
         Node("document web", children=[Node("heading", "Title"), target])
         self.assertIsNone(backend().window_context(metadata(target, web=False)))
-        self.assertIsNone(backend().window_context(metadata(target, uri="")))
+        self.assertIsNone(backend(None).window_context(metadata(target, uri="")), "no document at all")
         # The binding names another document than the one the field is in now.
         self.assertIsNone(backend("https://other.example/").window_context(metadata(target)))
         # No document ancestor at all.
@@ -200,7 +201,7 @@ class VocabularyTextTests(unittest.TestCase):
         target = field()
         Node("document web", children=[Node("paragraph", "Some words"), target])
         self.assertIsNone(backend().vocabulary_text(metadata(target, web=False)))
-        self.assertIsNone(backend().vocabulary_text(metadata(target, uri="")))
+        self.assertIsNone(backend(None).vocabulary_text(metadata(target, uri="")), "no document at all")
         self.assertIsNone(backend("https://other.example/").vocabulary_text(metadata(target)))
         orphan = field()
         Node("section", children=[Node("paragraph", "No document"), orphan])
@@ -218,3 +219,34 @@ class VocabularyTextTests(unittest.TestCase):
         slow = backend()
         slow.deadline = time.monotonic()
         self.assertIsNone(slow.vocabulary_text(metadata(late)), "no headroom left: nothing is read")
+
+
+class DocumentAnchorTests(unittest.TestCase):
+    """Each engine names the field's document its own way (field_document)."""
+
+    def page(self):
+        target = field()
+        Node("document web", children=[Node("paragraph", "Marinella Costa wrote about Okonkwo."), target])
+        return target
+
+    def test_gecko_uses_doc_url_because_its_uri_is_empty(self):
+        target = self.page()
+        gecko = backend("")
+        gecko.gecko_document_url = lambda _node: PAGE
+        self.assertIn("Marinella", gecko.vocabulary_text(metadata(target, gecko=True)))
+        self.assertIsNotNone(gecko.window_context(metadata(target, gecko=True)))
+        gecko.gecko_document_url = lambda _node: "https://other.example/"
+        self.assertIsNone(gecko.vocabulary_text(metadata(target, gecko=True)), "another page's document")
+
+        def browser_ui(_node):
+            raise Denied("unsupported_field")
+        gecko.gecko_document_url = browser_ui
+        self.assertIsNone(gecko.vocabulary_text(metadata(target, gecko=True)), "browser UI is no web page")
+
+    def test_a_chromium_based_app_anchors_on_its_own_document(self):
+        target = self.page()
+        app = backend("file:///opt/app/resources/index.html")
+        self.assertIn("Okonkwo", app.vocabulary_text(metadata(target, uri="")),
+                      "a desktop app's page has no browser origin to match")
+        self.assertIsNone(backend(None).vocabulary_text(metadata(target, uri="")))
+        self.assertIsNone(app.vocabulary_text(metadata(target, uri="", web=False)), "native fields get nothing")

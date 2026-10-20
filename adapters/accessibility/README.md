@@ -202,8 +202,10 @@ the broker's policy reply says `context_words`, a `snapshot` adds
 the text displayed near a web field so the broker can finish a typed word with
 a word in view, such as a name from the thread or a term from a coding session.
 
-- **Scope.** Web fields only, in their own `document web`, under the same
-  address check as the same-window context above. Native apps get nothing.
+- **Scope.** Web fields only, in their own `document web`, named by
+  Chromium's `URI` or Gecko's `DocURL`. In a browser that document must have
+  the field's page address; a Chromium-based app (Claude, Codex, VS Code) has
+  no page address, so its own document is the bound. Native apps get nothing.
 - **Walk.** From the field: each ancestor's earlier siblings, last first, then
   its later siblings, until that document. Each node's text is read with its
   embedded objects dropped, then its children's.
@@ -229,6 +231,20 @@ note fields):
   stopped finishing words, and deleted the site's learned words.
 - **Panel.** It asked "Finish words from what you see?" while context was
   unchosen; Turn on replaced the question with the switch and per-app rows.
+
+Retried on 2026-10-20 with installed `f180653` on the same page. Before
+that commit, Zen and Chromium-based apps never got window words: the walk
+looked for Chromium's `URI`, which Gecko leaves empty, and required a page
+address, which a Chromium-based app does not have.
+
+- **Zen 1.23.3b** (isolated profile): 197 characters of the thread; "Marin"
+  and "Okonk" finished as in Chromium (3 of 3).
+- **Brave Origin 1.97** (isolated profile, as a tab and as an `--app` web
+  app): names from the thread finished and Tab took them.
+- **VS Code 1.142** (isolated profile, a scratch Markdown file): 175
+  characters of window text, the explorer and tab labels. The names finished
+  from the draft, which VS Code's screen-reader textarea exposes several
+  lines of: "Okonk" showed "wo", "Koope" showed "rationsvereinbarung".
 
 A real mail client and the Claude desktop app are not yet tested
 ([backlog](<../../future plans.md>)).

@@ -7,6 +7,12 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Window words now reach Zen and Chromium-based apps such as VS Code, Codex
+  and Claude: the observer finds each engine's document (Gecko's `DocURL`)
+  and bounds an app without a page address by its own document. The
+  2026-10-20 app sweep passed in Brave Origin, a web app, Zen, Ghostty,
+  Neovim, Obsidian, Writer and VS Code, and found Qt Quick apps such as
+  Omawrite quiet since fcitx5-qt 5.1.16.
 - The spelling replacement shape has one shared fixture
   (`protocol/spelling-replacement-fixtures.json`) that Rust, the v2 schema,
   `text-safety.mjs` and the Writer extension all test against. The schema and

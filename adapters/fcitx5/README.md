@@ -358,13 +358,46 @@ terminal received was read back. No cell made a wrong-field or stale edit:
 A real suspend and resume, a VT switch and several monitors (one display)
 were not exercised.
 
+App sweep on 2026-10-20 (installed `f180653`, Fcitx 5.1.23, real model at
+15 W, context on, `badi debug on --text`, disposable text in isolated
+profiles and scratch files). Each cell typed a prefix, waited for the
+suggestion and pressed Tab once:
+- **Brave Origin 1.97**, a local mail-style page: 5 of 5 in a textarea and 3
+  of 3 in a contenteditable, inline, mostly 160–360 ms after the last key.
+  As an `--app` web app: 4 of 4; Ctrl+→ took all of it and Escape hid it
+  without editing.
+- **Zen 1.23.3b:** suggestions and, after `f180653`, window words.
+- **Ghostty 1.3.1**, `cat` into a file: 3 of 3 in the panel (220–540 ms);
+  the file received one word per Tab.
+- **Neovim 0.12.6** (LazyVim in Ghostty) and **Obsidian 1.14.4**
+  (`node adapters/obsidian/live.mjs --local`, all eight checks, English,
+  German and Persian) through their plugins.
+- **LibreOffice Writer 26.8.1** (GTK 3): 2 of 3 inline in 169 and 241 ms;
+  Tab committed one word (`dispatched-unverified`). Writer sends only the
+  caret's sentence, so "Okonk" could not finish from an earlier sentence.
+  The extension's Alt+F7 replaced `recieve`, and one Ctrl+Z restored it.
+- **VS Code 1.142:** 3 of 3, Tab took one word, and the saved file read
+  back exactly. `wtype` sends its own keymap, and VS Code's default key-code
+  dispatch then read letters as Tab or Backspace ("sending" became
+  "se    ng") and ignored Ctrl+S, so the trial profile sets
+  `"keyboard.dispatch": "keyCode"`.
+- **Omawrite 0.7.0: nothing.** Since fcitx5-qt 5.1.16 (installed here
+  2026-10-18 with Qt 6.12), Qt's input module withdraws the
+  `SurroundingText` capability after every key: an input-method update that
+  does not ask for the surrounding text now clears it
+  ([upstream change](https://github.com/fcitx/fcitx5-qt/commit/bac684ce07d9df78ee37dab1cbdcebfa71bf24ec)).
+  The addon then treats the field as unreadable, so no automatic or explicit
+  request is made. A bare Qt Quick `TextArea` (`qml6`) does the same, so
+  every Qt Quick field is affected; Qt Widgets apps such as Telegram were not
+  tested ([backlog](<../../future plans.md>)).
+
 | Application | Reaches Fcitx through | Boundary |
 | --- | --- | --- |
-| Omawrite 0.5.0 (Qt 6) | `QT_IM_MODULE=fcitx` | 20/20 trials; one native undo restores the exact prefix |
+| Omawrite 0.5.0 (Qt 6) | `QT_IM_MODULE=fcitx` | 20/20 trials; one native undo restores the exact prefix. 0.7.0 with fcitx5-qt 5.1.16 gets nothing (see above) |
 | Xournal++ 1.3.7 (GTK 3 text tool) | `GTK_IM_MODULE=fcitx` launcher override | 20/20 trials; after Escape leaves text editing, one document undo restores the prefix |
 | Chromium 152, Brave Origin, Electron apps | text-input-v3 (`wayland_v2`), Wayland app id | Page fields carry no purpose hints, so the observer's checks deny passwords. The omnibox sends the `Url` purpose and is denied before any observer request. Surrounding text stays current only on Fcitx 5.1.23 or later. |
-| VS Code 1.140 | as above | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. Its caret-wide hidden textarea gets the inline preview bounded by the editor widget. |
-| Zen 1.23b (Gecko 157) | `wayland_v2`, `zen` | Fields and the urlbar share one context with no `Url` hint, so the observer denies the urlbar. Gecko sends only the caret's paragraph. One Ctrl+Z undoes an acceptance alone. |
+| VS Code 1.140, 1.142 | as above | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. Its caret-wide hidden textarea gets the inline preview bounded by the editor widget. |
+| Zen 1.23b (Gecko 157), 1.23.3b (Gecko 158) | `wayland_v2`, `zen` | Fields and the urlbar share one context with no `Url` hint, so the observer denies the urlbar. Gecko sends only the caret's paragraph. One Ctrl+Z undoes an acceptance alone. |
 | Telegram (Qt) | `dbus`, `Telegram` | Canonicalized to `telegram` |
 
 Fcitx supplies process identity and text but no stable widget identity, so
