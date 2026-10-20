@@ -160,6 +160,25 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(self.snapshot(focus)["ok"])
         self.assertEqual((self.backend.lock_checks, self.backend.positions), ([False], 1))
 
+    def test_a_snapshot_reads_the_window_only_when_asked_and_only_with_true(self):
+        focus = self.inspect()["focus"]
+        calls = []
+        self.backend.vocabulary_text = lambda metadata: calls.append(metadata["uri"]) or "Re: Venue deposit"
+        plain = self.snapshot(focus)
+        self.assertTrue(plain["ok"])
+        self.assertNotIn("window_text", plain["focus"])
+        self.assertEqual(calls, [], "no window read unless asked")
+        request = {"schema": SCHEMA, "id": "3", "op": "snapshot", "binding": focus["binding"],
+                   "policy_target": focus["target"], "window": True}
+        asked = self.observer.request(request)
+        self.assertEqual(asked["focus"]["window_text"], "Re: Venue deposit")
+        self.assertEqual(calls, ["https://example.test/writing"])
+        for value in (False, 1, "yes"):
+            with self.subTest(value=value):
+                self.assertEqual(self.observer.request({**request, "window": value})["error"], "invalid_request")
+        self.backend.vocabulary_text = lambda _metadata: None
+        self.assertNotIn("window_text", self.observer.request(request)["focus"])
+
     def test_sentence_bounded_snapshot_starts_at_the_carets_sentence(self):
         # LibreOffice Writer gives Fcitx only the caret's sentence; the snapshot must equal it.
         self.backend.content = "First. Same text"

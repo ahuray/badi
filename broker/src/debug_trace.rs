@@ -325,6 +325,8 @@ fn describe_context(entry: &mut Entry, payload: &Value) {
     );
     entry.chars("before_chars", payload, "/before");
     entry.chars("after_chars", payload, "/after");
+    // Only its length: the window's text stays out of every trace (ADR 0010).
+    entry.chars("window_chars", payload, "/window_text");
     let sensitive = payload.pointer("/field/sensitive") != Some(&Value::Bool(false))
         || payload.pointer("/field/purpose").and_then(Value::as_str) != Some("normal");
     if entry.text && !sensitive {

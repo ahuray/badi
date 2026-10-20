@@ -52,6 +52,14 @@ HELP = """Badi — local writing controls
   badi escape-quiet SECONDS|off How long a dismissal keeps its field quiet
                                (1-3600 seconds, across edits; off keeps quiet
                                only until the text changes, the default)
+  badi context on|off|status    Opt-in context: finish the word you are typing
+                               (five letters in) with a word from the same
+                               window or one you wrote before in that app,
+                               kept sealed with a key in your keyring
+  badi context app ID on|off   Context for one app (on by default once on)
+  badi context site ORIGIN on|off
+                               Context for one site
+  badi context forget          Delete every learned word
   badi style on|off|status      Opt-in style learning: keep the sentences you
                                write before accepting a suggestion, sealed
                                with a key in your keyring; no prompt uses
@@ -533,6 +541,15 @@ def health_report():
             report["notes"].append("Style learning is on, but the broker cannot seal samples (its keyring key is "
                                    "missing, locked or different, or the store is unreadable), so nothing is kept. "
                                    "Unlock the keyring or run badi style on; badi style status explains which.")
+    if settings.get("context_words") is True:
+        try:
+            context = json.loads(control(["context", "status"]))
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+            context = {}
+        if context.get("key") != "ready" or context.get("available") is not True:
+            report["notes"].append("Context is on and window words work, but no words are learned: the keyring key is "
+                                   "missing, locked or different, or the learned words are unreadable. Unlock the "
+                                   "keyring or run badi context on; badi context status explains which.")
     if settings.get("all_linux_apps") is True:
         report["notes"].append(ALL_APPS_NOTE)
     editor = vscode_edit_context_note()
@@ -584,6 +601,12 @@ def web_settings():
     return document if isinstance(document, dict) else {}
 
 
+def context_text(chosen):
+    if chosen is True:
+        return "on: finishes words from the window and words you wrote before (badi context status)"
+    return "off" if chosen is False else "not chosen: badi context on lets Badi finish words from the window"
+
+
 def status_text(health, settings=None):
     state = "Paused" if health["paused"] else "Model ready"
     counters = health["metrics"]
@@ -603,6 +626,7 @@ def status_text(health, settings=None):
             f"Observed fields: automatic for Omawrite, Telegram and IME-parity apps ({IME_APPS}); Tab accepts a visible suggestion's next word, otherwise stays Tab; Ctrl+Right accepts all of it; Ctrl+Shift+Space requests\n"
             + f"Apps: {mode_text((settings or {}).get('all_linux_apps'), 'app')}\n"
             + f"Web sites: {mode_text((settings or {}).get('all_web_origins'), 'site')}\n"
+            + f"Context: {context_text((settings or {}).get('context_words'))}\n"
             + f"Escape: dismiss (quiet: {quiet_text}) · Why nothing appeared: badi doctor; badi debug on; badi debug watch"
             + "".join(f"\n{line}" for line in [desktop_text(health.get("desktop"), settings)] if line))
 
@@ -863,6 +887,75 @@ def style_command(arguments):
         print("All style samples were deleted" + (" and the keyring key removed." if removed else "."))
     else:
         raise RuntimeError("Usage: badi style on|off|status|export|forget, or badi style site ORIGIN on [DAYS]|off")
+
+
+CONTEXT_ON = ("Context is on. Once you have typed five letters of a word, Badi can finish it with a word "
+              "from the same window, read when you type and never kept, or one you wrote in that app in "
+              "two separate fields before, kept sealed with a key in your keyring until it goes 90 days "
+              "unused. Turn it off for one app or site with badi context app ID off or badi context site "
+              "ORIGIN off; badi context forget deletes the learned words.")
+
+
+def set_context(document, enabled):
+    # Present once chosen: the settings panel asks only while it is absent.
+    document["context_words"] = bool(enabled)
+
+
+def set_context_off(document, identity, off):
+    """Context off (True) or back on (False) for one app or site."""
+    listed = [item for item in document.get("context_words_off", []) if item != identity]
+    if off:
+        listed.append(identity)
+    listed.sort(key=identity_key)
+    if listed:
+        document["context_words_off"] = listed
+    else:
+        document.pop("context_words_off", None)
+
+
+def identity_text(identity):
+    return identity["app_id"] if identity["kind"] == "linux_app" else origin_text(identity)
+
+
+def context_command(arguments):
+    if arguments == ["on"]:
+        try:
+            key_id, key = style_keyring().ensure()
+        except Exception as error:  # the module's KeyringError, or no Secret Service
+            key_id = None
+            note = (f"\nThe keyring could not provide a key ({error}), so nothing is learned yet; "
+                    "window words still work. Unlock the keyring and run badi context on again.")
+        if key_id is not None:
+            control(["style", "key", "-"], input_text=f"{key_id} {key}\n")
+            note = ""
+        update_settings(lambda document: set_context(document, True))
+        print(CONTEXT_ON + note)
+    elif arguments == ["off"]:
+        update_settings(lambda document: set_context(document, False))
+        print("Context is off: no window words are read and nothing new is learned. Learned words expire "
+              "90 days after last use, or delete them now with badi context forget.")
+    elif arguments == ["status"]:
+        status = json.loads(control(["context", "status"]))
+        document = json.loads(control(["settings", "show", "--json"]))
+        state = "on" if status["enabled"] else "off" if status["chosen"] else "not chosen (badi context on)"
+        words = "unknown until the key arrives" if status.get("words") is None else str(status["words"])
+        key = {"ready": "ready", "absent": "not delivered (badi context on)",
+               "mismatch": "different from the one that sealed them (badi context forget)"}[status["key"]]
+        off = [identity_text(item) for item in document.get("context_words_off", [])]
+        print(f"Context: {state} · learned words: {words} from {status['subjects']} app(s) and site(s) · key: {key}"
+              + ("" if status["available"] else " · learned words unreadable (badi context forget)")
+              + f"\nOff for: {', '.join(off) if off else 'nothing'}")
+    elif len(arguments) == 3 and arguments[0] in ("app", "site") and arguments[2] in ("on", "off"):
+        identity = app_identity(arguments[1]) if arguments[0] == "app" else site_identity(arguments[1])
+        off = arguments[2] == "off"
+        update_settings(lambda document: set_context_off(document, identity, off))
+        print(f"{identity_text(identity)}: context off; its learned words are deleted." if off
+              else f"{identity_text(identity)}: context follows badi context on|off again.")
+    elif arguments == ["forget"]:
+        control(["context", "forget"])
+        print("Every learned word was deleted. The keyring key stays for style learning; badi style forget removes it.")
+    else:
+        raise RuntimeError("Usage: badi context on|off|status|forget, or badi context app ID|site ORIGIN on|off")
 
 
 def set_battery_mode(document, mode):
@@ -1363,6 +1456,9 @@ def main(arguments):
         return
     if arguments[:1] == ["style"]:
         style_command(arguments[1:])
+        return
+    if arguments[:1] == ["context"]:
+        context_command(arguments[1:])
         return
     if len(arguments) == 2 and arguments[0] == "battery" and arguments[1] in BATTERY_TEXT:
         update_settings(lambda document: set_battery_mode(document, arguments[1]))

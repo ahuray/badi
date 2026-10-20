@@ -136,6 +136,16 @@ pub struct SettingsV2 {
     /// off. Turning it off stops collection; forgetting is a separate step.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub style_learning: bool,
+    /// Opt-in context (`badi context on`): finish the word being typed with
+    /// words in the same window and words the user wrote before in the app,
+    /// which are kept sealed. `None` until the user chooses, when the panel
+    /// asks once; `Some(false)` keeps it off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_words: Option<bool>,
+    /// Apps and sites where context stays off while it is on: no window words
+    /// are read there and no words are learned or used. Canonical order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_words_off: Vec<StableIdentity>,
     /// Per-app quality hints, independent of app/site acquisition permission.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub language_overrides: BTreeMap<String, PredictionLanguage>,
@@ -193,6 +203,10 @@ struct SettingsDocument {
     battery_mode: Option<BatteryMode>,
     #[serde(default)]
     style_learning: Option<bool>,
+    #[serde(default)]
+    context_words: Option<bool>,
+    #[serde(default)]
+    context_words_off: Option<Vec<StableIdentity>>,
     #[serde(default, deserialize_with = "present_language_overrides")]
     language_overrides: Option<BTreeMap<String, PredictionLanguage>>,
     #[serde(default)]
@@ -257,6 +271,13 @@ impl<'de> Deserialize<'de> for SettingsV2 {
                 "style_learning_requires_settings_v2",
             ));
         }
+        if decoded.schema == SETTINGS_SCHEMA_V1
+            && (decoded.context_words.is_some() || decoded.context_words_off.is_some())
+        {
+            return Err(serde::de::Error::custom(
+                "context_words_requires_settings_v2",
+            ));
+        }
         if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.language_overrides.is_some() {
             return Err(serde::de::Error::custom(
                 "language_overrides_requires_settings_v2",
@@ -292,6 +313,8 @@ impl<'de> Deserialize<'de> for SettingsV2 {
             escape_quiet_seconds: decoded.escape_quiet_seconds.unwrap_or(0),
             battery_mode: decoded.battery_mode.unwrap_or_default(),
             style_learning: decoded.style_learning.unwrap_or(false),
+            context_words: decoded.context_words,
+            context_words_off: decoded.context_words_off.unwrap_or_default(),
             language_overrides: decoded.language_overrides.unwrap_or_default(),
             spelling_languages: decoded
                 .spelling_languages
@@ -335,6 +358,15 @@ impl SettingsV2 {
             .copied()
     }
 
+    /// Whether context is on for `identity`: chosen globally and not turned
+    /// off for it. Permission to suggest there is checked separately.
+    #[must_use]
+    pub fn context_words_for(&self, identity: &StableIdentity) -> bool {
+        self.context_words == Some(true)
+            && !self.paused
+            && self.context_words_off.binary_search(identity).is_err()
+    }
+
     #[must_use]
     pub fn deny_by_default() -> Self {
         Self {
@@ -347,6 +379,8 @@ impl SettingsV2 {
             escape_quiet_seconds: 0,
             battery_mode: BatteryMode::Quiet,
             style_learning: false,
+            context_words: None,
+            context_words_off: Vec::new(),
             language_overrides: BTreeMap::new(),
             spelling_languages: vec![SpellingLanguage::English],
             writing_model: None,
@@ -392,6 +426,15 @@ impl SettingsV2 {
         }
         if self.subjects.len() > MAX_SUBJECTS {
             return Err(SettingsValidationError::TooManySubjects);
+        }
+        if self.context_words_off.len() > MAX_SUBJECTS {
+            return Err(SettingsValidationError::TooManySubjects);
+        }
+        for identity in &self.context_words_off {
+            identity.validate()?;
+        }
+        if !self.context_words_off.is_sorted_by(|a, b| a < b) {
+            return Err(SettingsValidationError::ContextWordsOffNotCanonical);
         }
 
         let mut previous: Option<&StableIdentity> = None;
@@ -519,6 +562,9 @@ impl SettingsV2 {
         self.escape_quiet_seconds = current.escape_quiet_seconds;
         self.battery_mode = current.battery_mode;
         self.style_learning = current.style_learning;
+        self.context_words = current.context_words;
+        self.context_words_off
+            .clone_from(&current.context_words_off);
         self.language_overrides
             .clone_from(&current.language_overrides);
         self.spelling_languages
@@ -552,6 +598,8 @@ pub enum SettingsValidationError {
     DuplicateIdentity,
     #[error("escape_quiet_out_of_range")]
     EscapeQuietOutOfRange,
+    #[error("context_words_off_not_canonical")]
+    ContextWordsOffNotCanonical,
     #[error("identity")]
     Identity(#[from] IdentityError),
     #[error("invalid_retention")]

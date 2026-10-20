@@ -184,7 +184,14 @@ void BadiAddon::requestObservedContext(Binding &binding, bool rediscover) {
     }
     const auto session = binding.state.coordinates().sessionId;
     const auto generation = binding.observationGeneration;
-    const bool sent = accessibility_->request(snapshotRequest(binding.observedFocus),
+    // The window is read once per field visit, and only while context is on.
+    const bool window = binding.broker.contextWords && !binding.fieldVisitId.empty() &&
+        binding.windowVisitId != binding.fieldVisitId;
+    if (window) {
+        binding.windowVisitId = binding.fieldVisitId;
+        binding.windowText.clear();
+    }
+    const bool sent = accessibility_->request(snapshotRequest(binding.observedFocus, window),
         [this, session, generation, rediscover, focus = binding.observedFocus](const Json &reply) {
             auto *current = bindingFor(session);
             if (!current || !current->inputContext->hasFocus() || current->observationGeneration != generation ||
@@ -226,6 +233,10 @@ void BadiAddon::publishObservedContext(Binding &binding, const Json &focus, cons
     if (!samePosition) {
         return debug_.record("request_blocked", app, "observer_context_mismatch");
     }
+    // The visit's window text, kept even when this context asks nothing (an
+    // empty field on focus): the window is read only once per visit.
+    if (const auto window = observedWindowText(observed); !window.empty() &&
+        binding.windowVisitId == binding.fieldVisitId) binding.windowText = window;
     auto context = currentContext(binding);
     if (!context) return debug_.record("request_blocked", app, unavailableContextReason(binding));
     if (app == "libreoffice") restoreObservedTrailingSpaces(*context, observed);
@@ -249,7 +260,9 @@ void BadiAddon::publishObservedContext(Binding &binding, const Json &focus, cons
     }
     binding.typeThroughWaits = 0;
     binding.observedFocus = observed;
-    const auto update = binding.state.updateContext(*context);
+    auto update = binding.state.updateContext(*context);
+    if (update && binding.broker.contextWords && binding.windowVisitId == binding.fieldVisitId)
+        update->windowText = binding.windowText;
     if (update && open(binding) && transport_.publishContext(*update)) {
         binding.broker.coordinates = update->coordinates;
         binding.requestExplicit = update->context.explicitRequest;

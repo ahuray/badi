@@ -99,6 +99,9 @@ struct ContextUpdate {
     ContextWindow context;
     std::string appId;
     std::string targetId;
+    // The observed field's window text while the broker says context_words;
+    // empty otherwise and on every unobserved path.
+    std::string windowText = {};
 };
 
 struct Suggestion {
@@ -254,6 +257,8 @@ struct BrokerSession {
     bool policyKnown = false;
     bool policyAllowed = false;
     std::string languageOverride;
+    // The broker turned context on for this target (ADR 0010).
+    bool contextWords = false;
 
     void open(const Coordinates &session) {
         coordinates = session;
@@ -261,16 +266,18 @@ struct BrokerSession {
         coordinates.fingerprint.clear();
         opened = true;
     }
-    void answer(bool allowed, std::string language = {}) {
+    void answer(bool allowed, std::string language = {}, bool words = false) {
         policyKnown = true;
         policyAllowed = allowed;
         languageOverride = allowed ? std::move(language) : std::string{};
+        contextWords = allowed && words;
     }
     void retire() {
         opened = false;
         policyKnown = false;
         policyAllowed = false;
         languageOverride.clear();
+        contextWords = false;
     }
 };
 

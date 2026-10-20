@@ -46,6 +46,9 @@
         "style.export",
         "style.status",
         "style.samples",
+        "context.query",
+        "context.forget",
+        "context.status",
         "editor.focus",
         "editor.status"
       ]
@@ -383,6 +386,24 @@
         "revision": false,
         "payload": { "$ref": "#/$defs/styleSamplesPayload" }
       }
+    },
+    {
+      "properties": {
+        "type": { "enum": ["context.query", "context.forget"] },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "context.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/contextStatusPayload" }
+      }
     }
   ],
   "$defs": {
@@ -687,7 +708,11 @@
         "suggestions_allowed": { "type": "boolean" },
         "learning_allowed": { "type": "boolean" },
         "reason": { "$ref": "#/$defs/policyResolutionReason" },
-        "language_override": { "enum": ["en", "de", "fa"] }
+        "language_override": { "enum": ["en", "de", "fa"] },
+        "context_words": {
+          "type": "boolean",
+          "description": "Context is on for this target (ADR 0010): an observed field may send the text near it as window_text. It grants nothing else. Producers omit it when false."
+        }
       },
       "allOf": [
         {
@@ -713,6 +738,13 @@
               "display_allowed": { "const": true }
             }
           }
+        },
+        {
+          "if": {
+            "required": ["context_words"],
+            "properties": { "context_words": { "const": true } }
+          },
+          "then": { "properties": { "suggestions_allowed": { "const": true } } }
         },
         {
           "if": {
@@ -812,6 +844,7 @@
         "fingerprint": { "$ref": "#/$defs/fingerprint" },
         "before": { "$ref": "#/$defs/contextText", "maxLength": 512, "description": "UTF-8 wire text capped at 512 Unicode scalar values immediately before the selection." },
         "after": { "$ref": "#/$defs/contextText", "maxLength": 128, "description": "UTF-8 wire text capped at 128 Unicode scalar values immediately after the selection." },
+        "window_text": { "$ref": "#/$defs/contextText", "maxLength": 2048, "description": "Text near an observed field in the same window, capped at 2,048 Unicode scalar values, sent only while the policy reply says context_words. The broker uses its words to finish the word being typed and keeps them only for this request (ADR 0010). Absent for denied, sensitive and unobserved fields." },
         "selection": { "$ref": "#/$defs/selection" },
         "field": { "$ref": "#/$defs/field" },
         "activation": { "$ref": "#/$defs/activation" },
@@ -1350,6 +1383,20 @@
         "key": { "enum": ["absent", "ready", "mismatch"] },
         "samples": { "type": "integer", "minimum": 0, "maximum": 64 },
         "subjects": { "type": "integer", "minimum": 0, "maximum": 64 }
+      }
+    },
+    "contextStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Content-free state of opt-in context (ADR 0010): whether it is on, whether the user has chosen, and learned-word counts. Never a word.",
+      "required": ["enabled", "chosen", "available", "key", "subjects"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "chosen": { "type": "boolean" },
+        "available": { "type": "boolean" },
+        "key": { "enum": ["absent", "ready", "mismatch"] },
+        "subjects": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "words": { "type": "integer", "minimum": 0, "maximum": 32768 }
       }
     },
     "styleSamplesPayload": {

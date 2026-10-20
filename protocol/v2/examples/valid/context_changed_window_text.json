@@ -1,0 +1,28 @@
+{
+  "v": 2,
+  "type": "context.changed",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 4,
+  "revision": 9,
+  "mono_ms": 4,
+  "payload": {
+    "fingerprint": "desktop_context_0002",
+    "before": "Hi Marin",
+    "after": "",
+    "selection": { "anchor": 8, "head": 8, "unit": "unicode_scalar_values" },
+    "field": {
+      "purpose": "normal",
+      "editable": true,
+      "multiline": true,
+      "composing": false,
+      "sensitive": false,
+      "identity_known": true,
+      "focused": true,
+      "lock_screen": false
+    },
+    "activation": "always",
+    "explicit": false,
+    "language": "en",
+    "window_text": "Re: Venue deposit for the June offsite\nMarinella Costa wrote: the deposit is due Friday."
+  }
+}

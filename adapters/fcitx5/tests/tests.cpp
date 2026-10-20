@@ -886,6 +886,13 @@ void brokerSessionRetiresSessionAndPolicyTogether() {
           "retiring forgets the session and its policy, keeping the coordinates a close names");
     broker.answer(false);
     check(broker.policyKnown && !broker.policyAllowed, "a denial is a known answer");
+    broker.answer(true, {}, true);
+    check(broker.contextWords, "context on follows an allowed answer");
+    broker.answer(false, {}, true);
+    check(!broker.contextWords, "a denial never keeps context on");
+    broker.answer(true, {}, true);
+    broker.retire();
+    check(!broker.contextWords, "retiring forgets context on");
 }
 
 void inspectionBacksOffWithoutInput() {
@@ -959,7 +966,17 @@ void nativePolicyMustBeCoherent() {
     for (const auto key : {"context_allowed", "display_allowed", "suggestions_allowed"})
         denied["payload"][key] = false;
     check(strictPolicyStatus(denied.dump()), "a coherent denial is a valid response");
+    auto words = allowed;
+    words["payload"]["context_words"] = true;
+    check(strictPolicyStatus(words.dump()), "context on is a fact about an allowed target");
+    words["payload"]["context_words"] = "yes";
+    check(!strictPolicyStatus(words.dump()), "context_words is a boolean");
+    denied["payload"]["context_words"] = true;
+    check(!strictPolicyStatus(denied.dump()), "a denied target never has context on");
+    denied["payload"]["context_words"] = false;
+    check(strictPolicyStatus(denied.dump()), "context off may be stated on a denial");
 }
+
 
 void observedFieldsAreAppendOnly() {
     auto state = focusedState();
@@ -1601,6 +1618,36 @@ void observerRequestsNameTheBoundField() {
           "an invalidation concerns every app unless it names another");
 }
 
+void windowTextTravelsOnlyWithAnObservedFieldAndWithinItsBound() {
+    auto state = focusedState();
+    auto context = explicitContext(state, "Hi Marin").context;
+    context.anchor = context.head = context.before.size();
+    context.identityKnown = true;
+    context.explicitRequest = false;
+    auto update = *state.updateContext(context);
+    auto payload = nlohmann::json::parse(*serializeContextEnvelope(update, 0))["payload"];
+    check(!payload.contains("window_text"), "no window text unless the addon has it");
+    update.windowText = "Re: Venue deposit. Marinella Costa wrote: the deposit is due.";
+    payload = nlohmann::json::parse(*serializeContextEnvelope(update, 0))["payload"];
+    check(payload["window_text"] == update.windowText, "an observed field carries its window text");
+    update.windowText = std::string(kMaxWindowTextScalars + 1, 'a');
+    check(!serializeContextEnvelope(update, 0), "window text beyond its bound fails closed");
+    update.windowText = "Marinella";
+    update.context.identityKnown = false;
+    check(!serializeContextEnvelope(update, 0), "an unobserved field never carries window text");
+
+    const auto field = observedField();
+    check(snapshotRequest(field, true)["window"] == true && !snapshotRequest(field).contains("window"),
+          "only an asking snapshot names the window");
+    auto observed = field;
+    observed["window_text"] = "Okonkwo Adeyemi";
+    check(observedWindowText(observed) == "Okonkwo Adeyemi", "a well-formed window text is kept");
+    for (const auto &bad : {nlohmann::json(7), nlohmann::json(""), nlohmann::json(std::string(kMaxWindowTextScalars + 1, 'a'))}) {
+        observed["window_text"] = bad;
+        check(observedWindowText(observed).empty(), "a malformed or overlong window text is dropped");
+    }
+}
+
 void observedParagraphEndIsEndOfField() {
     // Chromium sends after == "\n\n" for the caret at the end of a <p>;
     // Codex's ProseMirror composer is such a <p>.
@@ -1701,6 +1748,7 @@ int main(int argc, char **argv) {
         {"observed fields are append-only", observedFieldsAreAppendOnly},
         {"state transitions and identity", stateTransitionsAndIdentity},
         {"native app policy coherence", nativePolicyMustBeCoherent},
+        {"window text bounds", windowTextTravelsOnlyWithAnObservedFieldAndWithinItsBound},
         {"unchanged toolkit republish",
          unchangedToolkitRepublishPreservesAuthority},
         {"fingerprint binding", fingerprintBindsExactCaptureAndSalt},

@@ -167,6 +167,7 @@ mod tests {
             activation: Activation::Always,
             explicit: false,
             language: Some("en".to_owned()),
+            window_text: None,
         }
     }
 

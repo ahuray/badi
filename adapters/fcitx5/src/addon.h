@@ -59,6 +59,10 @@ private:
         // invalidation; this contains no text or reusable editing grant.
         Json fieldVisit;
         std::string fieldVisitId;
+        // The observer's window text for this field visit (ADR 0010): asked
+        // for once per visit while the broker says context_words.
+        std::string windowVisitId;
+        std::string windowText;
         std::uint64_t observationGeneration = 0;
         bool observationExplicit = false;
         // The published request a broker clear would answer was explicit:
@@ -151,7 +155,8 @@ private:
     // Broker events.
     void queryFocusedPolicies();
     void onAuthority(const AuthoritySnapshot &snapshot);
-    void onPolicy(std::string_view session, bool allowed, const std::string &reason, std::string language);
+    void onPolicy(std::string_view session, bool allowed, const std::string &reason, std::string language,
+                  bool contextWords);
     void onSuggestion(Suggestion suggestion);
     void presentSuggestion(Binding &binding, Suggestion suggestion);
     void previewIfCorroborated(Binding &binding, const Suggestion &suggestion, const Json &focus, const Json &reply);

@@ -343,11 +343,52 @@ and a request carries at most 256 window and 1,024 earlier words. Each such
 request adds a `vocabulary` trace line: word counts, outcome and sources, and
 the word only in a `--text` run.
 
-Only the Prediction Lab supplies a vocabulary: production requests carry
-none, so nothing changes for anyone yet. Two independent sets measured a
-large gain and more wrong words in traps
-([Lab runbook](../evaluation/writing/README.md#terminal-runs)); shipping it
-is an open decision in [future plans](<../future plans.md>).
+A request carries a vocabulary only while context is on for its subject
+(`context_words`, [ADR 0010](../docs/decisions/0010-context-finishes-words.md)).
+Without it, the draft is not used either, and nothing changes. Two
+independent sets measured a large gain and more wrong words in traps
+([Lab runbook](../evaluation/writing/README.md#terminal-runs)); the user
+accepted that cost.
+
+## Context: window words and learned words (opt-in)
+
+Settings v2 holds `context_words` and `context_words_off`:
+
+- `context_words` is absent until the user chooses, true when context is on
+  and false when it is off.
+- `context_words_off` lists the apps and sites, in canonical order, where
+  context stays off.
+
+`SettingsV2::context_words_for` combines them and any pause. Where context
+is on and the subject may suggest, the broker does four things:
+
+- **Says so.** `policy.status` adds `context_words: true` (never with
+  suggestions denied). An observed field may then send up to 2,048 scalars of
+  `window_text` with `context.changed`. Text from an unobserved, sensitive or
+  denied field is rejected.
+- **Uses it.** Each admitted request's provider call carries the window's
+  words (at most 256) and the subject's learned words (at most 1,024). The
+  generation task reads the learned words after the state lock is released.
+- **Learns.** The finished words of a `normal`-purpose field's text are
+  counted toward that subject's learned words: letters only, six to 24 long,
+  without the word still being typed, and without the first word when the
+  draft fills the 512-scalar cap, where it may be clipped. Each word counts once per field
+  visit, keyed by target; an observed field reopens its session as it changes,
+  but its target id stays for the visit. A terminal field never learns. The
+  words go through the outcome worker, like style samples.
+- **Keeps them sealed.** `learned-words.json` in the private data directory
+  ([src/vocabulary/learned.rs](src/vocabulary/learned.rs)) holds one record
+  per subject. The subject and its last day are in the clear; the word list
+  is sealed with the style-learning key. A word is offered after two field
+  visits and dropped after 90 days unused. A subject holds at most 512 words
+  and the file at most 64 subjects; the rarest, then the oldest, make room.
+  Turning context off for a subject purges its record without the key, at
+  the settings change and at startup. Records sealed under another key give
+  way to the new key's.
+
+`context.query` reports content-free counts and `context.forget` deletes
+every learned word but keeps the key; both need the CLI settings capability
+(`badictl context status|forget`, or `badi context`).
 
 ## Context word bias
 

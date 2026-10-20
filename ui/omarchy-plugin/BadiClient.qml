@@ -170,7 +170,7 @@ Scope {
     // The blocklist modes add all_web_origins and all_linux_apps; producers
     // omit them when false.
     var keys = ["schema", "revision", "paused", "subjects"]
-    var modes = ["all_web_origins", "all_linux_apps", "mid_line", "style_learning"]
+    var modes = ["all_web_origins", "all_linux_apps", "mid_line", "style_learning", "context_words"]
     for (var mode = 0; mode < modes.length; mode += 1) {
       if (isObject(value) && Object.prototype.hasOwnProperty.call(value, modes[mode])) {
         if (typeof value[modes[mode]] !== "boolean") return false
@@ -220,6 +220,16 @@ Scope {
             || typeof value.trailing_space_healing[healed[h]] !== "boolean") return false
       }
       keys.push("trailing_space_healing")
+    }
+    // Apps and sites with context off, in the broker's identity order;
+    // producers omit an empty list.
+    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "context_words_off")) {
+      var off = value.context_words_off
+      if (!Array.isArray(off) || off.length === 0 || off.length > 64) return false
+      for (var o = 0; o < off.length; o += 1) {
+        if (!isIdentity(off[o]) || (o > 0 && compareIdentities(off[o - 1], off[o]) >= 0)) return false
+      }
+      keys.push("context_words_off")
     }
     // The chosen writing model: a catalog id the broker reads at its start.
     if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "writing_model")) {

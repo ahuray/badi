@@ -253,6 +253,11 @@ struct BrokerState {
     desktop: HashMap<String, DesktopStatePayload>,
     /// Editor connections that hold their terminal's focus.
     editor_focus: HashSet<String>,
+    /// Recent field visits, by target, with the words already counted toward
+    /// learned words there, so each word counts once per field (ADR 0010).
+    /// An observed field reopens its session as it changes; its target id
+    /// stays for the visit.
+    learned_visits: std::collections::VecDeque<(String, std::collections::BTreeSet<String>)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

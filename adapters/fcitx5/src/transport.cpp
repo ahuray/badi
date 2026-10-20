@@ -102,6 +102,13 @@ bool policyStatus(const Json &value, const Json &payload) {
         if (language != "en" && language != "de" && language != "fa") return false;
         permissions.erase("language_override");
     }
+    if (permissions.is_object() && permissions.contains("context_words")) {
+        const auto &words = permissions["context_words"];
+        // Context on is a fact about an allowed target only.
+        if (!words.is_boolean() || (words == true && payload.value("suggestions_allowed", Json()) != true))
+            return false;
+        permissions.erase("context_words");
+    }
     if (!exactKeys(value, {"v", "id", "type", "mono_ms", "payload"}) ||
         value["v"] != 2 || value["type"] != "policy.status" ||
         !counter(value["mono_ms"]) || !value["id"].is_string() ||
@@ -286,6 +293,7 @@ std::optional<Json> contextEnvelope(const ContextUpdate &update,
     const auto &context = update.context;
     const auto before = decodeUtf8(context.before);
     const auto after = decodeUtf8(context.after);
+    const auto window = decodeUtf8(update.windowText);
     if (!validLinuxAppId(update.appId) || !validOpaqueId(update.targetId) ||
         !validSessionId(coordinates.sessionId) ||
         coordinates.fingerprint.size() < 16 ||
@@ -293,10 +301,11 @@ std::optional<Json> contextEnvelope(const ContextUpdate &update,
         (!context.identityKnown && !context.explicitRequest) ||
         !validLanguageTag(context.language) || !validContextText(context.before) || !validContextText(context.after) ||
         !before || before->size() > kMaxBeforeScalars || !after ||
-        after->size() > kMaxAfterScalars) {
+        after->size() > kMaxAfterScalars || !window || window->size() > kMaxWindowTextScalars ||
+        (!update.windowText.empty() && (!context.identityKnown || !validContextText(update.windowText)))) {
         return std::nullopt;
     }
-    const Json payload{
+    Json payload{
         {"fingerprint", coordinates.fingerprint},
         {"before", context.before},
         {"after", context.after},
@@ -315,6 +324,7 @@ std::optional<Json> contextEnvelope(const ContextUpdate &update,
         {"explicit", context.explicitRequest},
         {"language", context.language},
     };
+    if (!update.windowText.empty()) payload["window_text"] = update.windowText;
     return envelope(
         "context.changed",
         "fcitx.suggest." + std::to_string(coordinates.focusEpoch) + "." +
@@ -918,7 +928,7 @@ private:
             payload["activation"] == "always" && payload["context_allowed"] == true &&
             payload["display_allowed"] == true && payload["suggestions_allowed"] == true;
         if (callbacks_.onPolicy) callbacks_.onPolicy(session, allowed, payload["reason"].get<std::string>(),
-            payload.value("language_override", std::string{}));
+            payload.value("language_override", std::string{}), payload.value("context_words", false));
         return true;
     }
 

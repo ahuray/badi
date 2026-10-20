@@ -11,22 +11,25 @@ Item {
 
   readonly property string helper: Quickshell.env("HOME") + "/.local/bin/badi-desktop"
   // Supported apps; `manual` apps need an exact rule even in blocklist mode.
+  // `context` says what context finishes words from there (ADR 0010): the
+  // window and learned words (web content), learned words only (native
+  // fields), or the typed line only (terminals, which never learn).
   readonly property var supportedApps: [
-    {name: "Omawrite", appId: "omawrite", detail: "Markdown editor"},
-    {name: "Ghostty", appId: "com.mitchellh.ghostty", detail: "Terminal · follows the line you type", manual: true},
-    {name: "Xournal++", appId: "com.github.xournalpp.xournalpp", detail: "Text tool · Tab requests, Tab again accepts a word", manual: true},
-    {name: "Obsidian", appId: "obsidian", detail: "Badi plugin · Tab a word, Ctrl+Right all"},
-    {name: "Neovim", appId: "nvim", detail: "Badi plugin · prose buffers"},
-    {name: "Bash", appId: "bash", detail: "Ctrl-X Tab requests and accepts"},
-    {name: "LibreOffice Writer", appId: "libreoffice", detail: "Grey preview in paragraphs"},
+    {name: "Omawrite", appId: "omawrite", context: "learned", detail: "Markdown editor"},
+    {name: "Ghostty", appId: "com.mitchellh.ghostty", context: "line", detail: "Terminal · follows the line you type", manual: true},
+    {name: "Xournal++", appId: "com.github.xournalpp.xournalpp", context: "learned", detail: "Text tool · Tab requests, Tab again accepts a word", manual: true},
+    {name: "Obsidian", appId: "obsidian", context: "learned", detail: "Badi plugin · Tab a word, Ctrl+Right all"},
+    {name: "Neovim", appId: "nvim", context: "learned", detail: "Badi plugin · prose buffers"},
+    {name: "Bash", appId: "bash", context: "line", detail: "Ctrl-X Tab requests and accepts"},
+    {name: "LibreOffice Writer", appId: "libreoffice", context: "learned", detail: "Grey preview in paragraphs"},
     {name: "Writer spelling", appId: "libreoffice-writer", detail: "Corrections after a word · Alt+F7"},
-    {name: "Telegram", appId: "telegram", detail: "Message fields"},
-    {name: "Codex", appId: "chatgpt", detail: "Composer"},
-    {name: "VS Code", appId: "code", detail: "Needs \"editor.editContext\": false"},
-    {name: "Cursor", appId: "cursor", detail: "Editor"},
-    {name: "Grok Bot", appId: "grok-bot", detail: "Chat composer"},
-    {name: "Claude", appId: "com.anthropic.claude", detail: "Desktop app composer"},
-    {name: "Discord", appId: "discord", detail: "Needs renderer accessibility"}]
+    {name: "Telegram", appId: "telegram", context: "learned", detail: "Message fields"},
+    {name: "Codex", appId: "chatgpt", context: "window", detail: "Composer"},
+    {name: "VS Code", appId: "code", context: "window", detail: "Needs \"editor.editContext\": false"},
+    {name: "Cursor", appId: "cursor", context: "window", detail: "Editor"},
+    {name: "Grok Bot", appId: "grok-bot", context: "window", detail: "Chat composer"},
+    {name: "Claude", appId: "com.anthropic.claude", context: "window", detail: "Desktop app composer"},
+    {name: "Discord", appId: "discord", context: "window", detail: "Needs renderer accessibility"}]
 
   property alias client: client
   property string query: ""
@@ -110,6 +113,15 @@ Item {
         return entry
     }
     return null
+  }
+
+  // Context is off for this app (badi context app ID off).
+  function contextOff(appId) {
+    var off = client.settings.context_words_off || []
+    for (var i = 0; i < off.length; i++) {
+      if (off[i].kind === "linux_app" && off[i].adapter === appAdapter(appId) && off[i].app_id === appId) return true
+    }
+    return false
   }
 
   function allows(permissions) {
@@ -301,6 +313,39 @@ Item {
         choose: function(value) {
           if (value !== activeModel.id) root.runAction(["model", "use", value, "--accept-license"], "Switching the model", "Model switched", 900000)
         }})
+    }
+    // Opt-in context (ADR 0010): asked once while unchosen, then a switch,
+    // one row per allowed app and a way to forget the learned words.
+    var context = client.settings.context_words
+    if (reachable && typeof context !== "boolean") {
+      list.push({key: "context_prompt", section: "Context", kind: "choice", label: "Finish words from what you see?",
+        detail: "Words from the window or your own writing · on this device",
+        value: "", enabled: !controlsBusy,
+        options: [{value: "on", label: "Turn on"}, {value: "off", label: "Not now"}],
+        choose: function(value) { root.runAction(["context", value], value === "on" ? "Turning context on" : "Saving your choice",
+          value === "on" ? "Context on · badi context status" : "Context stays off") }})
+    } else {
+      list.push({key: "context", section: "Context", kind: "toggle", label: "Words from context",
+        detail: context === true ? "Window words and words you wrote before · sealed in your keyring"
+          : "Off · finish words from the window and your own writing", checked: context === true,
+        enabled: !controlsBusy, activate: function() {
+          root.runAction(["context", context === true ? "off" : "on"], "Updating context",
+            context === true ? "Context off" : "Context on") }})
+    }
+    if (context === true) {
+      var sources = {window: "Window words and words learned here", learned: "Words learned here · the window is not read",
+        line: "The line you type only · never learns here"}
+      supportedApps.filter(function(app) { return app.context && appEnabled(app.appId) }).forEach(function(app) {
+        var on = !contextOff(app.appId)
+        list.push({key: "context_app_" + app.appId, section: "Context", kind: "toggle", label: app.name,
+          detail: on ? sources[app.context] : "Off here · its learned words are deleted",
+          checked: on, enabled: !controlsBusy,
+          activate: function() { root.runAction(["context", "app", app.appId, on ? "off" : "on"], "Updating context",
+            app.name + (on ? ": context off" : ": context on")) }})
+      })
+      list.push({key: "context_forget", section: "Context", kind: "action", label: "Forget learned words",
+        detail: "Deletes every learned word; the keyring key stays", enabled: !controlsBusy,
+        activate: function() { root.runAction(["context", "forget"], "Forgetting learned words", "Learned words deleted") }})
     }
     list.push({key: "mid_line", section: "Writing", kind: "toggle", label: "Mid-sentence suggestions",
       detail: "Also suggest when a word follows the caret", checked: client.settings.mid_line === true,

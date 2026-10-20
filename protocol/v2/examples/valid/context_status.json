@@ -1,0 +1,14 @@
+{
+  "v": 2,
+  "id": "ctl:context",
+  "type": "context.status",
+  "mono_ms": 52,
+  "payload": {
+    "enabled": true,
+    "chosen": true,
+    "available": true,
+    "key": "ready",
+    "subjects": 3,
+    "words": 41
+  }
+}

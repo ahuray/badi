@@ -26,7 +26,8 @@ REQUEST_FIELDS = {"inspect": {"schema", "id", "op", "app_id"},
                   "status": {"schema", "id", "op"},
                   "hide": {"schema", "id", "op"}}
 # A preview may add the caret rectangle the app gave its input method.
-OPTIONAL_FIELDS = {"preview": {"caret_rect"}}
+# A snapshot may ask once per field for the window's text (ADR 0010).
+OPTIONAL_FIELDS = {"preview": {"caret_rect"}, "snapshot": {"window"}}
 CARET_RECT_FIELDS = frozenset({"x", "y", "width", "height", "scale"})
 IDENTITY = ("bus", "path", "process_id", "app_id", "uri")
 BINDING_FIELDS = frozenset({"epoch", *IDENTITY})
@@ -105,7 +106,7 @@ def reply_facts(reply, tracked):
     for key in ("caret", "total_chars", "rendered", "scope", "purpose"):
         if key in focus:
             facts[key] = focus[key]
-    for key in ("before", "after"):
+    for key in ("before", "after", "window_text"):
         if isinstance(focus.get(key), str):
             facts[f"{key}_chars"] = len(focus[key])
     if isinstance(focus.get("geometry"), dict):
@@ -184,6 +185,8 @@ class Observer:
         return {"focus": focus}
 
     def snapshot(self, request):
+        if request.get("window", True) is not True:
+            raise Denied("invalid_request")
         metadata, focus = self.bound_focus(request)
         self.authorize(focus["binding"], metadata.get("node"))
         if metadata.get("sentence_bounded"):
@@ -216,6 +219,10 @@ class Observer:
             focus["geometry"].update(caret_edge=self.caret_edge, text_follows=self.text_follows,
                                      text_ends=self.text_ends)
         focus.update(before=before, after=after, total_chars=metadata["total_chars"])
+        if request.get("window"):
+            window = self.backend.vocabulary_text(metadata)
+            if window:
+                focus["window_text"] = window
         return {"focus": focus}
 
     def preview(self, request):

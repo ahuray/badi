@@ -88,8 +88,9 @@ struct WireCallbacks {
     std::function<void()> onDisconnected;
     // (session, allowed, byDefault): byDefault marks an allowance from the app
     // list mode (matched_default), not from an exact rule.
-    // Session, allowed, the broker's resolution reason, language override.
-    std::function<void(std::string_view, bool, std::string, std::string)> onPolicy;
+    // Session, allowed, the broker's resolution reason, language override,
+    // and whether context is on there (context_words).
+    std::function<void(std::string_view, bool, std::string, std::string, bool)> onPolicy;
 };
 
 class Transport {

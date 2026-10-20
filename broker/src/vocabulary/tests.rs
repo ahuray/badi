@@ -273,3 +273,21 @@ fn texts_become_bounded_distinct_word_lists() {
     );
     assert!(Vocabulary::default().is_empty());
 }
+
+#[test]
+fn written_words_are_finished_and_whole() {
+    assert_eq!(
+        written_words("Brightwater passed review. Okonkwo agreed, then Brigh"),
+        vec!["Brightwater", "passed", "review", "Okonkwo", "agreed"],
+        "the word still being typed is not learned"
+    );
+    // A learnable first word in a draft at the wire's cap may be clipped.
+    let clipped = format!("ightwater {}passed review.", "pad ".repeat(130));
+    assert!(clipped.chars().count() >= crate::protocol::MAX_BEFORE_CHARS);
+    assert_eq!(written_words(&clipped), vec!["passed", "review"]);
+    assert_eq!(
+        written_words(&clipped[..60]),
+        vec!["ightwater"],
+        "under the cap it is whole"
+    );
+}

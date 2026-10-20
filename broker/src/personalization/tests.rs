@@ -30,6 +30,8 @@ fn settings(retention: RetentionPermission) -> SettingsV2 {
         escape_quiet_seconds: 0,
         battery_mode: crate::settings::BatteryMode::Normal,
         style_learning: false,
+        context_words: None,
+        context_words_off: Vec::new(),
         language_overrides: std::collections::BTreeMap::new(),
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         writing_model: None,

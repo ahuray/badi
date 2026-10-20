@@ -65,6 +65,17 @@
       "type": "boolean",
       "description": "Opt-in style learning: sentences the user wrote before an accepted suggestion, in subjects that allow learning with bounded retention, sealed with a key held in the desktop keyring. No production prompt uses them yet. Producers omit the property when false."
     },
+    "context_words": {
+      "type": "boolean",
+      "description": "Opt-in context: finish the word being typed with words in the same window (read by the accessibility observer, held in memory) and words the user wrote before in the same app (kept sealed with the keyring key for 90 days after last use). Absent until the user chooses, when the settings panel asks once; false keeps it off. Never grants acquisition, suggestions or edits."
+    },
+    "context_words_off": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/identity" },
+      "description": "Apps and sites where context stays off while context_words is true: no window words are read there and no words are learned or used. Rust validation requires canonical identity order. Producers omit the property when empty."
+    },
     "language_overrides": {
       "type": "object",
       "maxProperties": 64,

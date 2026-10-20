@@ -8,7 +8,7 @@ use crate::protocol::{
     Activation, AuthorityChangedPayload, PolicyResolutionReason, PolicyStatusPayload, ReasonCode,
     TargetDescriptor, TargetKind,
 };
-use crate::settings::{PolicyResolution, SettingsV2};
+use crate::settings::{PolicyResolution, SettingsV2, StableIdentity};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthoritySnapshot {
@@ -216,6 +216,8 @@ pub(super) fn policy_status(
         suggestions_allowed: true,
         learning_allowed: resolution.allows_learning(),
         language_override: settings.language_override(target),
+        context_words: StableIdentity::from_target(target)
+            .is_ok_and(|identity| settings.context_words_for(&identity)),
         // Browser defaults keep matched_rule, which protocol v1 clients know.
         reason: if resolution.by_default() && target.kind != TargetKind::Browser {
             PolicyResolutionReason::MatchedDefault
@@ -256,5 +258,6 @@ fn denied_policy_status(
         learning_allowed: false,
         language_override: None,
         reason,
+        context_words: false,
     }
 }

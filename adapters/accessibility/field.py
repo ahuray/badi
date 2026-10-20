@@ -47,6 +47,13 @@ WINDOW_PARAGRAPH_CHARS = 240
 MAX_WINDOW_NODES = 96
 MAX_WINDOW_DEPTH = 12
 WINDOW_ROLES = frozenset({"heading", "paragraph"})
+# Window text for finishing words (ADR 0010): displayed text near the field,
+# nearest first, within the broker's 2,048-character bound.
+VOCABULARY_CHARS = 2000
+VOCABULARY_NODES = 400
+VOCABULARY_DEPTH = 24
+VOCABULARY_SECONDS = 0.12
+VOCABULARY_HEADROOM_SECONDS = 0.05
 
 
 class CaretText(NamedTuple):
@@ -524,6 +531,73 @@ class FieldBackend:
             if child is not None and self.window_walk(child, found, visits, depth + 1):
                 return True
         return False
+
+    def vocabulary_text(self, metadata):
+        """Displayed text near a web field, nearest first, for finishing the
+        word being typed (ADR 0010), or None.
+
+        The walk starts at the field and visits each ancestor's earlier
+        siblings, last first, then its later siblings, until the field's own
+        `document web`. Like `window_context` it never reads another field
+        (anything editable), a password, a hidden node or a nested document,
+        and gives up when the document cannot be confirmed. It stops at
+        VOCABULARY_CHARS, VOCABULARY_NODES or VOCABULARY_SECONDS and returns
+        what it found by then. Native apps get None.
+        """
+        if not metadata.get("web") or not metadata.get("uri"):
+            return None
+        node = metadata["node"]
+        if self.nearest_document_uri(node) != metadata["uri"]:
+            return None
+        # The snapshot itself must still answer inside the operation deadline.
+        until = min(time.monotonic() + VOCABULARY_SECONDS, self.deadline - VOCABULARY_HEADROOM_SECONDS)
+        found = {"chunks": [], "chars": 0, "visits": 0, "until": until}
+        child = node
+        for ancestor in self.ancestors(node.get_parent()):
+            index = child.get_index_in_parent()
+            count = min(ancestor.get_child_count(), MAX_CHILDREN)
+            nearest = [*range(min(index, count) - 1, -1, -1), *range(index + 1, count)]
+            for sibling_index in nearest:
+                if self.vocabulary_full(found):
+                    break
+                sibling = ancestor.get_child_at_index(sibling_index)
+                if sibling is not None:
+                    self.vocabulary_walk(sibling, found, 0)
+            if ancestor.get_role_name() == "document web":
+                text = " ".join(found["chunks"])
+                return window_text(text, VOCABULARY_CHARS, tail=False) if text else None
+            child = ancestor
+        return None
+
+    def vocabulary_full(self, found):
+        return (found["chars"] >= VOCABULARY_CHARS or found["visits"] >= VOCABULARY_NODES
+                or time.monotonic() >= found["until"])
+
+    def vocabulary_walk(self, node, found, depth):
+        """Adds `node`'s displayed text, then its children's, in order."""
+        if self.vocabulary_full(found) or depth > VOCABULARY_DEPTH:
+            return
+        found["visits"] += 1
+        self.budget()
+        role = node.get_role_name()
+        if role in ("document web", "password text"):
+            return
+        flags = node.get_state_set()
+        state = self.atspi.StateType
+        if flags.contains(state.EDITABLE) or not flags.contains(state.SHOWING):
+            return
+        if "Text" in node.get_interfaces():
+            text = node.get_text_iface()
+            count = min(text.get_character_count(), VOCABULARY_CHARS)
+            # A child element appears as one embedded object and is read itself.
+            value = " ".join(self.atspi.Text.get_text(text, 0, count).replace(EMBEDDED_OBJECT, " ").split())
+            if value:
+                found["chunks"].append(value)
+                found["chars"] += len(value) + 1
+        for index in range(min(node.get_child_count(), MAX_CHILDREN)):
+            child = node.get_child_at_index(index)
+            if child is not None:
+                self.vocabulary_walk(child, found, depth + 1)
 
     def window_result(self, found):
         parts = {name: value for name, value in found.items() if value}

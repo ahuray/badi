@@ -7,6 +7,12 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Opt-in context (`badi context on`, or the panel's one-time question)
+  finishes a typed word, five letters in, from words in the same window and
+  words learned in that app. Learned words are sealed with the keyring key and
+  expire after 90 days. Apps and sites can be turned off one at a time, and
+  `badi context forget` deletes the learned words. User decision, accepting
+  the measured trap cost ([ADR 0010](docs/decisions/0010-context-finishes-words.md)).
 - Finishing the typed word from words in view (the window, the writer's
   earlier writing, the draft) is measured in the Lab's `vocabulary` mode: on
   two independent 60-case sets it gave 39 and 23 useful additions against 5

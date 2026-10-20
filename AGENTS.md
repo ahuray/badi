@@ -119,6 +119,11 @@ Where code lives inside the larger components:
   alone denies its urlbar.
 - **Type-through** ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md))
   carries suggestion text, never authority, into the next admitted request.
+- **Context words** ([ADR 0010](docs/decisions/0010-context-finishes-words.md))
+  exist only while the user turned context on for that app or site. The
+  observer reads displayed text near an observed web field, never another
+  field, and the broker keeps no window text. Learned words stay sealed with
+  the keyring key, expire and are never learned from a terminal's line.
 - **Desktop signals** ([ADR 0005](docs/decisions/0005-desktop-signals-withhold-authority.md))
   from the session helper may hold or quiet suggestions; they never grant.
 - Spelling replacement needs negotiated `text_replacement`, an exactly bound

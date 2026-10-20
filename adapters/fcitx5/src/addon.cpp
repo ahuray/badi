@@ -48,8 +48,9 @@ WireCallbacks BadiAddon::callbacksFor(BadiAddon *addon) {
             addon->onCommitPrepare(prepare);
         },
         .onDisconnected = [addon] { addon->onDisconnected(); },
-        .onPolicy = [addon](std::string_view session, bool allowed, std::string reason, std::string language) {
-            addon->onPolicy(session, allowed, reason, std::move(language));
+        .onPolicy = [addon](std::string_view session, bool allowed, std::string reason, std::string language,
+                            bool contextWords) {
+            addon->onPolicy(session, allowed, reason, std::move(language), contextWords);
         },
     };
 }
