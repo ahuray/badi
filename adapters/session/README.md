@@ -2,7 +2,7 @@
 
 `badi-session` tells the broker, without any text, whether the login session
 is in the foreground, whether the machine is about to sleep, and whether it
-runs on battery or in the power-saver profile. It also offers two desktop
+runs on battery or in the power-saver profile. It also offers three desktop
 shortcuts through the GlobalShortcuts portal. It never reads a field, opens a
 suggestion session, edits anything or changes a system setting.
 
@@ -96,23 +96,31 @@ The helper can deliver a key but cannot read samples.
 
 The helper registers the host application id `io.github.ahuray.badi` with the
 portal and binds `pause-toggle` (runs `badi pause toggle`, the same
-compare-and-swap settings write as the bar's right-click) and `open-settings`
-(runs `badi settings`). The compositor chooses the keys; on Hyprland 0.56,
-for example in `~/.config/hypr/bindings.lua` (both are free in Omarchy
+compare-and-swap settings write as the bar's right-click), `snooze` (runs
+`badi snooze`: Badi stays off in the focused field's app or site for 10
+minutes, like Cotypist's Ctrl+Option+Command+`) and `open-settings` (runs
+`badi settings`). The compositor chooses the keys; on Hyprland 0.56, for
+example in `~/.config/hypr/bindings.lua` (all three are free in Omarchy
 4.0.6, whose `SUPER + ALT + COMMA` invokes the last notification):
 
 ```lua
 hl.bind("SUPER + ALT + B", hl.dsp.global("io.github.ahuray.badi:pause-toggle"))
+hl.bind("SUPER + ALT + GRAVE", hl.dsp.global("io.github.ahuray.badi:snooze"))
 hl.bind("SUPER + ALT + PERIOD", hl.dsp.global("io.github.ahuray.badi:open-settings"))
 ```
 
-A pause or resume shows a desktop notification. Interface version 1 is all
-this needs: it has no `ConfigureShortcuts`, and the helper never calls it. A
-shortcut grants no access to an application or field; there is deliberately
-no request shortcut, because a request needs an admitted adapter field
-(Ctrl+Shift+Space already does that through Fcitx). xdg-desktop-portal-hyprland
-1.4.1 keeps listing the two shortcuts in `hyprctl globalshortcuts` after the
-helper stops; while it is stopped they do nothing, and a restart reuses them.
+A pause or resume shows a desktop notification. A snooze shows the
+controller's own line, naming the app or site and the minutes, or why
+nothing was snoozed (no focused field Badi follows, or fields of two apps);
+the snooze itself is [broker runtime state](../../broker/README.md#snooze)
+that only withholds, and `badi resume` ends it sooner. Interface version 1 is
+all this needs: it has no `ConfigureShortcuts`, and the helper never calls
+it. A shortcut grants no access to an application or field; there is
+deliberately no request shortcut, because a request needs an admitted adapter
+field (Ctrl+Shift+Space already does that through Fcitx).
+xdg-desktop-portal-hyprland 1.4.1 keeps listing the shortcuts in `hyprctl
+globalshortcuts` after the helper stops; while it is stopped they do nothing,
+and a restart reuses them.
 
 ## Install and service
 
@@ -136,7 +144,7 @@ python3 evaluation/power/battery-trial.py --broker target/release/badi-broker   
 The integration lane covers startup on battery, mains and power-saver
 changes (no authority change), sleep with the hold acknowledged before the
 inhibitor is released, resume with a new inhibitor, a session switch and
-return, a restarted logind, both shortcuts and an unknown one, a broker
+return, a restarted logind, the three shortcuts and an unknown one, a broker
 restart with the report resent, and helper exit releasing the hold, the
 inhibitor and the portal session. With `gnome-keyring-daemon` installed, a
 second test stores a key in an isolated keyring on the private bus, restarts

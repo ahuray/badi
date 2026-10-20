@@ -188,14 +188,25 @@ pub enum ControlAction {
     Pause,
     Resume,
     PauseToggle,
+    /// Protocol v2: withhold every grant for the focused field's app or
+    /// site for `minutes` (runtime only).
+    Snooze,
+    /// Protocol v2: end every snooze early.
+    SnoozeEnd,
 }
 
 impl ControlAction {
     #[must_use]
     pub const fn is_global(self) -> bool {
-        matches!(self, Self::Pause | Self::Resume | Self::PauseToggle)
+        matches!(
+            self,
+            Self::Pause | Self::Resume | Self::PauseToggle | Self::Snooze | Self::SnoozeEnd
+        )
     }
 }
+
+/// The longest snooze `badi snooze` may ask for: one day.
+pub const MAX_SNOOZE_MINUTES: u16 = 1440;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -721,6 +732,8 @@ pub enum PolicyResolutionReason {
     /// An editor with its own Badi integration holds the focused terminal,
     /// so the native input-method path stays out of its way.
     EditorFocused,
+    /// Protocol v2: the user snoozed this app or site for a few minutes.
+    Snoozed,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1057,15 +1070,37 @@ pub struct SuggestionClearPayload {
 #[serde(deny_unknown_fields)]
 pub struct GlobalControlRequestPayload {
     pub action: ControlAction,
+    /// How long a snooze lasts; present exactly for `snooze`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minutes: Option<u16>,
 }
 
 impl GlobalControlRequestPayload {
     pub fn validate(&self) -> Result<(), ProtocolError> {
-        if self.action.is_global() {
+        let minutes_valid = match (self.action, self.minutes) {
+            (ControlAction::Snooze, Some(minutes)) => (1..=MAX_SNOOZE_MINUTES).contains(&minutes),
+            (ControlAction::Snooze, None) | (_, Some(_)) => false,
+            (_, None) => true,
+        };
+        if self.action.is_global() && minutes_valid {
             Ok(())
         } else {
             Err(ProtocolError::InvalidPayload)
         }
+    }
+
+    /// Snoozing arrived with protocol v2.
+    pub fn validate_for_version(&self, version: u8) -> Result<(), ProtocolError> {
+        self.validate()?;
+        if version < CURRENT_PROTOCOL_VERSION
+            && matches!(
+                self.action,
+                ControlAction::Snooze | ControlAction::SnoozeEnd
+            )
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
     }
 }
 
@@ -1096,13 +1131,25 @@ impl SessionControlRequestPayload {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControlResultPayload {
     pub action: ControlAction,
     pub accepted: bool,
     pub reason: ReasonCode,
     pub paused: bool,
+    /// The snooze an accepted `snooze` started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snooze: Option<SnoozeStatus>,
+}
+
+/// One snoozed app or site and how long it stays snoozed. The subject is the
+/// exact settings identity the snooze withholds, never a window title.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnoozeStatus {
+    pub subject: crate::settings::StableIdentity,
+    pub remaining_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1155,6 +1202,9 @@ pub struct HealthStatusPayload {
     /// Protocol v2 only: what the desktop session helper reported, if anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop: Option<DesktopStatusPayload>,
+    /// Protocol v2 only: every app or site snoozed now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub snoozes: Vec<SnoozeStatus>,
 }
 
 impl HealthStatusPayload {

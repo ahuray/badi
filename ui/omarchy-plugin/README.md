@@ -28,6 +28,12 @@ seconds only while open. From the top:
 - **Usage:** a ten-cell acceptance meter, words saved and the last
   no-suggestion reason (`⎿ last miss: …`).
 - **Search:** `/` filters every row by name, description or section.
+- **Snoozed:** while a snooze keeps an app or site quiet (`badi snooze` or
+  the session helper's shortcut, [broker runbook](../../broker/README.md#snooze)),
+  the first row names it with the minutes left, and Enter ends every snooze
+  (`badi snooze end`). The mark's tooltip adds the same name, and the
+  `badi-writing` IPC `state()` reports it as `snoozed`. Resuming from the
+  switch, `p` or a right-click runs `badi resume`, which ends it too.
 - **Rows**, in sections: Model (the writing model: a chip for each model
   that fits this device, ★ on the recommendation; picking an Apache-2.0
   model runs `badi model use`, which downloads it and restarts the model,

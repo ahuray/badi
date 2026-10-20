@@ -116,8 +116,6 @@ publish need the user's go-ahead first; the rest can start at once.
    does not yet:
    - a suggestion length setting, from 1–2 to 10–15 words (Badi shows up
      to four), each length measured in the Lab before it ships;
-   - a shortcut that turns the current app off for a few minutes, and a way
-     to send a literal Tab while a suggestion shows;
    - words completed per day and per app (Badi counts since model start,
      content-free, and should keep it that way);
    - global and per-app instructions, and personalized word choice (Badi's
@@ -132,7 +130,9 @@ publish need the user's go-ahead first; the rest can start at once.
    - mid-line completion and typo correction where the editor allows it;
    - terminal agent prompts, and on-screen words through accessibility
      rather than screen recording;
-   - learned words, battery modes, no telemetry, no account, MIT.
+   - learned words, battery modes, no telemetry, no account, MIT;
+   - a snooze for the focused app or site (`badi snooze`, a portal
+     shortcut) and Ctrl+Shift+Tab for a real Tab while a suggestion shows.
 
    Left out on purpose: clipboard awareness and screen recording (the
    [context firewall](VISION.md#context-firewall)), sync and telemetry

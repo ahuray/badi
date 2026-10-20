@@ -52,5 +52,8 @@ do is make Badi quieter.
 - logind's `LockedHint` is not used as evidence of anything. The observer's
   fresh Omarchy lock check remains the unlock proof.
 - Desktop shortcuts live in the same helper because they are desktop session
-  integration, not field acquisition; a shortcut can pause or open settings
-  but never request or accept.
+  integration, not field acquisition; a shortcut can pause, snooze the
+  focused app or site, or open settings, but never request or accept. A
+  snooze (2026-10-20) is the same kind of input: runtime broker state keyed
+  by the exact app id or site origin, which only revokes and withholds and
+  ends on its own, on `badi resume` or with the broker.

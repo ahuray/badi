@@ -10,10 +10,10 @@ use badi_broker::protocol::{
     ActiveLocator, AdapterDescriptor, AdapterKind, CURRENT_PROTOCOL_VERSION, Capability,
     ContextStatusPayload, ControlAction, ControlResultPayload, Coordinates, DesktopStatusPayload,
     ErrorPayload, GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
-    MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_SAFE_COUNTER, MemoryStatusPayload, MessageType,
-    ProbeRequestPayload, ProbeResultPayload, ProtocolError, ProviderKind, ReasonCode,
-    SessionControlRequestPayload, SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload,
-    StyleSamplesPayload, StyleStatusPayload, WireEnvelope,
+    MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_SAFE_COUNTER, MAX_SNOOZE_MINUTES, MemoryStatusPayload,
+    MessageType, ProbeRequestPayload, ProbeResultPayload, ProtocolError, ProviderKind, ReasonCode,
+    SessionControlRequestPayload, SettingsReplacePayload, SettingsStatusPayload, SnoozeStatus,
+    StyleKeyPayload, StyleSamplesPayload, StyleStatusPayload, WireEnvelope,
 };
 use badi_broker::settings::{
     MAX_SETTINGS_BYTES, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV2,
@@ -32,6 +32,8 @@ const CLI_CAPABILITIES: [Capability; 4] = [
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 const OVERVIEW_SNAPSHOT_ATTEMPTS: usize = 3;
+/// `snooze` without MINUTES, as Cotypist's snooze shortcut.
+const DEFAULT_SNOOZE_MINUTES: u16 = 10;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -105,10 +107,9 @@ async fn broker_report(stream: &mut UnixStream, command: Command) -> Result<Stri
             let memory = exchange(stream, request, validate_memory_response).await?;
             serde_json::to_string(&memory)?
         }
-        Command::Global(action) => {
-            let payload = GlobalControlRequestPayload { action };
+        Command::Global(payload) => {
             let request = cli_global(MessageType::ControlRequest, &payload)?;
-            request_control(stream, request, action).await?
+            request_control(stream, request, payload.action).await?
         }
         Command::Session(action) => {
             let status = request_health(stream).await?;
@@ -311,6 +312,9 @@ struct RedactedHealthStatus<'a> {
     /// The session helper's content-free report, when the broker sends one.
     #[serde(skip_serializing_if = "Option::is_none")]
     desktop: Option<DesktopStatusPayload>,
+    /// The apps and sites snoozed now, by settings identity.
+    #[serde(skip_serializing_if = "<[SnoozeStatus]>::is_empty")]
+    snoozes: &'a [SnoozeStatus],
 }
 
 #[derive(Debug, Serialize)]
@@ -333,6 +337,8 @@ struct OverviewBroker {
     sessions: u64,
     socket_mode: String,
     max_frame_bytes: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    snoozes: Vec<SnoozeStatus>,
 }
 
 #[derive(Debug, Serialize)]
@@ -384,6 +390,7 @@ fn redact_health_status(status: &HealthStatusPayload) -> RedactedHealthStatus<'_
                 .is_some_and(|active| active.suggestion_id.is_some()),
         },
         desktop: status.desktop,
+        snoozes: &status.snoozes,
     }
 }
 
@@ -437,6 +444,7 @@ fn build_overview(
             sessions: health.sessions,
             socket_mode: health.socket_mode,
             max_frame_bytes: health.max_frame_bytes,
+            snoozes: health.snoozes,
         },
         settings,
         privacy: OverviewPrivacy {
@@ -680,13 +688,31 @@ fn validate_control_response(
     let payload: ControlResultPayload = response
         .decode_payload()
         .map_err(|_| CliError::UnexpectedResponse)?;
-    if payload.action != expected_action
-        || !payload.accepted
+    if payload.action != expected_action {
+        return Err(CliError::UnexpectedResponse);
+    }
+    // A snooze needs one focused field Badi follows; say why there was none.
+    if expected_action == ControlAction::Snooze
+        && !payload.accepted
+        && matches!(
+            payload.reason,
+            ReasonCode::NoContext | ReasonCode::AmbiguousSession | ReasonCode::Paused
+        )
+        && payload.snooze.is_none()
+    {
+        let reason = serde_json::to_value(payload.reason)?;
+        return Err(CliError::Rejected(
+            reason.as_str().unwrap_or("unexpected").to_owned(),
+        ));
+    }
+    if !payload.accepted
         || payload.reason != ReasonCode::Accepted
+        || payload.snooze.is_some() != (expected_action == ControlAction::Snooze)
         || match expected_action {
             ControlAction::Pause => !payload.paused,
-            ControlAction::PauseToggle | ControlAction::Resume => false,
-            ControlAction::Request
+            ControlAction::PauseToggle | ControlAction::Resume | ControlAction::SnoozeEnd => false,
+            ControlAction::Snooze
+            | ControlAction::Request
             | ControlAction::AcceptWord
             | ControlAction::AcceptAll
             | ControlAction::Dismiss => payload.paused,
@@ -759,6 +785,8 @@ fn cli_session<P: Serialize>(
 const CLI_USAGE: &str = "Usage: badictl [--socket ABSOLUTE] COMMAND\n\
 Local commands:\n  hardware [--json]       Inspect content-free hardware capabilities\n  models [USE] [--json]   Recommend pinned local models; USE is writing or code\n\
 Broker commands:\n  status [--json]  Show content-free broker status as JSON\n  request          Request a suggestion for the sole active session\n  accept-word      Accept the authorized first word-part\n  accept-all       Accept the authorized full suggestion\n  dismiss          Dismiss the current suggestion\n  pause [MODE]     MODE is on, off, or toggle (default)\n\
+  snooze [MINUTES] Withhold suggestions in the focused field's app or site\n                    for MINUTES (1-1440, default 10); runtime only\n\
+  snooze end       End every snooze now\n\
   overview [--json]  Show broker, policy, privacy, and model readiness\n  settings show [--json]\n                    Show the strict badi.settings.v2 document\n  settings replace --if-revision N --json DOCUMENT|-\n                    Replace settings with compare-and-swap protection; - reads\n                    a bounded document from stdin, keeping it out of argv\n  memory clear      Clear local text-free origin/day interaction aggregates\n\
   context status    Show content-free context state and learned-word counts\n\
   context forget    Delete every learned word (the keyring key stays)\n\
@@ -860,13 +888,14 @@ where
         Some("accept-word") if rest.is_empty() => Command::Session(ControlAction::AcceptWord),
         Some("accept-all") if rest.is_empty() => Command::Session(ControlAction::AcceptAll),
         Some("dismiss") if rest.is_empty() => Command::Session(ControlAction::Dismiss),
-        Some("pause") => match rest.as_slice() {
-            [] => Command::Global(ControlAction::PauseToggle),
-            [value] if value == "toggle" => Command::Global(ControlAction::PauseToggle),
-            [value] if value == "on" => Command::Global(ControlAction::Pause),
-            [value] if value == "off" => Command::Global(ControlAction::Resume),
+        Some("pause") => global(match rest.as_slice() {
+            [] => ControlAction::PauseToggle,
+            [value] if value == "toggle" => ControlAction::PauseToggle,
+            [value] if value == "on" => ControlAction::Pause,
+            [value] if value == "off" => ControlAction::Resume,
             _ => return Err(CliError::Arguments),
-        },
+        }),
+        Some("snooze") => parse_snooze_command(&rest)?,
         _ => return Err(CliError::Arguments),
     };
     let socket_path = explicit_socket.map_or_else(default_socket_path, Ok)?;
@@ -874,6 +903,31 @@ where
         socket_path,
         command,
     })
+}
+
+const fn global(action: ControlAction) -> Command {
+    Command::Global(GlobalControlRequestPayload {
+        action,
+        minutes: None,
+    })
+}
+
+/// `snooze [MINUTES]` (10 by default) or `snooze end`.
+fn parse_snooze_command(arguments: &[String]) -> Result<Command, CliError> {
+    let minutes = match arguments {
+        [] => DEFAULT_SNOOZE_MINUTES,
+        [value] if value == "end" => return Ok(global(ControlAction::SnoozeEnd)),
+        [value] => value
+            .parse::<u16>()
+            .ok()
+            .filter(|minutes| (1..=MAX_SNOOZE_MINUTES).contains(minutes))
+            .ok_or(CliError::Arguments)?,
+        _ => return Err(CliError::Arguments),
+    };
+    Ok(Command::Global(GlobalControlRequestPayload {
+        action: ControlAction::Snooze,
+        minutes: Some(minutes),
+    }))
 }
 
 fn parse_style_command(arguments: &[String]) -> Result<Command, CliError> {
@@ -983,7 +1037,7 @@ fn settings_replacement(expected_revision: u64, json: &str) -> Result<Command, C
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Command {
-    Global(ControlAction),
+    Global(GlobalControlRequestPayload),
     MemoryClear,
     Overview,
     Probe {

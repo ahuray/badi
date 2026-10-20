@@ -40,7 +40,11 @@ impl Broker {
             ControlAction::Dismiss => None,
             ControlAction::AcceptWord => Some(Acceptance::Word),
             ControlAction::AcceptAll => Some(Acceptance::All),
-            ControlAction::Pause | ControlAction::Resume | ControlAction::PauseToggle => {
+            ControlAction::Pause
+            | ControlAction::Resume
+            | ControlAction::PauseToggle
+            | ControlAction::Snooze
+            | ControlAction::SnoozeEnd => {
                 return Err(BrokerError::InvalidPayload);
             }
         };

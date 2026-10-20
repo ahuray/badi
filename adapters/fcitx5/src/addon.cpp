@@ -149,6 +149,7 @@ void BadiAddon::focusOut(::fcitx::InputContext &inputContext) {
     if (!binding) return;
     closeBrokerSession(*binding);
     dropHeldTab(*binding);
+    dropLiteralTabs(*binding);
     clearOwnedPanel(*binding);
     binding->state.focusOut();
     binding->surroundingFreshness.focusOut();

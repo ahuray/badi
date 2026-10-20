@@ -97,6 +97,10 @@ private:
         bool heldTab = false;
         std::string heldTabRest;
         std::unique_ptr<::fcitx::EventSourceTime> heldTabTimer;
+        // Ctrl+Shift+Tab presses that reach the app as plain Tabs once the
+        // chord's modifiers are up, and the timer that sends them.
+        unsigned int literalTabs = 0;
+        std::unique_ptr<::fcitx::EventSourceTime> literalTabTimer;
         // Show a suggestion that arrives during the typing pause only after
         // that pause, and only if this keystroke is still the latest.
         std::uint64_t showAfterUs = 0;
@@ -128,6 +132,11 @@ private:
     void preKeyEvent(::fcitx::KeyEvent &event);
     void holdTab(Binding &binding);
     void dropHeldTab(Binding &binding);
+    void clearTypeThrough(Binding &binding);
+    void literalTab(Binding &binding);
+    void literalTabRelease(::fcitx::KeyEvent &event);
+    void sendLiteralTabs(Binding &binding);
+    void dropLiteralTabs(Binding &binding);
     void tabKey(::fcitx::KeyEvent &event, Binding &binding, const PanelObservation &panel);
     void keyEvent(::fcitx::KeyEvent &event);
     void invoke(Binding &binding);

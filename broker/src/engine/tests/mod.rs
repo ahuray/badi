@@ -40,6 +40,7 @@ mod generation;
 mod outcomes;
 mod policy;
 mod probe;
+mod snooze;
 mod spelling;
 mod style;
 mod type_through;

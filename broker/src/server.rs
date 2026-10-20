@@ -26,7 +26,7 @@ use crate::protocol::{
     GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
     MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SAFE_COUNTER, MAX_SUGGESTION_CHARS,
     MAX_SUGGESTION_WORDS, MemoryStatusPayload, MessageType, PROTOCOL_VERSION, PolicyQueryPayload,
-    ProbeRequestPayload, ProtocolError, ReasonCode, SessionClosePayload,
+    PolicyResolutionReason, ProbeRequestPayload, ProtocolError, ReasonCode, SessionClosePayload,
     SessionControlRequestPayload, SessionId, SessionOpenPayload, SettingsReplacePayload,
     SettingsStatusPayload, StyleKeyPayload, StyleSamplesPayload, StyleStatusPayload,
     SuggestCancelPayload, SuggestRequestPayload, WireEnvelope,
@@ -659,11 +659,26 @@ impl MessageHandler<'_> {
         .map_err(|_| ServerError::InvalidMessage)?;
         if action.is_global() {
             let payload: GlobalControlRequestPayload = envelope.decode_payload()?;
-            payload.validate()?;
+            payload.validate_for_version(self.protocol_version())?;
+            let mut snooze = None;
+            let mut reason = ReasonCode::Accepted;
             let paused = match action {
                 ControlAction::Pause => self.broker.set_paused(true).await?,
                 ControlAction::Resume => self.broker.set_paused(false).await?,
                 ControlAction::PauseToggle => self.broker.toggle_paused().await?,
+                ControlAction::Snooze => {
+                    let minutes = payload.minutes.ok_or(ServerError::InvalidMessage)?;
+                    let duration = Duration::from_secs(u64::from(minutes) * 60);
+                    match self.broker.snooze_focused(duration).await {
+                        Ok(status) => snooze = Some(status),
+                        Err(refusal) => reason = refusal,
+                    }
+                    self.broker.is_paused().await
+                }
+                ControlAction::SnoozeEnd => {
+                    self.broker.end_snoozes().await;
+                    self.broker.is_paused().await
+                }
                 ControlAction::Request
                 | ControlAction::AcceptWord
                 | ControlAction::AcceptAll
@@ -671,9 +686,10 @@ impl MessageHandler<'_> {
             };
             let result = ControlResultPayload {
                 action,
-                accepted: true,
-                reason: ReasonCode::Accepted,
+                accepted: reason == ReasonCode::Accepted,
+                reason,
                 paused,
+                snooze,
             };
             return self.reply(MessageType::ControlResult, envelope.id, &result);
         }
@@ -687,6 +703,7 @@ impl MessageHandler<'_> {
             accepted: true,
             reason: ReasonCode::Accepted,
             paused: self.broker.is_paused().await,
+            snooze: None,
         };
         self.reply(MessageType::ControlResult, envelope.id, &result)
     }
@@ -721,6 +738,11 @@ impl MessageHandler<'_> {
             active: health.active,
             desktop: (self.protocol_version() == CURRENT_PROTOCOL_VERSION)
                 .then_some(health.desktop),
+            snoozes: if self.protocol_version() == CURRENT_PROTOCOL_VERSION {
+                health.snoozes
+            } else {
+                Vec::new()
+            },
         };
         self.reply(MessageType::HealthStatus, envelope.id, &status)
     }
@@ -835,6 +857,10 @@ impl MessageHandler<'_> {
         let mut status = self.broker.resolve_policy(&payload.target).await;
         if self.protocol_version() == 1 {
             status.language_override = None;
+            // Protocol v1 has no snooze reason; the denial is the same.
+            if status.reason == PolicyResolutionReason::Snoozed {
+                status.reason = PolicyResolutionReason::SuggestionsDisabled;
+            }
         }
         self.reply(MessageType::PolicyStatus, envelope.id, &status)
     }

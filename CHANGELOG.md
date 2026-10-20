@@ -7,6 +7,12 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Two Cotypist gaps closed: `badi snooze [MINUTES]` and the session helper's
+  `snooze` portal shortcut turn Badi off in the focused field's app or site
+  for 10 minutes (runtime broker state keyed by the exact app id or origin,
+  policy reason `snoozed`, withhold only; `badi resume` ends it, and the
+  panel shows it), and Ctrl+Shift+Tab sends a real Tab instead of accepting,
+  once the chord's modifiers are up.
 - Ready for publication review: `THIRD-PARTY-NOTICES.txt` lists every
   component compiled into the binaries with its licence text (generated from
   Cargo.lock and checked in CI) and ships with both installs; the AUR

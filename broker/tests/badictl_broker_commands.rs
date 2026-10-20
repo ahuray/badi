@@ -121,6 +121,30 @@ fn broker_commands_print_their_replies_and_refusals() {
 }
 
 #[test]
+fn snooze_names_why_nothing_was_snoozed_and_ends_at_once() {
+    let broker = PhraseBroker::start();
+    // A snooze names the focused field's app or site; with none, it says so.
+    broker.fails(&["snooze"], "error_code=rejected:paused\n");
+    let unpaused = r#"{"schema":"badi.settings.v2","revision":1,"paused":false,"subjects":[]}"#;
+    broker.succeeds(&[
+        "settings",
+        "replace",
+        "--if-revision",
+        "0",
+        "--json",
+        unpaused,
+    ]);
+    broker.fails(&["snooze"], "error_code=rejected:no_context\n");
+    broker.fails(&["snooze", "0"], "error_code=arguments\n");
+    let reply: Value =
+        serde_json::from_str(&broker.succeeds(&["snooze", "end"])).expect("snooze end JSON");
+    assert_eq!(
+        reply["payload"],
+        json!({"accepted": true, "action": "snooze_end", "paused": false, "reason": "accepted"})
+    );
+}
+
+#[test]
 fn style_commands_keep_the_key_out_of_argv_and_output() {
     let broker = PhraseBroker::start();
     // The key arrives on stdin, never in argv, and is never printed.

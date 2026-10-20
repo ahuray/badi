@@ -32,6 +32,12 @@ BATTERY_TEXT = {
     "explicit": ("On battery or in the power-saver profile, suggestions appear only when you ask "
                  "(Ctrl+Shift+Space, Tab in manual fields). Explicit requests are unchanged."),
 }
+SNOOZE_MINUTES = 10
+SNOOZE_REFUSALS = {
+    "no_context": "Nothing to snooze: type in a field where Badi suggests, then snooze from there.",
+    "ambiguous_session": "Nothing snoozed: fields of more than one app or site have focus.",
+    "paused": "Predictions are paused already. Run badi resume when you want suggestions again.",
+}
 DESKTOP_AUTOMATIC = {"normal": "as on mains", "deferred": "after the typing pause",
                      "explicit_only": "only when asked"}
 HELP = """Badi — local writing controls
@@ -42,6 +48,10 @@ HELP = """Badi — local writing controls
   badi pause | resume          Persistently pause or resume predictions
   badi pause toggle            Pause if running, resume if paused (the
                                badi-session shortcut runs this)
+  badi snooze [MINUTES]        Turn Badi off in the focused field's app or
+                               site for MINUTES (1-1440, default 10); until
+                               the broker restarts, badi resume ends it sooner
+  badi snooze end              End every snooze now
   badi battery quiet|normal|explicit
                                Automatic suggestions on battery or in the
                                power-saver profile: start the model only
@@ -322,6 +332,31 @@ def desktop_text(desktop, settings=None):
     return f"Desktop: session {desktop.get('session', 'unknown')} · {power} · battery mode {mode} · automatic {automatic}"
 
 
+def snooze_text(snoozes):
+    """One line naming each snoozed app or site, or None when none is."""
+    if not isinstance(snoozes, list) or not snoozes:
+        return None
+    items = [f"{identity_text(item['subject'])} ({max(1, round(item['remaining_ms'] / 60000))} min left)"
+             for item in snoozes]
+    return "Snoozed: " + ", ".join(items) + " · badi resume ends it"
+
+
+def snooze(minutes):
+    """Snoozes the focused field's app or site; returns the broker's status."""
+    try:
+        reply = json.loads(control(["snooze", str(minutes)]))
+    except RuntimeError as error:
+        refusal = SNOOZE_REFUSALS.get(str(error).removeprefix("error_code=rejected:"))
+        if refusal:
+            raise RuntimeError(refusal) from None
+        raise
+    return reply["payload"]["snooze"]
+
+
+def end_snoozes():
+    control(["snooze", "end"])
+
+
 def no_suggestion_summary(metrics):
     """Summarize content-free no-suggestion classes; None for older brokers."""
     breakdown = metrics.get("no_suggestion") if isinstance(metrics, dict) else None
@@ -537,6 +572,8 @@ def health_report():
         report["notes"].append("Fcitx is still using the previous addon build. Apply the native update after normal desktop unlock.")
     if broker.get("paused"):
         report["notes"].append("Predictions are paused. Run badi resume when you want suggestions again.")
+    elif snooze_text(broker.get("snoozes")):
+        report["notes"].append(snooze_text(broker["snoozes"]) + " sooner; it withholds only that app or site.")
     elif broker and broker.get("metrics", {}).get("provider_calls") == 0:
         report["notes"].append("The model is ready but has received no prediction requests since startup. Run badi debug on and badi debug watch, then type in a supported field. Native manual fields require Tab; observed fields need matching accessibility and Fcitx context.")
     settings = web_settings() if broker else {}
@@ -638,7 +675,8 @@ def status_text(health, settings=None):
             + f"Web sites: {mode_text((settings or {}).get('all_web_origins'), 'site')}\n"
             + f"Context: {context_text((settings or {}).get('context_words'))}\n"
             + f"Escape: dismiss (quiet: {quiet_text}) · Why nothing appeared: badi doctor; badi debug on; badi debug watch"
-            + "".join(f"\n{line}" for line in [desktop_text(health.get("desktop"), settings)] if line))
+            + "".join(f"\n{line}" for line in [desktop_text(health.get("desktop"), settings),
+                                                 snooze_text(health.get("snoozes"))] if line))
 
 
 MODEL_DIRECTORY = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "badi/models"
@@ -1432,6 +1470,8 @@ def main(arguments):
         def toggle(document):
             document["paused"] = outcome["paused"] = not document["paused"]
         update_settings(toggle)
+        if not outcome["paused"]:
+            end_snoozes()
         print("Predictions paused." if outcome["paused"] else "Predictions resumed.")
         return
     if arguments[:1] == ["style"]:
@@ -1447,7 +1487,23 @@ def main(arguments):
     if arguments in (["pause"], ["resume"]):
         paused = arguments == ["pause"]
         update_settings(lambda document: document.update(paused=paused))
+        if not paused:
+            # Resuming also ends every snooze early.
+            end_snoozes()
         print("Predictions paused." if paused else "Predictions resumed.")
+        return
+    if arguments == ["snooze", "end"]:
+        end_snoozes()
+        print("Every snooze ended. Badi suggests again wherever your settings allow it.")
+        return
+    if arguments[:1] == ["snooze"] and len(arguments) <= 2:
+        value = arguments[1] if len(arguments) == 2 else str(SNOOZE_MINUTES)
+        if not (value.isascii() and value.isdigit() and 1 <= int(value) <= 1440):
+            raise RuntimeError("Usage: badi snooze [MINUTES]|end (MINUTES is 1-1440, default 10)")
+        status = snooze(int(value))
+        minutes = int(value)
+        print(f"Badi is snoozed in {identity_text(status['subject'])} for {minutes} minute"
+              f"{'' if minutes == 1 else 's'}. badi resume ends it sooner.")
         return
     if arguments in (["mid-line", "on"], ["mid-line", "off"]):
         enabled = arguments[1] == "on"

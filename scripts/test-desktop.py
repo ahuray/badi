@@ -135,17 +135,77 @@ class DesktopTests(unittest.TestCase):
         for paused, message in ((False, 'Predictions paused.'), (True, 'Predictions resumed.')):
             settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': paused, 'subjects': []}
             with self.subTest(paused=paused), \
-                 patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}']) as command, \
+                 patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}', '{}']) as command, \
                  contextlib.redirect_stdout(io.StringIO()) as output:
                 desktop.main(['pause', 'toggle'])
-            self.assertEqual(command.call_args.args[0], ['settings', 'replace', '--if-revision', '7', '--json', '-'])
-            document = json.loads(command.call_args.kwargs['input_text'])
+            replace = command.call_args_list[1]
+            self.assertEqual(replace.args[0], ['settings', 'replace', '--if-revision', '7', '--json', '-'])
+            document = json.loads(replace.kwargs['input_text'])
             self.assertEqual((document['revision'], document['paused']), (8, not paused))
             self.assertEqual(output.getvalue().strip(), message)
+            # Resuming also ends every snooze; pausing leaves them.
+            self.assertEqual(command.call_count, 3 if paused else 2)
+            if paused:
+                self.assertEqual(command.call_args.args[0], ['snooze', 'end'])
         settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'subjects': []}
         with patch.object(desktop, 'control', side_effect=[json.dumps(settings), RuntimeError('settings_conflict')]), \
              self.assertRaisesRegex(RuntimeError, 'settings_conflict'):
             desktop.main(['pause', 'toggle'])
+
+    def test_resume_ends_every_snooze_after_the_settings_write(self):
+        settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': True, 'subjects': []}
+        with patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}', '{}']) as command, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['resume'])
+        self.assertEqual([call.args[0][:2] for call in command.call_args_list],
+                         [['settings', 'show'], ['settings', 'replace'], ['snooze', 'end']])
+        self.assertEqual(output.getvalue().strip(), 'Predictions resumed.')
+
+    def test_snooze_names_the_app_or_site_and_explains_a_refusal(self):
+        origin = {'kind': 'browser_origin', 'adapter': 'chromium', 'scheme': 'https', 'host': 'mail.example.com', 'port': 443}
+        reply = {'v': 2, 'type': 'control.result', 'payload': {
+            'action': 'snooze', 'accepted': True, 'reason': 'accepted', 'paused': False,
+            'snooze': {'subject': origin, 'remaining_ms': 600000}}}
+        with patch.object(desktop, 'control', return_value=json.dumps(reply)) as command, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['snooze'])
+        command.assert_called_once_with(['snooze', '10'])
+        self.assertEqual(output.getvalue().strip(),
+                         'Badi is snoozed in https://mail.example.com for 10 minutes. badi resume ends it sooner.')
+        with patch.object(desktop, 'control', return_value=json.dumps(reply)) as command, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['snooze', '1'])
+        command.assert_called_once_with(['snooze', '1'])
+        self.assertIn('for 1 minute.', output.getvalue())
+        for code, message in (('no_context', 'Nothing to snooze'), ('ambiguous_session', 'more than one app'),
+                              ('paused', 'paused already')):
+            with self.subTest(code=code), \
+                 patch.object(desktop, 'control', side_effect=RuntimeError(f'error_code=rejected:{code}')), \
+                 self.assertRaisesRegex(RuntimeError, message):
+                desktop.main(['snooze'])
+        with patch.object(desktop, 'control', side_effect=RuntimeError('error_code=response_timeout')), \
+             self.assertRaisesRegex(RuntimeError, 'response_timeout'):
+            desktop.main(['snooze'])
+        for invalid in (['snooze', '0'], ['snooze', '1441'], ['snooze', 'ten'], ['snooze', '5', '6']):
+            with self.subTest(invalid=invalid), patch.object(desktop, 'control') as command:
+                with self.assertRaises(RuntimeError):
+                    desktop.main(invalid)
+                command.assert_not_called()
+        with patch.object(desktop, 'control', return_value='{}') as command, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['snooze', 'end'])
+        command.assert_called_once_with(['snooze', 'end'])
+        self.assertIn('Every snooze ended', output.getvalue())
+
+    def test_status_and_doctor_name_each_snooze(self):
+        metrics = {'provider_calls': 1, 'suggestions_shown': 0, 'provider_errors': 0, 'no_suggestion': BREAKDOWN}
+        snoozes = [{'subject': {'kind': 'linux_app', 'adapter': 'fcitx', 'app_id': 'telegram'}, 'remaining_ms': 540000},
+                   {'subject': {'kind': 'browser_origin', 'adapter': 'chromium', 'scheme': 'http',
+                                'host': 'localhost', 'port': 4173}, 'remaining_ms': 20000}]
+        health = {'paused': False, 'provider': 'local_model', 'metrics': metrics, 'snoozes': snoozes}
+        line = 'Snoozed: telegram (9 min left), http://localhost:4173 (1 min left) · badi resume ends it'
+        self.assertIn(line, desktop.status_text(health, {}))
+        self.assertNotIn('Snoozed', desktop.status_text({**health, 'snoozes': []}, {}))
 
     def test_battery_mode_is_omitted_when_quiet(self):
         settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'battery_mode': 'normal',
