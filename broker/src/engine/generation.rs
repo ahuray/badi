@@ -167,6 +167,12 @@ impl Broker {
             .as_ref()
             .is_some_and(|settings| settings.mid_line);
         let context_on = context_on(state.settings.as_ref(), &target);
+        if let Some((identity, revision)) = &context_on {
+            let fresh = state.fresh_written_words(&target, &context);
+            if !fresh.is_empty() {
+                self.queue_learned_words(identity.clone(), *revision, fresh);
+            }
+        }
         let escape_quiet = state.quiet_request(coordinates, payload.explicit)?;
         let power_start_delay = state.power_start_delay(trigger);
         let session = state.session_with_data_access(coordinates.session_id)?;
@@ -219,7 +225,8 @@ impl Broker {
         self.renew_context_authority_lease(session, generation_timeout);
         Ok(Some(AdmittedGeneration {
             // Before `request` moves the context's text.
-            vocabulary: context_on.map(|on| self.learn_and_scope(on, &context, &target, session)),
+            vocabulary: context_on
+                .map(|(identity, _)| (identity, context.window_text.clone().unwrap_or_default())),
             allow_replacement: session.allows_text_replacement(),
             binding,
             request: ProviderRequest {
@@ -258,29 +265,6 @@ impl Broker {
         let cancellation = CancellationToken::new();
         self.show_if_current(state, binding, &cancellation, proposal, Some(carried), true);
         Ok(())
-    }
-
-    /// Queues the field's newly written words for learning, once each per
-    /// field and only from prose fields, and returns what the provider
-    /// request needs to finish words with context on.
-    fn learn_and_scope(
-        &self,
-        (identity, revision): (StableIdentity, u64),
-        context: &ContextChangedPayload,
-        target: &TargetDescriptor,
-        session: &mut SessionState,
-    ) -> (StableIdentity, String) {
-        // A terminal's typed line may hold a passphrase: never learned.
-        if context.field.purpose == FieldPurpose::Normal && target.kind != TargetKind::Terminal {
-            let fresh: Vec<String> = crate::vocabulary::written_words(&context.before)
-                .into_iter()
-                .filter(|word| session.written.insert(word.clone()))
-                .collect();
-            if !fresh.is_empty() {
-                self.queue_learned_words(identity.clone(), revision, fresh);
-            }
-        }
-        (identity, context.window_text.clone().unwrap_or_default())
     }
 
     /// Settles an admitted binding without a provider call: the adapter is
@@ -1010,4 +994,42 @@ fn context_on(
     settings
         .context_words_for(&identity)
         .then_some((identity, settings.revision))
+}
+
+/// Field visits whose counted words are remembered.
+const MAX_LEARNED_VISITS: usize = 16;
+
+impl BrokerState {
+    /// The finished words of `context` not yet counted in this field visit,
+    /// marked counted now. Prose fields only: a terminal's typed line may
+    /// hold a passphrase.
+    fn fresh_written_words(
+        &mut self,
+        target: &TargetDescriptor,
+        context: &ContextChangedPayload,
+    ) -> Vec<String> {
+        if context.field.purpose != FieldPurpose::Normal || target.kind == TargetKind::Terminal {
+            return Vec::new();
+        }
+        let key = serde_json::to_string(target).unwrap_or_default();
+        let found = self
+            .learned_visits
+            .iter()
+            .position(|(visit, _)| *visit == key);
+        let index = if let Some(index) = found {
+            index
+        } else {
+            if self.learned_visits.len() >= MAX_LEARNED_VISITS {
+                self.learned_visits.pop_front();
+            }
+            self.learned_visits
+                .push_back((key, std::collections::BTreeSet::new()));
+            self.learned_visits.len() - 1
+        };
+        let counted = &mut self.learned_visits[index].1;
+        crate::vocabulary::written_words(&context.before)
+            .into_iter()
+            .filter(|word| counted.insert(word.clone()))
+            .collect()
+    }
 }

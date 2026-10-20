@@ -245,6 +245,69 @@ class DesktopTests(unittest.TestCase):
         with patch.object(desktop, 'control', side_effect=keyless), self.assertRaisesRegex(RuntimeError, 'badi style on'):
             desktop.main(['style', 'export'])
 
+    def test_context_is_opt_in_keeps_the_key_out_of_argv_and_turns_off_per_app_or_site(self):
+        key = ('ab' * 16, 'cd' * 32)
+        keyring = SimpleNamespace(ensure=lambda: key, delete=lambda: True)
+        settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'subjects': []}
+        calls = []
+
+        def control(arguments, endpoint=None, *, input_text=None):
+            calls.append((arguments, input_text))
+            if arguments[:2] == ['settings', 'show']:
+                return json.dumps(settings)
+            if arguments == ['context', 'status']:
+                return json.dumps({'enabled': True, 'chosen': True, 'available': True, 'key': 'ready',
+                                   'subjects': 2, 'words': 17})
+            return '{}'
+
+        with patch.object(desktop, 'style_keyring', return_value=keyring), \
+             patch.object(desktop, 'control', side_effect=control), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['context', 'on'])
+        delivery, = [call for call in calls if call[0] == ['style', 'key', '-']]
+        self.assertEqual(delivery[1], f'{key[0]} {key[1]}\n')
+        self.assertFalse(any(key[1] in ' '.join(arguments) for arguments, _ in calls), 'never in argv')
+        self.assertIs(json.loads(calls[-1][1])['context_words'], True)
+        self.assertIn('five letters', output.getvalue())
+
+        calls.clear()
+        with patch.object(desktop, 'control', side_effect=control), contextlib.redirect_stdout(io.StringIO()):
+            desktop.main(['context', 'off'])
+        self.assertIs(json.loads(calls[-1][1])['context_words'], False, 'off is a recorded choice')
+
+        def written(arguments):
+            calls.clear()
+            with patch.object(desktop, 'control', side_effect=control), contextlib.redirect_stdout(io.StringIO()):
+                desktop.main(arguments)
+            return json.loads(calls[-1][1])
+        document = written(['context', 'app', 'com.anthropic.claude', 'off'])
+        self.assertEqual(document['context_words_off'],
+                         [{'kind': 'linux_app', 'adapter': 'fcitx', 'app_id': 'com.anthropic.claude'}])
+        settings.update(document)
+        document = written(['context', 'site', 'https://mail.example', 'off'])
+        self.assertEqual([item['kind'] for item in document['context_words_off']], ['browser_origin', 'linux_app'],
+                         'canonical order: sites before apps')
+        settings.update(document)
+        document = written(['context', 'app', 'com.anthropic.claude', 'on'])
+        self.assertEqual(len(document['context_words_off']), 1)
+        settings.update(document)
+        document = written(['context', 'site', 'https://mail.example', 'on'])
+        self.assertNotIn('context_words_off', document, 'an empty list is omitted')
+
+        with patch.object(desktop, 'control', side_effect=control), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['context', 'status'])
+        self.assertIn('learned words: 17 from 2', output.getvalue())
+        calls.clear()
+        with patch.object(desktop, 'control', side_effect=control), contextlib.redirect_stdout(io.StringIO()):
+            desktop.main(['context', 'forget'])
+        self.assertEqual(calls[0][0], ['context', 'forget'])
+        for invalid in (['context', 'app', 'Bad App', 'off'], ['context', 'site', 'https://x.example/path', 'off'],
+                        ['context', 'maybe']):
+            with self.subTest(invalid=invalid), patch.object(desktop, 'control', side_effect=control), \
+                 self.assertRaises(RuntimeError):
+                desktop.main(invalid)
+
     def test_doctor_notes_style_learning_without_a_usable_key(self):
         health = {'paused': False, 'provider': 'local_model',
                   'metrics': {'provider_calls': 1, 'suggestions_shown': 1, 'provider_errors': 0, 'no_suggestion': BREAKDOWN}}

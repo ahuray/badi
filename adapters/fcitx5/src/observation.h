@@ -14,8 +14,12 @@ namespace badi::fcitx5 {
 // Badi's authority over one field. Missing or malformed data fails closed.
 
 nlohmann::json inspectRequest(std::string_view appId);
-// Re-reads the exact field an earlier reply bound (`focus`).
-nlohmann::json snapshotRequest(const nlohmann::json &focus);
+// Re-reads the exact field an earlier reply bound (`focus`); with `window`,
+// also the text near it, once per field visit while context is on.
+nlohmann::json snapshotRequest(const nlohmann::json &focus, bool window = false);
+// A snapshot reply's window text when it is well-formed and bounded; empty
+// otherwise.
+std::string observedWindowText(const nlohmann::json &observed);
 // The caret rectangle an app gave its input method, relative to its window
 // in physical pixels (Qt's Fcitx module declares RelativeRect).
 struct CaretRect {

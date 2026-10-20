@@ -1,12 +1,14 @@
-"""Same-window context: the nearest heading and preceding paragraph only."""
+"""Same-window context: the nearest heading and preceding paragraph for the Lab,
+and the displayed text near the field for finishing words (ADR 0010)."""
 import pathlib
 import sys
+import time
 from types import SimpleNamespace
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from field import (EMBEDDED_OBJECT, MAX_WINDOW_NODES, WINDOW_HEADING_CHARS, WINDOW_PARAGRAPH_CHARS,  # noqa: E402
-                   FieldBackend, window_text)
+from field import (EMBEDDED_OBJECT, MAX_WINDOW_NODES, VOCABULARY_CHARS, VOCABULARY_NODES,  # noqa: E402
+                   WINDOW_HEADING_CHARS, WINDOW_PARAGRAPH_CHARS, FieldBackend, window_text)
 
 PAGE = "https://mail.example/compose"
 SHOWN = frozenset({"showing"})
@@ -75,6 +77,7 @@ ATSPI = SimpleNamespace(StateType=SimpleNamespace(EDITABLE="editable", SHOWING="
 def backend(uri=PAGE):
     value = FieldBackend(ATSPI, {})
     value.budget = lambda: None
+    value.deadline = time.monotonic() + 60
     value.nearest_document_uri = lambda _node: uri
     return value
 
@@ -166,3 +169,52 @@ class WindowContextTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VocabularyTextTests(unittest.TestCase):
+    def test_displayed_text_near_the_field_nearest_first_never_another_field(self):
+        target = field()
+        Node("document web", children=[
+            Node("heading", "Re: Venue deposit for the June offsite"),
+            Node("paragraph", "Marinella Costa wrote: the deposit is due on Friday."),
+            Node("section", children=[
+                Node("entry", "Secret subject draft", states=frozenset({"showing", "editable"})),
+                Node("password text", "hunter2hunter2"),
+                Node("paragraph", "Hidden note", states=frozenset()),
+                Node("document web", "Another frame"),
+                Node("label", "To"),
+                Node("link", "Okonkwo Adeyemi"),
+                target,
+                Node("paragraph", f"Quoted {EMBEDDED_OBJECT} reply below", children=[Node("link", "Priyanka")]),
+            ]),
+        ])
+        text = backend().vocabulary_text(metadata(target))
+        # Earlier siblings nearest first, then later ones, level by level.
+        self.assertEqual(text, "Okonkwo Adeyemi To Quoted reply below Priyanka "
+                               "Marinella Costa wrote: the deposit is due on Friday. "
+                               "Re: Venue deposit for the June offsite")
+        for hidden in ("Secret subject", "hunter2", "Hidden note", "Another frame"):
+            self.assertNotIn(hidden, text)
+
+    def test_only_a_confirmed_web_document(self):
+        target = field()
+        Node("document web", children=[Node("paragraph", "Some words"), target])
+        self.assertIsNone(backend().vocabulary_text(metadata(target, web=False)))
+        self.assertIsNone(backend().vocabulary_text(metadata(target, uri="")))
+        self.assertIsNone(backend("https://other.example/").vocabulary_text(metadata(target)))
+        orphan = field()
+        Node("section", children=[Node("paragraph", "No document"), orphan])
+        self.assertIsNone(backend().vocabulary_text(metadata(orphan)))
+
+    def test_the_walk_stops_at_its_character_and_node_bounds(self):
+        target = field()
+        Node("document web", children=[*(Node("paragraph", "word " * 100) for _ in range(30)), target])
+        self.assertLessEqual(len(backend().vocabulary_text(metadata(target))), VOCABULARY_CHARS)
+        crowd = field()
+        Node("document web", children=[*(Node("paragraph", "x") for _ in range(VOCABULARY_NODES + 50)), crowd])
+        self.assertLessEqual(backend().vocabulary_text(metadata(crowd)).count("x"), VOCABULARY_NODES)
+        late = field()
+        Node("document web", children=[Node("paragraph", "Too late"), late])
+        slow = backend()
+        slow.deadline = time.monotonic()
+        self.assertIsNone(slow.vocabulary_text(metadata(late)), "no headroom left: nothing is read")

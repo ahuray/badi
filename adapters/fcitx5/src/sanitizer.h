@@ -11,6 +11,8 @@ namespace badi::fcitx5 {
 
 constexpr std::size_t kMaxBeforeScalars = 512;
 constexpr std::size_t kMaxAfterScalars = 128;
+// Text near an observed field for finishing words (broker ADR 0010).
+constexpr std::size_t kMaxWindowTextScalars = 2048;
 constexpr std::size_t kMaxSuggestionScalars = 64;
 constexpr std::size_t kMaxSuggestionWords = 8;
 constexpr std::size_t kMaxContextSourceBytes = 65'536;

@@ -115,8 +115,12 @@ fn fixture(initial: SettingsV2) -> Fixture {
     }
 }
 
-/// Opens one browser field on the fixture site.
-async fn open_field(broker: &Broker, coordinates: Coordinates) -> mpsc::Receiver<BrokerEvent> {
+/// Opens one browser field, `field_id`, on the fixture site.
+async fn open_field(
+    broker: &Broker,
+    coordinates: Coordinates,
+    field_id: &str,
+) -> mpsc::Receiver<BrokerEvent> {
     let (sink, events) = mpsc::channel(16);
     broker
         .open_session(
@@ -125,7 +129,7 @@ async fn open_field(broker: &Broker, coordinates: Coordinates) -> mpsc::Receiver
                 target: TargetDescriptor {
                     kind: TargetKind::Browser,
                     app_id: "chromium".to_owned(),
-                    target_id: "context-field".to_owned(),
+                    target_id: field_id.to_owned(),
                     origin: Some(Origin {
                         scheme: OriginScheme::Http,
                         host: "localhost".to_owned(),
@@ -158,6 +162,7 @@ async fn type_in_field(
     before: &str,
     window_text: Option<&str>,
     purpose: FieldPurpose,
+    field_id: &str,
 ) -> ProviderRequest {
     let session_id = SessionId::new();
     let coordinates = |revision| Coordinates {
@@ -165,7 +170,7 @@ async fn type_in_field(
         focus_epoch: 1,
         revision,
     };
-    let mut events = open_field(&fixture.broker, coordinates(0)).await;
+    let mut events = open_field(&fixture.broker, coordinates(0), field_id).await;
     let fingerprint = "fingerprint_context_01".to_owned();
     let length = u64::try_from(before.chars().count()).expect("length");
     fixture
@@ -240,6 +245,7 @@ async fn context_on_sends_window_words_and_offers_a_word_from_two_fields() {
         "Thanks, I asked Okonkwo about the schedule. Also ",
         Some(WINDOW),
         FieldPurpose::Normal,
+        "field-10",
     )
     .await;
     let vocabulary = first.vocabulary.expect("context on");
@@ -260,6 +266,7 @@ async fn context_on_sends_window_words_and_offers_a_word_from_two_fields() {
         "Hello, Okonkwo agreed yesterday. ",
         None,
         FieldPurpose::Normal,
+        "field-11",
     )
     .await;
     fixture
@@ -267,7 +274,7 @@ async fn context_on_sends_window_words_and_offers_a_word_from_two_fields() {
         .flush_outcomes_before_pause_ack()
         .await
         .expect("flush");
-    let third = type_in_field(&fixture, "Ask Okon", None, FieldPurpose::Normal).await;
+    let third = type_in_field(&fixture, "Ask Okon", None, FieldPurpose::Normal, "field-1").await;
     assert_eq!(
         third.vocabulary.expect("context on").learned,
         vec!["Okonkwo"]
@@ -290,6 +297,7 @@ async fn context_unchosen_off_or_off_for_the_site_sends_and_learns_nothing() {
                 "Thanks, I asked Okonkwo about it. ",
                 Some(WINDOW),
                 FieldPurpose::Normal,
+                "field-12",
             )
             .await;
             assert_eq!(request.vocabulary, None, "{chosen:?} {off}");
@@ -315,6 +323,7 @@ async fn a_terminal_line_uses_context_but_is_never_learned() {
             "export PASSPHRASE correcthorse ",
             None,
             FieldPurpose::Terminal,
+            "field-13",
         )
         .await;
         assert!(request.vocabulary.is_some());
@@ -338,6 +347,7 @@ async fn turning_context_off_for_a_site_purges_its_learned_words() {
         "Thanks, I asked Okonkwo. ",
         None,
         FieldPurpose::Normal,
+        "field-14",
     )
     .await;
     fixture
@@ -351,4 +361,37 @@ async fn turning_context_off_for_a_site_purges_its_learned_words() {
         .replace_settings(1, settings(2, Some(true), true))
         .expect("off for the site");
     assert_eq!(fixture.broker.learned_status().expect("status").subjects, 0);
+}
+
+#[tokio::test]
+async fn one_field_visit_counts_a_word_once_however_often_its_session_reopens() {
+    let fixture = fixture(settings(1, Some(true), false));
+    // An observed field reopens its session as it changes; the visit stays.
+    for _ in 0..3 {
+        type_in_field(
+            &fixture,
+            "Thanks, I asked Okonkwo. ",
+            None,
+            FieldPurpose::Normal,
+            "one-visit",
+        )
+        .await;
+    }
+    fixture
+        .broker
+        .flush_outcomes_before_pause_ack()
+        .await
+        .expect("flush");
+    let request = type_in_field(
+        &fixture,
+        "Ask Okon",
+        None,
+        FieldPurpose::Normal,
+        "one-visit",
+    )
+    .await;
+    assert_eq!(
+        request.vocabulary.expect("context on").learned,
+        Vec::<String>::new()
+    );
 }

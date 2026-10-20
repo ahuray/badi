@@ -12,9 +12,21 @@ Json inspectRequest(std::string_view appId) {
     return Json{{"op", "inspect"}, {"app_id", appId}};
 }
 
-Json snapshotRequest(const Json &focus) {
-    return Json{{"op", "snapshot"}, {"binding", focus.value("binding", Json())},
-                {"policy_target", focus.value("target", Json())}};
+Json snapshotRequest(const Json &focus, bool window) {
+    auto request = Json{{"op", "snapshot"}, {"binding", focus.value("binding", Json())},
+                        {"policy_target", focus.value("target", Json())}};
+    if (window) request["window"] = true;
+    return request;
+}
+
+std::string observedWindowText(const Json &observed) {
+    const auto text = observed.value("window_text", Json());
+    if (!text.is_string()) return {};
+    const auto &value = text.get_ref<const std::string &>();
+    const auto scalars = decodeUtf8(value);
+    if (!scalars || scalars->empty() || scalars->size() > kMaxWindowTextScalars || !validContextText(value))
+        return {};
+    return value;
 }
 
 Json previewRequest(const Json &focus, std::string_view text, std::uint64_t ttlMs,
