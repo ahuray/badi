@@ -57,7 +57,7 @@ export function parseOptions(args, cwd = process.cwd()) {
   const warmPrefix = values['warm-prefix'] === 'true';
   const configs = validateConfigs(values.modes.split(',').map(mode => {
     const fixed = mode === 'production_boundary' || mode === 'framed' || mode === 'field_context' || mode === 'following_text' ||
-      mode === 'context_bias';
+      mode === 'context_bias' || mode === 'vocabulary';
     return { id: mode, mode, budget_ms: fixed ? 550 : budget, max_tokens: fixed ? 8 : tokens,
       cache_prompt: fixed || values['cache-prompt'] === 'true', temperature: 0, seed: 42 };
   }));

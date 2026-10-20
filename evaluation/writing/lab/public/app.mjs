@@ -4,7 +4,7 @@ import { confidenceCoverage } from './confidence.mjs';
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="badi-lab-token"]').content;
 const headers = { 'Content-Type': 'application/json', 'X-Badi-Lab-Token': token };
-const names = { production_boundary: 'Current Badi logic', context: 'Full context', context_confidence: 'Full context + token confidence', instructed: 'Context + style', healed: 'Word-boundary experiment', instructed_healed: 'Instructions + word boundary', native_instructed: 'Selected model instructions', framed: 'Framed prompt', field_context: 'Earlier field text', probability_rejoin: 'Probability rejoin', following_text: 'Text after the caret', context_bias: 'Context word bias' };
+const names = { production_boundary: 'Current Badi logic', context: 'Full context', context_confidence: 'Full context + token confidence', instructed: 'Context + style', healed: 'Word-boundary experiment', instructed_healed: 'Instructions + word boundary', native_instructed: 'Selected model instructions', framed: 'Framed prompt', field_context: 'Earlier field text', probability_rejoin: 'Probability rejoin', following_text: 'Text after the caret', context_bias: 'Context word bias', vocabulary: 'Finish words from context' };
 const fixedProductionMode = mode => mode === 'production_boundary';
 const reasonLabels = {
   production_abstention_or_budget: 'The current provider returned no usable continuation. Its response does not distinguish an abstention from an exhausted time budget.',

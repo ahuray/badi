@@ -107,6 +107,7 @@ names in all five languages. Spelling and word lookup retain their own coverage.
 | `probability_rejoin` | Lab only: force the next words and keep a prefix only when they are not unlikely. The cut is uncalibrated and is not installed |
 | `following_text` | Lab only: name the line after the caret, then continue from the text before it. Production prompts do not include that line |
 | `context_bias` | The production provider, with the case's context as window text: its distinctive English words raise the first token of each by a logit bias of 2.0 (`CONTEXT_BIAS`); the prompt is unchanged. Production has no window text yet, so it behaves as `production_boundary` there |
+| `vocabulary` | The production provider with context on: the case's context gives the window's words and its style examples the writer's earlier words. When the caret ends a partial word that exactly one longer word there, or earlier in the draft, starts with, its rest is the suggestion and no model runs ([rule](../../broker/README.md#vocabulary-completion)); otherwise it behaves as `production_boundary` |
 
 `instructed_word` and `healed_attested` are not selectable. The 2026-09-09 next-word study had no useful `instructed_word` result in 30 opportunities and one harmful result. `healed_attested` added harmful suggestions on top of `healed`.
 
@@ -236,6 +237,40 @@ was changing (the postponed event's original "3 February"), and it missed
 550 ms cold. Neither arm justifies production use; a context-fact fence and a
 prompt that keeps controls quiet come first, and these 40 cases now count as
 development data. Runs: `output/writing/2026-10-19-window-context-independent/`.
+
+Vocabulary completion (`vocabulary`, 2026-10-20) finishes the word at the
+caret with an exact word in view instead of putting context in the prompt.
+Two independent sets of 60 mid-word cases (40 English, 8 German, 4 each
+Spanish, French and Portuguese) were each written by a separate agent with no
+access to earlier cases or the code and frozen by hash before inference: 20
+where the window names the word, 11 where only the writer's earlier writing
+does, 6 where the draft does, 13 traps where a different word in view starts
+with the same letters, and 10 controls. Installed Gemma 3 1B, 15 W PL1 on
+battery with the performance profile; two blind reviewers judged each whole
+addition and a third settled disagreements.
+
+| Set (rule) | Arm | Shown | Useful full additions | Harmful |
+| --- | --- | --- | --- | --- |
+| First (three letters) | `production_boundary` | 8 | 5 | 3 |
+| | `vocabulary` | 52 | 39 | 13 |
+| Second (five letters) | `production_boundary` | 7 | 1 | 4 |
+| | `vocabulary` | 31 | 23 | 7 |
+
+On the first set every word in view was finished correctly (37 of 37), and
+every trap was finished into the other word ("user stor" became "storage").
+The five-letter minimum was chosen on that seen set, where three or four
+letters gave 12 right and 13 wrong finishes and five or more gave 25 right.
+On the second set 23 of 26 finishes were right. The three wrong ones were
+traps with five or more letters ("migra" to "migration" for "migrate",
+"Verla" to "Verlag" for "Verlauf", "Domini" to "Dominic" for "Dominican");
+the other four harmful additions are the model's own, the same in both arms.
+A finish takes 0.1–0.3 ms at the median, the model 320–430 ms. Both runs
+fail the registered gates: harmful additions rise (on the second set English
+4 to 6, German 0 to 1). The model cannot referee a trap without the window:
+under the healed echo, "on Fri" became "Friends" at log-probability −19 once
+the grammar ruled out the digits it preferred, and a window's names are as
+unlikely to it as wrong words. Runs:
+`output/writing/2026-10-20-vocabulary-independent/` and `-2/`.
 
 A model artifact descriptor selects weights for the Lab only (bounded to 16 KiB
 and 8 GiB; it cannot supply an executable or flags):

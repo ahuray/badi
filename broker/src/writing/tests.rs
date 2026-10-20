@@ -153,6 +153,7 @@ fn token_healing_binds_the_exact_typed_stem() {
         before: "Please review the docum".to_owned(),
         after: String::new(),
         language: Some("en".to_owned()),
+        vocabulary: None,
     };
     let payload = super::completion_payload(&request);
     assert_eq!(payload["prompt"], "Please review the");
@@ -164,6 +165,7 @@ fn token_healing_binds_the_exact_typed_stem() {
         before: "Please review the docum ".to_owned(),
         after: String::new(),
         language: Some("en".to_owned()),
+        vocabulary: None,
     };
     let spaced = super::completion_payload(&spaced);
     assert_eq!(spaced["prompt"], "Please review the");
@@ -186,6 +188,7 @@ fn token_healing_binds_the_exact_typed_stem() {
         before: "Please review the docum ".to_owned(),
         after: String::new(),
         language: Some("en".to_owned()),
+        vocabulary: None,
     };
     let rolled_back = super::completion_plan(&rolled_back, &[]);
     assert_eq!(rolled_back.prompt, "Please review the docum ");
@@ -194,6 +197,7 @@ fn token_healing_binds_the_exact_typed_stem() {
         before: "Docum ".to_owned(),
         after: String::new(),
         language: Some("en".to_owned()),
+        vocabulary: None,
     };
     let lone_word = super::completion_plan(&lone_word, super::TRAILING_SPACE_HEALING);
     assert_eq!(lone_word.prompt, "Docum");
@@ -202,6 +206,7 @@ fn token_healing_binds_the_exact_typed_stem() {
         before: "Hel".to_owned(),
         after: String::new(),
         language: Some("en".to_owned()),
+        vocabulary: None,
     };
     let bare_stem = super::completion_plan(&bare_stem, super::TRAILING_SPACE_HEALING);
     assert_eq!(bare_stem.prompt, "");
@@ -224,6 +229,7 @@ fn cold_inference_uses_a_bounded_sentence_without_changing_authority_context() {
         before: original.clone(),
         after: String::new(),
         language: Some("en".to_owned()),
+        vocabulary: None,
     };
     let payload = super::completion_payload(&request);
     assert_eq!(payload["prompt"], "Please review the");
@@ -263,6 +269,7 @@ fn cold_inference_uses_a_bounded_sentence_without_changing_authority_context() {
         before: "Vielen Dank für Ihre".to_owned(),
         after: String::new(),
         language: Some("de".to_owned()),
+        vocabulary: None,
     };
     assert_eq!(super::completion_payload(&german)["prompt"], german.before);
     assert!(super::completion_plan(&german, &[]).echo.is_none());
@@ -374,6 +381,7 @@ fn a_short_sentence_start_keeps_the_previous_sentences_in_the_window() {
         before: "Previous notes are here. Thanks for sharing the draft. Please ".to_owned(),
         after: String::new(),
         language: Some("en".to_owned()),
+        vocabulary: None,
     };
     let plan = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
     assert_eq!(plan.prompt, "Thanks for sharing the draft. Please");
@@ -395,6 +403,7 @@ fn trailing_space_healing_is_promoted_per_language() {
             before: before.to_owned(),
             after: String::new(),
             language: Some(tag.to_owned()),
+            vocabulary: None,
         };
         let legacy = super::completion_plan(&request, &[]).payload();
         assert_eq!(legacy["prompt"], before);
@@ -439,6 +448,7 @@ fn an_unhealed_trailing_space_is_never_sent() {
             before: before.to_owned(),
             after: String::new(),
             language: Some(language.to_owned()),
+            vocabulary: None,
         };
         let plan = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
         assert_eq!(plan.sends_nothing(), unsent, "{language} {before:?}");
@@ -497,6 +507,7 @@ fn generation_excludes_what_could_never_be_shown() {
             before: before.to_owned(),
             after: String::new(),
             language: Some(language.to_owned()),
+            vocabulary: None,
         };
         super::completion_plan(&request, super::TRAILING_SPACE_HEALING).payload()["grammar"]
             .as_str()
@@ -532,6 +543,7 @@ fn trailing_space_boundary_preserves_exact_bytes_and_the_eight_token_budget() {
             before: before.to_owned(),
             after: String::new(),
             language: Some(language.to_owned()),
+            vocabulary: None,
         };
         // The mechanism, independent of which languages production promotes.
         let all = [
@@ -579,6 +591,7 @@ fn boundary_candidate_keeps_legacy_stems_and_never_trims_other_whitespace() {
             before: before.to_owned(),
             after: String::new(),
             language: Some(language.to_owned()),
+            vocabulary: None,
         };
         let legacy = super::completion_plan(&request, &[]);
         let candidate = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
@@ -608,6 +621,7 @@ fn boundary_candidate_keeps_legacy_stems_and_never_trims_other_whitespace() {
         before: before.clone(),
         after: String::new(),
         language: Some("en".to_owned()),
+        vocabulary: None,
     };
     let plan = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
     // Three words keep the previous sentence, but not the whole window.

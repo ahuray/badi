@@ -361,7 +361,7 @@ fn line_length(text: &[u8]) -> usize {
         .unwrap_or(text.len())
 }
 
-fn known_english_word(word: &str) -> bool {
+pub(crate) fn known_english_word(word: &str) -> bool {
     if !word.bytes().all(|byte| byte.is_ascii_alphabetic()) {
         return false;
     }

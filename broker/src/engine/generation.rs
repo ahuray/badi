@@ -229,6 +229,7 @@ impl Broker {
                 before: context.before,
                 after: context.after,
                 language: context.language,
+                vocabulary: None,
             },
             trigger,
             cancellation,

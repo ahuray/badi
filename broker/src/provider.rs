@@ -84,6 +84,10 @@ pub struct ProviderRequest {
     pub before: String,
     pub after: String,
     pub language: Option<String>,
+    /// Words for finishing the word at the caret: from the field's window,
+    /// the writer's earlier writing in the app, and the draft itself. `None`
+    /// unless the person turned context on; then no draft word is used either.
+    pub vocabulary: Option<crate::vocabulary::Vocabulary>,
 }
 
 impl ProviderRequest {
@@ -363,6 +367,7 @@ mod tests {
             before: "Thank you".to_owned(),
             after: String::new(),
             language: Some("en".to_owned()),
+            vocabulary: None,
         };
         let first = provider
             .complete(request.clone(), CancellationToken::new())
@@ -384,6 +389,7 @@ mod tests {
                     before: "An unmatched sentence".to_owned(),
                     after: String::new(),
                     language: Some("en".to_owned()),
+                    vocabulary: None,
                 },
                 CancellationToken::new(),
             )
@@ -401,36 +407,43 @@ mod tests {
                 before: "displease".to_owned(),
                 after: String::new(),
                 language: Some("en".to_owned()),
+                vocabulary: None,
             },
             ProviderRequest {
                 before: "I will not say thank you".to_owned(),
                 after: String::new(),
                 language: Some("en-US".to_owned()),
+                vocabulary: None,
             },
             ProviderRequest {
                 before: "thank you".to_owned(),
                 after: " already written".to_owned(),
                 language: Some("en".to_owned()),
+                vocabulary: None,
             },
             ProviderRequest {
                 before: "thank you".to_owned(),
                 after: String::new(),
                 language: Some("de".to_owned()),
+                vocabulary: None,
             },
             ProviderRequest {
                 before: "thank you".to_owned(),
                 after: String::new(),
                 language: None,
+                vocabulary: None,
             },
             ProviderRequest {
                 before: "thank you ".to_owned(),
                 after: String::new(),
                 language: Some("en".to_owned()),
+                vocabulary: None,
             },
             ProviderRequest {
                 before: format!("{}thank you", " ".repeat(MAX_BEFORE_CHARS - 9)),
                 after: String::new(),
                 language: Some("en".to_owned()),
+                vocabulary: None,
             },
         ] {
             let result = provider
@@ -449,6 +462,7 @@ mod tests {
                     before: "Dear reviewer,\n  Looking Forward".to_owned(),
                     after: String::new(),
                     language: Some("en-GB".to_owned()),
+                    vocabulary: None,
                 },
                 CancellationToken::new(),
             )
@@ -511,6 +525,7 @@ mod tests {
                         before: before.to_owned(),
                         after: after.to_owned(),
                         language: language.map(str::to_owned),
+                        vocabulary: None,
                     },
                     CancellationToken::new(),
                     false,
@@ -526,6 +541,7 @@ mod tests {
                     before: "Thank you".to_owned(),
                     after: String::new(),
                     language: Some("en".to_owned()),
+                    vocabulary: None,
                 },
                 CancellationToken::new(),
                 false,
@@ -549,6 +565,7 @@ mod tests {
                         before: "Thank you".to_owned(),
                         after: String::new(),
                         language: Some("en".to_owned()),
+                        vocabulary: None,
                     },
                     cancelled,
                     false,
@@ -570,6 +587,7 @@ mod tests {
                     before: before.to_owned(),
                     after: after.to_owned(),
                     language: Some(language.to_owned()),
+                    vocabulary: None,
                 },
                 CancellationToken::new(),
                 allow_replacement,

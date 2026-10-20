@@ -150,6 +150,7 @@ async fn failed_warm_up_leaves_the_owned_runtime_serving() -> TestResult {
                 before: "Thank you".to_owned(),
                 after: String::new(),
                 language: Some("en".to_owned()),
+                vocabulary: None,
             },
             CancellationToken::new(),
         )

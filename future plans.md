@@ -52,9 +52,10 @@ links to it. A tested app version is not a claim about Linux in general.
   tokens), suggestion, key and ghost ([README](README.md#debug-trace),
   [ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
   Use it for every live trial.
-- **Context and learning:** same-window context exists for the Lab only;
-  style learning stores sealed samples behind `badi style on`, and no prompt
-  reads them yet.
+- **Context and learning:** same-window context exists for the Lab only.
+  Finishing the typed word from words in view gains strongly there but turns
+  some traps into the wrong word (open decision below). Style learning stores
+  sealed samples behind `badi style on`, and no prompt reads them yet.
 
 Standing user decisions:
 - IME-parity for Chromium-based apps, Zen and LibreOffice Writer
@@ -83,6 +84,13 @@ Open decisions, for the user:
 - **Spelling beyond English is unqualified.** It is opt-in; decide whether that
   is enough or each language first needs the held-out measurement under
   [Suggestion quality](#suggestion-quality).
+- **Finishing words from context.** On two independent 60-case sets the
+  vocabulary rule gave 39 and 23 useful additions against 5 and 1 without
+  it, but traps became the wrong word: harmful additions rose from 3 to 13
+  with three typed letters, and from 4 to 7 with five (English 4 to 6,
+  German 0 to 1), so the registered gates fail
+  ([Lab runbook](evaluation/writing/README.md#terminal-runs)). Accept that
+  cost and build the opt-in (step 2), or keep it in the Lab.
 - **The `--text` debug trace** keeps typed text in memory for 15 minutes;
   confirm that, or limit it to suggestions.
 - **The 28 W CPU power limit** is set until reboot; installing
@@ -101,17 +109,18 @@ publish need the user's go-ahead first; the rest can start at once.
    passed on 2026-10-19 ([matrix](adapters/fcitx5/README.md#tested-with)).
    *Done when* those show zero wrong-field or stale edits and the
    [session helper](adapters/session/README.md) runbook records them.
-2. **Make same-window context safe before measuring it again.** On 40
-   independent English cases (2026-10-19) the word bias gained nothing and
-   prompt text drifted in controls, copied a fact the writer was changing
-   and missed 550 ms ([Lab runbook](evaluation/writing/README.md#terminal-runs)).
-   Next: a fence like `style_fact_conflict` for context facts and a prompt
-   that keeps controls quiet, developed on the cases seen so far, then a
-   fresh independent set with full-addition review. *Done when* a measured
-   gain on that new set justifies production use; only then add the source
-   (the observer's accessibility context; screen reading only after its own
-   privacy decision), global and per-app controls, the wire field and
-   cancellation on focus changes.
+2. **Finish typed words from the window and earlier writing, once decided.**
+   The rule and its Lab mode exist ([broker runbook](broker/README.md#vocabulary-completion));
+   production requests carry no vocabulary. If the user accepts the trap
+   cost (open decision), add the opt-in: a `badi context` switch, off until
+   chosen, with per-app off, a panel row and a first-run prompt; the
+   observer's window words for web fields (text near the field, never
+   another field), sent once per focus and dropped when it changes; and
+   learned words, sealed with the keyring key like style samples, with
+   retention and one-step deletion, never from terminals. Prompt-text window
+   context stays out: on 2026-10-19 it drifted in controls and copied a fact
+   the writer was changing. *Done when* that ships with a live trial in a web
+   mail client and the Claude desktop app.
 3. **Compare style learning in the Lab.** Feed an explicit `badi style
    export` into a Lab suite's `style` field and compare against no style on
    the user's own held-out drafts, with the `style_fact_conflict` fence and

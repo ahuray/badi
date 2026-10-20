@@ -23,6 +23,7 @@ fn request(before: &str, language: Option<&str>) -> ProviderRequest {
         before: before.to_owned(),
         after: String::new(),
         language: language.map(str::to_owned),
+        vocabulary: None,
     }
 }
 
@@ -97,6 +98,94 @@ async fn unsupported_writing_requests_never_reach_the_runtime() -> Result<(), Bo
         tokio::time::timeout(Duration::from_millis(10), listener.accept())
             .await
             .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn vocabulary_finishes_a_word_before_any_model_request() -> Result<(), Box<dyn Error>> {
+    use badi_broker::vocabulary::Vocabulary;
+    use badi_broker::writing::{LanguagePreferences, WritingLanguage};
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let client = SemanticClient::new(SemanticClientConfig::new(
+        listener.local_addr()?,
+        "writing-fixture",
+        "public-fixture-token",
+    )?)?;
+    let with = |before: &str, language: &str, vocabulary: Vocabulary| ProviderRequest {
+        before: before.to_owned(),
+        after: String::new(),
+        language: Some(language.to_owned()),
+        vocabulary: Some(vocabulary),
+    };
+    let nothing: &[&str] = &[];
+    // A window, an earlier-writing and a draft word each finish the word,
+    // before spelling could ask the model about the unfinished one.
+    for (request, suffix) in [
+        (
+            with(
+                "Hi Marin",
+                "en",
+                Vocabulary::from_texts("To: Marinella Costa", nothing),
+            ),
+            "ella",
+        ),
+        (
+            with(
+                "I will ask Okonk",
+                "en",
+                Vocabulary::from_texts("", &["Okonkwo agreed."]),
+            ),
+            "wo",
+        ),
+        (
+            with("Die Tagesordnung und Tagesord", "de", Vocabulary::default()),
+            "nung",
+        ),
+        (
+            with(
+                "then run kubec",
+                "en",
+                Vocabulary::from_texts("Run kubectl first.", nothing),
+            ),
+            "tl",
+        ),
+    ] {
+        let outcome = client
+            .propose_outcome(
+                request,
+                CancellationToken::new(),
+                true,
+                RequestTrigger::Automatic,
+            )
+            .await?;
+        assert!(
+            matches!(&outcome, ProviderOutcome::Proposal(proposal)
+                if proposal.text == suffix && proposal.replace_before.is_none()),
+            "{suffix}: {outcome:?}"
+        );
+    }
+    // A language turned off gets nothing from the vocabulary either.
+    client.set_language_preferences(&LanguagePreferences {
+        enabled: vec![WritingLanguage::English],
+        healing: Vec::new(),
+    });
+    assert!(matches!(
+        client
+            .propose_outcome(
+                with("Die Tagesordnung und Tagesord", "de", Vocabulary::default()),
+                CancellationToken::new(),
+                false,
+                RequestTrigger::Automatic,
+            )
+            .await?,
+        ProviderOutcome::NoSuggestion(NoSuggestionReason::RequestAbstained)
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), listener.accept())
+            .await
+            .is_err(),
+        "no request reached the model"
     );
     Ok(())
 }
