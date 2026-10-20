@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::{
-    CLI_CAPABILITIES, CliError, Command, LocalCommand, ParsedCommand, build_overview,
+    CLI_CAPABILITIES, CliError, Command, LocalCommand, ParsedCommand, StatsCommand, build_overview,
     parse_arguments, read_probe_text, redact_health_status, validate_control_response,
     validate_correlated_response, validate_handshake, validate_health_response,
     validate_probe_response, validate_settings_response,
@@ -379,6 +379,29 @@ fn parses_commands_with_absolute_socket() {
             command: Command::Global(ControlAction::Resume),
         }
     );
+    for (word, command) in [
+        ("status", StatsCommand::Status),
+        ("forget", StatsCommand::Forget),
+    ] {
+        assert_eq!(
+            parse_arguments(arguments(&["--socket", "/tmp/broker.sock", "stats", word]))
+                .expect("stats"),
+            ParsedCommand::Remote {
+                socket_path: PathBuf::from("/tmp/broker.sock"),
+                command: Command::Stats(command),
+            }
+        );
+    }
+    for rejected in [
+        &["stats"][..],
+        &["stats", "clear"],
+        &["stats", "status", "--json"],
+    ] {
+        assert!(matches!(
+            parse_arguments(arguments(rejected)),
+            Err(CliError::Arguments)
+        ));
+    }
 }
 
 #[test]

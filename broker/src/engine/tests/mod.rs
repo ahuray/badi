@@ -41,6 +41,7 @@ mod outcomes;
 mod policy;
 mod probe;
 mod spelling;
+mod stats;
 mod style;
 mod type_through;
 

@@ -12,8 +12,8 @@ use badi_broker::protocol::{
     ErrorPayload, GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
     MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_SAFE_COUNTER, MemoryStatusPayload, MessageType,
     ProbeRequestPayload, ProbeResultPayload, ProtocolError, ProviderKind, ReasonCode,
-    SessionControlRequestPayload, SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload,
-    StyleSamplesPayload, StyleStatusPayload, WireEnvelope,
+    SessionControlRequestPayload, SettingsReplacePayload, SettingsStatusPayload,
+    StatsStatusPayload, StyleKeyPayload, StyleSamplesPayload, StyleStatusPayload, WireEnvelope,
 };
 use badi_broker::settings::{
     MAX_SETTINGS_BYTES, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV2,
@@ -138,6 +138,14 @@ async fn broker_report(stream: &mut UnixStream, command: Command) -> Result<Stri
             let request = cli_global(message, &serde_json::json!({}))?;
             serde_json::to_string(&exchange(stream, request, validate_context_status).await?)?
         }
+        Command::Stats(command) => {
+            let message = match command {
+                StatsCommand::Status => MessageType::StatsQuery,
+                StatsCommand::Forget => MessageType::StatsForget,
+            };
+            let request = cli_global(message, &serde_json::json!({}))?;
+            serde_json::to_string(&exchange(stream, request, validate_stats_status).await?)?
+        }
         Command::Style(StyleCommand::Key(Some(payload))) => {
             let request = cli_global(MessageType::StyleKey, &payload)?;
             serde_json::to_string(&exchange(stream, request, validate_style_status).await?)?
@@ -157,6 +165,22 @@ fn validate_context_status(
     request_id: &str,
 ) -> Result<ContextStatusPayload, CliError> {
     decode_reply(response, request_id, MessageType::ContextStatus, |_| Ok(()))
+}
+
+fn validate_stats_status(
+    response: &WireEnvelope,
+    request_id: &str,
+) -> Result<StatsStatusPayload, CliError> {
+    decode_reply(response, request_id, MessageType::StatsStatus, |payload| {
+        let summary = &payload.summary;
+        if summary.days.len() <= usize::from(badi_broker::stats::STATS_RETENTION_DAYS) + 1
+            && summary.subjects.len() <= 3 * badi_broker::stats::MAX_SUMMARY_SUBJECTS
+        {
+            Ok(())
+        } else {
+            Err(ProtocolError::InvalidPayload)
+        }
+    })
 }
 
 fn validate_style_samples(
@@ -762,6 +786,8 @@ Broker commands:\n  status [--json]  Show content-free broker status as JSON\n  
   overview [--json]  Show broker, policy, privacy, and model readiness\n  settings show [--json]\n                    Show the strict badi.settings.v2 document\n  settings replace --if-revision N --json DOCUMENT|-\n                    Replace settings with compare-and-swap protection; - reads\n                    a bounded document from stdin, keeping it out of argv\n  memory clear      Clear local text-free origin/day interaction aggregates\n\
   context status    Show content-free context state and learned-word counts\n\
   context forget    Delete every learned word (the keyring key stays)\n\
+  stats status      Show content-free counts per day and per app or site\n\
+  stats forget      Delete every usage count\n\
   style status      Show content-free style-learning state\n\
   style forget      Delete every style sample and forget the key in memory\n\
   style export      Print decrypted style samples as JSON (explicit; for the Lab)\n\
@@ -851,22 +877,21 @@ where
         Some("probe") => parse_probe_command(rest)?,
         Some("memory") if rest == ["clear"] => Command::MemoryClear,
         Some("style") => parse_style_command(&rest)?,
-        Some("context") => match rest.as_slice() {
-            [value] if value == "status" => Command::Context(ContextCommand::Status),
-            [value] if value == "forget" => Command::Context(ContextCommand::Forget),
-            _ => return Err(CliError::Arguments),
-        },
+        Some("stats") => Command::Stats(status_or_forget(
+            &rest,
+            StatsCommand::Status,
+            StatsCommand::Forget,
+        )?),
+        Some("context") => Command::Context(status_or_forget(
+            &rest,
+            ContextCommand::Status,
+            ContextCommand::Forget,
+        )?),
         Some("request") if rest.is_empty() => Command::Session(ControlAction::Request),
         Some("accept-word") if rest.is_empty() => Command::Session(ControlAction::AcceptWord),
         Some("accept-all") if rest.is_empty() => Command::Session(ControlAction::AcceptAll),
         Some("dismiss") if rest.is_empty() => Command::Session(ControlAction::Dismiss),
-        Some("pause") => match rest.as_slice() {
-            [] => Command::Global(ControlAction::PauseToggle),
-            [value] if value == "toggle" => Command::Global(ControlAction::PauseToggle),
-            [value] if value == "on" => Command::Global(ControlAction::Pause),
-            [value] if value == "off" => Command::Global(ControlAction::Resume),
-            _ => return Err(CliError::Arguments),
-        },
+        Some("pause") => Command::Global(parse_pause(&rest)?),
         _ => return Err(CliError::Arguments),
     };
     let socket_path = explicit_socket.map_or_else(default_socket_path, Ok)?;
@@ -874,6 +899,25 @@ where
         socket_path,
         command,
     })
+}
+
+fn parse_pause(arguments: &[String]) -> Result<ControlAction, CliError> {
+    match arguments {
+        [] => Ok(ControlAction::PauseToggle),
+        [value] if value == "toggle" => Ok(ControlAction::PauseToggle),
+        [value] if value == "on" => Ok(ControlAction::Pause),
+        [value] if value == "off" => Ok(ControlAction::Resume),
+        _ => Err(CliError::Arguments),
+    }
+}
+
+/// `status` or `forget`: the two verbs of a content-free local store.
+fn status_or_forget<T>(arguments: &[String], status: T, forget: T) -> Result<T, CliError> {
+    match arguments {
+        [value] if value == "status" => Ok(status),
+        [value] if value == "forget" => Ok(forget),
+        _ => Err(CliError::Arguments),
+    }
 }
 
 fn parse_style_command(arguments: &[String]) -> Result<Command, CliError> {
@@ -1003,6 +1047,13 @@ enum Command {
     Status,
     Style(StyleCommand),
     Context(ContextCommand),
+    Stats(StatsCommand),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StatsCommand {
+    Status,
+    Forget,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

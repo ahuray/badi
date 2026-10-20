@@ -76,8 +76,8 @@ Where code lives inside the larger components:
   `engine/tests/` by topic; `settings/` is the private settings document
   (identity, permissions, policy, paths, private files, the compare-and-swap
   store); `writing.rs` and `semantic/` run the local model; `style.rs`,
-  `personalization.rs`, `model_selection.rs` and `control_plane.rs` are what
-  their names say; `bin/badictl/` is the control CLI. A module's unit tests
+  `personalization.rs`, `stats.rs`, `model_selection.rs` and
+  `control_plane.rs` are what their names say; `bin/badictl/` is the control CLI. A module's unit tests
   live beside it in `<module>/tests.rs`.
 - **Fcitx addon** (`adapters/fcitx5/src/`): `addon.h` declares the addon;
   `addon.cpp` (lifecycle and input-context events), `addon_keys.cpp`,

@@ -118,8 +118,6 @@ publish need the user's go-ahead first; the rest can start at once.
      to four), each length measured in the Lab before it ships;
    - a shortcut that turns the current app off for a few minutes, and a way
      to send a literal Tab while a suggestion shows;
-   - words completed per day and per app (Badi counts since model start,
-     content-free, and should keep it that way);
    - global and per-app instructions, and personalized word choice (Badi's
      style samples are stored but not yet read, step 5);
    - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
@@ -127,6 +125,8 @@ publish need the user's go-ahead first; the rest can start at once.
      measured with the [bench](evaluation/llm-bench/README.md) and the Lab.
 
    Badi already matches or beats it on:
+   - words saved per day and per app or site, as counts only
+     ([`badi stats`](README.md#usage-statistics));
    - inline grey text in the field's font, Tab for a word, a key for all
      of it, Escape quiet and a request key;
    - mid-line completion and typo correction where the editor allows it;

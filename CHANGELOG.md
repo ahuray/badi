@@ -7,6 +7,12 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Usage statistics: the broker keeps, per local day and per app or site,
+  the suggestions shown, the acceptances that landed and the words they
+  saved, as counts only in a private `stats.json` for 90 days; nothing is
+  counted while paused or where suggestions are off. `badi stats [--json]`
+  and `badictl stats status` read them, `badi stats forget` deletes them,
+  and the panel shows the week's words per day and the leading apps.
 - Ready for publication review: `THIRD-PARTY-NOTICES.txt` lists every
   component compiled into the binaries with its licence text (generated from
   Cargo.lock and checked in CI) and ships with both installs; the AUR

@@ -214,8 +214,8 @@ autocomplete hint. The **b** mark in the
 Omarchy bar opens the same settings as a keyboard-driven popout (j/k, space,
 h/l, `/` to search), and right-clicking it pauses Badi. It shows the model's
 live state, content-free shown and accepted counts, an acceptance meter and
-estimated words saved since model start
-([counter definitions](ui/omarchy-plugin/README.md#statistics)).
+estimated words saved since model start, and the words saved on each of the
+last seven days and by app ([counter definitions](ui/omarchy-plugin/README.md#statistics)).
 
 A language override takes precedence over detection and the adapter's hint
 without granting access to an app or website. `badi language APP reset`
@@ -286,6 +286,22 @@ digits, email addresses or links are skipped. No suggestion uses the samples
 yet: they are for measuring, in the Lab, whether your own style helps.
 `badi style forget` deletes them and the key. Apps other than websites cannot
 learn ([details](broker/README.md#style-learning-opt-in)).
+
+### Usage statistics
+
+```sh
+badi stats                 # today, the last 7 days, each day and the leading apps and sites
+badi stats --json          # the same counts for scripts
+badi stats forget          # delete them
+```
+
+Badi counts, per day and per app or site, the suggestions it showed, the
+acceptances that landed and the words they saved, and keeps those counts 90
+days in `~/.local/share/badi/stats.json` (mode 0600). It keeps no text: no
+word you typed, no suggestion and no window title. Nothing is counted while
+Badi is paused or in an app or site it may not suggest in. Counts reach the
+disk within a minute and whenever Badi pauses or stops, so a restart keeps
+them ([details](broker/README.md#usage-statistics)).
 
 ## When nothing appears
 

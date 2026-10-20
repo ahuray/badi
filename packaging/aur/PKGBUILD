@@ -71,7 +71,8 @@ package() {
         install -Dm644 "packaging/systemd/$unit.service" "$pkgdir/usr/lib/systemd/user/$unit.service"
         sed -i 's|%h/.local/lib/badi/|/usr/lib/badi/|g' "$pkgdir/usr/lib/systemd/user/$unit.service"
     done
-    for file in manifest.json BarWidget.qml BadiMark.qml DesktopPanel.qml SettingsView.qml BadiClient.qml KeyModel.js; do
+    for file in manifest.json BarWidget.qml BadiMark.qml DesktopPanel.qml SettingsView.qml BadiClient.qml KeyModel.js \
+        StatsModel.js; do
         install -Dm644 "ui/omarchy-plugin/$file" "$pkgdir/usr/share/badi/omarchy/$file"
     done
     install -Dm644 ui/omarchy-plugin/fcitx-theme.py "$pkgdir/usr/share/badi/omarchy/fcitx-theme.py"

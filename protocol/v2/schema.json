@@ -49,6 +49,9 @@
         "context.query",
         "context.forget",
         "context.status",
+        "stats.query",
+        "stats.forget",
+        "stats.status",
         "editor.focus",
         "editor.status"
       ]
@@ -403,6 +406,24 @@
         "focus_epoch": false,
         "revision": false,
         "payload": { "$ref": "#/$defs/contextStatusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "enum": ["stats.query", "stats.forget"] },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "stats.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/statsStatusPayload" }
       }
     }
   ],
@@ -1420,6 +1441,107 @@
           }
         }
       }
+    },
+    "statsStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Content-free usage statistics: suggestions shown, acceptances that landed and the words they saved, per local calendar day and per exact app id or site origin, kept 90 days. Never text.",
+      "required": ["available", "summary"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["today", "retention_days", "totals", "days", "subjects"],
+          "properties": {
+            "today": { "$ref": "#/$defs/calendarDay" },
+            "retention_days": { "const": 90 },
+            "totals": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["today", "last_7_days", "retained"],
+              "properties": {
+                "today": { "$ref": "#/$defs/statsCounts" },
+                "last_7_days": { "$ref": "#/$defs/statsCounts" },
+                "retained": { "$ref": "#/$defs/statsCounts" }
+              }
+            },
+            "days": {
+              "type": "array",
+              "maxItems": 91,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["day", "shown", "accepted", "words"],
+                "properties": {
+                  "day": { "$ref": "#/$defs/calendarDay" },
+                  "shown": { "$ref": "#/$defs/counter" },
+                  "accepted": { "$ref": "#/$defs/counter" },
+                  "words": { "$ref": "#/$defs/counter" }
+                }
+              }
+            },
+            "subjects": {
+              "type": "array",
+              "maxItems": 48,
+              "description": "The union of the 16 leading apps and sites of each window by words, then shown; the totals stay exact.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["identity", "today", "last_7_days", "retained"],
+                "properties": {
+                  "identity": { "$ref": "#/$defs/subjectIdentity" },
+                  "today": { "$ref": "#/$defs/statsCounts" },
+                  "last_7_days": { "$ref": "#/$defs/statsCounts" },
+                  "retained": { "$ref": "#/$defs/statsCounts" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "statsCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shown", "accepted", "words"],
+      "properties": {
+        "shown": { "$ref": "#/$defs/counter" },
+        "accepted": { "$ref": "#/$defs/counter" },
+        "words": { "$ref": "#/$defs/counter" }
+      }
+    },
+    "calendarDay": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "A local calendar date, YYYY-MM-DD."
+    },
+    "subjectIdentity": {
+      "description": "An exact app or site, as badi.settings.v2 names it.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter", "scheme", "host", "port"],
+          "properties": {
+            "kind": { "const": "browser_origin" },
+            "adapter": { "const": "chromium" },
+            "scheme": { "enum": ["http", "https"] },
+            "host": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[a-z0-9.:-]+$" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter", "app_id"],
+          "properties": {
+            "kind": { "const": "linux_app" },
+            "adapter": { "enum": ["fcitx", "obsidian", "shell", "neovim", "libreoffice"] },
+            "app_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)*$" }
+          }
+        }
+      ]
     },
     "errorPayload": {
       "type": "object",
