@@ -326,6 +326,29 @@ per-app language always wins. The text, fingerprint, caret and edit authority
 are unchanged, and no sample is retained. French and Spanish generation
 still requires independent qualification.
 
+## Vocabulary completion
+
+[src/vocabulary.rs](src/vocabulary.rs) finishes the word at the caret with a
+word already in front of the writer. A request's `vocabulary` carries the
+window's words and the writer's earlier words in the app; the draft before
+the caret is the third source. When the caret ends a partial word of at least
+five letters after a separator, and exactly one longer whole word in those
+sources starts with it (case-sensitive, never normalized), its rest is
+offered before spelling or the model runs. Several fitting words abstain,
+unless one begins all the others (`almond`, `almonds`). An English function
+word (`about`, `their`) or a finished English word plus an ending (`crash`,
+`crashes`) abstains; a capital mid-sentence still marks a name. Words joined
+to others by a hyphen, underscore, apostrophe, digit or dot are no evidence,
+and a request carries at most 256 window and 1,024 earlier words. Each such
+request adds a `vocabulary` trace line: word counts, outcome and sources, and
+the word only in a `--text` run.
+
+Only the Prediction Lab supplies a vocabulary: production requests carry
+none, so nothing changes for anyone yet. Two independent sets measured a
+large gain and more wrong words in traps
+([Lab runbook](../evaluation/writing/README.md#terminal-runs)); shipping it
+is an open decision in [future plans](<../future plans.md>).
+
 ## Context word bias
 
 `SemanticClient::with_window_context(text)` lets a caller hand the client the

@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Finishing the typed word from words in view (the window, the writer's
+  earlier writing, the draft) is measured in the Lab's `vocabulary` mode: on
+  two independent 60-case sets it gave 39 and 23 useful additions against 5
+  and 1, but traps became the wrong word (harmful 13 against 3, then 7
+  against 4), so the gates fail and production requests carry no vocabulary.
 - The Omarchy panel's accent and urgent colors read `Commons.Color`, as
   Omarchy 4.0.5 does: on Qt 6.12 a bare `Color` names QtQuick's new singleton
   and worked only through Omarchy's temporary Quickshell patch. The pinned
