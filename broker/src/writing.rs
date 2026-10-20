@@ -26,6 +26,7 @@ use crate::semantic::provenance::{
     verify_directory_manifest, verify_file,
 };
 use crate::semantic::runtime::{LlamaCppLaunch, OwnedRuntime, RuntimeError, WarmUpReport};
+pub use crate::settings::SuggestionLength;
 
 pub const WRITING_CONTRACT: &str = "badi.writing.completion-and-spelling.en-de-fa.v2";
 const MEMORY_RETRY_INITIAL: Duration = Duration::from_secs(2);
@@ -798,7 +799,22 @@ fn token_budget(_language: Option<WritingLanguage>, english_tokens: u16) -> u16 
     english_tokens
 }
 
+/// Tokens a long continuation adds to the normal budget: about two per word
+/// for its four further words, the next word's first token included.
+const LONG_EXTRA_TOKENS: u16 = 8;
+
 impl CompletionPlan<'_> {
+    /// This plan with enough tokens for `length`'s words. Short and normal
+    /// share the normal budget, since a stream ends once its words are
+    /// complete; long asks for more, and the writing budget still ends it.
+    #[must_use]
+    pub(crate) const fn for_length(mut self, length: SuggestionLength) -> Self {
+        if matches!(length, SuggestionLength::Long) {
+            self.max_tokens += LONG_EXTRA_TOKENS;
+        }
+        self
+    }
+
     /// Whether this plan abstains before any model call: an empty prompt, or
     /// an unhealed one that ends in an ASCII space. Healed languages never
     /// leave that space in the prompt. After one, a model must start a word
@@ -987,12 +1003,13 @@ pub(crate) fn strip_healed_prefix<'a>(raw: &'a str, echo: Option<&str>) -> Optio
     }
 }
 
-pub(crate) fn available_complete_words(raw: &str) -> Option<String> {
+/// The complete words of a stream cut short, at most `limit` of them.
+pub(crate) fn available_complete_words(raw: &str, limit: usize) -> Option<String> {
     let separator = raw.rfind(' ').unwrap_or(0);
     let count = spaced_words(raw)
         .filter(|(run_end, _)| *run_end <= separator)
         .count()
-        .min(4);
+        .min(limit);
     (count > 0)
         .then(|| complete_word_prefix(raw, count, false))
         .flatten()
@@ -1138,7 +1155,10 @@ fn spaced_words(raw: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
 }
 
 /// A streaming token is not necessarily a complete word. Wait for a following
-/// separator (or a terminal model stop) before returning a bounded continuation.
+/// separator (or a terminal model stop) before returning a bounded continuation
+/// of at most `limit` words. A continuation that would pass the wire's 64
+/// characters or eight words ends at its last word that fits, and a stream
+/// whose complete words already pass them ends there without waiting.
 #[must_use]
 pub fn complete_word_prefix(raw: &str, limit: usize, finished: bool) -> Option<String> {
     if raw.is_empty()
@@ -1152,20 +1172,31 @@ pub fn complete_word_prefix(raw: &str, limit: usize, finished: bool) -> Option<S
         .filter(|(run_end, _)| finished || *run_end <= separator)
         .map(|(_, word_end)| word_end)
         .collect();
-    if complete.is_empty() || (!finished && complete.len() < limit) {
+    let end = |count: usize| {
+        if finished && count == complete.len() {
+            raw.trim_end().len()
+        } else {
+            complete[count - 1]
+        }
+    };
+    let too_long = |count: usize| {
+        matches!(
+            crate::segment::sanitize_suggestion(&raw[..end(count)]),
+            Err(crate::segment::OutputError::TooLong)
+        )
+    };
+    if complete.is_empty() || (!finished && complete.len() < limit && !too_long(complete.len())) {
         return None;
     }
-    let count = complete.len().min(limit);
-    let mut end = complete[count - 1];
-    if finished && count == complete.len() {
-        end = raw.trim_end().len();
+    let mut count = complete.len().min(limit);
+    while count > 0 && too_long(count) {
+        count -= 1;
     }
-    let output = raw[..end].to_owned();
-    if output.chars().count() > crate::protocol::MAX_SUGGESTION_CHARS
-        || crate::segment::sanitize_suggestion(&output).is_err()
-    {
+    if count == 0 {
         return None;
     }
+    let output = raw[..end(count)].to_owned();
+    crate::segment::sanitize_suggestion(&output).ok()?;
     Some(output)
 }
 

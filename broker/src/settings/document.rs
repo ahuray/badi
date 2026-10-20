@@ -96,6 +96,49 @@ impl BatteryMode {
     }
 }
 
+/// How many words a model continuation may show. Every length keeps the
+/// writing budget: a longer one shows the complete words it has when the
+/// budget ends. Corrections and the deterministic fixture ignore it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SuggestionLength {
+    /// One or two words.
+    #[serde(rename = "short")]
+    Short,
+    /// Up to four words, the default, omitted from documents.
+    #[default]
+    #[serde(rename = "normal")]
+    Normal,
+    /// Up to eight words, the wire's limit, within its 64 characters. The
+    /// Prediction Lab measures it, and settings refuse it: in the paired
+    /// comparison of 2026-10-21 it doubled harmful additions, rising in five
+    /// of six languages (user decision: no per-language harm increase).
+    #[serde(rename = "long")]
+    Long,
+}
+
+impl SuggestionLength {
+    #[must_use]
+    pub const fn is_normal(&self) -> bool {
+        matches!(self, Self::Normal)
+    }
+
+    /// Whether settings may choose this length.
+    #[must_use]
+    pub const fn is_qualified(self) -> bool {
+        !matches!(self, Self::Long)
+    }
+
+    /// The most words a continuation of this length shows.
+    #[must_use]
+    pub const fn max_words(self) -> usize {
+        match self {
+            Self::Short => 2,
+            Self::Normal => 4,
+            Self::Long => crate::protocol::MAX_SUGGESTION_WORDS,
+        }
+    }
+}
+
 /// Settings v1 documents deserialize into this type, but it is always
 /// canonical settings v2 in memory and on disk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -131,6 +174,9 @@ pub struct SettingsV2 {
     /// Omitted when quiet, the default.
     #[serde(default, skip_serializing_if = "BatteryMode::is_quiet")]
     pub battery_mode: BatteryMode,
+    /// How many words a continuation shows. Omitted when normal, the default.
+    #[serde(default, skip_serializing_if = "SuggestionLength::is_normal")]
+    pub suggestion_length: SuggestionLength,
     /// Opt-in style learning: encrypted samples of the user's own sentences
     /// from subjects that allow learning with bounded retention. Omitted when
     /// off. Turning it off stops collection; forgetting is a separate step.
@@ -202,6 +248,8 @@ struct SettingsDocument {
     #[serde(default)]
     battery_mode: Option<BatteryMode>,
     #[serde(default)]
+    suggestion_length: Option<SuggestionLength>,
+    #[serde(default)]
     style_learning: Option<bool>,
     #[serde(default)]
     context_words: Option<bool>,
@@ -220,6 +268,72 @@ struct SettingsDocument {
     subjects: Vec<SubjectRule>,
 }
 
+impl SettingsDocument {
+    /// The error for the first field a settings v1 document cannot name,
+    /// in a fixed order.
+    fn first_v2_only_field(&self) -> Option<&'static str> {
+        [
+            (
+                self.subjects
+                    .iter()
+                    .any(|rule| matches!(rule.identity, StableIdentity::LinuxApp { .. })),
+                "linux_app_requires_settings_v2",
+            ),
+            (
+                self.all_web_origins.is_some(),
+                "all_web_origins_requires_settings_v2",
+            ),
+            (
+                self.all_linux_apps.is_some(),
+                "all_linux_apps_requires_settings_v2",
+            ),
+            (self.mid_line.is_some(), "mid_line_requires_settings_v2"),
+            (
+                self.escape_quiet_seconds.is_some(),
+                "escape_quiet_seconds_requires_settings_v2",
+            ),
+            (
+                self.battery_mode.is_some(),
+                "battery_mode_requires_settings_v2",
+            ),
+            (
+                self.suggestion_length.is_some(),
+                "suggestion_length_requires_settings_v2",
+            ),
+            (
+                self.style_learning.is_some(),
+                "style_learning_requires_settings_v2",
+            ),
+            (
+                self.context_words.is_some() || self.context_words_off.is_some(),
+                "context_words_requires_settings_v2",
+            ),
+            (
+                self.language_overrides.is_some(),
+                "language_overrides_requires_settings_v2",
+            ),
+            (
+                self.spelling_languages.is_some(),
+                "spelling_languages_requires_settings_v2",
+            ),
+            (
+                self.writing_model.is_some(),
+                "writing_model_requires_settings_v2",
+            ),
+            (
+                self.writing_languages.is_some(),
+                "writing_languages_requires_settings_v2",
+            ),
+            (
+                self.trailing_space_healing.is_some(),
+                "trailing_space_healing_requires_settings_v2",
+            ),
+        ]
+        .into_iter()
+        .find_map(|(present, error)| present.then_some(error))
+    }
+}
+
 fn present_language_overrides<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<BTreeMap<String, PredictionLanguage>>, D::Error> {
@@ -235,73 +349,10 @@ impl<'de> Deserialize<'de> for SettingsV2 {
         if decoded.schema != SETTINGS_SCHEMA && decoded.schema != SETTINGS_SCHEMA_V1 {
             return Err(serde::de::Error::custom("unsupported_settings_schema"));
         }
-        if decoded.schema == SETTINGS_SCHEMA_V1
-            && decoded
-                .subjects
-                .iter()
-                .any(|rule| matches!(rule.identity, StableIdentity::LinuxApp { .. }))
-        {
-            return Err(serde::de::Error::custom("linux_app_requires_settings_v2"));
-        }
-        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.all_web_origins.is_some() {
-            return Err(serde::de::Error::custom(
-                "all_web_origins_requires_settings_v2",
-            ));
-        }
-        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.all_linux_apps.is_some() {
-            return Err(serde::de::Error::custom(
-                "all_linux_apps_requires_settings_v2",
-            ));
-        }
-        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.mid_line.is_some() {
-            return Err(serde::de::Error::custom("mid_line_requires_settings_v2"));
-        }
-        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.escape_quiet_seconds.is_some() {
-            return Err(serde::de::Error::custom(
-                "escape_quiet_seconds_requires_settings_v2",
-            ));
-        }
-        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.battery_mode.is_some() {
-            return Err(serde::de::Error::custom(
-                "battery_mode_requires_settings_v2",
-            ));
-        }
-        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.style_learning.is_some() {
-            return Err(serde::de::Error::custom(
-                "style_learning_requires_settings_v2",
-            ));
-        }
-        if decoded.schema == SETTINGS_SCHEMA_V1
-            && (decoded.context_words.is_some() || decoded.context_words_off.is_some())
-        {
-            return Err(serde::de::Error::custom(
-                "context_words_requires_settings_v2",
-            ));
-        }
-        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.language_overrides.is_some() {
-            return Err(serde::de::Error::custom(
-                "language_overrides_requires_settings_v2",
-            ));
-        }
-        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.spelling_languages.is_some() {
-            return Err(serde::de::Error::custom(
-                "spelling_languages_requires_settings_v2",
-            ));
-        }
-        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.writing_model.is_some() {
-            return Err(serde::de::Error::custom(
-                "writing_model_requires_settings_v2",
-            ));
-        }
-        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.writing_languages.is_some() {
-            return Err(serde::de::Error::custom(
-                "writing_languages_requires_settings_v2",
-            ));
-        }
-        if decoded.schema == SETTINGS_SCHEMA_V1 && decoded.trailing_space_healing.is_some() {
-            return Err(serde::de::Error::custom(
-                "trailing_space_healing_requires_settings_v2",
-            ));
+        if decoded.schema == SETTINGS_SCHEMA_V1 {
+            if let Some(error) = decoded.first_v2_only_field() {
+                return Err(serde::de::Error::custom(error));
+            }
         }
         Ok(Self {
             schema: SETTINGS_SCHEMA.to_owned(),
@@ -312,6 +363,7 @@ impl<'de> Deserialize<'de> for SettingsV2 {
             mid_line: decoded.mid_line.unwrap_or(false),
             escape_quiet_seconds: decoded.escape_quiet_seconds.unwrap_or(0),
             battery_mode: decoded.battery_mode.unwrap_or_default(),
+            suggestion_length: decoded.suggestion_length.unwrap_or_default(),
             style_learning: decoded.style_learning.unwrap_or(false),
             context_words: decoded.context_words,
             context_words_off: decoded.context_words_off.unwrap_or_default(),
@@ -378,6 +430,7 @@ impl SettingsV2 {
             mid_line: false,
             escape_quiet_seconds: 0,
             battery_mode: BatteryMode::Quiet,
+            suggestion_length: SuggestionLength::Normal,
             style_learning: false,
             context_words: None,
             context_words_off: Vec::new(),
@@ -399,6 +452,9 @@ impl SettingsV2 {
         }
         if self.escape_quiet_seconds > MAX_ESCAPE_QUIET_SECONDS {
             return Err(SettingsValidationError::EscapeQuietOutOfRange);
+        }
+        if !self.suggestion_length.is_qualified() {
+            return Err(SettingsValidationError::UnqualifiedSuggestionLength);
         }
         if self.language_overrides.len() > MAX_SUBJECTS
             || self
@@ -561,6 +617,7 @@ impl SettingsV2 {
         self.mid_line = current.mid_line;
         self.escape_quiet_seconds = current.escape_quiet_seconds;
         self.battery_mode = current.battery_mode;
+        self.suggestion_length = current.suggestion_length;
         self.style_learning = current.style_learning;
         self.context_words = current.context_words;
         self.context_words_off
@@ -620,4 +677,6 @@ pub enum SettingsValidationError {
     TooManySubjects,
     #[error("unsupported_schema")]
     UnsupportedSchema,
+    #[error("unqualified_suggestion_length")]
+    UnqualifiedSuggestionLength,
 }

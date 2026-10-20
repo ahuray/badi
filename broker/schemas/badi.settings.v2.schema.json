@@ -36,6 +36,10 @@
       "enum": ["normal", "quiet", "explicit"],
       "description": "Automatic suggestions while the desktop session helper reports battery power or the power-saver profile. quiet (the default) starts the model only after a 300 ms typing pause; normal keeps mains scheduling; explicit leaves only explicit requests. Explicit requests and the resident model are never changed. Producers omit the property when quiet."
     },
+    "suggestion_length": {
+      "enum": ["short", "normal"],
+      "description": "How many words a model continuation shows: short one or two, normal (the default) up to four. Each length keeps the writing budget. Longer lengths are measured in the Prediction Lab and not yet qualified. Producers omit the property when normal."
+    },
     "spelling_languages": {
       "type": "array",
       "items": { "enum": ["en", "de", "fr", "es", "it", "nl", "pl"] },

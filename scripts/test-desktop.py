@@ -166,6 +166,32 @@ class DesktopTests(unittest.TestCase):
                 desktop.main(invalid)
             command.assert_not_called()
 
+    def test_suggestion_length_is_omitted_when_normal(self):
+        settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'suggestion_length': 'short',
+                    'subjects': []}
+        for arguments, expected, said in ((['length', 'short'], 'short', 'one or two words'),
+                                          (['length', 'normal'], None, 'up to four words')):
+            with self.subTest(arguments=arguments), \
+                 patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}']) as command, \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                desktop.main(arguments)
+            self.assertEqual(command.call_args.args[0], ['settings', 'replace', '--if-revision', '7', '--json', '-'])
+            sent = json.loads(command.call_args.kwargs['input_text'])
+            self.assertEqual(sent.get('suggestion_length'), expected)
+            self.assertEqual((sent['revision'], sent['subjects']), (8, []))
+            self.assertIn(said, output.getvalue())
+        # Long is measured in the Lab only; settings refuse it.
+        for invalid in (['length'], ['length', 'long'], ['length', 'medium'], ['length', '4'],
+                        ['length', 'short', 'now']):
+            with patch.object(desktop, 'control') as command, self.assertRaises(RuntimeError):
+                desktop.main(invalid)
+            command.assert_not_called()
+        metrics = {'provider_calls': 1, 'suggestions_shown': 1, 'provider_errors': 0, 'no_suggestion': BREAKDOWN}
+        health = {'paused': False, 'provider': 'local_model', 'metrics': metrics}
+        self.assertIn('Length: short, one or two words', desktop.status_text(health, settings))
+        self.assertIn('Length: normal, up to four words', desktop.status_text(health, {}))
+        self.assertIn('Length: normal, up to four words', desktop.status_text(health))
+
     def test_status_and_doctor_report_the_desktop_session_helper(self):
         metrics = {'provider_calls': 1, 'suggestions_shown': 1, 'provider_errors': 0, 'no_suggestion': BREAKDOWN}
         settings = {'schema': 'badi.settings.v2', 'revision': 2, 'paused': False, 'battery_mode': 'quiet',

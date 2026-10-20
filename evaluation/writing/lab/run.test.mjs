@@ -91,6 +91,23 @@ test('CLI production mode keeps production settings despite experiment overrides
   assert.throws(() => parseOptions([...base, '--modes', 'production_baseline']));
 });
 
+test('each suggestion length is its own production configuration, normal keeping the plain request', () => {
+  const base = ['--suite', 'suite.json', '--output', 'output/writing/new'];
+  const production = { mode: 'production_boundary', budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 };
+  const parsed = parseOptions([...base, '--modes', 'production_boundary,healed', '--lengths', 'short,normal,long']);
+  assert.deepEqual(parsed.configs.map(value => value.id), ['production_boundary-short', 'production_boundary',
+    'production_boundary-long', 'healed']);
+  assert.deepEqual(parsed.configs[0], { ...production, id: 'production_boundary-short', length: 'short' });
+  assert.deepEqual(parsed.configs[1], { ...production, id: 'production_boundary' });
+  assert.deepEqual(parsed.configs[2], { ...production, id: 'production_boundary-long', length: 'long' });
+  assert.equal(Object.hasOwn(parsed.configs[3], 'length'), false);
+  assert.deepEqual(parseOptions([...base, '--modes', 'production_boundary']).configs, [{ ...production, id: 'production_boundary' }]);
+  for (const lengths of ['medium', 'short,short', 'long,']) {
+    assert.throws(() => parseOptions([...base, '--modes', 'production_boundary', '--lengths', lengths]), lengths);
+  }
+  assert.throws(() => parseOptions([...base, '--modes', 'healed', '--lengths', 'short']));
+});
+
 test('artifact CLI option is explicit and cannot pass arbitrary runtime flags', () => {
   const args = ['--suite', 'suite.json', '--output', 'output/writing/new'];
   assert.equal(Object.hasOwn(parseOptions(args), 'modelArtifactPath'), false);

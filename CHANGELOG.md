@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- `badi length short` (or the panel's Writing row) shows one or two words
+  per suggestion instead of up to four. In a paired Lab comparison it
+  halved harmful additions and appeared sooner; up to eight words doubled
+  them, so `long` stays in the Lab (`run.mjs --lengths`) and settings
+  refuse it.
 - Ready for publication review: `THIRD-PARTY-NOTICES.txt` lists every
   component compiled into the binaries with its licence text (generated from
   Cargo.lock and checked in CI) and ships with both installs; the AUR

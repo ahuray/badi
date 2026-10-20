@@ -32,6 +32,13 @@ BATTERY_TEXT = {
     "explicit": ("On battery or in the power-saver profile, suggestions appear only when you ask "
                  "(Ctrl+Shift+Space, Tab in manual fields). Explicit requests are unchanged."),
 }
+# Longer suggestions doubled harmful additions in the Prediction Lab
+# (broker/README.md#suggestion-limits), so settings offer only these.
+LENGTH_TEXT = {
+    "short": "Suggestions show one or two words.",
+    "normal": "Suggestions show up to four words.",
+}
+LENGTH_STATUS = {"short": "one or two words", "normal": "up to four words"}
 DESKTOP_AUTOMATIC = {"normal": "as on mains", "deferred": "after the typing pause",
                      "explicit_only": "only when asked"}
 HELP = """Badi — local writing controls
@@ -47,6 +54,8 @@ HELP = """Badi — local writing controls
                                power-saver profile: start the model only
                                after a typing pause (default), as on mains,
                                or only when asked. Needs badi-session
+  badi length short|normal      How many words a suggestion shows: one or
+                               two, or up to four (default)
   badi mid-line on|off         Suggestions with a word after the caret (off
                                by default). Punctuation can still finish a word
   badi escape-quiet SECONDS|off How long a dismissal keeps its field quiet
@@ -617,6 +626,11 @@ def context_text(chosen):
     return "off" if chosen is False else "not chosen: badi context on lets Badi finish words from the window"
 
 
+def length_text(length):
+    length = length if length in LENGTH_STATUS else "normal"
+    return f"{length}, {LENGTH_STATUS[length]} (badi length short|normal)"
+
+
 def status_text(health, settings=None):
     state = "Paused" if health["paused"] else "Model ready"
     counters = health["metrics"]
@@ -637,6 +651,7 @@ def status_text(health, settings=None):
             + f"Apps: {mode_text((settings or {}).get('all_linux_apps'), 'app')}\n"
             + f"Web sites: {mode_text((settings or {}).get('all_web_origins'), 'site')}\n"
             + f"Context: {context_text((settings or {}).get('context_words'))}\n"
+            + f"Length: {length_text((settings or {}).get('suggestion_length'))}\n"
             + f"Escape: dismiss (quiet: {quiet_text}) · Why nothing appeared: badi doctor; badi debug on; badi debug watch"
             + "".join(f"\n{line}" for line in [desktop_text(health.get("desktop"), settings)] if line))
 
@@ -936,6 +951,14 @@ def context_command(arguments):
         print("Every learned word was deleted. The keyring key stays for style learning; badi style forget removes it.")
     else:
         raise RuntimeError("Usage: badi context on|off|status|forget, or badi context app ID|site ORIGIN on|off")
+
+
+def set_suggestion_length(document, length):
+    # Absent is the canonical normal length, the default.
+    if length == "normal":
+        document.pop("suggestion_length", None)
+    else:
+        document["suggestion_length"] = length
 
 
 def set_battery_mode(document, mode):
@@ -1443,6 +1466,10 @@ def main(arguments):
     if len(arguments) == 2 and arguments[0] == "battery" and arguments[1] in BATTERY_TEXT:
         update_settings(lambda document: set_battery_mode(document, arguments[1]))
         print(BATTERY_TEXT[arguments[1]])
+        return
+    if len(arguments) == 2 and arguments[0] == "length" and arguments[1] in LENGTH_TEXT:
+        update_settings(lambda document: set_suggestion_length(document, arguments[1]))
+        print(LENGTH_TEXT[arguments[1]])
         return
     if arguments in (["pause"], ["resume"]):
         paused = arguments == ["pause"]

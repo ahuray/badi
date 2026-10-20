@@ -193,6 +193,13 @@ Item {
     }, "On battery: " + batteryLabel(mode).toLowerCase())
   }
 
+  function setSuggestionLength(length) {
+    change(function(document) {
+      if (length === "normal") delete document.suggestion_length
+      else document.suggestion_length = length
+    }, "Suggestions: " + lengthLabel(length).toLowerCase())
+  }
+
   readonly property var spellingOrder: ["en", "de", "fr", "es", "it", "nl", "pl"]
 
   function spellingLanguages() {
@@ -295,6 +302,10 @@ Item {
     return seconds >= 3600 ? seconds / 3600 + " h" : seconds >= 60 ? seconds / 60 + " min" : seconds + " s"
   }
 
+  function lengthLabel(length) {
+    return length === "short" ? "One or two words" : "Up to four words"
+  }
+
   function batteryLabel(mode) {
     return mode === "normal" ? "As on mains" : mode === "explicit" ? "Only when asked" : "After a pause"
   }
@@ -374,6 +385,12 @@ Item {
         detail: "Deletes every learned word; the keyring key stays", enabled: !controlsBusy,
         activate: function() { root.runAction(["context", "forget"], "Forgetting learned words", "Learned words deleted") }})
     }
+    var length = client.settings.suggestion_length || "normal"
+    list.push({key: "suggestion_length", section: "Writing", kind: "choice", label: "Suggestion length",
+      detail: lengthLabel(length) + " · Tab takes a word, Ctrl+→ all of it",
+      value: length, enabled: canChange,
+      options: [{value: "short", label: "Short"}, {value: "normal", label: "Normal"}],
+      choose: function(value) { if (value !== length) root.setSuggestionLength(value) }})
     list.push({key: "mid_line", section: "Writing", kind: "toggle", label: "Mid-sentence suggestions",
       detail: "Also suggest when a word follows the caret", checked: client.settings.mid_line === true,
       enabled: canChange, activate: function() { root.setFlag("mid_line", client.settings.mid_line !== true,

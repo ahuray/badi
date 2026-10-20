@@ -455,6 +455,7 @@ async fn v1_settings_roundtrip_projects_browser_rules_and_preserves_native_rules
                 mid_line: false,
                 escape_quiet_seconds: 0,
                 battery_mode: crate::settings::BatteryMode::Normal,
+                suggestion_length: crate::settings::SuggestionLength::Normal,
                 style_learning: false,
                 context_words: None,
                 context_words_off: Vec::new(),

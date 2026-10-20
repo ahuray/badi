@@ -29,7 +29,8 @@ links to it. A tested app version is not a claim about Linux in general.
 - **Interaction:** type-through returns a typed-through remainder in about
   50 ms with no model call, also when a browser re-admits the field
   ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md));
-  Tab takes a word and Ctrl+→ the rest; search boxes stay quiet; the inline
+  Tab takes a word and Ctrl+→ the rest; `badi length short` shows one or
+  two words instead of up to four; search boxes stay quiet; the inline
   preview ([ADR 0006](docs/decisions/0006-grey-preview-is-an-overlay.md))
   reaches VS Code, iframe editors, Qt apps and Writer.
 - **Desktop signals:** the installed [session helper](adapters/session/README.md)
@@ -87,6 +88,11 @@ Standing user decisions:
   [Fcitx contract](adapters/fcitx5/README.md#contract));
 - Gemma 4 E2B stays out of the catalog: no overall gain for four times the
   memory ([model fit](docs/architecture/model-selection.md));
+- suggestions show one or two words (`short`) or up to four (`normal`, the
+  default); up to eight (`long`) stays Lab-only: with Gemma 3 1B it doubled
+  harmful additions (16 to 32 and 20 to 39 in two blind rounds), rising in
+  five of six languages, while short halved them (2026-10-21,
+  [comparison](broker/README.md#suggestion-limits));
 - distribution starts with an AUR package; publication and an Omarchy proposal
   still need approval after the naming review (the licence review is done);
 - Discord uses desktop-wide AT-SPI `ScreenReaderEnabled`, with recorded prior
@@ -114,8 +120,6 @@ publish need the user's go-ahead first; the rest can start at once.
 1. **Close the Cotypist gaps that fit Badi.** Cotypist 0.22 (researched
    2026-10-20 from its site, help pages and reviews) offers these, and Badi
    does not yet:
-   - a suggestion length setting, from 1–2 to 10–15 words (Badi shows up
-     to four), each length measured in the Lab before it ships;
    - a shortcut that turns the current app off for a few minutes, and a way
      to send a literal Tab while a suggestion shows;
    - words completed per day and per app (Badi counts since model start,
@@ -129,6 +133,8 @@ publish need the user's go-ahead first; the rest can start at once.
    Badi already matches or beats it on:
    - inline grey text in the field's font, Tab for a word, a key for all
      of it, Escape quiet and a request key;
+   - a length setting for one or two words (`badi length short`) or up to
+     four;
    - mid-line completion and typo correction where the editor allows it;
    - terminal agent prompts, and on-screen words through accessibility
      rather than screen recording;
@@ -136,7 +142,9 @@ publish need the user's go-ahead first; the rest can start at once.
 
    Left out on purpose: clipboard awareness and screen recording (the
    [context firewall](VISION.md#context-firewall)), sync and telemetry
-   (non-goals) and colon emoji (Fcitx owns emoji). Its app list's gaps here
+   (non-goals), colon emoji (Fcitx owns emoji) and suggestions longer than
+   four words, which stay Lab-only until a model writes them without more
+   harm (standing user decision above). Its app list's gaps here
    (Firefox, VS Code's default EditContext, Google Docs, Slack, Discord)
    are under [Remaining surfaces](#remaining-surfaces). *Done when* each
    item ships or is declined in a recorded user decision.

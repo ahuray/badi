@@ -213,10 +213,10 @@ fn token_healing_binds_the_exact_typed_stem() {
     assert_eq!(bare_stem.echo, None);
     assert_eq!(super::healing_prefix("او می‌تواند"), Some("می‌تواند"));
     assert_eq!(
-        super::available_complete_words("ent and prov"),
+        super::available_complete_words("ent and prov", 4),
         Some("ent and".to_owned())
     );
-    assert_eq!(super::available_complete_words("partial"), None);
+    assert_eq!(super::available_complete_words("partial", 4), None);
 }
 
 #[test]
@@ -893,7 +893,7 @@ fn spelling_target_owns_only_the_word_and_a_single_typed_space() {
 fn streaming_never_returns_a_partial_last_word() {
     for apostrophe in ['\'', '\u{2019}'] {
         assert_eq!(
-            super::available_complete_words(&format!(" don{apostrophe}")),
+            super::available_complete_words(&format!(" don{apostrophe}"), 4),
             None
         );
         assert_eq!(
@@ -901,7 +901,7 @@ fn streaming_never_returns_a_partial_last_word() {
             None
         );
         assert_eq!(
-            super::available_complete_words(&format!(" one two three don{apostrophe}")),
+            super::available_complete_words(&format!(" one two three don{apostrophe}"), 4),
             Some(" one two three".to_owned())
         );
         assert_eq!(
@@ -993,7 +993,7 @@ fn the_word_limit_never_cuts_inside_a_joined_word() {
         (" able to re-", Some(" able to")),
     ] {
         assert_eq!(
-            super::available_complete_words(raw).as_deref(),
+            super::available_complete_words(raw, 4).as_deref(),
             expected,
             "{raw:?}"
         );
@@ -1032,4 +1032,85 @@ fn window_words_bias_only_english_topic_words_not_typed_just_now() {
         super::bias_words("Hello there", "", Some("en")),
         Vec::<&str>::new()
     );
+}
+
+/// Each suggestion length bounds the shown words, and long stops at the
+/// wire's 64 characters or eight words instead of abstaining.
+#[test]
+fn each_suggestion_length_bounds_its_words_within_the_wire_limits() {
+    use super::SuggestionLength::{Long, Normal, Short};
+    let raw = " one two three four five six seven eight nine";
+    for (length, expected) in [
+        (Short, " one two"),
+        (Normal, " one two three four"),
+        (Long, " one two three four five six seven eight"),
+    ] {
+        assert_eq!(
+            complete_word_prefix(raw, length.max_words(), false).as_deref(),
+            Some(expected),
+            "{length:?}"
+        );
+    }
+    // A stream waits for the length's words before it ends early.
+    assert_eq!(complete_word_prefix(" one two three", 8, false), None);
+    assert_eq!(
+        complete_word_prefix(" one two three", 8, true).as_deref(),
+        Some(" one two three")
+    );
+    // Words past 64 characters are never shown: a finished continuation
+    // ends at its last word that fits, and a stream whose complete words
+    // already pass the limit ends there without waiting for more.
+    let wordy = " extraordinarily comprehensive documentation requirements regarding";
+    assert_eq!(
+        complete_word_prefix(wordy, 8, true).as_deref(),
+        Some(" extraordinarily comprehensive documentation requirements")
+    );
+    assert_eq!(
+        complete_word_prefix(&format!("{wordy} the"), 8, false).as_deref(),
+        Some(" extraordinarily comprehensive documentation requirements")
+    );
+    assert_eq!(
+        complete_word_prefix(" extraordinarily comprehensive documentation", 8, false),
+        None
+    );
+    // The eight-word wire limit counts UAX #29 words, so joined words end a
+    // long continuation sooner.
+    assert_eq!(
+        complete_word_prefix(" a state-of-the-art tool for the job here", 8, true).as_deref(),
+        Some(" a state-of-the-art tool for the")
+    );
+    // A shape error is never shortened into a suggestion.
+    assert_eq!(complete_word_prefix(" one  two three", 8, true), None);
+    assert_eq!(
+        super::available_complete_words(" one two three four five six", 8).as_deref(),
+        Some(" one two three four five")
+    );
+    assert_eq!(
+        super::available_complete_words(" one two three four five six", 2).as_deref(),
+        Some(" one two")
+    );
+}
+
+#[test]
+fn only_a_long_suggestion_asks_for_more_tokens() {
+    use super::SuggestionLength::{Long, Normal, Short};
+    for (before, normal) in [
+        ("Please send the report", 8),
+        ("Please review the docum", 12),
+    ] {
+        let request = crate::provider::ProviderRequest {
+            before: before.to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+            vocabulary: None,
+        };
+        let plan = || super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
+        assert_eq!(plan().max_tokens, normal, "{before:?}");
+        assert_eq!(plan().for_length(Normal).payload(), plan().payload());
+        assert_eq!(plan().for_length(Short).payload(), plan().payload());
+        let long = plan().for_length(Long);
+        assert_eq!(long.max_tokens, normal + 8);
+        assert_eq!(long.payload()["n_predict"], normal + 8);
+        assert_eq!(long.payload()["grammar"], plan().payload()["grammar"]);
+    }
 }

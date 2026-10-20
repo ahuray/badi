@@ -10,7 +10,7 @@ use super::{
     MAX_ESCAPE_QUIET_SECONDS, MAX_SETTINGS_BYTES, MAX_SUBJECTS, PermissionDecision, PrivateStorage,
     PrivateStorageError, RetentionPermission, SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1,
     SettingsStoreError, SettingsV2, SettingsValidationError, StableIdentity, StoragePaths,
-    SubjectPermissions, SubjectRule, WebScheme,
+    SubjectPermissions, SubjectRule, SuggestionLength, WebScheme,
 };
 use crate::protocol::{
     MAX_FRAME_BYTES, Origin, OriginScheme, TargetDescriptor, TargetKind, WireEnvelope,
@@ -43,6 +43,7 @@ fn settings_with(rule: SubjectRule) -> SettingsV2 {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
+        suggestion_length: crate::settings::SuggestionLength::Normal,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         context_words: None,
@@ -300,6 +301,64 @@ fn battery_mode_round_trips_omits_quiet_and_rejects_v1() {
 }
 
 #[test]
+fn suggestion_length_round_trips_omits_normal_refuses_long_and_survives_a_v1_write() {
+    let mut settings = settings_with(SubjectRule {
+        identity: identity("mail.example"),
+        permissions: allowed(None),
+    });
+    assert_eq!(settings.suggestion_length, SuggestionLength::Normal);
+    let encoded = serde_json::to_value(&settings).expect("encode settings");
+    assert!(
+        encoded.get("suggestion_length").is_none(),
+        "normal is omitted"
+    );
+    settings.validate().expect("normal is qualified");
+    // Long is the Lab's: it decodes, so a stored document can name it, but
+    // validation refuses it, so no store or replace accepts it.
+    settings.suggestion_length = SuggestionLength::Long;
+    let decoded: SettingsV2 =
+        serde_json::from_value(serde_json::to_value(&settings).expect("encode")).expect("decode");
+    assert_eq!(decoded.suggestion_length, SuggestionLength::Long);
+    assert_eq!(
+        decoded.validate(),
+        Err(SettingsValidationError::UnqualifiedSuggestionLength)
+    );
+    assert_eq!(SuggestionLength::Long.max_words(), 8);
+    settings.suggestion_length = SuggestionLength::Short;
+    let encoded = serde_json::to_value(&settings).expect("encode settings");
+    assert_eq!(encoded["suggestion_length"], "short");
+    let decoded: SettingsV2 = serde_json::from_value(encoded).expect("decode settings");
+    assert_eq!(decoded, settings);
+    decoded.validate().expect("short is qualified");
+    assert_eq!(SuggestionLength::Short.max_words(), 2);
+    let mut explicit_normal = serde_json::to_value(&settings).expect("encode settings");
+    explicit_normal["suggestion_length"] = serde_json::json!("normal");
+    let decoded: SettingsV2 = serde_json::from_value(explicit_normal).expect("normal");
+    assert_eq!(decoded.suggestion_length, SuggestionLength::Normal);
+    assert_eq!(SuggestionLength::Normal.max_words(), 4);
+
+    // A protocol v1 client manages browser origins only and keeps the length.
+    let v1_write = SettingsV2::deny_by_default().preserving_v2_policy_from(&settings);
+    assert_eq!(v1_write.suggestion_length, SuggestionLength::Short);
+
+    let legacy = serde_json::json!({
+        "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
+        "suggestion_length": "short", "subjects": [],
+    });
+    assert!(
+        serde_json::from_value::<SettingsV2>(legacy).is_err(),
+        "v1 cannot name it"
+    );
+    for value in [serde_json::json!("medium"), serde_json::json!(4)] {
+        let unknown = serde_json::json!({
+            "schema": SETTINGS_SCHEMA, "revision": 1, "paused": false,
+            "suggestion_length": value, "subjects": [],
+        });
+        assert!(serde_json::from_value::<SettingsV2>(unknown).is_err());
+    }
+}
+
+#[test]
 fn browser_target_resolution_is_exact_and_canonical() {
     let target = TargetDescriptor {
         kind: TargetKind::Browser,
@@ -509,6 +568,7 @@ fn linux_adapters_sort_by_wire_name_like_the_desktop_clients() {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
+        suggestion_length: crate::settings::SuggestionLength::Normal,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         context_words: None,
@@ -547,6 +607,7 @@ fn settings_require_sorted_unique_subjects() {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
+        suggestion_length: crate::settings::SuggestionLength::Normal,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         context_words: None,
@@ -593,6 +654,7 @@ fn maximum_shape_settings_fit_storage_and_wire_limits() {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
+        suggestion_length: crate::settings::SuggestionLength::Normal,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         context_words: None,

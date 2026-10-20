@@ -211,6 +211,18 @@ for value in '"off"' null true; do
     '{schema: "badi.settings.v2", revision: 1, paused: false, style_learning: $value, subjects: []}')
   [[ $(ipc validateSettings "$document") == $([[ $value == true ]] && echo true || echo false) ]]
 done
+# The suggestion length is an optional choice; producers omit normal, and
+# long is measured in the Prediction Lab only.
+for value in '"short"' '"normal"'; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, suggestion_length: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == true ]]
+done
+for value in '"long"' '"medium"' 4 null true; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, suggestion_length: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == false ]]
+done
 
 # Opt-in context: a boolean once chosen, and a canonical list of apps and
 # sites where it stays off.

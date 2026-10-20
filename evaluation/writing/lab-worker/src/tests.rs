@@ -16,6 +16,7 @@ fn request(mode: Mode) -> Request {
             cache_prompt: true,
             temperature: 0.0,
             seed: 42,
+            length: badi_broker::writing::SuggestionLength::Normal,
         },
     }
 }
@@ -88,6 +89,27 @@ fn references_and_unknown_controls_are_rejected() {
     value.context.clear();
     value.config.max_tokens = 65;
     assert!(value.validate().is_err());
+}
+
+#[test]
+fn only_the_production_provider_takes_a_suggestion_length() {
+    let raw = |length: &str| {
+        json!({"schema":REQUEST_SCHEMA,"id":"x","before":"The next","language":"en","context":"",
+            "style_examples":[],"config":{"mode":"production_boundary","budget_ms":550,"max_tokens":8,
+            "cache_prompt":true,"temperature":0.0,"seed":42,"length":length}})
+    };
+    let long: Request = serde_json::from_value(raw("long")).expect("long");
+    long.validate().expect("production takes a length");
+    assert_eq!(long.config.length, SuggestionLength::Long);
+    assert!(serde_json::from_value::<Request>(raw("medium")).is_err());
+    let mut lab_only = request(Mode::Healed);
+    lab_only.config.length = SuggestionLength::Short;
+    assert!(lab_only.validate().is_err());
+    lab_only.config.length = SuggestionLength::Normal;
+    lab_only.validate().expect("normal is every mode's length");
+    // Normal is omitted, so a normal record reads as before lengths existed.
+    let encoded = serde_json::to_value(&request(Mode::ProductionBoundary).config).expect("config");
+    assert!(encoded.get("length").is_none());
 }
 
 #[test]
