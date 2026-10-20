@@ -54,10 +54,15 @@ class SocketLockTests(unittest.TestCase):
             self.query(raw, peer=(999, os.getuid(), 0))
 
     def test_discovery_is_cached_only_until_the_instance_or_executable_changes(self):
+        for version in (b"Quickshell 0.3.1 (test)", b"Quickshell 0.3.2 (revision test, distributed by Omarchy)"):
+            with self.subTest(version=version):
+                self.discovery_is_cached(version)
+
+    def discovery_is_cached(self, version):
         cache = LockEndpoint()
         stamp = ("/run/user/1000", "/usr/share/omarchy", "/usr/bin/qs", (1, 2, 3), (4, 5, 6))
         entry = {"id": "example", "pid": 123, "config_path": "/usr/share/omarchy/shell/shell.qml"}
-        replies = [Mock(stdout=b"Quickshell 0.3.1 (test)"), Mock(stdout=json.dumps([entry]).encode())]
+        replies = [Mock(stdout=version), Mock(stdout=json.dumps([entry]).encode())]
         with patch.object(cache, "current_stamp", return_value=stamp) as current, \
              patch("desktop.subprocess.run", side_effect=replies * 2) as run:
             self.assertEqual(cache.resolve(lambda limit: limit)[1], 123)
@@ -66,3 +71,13 @@ class SocketLockTests(unittest.TestCase):
             current.return_value = (*stamp[:-1], (4, 5, 7))
             self.assertEqual(cache.resolve(lambda limit: limit)[1], 123)
             self.assertEqual(run.call_count, 4)
+
+    def test_an_unpinned_quickshell_keeps_the_cli(self):
+        cache = LockEndpoint()
+        stamp = ("/run/user/1000", "/usr/share/omarchy", "/usr/bin/qs", (1, 2, 3), (4, 5, 6))
+        for version in (b"Quickshell 0.3.3 (test)", b"Quickshell 0.2.1 (test)", b"Quickshell 0.3.20 (test)"):
+            with self.subTest(version=version), patch.object(cache, "current_stamp", return_value=stamp), \
+                 patch("desktop.subprocess.run", return_value=Mock(stdout=version)) as run:
+                cache.stamp = cache.endpoint = None
+                self.assertIsNone(cache.resolve(lambda limit: limit))
+                self.assertEqual(run.call_count, 1, "only the version is asked; no endpoint is discovered")

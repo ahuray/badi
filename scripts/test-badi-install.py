@@ -330,5 +330,61 @@ class ReceiptTests(unittest.TestCase):
                              hashlib.sha256(b'old unit\n').hexdigest())
 
 
+class RepairTests(unittest.TestCase):
+    """Omarchy's refresh commands replace hyprland.lua and the browser flag files."""
+
+    def install(self, home):
+        config = home / '.config'
+        (config / 'hypr').mkdir(parents=True)
+        (config / 'hypr/badi.lua').write_text('-- Badi layer rule\n')
+        files = {
+            'hypr/hyprland.lua': 'require("default")\n' + badi_install.HYPR_REQUIRE + '\n',
+            'chromium-flags.conf': '--ozone-platform=wayland\n' + badi_install.OBSERVED_FLAG + '\n',
+            'brave-origin-flags.conf': badi_install.OBSERVED_FLAG + '\n',
+            'code-flags.conf': badi_install.OBSERVED_FLAG + '\n',
+        }
+        for name, text in files.items():
+            (config / name).write_text(text)
+        badi_install.write_receipt(home, 'desktop', {'commit': 'a' * 40, 'dirty': False},
+                                   [config / name for name in files])
+        return config
+
+    def test_only_badi_lines_that_a_refresh_dropped_come_back(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.dict(os.environ, {'XDG_CONFIG_HOME': str(Path(temporary) / '.config')}):
+            home = Path(temporary)
+            config = self.install(home)
+            self.assertEqual(badi_install.dropped_lines(home), [])
+            # What omarchy-refresh-hyprland and omarchy-refresh-chromium leave.
+            (config / 'hypr/hyprland.lua').write_text('require("default")\n')
+            (config / 'chromium-flags.conf').write_text('--ozone-platform=wayland\n')
+            (config / 'code-flags.conf').write_text('# the user removed it\n')
+            (config / 'brave-origin-flags.conf').write_text('--disable-renderer-accessibility\n')
+            (config / 'cursor-flags.conf').write_text('--never-installed\n')
+            names = [name for name, _, _ in badi_install.dropped_lines(home)]
+            self.assertEqual(sorted(names), ['chromium-flags.conf', 'code-flags.conf', 'hypr/hyprland.lua'],
+                             'a conflicting flag and a file the install never changed are left alone')
+            self.assertEqual(sorted(badi_install.repair(home, omarchy_only=True)),
+                             ['chromium-flags.conf', 'hypr/hyprland.lua'])
+            self.assertTrue((config / 'hypr/hyprland.lua').read_text().startswith('require("default")\n'))
+            self.assertIn(badi_install.HYPR_REQUIRE, (config / 'hypr/hyprland.lua').read_text())
+            self.assertTrue((config / 'chromium-flags.conf').read_text().startswith('--ozone-platform=wayland\n'))
+            self.assertEqual((config / 'code-flags.conf').read_text(), '# the user removed it\n',
+                             "Omarchy's hooks never touch a file Omarchy does not replace")
+            self.assertEqual(badi_install.repair(home), ['code-flags.conf'])
+            self.assertEqual(badi_install.repair(home), [], 'a second repair changes nothing')
+            self.assertEqual((config / 'brave-origin-flags.conf').read_text(), '--disable-renderer-accessibility\n')
+
+    def test_no_receipt_or_no_layer_rule_repairs_nothing(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.dict(os.environ, {'XDG_CONFIG_HOME': str(Path(temporary) / '.config')}):
+            home = Path(temporary)
+            self.assertEqual(badi_install.dropped_lines(home), [])
+            config = self.install(home)
+            (config / 'hypr/badi.lua').unlink()
+            (config / 'hypr/hyprland.lua').write_text('require("default")\n')
+            self.assertEqual(badi_install.dropped_lines(home), [], 'without Badi\'s layer rule there is nothing to load')
+
+
 if __name__ == '__main__':
     unittest.main()

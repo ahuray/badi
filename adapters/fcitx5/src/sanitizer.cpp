@@ -211,12 +211,14 @@ std::optional<std::string> canonicalAppId(std::string_view program) {
     return result;
 }
 
-bool braveWebAppWindow(std::string_view program) {
-    // Brave names each --app window "brave-<host>_<path>-<profile>" with the
-    // URL path's slashes as underscores; the path starts with one, so the name
-    // holds "__". Installed-PWA windows ("brave-<extension id>-<profile>") and
-    // Brave's own builds ("brave-browser*") have none and stay unmapped.
-    constexpr std::string_view prefix = "brave-";
+namespace {
+
+// A Chromium-family browser names each --app window
+// "<prefix><host>_<path>-<profile>" with the URL path's slashes as
+// underscores; the path starts with one, so the name holds "__".
+// Installed-PWA windows ("<prefix><extension id>-<profile>") and the
+// browser's own builds ("brave-browser*") have none and stay unmapped.
+bool webAppWindow(std::string_view program, std::string_view prefix) {
     if (!program.starts_with(prefix) || program.size() > 255 ||
         program.find("__", prefix.size()) == std::string_view::npos) return false;
     return std::all_of(program.begin(), program.end(), [](unsigned char byte) {
@@ -224,10 +226,21 @@ bool braveWebAppWindow(std::string_view program) {
     });
 }
 
+} // namespace
+
+bool braveWebAppWindow(std::string_view program) { return webAppWindow(program, "brave-"); }
+
+// Omarchy opens web apps in Chromium unless another supported browser is the
+// default. Google Chrome names its --app windows the same way; the observer
+// admits only Chromium's own executable under this identity, so those stay
+// denied.
+bool chromiumWebAppWindow(std::string_view program) { return webAppWindow(program, "chrome-"); }
+
 std::optional<std::string> programAppId(std::string_view program) {
-    // A Brave web-app window shows pages whose origin, not this window name,
+    // A web-app window shows pages whose origin, not this window name,
     // selects policy, so it keeps the browser's identity.
     if (braveWebAppWindow(program)) return "brave-origin";
+    if (chromiumWebAppWindow(program)) return "chromium";
     // VS Code 1.140 renamed its Wayland app id from "code"; its grants,
     // sessions and observer rule keep the original identity.
     auto app = canonicalAppId(program);

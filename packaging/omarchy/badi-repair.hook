@@ -1,0 +1,6 @@
+# Badi: restore the lines that Omarchy's refresh commands drop from hyprland.lua
+# and the Chromium and Brave flag files (badi repair --omarchy). Installed by
+# scripts/install-desktop.py into the post-boot and post-update hook folders.
+badi="$HOME/.local/bin/badi"
+[[ -x $badi ]] && "$badi" repair --omarchy
+exit 0

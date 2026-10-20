@@ -10,7 +10,9 @@ import "KeyModel.js" as KeyModel
 Item {
   id: root
 
-  readonly property string helper: Quickshell.env("HOME") + "/.local/bin/badi-desktop"
+  // Found on the shell's PATH: /usr/bin from a package, ~/.local/bin from
+  // the user-local installer (the two are not meant to be mixed).
+  readonly property string helper: "badi-desktop"
   // Supported apps; `manual` apps need an exact rule even in blocklist mode.
   // `context` says what context finishes words from there (ADR 0010): the
   // window and learned words (web content), learned words only (native

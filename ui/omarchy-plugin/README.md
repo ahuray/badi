@@ -132,8 +132,9 @@ row, the first Escape left the search and the second closed the popout.
 ## Pinned host
 
 `compatibility.json` records the Omarchy host files the plugin depends on,
-byte-compared with Omarchy `v4.0.5` (`94a8fbc2d67eec5673c7f16b8c5e8a9c8452ffdc`)
-under Quickshell 0.3.2 and Qt declarative 6.12.0, including every `qs.Ui`
+byte-compared with Omarchy `v4.0.6` (`237f1b4071a0bff2296c6d740ba2b9fd695ebfa0`)
+under Quickshell 0.3.2 and Qt declarative 6.12.0 (none of the 21 changed
+since `v4.0.5`), including every `qs.Ui`
 component the popout uses. The strict check fails when the installed host
 drifts. The manifest declares only the `bar-widget` kind.
 
@@ -142,7 +143,7 @@ under stock Quickshell a bare `Color.accent` reads `undefined`. Omarchy's own
 Quickshell build pins bare `import QtQuick` imports, plugins included, to 6.11
 while its shell carries the `OmarchyLoadPatch` pragma, but that patch is
 temporary. The plugin imports `qs.Commons as Commons` and writes
-`Commons.Color`, as Omarchy 4.0.5 does; the source gate rejects a bare
+`Commons.Color`, as Omarchy 4.0.5 and later do; the source gate rejects a bare
 `Color`, and CI runs Arch's stock Quickshell 0.3.2-1.
 
 ## Checks

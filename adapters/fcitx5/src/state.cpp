@@ -38,7 +38,7 @@ constexpr std::array<std::string_view, 6> kImeParityDesktopApps{"chatgpt", "code
 // cells must keep Tab), so no manual path may exist.
 constexpr std::array<std::string_view, 1> kImeParityNativeApps{"libreoffice"};
 // Terminals whose typed line and commitString were tried live.
-constexpr std::array<std::string_view, 1> kTerminalApps{"com.mitchellh.ghostty"};
+constexpr std::array<std::string_view, 2> kTerminalApps{"com.mitchellh.ghostty", "foot"};
 
 // Chromium-family identities without an observer rule: other Chromium
 // browsers, channels and Flatpak ids, installed web-app windows (Wayland

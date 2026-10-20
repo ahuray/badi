@@ -101,6 +101,9 @@ HELP = """Badi — local writing controls
   badi autostart on|off         Start with the graphical session (next login)
   badi doctor [--json]         Inspect service, model, install identity and
                                no-suggestion reasons; --json is for tools
+  badi repair                  Restore Badi's lines that an Omarchy refresh
+                               dropped: the hyprland.lua require and the
+                               apps' accessibility flags
   badi debug on [--text] | off  Trace every suggestion, key decision and ghost
                                display for 15 minutes; --text also records
                                context and suggestion text (RAM only)
@@ -392,6 +395,8 @@ def install_state():
         running["version_matches_receipt"] = running["version"] is not None and running["version"] == expected.get("version")
         running["sha256_matches_receipt"] = running["sha256"] == expected.get("sha256")
     state["running_broker"] = running
+    # Lines an Omarchy refresh dropped from files the desktop install changed.
+    state["dropped_lines"] = [name for name, _, _ in badi_install.dropped_lines(Path.home())]
     return state
 
 
@@ -511,6 +516,11 @@ def health_report():
     elif running.get("sha256_matches_receipt") is False or running.get("version_matches_receipt") is False:
         problems.append({"code": "broker_build_mismatch", "message": "The running broker is not the build recorded by the last desktop installation.",
                          "action": "Run badi service restart after an installation; otherwise reinstall with scripts/install-desktop.py."})
+    dropped = install.get("dropped_lines") or []
+    if dropped:
+        problems.append({"code": "install_lines_dropped",
+                         "message": "Files the desktop install changed lost Badi's lines: " + ", ".join(dropped) + ".",
+                         "action": "Run badi repair. Omarchy's refresh commands replace these files; its hooks run the repair at login and after omarchy-update."})
     broker = report.get("broker", {})
     helper = report["session_helper"] = session_helper_state()
     desktop = broker.get("desktop") if broker else None
@@ -1591,6 +1601,16 @@ def main(arguments):
         return
     if arguments == ["logs"]:
         subprocess.run(["journalctl", "--user", "-u", SERVICE, "-n", "60", "--no-pager"], check=True, timeout=5)
+        return
+    if arguments in (["repair"], ["repair", "--omarchy"]):
+        # --omarchy is what Omarchy's post-boot and post-update hooks run:
+        # only the files Omarchy itself replaces, quietly unless it restored one.
+        omarchy = arguments[1:] == ["--omarchy"]
+        restored = badi_install.repair(Path.home(), omarchy_only=omarchy)
+        if restored:
+            print("Restored Badi's lines in " + ", ".join(restored) + ". A browser picks up its flag at its next start.")
+        elif not omarchy:
+            print("Nothing to repair: every file the desktop install changed still has Badi's lines.")
         return
     if arguments in (["doctor"], ["doctor", "--json"]):
         report = health_report()

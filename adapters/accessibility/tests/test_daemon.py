@@ -626,7 +626,19 @@ class WindowTests(unittest.TestCase):
                                  "brave-" + "a" * 250 + "__-Default"):
                 with self.subTest(window_class=window_class), self.assertRaisesRegex(Denied, "app_mismatch"):
                     self.backend({"pid": 42, "class": window_class, "mapped": True, "hidden": False}).window(brave)
-            self.assertIsNone(APPS["chromium"].web_apps)
+            # Omarchy opens web apps as Chromium --app windows unless Brave is the default browser.
+            chromium_app = APPS["chromium"]
+            for window_class in ("chromium", "chrome-app.hey.com__-Default", "chrome-web.whatsapp.com__-Profile_1",
+                                 "chrome-127.0.0.1__0123abc_fixture-Default"):
+                with self.subTest(window_class=window_class):
+                    shown = {"pid": 42, "class": window_class, "mapped": True, "hidden": False}
+                    self.assertEqual(self.backend(shown).window(chromium_app), shown)
+            for window_class in ("chrome-nngceckbapebfimnlniiiahkandclblb-Default", "chrome", "google-chrome",
+                                 "brave-app.hey.com__-Default", "chrome-x.com__-Profile 1", "chrome-x.com__/-Default",
+                                 "chrome-" + "a" * 250 + "__-Default"):
+                with self.subTest(window_class=window_class), self.assertRaisesRegex(Denied, "app_mismatch"):
+                    self.backend({"pid": 42, "class": window_class, "mapped": True, "hidden": False}).window(chromium_app)
+            self.assertIsNone(APPS["chromium-browser"].web_apps)
             chromium = {"pid": 42, "class": "chromium-browser", "mapped": True, "hidden": False}
             self.assertEqual(self.backend(chromium).window(APPS["chromium-browser"]), chromium)
             for app_id, window_class in (("chromium", "chromium-browser"), ("chromium-browser", "chromium")):

@@ -10,7 +10,6 @@ import mmap
 import os
 from pathlib import Path
 import re
-import shlex
 import socket
 import stat
 import struct
@@ -18,35 +17,17 @@ import subprocess
 import sys
 
 import badi_install
+from badi_install import (ACCESSIBILITY_SWITCH, COMPLETE_ACCESSIBILITY, HYPR_REQUIRE,  # noqa: F401
+                          OBSERVED_APP_FLAGS, OBSERVED_FLAG, chromium_line_tokens, hyprland_with_badi,
+                          observed_flags, observed_tokens)
 
 ROOT = Path(__file__).resolve().parents[1]
-# Each launcher's user flags file and how that wrapper turns it into arguments:
-# "glib" is /usr/bin/chromium's GLib shell parsing, "words" strips # comments
-# and splits on whitespace without quote handling (Codex and Claude: read -a;
-# VS Code and Grok Bot: sed plus unquoted expansion), and "line" passes every non-comment
-# line as one argument (mapfile). Discord has no such file; see the
-# accessibility runbook.
-OBSERVED_APP_FLAGS = {
-    "chromium": ("chromium-flags.conf", "glib"),
-    "brave-origin": ("brave-origin-flags.conf", "line"),
-    "chatgpt": ("codex-flags.conf", "words"),
-    "code": ("code-flags.conf", "words"),
-    "com.anthropic.claude": ("claude-desktop-flags.conf", "words"),
-    "cursor": ("cursor-flags.conf", "line"),
-    "grok-bot": ("grok-bot-flags.conf", "words"),
-}
-# Measured on Chromium 152: "basic" and "form-controls" omit the HTML tag the
-# observer's purpose gate needs and the character extents its caret geometry
-# needs. The bare switch also selects the complete mode. Native Wayland
-# text-input-v3 is the Chromium 152 / Electron 42 default, so no input flags.
-OBSERVED_FLAG = "--force-renderer-accessibility=complete"
-ACCESSIBILITY_SWITCH = "--force-renderer-accessibility"
-COMPLETE_ACCESSIBILITY = (ACCESSIBILITY_SWITCH, OBSERVED_FLAG)
 # Every module the installed observer imports, beside its daemon.
 OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geometry.py", "preview.py", "health.py",
                     "debugtrace.py")
 SESSION_MODULES = ("daemon.py", "link.py", "style_key.py")
 SESSION_SERVICE = "badi-session.service"
+OMARCHY_REPAIR_HOOKS = ("post-boot.d", "post-update.d")
 # The retired Fcitx 5.1.22 Wayland frontend backport. Fcitx 5.1.23 ships the
 # upstream fix, so a complete install removes exactly what earlier installs
 # left here, backed up like any replaced file.
@@ -62,62 +43,6 @@ RETIRED_COMPAT_DROPIN_TEXT = (
 
 def run(command, **kwargs):
     return subprocess.run(command, check=True, **kwargs)
-
-
-def chromium_line_tokens(line):
-    # GLib starts comments at an unquoted token boundary. shlex's built-in
-    # commenters would also truncate a literal hash within an option value.
-    quote, escaped, boundary = None, False, True
-    for index, char in enumerate(line):
-        if escaped:
-            escaped = False
-            continue
-        if char == "\\" and quote != "'":
-            escaped, boundary = True, False
-        elif quote is not None:
-            if char == quote:
-                quote = None
-        elif char in "\"'":
-            quote, boundary = char, False
-        elif char == "#" and boundary:
-            line = line[:index]
-            break
-        else:
-            boundary = char.isspace()
-    return shlex.split(line, comments=False, posix=True)
-
-
-def observed_tokens(text, parser):
-    """The arguments a launcher's flags file supplies, as that wrapper parses it."""
-    if parser == "glib":
-        try:
-            return [token for line in text.splitlines() for token in chromium_line_tokens(line)]
-        except ValueError:
-            raise RuntimeError("Inspect unbalanced quoting in Chromium startup flags before changing them.") from None
-    # Bash reads lines at \n and splits words at the default IFS only.
-    if parser == "words":
-        return [token for line in text.split("\n") for token in re.split(r"[ \t]+", line.split("#", 1)[0]) if token]
-    if parser == "line":
-        return [line for line in text.split("\n") if line.strip(" \t") and not line.lstrip(" \t").startswith("#")]
-    raise RuntimeError("Unknown observed application startup parser")
-
-
-def observed_flags(text, app="chromium"):
-    """Add only the renderer accessibility switch; None when it is already effective.
-
-    Comments and every other option stay byte-identical. A reduced or disabled
-    accessibility choice is the user's and is reported instead of overridden.
-    """
-    tokens = observed_tokens(text, OBSERVED_APP_FLAGS[app][1])
-    if any(token.split("=", 1)[0] == "--disable-renderer-accessibility" for token in tokens):
-        raise RuntimeError(f"Existing --disable-renderer-accessibility in {OBSERVED_APP_FLAGS[app][0]} conflicts with the observer's accessibility requirement; startup flags were not changed.")
-    current = [token for token in tokens if token.split("=", 1)[0] == ACCESSIBILITY_SWITCH]
-    if any(token not in COMPLETE_ACCESSIBILITY for token in current):
-        raise RuntimeError(f"Existing {ACCESSIBILITY_SWITCH} value in {OBSERVED_APP_FLAGS[app][0]} conflicts with the measured complete accessibility mode; startup flags were not changed.")
-    if current:
-        return None
-    return text + ("\n" if text and not text.endswith("\n") else "") + \
-        "# Badi: renderer accessibility for the focused-field observer\n" + OBSERVED_FLAG + "\n"
 
 
 def observed_config_target(home, config_home, filename):
@@ -328,6 +253,31 @@ def wait_native_addon(addon):
         raise RuntimeError("The running Fcitx service did not load the installed Badi addon. Inspect badi doctor and the Fcitx user-service journal.")
 
 
+# Chromium-based apps keep the text around the caret current only from Fcitx
+# 5.1.23 on Hyprland (the adapter runbook's tested-with section).
+MIN_FCITX_VERSION = (5, 1, 23)
+
+
+def fcitx_version(output):
+    """The (major, minor, patch) that `fcitx5 --version` printed, or None."""
+    match = re.fullmatch(r"\s*(\d+)\.(\d+)\.(\d+)\S*\s*", output or "")
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def require_fcitx_version():
+    try:
+        result = run(["fcitx5", "--version"], capture_output=True, text=True, timeout=5)
+        version = fcitx_version(result.stdout)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        version = None
+    needed = ".".join(map(str, MIN_FCITX_VERSION))
+    if version is None:
+        raise RuntimeError(f"Could not read the Fcitx version with fcitx5 --version; Badi needs Fcitx {needed} or later.")
+    if version < MIN_FCITX_VERSION:
+        raise RuntimeError(f"Badi needs Fcitx {needed} or later; this desktop has {'.'.join(map(str, version))}. "
+                           "Update the system (omarchy-update) before installing.")
+
+
 def require_accessibility_runtime():
     if not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") or "/" in os.environ["HYPRLAND_INSTANCE_SIGNATURE"]:
         raise RuntimeError("Run the native installer in the current Hyprland session. --broker-only does not require the accessibility helper.")
@@ -454,16 +404,6 @@ class Plan:
         return not self.args.broker_only
 
 
-HYPR_REQUIRE = 'require("hypr.badi")'
-
-
-def hyprland_with_badi(text):
-    """hyprland.lua loading Badi's layer rule, or None when it already does."""
-    if HYPR_REQUIRE in text:
-        return None
-    return text.rstrip() + "\n\n-- Badi writing preview layer rule (no entrance animation).\n" + HYPR_REQUIRE + "\n"
-
-
 def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--broker-only", action="store_true",
@@ -486,6 +426,7 @@ def preflight(args):
     if not args.broker_only:
         require_unlocked()
         require_accessibility_runtime()
+        require_fcitx_version()
     config_home = badi_install.config_home(home)
     flag_updates, flags_present = {}, []
     for app in dict.fromkeys(args.observed_app):
@@ -669,6 +610,13 @@ def install_prepared_files(plan, installation):
         install(ROOT / "packaging/systemd/badi-accessibility.service",
                 home / ".config/systemd/user/badi-accessibility.service")
         install(ROOT / "packaging/hypr/badi.lua", plan.config_home / "hypr/badi.lua")
+        # Omarchy runs these at every login and after omarchy-update; its
+        # refresh commands replace hyprland.lua and the browser flag files.
+        # omarchy-hook reads ~/.config whatever XDG_CONFIG_HOME says.
+        hooks = home / ".config/omarchy/hooks"
+        if hooks.is_dir():
+            for name in OMARCHY_REPAIR_HOOKS:
+                install(ROOT / "packaging/omarchy/badi-repair.hook", hooks / name / "badi-repair")
         if plan.hypr_update is not None:
             target, original, text = plan.hypr_update
             if target.is_symlink() or not target.exists() or target.read_text() != original:
@@ -748,11 +696,13 @@ def restart(plan, installation):
         raise RuntimeError("Another omarchy-fcitx5.service override still starts the retired Badi frontend launcher, so Fcitx was not restarted. "
                            "Inspect its drop-ins, or restore the newest backup in ~/.local/state/badi/install-backups.")
     require_unlocked()
+    # A fresh Fcitx may not have written its profile yet; then only an
+    # existing profile that changed counts as a rewrite.
     profile = home / ".config/fcitx5/profile"
-    previous = hashlib.sha256(profile.read_bytes()).digest()
+    previous = hashlib.sha256(profile.read_bytes()).digest() if profile.exists() else None
     run(["systemctl", "--user", "restart", "omarchy-fcitx5.service"])
     wait_native_addon(home / ".local/lib/fcitx5/libbadi-fcitx5.so")
-    if hashlib.sha256(profile.read_bytes()).digest() != previous:
+    if previous is not None and (not profile.exists() or hashlib.sha256(profile.read_bytes()).digest() != previous):
         raise RuntimeError("Fcitx rewrote the keyboard profile; inspect it before continuing")
     return probe
 
