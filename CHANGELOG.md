@@ -7,6 +7,8 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- User-flow proof is a project skill (`.cursor/skills/verify-badi/`), and a
+  pull request is ready only once it shows a proof artifact.
 - A fresh Omarchy 4.0.6 works out of the box: its Chromium web apps and foot,
   its default terminal, get suggestions; `badi repair` and an Omarchy
   login/update hook restore what Omarchy's refresh commands drop; the

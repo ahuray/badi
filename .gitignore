@@ -1,5 +1,6 @@
-# Editors and local agent state
-.cursor/
+# Editors and local agent state. The verification skill is project source.
+.cursor/*
+!.cursor/skills/
 .idea/
 .vscode/
 
