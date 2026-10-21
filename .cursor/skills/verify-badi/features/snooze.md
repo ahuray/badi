@@ -24,13 +24,14 @@ Preconditions:
 - The Bash grant is the seeded one. Snooze keys off that identity only while the bridge holds a focused field.
 - A Hyprland shortcut or the panel's Snoozed row needs the desktop. This drive does not press them.
 
-- **No field.** The drive first runs `badictl snooze` with no session. Exit code is 1 and stderr contains `error_code=rejected:no_context`. Status `snoozes` stays empty.
-- **Focused Bash field.** The same drive then asks the Bash bridge for `thank you`, and while that field is still open runs `badictl snooze`. Status lists one snooze whose subject is Bash (`shell` / `bash`) with `remaining_ms` above 0. A further bridge status is `BLOCKED`. `badictl snooze end` clears `snoozes`. Helper exit code is 0. Evidence is `drive-snooze.txt` and `status-snoozed.json`.
+- **No field.** The drive first runs `badictl snooze` with no session. Exit code is 1 and stderr contains `error_code=rejected:no_context`. Status has no `snoozes` key.
+- **Focused Bash field.** The same drive then asks the Bash bridge for `thank you`, and while that field is still open runs `badictl snooze`. Status lists one snooze whose subject is Bash (`shell` / `bash`) with `remaining_ms` above 0. A further bridge status is `BLOCKED`. `badictl snooze end` drops `snoozes` from status. Helper exit code is 0. Evidence is `drive-snooze.txt` and `status-snoozed.json`.
 - **Desktop.** In a real field, `badi snooze`, type there and get nothing, type in a different allowed app and still get suggestions, then `badi resume`. A screenshot of the quiet field is the desktop proof. A VM cannot run it.
 
 ## Gotchas
 
 - Snooze is runtime broker state. Citing it does not prove anything that survives a broker restart.
 - The bridge's blocked line is the same text it uses while paused. The snooze proof is `snoozes` naming Bash, not that line alone.
+- `badictl status` omits `snoozes` when the list is empty. A missing key is the idle state. A present key is a recorded subject.
 - `snooze-others` is not driven headless: the instance grants Bash only, so a second app cannot suggest. Do not treat Bash going quiet as proof that another app still works.
 - Snooze while already paused is refused. Resume the pause before snoozing.

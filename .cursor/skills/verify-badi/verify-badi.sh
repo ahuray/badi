@@ -480,8 +480,10 @@ drive_snooze() {
   set -e
   [[ "$idle_code" -eq 1 ]] || die "idle snooze exited ${idle_code}"
   grep -q 'error_code=rejected:no_context' "$EVIDENCE/drive-${name}-idle.err" || die "idle snooze was not rejected:no_context"
-  python3 -c 'import json,sys; raise SystemExit(0 if json.load(open(sys.argv[1])).get("snoozes")==[] else 1)' \
-    <(status_json) || die "idle snooze recorded a subject"
+  # badictl status omits snoozes when the list is empty.
+  status_json > "$EVIDENCE/status-idle-${name}.json"
+  python3 -c 'import json,sys; raise SystemExit(0 if not json.load(open(sys.argv[1])).get("snoozes") else 1)' \
+    "$EVIDENCE/status-idle-${name}.json" || die "idle snooze recorded a subject"
   local before
   before="$(printf 'thank you' | base64 -w0)"
   broker_env python3 - "$BRIDGE" "$CLI" "$SOCKET" "$EVIDENCE" "$before" <<'PY'
@@ -538,7 +540,7 @@ try:
     if ended.returncode != 0:
         raise SystemExit(ended.stderr)
     cleared = json.loads(control("status").stdout)
-    if cleared.get("snoozes") != []:
+    if cleared.get("snoozes"):
         raise SystemExit(f"snooze end left {cleared.get('snoozes')!r}")
     open(f"{evidence}/status-after-snooze.json", "w").write(json.dumps(cleared))
 finally:
@@ -552,7 +554,7 @@ PY
   trap - EXIT
   end_snooze
   wait_idle "$EVIDENCE/status-after-${name}.json"
-  python3 -c 'import json,sys; raise SystemExit(0 if json.load(open(sys.argv[1])).get("snoozes")==[] else 1)' \
+  python3 -c 'import json,sys; raise SystemExit(0 if not json.load(open(sys.argv[1])).get("snoozes") else 1)' \
     "$EVIDENCE/status-after-${name}.json" || die "snooze survived the drive"
   printf 'verify-badi drive snooze ok\n'
 }
