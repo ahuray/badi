@@ -20,8 +20,8 @@ The package installs:
   its licence text) and the complete modified SCOWL notices.
 
 `license=` names MIT and the licences of code compiled into the binaries:
-MPL-2.0 (spellbook, whose source is linked from the notices), BSD-3-Clause
-(subtle), Zlib (foldhash) and SCOWL. It does not contain model weights,
+MPL-2.0 (spellbook, whose source is linked from the notices), Zlib
+(foldhash) and SCOWL. It does not contain model weights,
 llama.cpp, the Prediction Lab or editor plugins. No install hook starts a
 service, changes accessibility, edits a home directory or downloads anything.
 

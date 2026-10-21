@@ -393,7 +393,7 @@ cargo test --workspace --all-features --locked
 
 Badi's source and documentation are MIT-licensed ([LICENSE](LICENSE)). Its
 binaries also contain open-source components under MIT, Apache-2.0,
-MPL-2.0, BSD-3-Clause and Zlib licences, listed with their texts in
+MPL-2.0 and Zlib licences, listed with their texts in
 [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) (regenerate it with
 `python3 scripts/third-party-notices.py` after a dependency changes; CI
 checks it). Model weights and other third-party files keep their own licences.

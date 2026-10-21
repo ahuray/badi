@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
+use chacha20poly1305::aead::{Aead, Generate, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -379,7 +379,10 @@ pub(crate) fn seal_text(
     day: u64,
     text: &str,
 ) -> Result<(String, String), StyleError> {
-    let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+    // `Generate` replaced `AeadCore::generate_nonce`. The nonce is still 24
+    // random bytes and the ciphertext is still XChaCha20-Poly1305, so a
+    // record sealed by chacha20poly1305 0.10 opens here.
+    let nonce = XNonce::try_generate().map_err(|_| StyleError::Encryption)?;
     let aad = associated_data(schema, &key.id, identity, day)?;
     let ciphertext = key
         .cipher
@@ -407,12 +410,13 @@ pub(crate) fn open_text(
     let nonce = decode_hex(nonce)
         .filter(|bytes| bytes.len() == NONCE_BYTES)
         .ok_or(StyleError::Corrupt)?;
+    let nonce = <&XNonce>::try_from(nonce.as_slice()).map_err(|_| StyleError::Corrupt)?;
     let ciphertext = decode_hex(ciphertext).ok_or(StyleError::Corrupt)?;
     let aad = associated_data(schema, &key.id, identity, day)?;
     let plaintext = key
         .cipher
         .decrypt(
-            XNonce::from_slice(&nonce),
+            nonce,
             Payload {
                 msg: &ciphertext,
                 aad: &aad,

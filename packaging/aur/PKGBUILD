@@ -4,9 +4,9 @@ pkgrel=1
 pkgdesc='Local writing suggestions for Linux, Omarchy first'
 arch=('x86_64')
 url='https://github.com/ahuray/badi'
-# Badi is MIT; its binaries also contain MPL-2.0 (spellbook), BSD-3-Clause
-# (subtle) and Zlib (foldhash) code, listed in THIRD-PARTY-NOTICES.txt.
-license=('MIT' 'MPL-2.0' 'BSD-3-Clause' 'Zlib' 'LicenseRef-SCOWL')
+# Badi is MIT; its binaries also contain MPL-2.0 (spellbook) and Zlib
+# (foldhash) code, listed in THIRD-PARTY-NOTICES.txt.
+license=('MIT' 'MPL-2.0' 'Zlib' 'LicenseRef-SCOWL')
 depends=('gcc-libs' 'glibc' 'python' 'python-gobject' 'python-cairo' 'at-spi2-core'
          'gtk4' 'gtk4-layer-shell' 'glib2' 'pango' 'systemd' 'fcitx5>=5.1.23'
          'hyprland' 'quickshell' 'qt6-declarative' 'hicolor-icon-theme')

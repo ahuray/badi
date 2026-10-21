@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt as _;
 
 use tempfile::{TempDir, tempdir};
 
@@ -83,6 +84,42 @@ fn store() -> (TempDir, StyleStore) {
 }
 
 const SAMPLE: &str = "Thanks for the quick reply, I will look into it today.";
+
+#[test]
+fn ciphertext_sealed_by_chacha20poly1305_0_10_opens() {
+    // Produced by chacha20poly1305 0.10.1 with the test key `ab`, nonce
+    // 0011…6677, and the AAD `open_text` rebuilds for this subject and day.
+    // Do not regenerate it with the current crate: the point is that a
+    // record sealed before the 0.11 upgrade still opens. Learned words use
+    // the same `open_text`.
+    let directory = tempdir().expect("directory");
+    let path = directory.path().join("badi/style.json");
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("directory");
+    std::fs::write(
+        &path,
+        r#"{"schema":"badi.style.v1","key_id":"abababababababababababababababab","records":[{"identity":{"kind":"browser_origin","adapter":"chromium","scheme":"https","host":"mail.example","port":443},"day":20000,"nonce":"00112233445566778899aabbccddeeff0011223344556677","ciphertext":"c947bfe6039b79fccf776613d4cc4af6c94457da8287dc6171046ffc77c1e325baff43ffe72fb91a15ddd06faf57ed8d3d29bf58c076445c3b16b70d8503eb2736d7c21fd50b"}]}"#,
+    )
+    .expect("fixture");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("private mode");
+    let mut store = StyleStore::open(path).expect("store");
+    assert_eq!(store.set_key(key("ab")), StyleKeyState::Ready);
+    assert_eq!(
+        store.export().expect("export"),
+        vec![StyleSample {
+            identity: site("mail.example"),
+            day: TODAY,
+            text: SAMPLE.to_owned(),
+        }]
+    );
+    // The same plaintext is the sample already stored, so sealing again
+    // changes nothing.
+    assert!(
+        !store
+            .record(&learning(), TODAY, &site("mail.example"), SAMPLE)
+            .expect("duplicate")
+    );
+    assert_eq!(store.status().samples, 1);
+}
 
 #[test]
 fn samples_are_sealed_and_only_an_export_reads_them() {

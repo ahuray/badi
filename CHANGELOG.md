@@ -7,6 +7,9 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Style samples and learned words stay sealed with XChaCha20-Poly1305 on
+  chacha20poly1305 0.11. A ciphertext written by 0.10.1 still opens, and the
+  binaries no longer include the BSD-3-Clause `subtle` crate.
 - `badi length short` (or the panel's Writing row) shows one or two words
   per suggestion instead of up to four. In a paired Lab comparison
   (`run.mjs --lengths`) it halved harmful additions and appeared sooner; up
