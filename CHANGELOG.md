@@ -10,6 +10,8 @@ in [future plans](<future plans.md>), and lasting decisions in
 - Style samples and learned words stay sealed with XChaCha20-Poly1305 on
   chacha20poly1305 0.11. A ciphertext written by 0.10.1 still opens, and the
   binaries no longer include the BSD-3-Clause `subtle` crate.
+- User-flow proof is a project skill (`.cursor/skills/verify-badi/`), and a
+  pull request is ready only once it shows a proof artifact.
 - The owned writing runtime waits on its child's pidfd with rustix `poll`.
   Tokio 1.53.3 deprecates the safe `AsyncFd` constructors as unsound
   ([tokio#8587](https://github.com/tokio-rs/tokio/pull/8587)), and their
