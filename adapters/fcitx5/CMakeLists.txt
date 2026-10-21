@@ -6,6 +6,14 @@ include(GNUInstallDirs)
 find_package(Fcitx5Core 5.1 REQUIRED)
 find_package(nlohmann_json 3.11 REQUIRED)
 
+# Warnings fail development and CI builds; a distribution build turns that off
+# (-DBADI_WERROR=OFF) so a newer compiler's new warning cannot break it.
+option(BADI_WERROR "Treat compiler warnings as errors" ON)
+set(BADI_WARNINGS -Wall -Wextra -Wpedantic)
+if(BADI_WERROR)
+    list(APPEND BADI_WARNINGS -Werror)
+endif()
+
 add_library(badi-fcitx5-core STATIC
     src/accessibility.cpp
     src/debug.cpp
@@ -18,7 +26,7 @@ set_target_properties(badi-fcitx5-core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(badi-fcitx5-core PUBLIC cxx_std_20)
 target_include_directories(badi-fcitx5-core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(badi-fcitx5-core PUBLIC Fcitx5::Core nlohmann_json::nlohmann_json)
-target_compile_options(badi-fcitx5-core PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_compile_options(badi-fcitx5-core PRIVATE ${BADI_WARNINGS})
 
 add_fcitx5_addon(badi-fcitx5
     src/addon.cpp
@@ -29,7 +37,7 @@ add_fcitx5_addon(badi-fcitx5
 )
 target_compile_features(badi-fcitx5 PRIVATE cxx_std_20)
 target_link_libraries(badi-fcitx5 PRIVATE badi-fcitx5-core Fcitx5::Core)
-target_compile_options(badi-fcitx5 PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_compile_options(badi-fcitx5 PRIVATE ${BADI_WARNINGS})
 set_target_properties(badi-fcitx5 PROPERTIES OUTPUT_NAME badi-fcitx5)
 
 configure_file(badi.conf.in badi.conf @ONLY)
@@ -42,27 +50,27 @@ if(BUILD_TESTING)
     add_executable(badi-fcitx5-replacement-tests tests/replacement.cpp)
     target_compile_features(badi-fcitx5-replacement-tests PRIVATE cxx_std_20)
     target_link_libraries(badi-fcitx5-replacement-tests PRIVATE badi-fcitx5-core)
-    target_compile_options(badi-fcitx5-replacement-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(badi-fcitx5-replacement-tests PRIVATE ${BADI_WARNINGS})
     add_test(NAME badi-fcitx5-replacement-tests COMMAND badi-fcitx5-replacement-tests)
     add_executable(badi-fcitx5-accessibility-tests tests/accessibility.cpp)
     target_compile_features(badi-fcitx5-accessibility-tests PRIVATE cxx_std_20)
     target_link_libraries(badi-fcitx5-accessibility-tests PRIVATE badi-fcitx5-core)
-    target_compile_options(badi-fcitx5-accessibility-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(badi-fcitx5-accessibility-tests PRIVATE ${BADI_WARNINGS})
     add_test(NAME badi-fcitx5-accessibility-tests COMMAND badi-fcitx5-accessibility-tests)
     add_executable(badi-fcitx5-policy-tests tests/policy.cpp)
     target_compile_features(badi-fcitx5-policy-tests PRIVATE cxx_std_20)
     target_link_libraries(badi-fcitx5-policy-tests PRIVATE badi-fcitx5-core)
-    target_compile_options(badi-fcitx5-policy-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(badi-fcitx5-policy-tests PRIVATE ${BADI_WARNINGS})
     add_test(NAME badi-fcitx5-policy-tests COMMAND badi-fcitx5-policy-tests)
     add_executable(badi-fcitx5-debug-tests tests/debug.cpp)
     target_compile_features(badi-fcitx5-debug-tests PRIVATE cxx_std_20)
     target_link_libraries(badi-fcitx5-debug-tests PRIVATE badi-fcitx5-core)
-    target_compile_options(badi-fcitx5-debug-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(badi-fcitx5-debug-tests PRIVATE ${BADI_WARNINGS})
     add_test(NAME badi-fcitx5-debug-tests COMMAND badi-fcitx5-debug-tests)
     add_executable(badi-fcitx5-tests tests/tests.cpp)
     target_compile_features(badi-fcitx5-tests PRIVATE cxx_std_20)
     target_link_libraries(badi-fcitx5-tests PRIVATE badi-fcitx5-core)
-    target_compile_options(badi-fcitx5-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(badi-fcitx5-tests PRIVATE ${BADI_WARNINGS})
     add_test(NAME badi-fcitx5-tests COMMAND badi-fcitx5-tests
         "${CMAKE_CURRENT_SOURCE_DIR}/../../protocol/orthographic-joiner-fixtures.json")
 
@@ -73,5 +81,5 @@ if(BUILD_TESTING)
     add_executable(badi-fcitx5-broker-smoke tests/broker-smoke.cpp)
     target_compile_features(badi-fcitx5-broker-smoke PRIVATE cxx_std_20)
     target_link_libraries(badi-fcitx5-broker-smoke PRIVATE badi-fcitx5-core)
-    target_compile_options(badi-fcitx5-broker-smoke PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(badi-fcitx5-broker-smoke PRIVATE ${BADI_WARNINGS})
 endif()

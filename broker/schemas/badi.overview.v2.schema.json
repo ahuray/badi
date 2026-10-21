@@ -41,7 +41,21 @@
         "control_plane_degraded": { "type": "boolean" },
         "sessions": { "$ref": "#/$defs/counter" },
         "socket_mode": { "const": "0600" },
-        "max_frame_bytes": { "type": "integer", "minimum": 1 }
+        "max_frame_bytes": { "type": "integer", "minimum": 1 },
+        "snoozes": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Every app or site snoozed now (runtime only); omitted when none is.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["subject", "remaining_ms"],
+            "properties": {
+              "subject": { "$ref": "urn:badi:schema:settings:v2#/$defs/identity" },
+              "remaining_ms": { "type": "integer", "minimum": 0, "maximum": 86400000 }
+            }
+          }
+        }
       }
     },
     "privacy": {

@@ -189,6 +189,11 @@ Scope {
       if (["normal", "quiet", "explicit"].indexOf(value.battery_mode) < 0) return false
       keys.push("battery_mode")
     }
+    // Suggestion length: producers omit the default, normal.
+    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "suggestion_length")) {
+      if (["short", "normal"].indexOf(value.suggestion_length) < 0) return false
+      keys.push("suggestion_length")
+    }
     // Spelling languages: producers omit exactly ["en"] and keep this order.
     if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "spelling_languages")) {
       var order = ["en", "de", "fr", "es", "it", "nl", "pl"]

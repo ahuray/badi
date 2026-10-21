@@ -28,17 +28,6 @@ OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geome
 SESSION_MODULES = ("daemon.py", "link.py", "style_key.py")
 SESSION_SERVICE = "badi-session.service"
 OMARCHY_REPAIR_HOOKS = ("post-boot.d", "post-update.d")
-# The retired Fcitx 5.1.22 Wayland frontend backport. Fcitx 5.1.23 ships the
-# upstream fix, so a complete install removes exactly what earlier installs
-# left here, backed up like any replaced file.
-RETIRED_COMPAT_LIBRARY = Path(".local/lib/badi/compat")
-RETIRED_COMPAT_FILES = ("fcitx5-5.1.22/launch.py", "fcitx5-5.1.22/build-receipt.json",
-                        "fcitx5-5.1.22/addons/libwaylandim.so")
-RETIRED_COMPAT_DIRECTORIES = ("fcitx5-5.1.22/addons", "fcitx5-5.1.22", "")
-RETIRED_COMPAT_DROPIN = Path(".config/systemd/user/omarchy-fcitx5.service.d/60-badi-wayland-compat.conf")
-RETIRED_COMPAT_DROPIN_TEXT = (
-    "[Service]\n# Badi: pinned Fcitx Wayland frontend; launch.py falls back to /usr/bin/fcitx5.\n"
-    f"ExecStart=\nExecStart=/usr/bin/python3 -B %h/{RETIRED_COMPAT_LIBRARY}/fcitx5-5.1.22/launch.py --disable notificationitem\n")
 
 
 def run(command, **kwargs):
@@ -339,43 +328,6 @@ def wait_accessibility(helper, endpoint):
         raise RuntimeError("The accessibility helper did not become ready. Inspect badi doctor and journalctl --user -u badi-accessibility.service; Fcitx was not restarted.")
 
 
-def fcitx_command():
-    """The effective argv of the Fcitx service's single ExecStart, verbatim."""
-    value = badi_install.unit_value("omarchy-fcitx5.service", "ExecStart")
-    commands = re.findall(r"argv\[\]=(.*?) ; ignore_errors=", value)
-    return commands[0] if len(commands) == 1 else None
-
-
-def retired_compat_files(home):
-    """The retired frontend's files an earlier install left, to remove now.
-
-    Only Badi's exact files qualify. Anything else there stops the install
-    before any change, so a file Badi did not write is never deleted.
-    """
-    library = home / RETIRED_COMPAT_LIBRARY
-    for path in (library, *library.parents):
-        if path == home:
-            break
-        if path.is_symlink():
-            raise RuntimeError(f"Inspect the symlink {path} before installing; Badi no longer installs a Fcitx frontend there.")
-    found = []
-    if library.exists():
-        files = {library / name for name in RETIRED_COMPAT_FILES}
-        directories = {library / name for name in RETIRED_COMPAT_DIRECTORIES}
-        for path in sorted(library.rglob("*")):
-            if path.is_symlink() or not ((path in files and path.is_file()) or (path in directories and path.is_dir())):
-                raise RuntimeError(f"Inspect unexpected files in {library} before installing; "
-                                   "Badi no longer installs a Fcitx frontend there.")
-            if path.is_file():
-                found.append(path)
-    dropin = home / RETIRED_COMPAT_DROPIN
-    if os.path.lexists(dropin):
-        if dropin.is_symlink() or not dropin.is_file() or dropin.read_text() != RETIRED_COMPAT_DROPIN_TEXT:
-            raise RuntimeError(f"Inspect {dropin} before installing: it is not the drop-in an earlier Badi install wrote.")
-        found.append(dropin)
-    return found
-
-
 @dataclass
 class Plan:
     """What one installer run will change, decided before anything is built."""
@@ -390,8 +342,6 @@ class Plan:
     # True only when the user unit is enabled. A unit file left behind by an
     # interrupted first install is loaded but not enabled, and must be enabled.
     accessibility_enabled: bool
-    # Files the retired Fcitx frontend backport left, removed by this run.
-    retired_compat: list
     checkout: dict | None = None
     # hyprland.lua change that loads Badi's layer rule: (target, original, new).
     hypr_update: tuple | None = None
@@ -412,6 +362,11 @@ def parse_arguments():
                         help=f"Add {OBSERVED_FLAG} to this app's user flags file for its next launch (backed up)")
     parser.add_argument("--screen-reader-accessibility", action="store_true",
                         help="Enable desktop-wide AT-SPI ScreenReaderEnabled, including Discord; record prior settings for rollback")
+    parser.add_argument("--model", metavar="ID",
+                        help="When no writing model is installed, download this catalog model (pinned, hash-checked) "
+                             "instead of the one recommended for this device")
+    parser.add_argument("--accept-model-license", action="store_true",
+                        help="Accept the terms that come with the downloaded model (Gemma, Llama) without asking")
     args = parser.parse_args()
     if args.broker_only and (args.observed_app or args.screen_reader_accessibility):
         parser.error("Accessibility options require the complete unlocked native installation")
@@ -439,11 +394,10 @@ def preflight(args):
             flag_updates[target] = (original, text)
     runtime = session_runtime()
     broker_updating = service_installed()
-    accessibility_enabled, retired_compat, hypr_update = False, [], None
+    accessibility_enabled, hypr_update = False, None
     if not args.broker_only:
         accessibility_enabled = unit_enabled("badi-accessibility.service")
         run(["systemctl", "--user", "is-active", "omarchy-fcitx5.service"], capture_output=True)
-        retired_compat = retired_compat_files(home)
         hyprland = config_home / "hypr/hyprland.lua"
         if hyprland.exists() and not hyprland.is_symlink():
             original = hyprland.read_text()
@@ -452,7 +406,7 @@ def preflight(args):
                 hypr_update = (hyprland, original, updated)
     session_disabled = badi_install.unit_value(SESSION_SERVICE, "UnitFileState", timeout=4) == "disabled"
     return Plan(args, home, config_home, runtime, flag_updates, flags_present,
-                broker_updating, accessibility_enabled, retired_compat, hypr_update=hypr_update,
+                broker_updating, accessibility_enabled, hypr_update=hypr_update,
                 session_disabled=session_disabled)
 
 
@@ -497,9 +451,14 @@ def require_writing_assets(home):
         )
 
 
-def require_writing_model(home, badictl):
+def require_writing_model(home, badictl, model_id=None, accept_license=False):
     """At least one model of the freshly built broker's writing catalog is
-    installed with its pinned size and hash; the broker picks among them."""
+    installed with its pinned size and hash; the broker picks among them.
+
+    Without one, the recommended model (or `model_id`) is downloaded, pinned
+    and hash-checked, after its size and any terms that come with it were
+    shown and accepted: asked on a terminal, otherwise only with
+    --model and --accept-model-license."""
     advice = json.loads(subprocess.run([str(badictl), "models", "writing", "--json"], capture_output=True,
                                        text=True, check=True, timeout=15).stdout)
     models = Path(home) / ".local/share/badi/models"
@@ -508,10 +467,30 @@ def require_writing_model(home, badictl):
         if (path.is_file() and path.stat().st_size == model["download_bytes"]
                 and badi_install.file_sha256(path) == model["sha256"]):
             return model
-    recommended = (advice.get("recommended") or {}).get("name", "a catalog model")
-    raise RuntimeError(f"No pinned writing model is installed in {models}. `{badictl} models writing` prints "
-                       f"the pinned download of {recommended}, the one recommended for this device; "
-                       "rerun the installer after it. Later, `badi model use ID` switches models.")
+    wanted = model_id or (advice.get("recommended") or {}).get("id")
+    model = next((entry for entry in advice["catalog"] if entry["id"] == wanted), None)
+    if model is None or not model.get("fits", True):
+        choices = " ".join(entry["id"] for entry in advice["catalog"] if entry.get("fits", True))
+        raise RuntimeError(f"No writing model is installed in {models}, and {wanted or 'no model'} cannot be "
+                           f"downloaded for this device. Rerun with --model ID, one of: {choices}")
+    terms = badi_install.model_terms(model)
+    offer = f"{model['name']} ({model['download_bytes'] / 1e9:.2f} GB)" + (f", provided under {terms}" if terms else "")
+    # Only an explicit --model, with --accept-model-license for a model with
+    # terms, downloads without asking.
+    consented = model_id is not None and (accept_license or not terms)
+    if not consented:
+        if not sys.stdin.isatty():
+            raise RuntimeError(f"No writing model is installed in {models}. Badi recommends {offer}. "
+                               f"Rerun with --model {model['id']}" + (" --accept-model-license" if terms else "")
+                               + " to download it.")
+        question = "Do you accept its terms and download it?" if terms else "Download it?"
+        if input(f"Badi needs a writing model. Recommended for this device: {offer}. {question} [y/N] "
+                 ).strip().lower() not in ("y", "yes"):
+            raise RuntimeError("No writing model was downloaded; nothing was installed.")
+    if terms:
+        badi_install.record_model_terms(home, model)
+    badi_install.download_model(model, models)
+    return model
 
 
 def build(plan):
@@ -520,7 +499,7 @@ def build(plan):
     plan.checkout = badi_install.source_identity(ROOT)
     # Build only the shipped package: installs never compile the Prediction Lab.
     run(["cargo", "build", "--release", "--locked", "-p", "badi-broker", "--bins"], cwd=ROOT)
-    require_writing_model(plan.home, ROOT / "target/release/badictl")
+    require_writing_model(plan.home, ROOT / "target/release/badictl", plan.args.model, plan.args.accept_model_license)
     if plan.native:
         run(["npm", "run", "fcitx5:check"], cwd=ROOT)
         require_unlocked()
@@ -602,6 +581,8 @@ def install_prepared_files(plan, installation):
     for name in ("LICENSE", "README.md"):
         install(ROOT / "broker/data/writing-lexicon" / name,
                 home / ".local/share/badi/licenses/writing-lexicon" / name)
+    # The licences of the open-source code compiled into the binaries.
+    install(ROOT / "THIRD-PARTY-NOTICES.txt", home / ".local/share/badi/licenses/THIRD-PARTY-NOTICES.txt")
     if native:
         install(ROOT / "adapters/fcitx5/build/libbadi-fcitx5.so", home / ".local/lib/fcitx5/libbadi-fcitx5.so")
         install(ROOT / "adapters/fcitx5/build/badi.conf", home / ".local/share/fcitx5/addon/badi.conf")
@@ -626,17 +607,6 @@ def install_prepared_files(plan, installation):
             if target.parent.resolve() != target.parent or target.is_symlink() or (target.read_text() if target.exists() else None) != original:
                 raise RuntimeError("App startup configuration changed during the build; newer user settings were preserved.")
             installation.write(target, text.encode(), stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600)
-        # launch.py replaced itself with /usr/bin/fcitx5 when the service
-        # started, so removing it is safe; the Fcitx restart below runs the
-        # stock command.
-        for path in plan.retired_compat:
-            if os.path.lexists(path):
-                installation.remove(path)
-        badi_install.forget(home, "desktop", plan.retired_compat)
-        for name in RETIRED_COMPAT_DIRECTORIES:
-            directory = home / RETIRED_COMPAT_LIBRARY / name
-            if directory.is_dir() and not directory.is_symlink() and not any(directory.iterdir()):
-                directory.rmdir()
     install(ROOT / "packaging/systemd/badi-broker.service", home / ".config/systemd/user/badi-broker.service")
     # The session helper reports suspend, session and power state to the
     # broker and reads no text, so it updates with the broker on both paths.
@@ -692,9 +662,6 @@ def restart(plan, installation):
         enable_accessibility(installation)
     if plan.args.screen_reader_accessibility:
         enable_screen_reader_accessibility(installation)
-    if plan.retired_compat and str(RETIRED_COMPAT_LIBRARY) in (fcitx_command() or ""):
-        raise RuntimeError("Another omarchy-fcitx5.service override still starts the retired Badi frontend launcher, so Fcitx was not restarted. "
-                           "Inspect its drop-ins, or restore the newest backup in ~/.local/state/badi/install-backups.")
     require_unlocked()
     # A fresh Fcitx may not have written its profile yet; then only an
     # existing profile that changed counts as a rewrite.
@@ -722,9 +689,6 @@ def report(plan, probe):
         print("Local model ready. Broker and controls updated; native input addon was not restarted." + pause_note)
         return
     print("Local model and accessibility helper ready. Desktop addon loaded by the normal Fcitx service. Keyboard profile preserved. Application accessibility and exact target policy determine coverage; use badi doctor to inspect setup." + pause_note)
-    if plan.retired_compat:
-        print("Removed the retired Fcitx 5.1.22 Wayland frontend backport and its service drop-in; "
-              "Fcitx 5.1.23 and later include the upstream fix, and Fcitx now runs its own frontend.")
     if plan.args.observed_app:
         prepared = [app for app in dict.fromkeys(plan.args.observed_app) if app not in plan.flags_present]
         if prepared:

@@ -52,23 +52,14 @@ and whether they were dirty (`--version` prints both; packagers may set
   Update the broker before clients advertising the new capability; an older
   broker rejects it. Fcitx, Obsidian, Neovim and the LibreOffice Writer
   extension opt in; Bash keeps its existing lease.
-- **Growing previews.** Each extension has an immutable id and text. Earlier
-  versions remain acceptable only within the same generation, exact field
-  revision and original expiry, so a new word crossing Tab on the socket
-  cannot swallow the acceptance. Accepting or dismissing any version retires
-  them all; cancellation, focus changes and expiry revoke the whole group.
-  At most 64 versions fit the protocol's 64-character limit. When the final
-  result is rejected (by the display checks, or by the provider's own
-  validation, which it reports as a no-suggestion outcome) or arrives late,
-  the last shown partial stays if it ends at a word boundary
-  (`ends_at_word_boundary`): it
-  was already checked before display, so it counts as the shown suggestion,
-  not as a no-suggestion miss, and only an edit, a focus change, Escape or
-  its expiry withdraws it. Live in Ghostty on 2026-10-17, ten
-  provider-rejected finals followed two or three shown partials and none
-  produced a `no_suggestion` clear; the next broker clear was `superseded`
-  46–280 ms later, and in the row inspected key-by-key the ghost was still
-  marked visible when the next printable key arrived 129 ms after rejection.
+- **Growing previews.** The protocol lets a suggestion grow in versions,
+  each with an immutable id and text. An earlier version stays acceptable
+  only within the same generation, field revision and original expiry, so a
+  word crossing Tab on the socket cannot swallow the acceptance; accepting or
+  dismissing any version retires them all. The local model's
+  [confidence gate](#suggestion-limits) now holds each suggestion until it is
+  judged whole, so every suggestion arrives as one version and the partial
+  path is dormant ([backlog](<../future plans.md>)).
 - **Type-through** ([ADR 0004](../docs/decisions/0004-type-through-carries-text-not-authority.md)).
   The last shown continuation is kept as text only.
   - When a later admitted request in the same app or site keeps `after` and
@@ -132,6 +123,32 @@ reach the editor ([ADR 0009](../docs/decisions/0009-terminals-use-the-typed-line
 Starting or ending the hold advances the authority epoch. The report belongs
 to its connection and ends with it; it withholds only and never grants.
 
+## Snooze
+
+`badi snooze [MINUTES]` (the session helper's `snooze` shortcut, 10 minutes
+by default, at most 1440) sends the v2 global control `snooze {minutes}`. The
+broker snoozes the settings identity of the one focused field it follows: the
+exact app id, or the site origin, which every browser shares as it shares
+site rules. It refuses with `no_context` when no session has focused context,
+`ambiguous_session` when focused fields belong to different apps or sites,
+and `paused` while every grant is already withheld; `badictl` prints these as
+`error_code=rejected:REASON`.
+
+- **Withhold only** ([ADR 0005](../docs/decisions/0005-desktop-signals-withhold-authority.md)).
+  Starting a snooze advances the authority epoch and revokes the context,
+  pending inference, visible suggestion and pending commit of every session
+  on that identity, and ends the type-through carry. Policy for it resolves
+  to `snoozed` (not `paused`): no session opens, open ones lose their data
+  access, and every other app and site keeps its policy. Protocol v1 policy
+  clients see `suggestions_disabled`.
+- **Runtime only.** Snoozes live in the broker's memory, never in settings,
+  and end with a broker restart. When one runs out, a timer advances the
+  epoch again so adapters resolve their policy afresh. `snooze_end` (`badi
+  snooze end`, `badi resume` and a resuming `badi pause toggle`) ends every
+  snooze at once.
+- v2 `health.status`, `badictl status` and `badictl overview` (under
+  `broker`) list `snoozes`: each `subject` identity and its `remaining_ms`.
+
 ## Style learning (opt-in)
 
 Off by default (`style_learning` omitted). With `badi style on` and a site
@@ -172,8 +189,8 @@ still ask the keyring or the broker ([ADR 0001](../docs/decisions/0001-same-uid-
 ## Debug trace
 
 While `badi debug on` runs, `debug_trace.rs` appends each wire frame in and
-out of the broker (allowlisted fields; settings, style and memory frames by
-type only; health polls not at all), each `model start` and `model done`
+out of the broker (allowlisted fields; settings, style, memory and
+statistics frames by type only; health and statistics polls not at all), each `model start` and `model done`
 with latency and outcome, and each `carry` decision to the
 [debug trace](../README.md#debug-trace). When the local runtime reports
 them, `model done` also carries content-free `ttft_ms`, `prompt_tokens`
@@ -199,7 +216,9 @@ badictl settings show
 badictl settings replace --if-revision N --json -   # read the document from stdin
 badictl memory clear      # text-free origin and day aggregates
 badictl style status|forget|export   # style learning; style key - reads the key from stdin
+badictl stats status|forget   # usage counts per day and per app or site
 badictl pause [on|off|toggle]
+badictl snooze [MINUTES] | snooze end   # the focused app or site, runtime only
 badictl request | accept-word | accept-all | dismiss   # the sole active session
 badictl probe [--language TAG] [--after TEXT] [--replace] [--explicit] [--] TEXT|-
 badictl hardware --json   # offline
@@ -218,7 +237,8 @@ no counter moving while `provider_calls` rises means no carry existed.
 Its optional v2 `word_savings` counts space-delimited word parts after a valid
 commit result, separately for `applied` and `dispatched_unverified`. Spelling
 replacements, failed, stale and expired results add nothing. Partial words
-count; later undo is unknown. All health counters reset at broker restart.
+count; later undo is unknown. All health counters reset at broker restart;
+the per-day counts that persist are under [Usage statistics](#usage-statistics).
 The frozen v1 health response omits the new counters.
 
 Settings replacements accept a bounded UTF-8 document on stdin with `--json -`;
@@ -390,6 +410,39 @@ is on and the subject may suggest, the broker does four things:
 every learned word but keeps the key; both need the CLI settings capability
 (`badictl context status|forget`, or `badi context`).
 
+## Usage statistics
+
+[src/stats.rs](src/stats.rs) keeps `stats.json` (`badi.stats.v1`) in the
+private data directory, mode 0600 and written atomically: per local calendar
+day and per exact app id or site origin, the suggestions shown, the
+acceptances the adapter reported `applied` or `dispatched_unverified` and the
+word parts they inserted (as `word_savings` counts them). No text,
+fingerprint, field or window detail is kept.
+
+- **What counts.** A show counts where `suggestions_shown` does, so growing
+  versions and type-through remainders are the same suggestion. Every landed
+  acceptance counts, so a suggestion taken word by word counts once per word;
+  a failed, stale or expired one counts nothing.
+- **What never counts.** The outcome worker keeps a count only under the
+  settings revision it was admitted under, and only while those settings let
+  that app or site suggest and do not pause Badi; a runtime pause or desktop
+  hold admits nothing to count. Turning an app off keeps its earlier counts
+  until they expire or are forgotten.
+- **Bounded.** 90 days, today included, plus tomorrow, so moving west across
+  a time zone keeps the day just counted; 64 apps and sites a day, further
+  ones adding to that day's total. The day is the system time zone's
+  ([jiff](https://github.com/BurntSushi/jiff); UTC when it is unknown).
+- **Written.** Counts collect in memory and reach the disk with the worker's
+  one-minute sweep, before a pause is acknowledged and at shutdown, so a
+  restart keeps them and a crash loses at most a minute. Expired days go at
+  startup and with each sweep. An unreadable file is preserved, counts
+  nothing and reports `available: false` until `stats.forget` replaces it.
+- **Read.** `stats.query` returns each kept day's totals, exact totals for
+  today, the last 7 days and every kept day, and the apps and sites among the
+  16 that lead any of those windows; `stats.forget` deletes everything. Both
+  need the CLI settings capability (`badictl stats status|forget`, or `badi
+  stats`).
+
 ## Context word bias
 
 `SemanticClient::with_window_context(text)` lets a caller hand the client the
@@ -434,11 +487,24 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   matches, and a live paragraph in Ghostty read no better. Long Tab-only
   chains drift (a run of Tabs turned a sentence into a maths exercise); the
   model, not the window, is the limit.
-- **Shape.** At most four words and 64 characters. `en`, `de`, `fa`, `fr`,
+- **Shape.** At most four words (two with `short`, below) and 64
+  characters. `en`, `de`, `fa`, `fr`,
   `es` and `pt` are routed; every language but Persian must be Latin
   script, Persian Arabic script, with
   ZWNJ only between the letters in
   [the joiner fixtures](../protocol/orthographic-joiner-fixtures.json).
+- **Length.** `suggestion_length` in settings (`badi length short|normal`
+  or the panel; omitted when `normal`, the default) shows one or two words
+  or up to four, with the same token budget; a short stream ends as
+  soon as its second word is complete. Settings changes retire live
+  sessions, so a type-through carry never outlives a change of length.
+  Corrections, vocabulary completions and the phrase fixture ignore it.
+  In the paired Lab comparison of 2026-10-21 (395 requests in six
+  languages, two blind rounds, 15 W) short cut harmful additions from 16/20
+  to 8/9 with more useful full additions and a p50 of 201 against 259 ms;
+  up to eight words (`f9515e0`) doubled them to 32/39, rising in five
+  languages, and was removed. Runs:
+  `output/writing/2026-10-20-suggestion-length/`.
 - **Partial words.** An English suffix that continues the typed word must form
   a word in the pinned [SCOWL lexicon](data/writing-lexicon/README.md); German
   and Persian suggest whole words only. English healing echoes the last

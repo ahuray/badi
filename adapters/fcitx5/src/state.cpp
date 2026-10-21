@@ -257,6 +257,12 @@ PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeS
     // the app. Its own edit retires the observed field until the observer
     // binds it again, so a fast next key finds no edit path yet.
     const bool typingThrough = key.typesSuggestion && !key.repeat && !hasForeignImeUi(panel);
+    // The literal-Tab chord is a real Tab wherever Badi would take Tab
+    // (a suggestion shows, a Tab waits for its remainder, the manual path
+    // requests); elsewhere it stays the app's key (a browser's previous tab).
+    if (key.literalTab && !hasForeignImeUi(panel) && (suggestionVisible || key.tabTaken)) {
+        return PreKeyAction::LiteralTab;
+    }
     if (!editingAvailable || key.repeat) {
         if (key.modifier) return PreKeyAction::PassThrough;
         return typingThrough ? PreKeyAction::CancelTypingThrough : PreKeyAction::Cancel;
@@ -290,6 +296,14 @@ bool heldTabMatchesRest(std::string_view rest, const Suggestion &suggestion) {
     return !rest.empty() && !suggestion.replaceBefore && !suggestion.acceptWord.empty() &&
            suggestion.text.starts_with(suggestion.acceptWord) &&
            rest.starts_with(suggestion.acceptWord);
+}
+
+bool lastModifierReleased(const ::fcitx::Key &release) {
+    if (!release.isModifier()) return false;
+    const ::fcitx::KeyStates held{::fcitx::KeyState::Ctrl, ::fcitx::KeyState::Alt, ::fcitx::KeyState::Shift,
+                                  ::fcitx::KeyState::Super};
+    const auto remaining = release.states() & held & ~::fcitx::Key::keySymToStates(release.sym());
+    return !remaining.testAny(held);
 }
 
 CandidateParts candidateParts(const Suggestion &suggestion) {
@@ -329,7 +343,9 @@ InvokeRoute routeInvoke(std::string_view appId, bool editingAvailable, bool fiel
 std::optional<std::string_view> manualRequestNotice(const RequestFacts &facts) {
     if (!facts.connected) return notice::kReconnecting;
     if (!facts.policyKnown) return notice::kCheckingPermission;
-    if (!facts.policyAllowed) return facts.paused ? notice::kPaused : notice::kDisabled;
+    if (!facts.policyAllowed) {
+        return facts.paused ? notice::kPaused : facts.snoozed ? notice::kSnoozed : notice::kDisabled;
+    }
     if (!facts.fresh) return notice::kNeedsFreshContext;
     return std::nullopt;
 }

@@ -27,11 +27,10 @@ NATIVE_SOURCES = ('target/release/badi-broker', 'target/release/badictl', 'scrip
                   'broker/data/writing-lexicon/README.md', 'adapters/fcitx5/build/libbadi-fcitx5.so',
                   'adapters/fcitx5/build/badi.conf', 'packaging/systemd/fcitx-badi.conf',
                   'packaging/systemd/badi-accessibility.service', 'packaging/hypr/badi.lua',
-                  'packaging/systemd/badi-session.service', 'packaging/omarchy/badi-repair.hook') + tuple(
+                  'packaging/systemd/badi-session.service', 'packaging/omarchy/badi-repair.hook',
+                  'THIRD-PARTY-NOTICES.txt') + tuple(
                   'adapters/accessibility/' + name for name in installer.OBSERVER_MODULES) + tuple(
                   'adapters/session/' + name for name in installer.SESSION_MODULES)
-STOCK = '{ path=/usr/bin/fcitx5 ; argv[]=%s ; ignore_errors=no ; start_time=[n/a] ; pid=0 }\n'
-STOCK_COMMAND = '/usr/bin/fcitx5 --disable notificationitem'
 
 
 def only_backup(home):
@@ -52,18 +51,6 @@ def native_project(project):
         source = project / name
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text('new ' + name)
-
-
-def retired_frontend(home):
-    """What an install from before Fcitx 5.1.23 left: the backport, its drop-in and receipt entries."""
-    library = home / installer.RETIRED_COMPAT_LIBRARY
-    files = {library / name: f'retired {name}'.encode() for name in installer.RETIRED_COMPAT_FILES}
-    files[home / installer.RETIRED_COMPAT_DROPIN] = installer.RETIRED_COMPAT_DROPIN_TEXT.encode()
-    for path, data in files.items():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-    receipts.write_receipt(home, 'desktop', {'commit': '0' * 40, 'dirty': False}, list(files))
-    return files
 
 
 def broker_only_install(root):
@@ -105,18 +92,63 @@ class DesktopInstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             data = b'model bytes'
-            catalog = {'recommended': {'name': 'Gemma 3 1B'}, 'catalog': [
-                {'filename': 'a.gguf', 'download_bytes': 1, 'sha256': '0' * 64},
-                {'filename': 'b.gguf', 'download_bytes': len(data),
-                 'sha256': hashlib.sha256(data).hexdigest()}]}
+            catalog = {'recommended': {'id': 'gemma-3-1b', 'name': 'Gemma 3 1B'}, 'catalog': [
+                {'id': 'gemma-3-1b', 'name': 'Gemma 3 1B', 'license': 'Gemma', 'fits': True,
+                 'filename': 'a.gguf', 'download_bytes': 1, 'sha256': '0' * 64},
+                {'id': 'qwen3-1.7b', 'name': 'Qwen3 1.7B', 'license': 'Apache-2.0', 'fits': True,
+                 'filename': 'b.gguf', 'download_bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}]}
             reply = unittest.mock.Mock(stdout=json.dumps(catalog))
-            with patch.object(installer.subprocess, 'run', return_value=reply):
-                with self.assertRaisesRegex(RuntimeError, 'prints the pinned download of Gemma 3 1B'):
+            with patch.object(installer.subprocess, 'run', return_value=reply), \
+                 patch.object(installer.sys.stdin, 'isatty', return_value=False), \
+                 patch.object(installer.badi_install, 'download_model') as download:
+                with self.assertRaisesRegex(RuntimeError, 'Gemma Terms of Use.*--model gemma-3-1b --accept-model-license'):
                     installer.require_writing_model(home, 'badictl')
+                with self.assertRaisesRegex(RuntimeError, '--accept-model-license'):
+                    installer.require_writing_model(home, 'badictl', 'gemma-3-1b')
+                download.assert_not_called()
                 models = home / '.local/share/badi/models'
                 models.mkdir(parents=True)
                 (models / 'b.gguf').write_bytes(data)
                 self.assertEqual(installer.require_writing_model(home, 'badictl')['filename'], 'b.gguf')
+                download.assert_not_called()
+
+    def test_the_first_model_downloads_only_after_its_terms_are_accepted(self):
+        catalog = {'recommended': {'id': 'gemma-3-1b'}, 'catalog': [
+            {'id': 'gemma-3-1b', 'name': 'Gemma 3 1B', 'license': 'Gemma', 'fits': True,
+             'filename': 'a.gguf', 'download_bytes': 7, 'sha256': '0' * 64},
+            {'id': 'qwen3-1.7b', 'name': 'Qwen3 1.7B', 'license': 'Apache-2.0', 'fits': True,
+             'filename': 'b.gguf', 'download_bytes': 7, 'sha256': '1' * 64},
+            {'id': 'too-big', 'name': 'Too big', 'license': 'Apache-2.0', 'fits': False,
+             'filename': 'c.gguf', 'download_bytes': 7, 'sha256': '2' * 64}]}
+        reply = unittest.mock.Mock(stdout=json.dumps(catalog))
+        record = Path('.local/state/badi/model-terms.json')
+        for model_id, accept, tty, answer, downloaded in (
+                ('gemma-3-1b', True, False, None, 'gemma-3-1b'),
+                ('qwen3-1.7b', False, False, None, 'qwen3-1.7b'),
+                (None, False, True, 'y', 'gemma-3-1b'),
+                (None, False, True, 'n', None),
+                ('too-big', True, False, None, None)):
+            with self.subTest(model=model_id, tty=tty, answer=answer), tempfile.TemporaryDirectory() as temporary, \
+                 patch.object(installer.subprocess, 'run', return_value=reply), \
+                 patch.object(installer.sys.stdin, 'isatty', return_value=tty), \
+                 patch('builtins.input', return_value=answer) as asked, \
+                 patch.object(installer.badi_install, 'download_model') as download:
+                home = Path(temporary)
+                if downloaded is None:
+                    with self.assertRaises(RuntimeError):
+                        installer.require_writing_model(home, 'badictl', model_id, accept)
+                    download.assert_not_called()
+                    self.assertFalse((home / record).exists())
+                    continue
+                self.assertEqual(installer.require_writing_model(home, 'badictl', model_id, accept)['id'], downloaded)
+                self.assertEqual(download.call_args.args[0]['id'], downloaded)
+                self.assertEqual(download.call_args.args[1], home / '.local/share/badi/models')
+                self.assertEqual(asked.called, tty)
+                if downloaded == 'gemma-3-1b':
+                    accepted, = json.loads((home / record).read_text())['accepted']
+                    self.assertEqual((accepted['model'], accepted['terms']), ('gemma-3-1b', 'https://ai.google.dev/gemma/terms'))
+                else:
+                    self.assertFalse((home / record).exists(), 'an Apache-2.0 model records no terms')
 
     def test_changed_flags_abort_before_any_file_is_copied(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -130,7 +162,7 @@ class DesktopInstallTests(unittest.TestCase):
                 args=SimpleNamespace(broker_only=False, observed_app=['chromium']),
                 home=home, config_home=home / '.config', runtime=root / 'runtime',
                 flag_updates={flags: ('# mine\n', '# mine\n' + installer.OBSERVED_FLAG + '\n')},
-                flags_present=[], broker_updating=True, accessibility_enabled=True, retired_compat=[])
+                flags_present=[], broker_updating=True, accessibility_enabled=True)
             flags.write_text('# mine\n# edited while building\n')
             with patch.object(installer, 'ROOT', project), \
                  self.assertRaisesRegex(RuntimeError, 'changed during the build'):
@@ -153,7 +185,7 @@ class DesktopInstallTests(unittest.TestCase):
                 args=SimpleNamespace(broker_only=False, observed_app=[]),
                 home=home, config_home=home / '.config', runtime=root / 'runtime',
                 flag_updates={}, flags_present=[], broker_updating=True,
-                accessibility_enabled=True, retired_compat=[],
+                accessibility_enabled=True,
                 hypr_update=(hyprland, original, updated))
             hyprland.write_text(original + '-- edited while building\n')
             with patch.object(installer, 'ROOT', project), \
@@ -176,7 +208,7 @@ class DesktopInstallTests(unittest.TestCase):
                 args=SimpleNamespace(broker_only=False, observed_app=[]),
                 home=home, config_home=home / '.config', runtime=root / 'runtime',
                 flag_updates={}, flags_present=[], broker_updating=True,
-                accessibility_enabled=True, retired_compat=[],
+                accessibility_enabled=True,
                 checkout={'commit': '0' * 40, 'dirty': False},
                 hypr_update=(hyprland, original, updated))
             with patch.object(installer, 'ROOT', project), \
@@ -243,7 +275,7 @@ class DesktopInstallTests(unittest.TestCase):
                 args=SimpleNamespace(broker_only=False, observed_app=[], screen_reader_accessibility=False),
                 home=home, config_home=home / '.config', runtime=runtime,
                 flag_updates={}, flags_present=[], broker_updating=True,
-                accessibility_enabled=False, retired_compat=[])
+                accessibility_enabled=False)
             installation = receipts.Installation(home, 'desktop')
             with patch.object(installer, 'run', side_effect=execute), \
                  patch.object(installer, 'require_unlocked'), \
@@ -272,7 +304,7 @@ class DesktopInstallTests(unittest.TestCase):
                 args=SimpleNamespace(broker_only=False, observed_app=[], screen_reader_accessibility=False),
                 home=home, config_home=home / '.config', runtime=home / 'runtime',
                 flag_updates={}, flags_present=[], broker_updating=True,
-                accessibility_enabled=True, retired_compat=[])
+                accessibility_enabled=True)
             with patch.object(installer, 'run', side_effect=execute), \
                  patch.object(installer, 'require_unlocked'), \
                  patch.object(installer, 'wait_model', return_value={'paused': False}), \
@@ -484,7 +516,7 @@ class DesktopInstallTests(unittest.TestCase):
                        'packaging/systemd/badi-broker.service', 'broker/data/writing-lexicon/LICENSE',
                        'broker/data/writing-lexicon/README.md', 'packaging/systemd/badi-session.service',
                        'adapters/session/daemon.py', 'adapters/session/link.py',
-                       'adapters/session/style_key.py')
+                       'adapters/session/style_key.py', 'THIRD-PARTY-NOTICES.txt')
             for name in sources:
                 source = project / name
                 source.parent.mkdir(parents=True, exist_ok=True)
@@ -501,7 +533,6 @@ class DesktopInstallTests(unittest.TestCase):
             previous = home / '.local/lib/badi/badi-broker'
             previous.parent.mkdir(parents=True, exist_ok=True)
             previous.write_text('previous broker')
-            retired = retired_frontend(home)
             settings = home / '.config/badi/settings.json'
             settings.parent.mkdir(parents=True)
             settings.write_text('{"paused":true,"user_preference":"preserved"}')
@@ -533,8 +564,6 @@ class DesktopInstallTests(unittest.TestCase):
             self.assertEqual(helper.read_text(), 'keep running helper')
             self.assertEqual(json.loads(settings.read_text())['paused'], True)
             self.assertFalse(any('omarchy-fcitx5.service' in call or call[0] in ('omarchy-shell', 'npm', '/usr/bin/fcitx5') for call in calls))
-            self.assertEqual({path: path.read_bytes() for path in retired}, retired,
-                             'The retired frontend waits for a complete install, which restarts Fcitx')
             self.assertFalse(any('badi-accessibility.service' in call or call[0] == '/usr/bin/python3' for call in calls))
             self.assertNotIn(['systemctl', '--user', 'enable', 'badi-broker.service'], calls)
             backup, document, changed = only_backup(home)
@@ -557,8 +586,7 @@ class DesktopInstallTests(unittest.TestCase):
                      '.local/bin/badi-desktop': '../lib/badi/badi-desktop.py'}
             self.assertEqual({relative: os.readlink(home / relative) for relative in links}, links,
                              'Each command is installed once; PATH names are links')
-            kept = {str(path.relative_to(home)) for path in retired}
-            self.assertEqual(sorted(receipt['files']), sorted(set(changed) - set(links) | kept))
+            self.assertEqual(sorted(receipt['files']), sorted(set(changed) - set(links)))
             # The installed CLI imports its helper module from beside its real path.
             for command in ('badi', 'badi-desktop'):
                 result = subprocess.run([str(home / '.local/bin' / command), '--help'], capture_output=True,
@@ -903,32 +931,22 @@ class DesktopInstallTests(unittest.TestCase):
                 self.assertIn('.local/lib/badi/accessibility/health.py', changed)
                 self.assertIn('.config/systemd/user/badi-accessibility.service', changed)
                 self.assertEqual(profile.read_text(), 'preserve keyboard profile')
-                self.assertNotIn('retired', output.getvalue())
 
 
 class FullInstall:
-    def full_install(self, root, argv, *, retired=False, overridden=False):
-        """A complete install; `retired` leaves an earlier backport in place first,
-        and `overridden` adds another drop-in that still starts its launcher."""
+    def full_install(self, root, argv):
+        """A complete install in a disposable home."""
         home, project, runtime = root / 'home', root / 'project', root / 'runtime'
         native_project(project)
         profile = home / '.config/fcitx5/profile'
         profile.parent.mkdir(parents=True, exist_ok=True)
         profile.write_text('preserve keyboard profile')
-        self.retired = retired_frontend(home) if retired else {}
-        retired_command = '/usr/bin/python3 -B %s/.local/lib/badi/compat/fcitx5-5.1.22/launch.py --disable notificationitem' % home
         calls = []
 
         def execute(command, **kwargs):
             calls.append(command)
             if command[0] == 'loginctl':
                 return subprocess.CompletedProcess(command, 0, str(runtime), '')
-            if '--property=ExecStart' in command:
-                # Model systemd: a removed drop-in stops applying at daemon-reload.
-                reloaded = ['systemctl', '--user', 'daemon-reload'] in calls
-                dropin = (home / installer.RETIRED_COMPAT_DROPIN).exists() or not reloaded
-                argv = retired_command if overridden or (retired and dropin) else STOCK_COMMAND
-                return subprocess.CompletedProcess(command, 0, STOCK % argv, '')
             output = 'loaded' if '--property=LoadState' in command else 'enabled' if '--property=UnitFileState' in command else '{}'
             return subprocess.CompletedProcess(command, 0, output, '')
 
@@ -954,45 +972,12 @@ class FullInstall:
         return home, project, calls
 
 
-class RetiredFrontendTests(FullInstall, unittest.TestCase):
-    def test_full_install_removes_the_retired_frontend_with_a_restorable_backup(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            home, _project, calls = self.full_install(Path(temporary), [], retired=True)
-            for path in self.retired:
-                self.assertFalse(os.path.lexists(path))
-            self.assertFalse((home / installer.RETIRED_COMPAT_LIBRARY).exists(), 'Its emptied directories go too')
-            self.assertTrue((home / '.config/systemd/user/omarchy-fcitx5.service.d/50-badi.conf').is_file(),
-                            'The addon drop-in beside it stays')
-            backup, document, _changed = only_backup(home)
-            removed = {entry['path']: entry for entry in document['changes'] if entry['action'] == 'remove'}
-            self.assertEqual(set(removed), {str(path.relative_to(home)) for path in self.retired})
-            for path, data in self.retired.items():
-                self.assertEqual((backup / removed[str(path.relative_to(home))]['saved']).read_bytes(), data)
-            recorded = json.loads((home / '.local/state/badi/receipts/desktop.json').read_text())['files']
-            self.assertFalse(any('compat' in key for key in recorded), 'The receipt no longer claims removed files')
-            self.assertIn('.local/lib/badi/badi-broker', recorded)
-            # The stock command must be effective before the one Fcitx restart.
-            reload = calls.index(['systemctl', '--user', 'daemon-reload'])
-            restart = calls.index(['systemctl', '--user', 'restart', 'omarchy-fcitx5.service'])
-            checks = [index for index, call in enumerate(calls) if '--property=ExecStart' in call]
-            self.assertTrue(checks and all(reload < index < restart for index in checks))
-            self.assertIn('Removed the retired Fcitx 5.1.22 Wayland frontend backport', self.output)
-
-            with patch.object(receipts.subprocess, 'run') as reload_units, contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(receipts.restore(backup, [str(installer.RETIRED_COMPAT_LIBRARY),
-                                                           str(installer.RETIRED_COMPAT_DROPIN)]), [])
-            self.assertEqual({path: path.read_bytes() for path in self.retired}, self.retired)
-            reload_units.assert_called_once()
-
-    def test_install_without_a_retired_frontend_leaves_fcitx_overrides_alone(self):
+class FullInstallTests(FullInstall, unittest.TestCase):
+    def test_a_full_install_restarts_fcitx_once(self):
         with tempfile.TemporaryDirectory() as temporary:
             home, _project, calls = self.full_install(Path(temporary), [])
-            _backup, _document, changed = only_backup(home)
-            self.assertFalse(any('compat' in path for path in changed))
-            self.assertFalse(any('--property=ExecStart' in call for call in calls))
-            self.assertFalse(any(call[0] == '/usr/bin/fcitx5' for call in calls))
-            self.assertIn(['systemctl', '--user', 'restart', 'omarchy-fcitx5.service'], calls)
-            self.assertNotIn('retired', self.output)
+            self.assertEqual(calls.count(['systemctl', '--user', 'restart', 'omarchy-fcitx5.service']), 1)
+            self.assertTrue((home / '.config/systemd/user/omarchy-fcitx5.service.d/50-badi.conf').is_file())
 
     def test_omarchy_hooks_get_the_repair_only_where_omarchy_keeps_hooks(self):
         for omarchy in (True, False):
@@ -1011,56 +996,8 @@ class RetiredFrontendTests(FullInstall, unittest.TestCase):
                 if not omarchy:
                     self.assertFalse((home / '.config/omarchy').exists(), 'no Omarchy, no hook folder')
 
-    def test_unexpected_content_stops_before_any_change(self):
-        def extra_file(home):
-            (home / installer.RETIRED_COMPAT_LIBRARY / 'fcitx5-5.1.22/notes.txt').write_text('mine')
-
-        def other_version(home):
-            (home / installer.RETIRED_COMPAT_LIBRARY / 'fcitx5-5.1.24').mkdir()
-
-        def edited_dropin(home):
-            dropin = home / installer.RETIRED_COMPAT_DROPIN
-            dropin.write_text(dropin.read_text() + 'Environment=MINE=1\n')
-
-        def linked_module(home):
-            module = home / installer.RETIRED_COMPAT_LIBRARY / 'fcitx5-5.1.22/addons/libwaylandim.so'
-            module.unlink()
-            module.symlink_to(home / 'elsewhere.so')
-
-        def linked_library(home):
-            library = home / installer.RETIRED_COMPAT_LIBRARY
-            library.rename(home / 'moved')
-            library.symlink_to(home / 'moved')
-
-        for change, message in ((extra_file, 'unexpected files'), (other_version, 'unexpected files'),
-                                (edited_dropin, 'not the drop-in'), (linked_module, 'unexpected files'),
-                                (linked_library, 'symlink')):
-            with self.subTest(change=change.__name__), tempfile.TemporaryDirectory() as temporary:
-                home = Path(temporary) / 'home'
-                retired_frontend(home)
-                change(home)
-                with self.assertRaisesRegex(RuntimeError, message):
-                    installer.retired_compat_files(home)
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            retired_frontend(root / 'home')
-            extra_file(root / 'home')
-            with self.assertRaisesRegex(RuntimeError, 'unexpected files'):
-                self.full_install(root, [], retired=False)
-            self.assertFalse((root / 'home/.local/state/badi/install-backups').exists(), 'No file changed')
-            self.assertTrue((root / 'home' / installer.RETIRED_COMPAT_DROPIN).exists())
-
-    def test_another_override_starting_the_retired_launcher_stops_before_fcitx_restart(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            with self.assertRaisesRegex(RuntimeError, 'Fcitx was not restarted'), \
-                 contextlib.redirect_stderr(io.StringIO()):
-                self.full_install(Path(temporary), [], retired=True, overridden=True)
-
     def test_rejected_arguments_change_nothing(self):
-        # The retired frontend's opt-out is gone with it.
-        for argv in (['--broker-only', '--screen-reader-accessibility'], ['--no-wayland-compat'],
-                     ['--wayland-compat-build', '/x']):
+        for argv in (['--broker-only', '--screen-reader-accessibility'], ['--no-such-option']):
             with self.subTest(argv=argv), patch('sys.argv', ['install-desktop.py', *argv]), \
                  patch.object(installer.subprocess, 'run') as command, contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as stopped:

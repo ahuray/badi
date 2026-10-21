@@ -4,7 +4,7 @@ import { open, readFile, readdir, mkdir, lstat, realpath } from 'node:fs/promise
 import { resolve, relative, join, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { createLabServer, validateConfigs } from './server.mjs';
+import { createLabServer, validateConfigs, LENGTHS } from './server.mjs';
 import { LabWorker } from './worker.mjs';
 import { validateSuite, planComparison, warmSchedule, summarizeResults } from './cases.mjs';
 import { modelArtifactPath, readModelArtifact, modelArtifactProvenance, modelArtifactArgs,
@@ -37,7 +37,7 @@ export function parseOptions(args, cwd = process.cwd()) {
     seed: { type: 'string', default: '42' }, 'cache-prompt': { type: 'string', default: 'true' },
     'warm-prefix': { type: 'string' },
     'model-artifact': { type: 'string' }, 'prefill-batch': { type: 'string' },
-    'memory-map': { type: 'string' },
+    'memory-map': { type: 'string' }, lengths: { type: 'string' },
   } });
   if (!values.suite || !values.output) throw new Error('Supply --suite PATH and --output NEWDIR under output/writing.');
   const integer = (name, min, max) => {
@@ -53,12 +53,23 @@ export function parseOptions(args, cwd = process.cwd()) {
   if (values['memory-map'] !== undefined && !['true', 'false'].includes(values['memory-map'])) throw new Error('Use --memory-map true or false.');
   if (values['warm-prefix'] !== undefined && values['warm-prefix'] !== 'true') throw new Error('--warm-prefix must be true when present.');
   const warmPrefix = values['warm-prefix'] === 'true';
-  const configs = validateConfigs(values.modes.split(',').map(mode => {
+  // Each suggestion length is its own production_boundary configuration;
+  // normal keeps the plain id and request, so earlier runs stay comparable.
+  const lengths = (values.lengths ?? 'normal').split(',');
+  if (!lengths.length || new Set(lengths).size !== lengths.length || lengths.some(length => !LENGTHS.includes(length))) {
+    throw new Error('Use --lengths with distinct values from short and normal.');
+  }
+  const configs = validateConfigs(values.modes.split(',').flatMap(mode => {
     const fixed = mode === 'production_boundary' || mode === 'framed' || mode === 'field_context' || mode === 'following_text' ||
       mode === 'context_bias' || mode === 'vocabulary';
-    return { id: mode, mode, budget_ms: fixed ? 550 : budget, max_tokens: fixed ? 8 : tokens,
+    const config = { id: mode, mode, budget_ms: fixed ? 550 : budget, max_tokens: fixed ? 8 : tokens,
       cache_prompt: fixed || values['cache-prompt'] === 'true', temperature: 0, seed: 42 };
+    if (mode !== 'production_boundary') return [config];
+    return lengths.map(length => length === 'normal' ? config : { ...config, id: `${mode}-${length}`, length });
   }));
+  if (values.lengths !== undefined && !configs.some(config => config.mode === 'production_boundary')) {
+    throw new Error('--lengths applies to production_boundary.');
+  }
   return { suitePath: resolve(cwd, values.suite), outputPath: resolve(cwd, values.output), configs, seed, warmPrefix,
     ...(values['prefill-batch'] !== undefined ? { prefillBatch: Number(values['prefill-batch']) } : {}),
     ...(values['memory-map'] !== undefined ? { memoryMap: values['memory-map'] === 'true' } : {}),

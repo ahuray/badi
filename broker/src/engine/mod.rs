@@ -13,6 +13,7 @@ mod outcomes;
 mod probe;
 mod session;
 mod settings;
+mod snooze;
 mod status;
 #[cfg(test)]
 mod tests;
@@ -36,7 +37,7 @@ use crate::protocol::{
     SessionId, SessionOpenPayload, SuggestionShowPayload,
 };
 use crate::provider::{CompletionProvider, RequestTrigger};
-use crate::settings::SettingsV2;
+use crate::settings::{SettingsV2, StableIdentity};
 
 pub use authority::AuthoritySnapshot;
 pub use desktop::QUIET_START_DELAY;
@@ -253,6 +254,8 @@ struct BrokerState {
     desktop: HashMap<String, DesktopStatePayload>,
     /// Editor connections that hold their terminal's focus.
     editor_focus: HashSet<String>,
+    /// Apps and sites the user snoozed, until when (runtime only).
+    snoozes: HashMap<StableIdentity, Instant>,
     /// Recent field visits, by target, with the words already counted toward
     /// learned words there, so each word counts once per field (ADR 0010).
     /// An observed field reopens its session as it changes; its target id
@@ -474,12 +477,17 @@ impl BrokerState {
         session_id: SessionId,
     ) -> Result<&mut SessionState, BrokerError> {
         let runtime_paused = self.runtime_paused();
-        let editor_focus_held = self.editor_focus_held();
+        // A snooze or an editor's focus withholds this target's grants.
+        let withheld = self
+            .sessions
+            .get(&session_id)
+            .ok_or(BrokerError::UnknownSession)
+            .map(|session| self.withheld_reason(&session.target.target).is_some())?;
         let session = self
             .sessions
             .get_mut(&session_id)
             .ok_or(BrokerError::UnknownSession)?;
-        if (editor_focus_held && editor::withheld_by_editor(&session.target.target))
+        if withheld
             || self.settings.as_ref().is_some_and(|settings| {
                 !authority::settings_allow_data(runtime_paused, settings, &session.target.target)
             })

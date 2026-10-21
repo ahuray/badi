@@ -6,12 +6,24 @@
 in `prepare()`, then builds and tests run offline. The active Arch stable Rust
 must satisfy the repository's 1.85 MSRV. This package targets x86-64 only.
 
-The package installs the broker, controls, observer and session helper in
-`/usr/lib/badi`, the Fcitx addon in `/usr/lib/fcitx5`, and user units in
-`/usr/lib/systemd/user`. It includes the MIT and complete modified SCOWL
-notices. It does not contain model weights, llama.cpp, the Prediction Lab or
-editor plugins. No install hook starts a service, changes accessibility,
-edits a home directory or downloads anything.
+The package installs:
+- the broker, controls, observer and session helper in `/usr/lib/badi`, with
+  `badi`, `badi-desktop` and `badictl` in `/usr/bin`;
+- the Fcitx addon in `/usr/lib/fcitx5` (built without `-Werror`, so a newer
+  compiler's warning cannot fail it) and user units in `/usr/lib/systemd/user`;
+- in `/usr/share/badi`: the seven panel files and the Fcitx theme script in
+  `omarchy/`, the Omarchy repair hook `omarchy/badi-repair.hook`, and the
+  Hyprland preview rule `hypr/badi.lua`;
+- the launcher and its icon;
+- in `/usr/share/licenses/badi-git`: `LICENSE` (MIT),
+  `THIRD-PARTY-NOTICES.txt` (every component compiled into the binaries, with
+  its licence text) and the complete modified SCOWL notices.
+
+`license=` names MIT and the licences of code compiled into the binaries:
+MPL-2.0 (spellbook, whose source is linked from the notices), BSD-3-Clause
+(subtle), Zlib (foldhash) and SCOWL. It does not contain model weights,
+llama.cpp, the Prediction Lab or editor plugins. No install hook starts a
+service, changes accessibility, edits a home directory or downloads anything.
 
 The current desktop contract still requires Omarchy/Hyprland and its lock
 IPC. This is not general Linux desktop support. The package requires Fcitx
@@ -81,11 +93,27 @@ for other apps and sites. Accessibility flags and desktop-wide
 `ScreenReaderEnabled` remain explicit user choices. Model readiness alone
 does not prove that an application exposes a supported field.
 
+A packaged install has no model yet: `badi model` shows the recommendation,
+and `badi model use ID` shows the terms that come with a Gemma or Llama model
+and downloads it only after you accept. The commands above fetch an Apache-2.0
+model instead.
+
 The optional panel files are in `/usr/share/badi/omarchy`. For a fresh panel,
-create a new `io.github.ahuray.badi` directory under
-`$XDG_CONFIG_HOME/omarchy/plugins` (default `~/.config/omarchy/plugins`), copy
-those five files, run `omarchy plugin validate` on it, then
-`omarchy plugin enable io.github.ahuray.badi`. For updates, use the backed-up
+create a new `io.github.ahuray.badi` directory under `~/.config/omarchy/plugins`,
+copy the eight files `manifest.json`, `BarWidget.qml`, `BadiMark.qml`,
+`DesktopPanel.qml`, `SettingsView.qml`, `BadiClient.qml`, `KeyModel.js` and
+`StatsModel.js`,
+run `omarchy plugin validate` on it, then
+`omarchy plugin enable io.github.ahuray.badi`. The panel runs `badi-desktop`
+from `PATH`, so it finds `/usr/bin/badi-desktop`.
+
+The grey preview's Hyprland rule needs `/usr/share/badi/hypr/badi.lua` copied
+to `~/.config/hypr/badi.lua` and `require("hypr.badi")` at the end of
+`~/.config/hypr/hyprland.lua`. Omarchy's refresh commands replace that file;
+copying `/usr/share/badi/omarchy/badi-repair.hook` into
+`~/.config/omarchy/hooks/post-boot.d/badi-repair` and `post-update.d/badi-repair`
+restores the line at login and after `omarchy-update` (`badi repair` does it by
+hand). For updates, use the backed-up
 [panel installer](https://github.com/ahuray/badi/blob/main/ui/omarchy-plugin/README.md)
 from the matching checkout. The package does not overwrite a personal panel.
 
@@ -99,9 +127,10 @@ accessibility choice using its recorded prior values.
 
 Use Arch's [Rust](https://wiki.archlinux.org/title/Rust_package_guidelines) and
 [VCS](https://wiki.archlinux.org/title/VCS_package_guidelines) packaging rules.
-Check `makepkg --printsrcinfo` against `.SRCINFO`, inspect package contents,
-and verify a clean build and the real install/update/removal flow on a fresh
-Omarchy system. Local build evidence does not establish that fresh-system
+CI's "AUR package / pinned Arch" job checks `makepkg --printsrcinfo` against
+`.SRCINFO`, builds and tests the commit under review as an unprivileged user,
+fails on any namcap error and checks that the notices are packaged. Verify the
+real install/update/removal flow on a fresh Omarchy system. Local build evidence does not establish that fresh-system
 flow. Naming, maintainer identity and publication require a final review.
 
 On 2026-10-13, an isolated Arch container using the 2026-10-12 repository

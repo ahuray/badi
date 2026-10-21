@@ -9,6 +9,36 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 - User-flow proof is a project skill (`.cursor/skills/verify-badi/`), and a
   pull request is ready only once it shows a proof artifact.
+- `badi length short` (or the panel's Writing row) shows one or two words
+  per suggestion instead of up to four. In a paired Lab comparison
+  (`run.mjs --lengths`) it halved harmful additions and appeared sooner; up
+  to eight words doubled them and was removed.
+- A leaner workspace: AGENTS.md sets the rules (every tracked file earns its
+  place, `output/` holds only cited evidence, parallel sessions use their own
+  worktrees), and `docs:check` refuses model, archive and build files and
+  anything over 1 MiB. Gone: the retired Fcitx 5.1.22 backport's migration
+  code, the unused screen-OCR probe, an old smoke script, unreferenced type
+  stubs and stale backlog items; the Fcitx runbook's tested-with diary is now
+  a current matrix, and Dependabot and CI target `main`.
+- Two Cotypist gaps closed: `badi snooze [MINUTES]` and the session helper's
+  `snooze` portal shortcut turn Badi off in the focused field's app or site
+  for 10 minutes (runtime broker state keyed by the exact app id or origin,
+  policy reason `snoozed`, withhold only; `badi resume` ends it, and the
+  panel shows it), and Ctrl+Shift+Tab sends a real Tab instead of accepting,
+  once the chord's modifiers are up.
+- Usage statistics: the broker keeps, per local day and per app or site,
+  the suggestions shown, the acceptances that landed and the words they
+  saved, as counts only in a private `stats.json` for 90 days; nothing is
+  counted while paused or where suggestions are off. `badi stats [--json]`
+  and `badictl stats status` read them, `badi stats forget` deletes them,
+  and the panel shows the week's words per day and the leading apps.
+- Ready for publication review: `THIRD-PARTY-NOTICES.txt` lists every
+  component compiled into the binaries with its licence text (generated from
+  Cargo.lock and checked in CI) and ships with both installs; the AUR
+  candidate names MPL-2.0, BSD-3-Clause and Zlib, packages the launcher,
+  preview rule and Omarchy hooks, builds without `-Werror`, and a new CI job
+  builds and namcap-checks it. The installer, `badi model use` and the panel
+  all show a model's terms before downloading it and record the acceptance.
 - A fresh Omarchy 4.0.6 works out of the box: its Chromium web apps and foot,
   its default terminal, get suggestions; `badi repair` and an Omarchy
   login/update hook restore what Omarchy's refresh commands drop; the

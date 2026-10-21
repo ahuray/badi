@@ -60,6 +60,7 @@ impl ProbeInput {
             cache_prompt: true,
             temperature: 0.0,
             seed: 42,
+            length: badi_broker::writing::SuggestionLength::Normal,
         };
         let initial = &self.events[0].request;
         let mut ids = std::collections::HashSet::new();
@@ -506,6 +507,7 @@ mod tests {
                             cache_prompt: true,
                             temperature: 0.0,
                             seed: 42,
+                            length: badi_broker::writing::SuggestionLength::Normal,
                         },
                     },
                 })

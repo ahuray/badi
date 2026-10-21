@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Control the persistent desktop broker, its settings and its diagnostics."""
 
+import datetime
 import importlib.util
 import json
 import os
@@ -32,21 +33,44 @@ BATTERY_TEXT = {
     "explicit": ("On battery or in the power-saver profile, suggestions appear only when you ask "
                  "(Ctrl+Shift+Space, Tab in manual fields). Explicit requests are unchanged."),
 }
+# Up to eight words doubled harmful additions in the Prediction Lab
+# (broker/README.md#suggestion-limits), so these are the lengths.
+LENGTH_TEXT = {
+    "short": "Suggestions show one or two words.",
+    "normal": "Suggestions show up to four words.",
+}
+LENGTH_STATUS = {"short": "one or two words", "normal": "up to four words"}
+SNOOZE_MINUTES = 10
+SNOOZE_REFUSALS = {
+    "no_context": "Nothing to snooze: type in a field where Badi suggests, then snooze from there.",
+    "ambiguous_session": "Nothing snoozed: fields of more than one app or site have focus.",
+    "paused": "Predictions are paused already. Run badi resume when you want suggestions again.",
+}
 DESKTOP_AUTOMATIC = {"normal": "as on mains", "deferred": "after the typing pause",
                      "explicit_only": "only when asked"}
 HELP = """Badi — local writing controls
 
   badi status [--json]          Model health and counters
+  badi stats [--json]          Suggestions shown, accepted and words saved
+                               today, in the last 7 days and per app or site
+                               (counts only, kept 90 days on this device)
+  badi stats forget            Delete every usage count
   badi settings                Open the Omarchy settings panel
   badi settings --json          Read the current settings document
   badi pause | resume          Persistently pause or resume predictions
   badi pause toggle            Pause if running, resume if paused (the
                                badi-session shortcut runs this)
+  badi snooze [MINUTES]        Turn Badi off in the focused field's app or
+                               site for MINUTES (1-1440, default 10); until
+                               the broker restarts, badi resume ends it sooner
+  badi snooze end              End every snooze now
   badi battery quiet|normal|explicit
                                Automatic suggestions on battery or in the
                                power-saver profile: start the model only
                                after a typing pause (default), as on mains,
                                or only when asked. Needs badi-session
+  badi length short|normal      How many words a suggestion shows: one or
+                               two, or up to four (default)
   badi mid-line on|off         Suggestions with a word after the caret (off
                                by default). Punctuation can still finish a word
   badi escape-quiet SECONDS|off How long a dismissal keeps its field quiet
@@ -322,6 +346,31 @@ def desktop_text(desktop, settings=None):
     return f"Desktop: session {desktop.get('session', 'unknown')} · {power} · battery mode {mode} · automatic {automatic}"
 
 
+def snooze_text(snoozes):
+    """One line naming each snoozed app or site, or None when none is."""
+    if not isinstance(snoozes, list) or not snoozes:
+        return None
+    items = [f"{identity_text(item['subject'])} ({max(1, round(item['remaining_ms'] / 60000))} min left)"
+             for item in snoozes]
+    return "Snoozed: " + ", ".join(items) + " · badi resume ends it"
+
+
+def snooze(minutes):
+    """Snoozes the focused field's app or site; returns the broker's status."""
+    try:
+        reply = json.loads(control(["snooze", str(minutes)]))
+    except RuntimeError as error:
+        refusal = SNOOZE_REFUSALS.get(str(error).removeprefix("error_code=rejected:"))
+        if refusal:
+            raise RuntimeError(refusal) from None
+        raise
+    return reply["payload"]["snooze"]
+
+
+def end_snoozes():
+    control(["snooze", "end"])
+
+
 def no_suggestion_summary(metrics):
     """Summarize content-free no-suggestion classes; None for older brokers."""
     breakdown = metrics.get("no_suggestion") if isinstance(metrics, dict) else None
@@ -331,6 +380,15 @@ def no_suggestion_summary(metrics):
               if isinstance(breakdown.get(reason), int) and breakdown[reason] > 0}
     last = breakdown.get("last") if breakdown.get("last") in NO_SUGGESTION else None
     return {"total": sum(counts.values()), "counts": counts, "last": last}
+
+
+def usage_stats(endpoint):
+    """The broker's usage statistics, or None when it cannot report them."""
+    try:
+        status = json.loads(control(["stats", "status"], endpoint))
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return status if isinstance(status, dict) else None
 
 
 def receipt(name):
@@ -537,6 +595,8 @@ def health_report():
         report["notes"].append("Fcitx is still using the previous addon build. Apply the native update after normal desktop unlock.")
     if broker.get("paused"):
         report["notes"].append("Predictions are paused. Run badi resume when you want suggestions again.")
+    elif snooze_text(broker.get("snoozes")):
+        report["notes"].append(snooze_text(broker["snoozes"]) + " sooner; it withholds only that app or site.")
     elif broker and broker.get("metrics", {}).get("provider_calls") == 0:
         report["notes"].append("The model is ready but has received no prediction requests since startup. Run badi debug on and badi debug watch, then type in a supported field. Native manual fields require Tab; observed fields need matching accessibility and Fcitx context.")
     settings = web_settings() if broker else {}
@@ -617,6 +677,11 @@ def context_text(chosen):
     return "off" if chosen is False else "not chosen: badi context on lets Badi finish words from the window"
 
 
+def length_text(length):
+    length = length if length in LENGTH_STATUS else "normal"
+    return f"{length}, {LENGTH_STATUS[length]} (badi length short|normal)"
+
+
 def status_text(health, settings=None):
     state = "Paused" if health["paused"] else "Model ready"
     counters = health["metrics"]
@@ -637,14 +702,13 @@ def status_text(health, settings=None):
             + f"Apps: {mode_text((settings or {}).get('all_linux_apps'), 'app')}\n"
             + f"Web sites: {mode_text((settings or {}).get('all_web_origins'), 'site')}\n"
             + f"Context: {context_text((settings or {}).get('context_words'))}\n"
+            + f"Length: {length_text((settings or {}).get('suggestion_length'))}\n"
             + f"Escape: dismiss (quiet: {quiet_text}) · Why nothing appeared: badi doctor; badi debug on; badi debug watch"
-            + "".join(f"\n{line}" for line in [desktop_text(health.get("desktop"), settings)] if line))
+            + "".join(f"\n{line}" for line in [desktop_text(health.get("desktop"), settings),
+                                                 snooze_text(health.get("snoozes"))] if line))
 
 
 MODEL_DIRECTORY = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "badi/models"
-# Models that are not Apache-2.0 come with terms a person accepts once.
-MODEL_LICENSES = {"Gemma": "the Gemma Terms of Use, https://ai.google.dev/gemma/terms",
-                  "Llama-3.2-Community": "the Llama 3.2 Community License, https://www.llama.com/llama3_2/license/"}
 
 
 def model_advice():
@@ -707,35 +771,6 @@ def print_models(report):
           "not a qualification. Switch with: badi model use ID")
 
 
-def download_model(model):
-    """The pinned file at its pinned revision, checked by size and SHA-256
-    before it becomes visible to the broker."""
-    import hashlib
-    import urllib.request
-    MODEL_DIRECTORY.mkdir(parents=True, exist_ok=True, mode=0o700)
-    target = MODEL_DIRECTORY / model["filename"]
-    partial = target.with_name(target.name + ".part")
-    url = f"https://huggingface.co/{model['repository']}/resolve/{model['revision']}/{model['filename']}"
-    digest = hashlib.sha256()
-    received = 0
-    with urllib.request.urlopen(url, timeout=60) as response, open(partial, "wb") as out:
-        os.fchmod(out.fileno(), 0o600)
-        while chunk := response.read(1 << 20):
-            out.write(chunk)
-            digest.update(chunk)
-            received += len(chunk)
-            if received > model["download_bytes"]:
-                break
-            if sys.stdout.isatty():
-                print(f"\rDownloading {model['name']}: {100 * received // model['download_bytes']}%", end="", flush=True)
-    if sys.stdout.isatty():
-        print()
-    if received != model["download_bytes"] or digest.hexdigest() != model["sha256"]:
-        partial.unlink(missing_ok=True)
-        raise RuntimeError(f"{model['filename']} did not match its pinned size and hash; nothing was installed.")
-    partial.rename(target)
-
-
 def use_model(model_id, accept_license):
     advice = model_advice()
     model = next((entry for entry in advice["catalog"] if entry["id"] == model_id), None)
@@ -743,14 +778,16 @@ def use_model(model_id, accept_license):
         raise RuntimeError("Unknown model. Choose one of: " + " ".join(entry["id"] for entry in advice["catalog"]))
     if not model["fits"]:
         raise RuntimeError(f"{model['name']} does not fit this device's memory with Badi's safety reserve.")
-    terms = MODEL_LICENSES.get(model["license"])
+    terms = badi_install.model_terms(model)
     if terms and not accept_license:
         if not sys.stdin.isatty():
             raise RuntimeError(f"{model['name']} is provided under {terms}. Add --accept-license to agree.")
         if input(f"{model['name']} is provided under {terms}. Do you accept it? [y/N] ").strip().lower() not in ("y", "yes"):
             raise RuntimeError("Nothing changed.")
+    if terms:
+        badi_install.record_model_terms(Path.home(), model)
     if not (MODEL_DIRECTORY / model["filename"]).is_file():
-        download_model(model)
+        badi_install.download_model(model, MODEL_DIRECTORY)
     update_settings(lambda document: document.update(writing_model=model["id"]))
     if not restart_service():
         raise RuntimeError("The model service did not answer after the restart. Run badi doctor.")
@@ -966,6 +1003,63 @@ def context_command(arguments):
         print("Every learned word was deleted. The keyring key stays for style learning; badi style forget removes it.")
     else:
         raise RuntimeError("Usage: badi context on|off|status|forget, or badi context app ID|site ORIGIN on|off")
+
+
+def set_suggestion_length(document, length):
+    # Absent is the canonical normal length, the default.
+    if length == "normal":
+        document.pop("suggestion_length", None)
+    else:
+        document["suggestion_length"] = length
+
+
+def stats_text(status):
+    """Content-free usage counts: the windows, the last seven days and the leading apps and sites."""
+    if not status.get("available"):
+        return ("Usage statistics are unreadable and kept as they are; "
+                "badi stats forget deletes them and counting starts again.")
+    summary = status["summary"]
+    totals = summary["totals"]
+    def row(label, counts):
+        return f"{label:16}{counts['shown']:>8}{counts['accepted']:>10}{counts['words']:>13}"
+    lines = [f"Usage on this device (counts only, kept {summary['retention_days']} days; badi stats forget deletes them)",
+             f"{'':16}{'Shown':>8}{'Accepted':>10}{'Words saved':>13}"]
+    for label, key in (("Today", "today"), ("Last 7 days", "last_7_days"),
+                       (f"{summary['retention_days']} days", "retained")):
+        lines.append(row(label, totals[key]))
+    if not summary["days"]:
+        lines.extend(["", "Nothing counted yet: suggestions shown and accepted in allowed apps and sites appear here."])
+        return "\n".join(lines)
+    today = datetime.date.fromisoformat(summary["today"])
+    by_day = {day["day"]: day for day in summary["days"]}
+    lines.extend(["", "Per day:"])
+    for offset in range(6, -1, -1):
+        day = today - datetime.timedelta(days=offset)
+        counts = by_day.get(day.isoformat(), {"shown": 0, "accepted": 0, "words": 0})
+        lines.append(row(f"  {day.isoformat()} {day.strftime('%a')}", counts))
+    leaders = sorted((subject for subject in summary["subjects"] if subject["last_7_days"]["shown"]
+                      or subject["last_7_days"]["accepted"]),
+                     key=lambda subject: (-subject["last_7_days"]["words"], -subject["last_7_days"]["shown"]))[:8]
+    if leaders:
+        lines.extend(["", "Apps and sites, last 7 days:"])
+        width = max(len(identity_text(subject["identity"])) for subject in leaders)
+        for subject in leaders:
+            counts = subject["last_7_days"]
+            lines.append(f"  {identity_text(subject['identity']):{width}}  ≈ {counts['words']} words · "
+                         f"{counts['shown']} shown · {counts['accepted']} accepted")
+    lines.extend(["", "Words saved counts the word parts Badi inserted; a later undo is not known."])
+    return "\n".join(lines)
+
+
+def stats_command(arguments):
+    if arguments in ([], ["--json"]):
+        status = json.loads(control(["stats", "status"]))
+        print(json.dumps(status, indent=2) if arguments else stats_text(status))
+    elif arguments == ["forget"]:
+        control(["stats", "forget"])
+        print("Every usage count was deleted. Counting continues from now.")
+    else:
+        raise RuntimeError("Usage: badi stats [--json] | badi stats forget")
 
 
 def set_battery_mode(document, mode):
@@ -1462,6 +1556,8 @@ def main(arguments):
         def toggle(document):
             document["paused"] = outcome["paused"] = not document["paused"]
         update_settings(toggle)
+        if not outcome["paused"]:
+            end_snoozes()
         print("Predictions paused." if outcome["paused"] else "Predictions resumed.")
         return
     if arguments[:1] == ["style"]:
@@ -1470,14 +1566,37 @@ def main(arguments):
     if arguments[:1] == ["context"]:
         context_command(arguments[1:])
         return
+    if arguments[:1] == ["stats"]:
+        stats_command(arguments[1:])
+        return
     if len(arguments) == 2 and arguments[0] == "battery" and arguments[1] in BATTERY_TEXT:
         update_settings(lambda document: set_battery_mode(document, arguments[1]))
         print(BATTERY_TEXT[arguments[1]])
         return
+    if len(arguments) == 2 and arguments[0] == "length" and arguments[1] in LENGTH_TEXT:
+        update_settings(lambda document: set_suggestion_length(document, arguments[1]))
+        print(LENGTH_TEXT[arguments[1]])
+        return
     if arguments in (["pause"], ["resume"]):
         paused = arguments == ["pause"]
         update_settings(lambda document: document.update(paused=paused))
+        if not paused:
+            # Resuming also ends every snooze early.
+            end_snoozes()
         print("Predictions paused." if paused else "Predictions resumed.")
+        return
+    if arguments == ["snooze", "end"]:
+        end_snoozes()
+        print("Every snooze ended. Badi suggests again wherever your settings allow it.")
+        return
+    if arguments[:1] == ["snooze"] and len(arguments) <= 2:
+        value = arguments[1] if len(arguments) == 2 else str(SNOOZE_MINUTES)
+        if not (value.isascii() and value.isdigit() and 1 <= int(value) <= 1440):
+            raise RuntimeError("Usage: badi snooze [MINUTES]|end (MINUTES is 1-1440, default 10)")
+        status = snooze(int(value))
+        minutes = int(value)
+        print(f"Badi is snoozed in {identity_text(status['subject'])} for {minutes} minute"
+              f"{'' if minutes == 1 else 's'}. badi resume ends it sooner.")
         return
     if arguments in (["mid-line", "on"], ["mid-line", "off"]):
         enabled = arguments[1] == "on"
@@ -1653,6 +1772,8 @@ def main(arguments):
             "activity": debug_activity(),
             # The file the running broker loaded; the advice's catalog names it.
             "model_file": active_model_file(),
+            # Counts per day and app or site; None from a broker without them.
+            "stats": usage_stats(endpoint),
         }
         print(json.dumps(overview))
     else:

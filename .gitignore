@@ -1,4 +1,5 @@
 # Editors and local agent state. The verification skill is project source.
+.claude/
 .cursor/*
 !.cursor/skills/
 .idea/

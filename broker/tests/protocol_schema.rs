@@ -250,7 +250,9 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         | MessageType::StyleForget
         | MessageType::StyleExport
         | MessageType::ContextQuery
-        | MessageType::ContextForget => {
+        | MessageType::ContextForget
+        | MessageType::StatsQuery
+        | MessageType::StatsForget => {
             let _: EmptyPayload = decode(envelope);
         }
         MessageType::HealthStatus => {
@@ -308,6 +310,10 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         }
         MessageType::ContextStatus => {
             let _: badi_broker::protocol::ContextStatusPayload = decode(envelope);
+        }
+        MessageType::StatsStatus => {
+            let payload: badi_broker::protocol::StatsStatusPayload = decode(envelope);
+            assert!(payload.summary.subjects.len() <= 3 * badi_broker::stats::MAX_SUMMARY_SUBJECTS);
         }
         MessageType::StyleSamples => {
             let payload: StyleSamplesPayload = decode(envelope);

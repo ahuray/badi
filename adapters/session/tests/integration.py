@@ -147,7 +147,7 @@ class SessionHelperIntegration(unittest.TestCase):
         self.wait_desktop("initial report", observed=True, session="active", low_power=True, automatic="deferred")
         wait_for(lambda: self.state()["inhibitors_held"] == 1, message="delay inhibitor")
         state = wait_for(lambda: (state := self.state())["bound"] and state, message="bound shortcuts")
-        self.assertEqual(state["bound"], ["open-settings", "pause-toggle"])
+        self.assertEqual(state["bound"], ["open-settings", "pause-toggle", "snooze"])
         self.assertEqual(state["registered"], "io.github.ahuray.badi")
         self.assertTrue(state["register_was_first"], "host registration precedes every other portal call")
         self.assertEqual(state["inhibit_mode"], "delay")
@@ -187,11 +187,12 @@ class SessionHelperIntegration(unittest.TestCase):
 
         # Shortcuts run the controller; nothing else.
         self.fake_call("Activate", "s", "pause-toggle")
+        self.fake_call("Activate", "s", "snooze")
         self.fake_call("Activate", "s", "open-settings")
         self.fake_call("Activate", "s", "unknown-shortcut")
-        wait_for(lambda: self.record.exists() and len(self.record.read_text().splitlines()) == 2,
+        wait_for(lambda: self.record.exists() and len(self.record.read_text().splitlines()) == 3,
                  message="controller runs")
-        self.assertEqual(sorted(self.record.read_text().splitlines()), ["pause toggle", "settings"])
+        self.assertEqual(sorted(self.record.read_text().splitlines()), ["pause toggle", "settings", "snooze"])
 
         # A broker restart: the helper reconnects and reports the current state again.
         self.fake_call("SetOnBattery", "b", True)

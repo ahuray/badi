@@ -1,0 +1,12 @@
+{
+  "v": 2,
+  "id": "ctl:snooze",
+  "type": "control.result",
+  "mono_ms": 41,
+  "payload": {
+    "action": "snooze",
+    "accepted": true,
+    "reason": "accepted",
+    "paused": false
+  }
+}

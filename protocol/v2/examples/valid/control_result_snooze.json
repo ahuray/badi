@@ -1,0 +1,22 @@
+{
+  "v": 2,
+  "id": "ctl:snooze",
+  "type": "control.result",
+  "mono_ms": 41,
+  "payload": {
+    "action": "snooze",
+    "accepted": true,
+    "reason": "accepted",
+    "paused": false,
+    "snooze": {
+      "subject": {
+        "kind": "browser_origin",
+        "adapter": "chromium",
+        "scheme": "https",
+        "host": "mail.example.com",
+        "port": 443
+      },
+      "remaining_ms": 600000
+    }
+  }
+}

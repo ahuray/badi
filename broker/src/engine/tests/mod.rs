@@ -40,7 +40,9 @@ mod generation;
 mod outcomes;
 mod policy;
 mod probe;
+mod snooze;
 mod spelling;
+mod stats;
 mod style;
 mod type_through;
 
@@ -302,6 +304,7 @@ fn controlled_settings(revision: u64, allowed: bool, learn: bool) -> SettingsV2 
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: crate::settings::BatteryMode::Normal,
+        suggestion_length: crate::settings::SuggestionLength::Normal,
         style_learning: false,
         context_words: None,
         context_words_off: Vec::new(),
@@ -347,6 +350,7 @@ fn controlled_learning_settings(revision: u64, retention: RetentionPermission) -
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: crate::settings::BatteryMode::Normal,
+        suggestion_length: crate::settings::SuggestionLength::Normal,
         style_learning: false,
         context_words: None,
         context_words_off: Vec::new(),

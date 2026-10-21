@@ -1,0 +1,10 @@
+{
+  "v": 2,
+  "id": "ctl:pause",
+  "type": "control.request",
+  "mono_ms": 40,
+  "payload": {
+    "action": "pause",
+    "minutes": 10
+  }
+}

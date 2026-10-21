@@ -5,7 +5,7 @@ set -euo pipefail
 artifact_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 qml_files=("$artifact_dir/BadiClient.qml" "$artifact_dir/BarWidget.qml" "$artifact_dir/BadiMark.qml" "$artifact_dir/DesktopPanel.qml" "$artifact_dir/SettingsView.qml")
 # Every installed source, QML and its JavaScript library, for the text gates.
-source_files=("${qml_files[@]}" "$artifact_dir/KeyModel.js")
+source_files=("${qml_files[@]}" "$artifact_dir/KeyModel.js" "$artifact_dir/StatsModel.js")
 compatibility="$artifact_dir/compatibility.json"
 omarchy_root=${BADI_OMARCHY_ROOT:-/usr/share/omarchy}
 require_host_checks=${BADI_OMARCHY_REQUIRE_HOST_CHECKS:-0}

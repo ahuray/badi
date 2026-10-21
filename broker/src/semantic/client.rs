@@ -413,6 +413,8 @@ pub struct SemanticClient {
     healing: Vec<crate::writing::WritingLanguage>,
     /// The person's language choices, shared by this client's clones.
     preferences: Arc<std::sync::RwLock<crate::writing::LanguagePreferences>>,
+    /// The person's suggestion length, shared by this client's clones.
+    length: Arc<std::sync::RwLock<crate::writing::SuggestionLength>>,
 }
 
 impl SemanticClient {
@@ -425,6 +427,7 @@ impl SemanticClient {
             bias_tokens: Arc::default(),
             healing: crate::writing::TRAILING_SPACE_HEALING.to_vec(),
             preferences: Arc::default(),
+            length: Arc::default(),
         })
     }
 
@@ -442,6 +445,19 @@ impl SemanticClient {
             Ok(mut guard) => preferences.clone_into(&mut guard),
             Err(poisoned) => preferences.clone_into(&mut poisoned.into_inner()),
         }
+    }
+
+    pub fn set_suggestion_length(&self, length: crate::writing::SuggestionLength) {
+        match self.length.write() {
+            Ok(mut guard) => *guard = length,
+            Err(poisoned) => *poisoned.into_inner() = length,
+        }
+    }
+
+    fn suggestion_length(&self) -> crate::writing::SuggestionLength {
+        self.length
+            .read()
+            .map_or_else(|poisoned| *poisoned.into_inner(), |guard| *guard)
     }
 
     /// This client with `text` as the window context whose words may bias
@@ -632,6 +648,7 @@ impl SemanticClient {
             return Ok(ObservedCompletion::language_abstention());
         }
         let healed = preferences.healed(&self.healing);
+        let length = self.suggestion_length();
         let plan = crate::writing::completion_plan(&request, &healed);
         // Healing can consume the whole window (one unfinished English word),
         // and an unhealed language can send only whitespace. Neither carries
@@ -664,6 +681,7 @@ impl SemanticClient {
                 echoed_prefix: plan.echo,
                 partials: partials.as_ref(),
                 confidence_floor: Some(crate::writing::CONFIDENCE_FLOOR),
+                length,
             },
         );
         let deadline = started + budget + WRITING_RESULT_GRACE;
@@ -1026,6 +1044,10 @@ impl CompletionProvider for SemanticClient {
 
     fn set_language_preferences(&self, preferences: &crate::writing::LanguagePreferences) {
         Self::set_language_preferences(self, preferences);
+    }
+
+    fn set_suggestion_length(&self, length: crate::settings::SuggestionLength) {
+        Self::set_suggestion_length(self, length);
     }
 
     async fn propose(
@@ -1509,12 +1531,14 @@ fn observed_completion(
 }
 
 /// How a streamed completion becomes a suggestion: the healed echo to strip,
-/// where partial suggestions go, and the confidence floor when gated.
+/// where partial suggestions go, the confidence floor when gated, and how
+/// many words it may show.
 #[derive(Clone, Copy, Default)]
 struct StreamShape<'a> {
     echoed_prefix: Option<&'a str>,
     partials: Option<&'a UnboundedSender<String>>,
     confidence_floor: Option<f64>,
+    length: crate::writing::SuggestionLength,
 }
 
 /// What the stream had produced when the writing budget ran out: its
@@ -1528,8 +1552,9 @@ fn deadline_observation(
 ) -> ObservedCompletion {
     let output = (!accumulator.invalid)
         .then(|| {
-            crate::writing::strip_healed_prefix(&accumulator.output, shape.echoed_prefix)
-                .and_then(crate::writing::available_complete_words)
+            crate::writing::strip_healed_prefix(&accumulator.output, shape.echoed_prefix).and_then(
+                |raw| crate::writing::available_complete_words(raw, shape.length.max_words()),
+            )
         })
         .flatten();
     let disposition = if output.is_some() {
@@ -1563,6 +1588,7 @@ async fn read_stream(
     shape: StreamShape<'_>,
 ) -> Result<ObservedCompletion, ClientError> {
     let echoed_prefix = shape.echoed_prefix;
+    let words = shape.length.max_words();
     // A gated suggestion is judged whole, so no partial may show first.
     let partials = shape.partials.filter(|_| shape.confidence_floor.is_none());
     let gate = |observed: ObservedCompletion, accumulator: &StreamAccumulator| {
@@ -1612,7 +1638,7 @@ async fn read_stream(
             if !accumulator.invalid {
                 if let Some(output) =
                     crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
-                        .and_then(crate::writing::available_complete_words)
+                        .and_then(|raw| crate::writing::available_complete_words(raw, words))
                 {
                     let extends = shown_partial.is_empty() || output.starts_with(&shown_partial);
                     if extends && output != shown_partial {
@@ -1624,7 +1650,7 @@ async fn read_stream(
                 }
                 if let Some(output) =
                     crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
-                        .and_then(|raw| crate::writing::complete_word_prefix(raw, 4, false))
+                        .and_then(|raw| crate::writing::complete_word_prefix(raw, words, false))
                 {
                     return Ok(gate(
                         observed_completion(
@@ -1656,6 +1682,7 @@ async fn read_stream(
         finish_observed_stream(
             &accumulator,
             echoed_prefix,
+            words,
             started,
             request_body_bytes,
             response_body_bytes,
@@ -1692,6 +1719,7 @@ fn gate_confidence(
 fn finish_observed_stream(
     accumulator: &StreamAccumulator,
     echoed_prefix: Option<&str>,
+    words: usize,
     started: Instant,
     request_body_bytes: usize,
     response_body_bytes: usize,
@@ -1710,7 +1738,7 @@ fn finish_observed_stream(
         } else {
             continuation
         };
-        match crate::writing::complete_word_prefix(raw, 4, true) {
+        match crate::writing::complete_word_prefix(raw, words, true) {
             Some(output) => (CompletionDisposition::Suggested, Some(output)),
             None => (CompletionDisposition::ModelAbstained, None),
         }

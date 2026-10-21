@@ -18,11 +18,12 @@ use crate::engine::{Broker, BrokerConfig};
 use crate::ipc::{read_envelope, write_envelope};
 use crate::protocol::{
     Activation, AdapterDescriptor, AdapterKind, AuthorityAckPayload, AuthorityChangedPayload,
-    CURRENT_PROTOCOL_VERSION, Capability, ContextChangedPayload, Coordinates, DesktopSession,
-    DesktopStatePayload, DesktopStatusPayload, EditorFocusPayload, EditorStatusPayload,
-    EmptyPayload, FieldDescriptor, FieldPurpose, HealthStatusPayload, HelloAckPayload,
-    HelloPayload, MessageType, OffsetUnit, PROTOCOL_VERSION, ProbeOutcome, ProbeRequestPayload,
-    ProbeResultPayload, Selection, SessionId, SessionOpenPayload, SettingsReplacePayload,
+    CURRENT_PROTOCOL_VERSION, Capability, ContextChangedPayload, ControlAction,
+    ControlResultPayload, Coordinates, DesktopSession, DesktopStatePayload, DesktopStatusPayload,
+    EditorFocusPayload, EditorStatusPayload, EmptyPayload, FieldDescriptor, FieldPurpose,
+    GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload, MessageType,
+    OffsetUnit, PROTOCOL_VERSION, ProbeOutcome, ProbeRequestPayload, ProbeResultPayload,
+    ReasonCode, Selection, SessionId, SessionOpenPayload, SettingsReplacePayload,
     SettingsStatusPayload, StyleKeyPayload, SuggestRequestPayload, TargetDescriptor, TargetKind,
     WireEnvelope,
 };
@@ -455,6 +456,7 @@ async fn v1_settings_roundtrip_projects_browser_rules_and_preserves_native_rules
                 mid_line: false,
                 escape_quiet_seconds: 0,
                 battery_mode: crate::settings::BatteryMode::Normal,
+                suggestion_length: crate::settings::SuggestionLength::Normal,
                 style_learning: false,
                 context_words: None,
                 context_words_off: Vec::new(),
@@ -738,6 +740,68 @@ async fn probe_is_a_private_v2_cli_request_and_v1_health_keeps_its_counters() {
         .await
         .expect("legacy task")
         .expect("legacy shutdown");
+}
+
+#[tokio::test]
+async fn snooze_is_a_v2_control_that_names_why_nothing_was_snoozed() {
+    let snooze = GlobalControlRequestPayload {
+        action: ControlAction::Snooze,
+        minutes: Some(10),
+    };
+    let (mut cli, connection) = connect_test_client(
+        AdapterKind::Cli,
+        CURRENT_PROTOCOL_VERSION,
+        vec![Capability::Control, Capability::Health],
+    )
+    .await;
+    let response = exchange(
+        &mut cli,
+        MessageType::ControlRequest,
+        CURRENT_PROTOCOL_VERSION,
+        &snooze,
+    )
+    .await;
+    assert_eq!(response.message_type, MessageType::ControlResult);
+    let result: ControlResultPayload = response.decode_payload().expect("control result");
+    assert!(!result.accepted && result.snooze.is_none());
+    assert_eq!(result.reason, ReasonCode::NoContext);
+    let ended = exchange(
+        &mut cli,
+        MessageType::ControlRequest,
+        CURRENT_PROTOCOL_VERSION,
+        &GlobalControlRequestPayload {
+            action: ControlAction::SnoozeEnd,
+            minutes: None,
+        },
+    )
+    .await;
+    let ended: ControlResultPayload = ended.decode_payload().expect("end result");
+    assert!(ended.accepted);
+    drop(cli);
+    connection.await.expect("CLI task").expect("CLI shutdown");
+
+    let (mut legacy, connection) = connect_test_client(
+        AdapterKind::Cli,
+        PROTOCOL_VERSION,
+        vec![Capability::Control],
+    )
+    .await;
+    let rejected = exchange(
+        &mut legacy,
+        MessageType::ControlRequest,
+        PROTOCOL_VERSION,
+        &snooze,
+    )
+    .await;
+    assert_eq!(
+        rejected.message_type,
+        MessageType::Error,
+        "v1 has no snooze"
+    );
+    connection
+        .await
+        .expect("legacy task")
+        .expect("rejected snooze closes cleanly");
 }
 
 #[tokio::test]
@@ -1084,6 +1148,32 @@ async fn desktop_reports_need_the_negotiated_capability_and_protocol_v2() {
     );
     drop(client);
     let _ = connection.await;
+}
+
+#[tokio::test]
+async fn only_a_settings_client_reads_or_forgets_usage_statistics() {
+    // Only the settings capability reads which apps were used.
+    for (kind, capabilities) in [
+        (AdapterKind::Cli, vec![Capability::Control]),
+        (AdapterKind::Cli, vec![Capability::Health]),
+        (AdapterKind::Session, vec![Capability::DesktopSignals]),
+    ] {
+        for message_type in [MessageType::StatsQuery, MessageType::StatsForget] {
+            let (mut client, connection) =
+                connect_test_client(kind, CURRENT_PROTOCOL_VERSION, capabilities.clone()).await;
+            let reply = exchange(
+                &mut client,
+                message_type,
+                CURRENT_PROTOCOL_VERSION,
+                &EmptyPayload {},
+            )
+            .await;
+            assert_eq!(reply.message_type, MessageType::Error, "{message_type:?}");
+            assert_eq!(reply.payload["code"], "invalid_capability");
+            drop(client);
+            let _ = connection.await;
+        }
+    }
 }
 
 #[tokio::test]

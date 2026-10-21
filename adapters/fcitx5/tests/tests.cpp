@@ -766,6 +766,45 @@ void preInputKeysConsumeOnlyBadiUi() {
           "a slid field window still has to contain the typed characters");
 }
 
+void literalTabIsARealTabWhereBadiWouldTakeTab() {
+    const PanelObservation owned{.candidates = true, .candidatesOwnedByBadi = true};
+    const PanelObservation foreign{.preedit = true};
+    const PreKey literal{.literalTab = true};
+    const PreKey taken{.literalTab = true, .tabTaken = true};
+    check(decidePreKey(literal, true, false, true, owned) == PreKeyAction::LiteralTab &&
+              decidePreKey(literal, true, false, true, {}) == PreKeyAction::LiteralTab,
+          "while a suggestion shows, the chord is a real Tab");
+    check(decidePreKey(taken, false, false, false, {}) == PreKeyAction::LiteralTab &&
+              decidePreKey({.repeat = true, .literalTab = true, .tabTaken = true}, true, false, false, {}) ==
+                  PreKeyAction::LiteralTab,
+          "a held Tab or the manual path's request makes it a real Tab too, auto-repeat included");
+    check(decidePreKey(literal, true, false, false, {}) == PreKeyAction::Cancel &&
+              decidePreKey(literal, false, false, false, {}) == PreKeyAction::Cancel,
+          "elsewhere the chord stays the application's (a browser's previous tab)");
+    check(decidePreKey(literal, true, false, true, foreign) == PreKeyAction::Cancel &&
+              decidePreKey(taken, true, false, false, foreign) == PreKeyAction::Cancel,
+          "a foreign input method keeps the chord");
+    check(preKeyActionName(PreKeyAction::LiteralTab) == "literal_tab", "the trace names the chord");
+
+    const auto normalized = [](const char *name) { return ::fcitx::Key(name).normalize(); };
+    check(normalized("Control+Shift+ISO_Left_Tab").check(literalTabChord()) &&
+              normalized("Control+Shift+Tab").check(literalTabChord()),
+          "Ctrl+Shift+Tab matches whichever keysym the layout sends with Shift");
+    check(!normalized("Control+Tab").check(literalTabChord()) &&
+              !normalized("Shift+ISO_Left_Tab").check(literalTabChord()) &&
+              !normalized("Control+Alt+Shift+ISO_Left_Tab").check(literalTabChord()),
+          "only the exact chord is a literal Tab");
+
+    check(lastModifierReleased(::fcitx::Key("Control+Control_L")) &&
+              lastModifierReleased(::fcitx::Key("Shift+Shift_R")),
+          "the release that leaves no modifier down sends the Tab");
+    check(!lastModifierReleased(::fcitx::Key("Control+Shift+Shift_L")) &&
+              !lastModifierReleased(::fcitx::Key("Control+Shift+Control_R")),
+          "while Ctrl or Shift is still down, a forwarded Tab would carry it");
+    check(!lastModifierReleased(::fcitx::Key("Control+Tab")) && !lastModifierReleased(::fcitx::Key("Tab")),
+          "only a modifier's release counts");
+}
+
 void heldTabWaitsForTheCarriedRest() {
     check(tabMayHoldForRest(true, true, false, false),
           "a rest that returns on its own may hold one Tab");
@@ -890,6 +929,8 @@ void invokeRoutesByEditPathAndExplainsWaits() {
     facts.policyAllowed = false;
     facts.fresh = false;
     check(manualRequestNotice(facts) == notice::kDisabled, "a denied app is explained before stale text");
+    facts.snoozed = true;
+    check(manualRequestNotice(facts) == notice::kSnoozed, "a snooze is named, with the way out");
     facts.paused = true;
     check(manualRequestNotice(facts) == notice::kPaused, "a pause is named as a pause");
     facts = ready;
@@ -959,6 +1000,13 @@ void brokerSessionRetiresSessionAndPolicyTogether() {
     broker.answer(true, {}, true);
     broker.retire();
     check(!broker.contextWords, "retiring forgets context on");
+    broker.answer(false, {}, false, true);
+    check(broker.snoozed && !broker.policyAllowed, "a snooze is a named denial");
+    broker.answer(true, {}, false, true);
+    check(!broker.snoozed, "an allowed answer is never snoozed");
+    broker.answer(false, {}, false, true);
+    broker.retire();
+    check(!broker.snoozed, "retiring forgets the snooze with the policy");
 }
 
 void inspectionBacksOffWithoutInput() {
@@ -1032,6 +1080,9 @@ void nativePolicyMustBeCoherent() {
     for (const auto key : {"context_allowed", "display_allowed", "suggestions_allowed"})
         denied["payload"][key] = false;
     check(strictPolicyStatus(denied.dump()), "a coherent denial is a valid response");
+    auto snoozed = denied;
+    snoozed["payload"]["reason"] = "snoozed";
+    check(strictPolicyStatus(snoozed.dump()), "a snooze is a known denial");
     auto words = allowed;
     words["payload"]["context_words"] = true;
     check(strictPolicyStatus(words.dump()), "context on is a fact about an allowed target");
@@ -1824,6 +1875,7 @@ int main(int argc, char **argv) {
         {"observer requests name the bound field", observerRequestsNameTheBoundField},
         {"inspection backoff without input", inspectionBacksOffWithoutInput},
         {"pre-input keys consume only Badi UI", preInputKeysConsumeOnlyBadiUi},
+        {"literal Tab where Badi would take Tab", literalTabIsARealTabWhereBadiWouldTakeTab},
         {"held Tab waits for the carried rest", heldTabWaitsForTheCarriedRest},
         {"word acceptance grants only the next word", wordAcceptanceGrantsOnlyTheNextWord},
         {"invoke routes and waiting notices", invokeRoutesByEditPathAndExplainsWaits},

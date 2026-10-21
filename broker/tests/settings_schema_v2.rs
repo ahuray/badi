@@ -198,6 +198,49 @@ fn all_linux_apps_is_an_optional_v2_only_boolean() {
 }
 
 #[test]
+fn suggestion_length_is_an_optional_v2_only_choice() {
+    let mut document = json!({
+        "schema": "badi.settings.v2",
+        "revision": 4,
+        "paused": false,
+        "suggestion_length": "short",
+        "subjects": []
+    });
+    assert!(validator(2).is_valid(&document));
+    let decoded: SettingsV2 = serde_json::from_value(document.clone()).expect("typed");
+    decoded.validate().expect("valid settings");
+    assert_eq!(
+        decoded.suggestion_length,
+        badi_broker::settings::SuggestionLength::Short
+    );
+    assert_eq!(serde_json::to_value(&decoded).expect("encoded"), document);
+
+    document["suggestion_length"] = json!("normal");
+    assert!(validator(2).is_valid(&document));
+    let encoded = serde_json::to_value(
+        serde_json::from_value::<SettingsV2>(document.clone()).expect("normal"),
+    )
+    .expect("encoded");
+    assert!(
+        encoded.get("suggestion_length").is_none(),
+        "normal is the canonical absence"
+    );
+    for invalid in [json!("long"), json!("medium"), json!(8)] {
+        document["suggestion_length"] = invalid;
+        assert!(!validator(2).is_valid(&document));
+        assert!(serde_json::from_value::<SettingsV2>(document.clone()).is_err());
+    }
+    // Producers never write null; typed decoding reads it as absence, as it
+    // does for every optional settings key.
+    document["suggestion_length"] = json!(null);
+    assert!(!validator(2).is_valid(&document));
+    let legacy = json!({"schema": "badi.settings.v1", "revision": 4, "paused": false,
+                        "suggestion_length": "short", "subjects": []});
+    assert!(!validator(1).is_valid(&legacy));
+    assert!(serde_json::from_value::<SettingsV2>(legacy).is_err());
+}
+
+#[test]
 fn all_web_origins_is_an_optional_v2_only_boolean() {
     let mut document = json!({
         "schema": "badi.settings.v2",

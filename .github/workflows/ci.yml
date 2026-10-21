@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -35,6 +35,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Test
         run: cargo test --workspace --all-features --locked
+      - name: Check third-party notices against Cargo.lock
+        run: python3 scripts/third-party-notices.py --check
       - name: Install Node for editor protocol and Readline checks
         uses: actions/setup-node@v7
         with:
@@ -102,6 +104,57 @@ jobs:
         env:
           BADI_OMARCHY_ROOT: ${{ github.workspace }}/.ci/omarchy
         run: bash ui/omarchy-plugin/tests/check-host.sh
+
+  aur-package:
+    name: AUR package / pinned Arch
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    container:
+      image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure the dated Arch package snapshot
+        run: |
+          # Pacman expands these repository placeholders.
+          # shellcheck disable=SC2016
+          printf '%s\n' \
+            'Server = https://archive.archlinux.org/repos/2026/10/19/$repo/os/$arch' \
+            > /etc/pacman.d/mirrorlist
+          pacman -Syyu --noconfirm
+          pacman -S --needed --noconfirm base-devel ca-certificates git namcap sudo
+      - name: Check out source with history for pkgver
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the package's dependencies
+        run: |
+          # makepkg refuses root; its dependencies come from the PKGBUILD itself.
+          source packaging/aur/PKGBUILD
+          pacman -S --needed --noconfirm "${makedepends[@]}" "${depends[@]}"
+          useradd --create-home builder
+          git config --system --add safe.directory '*'
+      - name: Check .SRCINFO matches the PKGBUILD
+        run: |
+          cp -r packaging/aur /home/builder/aur
+          chown -R builder: /home/builder/aur
+          sudo -u builder bash -c 'cd /home/builder/aur && makepkg --printsrcinfo' | diff -u packaging/aur/.SRCINFO -
+      - name: Build, test and package this commit
+        run: |
+          # The candidate follows main; here it builds the commit under test.
+          sed -i "s|^source=.*|source=('badi::git+file://$GITHUB_WORKSPACE#commit=$GITHUB_SHA')|" /home/builder/aur/PKGBUILD
+          sudo -u builder bash -c 'cd /home/builder/aur && makepkg --noconfirm'
+      - name: Lint the PKGBUILD and the package
+        run: |
+          cd /home/builder/aur
+          package=$(ls badi-git-*.pkg.tar.zst)
+          namcap PKGBUILD | tee namcap.txt
+          namcap "$package" | tee -a namcap.txt
+          # namcap marks errors with ' E: '; warnings are reviewed in the package README.
+          ! grep -F ' E: ' namcap.txt
+          bsdtar -tf "$package" | grep -Fx 'usr/share/licenses/badi-git/THIRD-PARTY-NOTICES.txt'
 
   fcitx5:
     name: Fcitx5 addon / pinned Arch

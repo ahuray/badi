@@ -22,14 +22,15 @@ links to it. A tested app version is not a claim about Linux in general.
   Brave Origin, a web app, Zen, Writer, Obsidian, Neovim, Ghostty and VS
   Code. Omawrite and other observed Qt fields suggest again despite a
   fcitx5-qt 5.1.16 bug, but cannot replace a typo until it is fixed
-  (step 3). German,
+  (step 2). German,
   French, Spanish, Italian, Dutch and Polish spelling are opt-in
   (`badi spelling`). The closest Omarchy alternative, Oma Tab, replaces the
   input method and ships a 4.8 GB model.
 - **Interaction:** type-through returns a typed-through remainder in about
   50 ms with no model call, also when a browser re-admits the field
   ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md));
-  Tab takes a word and Ctrl+→ the rest; search boxes stay quiet; the inline
+  Tab takes a word and Ctrl+→ the rest; `badi length short` shows one or
+  two words instead of up to four; search boxes stay quiet; the inline
   preview ([ADR 0006](docs/decisions/0006-grey-preview-is-an-overlay.md))
   reaches VS Code, iframe editors, Qt apps and Writer.
 - **Desktop signals:** the installed [session helper](adapters/session/README.md)
@@ -87,8 +88,12 @@ Standing user decisions:
   [Fcitx contract](adapters/fcitx5/README.md#contract));
 - Gemma 4 E2B stays out of the catalog: no overall gain for four times the
   memory ([model fit](docs/architecture/model-selection.md));
+- suggestions show one or two words (`short`) or up to four (`normal`, the
+  default); up to eight was removed after it doubled harmful additions with
+  Gemma 3 1B, and a longer length returns only with a model that writes it
+  without more harm (2026-10-21, [comparison](broker/README.md#suggestion-limits));
 - distribution starts with an AUR package; publication and an Omarchy proposal
-  still need approval after naming and licence review;
+  still need approval after the naming review (the licence review is done);
 - Discord uses desktop-wide AT-SPI `ScreenReaderEnabled`, with recorded prior
   settings and unchanged Badi app/site permissions.
 
@@ -111,52 +116,37 @@ Open decisions, for the user:
 Each step ends with its completion test. Steps that install to the desktop or
 publish need the user's go-ahead first; the rest can start at once.
 
-1. **Finish licence and packaging for publication.** Badi is MIT and no
-   shipped dependency is GPL or unknown (audit, 2026-10-20), but:
-   - a binary package needs a third-party notices file (BSD-3-Clause
-     `subtle`, MPL-2.0 `spellbook`'s source location, Zlib, MIT and Apache
-     texts, nlohmann-json) and a wider `license=` array;
-   - Gemma, the recommended model, is downloaded with its terms shown only
-     by `badi model use`: the installer's first-model hint and the panel
-     skip them, and no acceptance is recorded;
-   - `.SRCINFO` is stale (`fcitx5>=5.1.22`, no `libsecret`), the desktop
-     launcher, `hypr/badi.lua` and the theme hook are not packaged, and the
-     addon builds with `-Werror` under makepkg's flags;
-   - CI never builds the package, and the plugin manifests carry no licence.
-   *Done when* CI builds a namcap-clean package that installs the notices,
-   no model downloads before its terms are shown and accepted, and the
-   [AUR README](packaging/aur/README.md) lists exactly what is packaged.
-   Publishing still waits for the naming review.
-2. **Close the Cotypist gaps that fit Badi.** Cotypist 0.22 (researched
+1. **Close the Cotypist gaps that fit Badi.** Cotypist 0.22 (researched
    2026-10-20 from its site, help pages and reviews) offers these, and Badi
    does not yet:
-   - a suggestion length setting, from 1–2 to 10–15 words (Badi shows up
-     to four), each length measured in the Lab before it ships;
-   - a shortcut that turns the current app off for a few minutes, and a way
-     to send a literal Tab while a suggestion shows;
-   - words completed per day and per app (Badi counts since model start,
-     content-free, and should keep it that way);
    - global and per-app instructions, and personalized word choice (Badi's
-     style samples are stored but not yet read, step 6);
+     style samples are stored but not yet read, step 5);
    - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
      4B–30B): a llama.cpp Vulkan or CUDA runtime for machines with a GPU,
      measured with the [bench](evaluation/llm-bench/README.md) and the Lab.
 
    Badi already matches or beats it on:
+   - words saved per day and per app or site, as counts only
+     ([`badi stats`](README.md#usage-statistics));
    - inline grey text in the field's font, Tab for a word, a key for all
      of it, Escape quiet and a request key;
+   - a length setting for one or two words (`badi length short`) or up to
+     four;
    - mid-line completion and typo correction where the editor allows it;
    - terminal agent prompts, and on-screen words through accessibility
      rather than screen recording;
-   - learned words, battery modes, no telemetry, no account, MIT.
+   - learned words, battery modes, no telemetry, no account, MIT;
+   - a snooze for the focused app or site (`badi snooze`, a portal
+     shortcut) and Ctrl+Shift+Tab for a real Tab while a suggestion shows.
 
    Left out on purpose: clipboard awareness and screen recording (the
    [context firewall](VISION.md#context-firewall)), sync and telemetry
-   (non-goals) and colon emoji (Fcitx owns emoji). Its app list's gaps here
+   (non-goals), colon emoji (Fcitx owns emoji) and suggestions longer than
+   four words (standing user decision above). Its app list's gaps here
    (Firefox, VS Code's default EditContext, Google Docs, Slack, Discord)
    are under [Remaining surfaces](#remaining-surfaces). *Done when* each
    item ships or is declined in a recorded user decision.
-3. **Get the fcitx5-qt surrounding-text bug fixed upstream.** Since
+2. **Get the fcitx5-qt surrounding-text bug fixed upstream.** Since
    fcitx5-qt 5.1.16
    ([upstream change](https://github.com/fcitx/fcitx5-qt/commit/bac684ce07d9df78ee37dab1cbdcebfa71bf24ec),
    unchanged on its `master` branch), an input-method update that does not ask
@@ -170,14 +160,14 @@ publish need the user's go-ahead first; the rest can start at once.
    2026-10-20. *Done when* a fixed fcitx5-qt
    restores the replacement in Omawrite (two native undos), and a Qt
    Widgets app (Telegram) has been checked.
-4. **Finish the installed-flow matrix with someone present.** Still open: a
+3. **Finish the installed-flow matrix with someone present.** Still open: a
    real suspend and resume, a VT switch and a Tab right after each, and
    several monitors when a second display is at hand. Restarts, undo, pause,
    composition, stale focus, Ghostty's typed line and fractional scaling
    passed on 2026-10-19 ([matrix](adapters/fcitx5/README.md#tested-with)).
    *Done when* those show zero wrong-field or stale edits and the
    [session helper](adapters/session/README.md) runbook records them.
-5. **Check context in a real mail client and the Claude desktop app.** Opt-in
+4. **Check context in a real mail client and the Claude desktop app.** Opt-in
    context shipped ([ADR 0010](docs/decisions/0010-context-finishes-words.md)).
    A disposable mail-style page in Chromium 154 passed every check live on
    2026-10-20 ([observer runbook](adapters/accessibility/README.md#window-words-context-on)),
@@ -189,16 +179,20 @@ publish need the user's go-ahead first; the rest can start at once.
    *Done when* both show a window or learned word finished, and
    `window_chars` appears on their `context.changed` in a `badi debug on`
    trace.
-6. **Compare style learning in the Lab.** Feed an explicit `badi style
+5. **Compare style learning in the Lab.** Feed an explicit `badi style
    export` into a Lab suite's `style` field and compare against no style on
    the user's own held-out drafts, with the `style_fact_conflict` fence and
    native review ([broker runbook](broker/README.md#style-learning-opt-in)).
    Linux apps cannot learn under the settings schema; lifting that is a
    separate privacy decision. *Done when* the comparison shows a per-language
    gain without more harm, before any prompt reads samples.
-7. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
-   *Done when* install, update and removal leave nothing behind; publication
-   waits for the naming and licence review.
+6. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
+   CI builds and namcap-checks the package on every change, and the licence
+   review is done: [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) ships
+   with it and every model download shows its terms first. *Done when*
+   install, update and removal on a fresh Omarchy leave nothing behind, the
+   panel's model-terms row has been tried live, and publication then waits
+   only for the naming review.
 
 ## Later, by area
 
@@ -209,9 +203,8 @@ publish need the user's go-ahead first; the rest can start at once.
       fields are ([observer runbook](adapters/accessibility/README.md)).
       Escape quiet is a broker setting (`escape_quiet_seconds`), covered in
       the [broker runbook](broker/README.md).
-- [ ] Measure overflow frequency per app; the multi-monitor live trial
-      remains open (scale 1.5 passed on 2026-10-19). The implemented placement and fallback behavior
-      is in the [preview contract](adapters/accessibility/README.md#caret-geometry-and-preview).
+- [ ] Measure overflow frequency per app; the placement and fallback are in
+      the [preview contract](adapters/accessibility/README.md#caret-geometry-and-preview).
       Investigate explicit requests in horizontally scrolled, very narrow
       inputs: the installed Chromium trial at 100 CSS px did not establish
       coverage ([tested boundary](adapters/fcitx5/README.md#tested-with)).
@@ -227,10 +220,6 @@ publish need the user's go-ahead first; the rest can start at once.
       a zero glyph box, so its overlay keeps the caret-size fallback.
 - [ ] Browser event cost on large pages (`daemon.py` focus handling and
       `field.py` serialization).
-- [ ] Each streamed partial suggestion hides the overlay and draws it again
-      about 1 ms later (`preview hidden cause=replaced` in the
-      [debug trace](README.md#debug-trace), Chromium, 2026-10-14). Check
-      whether that flickers, and move the shown surface instead of hiding it.
 
 ### Speed and footprint
 
@@ -239,11 +228,10 @@ reported, resident memory about 1.3 GB, and no quality regression in the Lab.
 Measured alternatives that were not adopted are in the
 [runtime runbook](broker/README.md#writing-model-runtime).
 
-- [ ] Fewer generated tokens, only after a held-out quality comparison.
 - [ ] Win back the confidence gate's wait: it holds each suggestion until its
       last token (p50 +76 ms, 4 of 92 shown past 550 ms at 15 W). Fewer
       generated tokens, or showing the first word once its own tokens and
-      the rest pass, are candidates; each needs the held-out comparison.
+      the rest pass, are candidates; each needs a held-out quality comparison.
 - [ ] Pin the runtime's four threads to performance cores (`taskset`/
       `--cpu-mask`): one idle measurement saw 94/30 against 54/21 prompt/
       generate tokens per second for Qwen3-1.7B, a second under load saw no
@@ -294,14 +282,14 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 - [ ] Qualify French, Spanish and Portuguese before turning them on by default
       (they are opt-in with `badi suggest LANG on`). Gather independently
-      reviewed confirmation prefixes and full-addition reviews for both,
+      reviewed confirmation prefixes and full-addition reviews for each,
       alongside the existing English, German and Persian confirmation gate.
 - [ ] Improve short-fragment language coverage without reducing precision.
       The conservative field selector keeps the adapter hint for short or
       uncertain text; explicit per-app overrides remain available
       ([contract](broker/README.md#writing-model-runtime)).
-- [ ] Global and per-app instructions, and a strength setting that trades
-      frequency for confidence.
+- [ ] A strength setting that trades frequency for confidence (instructions
+      are in step 1).
 - [ ] Cut the latency of the combined instruction/boundary mode (18/22 useful
       in development, 2.8 s cold median) and confirm it independently.
 - [ ] Keep facts in style examples from overriding the draft; confirm the Lab's
@@ -312,9 +300,7 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Spelling replacement undo in Telegram and Xournal++. Omawrite 0.5.0
       (2026-10-12, disposable `teh ` → `the `) needed two Ctrl+Z steps: the
       first removed the correction and the second restored the typo. Obsidian
-      already replaces the suffix in one undo step. German and Persian stay
-      off until the Lab spelling gate passes (the 40-case run was 2 and 4
-      useful, with one unwanted change each).
+      already replaces the suffix in one undo step.
 - [ ] Lift English with Gemma 3 1B, its weakest language (29% useful against
       Qwen3 1.7B's 40% and Granite 4.0 H-Tiny's 42% in the
       [European-language screen](docs/architecture/model-selection.md)):
@@ -361,6 +347,17 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 ### Engineering upkeep
 
+- [ ] The partial-suggestion path (`KeepPartial`, `shown_partial` in
+      `broker/src/engine/generation.rs`) no longer runs: the confidence gate
+      delivers each suggestion whole, and only test fakes send partials.
+      Delete it, or reuse it for showing the first word once its own tokens
+      pass the gate (Speed and footprint).
+
+- [ ] Carry out [ADR 0007](docs/decisions/0007-retire-protocol-v1.md),
+      accepted on 2026-10-13: `PROTOCOL_VERSION` is still 1, the v1 surface is
+      live in the broker, and `protocol/v1/` and the v1 settings schema are
+      still loaded by tests. Every client already sends `min_v: 2`.
+
 - [ ] The Lab test "process exit rejects the active request and a later
       request starts a fresh process" (`worker.test.mjs`) failed once in CI
       with "Could not confirm cleanup of the owned model process" (#110, a
@@ -371,4 +368,11 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       `paused` after `badi pause` and an explicit request (#118, a change
       outside Neovim), and passed on rerun and in three local runs. If it
       recurs, find whether the plugin's status or the broker's pause
-      reaches it late.
+      reaches it late. On #123 (no Neovim change) `plugin.test.mjs:38`
+      failed once the same way: after the pause the virtual text was still
+      `thank you`, not the suggestion; it passed on rerun and five local runs.
+- [ ] `adapters/shell/test-preview.py` failed once in CI in
+      `test_the_display_timer_runs_only_while_a_preview_is_held`: the PTY
+      never emitted `HOOK:`, only a cleared line (#133, no shell change).
+      It passed three local runs. If it recurs, find whether the Readline
+      hook prints before the test starts reading.
