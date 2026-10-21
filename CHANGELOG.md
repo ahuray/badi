@@ -9,6 +9,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 - User-flow proof is a project skill (`.cursor/skills/verify-badi/`), and a
   pull request is ready only once it shows a proof artifact.
+- The owned writing runtime waits on its child's pidfd with rustix `poll`.
+  Tokio 1.53.3 deprecates the safe `AsyncFd` constructors as unsound
+  ([tokio#8587](https://github.com/tokio-rs/tokio/pull/8587)), and their
+  replacement is `unsafe`, which this workspace forbids.
 - `badi length short` (or the panel's Writing row) shows one or two words
   per suggestion instead of up to four. In a paired Lab comparison
   (`run.mjs --lengths`) it halved harmful additions and appeared sooner; up

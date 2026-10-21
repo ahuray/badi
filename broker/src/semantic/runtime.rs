@@ -10,12 +10,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use rustix::event::{PollFd, PollFlags, poll};
+use rustix::io::retry_on_intr;
 use rustix::process::{Pid, Signal, kill_process_group};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::io::Interest;
-use tokio::io::unix::AsyncFd;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -649,10 +649,15 @@ impl CompletionProvider for OwnedRuntime {
         let notice = self
             .exit_notice
             .as_ref()
-            .and_then(|notice| notice.try_clone().ok())
-            .and_then(|notice| AsyncFd::with_interest(notice, Interest::READABLE).ok());
+            .and_then(|notice| notice.try_clone().ok());
         if let Some(notice) = notice {
-            if notice.readable().await.is_ok() {
+            // Tokio 1.53.3 deprecates the safe `AsyncFd` constructors as unsound
+            // and makes registration `unsafe`, which this crate forbids. A pidfd
+            // is level-triggered and readable once the child exits, so rustix
+            // `poll` observes the same event. Dropping this wait detaches the
+            // blocked poll; `OwnedRuntime`'s drop reaps the child and wakes it.
+            let wait = tokio::task::spawn_blocking(move || wait_for_exit_notice(&notice));
+            if wait.await.is_ok_and(|result| result.is_ok()) {
                 return;
             }
         }
@@ -946,6 +951,15 @@ fn tighten_runtime_socket(path: &Path) -> Result<(), RuntimeError> {
     }
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
         .map_err(RuntimeError::Endpoint)
+}
+
+fn wait_for_exit_notice(notice: &OwnedFd) -> io::Result<()> {
+    let mut fds = [PollFd::new(notice, PollFlags::IN)];
+    let ready = retry_on_intr(|| poll(&mut fds, None))?;
+    if ready == 0 || !fds[0].revents().contains(PollFlags::IN) {
+        return Err(io::Error::other("pidfd poll was not readable"));
+    }
+    Ok(())
 }
 
 fn terminate_child(child: &mut Child) -> io::Result<ExitStatus> {
