@@ -6,7 +6,6 @@ pkgbase = badi-git
 	arch = x86_64
 	license = MIT
 	license = MPL-2.0
-	license = BSD-3-Clause
 	license = Zlib
 	license = LicenseRef-SCOWL
 	makedepends = git
