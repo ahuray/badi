@@ -240,3 +240,4 @@ boundary.
   universal Linux support.
 - Before finishing, inspect the final diff and status, including untracked
   files, and state what changed, which checks ran and what remains unverified.
+- A pull request is ready only with a proof artifact from [verify-badi](.cursor/skills/verify-badi/SKILL.md), as the [pull request template](.github/pull_request_template.md) requires.
