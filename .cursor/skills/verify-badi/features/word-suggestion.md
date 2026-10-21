@@ -9,6 +9,7 @@ A word suggestion is the grey continuation Badi shows while you type. Tab takes 
 - `suggest-accept-all` inserts the whole continuation.
 - `suggest-dismiss` removes the continuation without changing the text.
 - `suggest-request` asks for a continuation when automatic suggestions are quiet.
+- `suggest-literal-tab` types a real Tab with Ctrl+Shift+Tab and does not accept.
 
 ## How to get to it (user POV)
 
@@ -17,6 +18,7 @@ A word suggestion is the grey continuation Badi shows while you type. Tab takes 
 - In a Neovim prose buffer, pause while typing, then Tab or Ctrl+Right. Leaving Insert mode dismisses.
 - In Obsidian, pause, then Tab or Ctrl+Right (Command+Right on that app's chord).
 - In a Xournal++ text cell, Tab asks and Tab again accepts a word.
+- Press Ctrl+Shift+Tab while a suggestion is showing. The suggestion goes away and the app receives Tab. Where Badi would not take Tab, that chord stays the app's key.
 
 ## Driving it with verify-badi
 
@@ -32,7 +34,8 @@ Preconditions:
 
 ## Gotchas
 
-- The bridge proves the authorized insert. It does not paint grey text and it does not press a key. `suggest-accept-word`, Escape, and Ctrl+Shift+Space on a real field stay unverified until those entry points are driven.
+- The bridge proves the authorized insert. It does not paint grey text and it does not press a key. `suggest-accept-word`, Escape, Ctrl+Shift+Space, and Ctrl+Shift+Tab on a real field stay unverified until those entry points are driven.
+- `badi length short` does not shorten this fixture. The phrase provider ignores suggestion length, so ` for your time` is still the whole continuation. A shorter grey suggestion is the local model, in [Suggestion length](./suggestion-length.md).
 - Tab with no suggestion stays Tab. Do not treat a focused field that ignored Tab as an accepted suggestion.
 - The headless instance grants Bash only. Neovim, Obsidian, and Fcitx apps fail closed against it.
 - Fcitx `commitString` shows the text was dispatched. It does not show the app applied it, and undo on an IME-parity app may merge with earlier typing.

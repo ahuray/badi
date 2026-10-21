@@ -24,7 +24,7 @@ Two surfaces. A pass on one does not verify the other.
 ## Driving conventions
 
 - Start from the baseline for the surface the step names.
-- Headless commands are `verify-badi.sh drive word-suggestion`, `drive spelling`, and `drive pause`.
+- Headless commands are `verify-badi.sh drive word-suggestion`, `drive spelling`, `drive pause`, `drive length`, `drive stats`, and `drive snooze`.
 - Desktop keys are Tab, Ctrl+Right, Escape, and Ctrl+Shift+Space. Bash uses Ctrl-X, then Tab.
 - After a pause journey, pause is off.
 - Cleanup removes the instance root and the broker pid this run started. It keeps `/tmp/badi-verify-evidence/$BADI_VERIFY_RUN_ID`.
@@ -49,8 +49,11 @@ Each feature file starts with an H1 and one paragraph of user-visible behavior, 
 
 ## Features
 
-- [Word suggestion](./word-suggestion.md) covers grey text, the next word, the whole suggestion, dismissal, and an explicit request.
+- [Word suggestion](./word-suggestion.md) covers grey text, the next word, the whole suggestion, dismissal, an explicit request, and a literal Tab.
+- [Suggestion length](./suggestion-length.md) covers one or two words versus up to four.
 - [Spelling](./spelling.md) covers an unambiguous English correction on the Bash path, and the real-model and Writer paths that a VM cannot stand in for.
+- [Snooze](./snooze.md) covers turning Badi off in the focused app or site, and the refusal when nothing is focused.
 - [Pause and access](./pause-and-access.md) covers pause, app grants, status, and doctor.
+- [Usage statistics](./usage-stats.md) covers the content-free counts of suggestions, acceptances and words saved.
 - [Omarchy panel](./omarchy-panel.md) covers the bar mark and the settings popout.
 - [Prediction Lab](./prediction-lab.md) covers comparing a draft on the local model without changing the installed broker.

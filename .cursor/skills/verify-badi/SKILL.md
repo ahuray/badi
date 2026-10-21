@@ -74,9 +74,12 @@ The harness is `.cursor/skills/verify-badi/verify-badi.sh`. Headless drives spea
 .cursor/skills/verify-badi/verify-badi.sh drive word-suggestion
 .cursor/skills/verify-badi/verify-badi.sh drive spelling
 .cursor/skills/verify-badi/verify-badi.sh drive pause
+.cursor/skills/verify-badi/verify-badi.sh drive length
+.cursor/skills/verify-badi/verify-badi.sh drive stats
+.cursor/skills/verify-badi/verify-badi.sh drive snooze
 ```
 
-`word-suggestion` types `thank you`, accepts ` for your time`, and checks `commits_applied` increased by one. `spelling` types `We need an adress `, accepts replacement `address ` for `adress `, and checks the same counter. `pause` turns pause on, shows the bridge refuse the suggestion with `BLOCKED app_disabled_or_model_paused`, checks the context counter did not move, then turns pause off. Each drive waits until `sessions` is 0 again.
+`word-suggestion` types `thank you`, accepts ` for your time`, and checks `commits_applied` increased by one. `spelling` types `We need an adress `, accepts replacement `address ` for `adress `, and checks the same counter. `pause` turns pause on, shows the bridge refuse the suggestion with `BLOCKED app_disabled_or_model_paused`, checks the context counter did not move, then turns pause off. `length` sets `suggestion_length` to `short`, checks the phrase fixture is still ` for your time`, and restores normal. `stats` reads today's counts after `word-suggestion` has applied one acceptance, then forgets them. `snooze` refuses with `rejected:no_context` while idle, snoozes Bash while the bridge holds a focused field, and ends that snooze. Each drive waits until `sessions` is 0 again, and `snooze` also leaves `snoozes` empty.
 
 Doctor must have exited 0 for this run id first. The helper enforces that.
 
@@ -154,6 +157,9 @@ The pid is `BADI_BROKER_PID` in `instance.env`. The check is the command line, n
 .cursor/skills/verify-badi/verify-badi.sh drive word-suggestion
 .cursor/skills/verify-badi/verify-badi.sh drive spelling
 .cursor/skills/verify-badi/verify-badi.sh drive pause
+.cursor/skills/verify-badi/verify-badi.sh drive length
+.cursor/skills/verify-badi/verify-badi.sh drive stats
+.cursor/skills/verify-badi/verify-badi.sh drive snooze
 .cursor/skills/verify-badi/verify-badi.sh cleanup
 ```
 

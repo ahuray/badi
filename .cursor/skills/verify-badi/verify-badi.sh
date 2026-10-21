@@ -2,7 +2,7 @@
 # Isolated phrase-broker verification for Badi. Never touches a desktop install.
 # Usage, from the repository root, with BADI_VERIFY_RUN_ID set:
 #   .cursor/skills/verify-badi/verify-badi.sh launch|doctor|drive FEATURE|cleanup
-# FEATURE is word-suggestion, spelling, or pause.
+# FEATURE is word-suggestion, spelling, pause, length, stats, or snooze.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -367,6 +367,196 @@ cleanup() {
   printf '%s\nevidence=%s\n' "$note" "$EVIDENCE" | tee "$EVIDENCE/cleanup.txt"
 }
 
+drive_length() {
+  load_instance
+  assert_doctor_passed
+  local name="length"
+  broker_env python3 - "$CLI" "$SOCKET" "$EVIDENCE" set <<'PY'
+import json, os, subprocess, sys
+cli, socket, evidence, action = sys.argv[1:]
+def show():
+    return json.loads(subprocess.check_output([cli, "--socket", socket, "settings", "show"], text=True))
+def replace(mutate):
+    document = show()
+    expected = document["revision"]
+    document["revision"] = expected + 1
+    mutate(document)
+    subprocess.run([cli, "--socket", socket, "settings", "replace", "--if-revision", str(expected), "--json", "-"],
+                   input=json.dumps(document), text=True, check=True)
+if action == "set":
+    replace(lambda document: document.__setitem__("suggestion_length", "short"))
+    shown = show()
+    if shown.get("suggestion_length") != "short":
+        raise SystemExit(f"short was not stored: {shown.get('suggestion_length')!r}")
+    open(f"{evidence}/settings-short.json", "w").write(json.dumps(shown))
+else:
+    if "suggestion_length" in show():
+        replace(lambda document: document.pop("suggestion_length", None))
+    shown = show()
+    if "suggestion_length" in shown:
+        raise SystemExit("normal still stores suggestion_length")
+    open(f"{evidence}/settings-normal.json", "w").write(json.dumps(shown))
+PY
+  local before
+  before="$(printf 'thank you' | base64 -w0)"
+  printf '{"operation":"suggest","before":"%s"}\n{"operation":"cancel"}\n' "$before" \
+    > "$EVIDENCE/drive-${name}.commands.jsonl"
+  run_bridge "$EVIDENCE/drive-${name}.commands.jsonl" "$EVIDENCE/drive-${name}.txt" \
+    "$EVIDENCE/drive-${name}.err" "$EVIDENCE/drive-${name}.exit"
+  local bridge_code=$?
+  broker_env python3 - "$CLI" "$SOCKET" "$EVIDENCE" restore <<'PY'
+import json, os, subprocess, sys
+cli, socket, evidence, action = sys.argv[1:]
+def show():
+    return json.loads(subprocess.check_output([cli, "--socket", socket, "settings", "show"], text=True))
+def replace(mutate):
+    document = show()
+    expected = document["revision"]
+    document["revision"] = expected + 1
+    mutate(document)
+    subprocess.run([cli, "--socket", socket, "settings", "replace", "--if-revision", str(expected), "--json", "-"],
+                   input=json.dumps(document), text=True, check=True)
+if "suggestion_length" in show():
+    replace(lambda document: document.pop("suggestion_length", None))
+shown = show()
+if "suggestion_length" in shown:
+    raise SystemExit("normal still stores suggestion_length")
+open(f"{evidence}/settings-normal.json", "w").write(json.dumps(shown))
+PY
+  [[ "$bridge_code" -eq 0 ]] || die "length bridge failed"
+  python3 - "$EVIDENCE/drive-${name}.txt" <<'PY'
+import base64, pathlib, sys
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+status, _, rest = lines[1].partition(" ")
+text = base64.b64decode(rest.split(" ")[0]).decode()
+if status != "SUGGEST" or text != " for your time":
+    raise SystemExit(f"phrase fixture changed under short: {lines[1]!r}")
+if not lines[2].startswith("DONE"):
+    raise SystemExit(lines[2])
+PY
+  wait_idle "$EVIDENCE/status-after-${name}.json"
+  printf 'verify-badi drive length ok\n'
+}
+
+drive_stats() {
+  load_instance
+  assert_doctor_passed
+  local name="stats"
+  local tries=0
+  while (( tries < 20 )); do
+    broker_env "$CLI" --socket "$SOCKET" stats status > "$EVIDENCE/stats-before-forget.json"
+    python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); t=s["summary"]["totals"]["today"]; raise SystemExit(0 if s.get("available") is True and t["shown"]>=1 and t["accepted"]>=1 else 1)' \
+      "$EVIDENCE/stats-before-forget.json" && break
+    tries=$((tries + 1))
+    sleep 0.1
+  done
+  python3 - "$EVIDENCE/stats-before-forget.json" <<'PY'
+import json, sys
+status = json.load(open(sys.argv[1]))
+today = status["summary"]["totals"]["today"]
+if status.get("available") is not True or today["shown"] < 1 or today["accepted"] < 1:
+    raise SystemExit(f"no landed acceptance in today's stats: {today}")
+bash = [item for item in status["summary"]["subjects"]
+        if item["identity"].get("adapter") == "shell" and item["identity"].get("app_id") == "bash"]
+if not bash or bash[0]["today"]["accepted"] < 1:
+    raise SystemExit("Bash is not among today's counted subjects")
+PY
+  broker_env "$CLI" --socket "$SOCKET" stats forget > "$EVIDENCE/stats-forget.json"
+  broker_env "$CLI" --socket "$SOCKET" stats status > "$EVIDENCE/stats-after-forget.json"
+  python3 -c 'import json,sys; t=json.load(open(sys.argv[1]))["summary"]["totals"]["today"]; raise SystemExit(0 if t=={"shown":0,"accepted":0,"words":0} else 1)' \
+    "$EVIDENCE/stats-after-forget.json" || die "stats forget left today's counts"
+  printf 'verify-badi drive stats ok\n'
+}
+
+drive_snooze() {
+  load_instance
+  assert_doctor_passed
+  local name="snooze"
+  end_snooze() { broker_env "$CLI" --socket "$SOCKET" snooze end > "$EVIDENCE/snooze-end.json" || true; }
+  trap end_snooze EXIT
+  set +e
+  broker_env "$CLI" --socket "$SOCKET" snooze > "$EVIDENCE/drive-${name}-idle.txt" 2> "$EVIDENCE/drive-${name}-idle.err"
+  local idle_code=$?
+  set -e
+  [[ "$idle_code" -eq 1 ]] || die "idle snooze exited ${idle_code}"
+  grep -q 'error_code=rejected:no_context' "$EVIDENCE/drive-${name}-idle.err" || die "idle snooze was not rejected:no_context"
+  python3 -c 'import json,sys; raise SystemExit(0 if json.load(open(sys.argv[1])).get("snoozes")==[] else 1)' \
+    <(status_json) || die "idle snooze recorded a subject"
+  local before
+  before="$(printf 'thank you' | base64 -w0)"
+  broker_env python3 - "$BRIDGE" "$CLI" "$SOCKET" "$EVIDENCE" "$before" <<'PY'
+import base64, json, signal, subprocess, sys, time
+bridge, cli, socket, evidence, before = sys.argv[1:]
+
+def timed_out(_signum, _frame):
+    raise TimeoutError("snooze drive timed out")
+
+signal.signal(signal.SIGALRM, timed_out)
+signal.alarm(8)
+proc = subprocess.Popen(["node", bridge], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+transcript = open(f"{evidence}/drive-snooze.txt", "w")
+def read():
+    line = proc.stdout.readline()
+    if line == "":
+        raise SystemExit("bridge closed stdout")
+    transcript.write(line)
+    transcript.flush()
+    return line.rstrip("\n")
+def control(*args):
+    result = subprocess.run([cli, "--socket", socket, *args], capture_output=True, text=True)
+    return result
+try:
+    ready = read()
+    if not ready.startswith("READY"):
+        raise SystemExit(ready)
+    proc.stdin.write(json.dumps({"operation": "suggest", "before": before}) + "\n")
+    proc.stdin.flush()
+    suggested = read()
+    status, _, rest = suggested.partition(" ")
+    text = base64.b64decode(rest.split(" ")[0]).decode() if rest else ""
+    if status != "SUGGEST" or text != " for your time":
+        raise SystemExit(f"unexpected suggestion: {suggested!r}")
+    snoozed = control("snooze")
+    if snoozed.returncode != 0:
+        raise SystemExit(f"focused snooze failed: {snoozed.stderr}")
+    health = json.loads(control("status").stdout)
+    open(f"{evidence}/status-snoozed.json", "w").write(json.dumps(health))
+    subjects = health.get("snoozes") or []
+    if len(subjects) != 1 or subjects[0]["subject"].get("app_id") != "bash" or subjects[0]["remaining_ms"] <= 0:
+        raise SystemExit(f"snooze did not name Bash: {subjects!r}")
+    blocked = None
+    for _ in range(10):
+        proc.stdin.write(json.dumps({"operation": "status"}) + "\n")
+        proc.stdin.flush()
+        blocked = read()
+        if blocked == "BLOCKED app_disabled_or_model_paused":
+            break
+        time.sleep(0.05)
+    else:
+        raise SystemExit(f"bridge stayed allowed while Bash was snoozed: {blocked!r}")
+    ended = control("snooze", "end")
+    if ended.returncode != 0:
+        raise SystemExit(ended.stderr)
+    cleared = json.loads(control("status").stdout)
+    if cleared.get("snoozes") != []:
+        raise SystemExit(f"snooze end left {cleared.get('snoozes')!r}")
+    open(f"{evidence}/status-after-snooze.json", "w").write(json.dumps(cleared))
+finally:
+    signal.alarm(0)
+    if proc.poll() is None:
+        proc.stdin.close()
+        proc.kill()
+        proc.wait(timeout=2)
+    transcript.close()
+PY
+  trap - EXIT
+  end_snooze
+  wait_idle "$EVIDENCE/status-after-${name}.json"
+  python3 -c 'import json,sys; raise SystemExit(0 if json.load(open(sys.argv[1])).get("snoozes")==[] else 1)' \
+    "$EVIDENCE/status-after-${name}.json" || die "snooze survived the drive"
+  printf 'verify-badi drive snooze ok\n'
+}
+
 require_run_id
 case "${1:-}" in
   launch) launch ;;
@@ -376,7 +566,10 @@ case "${1:-}" in
       word-suggestion) drive_word_suggestion ;;
       spelling) drive_spelling ;;
       pause) drive_pause ;;
-      *) die "Usage: drive word-suggestion|spelling|pause" ;;
+      length) drive_length ;;
+      stats) drive_stats ;;
+      snooze) drive_snooze ;;
+      *) die "Usage: drive word-suggestion|spelling|pause|length|stats|snooze" ;;
     esac
     ;;
   cleanup) cleanup ;;
