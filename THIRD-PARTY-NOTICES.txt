@@ -50,14 +50,14 @@ rand_core 0.10.1  MIT OR Apache-2.0  https://github.com/rust-random/rand_core
 rustix 1.1.5  Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  https://github.com/bytecodealliance/rustix
 serde 1.0.229  MIT OR Apache-2.0  https://github.com/serde-rs/serde
 serde_core 1.0.229  MIT OR Apache-2.0  https://github.com/serde-rs/serde
-serde_json 1.0.151  MIT OR Apache-2.0  https://github.com/serde-rs/json
+serde_json 1.0.154  MIT OR Apache-2.0  https://github.com/serde-rs/json
 sha2 0.11.0  MIT OR Apache-2.0  https://github.com/RustCrypto/hashes
 signal-hook-registry 1.4.8  MIT OR Apache-2.0  https://github.com/vorner/signal-hook
 socket2 0.6.5  MIT OR Apache-2.0  https://github.com/rust-lang/socket2
 spellbook 0.4.2  MPL-2.0  https://github.com/helix-editor/spellbook; source: https://crates.io/crates/spellbook/0.4.2
 thiserror 2.0.21  MIT OR Apache-2.0  https://github.com/dtolnay/thiserror
-tokio 1.53.2  MIT  https://github.com/tokio-rs/tokio
-tokio-util 0.7.19  MIT  https://github.com/tokio-rs/tokio
+tokio 1.53.3  MIT  https://github.com/tokio-rs/tokio
+tokio-util 0.7.20  MIT  https://github.com/tokio-rs/tokio
 typenum 1.20.1  MIT OR Apache-2.0  https://github.com/paholg/typenum
 unicode-script 0.5.8  MIT OR Apache-2.0  https://github.com/unicode-rs/unicode-script
 unicode-segmentation 1.13.3  MIT OR Apache-2.0  https://github.com/unicode-rs/unicode-segmentation
@@ -304,7 +304,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-==> allocator-api2 0.2.21 (LICENSE-APACHE), itoa 1.0.18 (LICENSE-APACHE), libc 0.2.189 (LICENSE-APACHE), pin-project-lite 0.2.17 (LICENSE-APACHE), serde 1.0.229 (LICENSE-APACHE), serde_core 1.0.229 (LICENSE-APACHE), serde_json 1.0.151 (LICENSE-APACHE), thiserror 2.0.21 (LICENSE-APACHE)
+==> allocator-api2 0.2.21 (LICENSE-APACHE), itoa 1.0.18 (LICENSE-APACHE), libc 0.2.189 (LICENSE-APACHE), pin-project-lite 0.2.17 (LICENSE-APACHE), serde 1.0.229 (LICENSE-APACHE), serde_core 1.0.229 (LICENSE-APACHE), serde_json 1.0.154 (LICENSE-APACHE), thiserror 2.0.21 (LICENSE-APACHE)
 
                               Apache License
                         Version 2.0, January 2004
@@ -483,7 +483,7 @@ TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
 
 END OF TERMS AND CONDITIONS
 
-==> allocator-api2 0.2.21 (LICENSE-MIT), itoa 1.0.18 (LICENSE-MIT), linux-raw-sys 0.12.1 (LICENSE-MIT), pin-project-lite 0.2.17 (LICENSE-MIT), rustix 1.1.5 (LICENSE-MIT), serde 1.0.229 (LICENSE-MIT), serde_core 1.0.229 (LICENSE-MIT), serde_json 1.0.151 (LICENSE-MIT), thiserror 2.0.21 (LICENSE-MIT), zmij 1.0.23 (LICENSE-MIT)
+==> allocator-api2 0.2.21 (LICENSE-MIT), itoa 1.0.18 (LICENSE-MIT), linux-raw-sys 0.12.1 (LICENSE-MIT), pin-project-lite 0.2.17 (LICENSE-MIT), rustix 1.1.5 (LICENSE-MIT), serde 1.0.229 (LICENSE-MIT), serde_core 1.0.229 (LICENSE-MIT), serde_json 1.0.154 (LICENSE-MIT), thiserror 2.0.21 (LICENSE-MIT), zmij 1.0.23 (LICENSE-MIT)
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2429,7 +2429,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
 
-==> tokio 1.53.2 (LICENSE), tokio-util 0.7.19 (LICENSE)
+==> tokio 1.53.3 (LICENSE), tokio-util 0.7.20 (LICENSE)
 
 MIT License
 
