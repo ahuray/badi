@@ -312,3 +312,134 @@ async fn a_carried_remainder_survives_its_field_being_admitted_again_unchanged()
     }
     assert_eq!(provider.calls.load(Ordering::Relaxed), 2);
 }
+
+/// Records every suggestion length the engine hands it.
+struct LengthProvider {
+    lengths: std::sync::Mutex<Vec<crate::settings::SuggestionLength>>,
+    calls: AtomicU64,
+}
+
+#[async_trait]
+impl CompletionProvider for LengthProvider {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::PhraseV1
+    }
+
+    fn set_suggestion_length(&self, length: crate::settings::SuggestionLength) {
+        self.lengths.lock().expect("lengths").push(length);
+    }
+
+    async fn complete(
+        &self,
+        request: ProviderRequest,
+        _cancellation: CancellationToken,
+    ) -> Result<Option<String>, ProviderError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Ok(Some(format!(" revision {}", request.before)))
+    }
+}
+
+/// Telegram's observed fields allowed, at `length`.
+fn telegram_settings(revision: u64, length: crate::settings::SuggestionLength) -> SettingsV2 {
+    let mut settings = controlled_settings(revision, true, false);
+    settings.suggestion_length = length;
+    settings.subjects = vec![SubjectRule {
+        identity: StableIdentity::linux_app(
+            crate::settings::LinuxAdapter::Fcitx,
+            "org.telegram.desktop",
+        )
+        .expect("Telegram identity"),
+        permissions: settings.subjects[0].permissions,
+    }];
+    settings
+}
+
+/// An observed Telegram field on a broker with settings, which also needs
+/// the policy capability.
+async fn open_telegram_session(
+    broker: &Broker,
+    target_id: &str,
+) -> (SessionId, mpsc::Receiver<BrokerEvent>) {
+    let session_id = SessionId::new();
+    let (sink, receiver) = mpsc::channel(32);
+    broker
+        .open_session(
+            coordinates(session_id, 0),
+            SessionOpenPayload {
+                target: TargetDescriptor {
+                    kind: TargetKind::DesktopApplication,
+                    app_id: "org.telegram.desktop".to_owned(),
+                    target_id: target_id.to_owned(),
+                    origin: None,
+                },
+                activation: Activation::Always,
+            },
+            SessionAuthority {
+                protocol_version: 2,
+                adapter_kind: AdapterKind::Fcitx,
+                capabilities: vec![
+                    Capability::Context,
+                    Capability::Suggestion,
+                    Capability::Policy,
+                    Capability::CommitDispatchedUnverified,
+                ],
+            },
+            event_sink(sink),
+        )
+        .await
+        .expect("open Telegram session");
+    (session_id, receiver)
+}
+
+#[tokio::test]
+async fn a_new_suggestion_length_reaches_the_provider_and_ends_the_carry() {
+    use crate::settings::SuggestionLength;
+    let temporary = tempdir().expect("temporary directory");
+    let paths = StoragePaths::new(
+        temporary.path().join("config/badi"),
+        temporary.path().join("data/badi"),
+    )
+    .expect("storage paths");
+    let control_plane = std::sync::Arc::new(ControlPlane::open(paths).expect("control plane"));
+    control_plane
+        .replace_settings(0, telegram_settings(1, SuggestionLength::Short))
+        .expect("initial settings");
+    let provider = std::sync::Arc::new(LengthProvider {
+        lengths: std::sync::Mutex::new(Vec::new()),
+        calls: AtomicU64::new(0),
+    });
+    let broker = Broker::with_control_plane(
+        std::sync::Arc::clone(&provider) as std::sync::Arc<dyn CompletionProvider>,
+        BrokerConfig::default(),
+        control_plane,
+    )
+    .expect("controlled broker");
+    assert_eq!(
+        *provider.lengths.lock().expect("lengths"),
+        [SuggestionLength::Short],
+        "the stored length applies from the start"
+    );
+
+    let (first, mut first_events) = open_telegram_session(&broker, "field-epoch-1").await;
+    let shown = shown_after(&broker, first, &mut first_events, "Hello")
+        .await
+        .expect("generated suggestion");
+    assert_eq!(shown.text, " revision Hello");
+    broker
+        .replace_settings(1, telegram_settings(2, SuggestionLength::Normal))
+        .await
+        .expect("normal suggestions");
+    assert_eq!(
+        *provider.lengths.lock().expect("lengths"),
+        [SuggestionLength::Short, SuggestionLength::Normal]
+    );
+
+    // Text shown under the earlier length is never carried past the change:
+    // typing its next letters asks the provider at the new length.
+    let (second, mut second_events) = open_telegram_session(&broker, "field-epoch-2").await;
+    let next = shown_after(&broker, second, &mut second_events, "Hello rev")
+        .await
+        .expect("generated suggestion");
+    assert_eq!(next.text, " revision Hello rev");
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 2);
+}

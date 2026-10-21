@@ -213,10 +213,10 @@ fn token_healing_binds_the_exact_typed_stem() {
     assert_eq!(bare_stem.echo, None);
     assert_eq!(super::healing_prefix("او می‌تواند"), Some("می‌تواند"));
     assert_eq!(
-        super::available_complete_words("ent and prov"),
+        super::available_complete_words("ent and prov", 4),
         Some("ent and".to_owned())
     );
-    assert_eq!(super::available_complete_words("partial"), None);
+    assert_eq!(super::available_complete_words("partial", 4), None);
 }
 
 #[test]
@@ -893,7 +893,7 @@ fn spelling_target_owns_only_the_word_and_a_single_typed_space() {
 fn streaming_never_returns_a_partial_last_word() {
     for apostrophe in ['\'', '\u{2019}'] {
         assert_eq!(
-            super::available_complete_words(&format!(" don{apostrophe}")),
+            super::available_complete_words(&format!(" don{apostrophe}"), 4),
             None
         );
         assert_eq!(
@@ -901,7 +901,7 @@ fn streaming_never_returns_a_partial_last_word() {
             None
         );
         assert_eq!(
-            super::available_complete_words(&format!(" one two three don{apostrophe}")),
+            super::available_complete_words(&format!(" one two three don{apostrophe}"), 4),
             Some(" one two three".to_owned())
         );
         assert_eq!(
@@ -993,7 +993,7 @@ fn the_word_limit_never_cuts_inside_a_joined_word() {
         (" able to re-", Some(" able to")),
     ] {
         assert_eq!(
-            super::available_complete_words(raw).as_deref(),
+            super::available_complete_words(raw, 4).as_deref(),
             expected,
             "{raw:?}"
         );
@@ -1031,5 +1031,30 @@ fn window_words_bias_only_english_topic_words_not_typed_just_now() {
     assert_eq!(
         super::bias_words("Hello there", "", Some("en")),
         Vec::<&str>::new()
+    );
+}
+
+/// Each suggestion length bounds the shown words, streamed or cut short.
+#[test]
+fn each_suggestion_length_bounds_its_words() {
+    use super::SuggestionLength::{Normal, Short};
+    let raw = " one two three four five";
+    for (length, expected) in [(Short, " one two"), (Normal, " one two three four")] {
+        assert_eq!(
+            complete_word_prefix(raw, length.max_words(), false).as_deref(),
+            Some(expected),
+            "{length:?}"
+        );
+        assert_eq!(
+            super::available_complete_words(raw, length.max_words()).as_deref(),
+            Some(expected),
+            "{length:?}"
+        );
+    }
+    // A short stream waits for its second word, then ends early.
+    assert_eq!(complete_word_prefix(" one two", 2, false), None);
+    assert_eq!(
+        complete_word_prefix(" one two", 2, true).as_deref(),
+        Some(" one two")
     );
 }

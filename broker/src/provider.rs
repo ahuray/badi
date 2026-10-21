@@ -123,6 +123,10 @@ pub trait CompletionProvider: Send + Sync + 'static {
     /// model ignore them.
     fn set_language_preferences(&self, _preferences: &crate::writing::LanguagePreferences) {}
 
+    /// Applies the person's suggestion length from settings. Providers that
+    /// do not generate text, such as the phrase fixture, ignore it.
+    fn set_suggestion_length(&self, _length: crate::settings::SuggestionLength) {}
+
     /// Completes once [`Self::is_alive`] turns false. Providers that own a
     /// process override both; the default never completes.
     async fn exited(&self) {

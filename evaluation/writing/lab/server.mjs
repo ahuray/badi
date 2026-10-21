@@ -36,11 +36,15 @@ export function renderLabPage(source, capability) {
     .replace('id="launch-help"', 'id="launch-help" hidden')
     .replace('id="lab-ui" hidden', 'id="lab-ui"');
 }
+/** Production suggestion lengths (`suggestion_length` in settings). */
+export const LENGTHS = ['short', 'normal'];
+
 export function validateConfigs(configs) {
   if (!Array.isArray(configs) || !configs.length || configs.length > MODES.length) throw new Error(`Select between one and ${MODES.length} configurations.`);
   const ids = new Set();
   return configs.map(config => {
-    if (!config || typeof config !== 'object' || Object.keys(config).some(key => !['id', 'mode', 'budget_ms', 'max_tokens', 'cache_prompt', 'temperature', 'seed'].includes(key))) throw new Error('Invalid configuration.');
+    if (!config || typeof config !== 'object' || Object.keys(config).some(key => !['id', 'mode', 'budget_ms', 'max_tokens', 'cache_prompt', 'temperature', 'seed', 'length'].includes(key))) throw new Error('Invalid configuration.');
+    if (Object.hasOwn(config, 'length') && (!LENGTHS.includes(config.length) || config.mode !== 'production_boundary')) throw new Error('Only production_boundary takes a suggestion length.');
     if (typeof config.id !== 'string' || !/^[a-z0-9_-]{1,48}$/u.test(config.id) || ids.has(config.id)) throw new Error('Configuration IDs must be unique.');
     ids.add(config.id);
     if (!MODES.includes(config.mode) || !Number.isInteger(config.budget_ms) || config.budget_ms < 550 || config.budget_ms > 10000

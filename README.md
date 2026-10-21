@@ -2,7 +2,7 @@
 
 Badi (`بعدی`, Persian for “next”) is a local writing assistant for Linux,
 starting with Omarchy on Hyprland. While you type, a local model suggests up to
-four words in grey. The grey text can lengthen as each word finishes, and you
+four words in grey (`badi length short` shows one or two), and you
 accept whatever is showing. Nothing leaves this
 machine. Badi is pre-release software.
 
@@ -183,6 +183,7 @@ badi pause                          # persists across restarts; badi resume
 badi pause toggle                   # what the session helper's shortcut runs
 badi snooze                         # off in the focused app or site for 10 minutes; badi resume ends it
 badi battery normal                 # on battery: keep mains scheduling (default: quiet)
+badi length short                   # one or two words per suggestion; normal (default) up to four
 badi mid-line on                    # suggestions when a word follows the caret; off by default
 badi escape-quiet 60                # a dismissal keeps its field quiet for a minute; off by default
 badi suggest                        # suggestion languages and their healing

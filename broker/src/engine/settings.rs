@@ -193,6 +193,7 @@ impl BrokerState {
     ) {
         self.settings_revision = settings.revision;
         provider.set_language_preferences(&settings.language_preferences());
+        provider.set_suggestion_length(settings.suggestion_length);
         let spelling = crate::spelling::global();
         let generation = spelling.enable(&settings.spelling_languages);
         // Dictionaries load off the runtime; a newer setting supersedes it.

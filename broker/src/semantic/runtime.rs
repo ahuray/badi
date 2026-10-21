@@ -637,6 +637,10 @@ impl CompletionProvider for OwnedRuntime {
         self.client.set_language_preferences(preferences);
     }
 
+    fn set_suggestion_length(&self, length: crate::settings::SuggestionLength) {
+        self.client.set_suggestion_length(length);
+    }
+
     fn is_alive(&self) -> bool {
         matches!(self.try_wait(), Ok(None))
     }
