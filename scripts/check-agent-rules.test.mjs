@@ -12,6 +12,8 @@ test("product paths are behavior, not tests or notes", () => {
   assert.equal(isProductPath("adapters/libreoffice/extension/Jobs.xcu"), true);
   assert.equal(isProductPath("ui/omarchy-plugin/fcitx-theme.py"), true);
   assert.equal(isProductPath("packaging/systemd/badi-broker.service"), true);
+  assert.equal(isProductPath("packaging/aur/PKGBUILD"), true);
+  assert.equal(isProductPath("packaging/aur/.SRCINFO"), false);
   assert.equal(isProductPath("broker/src/engine/tests/spelling.rs"), false);
   assert.equal(isProductPath("broker/src/settings/tests.rs"), false);
   assert.equal(isProductPath("adapters/shell/test-preview.py"), false);

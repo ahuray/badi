@@ -26,7 +26,9 @@ export function isProductPath(file) {
   if (file.startsWith("broker/src/") && file.endsWith(".rs")) return true;
   if (file.startsWith("broker/schemas/") && file.endsWith(".json")) return true;
   if (file.startsWith("broker/data/")) return true;
-  if (file.startsWith("adapters/") || file.startsWith("ui/") || file.startsWith("packaging/")) return true;
+  if (file.startsWith("adapters/") || file.startsWith("ui/")) return true;
+  // .SRCINFO is makepkg's printout of the PKGBUILD. The PKGBUILD commit is the behavior change.
+  if (file.startsWith("packaging/") && file !== "packaging/aur/.SRCINFO") return true;
   if (file.startsWith("protocol/") && file.endsWith(".json")) return true;
   return /^scripts\/(?:badi-desktop|badi_install|install-[^/]+)\.py$/u.test(file);
 }
