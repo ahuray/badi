@@ -26,6 +26,7 @@ use crate::semantic::provenance::{
     verify_directory_manifest, verify_file,
 };
 use crate::semantic::runtime::{LlamaCppLaunch, OwnedRuntime, RuntimeError, WarmUpReport};
+pub use crate::settings::SuggestionLength;
 
 pub const WRITING_CONTRACT: &str = "badi.writing.completion-and-spelling.en-de-fa.v2";
 const MEMORY_RETRY_INITIAL: Duration = Duration::from_secs(2);
@@ -987,12 +988,13 @@ pub(crate) fn strip_healed_prefix<'a>(raw: &'a str, echo: Option<&str>) -> Optio
     }
 }
 
-pub(crate) fn available_complete_words(raw: &str) -> Option<String> {
+/// The complete words of a stream cut short, at most `limit` of them.
+pub(crate) fn available_complete_words(raw: &str, limit: usize) -> Option<String> {
     let separator = raw.rfind(' ').unwrap_or(0);
     let count = spaced_words(raw)
         .filter(|(run_end, _)| *run_end <= separator)
         .count()
-        .min(4);
+        .min(limit);
     (count > 0)
         .then(|| complete_word_prefix(raw, count, false))
         .flatten()

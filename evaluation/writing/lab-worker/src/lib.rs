@@ -29,7 +29,7 @@ use badi_broker::semantic::provenance::verify_file;
 use badi_broker::semantic::runtime::{
     LlamaCppLaunch, OwnedRuntime, RuntimeError, StableRuntimeIdentity, WritingProfile,
 };
-use badi_broker::writing::{self, WritingError, WritingLanguage};
+use badi_broker::writing::{self, SuggestionLength, WritingError, WritingLanguage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -140,6 +140,10 @@ pub struct Config {
     pub cache_prompt: bool,
     pub temperature: f32,
     pub seed: u32,
+    /// The production suggestion length, for `production_boundary`; other
+    /// modes keep the normal one. Omitted when normal.
+    #[serde(default, skip_serializing_if = "SuggestionLength::is_normal")]
+    pub length: SuggestionLength,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -360,6 +364,9 @@ impl Request {
             return Err(LabError::UnsupportedLanguage);
         }
         if config.mode == Mode::ProductionBoundary && self.before.chars().count() > 512 {
+            return Err(LabError::InvalidRequest);
+        }
+        if config.mode != Mode::ProductionBoundary && !config.length.is_normal() {
             return Err(LabError::InvalidRequest);
         }
         Ok(())
@@ -617,6 +624,7 @@ async fn baseline(
         cache_prompt: true,
         temperature: 0.0,
         seed: 42,
+        length: request.config.length,
     };
     let bias_context = request.config.mode == Mode::ContextBias;
     let vocabulary = (request.config.mode == Mode::Vocabulary).then(|| {
@@ -645,6 +653,8 @@ async fn baseline(
         .clone()
         .with_request_observer(Arc::clone(&trace) as _)
         .with_window_context(if bias_context { &request.context } else { "" });
+    // Clones share the length, and each request sets its own.
+    client.set_suggestion_length(request.config.length);
     let mut provider_request = request.provider_request();
     provider_request.vocabulary = vocabulary;
     let proposal = client

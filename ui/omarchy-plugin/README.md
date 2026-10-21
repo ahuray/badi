@@ -48,7 +48,7 @@ seconds only while open. From the top:
   until you choose, one question, "Finish words from what you see?", with
   Turn on and Not now; afterwards a switch, and while it is on a row per
   allowed app and Forget learned words, each running `badi context`, which
-  also hands the keyring key over), Writing (mid-sentence, Escape quiet, battery), Suggestions (each
+  also hands the keyring key over), Writing (suggestion length: Short or Normal, as `badi length` sets it; mid-sentence, Escape quiet, battery), Suggestions (each
   language: Off, Auto (heal as the running model's review decided), Heal or
   Keep space, as `badi suggest` sets them; French, Spanish and Portuguese are
   marked experimental), Spelling (each language and its dictionary, naming the package when one is

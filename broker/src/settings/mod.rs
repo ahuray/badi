@@ -13,7 +13,8 @@ mod store;
 mod tests;
 
 pub use document::{
-    BatteryMode, DEFAULT_WRITING_LANGUAGES, PredictionLanguage, SettingsV2, SettingsValidationError,
+    BatteryMode, DEFAULT_WRITING_LANGUAGES, PredictionLanguage, SettingsV2,
+    SettingsValidationError, SuggestionLength,
 };
 pub use identity::{BrowserAdapter, IdentityError, LinuxAdapter, StableIdentity, WebScheme};
 pub(crate) use paths::PrivateStorage;
