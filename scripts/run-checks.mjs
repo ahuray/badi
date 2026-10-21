@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import process from "node:process";
 
 const DEFAULT_CHECKS = [
+  "agent-rules:check",
   "docs:check",
   "accessibility:check",
   "session:check",

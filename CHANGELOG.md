@@ -7,6 +7,10 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Repeated agent mistakes are checks (`npm run agent-rules:check`): a
+  behavior change updates this file in the same commit, a second planning
+  or report document is refused, and the Lab finishes a word by calling the
+  broker's vocabulary rule.
 - Style samples and learned words stay sealed with XChaCha20-Poly1305 on
   chacha20poly1305 0.11. A ciphertext written by 0.10.1 still opens, and the
   binaries no longer include the BSD-3-Clause `subtle` crate.

@@ -31,7 +31,7 @@ Each fact has one home:
 | Component `README.md` files | That component's contract, tests and boundaries |
 
 Link to a fact instead of repeating it. Delete stale material instead of
-archiving it, and never add parallel planning, handoff or report documents.
+archiving it.
 
 ## Keep the workspace lean
 
@@ -67,12 +67,19 @@ should serve current work.
 4. Prove user-visible behavior live ([Live trials](#live-trials)) when the
    user authorized installation; otherwise name the unverified boundary.
 5. Finish the records: delete a completed backlog item from
-   [future plans.md](<future plans.md>), update the runbook and
-   [README.md](README.md) keys or coverage, and add one
-   [CHANGELOG.md](CHANGELOG.md) line under the newest heading.
+   [future plans.md](<future plans.md>), and update the runbook and
+   [README.md](README.md) keys or coverage.
 6. Commit, push, open or merge a pull request only when the user asked. Stage
    exact paths and inspect the staged diff. A pull request says what changed,
    which checks ran, the live evidence and what remains unverified.
+
+## Rules and what enforces them
+
+| Rule | Enforcer | How it fails |
+| --- | --- | --- |
+| A commit that changes broker, adapter, protocol, panel, packaging or installer behavior also adds a line under the newest [CHANGELOG.md](CHANGELOG.md) heading | [`scripts/check-agent-rules.mjs`](scripts/check-agent-rules.mjs) via `npm run agent-rules:check` | Exit 1, naming that commit and the product files. A later commit that only edits the changelog still fails |
+| [future plans.md](<future plans.md>) is the only backlog; no parallel planning, handoff or report document | the same check | Exit 1, naming the file to delete |
+| The Lab finishes a word by calling `badi_broker::vocabulary::complete` | the same check | Exit 1 when `evaluation/writing/lab-worker/src` scans words with `unicode_word_indices`, or no file there calls that function |
 
 ## Architecture
 
@@ -171,9 +178,11 @@ The MSRV job stays on `cargo +1.85.0` because the toolchain file would
 otherwise override it. Pick checks by the
 changed surface:
 
+Every change also runs `npm run agent-rules:check`, the first step of `npm run check`.
+
 | Change | Checks |
 | --- | --- |
-| Documentation | `npm run docs:check`, verify documented commands and paths, inspect the diff |
+| Documentation | `npm run docs:check` and `npm run agent-rules:check`, verify documented commands and paths, inspect the diff |
 | Rust broker, model, policy | Targeted tests, then the Rust gate below; real-broker adapter lanes for wire or authority changes |
 | Fcitx module | `npm run fcitx5:check`; `npm run fcitx5:integration` for transport or broker changes |
 | Accessibility observer | `npm run accessibility:check`; `npm run accessibility:integration` for bus or event changes |
@@ -194,8 +203,8 @@ cargo test --workspace --all-features --locked
 cargo +1.85.0 check --workspace --all-targets --all-features --locked
 ```
 
-`npm run check` ([run-checks.mjs](scripts/run-checks.mjs)) runs the docs,
-editor, LibreOffice, desktop, accessibility, Omarchy and writing checks and summarizes;
+`npm run check` ([run-checks.mjs](scripts/run-checks.mjs)) runs the agent-rule,
+docs, editor, LibreOffice, desktop, accessibility, Omarchy and writing checks and summarizes;
 `node scripts/run-checks.mjs NAME...` runs a subset. No source check proves
 native app behavior: claims about a real app need a live trial in the graphical
 session, and missing prerequisites must be reported with the exact unverified
