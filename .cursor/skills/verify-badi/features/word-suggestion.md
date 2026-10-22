@@ -9,7 +9,7 @@ A word suggestion is the grey continuation Badi shows while you type. Tab takes 
 - `suggest-accept-all` inserts the whole continuation.
 - `suggest-dismiss` removes the continuation without changing the text.
 - `suggest-request` asks for a continuation when automatic suggestions are quiet.
-- `suggest-literal-tab` types a real Tab with Ctrl+Shift+Tab and does not accept.
+- `suggest-literal-tab` on an Fcitx field types a real Tab with Ctrl+Shift+Tab and does not accept.
 
 ## How to get to it (user POV)
 
@@ -18,7 +18,7 @@ A word suggestion is the grey continuation Badi shows while you type. Tab takes 
 - In a Neovim prose buffer, pause while typing, then Tab or Ctrl+Right. Leaving Insert mode dismisses.
 - In Obsidian, pause, then Tab or Ctrl+Right (Command+Right on that app's chord).
 - In a Xournal++ text cell, Tab asks and Tab again accepts a word.
-- Press Ctrl+Shift+Tab while a suggestion is showing. The suggestion goes away and the app receives Tab. Where Badi would not take Tab, that chord stays the app's key.
+- On an Fcitx field, Ctrl+Shift+Tab retires the suggestion and the app receives Tab. Where Badi would not take Tab, that chord stays the app's key. Obsidian, Neovim and Bash do not bind that chord.
 
 ## Driving it with verify-badi
 
@@ -29,7 +29,7 @@ Preconditions:
 - Desktop entry points need a Hyprland and Fcitx session. They are not driven by the command below.
 
 - **Show and accept on the Bash bridge.** This is the Ctrl-X Tab entry, without a terminal. Run `.cursor/skills/verify-badi/verify-badi.sh drive word-suggestion`. The bridge transcript starts with `READY`, then `SUGGEST` and `INSERT` both decode to ` for your time`, then `DONE`. `status-after-word-suggestion.json` has `sessions` 0 and `commits_applied` one higher than the before file. Exit code of the helper is 0. Evidence is `drive-word-suggestion.txt` and the two status files.
-- **Grey preview in Bash.** When `adapters/shell/build/badi-preview.so` exists, export the run's `instance.env` and run `python3 adapters/shell/test.py`. The PTY shows the grey continuation, the buffer becomes `thank you for your time`, undo restores the prefix, and the script prints that no line was submitted. Building the preview needs Bash headers. Without them the journey fails on the missing `.so`; do not skip it and cite the bridge instead.
+- **Grey preview in Bash.** When `adapters/shell/build/badi-preview.so` exists, export the run's `instance.env` and run `python3 adapters/shell/test.py`. The PTY shows the grey continuation, the buffer becomes `thank you for your time`, undo restores the prefix, and the script prints that no line was submitted. Building the preview needs Bash headers (`builtins.h`, Ubuntu package `bash-builtins`) and Readline headers (`readline/readline.h`, Ubuntu package `libreadline-dev`). Without them the journey fails on the missing `.so`; do not skip it and cite the bridge instead.
 - **Desktop field.** Focus disposable text in an allowed app, type, and accept with Tab or Ctrl+Right. Capture a screenshot or recording that shows the grey text and the field after accept. `badi debug log --json` is the trace when `badi debug on --text` was turned on for that attempt.
 
 ## Gotchas
