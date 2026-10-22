@@ -64,7 +64,7 @@ python3 scripts/badi-desktop.py doctor
 python3 scripts/badi-desktop.py doctor --json
 ```
 
-Exit 0 means `badi.desktop-health.v1` lists no problems. Exit 1 means it does not. This talks to the user service manager and the session socket. It does not see a verify-badi instance, and a healthy verify-badi instance does not make `badi doctor` pass. With no user D-Bus, this command exits 1 and prints `Failed to connect to bus: No such file or directory` instead of the health report. When the user service manager answers but the broker socket does not, the report's problem code is `broker_unreachable`.
+Exit 0 means `badi.desktop-health.v1` lists no problems. Exit 1 means it does not. This talks to the user service manager and the session socket. It does not see a verify-badi instance, and a healthy verify-badi instance does not make `badi doctor` pass. With no user D-Bus, this command exits 1 and prints systemd's `Failed to connect to bus: …` line instead of the health report. No user runtime directory yields `No medium found`. A bus address whose socket file is missing yields `No such file or directory`. When the user service manager answers but the broker socket does not, the report's problem code is `broker_unreachable`.
 
 ## Drive
 
@@ -96,7 +96,7 @@ Further headless harnesses already in the repo, each with its own process and fi
 | `cargo build --release --locked -p badi-writing-lab` then `target/release/badi-writing-lab --inspect-device` | A content-free device description | A writing comparison; the worker errors when model files are missing |
 | `npm run check` and the table in [AGENTS.md](../../../AGENTS.md#verification) | Source and unit contracts | A user flow |
 
-`adapters/shell/test.py` needs Bash headers (`builtins.h`, Ubuntu package `bash-builtins`) and a built `adapters/shell/build/badi-preview.so`. It reads the broker from `XDG_RUNTIME_DIR` and `target/debug/badictl`. Export the variables from the run's `instance.env` before starting it. Do not run it against the desktop socket.
+`adapters/shell/test.py` needs Bash headers (`builtins.h`, Ubuntu package `bash-builtins`), Readline headers (`readline/readline.h`, Ubuntu package `libreadline-dev`), and a built `adapters/shell/build/badi-preview.so`. It reads the broker from `XDG_RUNTIME_DIR` and `target/debug/badictl`. Export the variables from the run's `instance.env` before starting it. Do not run it against the desktop socket.
 
 Desktop drive, Hyprland and Fcitx only, disposable text: [Live trials](../../../AGENTS.md#live-trials). Keys are in [README](../../../README.md#keys). `badi debug on --text` records text; turn it off when the transcript is saved. A screenshot or recording has to show the grey suggestion and the field after accept.
 

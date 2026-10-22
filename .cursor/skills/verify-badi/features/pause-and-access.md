@@ -26,7 +26,7 @@ Preconditions:
 
 - **Pause refuses a suggestion.** Run `.cursor/skills/verify-badi/verify-badi.sh drive pause`. While pause is on, `badictl status` has `paused` true, the bridge transcript contains `BLOCKED app_disabled_or_model_paused`, and `context_updates` is unchanged. After the drive, `paused` is false. Helper exit code is 0.
 - **Desktop pause persists.** Run `badi pause`, restart the user service, and run `badi status`. It still says paused. `badi resume` clears it. A VM without the user service cannot run this.
-- **Doctor the install.** Run `python3 scripts/badi-desktop.py doctor` and record its exit code. Exit 0 is a desktop with no problems. With no user D-Bus the command exits 1 and prints `Failed to connect to bus: No such file or directory`, and it does not print the health report. When the service manager answers but the broker does not, the report names `broker_unreachable`. Do not treat either result as a failed headless doctor, or the reverse.
+- **Doctor the install.** Run `python3 scripts/badi-desktop.py doctor` and record its exit code. Exit 0 is a desktop with no problems. With no user D-Bus the command exits 1 and prints systemd's `Failed to connect to bus: …` line, and it does not print the health report. No user runtime directory yields `No medium found`. A bus address whose socket file is missing yields `No such file or directory`. When the service manager answers but the broker does not, the report names `broker_unreachable`. Do not treat either result as a failed headless doctor, or the reverse.
 
 ## Gotchas
 
