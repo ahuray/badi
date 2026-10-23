@@ -55,6 +55,7 @@ fn settings(revision: u64, style_learning: bool, learn: bool) -> SettingsV2 {
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Quiet,
         suggestion_length: crate::settings::SuggestionLength::Normal,
+        languages_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning,
         context_words: None,

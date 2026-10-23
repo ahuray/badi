@@ -23,10 +23,10 @@ jq -e '
 
 jq -e '
   .status == "disabled_repo_local_feasibility"
-  and .omarchy.package == "4.0.6-1"
+  and .omarchy.package == "4.5.0rc1-1"
   and .omarchy.source_repository == "https://github.com/omacom/omarchy.git"
-  and .omarchy.source_tag == "v4.0.6"
-  and .omarchy.source_commit == "237f1b4071a0bff2296c6d740ba2b9fd695ebfa0"
+  and .omarchy.source_tag == "v4.5.0-rc1"
+  and .omarchy.source_commit == "03ff1eff3812933f7088484533784d2f63eaf19a"
 ' "$compatibility" >/dev/null
 
 if grep -En 'ShellRoot|execDetached|Qt\.openUrlExternally|/bin/(ba)?sh|(^|[[:space:]])(ba)?sh[[:space:]]+-c|console\.(log|warn|error)' "${source_files[@]}"; then

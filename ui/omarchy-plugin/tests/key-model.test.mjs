@@ -8,7 +8,7 @@ import vm from 'node:vm';
 const source = readFileSync(new URL('../KeyModel.js', import.meta.url), 'utf8');
 assert.match(source, /^\.pragma library\n/u);
 const KeyModel = vm.runInNewContext(`${source.replace(/^\.pragma library\n/u, '')}
-({ step, choice, action, removable, filter })`);
+({ step, choice, chip, action, removable, filter })`);
 
 const toggle = { kind: 'toggle', label: 'Mid-sentence suggestions', detail: 'Also suggest', section: 'Writing',
   enabled: true, activate() {} };
@@ -19,6 +19,8 @@ const model = { kind: 'choice', label: 'Writing model', detail: 'Recommended', s
 const site = { kind: 'site', label: 'https://mail.example', detail: 'Allowed', section: 'Websites', enabled: true,
   activate() {}, remove() {} };
 const field = { kind: 'field', label: 'Add a site', detail: 'Enter allows', section: 'Websites', enabled: true };
+const languages = { kind: 'multi', label: 'Languages', detail: 'Suggests and corrects', section: 'Languages', enabled: true,
+  values: ['en'], options: [{ value: 'en' }, { value: 'de' }, { value: 'fr' }], toggle() {} };
 
 test('j and k move one row, start at the first and stop at either end', () => {
   assert.equal(KeyModel.step(-1, 4, 1), 0, 'the first j lands on the first row');
@@ -38,6 +40,19 @@ test('h and l step a choice within its options and pick the first when none is c
   assert.equal(KeyModel.choice({ ...model, enabled: false }, -1), null);
   assert.equal(KeyModel.choice(toggle, 1), null, 'h and l leave other rows alone');
   assert.equal(KeyModel.choice(undefined, 1), null);
+});
+
+test('h and l walk a multi-select row\'s chips, clamped, and Enter toggles the one under the cursor', () => {
+  assert.equal(KeyModel.chip(languages, -1, 1), 1, 'the first l from no chip moves past the first');
+  assert.equal(KeyModel.chip(languages, 0, 1), 1);
+  assert.equal(KeyModel.chip(languages, 2, 1), 2, 'l at the last chip stays');
+  assert.equal(KeyModel.chip(languages, 0, -1), 0, 'h at the first chip stays');
+  assert.equal(KeyModel.chip({ ...languages, enabled: false }, 0, 1), null);
+  assert.equal(KeyModel.chip({ ...languages, options: [] }, 0, 1), null);
+  assert.equal(KeyModel.chip(model, 0, 1), null, 'single choices step their value instead');
+  assert.equal(KeyModel.choice(languages, 1), null, 'a multi-select row never picks one value');
+  assert.equal(KeyModel.action(languages), 'toggle');
+  assert.equal(KeyModel.action({ ...languages, enabled: false }), null);
 });
 
 test('Enter activates or focuses enabled rows and x removes only enabled site rules', () => {

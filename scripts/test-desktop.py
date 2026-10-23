@@ -998,19 +998,24 @@ class DesktopTests(unittest.TestCase):
         desktop.set_writing(document, "pt", True)
         desktop.set_writing(document, "es", True)
         desktop.set_writing(document, "fr", True)
-        self.assertEqual(document["writing_languages"], ["en", "de", "fa", "fr", "es", "pt"])
+        self.assertEqual(document["writing_languages"], ["en", "de", "fr", "es", "pt"])
         desktop.set_writing(document, "fr", False)
         desktop.set_writing(document, "es", False)
         desktop.set_writing(document, "pt", False)
-        self.assertNotIn("writing_languages", document, "English, German and Persian are the omitted default")
+        self.assertNotIn("writing_languages", document, "English and German are the omitted default")
+        desktop.set_writing(document, "fa", True)
+        self.assertEqual(document["writing_languages"], ["en", "de", "fa"], "Persian only from the terminal")
         desktop.set_writing(document, "fa", False)
-        self.assertEqual(document["writing_languages"], ["en", "de"])
+        self.assertNotIn("writing_languages", document)
         with self.assertRaisesRegex(RuntimeError, "Use one of"):
             desktop.set_writing(document, "it", True)
         desktop.set_healing(document, "fr", "on")
         desktop.set_healing(document, "de", "off")
         self.assertEqual(document["trailing_space_healing"], {"fr": True, "de": False})
         report = {entry["language"]: entry for entry in desktop.writing_report(document, ["en", "de", "fa"])}
+        self.assertNotIn("fa", report, "Persian is listed only while it is on")
+        self.assertIn("fa", {entry["language"] for entry in
+                             desktop.writing_report({"writing_languages": ["en", "fa"]}, ["en"])})
         self.assertEqual((report["fr"]["healing"], report["fr"]["healed"], report["fr"]["enabled"]), ("on", True, False))
         self.assertEqual((report["de"]["healing"], report["de"]["healed"]), ("off", False))
         self.assertEqual((report["en"]["healing"], report["en"]["healed"]), ("auto", True))
@@ -1020,6 +1025,36 @@ class DesktopTests(unittest.TestCase):
         self.assertNotIn("trailing_space_healing", document)
         with self.assertRaisesRegex(RuntimeError, "Usage: badi suggest"):
             desktop.set_healing(document, "fr", "maybe")
+
+    def test_languages_set_suggestions_and_typo_fixes_in_one_write(self):
+        document = {"writing_languages": ["en", "de", "fa"], "trailing_space_healing": {"de": False}}
+        desktop.set_languages(document, ["fr", "en", "it", "pt"])
+        self.assertEqual(document["writing_languages"], ["en", "fa", "fr", "pt"], "a terminal Persian choice stays")
+        self.assertEqual(document["spelling_languages"], ["en", "fr", "it"], "Portuguese has no dictionary")
+        self.assertIs(document["languages_chosen"], True)
+        self.assertEqual(document["trailing_space_healing"], {"de": False}, "healing choices are untouched")
+        document = {"spelling_languages": ["en", "de"]}
+        desktop.set_languages(document, ["de", "en"])
+        self.assertNotIn("writing_languages", document, "English and German are the omitted default")
+        self.assertEqual(document["spelling_languages"], ["en", "de"])
+        desktop.set_languages(document, ["en"])
+        self.assertEqual(document["writing_languages"], ["en"])
+        self.assertNotIn("spelling_languages", document, "English alone is the omitted default")
+        for invalid in ([], ["fa"], ["en", "en"], ["xx"]):
+            with self.assertRaisesRegex(RuntimeError, "Usage: badi languages"):
+                desktop.set_languages({}, invalid)
+        text = desktop.languages_text({"writing_languages": ["en", "pt"], "spelling_languages": ["en", "nl"]})
+        self.assertIn("Languages: English, Português, Nederlands · not chosen yet", text)
+        self.assertIn("Português   suggestions (typo fixes not offered)", text)
+        self.assertIn("Nederlands  typo fixes (suggestions not offered)", text)
+        self.assertNotIn("not chosen", desktop.languages_text({"languages_chosen": True}))
+        settings = {'schema': 'badi.settings.v2', 'revision': 3, 'paused': False, 'subjects': []}
+        with patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}', json.dumps(settings)]) as command, \
+             contextlib.redirect_stdout(io.StringIO()):
+            desktop.main(['languages', 'de', 'fr'])
+        sent = json.loads(command.call_args_list[1].kwargs['input_text'])
+        self.assertEqual((sent['revision'], sent['writing_languages'], sent['spelling_languages'], sent['languages_chosen']),
+                         (4, ['de', 'fr'], ['de', 'fr'], True))
 
     def test_spelling_languages_stay_canonical_and_name_missing_dictionaries(self):
         document = {}

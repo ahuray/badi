@@ -211,6 +211,17 @@ for value in '"off"' null true; do
     '{schema: "badi.settings.v2", revision: 1, paused: false, style_learning: $value, subjects: []}')
   [[ $(ipc validateSettings "$document") == $([[ $value == true ]] && echo true || echo false) ]]
 done
+# The first-run language answer is an optional boolean; producers omit false.
+for value in true false; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, languages_chosen: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == true ]]
+done
+for value in '"yes"' null 1; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, languages_chosen: $value, subjects: []}')
+  [[ $(ipc validateSettings "$document") == false ]]
+done
 # The suggestion length is an optional choice; producers omit normal.
 for value in '"short"' '"normal"'; do
   document=$(jq -cn --argjson value "$value" \

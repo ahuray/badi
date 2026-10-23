@@ -18,6 +18,22 @@ use tokio_util::sync::CancellationToken;
 const NO_DIGITS: &str = "[^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]*";
 const UNHEALED: &str = "root ::= [^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]*";
 
+/// A client with Persian on beside the default English and German: these
+/// fixtures also cover Persian's own boundary, joiner and healing rules.
+fn fixture_client(config: SemanticClientConfig) -> Result<SemanticClient, ClientError> {
+    use badi_broker::writing::{LanguagePreferences, WritingLanguage};
+    let client = SemanticClient::new(config)?;
+    client.set_language_preferences(&LanguagePreferences {
+        enabled: vec![
+            WritingLanguage::English,
+            WritingLanguage::German,
+            WritingLanguage::Persian,
+        ],
+        healing: Vec::new(),
+    });
+    Ok(client)
+}
+
 fn request(before: &str, language: Option<&str>) -> ProviderRequest {
     ProviderRequest {
         before: before.to_owned(),
@@ -30,7 +46,7 @@ fn request(before: &str, language: Option<&str>) -> ProviderRequest {
 #[tokio::test]
 async fn unsupported_writing_requests_never_reach_the_runtime() -> Result<(), Box<dyn Error>> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         listener.local_addr()?,
         "writing-fixture",
         "public-fixture-token",
@@ -107,7 +123,7 @@ async fn vocabulary_finishes_a_word_before_any_model_request() -> Result<(), Box
     use badi_broker::vocabulary::Vocabulary;
     use badi_broker::writing::{LanguagePreferences, WritingLanguage};
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         listener.local_addr()?,
         "writing-fixture",
         "public-fixture-token",
@@ -194,7 +210,7 @@ async fn vocabulary_finishes_a_word_before_any_model_request() -> Result<(), Box
 async fn language_choices_gate_and_heal_each_request() -> Result<(), Box<dyn Error>> {
     use badi_broker::writing::{LanguagePreferences, WritingLanguage};
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         listener.local_addr()?,
         "writing-fixture",
         "public-fixture-token",
@@ -255,7 +271,7 @@ async fn language_choices_gate_and_heal_each_request() -> Result<(), Box<dyn Err
 async fn healing_that_empties_the_prompt_abstains_before_any_request() -> Result<(), Box<dyn Error>>
 {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         listener.local_addr()?,
         "writing-fixture",
         "public-fixture-token",
@@ -410,7 +426,7 @@ async fn stream_outcome_until(
                 .await;
         }
     });
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         endpoint,
         "healing-fixture",
         "public-fixture-token",
@@ -603,7 +619,7 @@ async fn spelling_and_continuation_share_one_deadline() -> Result<(), Box<dyn Er
             }
         }
     });
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         endpoint,
         "deadline-fixture",
         "public-fixture-token",
@@ -629,7 +645,7 @@ async fn spelling_and_continuation_share_one_deadline() -> Result<(), Box<dyn Er
 async fn unambiguous_spelling_does_not_require_an_inference_round_trip()
 -> Result<(), Box<dyn Error>> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         listener.local_addr()?,
         "dictionary-fixture",
         "public-fixture-token",
@@ -861,7 +877,7 @@ async fn warm_up_endpoint(
 async fn warm_up_sends_one_fixed_tiny_completion_and_discards_its_reply()
 -> Result<(), Box<dyn Error>> {
     let (endpoint, server) = warm_up_endpoint(WarmUpReply::Json).await?;
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         endpoint,
         "warm-up-fixture",
         "public-fixture-token",
@@ -902,7 +918,7 @@ async fn warm_up_failures_are_bounded_and_classified_without_content() -> Result
         (WarmUpReply::Stall, "timeout"),
     ] {
         let (endpoint, server) = warm_up_endpoint(reply).await?;
-        let client = SemanticClient::new(SemanticClientConfig::new(
+        let client = fixture_client(SemanticClientConfig::new(
             endpoint,
             "warm-up-fixture",
             "public-fixture-token",
@@ -918,7 +934,7 @@ async fn warm_up_failures_are_bounded_and_classified_without_content() -> Result
     }
 
     let (endpoint, server) = warm_up_endpoint(WarmUpReply::Stall).await?;
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         endpoint,
         "warm-up-fixture",
         "public-fixture-token",
@@ -938,7 +954,7 @@ async fn warm_up_failures_are_bounded_and_classified_without_content() -> Result
     server.abort();
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         listener.local_addr()?,
         "warm-up-fixture",
         "public-fixture-token",
@@ -1051,7 +1067,7 @@ async fn runtime_exchange(
         }
         payload
     });
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         endpoint,
         "space-fixture",
         "public-fixture-token",
@@ -1232,7 +1248,7 @@ async fn a_spelling_attempt_that_spends_the_budget_sends_no_continuation()
         );
         payload
     });
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         endpoint,
         "deadline-fixture",
         "public-fixture-token",
@@ -1279,7 +1295,7 @@ async fn a_request_observer_sees_each_runtime_body_exactly_as_sent() -> Result<(
         payload
     });
     let recorder = std::sync::Arc::new(BodyRecorder::default());
-    let observed = SemanticClient::new(SemanticClientConfig::new(
+    let observed = fixture_client(SemanticClientConfig::new(
         endpoint,
         "observer-fixture",
         "public-fixture-token",
@@ -1317,7 +1333,7 @@ async fn a_request_observer_sees_each_runtime_body_exactly_as_sent() -> Result<(
 async fn runtime_posts_reach_only_a_single_lowercase_path_on_the_loopback_runtime()
 -> Result<(), Box<dyn Error>> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         listener.local_addr()?,
         "path-fixture",
         "public-fixture-token",
@@ -1437,7 +1453,7 @@ async fn event_exchange(
         let _ = socket.write_all(response.as_bytes()).await;
         payload
     });
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         endpoint,
         "confidence-fixture",
         "public-fixture-token",
@@ -1599,7 +1615,7 @@ async fn length_exchange(
         }
         payload
     });
-    let client = SemanticClient::new(SemanticClientConfig::new(
+    let client = fixture_client(SemanticClientConfig::new(
         endpoint,
         "length-fixture",
         "public-fixture-token",

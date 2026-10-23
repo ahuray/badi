@@ -170,7 +170,7 @@ Scope {
     // The blocklist modes add all_web_origins and all_linux_apps; producers
     // omit them when false.
     var keys = ["schema", "revision", "paused", "subjects"]
-    var modes = ["all_web_origins", "all_linux_apps", "mid_line", "style_learning", "context_words"]
+    var modes = ["all_web_origins", "all_linux_apps", "mid_line", "style_learning", "context_words", "languages_chosen"]
     for (var mode = 0; mode < modes.length; mode += 1) {
       if (isObject(value) && Object.prototype.hasOwnProperty.call(value, modes[mode])) {
         if (typeof value[modes[mode]] !== "boolean") return false

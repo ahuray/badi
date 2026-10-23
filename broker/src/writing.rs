@@ -642,15 +642,11 @@ pub struct LanguagePreferences {
 }
 
 impl Default for LanguagePreferences {
-    /// What settings without either field mean: English, German and
-    /// Persian, each healed as the model's review decided.
+    /// What settings without either field mean: English and German, each
+    /// healed as the model's review decided.
     fn default() -> Self {
         Self {
-            enabled: vec![
-                WritingLanguage::English,
-                WritingLanguage::German,
-                WritingLanguage::Persian,
-            ],
+            enabled: vec![WritingLanguage::English, WritingLanguage::German],
             healing: Vec::new(),
         }
     }

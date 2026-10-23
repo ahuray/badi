@@ -241,6 +241,37 @@ fn suggestion_length_is_an_optional_v2_only_choice() {
 }
 
 #[test]
+fn languages_chosen_is_an_optional_v2_only_boolean() {
+    let mut document = json!({
+        "schema": "badi.settings.v2",
+        "revision": 4,
+        "paused": false,
+        "languages_chosen": true,
+        "subjects": []
+    });
+    assert!(validator(2).is_valid(&document));
+    let decoded: SettingsV2 = serde_json::from_value(document.clone()).expect("typed settings");
+    decoded.validate().expect("valid settings");
+    assert!(decoded.languages_chosen);
+    assert_eq!(serde_json::to_value(&decoded).expect("encoded"), document);
+    document["languages_chosen"] = json!("yes");
+    assert!(!validator(2).is_valid(&document));
+    assert!(serde_json::from_value::<SettingsV2>(document.clone()).is_err());
+    document["languages_chosen"] = json!(false);
+    let encoded =
+        serde_json::to_value(serde_json::from_value::<SettingsV2>(document).expect("false"))
+            .expect("encoded");
+    assert!(
+        encoded.get("languages_chosen").is_none(),
+        "false is the canonical absence"
+    );
+    let legacy = json!({"schema": "badi.settings.v1", "revision": 4, "paused": false,
+                        "languages_chosen": true, "subjects": []});
+    assert!(!validator(1).is_valid(&legacy));
+    assert!(serde_json::from_value::<SettingsV2>(legacy).is_err());
+}
+
+#[test]
 fn all_web_origins_is_an_optional_v2_only_boolean() {
     let mut document = json!({
         "schema": "badi.settings.v2",

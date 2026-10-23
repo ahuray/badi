@@ -86,6 +86,7 @@ Panel {
         if (text === "/") view.focusSearch()
         else if (text === "p" || text === "P") badi.togglePause()
         else if (text === "r" || text === "R") badi.refresh()
+        else if (text === "a" || text === "A") badi.showAll = !badi.showAll
       }
 
       SettingsView {

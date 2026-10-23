@@ -539,8 +539,10 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   preview appeared at p50 294 against 218 ms (p90 395 against 265; 4 against
   0 over 550 ms) after the last key, and 92 against 112 pauses showed one
   (17 withheld as `low_confidence`).
-- **Languages and healing.** Settings `writing_languages` (default `en`, `de`,
-  `fa`; `fr`, `es` and `pt` opt-in) decide where Badi suggests; a request in
+- **Languages and healing.** Settings `writing_languages` (default `en` and
+  `de`; `fr`, `es`, `pt` and, from the terminal only, `fa` opt-in) decide
+  where Badi suggests, and `languages_chosen` records that the user picked
+  them (`badi languages` or the panel's first-run question); a request in
   any other language abstains before the model, and detection names French,
   Spanish and Portuguese so that they are not written as English. Each catalog model's
   `healed_languages` lists the languages whose trailing space it heals, by

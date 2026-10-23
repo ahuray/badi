@@ -40,6 +40,10 @@
       "enum": ["short", "normal"],
       "description": "How many words a model continuation shows: short one or two, normal (the default) up to four, within the same token and time budget. Producers omit the property when normal."
     },
+    "languages_chosen": {
+      "type": "boolean",
+      "description": "The user chose their writing and spelling languages, in the settings panel's first-run question or with badi languages; until then the panel asks. Producers omit the property when false."
+    },
     "spelling_languages": {
       "type": "array",
       "items": { "enum": ["en", "de", "fr", "es", "it", "nl", "pl"] },
@@ -52,7 +56,7 @@
       "items": { "enum": ["en", "de", "fa", "fr", "es", "pt"] },
       "uniqueItems": true,
       "maxItems": 6,
-      "description": "Languages Badi suggests words in, in this enum's order; a request in any other language abstains before the model. French, Spanish and Portuguese are opt-in and not yet qualified. Empty turns suggestions off. Producers omit the property when it is exactly [\"en\", \"de\", \"fa\"], the default."
+      "description": "Languages Badi suggests words in, in this enum's order; a request in any other language abstains before the model. French, Spanish, Portuguese and Persian are opt-in, and the first three are not yet qualified. Empty turns suggestions off. Producers omit the property when it is exactly [\"en\", \"de\"], the default."
     },
     "trailing_space_healing": {
       "type": "object",

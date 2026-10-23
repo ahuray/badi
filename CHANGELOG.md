@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- The settings panel opens compact and asks once which languages you write
+  in (also `badi languages en de fr`), with one chip per European language
+  for suggestions and typo fixes together; All settings (or `a`) shows the
+  rest. Persian left the panel and the default languages (`badi suggest fa
+  on` keeps it).
 - Repeated agent mistakes are checks (`npm run agent-rules:check`): a
   behavior change updates this file in the same commit, a second planning
   or report document is refused, and the Lab finishes a word by calling the
