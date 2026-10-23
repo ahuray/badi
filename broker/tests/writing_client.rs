@@ -539,6 +539,134 @@ async fn token_healing_never_displays_echoes_or_different_stems() -> Result<(), 
     Ok(())
 }
 
+/// Serves up to two streamed completions in turn, each made of `pieces`
+/// tokens, and returns the payloads the client sent with its outcome.
+async fn stems_exchange(
+    before: &str,
+    streams: Vec<Vec<&'static str>>,
+) -> Result<(Vec<serde_json::Value>, ProviderOutcome), Box<dyn Error>> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let endpoint = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        let mut payloads = Vec::new();
+        for pieces in streams {
+            let Ok(Ok((mut socket, _))) =
+                tokio::time::timeout(Duration::from_millis(300), listener.accept()).await
+            else {
+                break;
+            };
+            payloads.push(read_payload(&mut socket).await);
+            let mut response =
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
+                    .to_owned();
+            let stop = serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"eos"});
+            for event in pieces.into_iter().map(token_event).chain([stop]) {
+                response.push_str("data: ");
+                response.push_str(&event.to_string());
+                response.push_str("\n\n");
+            }
+            let _ = socket.write_all(response.as_bytes()).await;
+        }
+        payloads
+    });
+    let client = fixture_client(SemanticClientConfig::new(
+        endpoint,
+        "stem-fixture",
+        "public-fixture-token",
+    )?)?;
+    let outcome = client
+        .propose_outcome(
+            request(before, Some("en")),
+            CancellationToken::new(),
+            false,
+            RequestTrigger::Automatic,
+        )
+        .await?;
+    Ok((server.await?, outcome))
+}
+
+#[tokio::test]
+async fn a_typed_lexicon_word_is_finished_or_else_asked_again_unhealed()
+-> Result<(), Box<dyn Error>> {
+    // `rep` is healed: the answer's first token ` report` extends it, so the
+    // rest of the word shows and nothing else is sent.
+    let before = "I will send the rep";
+    let (payloads, outcome) = stems_exchange(
+        before,
+        vec![vec![" report", " tomorrow"], vec![" to", " you"]],
+    )
+    .await?;
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(payloads[0]["prompt"], "I will send the");
+    assert!(
+        payloads[0]["grammar"]
+            .as_str()
+            .is_some_and(|grammar| grammar.starts_with("root ::= \" rep\" "))
+    );
+    assert_eq!(shown_text(outcome).as_deref(), Some("ort tomorrow"));
+    // A lone space token could meet the echo without writing the word.
+    assert_eq!(payloads[0]["logit_bias"], serde_json::json!([[" ", false]]));
+    // Exactly the typed word, then the next one: the word was finished.
+    let (payloads, outcome) =
+        stems_exchange(before, vec![vec![" rep", " tomorrow"], vec![" to", " you"]]).await?;
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(shown_text(outcome).as_deref(), Some(" tomorrow"));
+    // A first token shorter than `and` spelled out something else: the
+    // request is sent again unhealed, within the same budget.
+    let before = "I like cats and";
+    let (payloads, outcome) =
+        stems_exchange(before, vec![vec![" a", "ndash"], vec![" dogs", " too"]]).await?;
+    assert_eq!(payloads.len(), 2);
+    assert_eq!(payloads[0]["prompt"], "I like cats");
+    assert_eq!(payloads[1]["prompt"], before);
+    assert!(
+        payloads[1]["grammar"]
+            .as_str()
+            .is_some_and(|grammar| !grammar.contains("and"))
+    );
+    assert!(payloads[1].get("logit_bias").is_none());
+    assert_eq!(shown_text(outcome).as_deref(), Some(" dogs too"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_token_that_writes_a_typed_lexicon_word_is_not_held_to_the_floor()
+-> Result<(), Box<dyn Error>> {
+    let before = "I will send the rep";
+    let eos = serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"eos"});
+    // ` report` was unlikely before `rep` was typed; the words after it
+    // are judged as usual.
+    let (_, outcome) = event_exchange(
+        before,
+        vec![
+            token_event_with(" report", -4.0),
+            token_event_with(" tomorrow", -0.2),
+            eos.clone(),
+        ],
+    )
+    .await?;
+    assert_eq!(shown_text(outcome).as_deref(), Some("ort tomorrow"));
+    // Only the rest of the word: that choice and the lexicon decide.
+    let (_, outcome) =
+        event_exchange(before, vec![token_event_with(" report", -4.0), eos.clone()]).await?;
+    assert_eq!(shown_text(outcome).as_deref(), Some("ort"));
+    // A later token under the floor still withholds the suggestion.
+    let (_, outcome) = event_exchange(
+        before,
+        vec![
+            token_event_with(" report", -0.1),
+            token_event_with(" tomorrow", -3.0),
+            eos,
+        ],
+    )
+    .await?;
+    assert!(matches!(
+        outcome,
+        ProviderOutcome::NoSuggestion(NoSuggestionReason::LowConfidence)
+    ));
+    Ok(())
+}
+
 #[tokio::test]
 async fn slow_stream_salvages_only_complete_words_and_respects_cancellation()
 -> Result<(), Box<dyn Error>> {
@@ -744,7 +872,7 @@ async fn fact_fence_counts_invented_numbers_as_rejected_output() -> Result<(), B
             Some("."),
         ),
         // Words salvaged at the stream deadline pass the same fence.
-        ("Our office opens at", "en", &[" 10 AM and"][..], true, None),
+        ("We open at ", "en", &[" ", "10 AM and"][..], true, None),
     ] {
         assert_eq!(
             stream_outcome_until(
@@ -764,7 +892,7 @@ async fn fact_fence_counts_invented_numbers_as_rejected_output() -> Result<(), B
         (
             "Meet me at room 42, then room",
             "en",
-            &[" 42 again"][..],
+            &[" room", " 42 again"][..],
             None,
             " 42 again",
         ),
@@ -1283,8 +1411,10 @@ async fn a_request_observer_sees_each_runtime_body_exactly_as_sent() -> Result<(
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("continuation request");
         let payload = read_payload(&mut socket).await;
-        let stop = serde_json::json!({"index":0,"content":" report","stop":true,"stop_type":"eos","completion_probabilities":[
-            {"id":1,"token":" report","bytes":" report".as_bytes(),"logprob":-0.1,"top_logprobs":[]}]});
+        // The typed `the` is healed: the runtime echoes it, then continues.
+        let stop = serde_json::json!({"index":0,"content":" the report","stop":true,"stop_type":"eos","completion_probabilities":[
+            {"id":1,"token":" the","bytes":" the".as_bytes(),"logprob":-0.1,"top_logprobs":[]},
+            {"id":2,"token":" report","bytes":" report".as_bytes(),"logprob":-0.1,"top_logprobs":[]}]});
         socket
             .write_all(
                 format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {stop}\n\n")
@@ -1405,10 +1535,11 @@ async fn the_word_limit_never_displays_part_of_a_hyphenated_word() -> Result<(),
             " die E-Mail an Herrn",
         ),
         (
+            // The typed `need` is healed, so the runtime echoes it first.
             "We need",
             "en",
             &[
-                " a", " state", "-of-", "the", "-art", " tool", " for", " this",
+                " need", " a", " state", "-of-", "the", "-art", " tool", " for", " this",
             ][..],
             " a state-of-the-art tool for",
         ),
@@ -1476,7 +1607,8 @@ fn shown_text(outcome: ProviderOutcome) -> Option<String> {
 #[tokio::test]
 async fn the_confidence_gate_shows_a_suggestion_only_when_every_shown_token_is_likely()
 -> Result<(), Box<dyn Error>> {
-    let before = "Please send me the";
+    // `discussed` begins no longer word, so the prompt is sent unhealed.
+    let before = "Please send me what we discussed";
     let eos = serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"eos"});
     // Every token at or above the floor: shown, and probabilities were asked for.
     let (payload, outcome) = event_exchange(
@@ -1623,7 +1755,7 @@ async fn length_exchange(
     client.set_suggestion_length(length);
     let outcome = client
         .propose_outcome(
-            request("Please send the report", Some("en")),
+            request("Please send what we discussed", Some("en")),
             CancellationToken::new(),
             false,
             RequestTrigger::Automatic,

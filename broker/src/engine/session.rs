@@ -6,9 +6,10 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use super::authority::policy_status;
+use super::type_through::CarryScope;
 use super::{
     Broker, BrokerError, BrokerEventSink, BrokerState, ContextOutcome, SessionAuthority,
-    SessionState,
+    SessionState, WordStart,
 };
 use crate::metrics::Metrics;
 use crate::policy::{PolicyDecision, PolicyInput, PolicyReason, evaluate};
@@ -111,6 +112,7 @@ impl Broker {
         let metrics = &self.inner.metrics;
         let mut state = self.inner.state.lock().await;
         let paused = state.effective_paused();
+        let previous_word_start = state.word_start.take();
         let language = state
             .sessions
             .get(&coordinates.session_id)
@@ -145,8 +147,14 @@ impl Broker {
                 {
                     payload.language = Some(language.to_owned());
                 }
+                let scope = CarryScope::of(session);
+                let previous = previous_word_start
+                    .filter(|(previous, _)| *previous == scope)
+                    .map(|(_, start)| start);
+                let word_start = WordStart::follow(previous, &payload).map(|start| (scope, start));
                 session.context = Some(payload);
                 self.renew_context_authority_lease(session, self.inner.config.generation_timeout);
+                state.word_start = word_start;
                 Ok(ContextOutcome::Allowed)
             }
             PolicyDecision::ManualRequired(_) => {

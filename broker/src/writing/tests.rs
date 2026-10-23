@@ -52,6 +52,39 @@ fn mid_line_insertions_end_where_the_continuation_rejoins_the_line() {
         ("Please find the", " report", " latest version of", None),
         ("Please find the", " report", " reports and", None),
         ("Please find the", " port", " report", None),
+        // A short next word must come back with the word after it.
+        (
+            "I am not sure whet",
+            " the figures are final.",
+            "her this is the right place",
+            Some("her"),
+        ),
+        (
+            "I am not sure ",
+            "the figures are final.",
+            "if this is the right",
+            None,
+        ),
+        (
+            "I am not sure ",
+            "the figures are final.",
+            "that the figures are",
+            Some("that "),
+        ),
+        // Finishing the typed word into the next word repeats it.
+        (
+            "I hope you ha",
+            " had a good weekend",
+            "d a wonderful week",
+            None,
+        ),
+        ("I hope you ha", " had a good weekend", "d had a good", None),
+        (
+            "I hope you ha",
+            " had a good weekend",
+            "ve had a good",
+            Some("ve"),
+        ),
     ];
     for (before, line, continuation, expected) in cases {
         assert_eq!(
@@ -217,6 +250,58 @@ fn token_healing_binds_the_exact_typed_stem() {
         Some("ent and".to_owned())
     );
     assert_eq!(super::available_complete_words("partial", 4), None);
+}
+
+#[test]
+fn a_typed_lexicon_word_is_healed_and_kept_only_when_the_answer_extends_it() {
+    let plan_for = |before: &str, language: &str| crate::provider::ProviderRequest {
+        before: before.to_owned(),
+        after: String::new(),
+        language: Some(language.to_owned()),
+        vocabulary: None,
+    };
+    let request = plan_for("I will send the rep", "en");
+    let plan = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
+    assert_eq!(plan.prompt, "I will send the");
+    assert_eq!(plan.echo, Some(" rep"));
+    assert_eq!(plan.max_tokens, 12);
+    assert_eq!(plan.finished_word_prompt, Some("I will send the rep"));
+    // ` report` or exactly ` rep` stands; a first token shorter than the
+    // typed word, or none read, sends the unhealed prompt instead.
+    assert!(plan.finished_word(Some(" report")).is_none());
+    assert!(plan.finished_word(Some(" rep")).is_none());
+    for first in [Some(" re"), Some(" to"), None] {
+        let finished = plan.finished_word(first).expect("taken as finished");
+        assert_eq!(finished.prompt, "I will send the rep");
+        assert_eq!(finished.echo, None);
+        assert_eq!(finished.max_tokens, 8);
+        assert!(finished.finished_word(None).is_none(), "one fallback only");
+    }
+    // The Lab's own healing helpers keep the unchecked echo only.
+    assert_eq!(
+        super::production_healed_echo("I will send the rep", "en"),
+        None
+    );
+    for (before, language, prompt, echo) in [
+        // No longer lexicon word starts with it, so it is finished.
+        ("We asked", "en", "We asked", None),
+        // The whole field is the word: nothing would be left to prompt.
+        ("Rep", "en", "Rep", None),
+        // A typed space finished it; only the space is healed.
+        (
+            "I will send the rep ",
+            "en",
+            "I will send the rep",
+            Some(" "),
+        ),
+        // Word healing is English only.
+        ("Bitte lies den Ber", "de", "Bitte lies den Ber", None),
+    ] {
+        let request = plan_for(before, language);
+        let plan = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
+        assert_eq!((plan.prompt, plan.echo), (prompt, echo), "{before:?}");
+        assert_eq!(plan.finished_word_prompt, None, "{before:?}");
+    }
 }
 
 #[test]
@@ -521,9 +606,11 @@ fn generation_excludes_what_could_never_be_shown() {
         "root ::= [^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]*"
     );
     // A typed digit (any script) lets numbers through to the fact check.
-    for (before, language) in [("We met on 12 May and", "en"), ("در سال ۱۴۰۲", "fa")] {
-        assert_eq!(plan(before, language), "root ::= [^<>\\n\\r`]*");
-    }
+    assert_eq!(plan("در سال ۱۴۰۲", "fa"), "root ::= [^<>\\n\\r`]*");
+    assert_eq!(
+        plan("We met on 12 May and", "en"),
+        "root ::= \" and\" [^<>\\n\\r`]*"
+    );
     // A healed echo keeps its literal ahead of the same class.
     assert_eq!(
         plan("Please review the ", "en"),
@@ -579,7 +666,7 @@ fn trailing_space_boundary_preserves_exact_bytes_and_the_eight_token_budget() {
 fn boundary_candidate_keeps_legacy_stems_and_never_trims_other_whitespace() {
     for (language, before, tokens) in [
         ("en", "Please review the docum", 12),
-        ("en", "Please review the", 8),
+        ("en", "Please review the", 12),
         ("de", "Bitte lies die Dokum", 8),
         ("fa", "لطفا این گزار", 8),
         ("en", "Please review the\u{a0}", 8),
@@ -603,6 +690,15 @@ fn boundary_candidate_keeps_legacy_stems_and_never_trims_other_whitespace() {
             );
             assert_eq!(candidate.prompt, "Please review the");
             assert_eq!(candidate.echo, Some(" docum"));
+            assert_eq!(candidate.finished_word_prompt, None);
+        } else if before == "Please review the" {
+            assert_eq!(legacy.prompt, before);
+            assert!(legacy.echo.is_none());
+            // A lexicon word is healed too, with the unhealed prompt kept
+            // for an answer that does not extend it.
+            assert_eq!(candidate.prompt, "Please review");
+            assert_eq!(candidate.echo, Some(" the"));
+            assert_eq!(candidate.finished_word_prompt, Some(before));
         } else {
             assert_eq!(legacy.payload(), candidate.payload());
         }

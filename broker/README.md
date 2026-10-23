@@ -512,6 +512,24 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   end on a bare space. English and Persian prompts also echo trailing spaces
   and require them back (`TRAILING_SPACE_HEALING`). Persian uses that same
   token count. A 2.6× Persian budget missed 550 ms on the development cases.
+- **Typed lexicon words.** An English word at the caret that is itself a
+  lexicon word but begins a longer one (`rep`, `fin`, `the`) is healed too,
+  because unhealed the model took it as finished (`can sh` became `uck off
+  the background`). The request forbids the lone space token, which let the
+  model meet the echo without writing the word (` ` then `finger` for
+  ` fin`). The answer stands only when its first token is the whole echo or
+  extends it (` report`, ` the`); a shorter one spelled out something else
+  from pieces (`and` → `andash`), so the stream is dropped at that token and
+  the unhealed prompt is sent within the same budget
+  (`CompletionPlan::finished_word`). The confidence gate skips the token
+  that writes the word: its probability is how likely the word was before
+  any letter was typed. In the paired Lab comparison of 2026-10-23 (134
+  English stems from the development references, 34 of them mid-sentence,
+  and 29 prefixes ending on a finished word; seed 42, 15 W) the intended
+  word was finished 75 times against 0 (23 of the mid-sentence ones
+  against 0), text running on after the stem fell from 40 to 9, finished
+  words kept their 23 suggestions, and shown p90 fell from 485 to 392 ms.
+  Runs: `output/writing/2026-10-23-word-stems/`.
 - **Abstention.** A continuation abstains when it adds a number absent from the
   typed text, and every request when the caret splits a word.
 - **Token confidence gate.** Each continuation request asks the runtime for
@@ -583,7 +601,20 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   it does not join that word. End of text, punctuation, and a repeated space
   stay rejected. Word acceptance on that last word includes the space, and
   typing its
-  first letters carries the space with the remainder.
+  first letters carries the space with the remainder. Letters typed at a
+  word start in front of a word (`the |report`, then `fin`) are a new word
+  while the text after the caret stays the same and only letters are typed
+  (the engine's `WordStart`, kept per app or site like a carry because an
+  observed field reopens its session on each edit; it grants nothing): the
+  provider is asked as if a space followed
+  them, and the suggestion ends in that space (`al ` → `the final report`).
+  A caret moved into a word, or anything but letters typed there, still
+  abstains. A next word of three letters or fewer rejoins only together
+  with the word after it: ` the right place` does not rejoin ` the
+  figures`, which on the 41 mid-sentence development cases removed the one
+  insertion `main` showed (`I am not sure |the figures` → `if this is `).
+  A finished word that repeats the next one (`ha` + `d` before `had`) does
+  not fit either.
 - **Language overrides.** Optional `language_overrides` settings map up to 64
   canonical app ids to `en`, `de` or `fa`. `badi language APP TAG` sets one;
   `reset` removes it. The broker applies the override only after context

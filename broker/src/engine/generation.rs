@@ -63,6 +63,9 @@ struct GenerationBinding {
     before: String,
     after: String,
     language: Option<String>,
+    /// Letters were typed at a word start in front of `after`'s first word,
+    /// so the suggestion ends in the space that keeps them apart.
+    separates_next_word: bool,
 }
 
 /// A type-through remainder keeps its original suggestion's deadline and
@@ -161,6 +164,7 @@ impl Broker {
         // allowing an obsolete suggestion to remain eligible.
         session.retire_generation(metrics, ReasonCode::Superseded);
         let scope = CarryScope::of(session);
+        let separates_next_word = state.typed_at_word_start(&scope, &context);
         let carry = state.type_through.as_ref();
         let (carried, carry_miss) = consult_carry(carry, &scope, &context, payload.explicit);
         let mid_line = state
@@ -186,6 +190,7 @@ impl Broker {
             before: context.before.clone(),
             after: context.after.clone(),
             language: context.language.clone(),
+            separates_next_word,
         };
         if escape_quiet || session.nothing_to_correct(payload.explicit) {
             self.abstain_admitted(state, binding, generation_timeout)
@@ -232,7 +237,7 @@ impl Broker {
             binding,
             request: ProviderRequest {
                 before: context.before,
-                after: context.after,
+                after: provider_after(context.after, separates_next_word),
                 language: context.language,
                 vocabulary: None,
             },
@@ -556,13 +561,17 @@ impl Broker {
             }
         };
         metrics.record_provider_output(raw.text.len());
-        checked_proposal(
-            self.inner.provider_kind,
-            &binding.before,
-            &binding.after,
-            raw,
-        )
-        .ok_or_else(|| {
+        let checked = if binding.separates_next_word && raw.replace_before.is_none() {
+            separated_proposal(self.inner.provider_kind, binding, raw)
+        } else {
+            checked_proposal(
+                self.inner.provider_kind,
+                &binding.before,
+                &binding.after,
+                raw,
+            )
+        };
+        checked.ok_or_else(|| {
             if keep_partial {
                 return Withheld::KeepPartial;
             }
@@ -616,6 +625,7 @@ impl Broker {
             before,
             after,
             language,
+            separates_next_word: _,
         } = binding;
         if proposal.replace_before.is_none() && session.spelling_only() {
             metrics.record_no_suggestion(NoSuggestionReason::ModelAbstained);
@@ -911,6 +921,37 @@ fn session_awaiting<'state>(
 
 /// Display-side safety and shape checks shared by generation and diagnostic
 /// probes. A replacement must own the exact typed suffix at a word boundary.
+/// The text after the caret as the provider is asked about it: after letters
+/// typed at a word start, as if a space already followed them;
+/// [`separated_proposal`] ends the suggestion with that space.
+fn provider_after(after: String, separates_next_word: bool) -> String {
+    if separates_next_word {
+        format!(" {after}")
+    } else {
+        after
+    }
+}
+
+/// A suggestion for letters typed at a word start in front of a word
+/// (`the fin|report`): checked as the provider was asked, with a space after
+/// those letters, and then ended with that space so it stays apart from the
+/// next word (`al ` makes `the final report`).
+fn separated_proposal(
+    provider_kind: ProviderKind,
+    binding: &GenerationBinding,
+    raw: WritingProposal,
+) -> Option<WritingProposal> {
+    let spaced = format!(" {}", binding.after);
+    let checked = checked_proposal(provider_kind, &binding.before, &spaced, raw)?;
+    let text = format!("{} ", checked.text.trim_end());
+    crate::segment::validate_completion_shape(&binding.before, &binding.after, &text, true)
+        .is_ok()
+        .then_some(WritingProposal {
+            text,
+            replace_before: None,
+        })
+}
+
 pub(super) fn checked_proposal(
     provider_kind: ProviderKind,
     before: &str,

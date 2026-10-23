@@ -7,6 +7,13 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Half-typed English words are finished where Badi used to run on after
+  them (`can sh` gave `uck off the background`): `rep`, `fin` or `whet`
+  complete to `report`, `final` and `whether`, in the Lab 75 of 134 times
+  against 0. A word typed right in front of another mid-sentence
+  (`the fin|report`) is finished with a separating space instead of
+  nothing, and a mid-sentence insertion no longer rejoins on a short word
+  by chance (`I am not sure |the figures` got `if this is `).
 - Typos are corrected in Chromium, Brave, Zen, the Claude app, VS Code,
   Cursor, Codex, Discord and Grok Bot, where they used to go by
   ([ADR 0011](docs/decisions/0011-checked-corrections-in-append-only-apps.md)).

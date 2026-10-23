@@ -13,9 +13,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 
+/// Ends on `discussed`, which begins no longer word, so one request is sent
+/// unhealed.
 fn request() -> ProviderRequest {
     ProviderRequest {
-        before: "Thanks for this. I will".to_owned(),
+        before: "Thanks for this, as discussed".to_owned(),
         after: String::new(),
         language: Some("en".to_owned()),
         vocabulary: None,
