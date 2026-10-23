@@ -377,6 +377,19 @@ class Power:
             watch.close()
 
 
+def refresh_bar():
+    """Asks Omarchy's bar mark to read the broker now, as a pause from the
+    terminal does: it otherwise looks only while its popout is open. Best
+    effort, and nothing where Omarchy is not running."""
+    if shutil.which("omarchy-shell") is None:
+        return
+    try:
+        Gio.Subprocess.new(["omarchy-shell", "-q", "badi-writing", "refresh"],
+                           Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE)
+    except GLib.Error:
+        pass
+
+
 def pipewire_dump_command(environment=os.environ):
     """pw-dump, or the fake a test names."""
     configured = environment.get("BADI_SESSION_PIPEWIRE_DUMP")
@@ -460,9 +473,10 @@ class ScreenCast:
     PipeWire, where no portal stream can exist.
     """
 
-    def __init__(self, reporter, command=None):
+    def __init__(self, reporter, command=None, refresh=refresh_bar):
         self.reporter = reporter
         self.command = command or pipewire_dump_command()
+        self.refresh = refresh
         self.streams = Streams()
         self.process = None
         self._cancellable = None
@@ -522,7 +536,9 @@ class ScreenCast:
         shared = bool(self.streams.ids)
         if shared != self.reporter.screen_shared:
             self.reporter.screen_shared = shared
-            self.reporter.publish()
+            # The broker holds before the reply, so the bar then reads the hold.
+            if self.reporter.publish():
+                self.refresh()
 
     def _ended(self, reason):
         if not self._received and self.streams.ids:
@@ -757,7 +773,9 @@ def main(arguments):
         return 2
     loop = GLib.MainLoop()
     reporter = Reporter(Link(), style_key.lookup if style_key is not None else None)
-    parts = [ScreenCast(reporter)]
+    # Tests turn off every desktop side effect: toasts, the OSD and bar refreshes.
+    desktop_ui = os.environ.get("BADI_SESSION_NOTIFICATIONS") != "off"
+    parts = [ScreenCast(reporter, refresh=refresh_bar if desktop_ui else lambda: None)]
     try:
         system = bus_for("system")
         parts.append(Logind(system, reporter))
@@ -767,8 +785,7 @@ def main(arguments):
         reporter.publish()
     if shortcuts_enabled:
         try:
-            parts.append(Shortcuts(bus_for("session"), controller_path(),
-                                   notify=os.environ.get("BADI_SESSION_NOTIFICATIONS") != "off"))
+            parts.append(Shortcuts(bus_for("session"), controller_path(), notify=desktop_ui))
         except GLib.Error:
             log("session bus unavailable; no global shortcuts")
 

@@ -677,10 +677,11 @@ def restart(plan, installation):
 def report(plan, probe):
     if plan.session_disabled:
         print("The session helper is disabled (systemctl --user enable --now badi-session.service turns it on); "
-              "suspend, session switches and battery modes are not reported to the broker.")
+              "suspend, session switches, battery modes and screen sharing are not reported to the broker.")
     elif plan.session_ready:
-        print("Session helper reporting: sleep and session switches withdraw suggestions; "
-              "battery behavior follows badi battery; shortcuts are offered through the desktop portal.")
+        print("Session helper reporting: sleep, session switches and screen sharing withdraw suggestions "
+              "(badi screen-share); battery behavior follows badi battery; shortcuts are offered through the "
+              "desktop portal.")
     else:
         print("The session helper did not report to the broker. Inspect badi doctor and "
               "journalctl --user -u badi-session.service; predictions still work without it.")

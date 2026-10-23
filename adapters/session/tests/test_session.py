@@ -381,7 +381,9 @@ class ScreenCastTests(unittest.TestCase):
         self.addCleanup(setattr, daemon, "BACKOFF_SECONDS", self.backoff)
 
     def watch(self):
-        screencast = daemon.ScreenCast(self.reporter, [sys.executable, "-B", str(Path(__file__).parent / "fake_pw_dump.py")])
+        self.refreshes = []
+        screencast = daemon.ScreenCast(self.reporter, [sys.executable, "-B", str(Path(__file__).parent / "fake_pw_dump.py")],
+                                       refresh=lambda: self.refreshes.append(self.reporter.screen_shared))
         self.addCleanup(screencast.close)
         return screencast
 
@@ -416,6 +418,7 @@ class ScreenCastTests(unittest.TestCase):
         self.change({"id": 123, "info": None})
         self.until(lambda: not self.reporter.screen_shared, "the share ending")
         self.assertEqual(self.fake.reports[-1], ("active", False, False, False))
+        self.assertEqual(self.refreshes, [True, False], "the bar mark reads each change once the broker has it")
 
     def test_a_crashed_dump_keeps_the_hold_until_a_new_dump_replaces_it(self):
         screencast = self.watch()
@@ -441,7 +444,7 @@ class ScreenCastTests(unittest.TestCase):
         (self.controls / "exit").touch()
         self.until(lambda: not self.reporter.screen_shared, "PipeWire gone")
         self.assertGreaterEqual(self.starts(), 2)
-        missing = daemon.ScreenCast(self.reporter, [str(self.controls / "no-such-pw-dump")])
+        missing = daemon.ScreenCast(self.reporter, [str(self.controls / "no-such-pw-dump")], refresh=lambda: None)
         self.addCleanup(missing.close)
         self.assertIsNone(missing.process)
         self.assertEqual(missing.problem, "pw-dump unavailable")

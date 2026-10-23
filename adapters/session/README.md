@@ -65,8 +65,9 @@ produce it without a share.
   settings `screen_share: hold` (the default, `badi screen-share hold`) the
   broker holds every grant as for an inactive session; `badi screen-share
   suggest` keeps suggesting. `badi status`, `badi doctor` and the panel name
-  the hold; the debug trace shows it as `screen_share: held` on
-  `desktop.status`.
+  the hold, and the helper asks the bar mark to look at once (`omarchy-shell
+  -q badi-writing refresh`), so it dims as for a pause; the debug trace shows
+  it as `screen_share: held` on `desktop.status`.
 - Only node ids are kept. Node names, applications and media titles (a
   playing song's, for example) are read to classify a node and dropped; the
   journal says only `screen_shared=true|false`.
