@@ -273,8 +273,13 @@ prints pinned download advice and downloads nothing
   free through a client-supplied `chat_parser` on `/completion`
   ([llama.cpp#29942](https://github.com/ggml-org/llama.cpp/pull/29942)) Badi
   needs only as hardening (the broker never sends that field), and outside
-  b11555–b11634, which slowed quantized kernels. Measurements below dated
-  before 2026-10-24 used b10726.
+  b11555–b11634, which slowed quantized kernels. Paired against b10726 (seed
+  42, 15 W, `output/writing/2026-10-24-runtime-b11840/`), the European and
+  Portuguese production-boundary suites scored the same (exact, first word,
+  keystrokes saved) with the same p50, and the revision suite fixed 53 of 75
+  errors (50 before) with 19 of 20 correct inputs left alone; the changed
+  cases are near-tie token choices. Measurements below dated before
+  2026-10-24 used b10726.
 - **Selection.** Startup reads the settings' `writing_model` (the user's
   `badi model use` choice) and loads that installed catalog model when it
   fits total memory after a host reserve; otherwise the installed model the
