@@ -379,7 +379,7 @@ def session(root, report):
                     'kind': 'fcitx', 'name': 'badi-fcitx5', 'version': '0.1.0'}
                 assert hello['payload']['capabilities'] == [
                     'context', 'suggestion', 'commit.dispatched_unverified', 'text_replacement',
-                    'control', 'policy', 'long_reading_window']
+                    'control', 'policy', 'long_reading_window', 'selection_revision']
                 checks.append('Actual loaded native addon hello negotiates exact text replacement')
             finally:
                 if hello_peer is not None:
