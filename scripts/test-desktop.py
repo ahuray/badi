@@ -1186,6 +1186,25 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual((sent['revision'], sent['writing_languages'], sent['spelling_languages'], sent['languages_chosen']),
                          (4, ['de', 'fr'], ['de', 'fr'], True))
 
+    def test_revise_reports_and_installs_only_the_missing_revision_model(self):
+        catalog = {"catalog": [{"id": "qwen3-1.7b", "name": "Qwen3 1.7B", "filename": "Qwen3-1.7B-Q4_K_M.gguf",
+                                "download_bytes": 1_282_439_264, "license": "Apache-2.0", "fits": True}]}
+        with patch.object(desktop, "model_advice", return_value=catalog), \
+             patch.object(desktop, "MODEL_DIRECTORY", self.directory), \
+             patch.object(desktop.badi_install, "download_model") as download:
+            report, _model = desktop.revision_report()
+            self.assertEqual((report["model"], report["installed"]), ("qwen3-1.7b", False))
+            installed, downloaded = desktop.install_revision_model()
+            self.assertTrue(downloaded and installed["installed"])
+            download.assert_called_once()
+            (self.directory / "Qwen3-1.7B-Q4_K_M.gguf").write_bytes(b"weights")
+            self.assertEqual(desktop.install_revision_model()[1], False, "nothing downloads twice")
+            download.assert_called_once()
+            catalog["catalog"][0]["fits"] = False
+            (self.directory / "Qwen3-1.7B-Q4_K_M.gguf").unlink()
+            with self.assertRaisesRegex(RuntimeError, "does not fit"):
+                desktop.install_revision_model()
+
     def test_spelling_languages_stay_canonical_and_name_missing_dictionaries(self):
         document = {}
         desktop.set_spelling(document, "fr", True)

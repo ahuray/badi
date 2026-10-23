@@ -362,6 +362,65 @@ per-app language always wins. The text, fingerprint, caret and edit authority
 are unchanged, and no sample is retained. French and Spanish generation
 still requires independent qualification.
 
+## Selection revision
+
+An explicit grammar check or refinement of one selection
+([ADR 0012](../docs/decisions/0012-explicit-revision-of-one-selection.md)),
+in `src/revision.rs` (prompts and gate), `src/revision/` (the runtime and its
+fixture) and `src/engine/revision.rs` (authority).
+
+- **Admission.** `revision.request` needs the negotiated `selection_revision`
+  capability (the v2 Fcitx addon) and is a context snapshot of its own: it
+  revokes the session's context, suggestion and earlier revision first. Policy
+  is that of an explicit request, plus no terminal field; a refusal (pause,
+  snooze, hold, setting, sensitive or composing field) is answered with
+  `revision.clear`, never an error. The language is the app's override, else
+  detected from the selection and the text before it, else the request's,
+  else the first writing language; outside en, de, fr, es and pt the answer
+  is `unsupported_language`.
+- **Model.** `LocalReviser` runs the catalog's Qwen3 1.7B (Apache-2.0) in a
+  second pinned llama.cpp process with its own socket
+  (`llama-<pid>-revision.sock`) and token, launch contract
+  `badi-revision-qwen3-v1`: a 1,024-token context, 64-token batches, the
+  model copied into memory. It starts on the first request (hashing the model
+  once per broker run, then confirming the same files) from one thread that
+  lives as long as the broker, since a contained runtime dies with the
+  thread that started it, and stops after ten idle minutes. One revision
+  runs at a time. Its exit, a missing model, short available memory or too
+  little room under the service's own memory limit (which the writing
+  runtime shares; its file cache does not count) answers
+  `revision_unavailable` and never stops suggestions. The prompt is
+  `ChatML` with an empty reasoning block, a system line that names the field's
+  language, and one worked example in that language: examples in another
+  language made answers switch to it. A mid-sentence selection is sent after
+  its sentence's start (up to 160 characters, from a word), so a clause keeps
+  its grammar; the answer must begin with that start unchanged, which is then
+  removed (`context` otherwise). Greedy decoding, at most two thirds of a
+  token per selected character plus 48 (64–512), a 40-second bound for the
+  call including a cold start. `--provider phrase` uses `FixtureReviser`,
+  which fixes a few known mistakes, for integration lanes.
+- **Gate.** `accept` keeps an answer only when it is one line with no control
+  or format character, keeps the selection's surrounding spaces, keeps a
+  mid-sentence lowercase start, adds no final period when words or marks
+  follow on the line, is in
+  the same language (all Latin letters and a confident detection that agrees),
+  keeps every number, address and handle and every capitalized name after the
+  first word (not in German, which capitalizes nouns), stays within the mode's
+  length bounds (grammar 0.5–1.6, refine 0.4–1.8, ±12 characters), and, for a
+  grammar check of more than three words, changes at most half of the words
+  ignoring case and punctuation. An unchanged answer is `no_change`; any
+  other failure `invalid_output`.
+- **Show and apply.** `revision.show` lasts 60 s within a context lease of
+  the call bound plus that window. `control.request` `accept_all` with the
+  revision id grants one `commit.prepare` with `replace_selection` and the
+  revised text; `dismiss` retires it. A revision's commit saves no words, adds
+  no statistics and no style sample. Any context change, focus change, pause,
+  hold, authority change or session close retires it with the matching
+  reason.
+- **Trace.** `revision start` and `revision done` record the mode, language,
+  length, time, whether the runtime started cold and the outcome (`shown` or
+  the gate's class); only a `--text` run adds the selection and its revision.
+
 ## Vocabulary completion
 
 [src/vocabulary.rs](src/vocabulary.rs) finishes the word at the caret with a

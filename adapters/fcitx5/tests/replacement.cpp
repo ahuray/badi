@@ -40,7 +40,8 @@ struct Runtime {
 };
 
 const Json capabilities = Json::array({"context", "suggestion",
-    "commit.dispatched_unverified", "text_replacement", "control", "policy", "long_reading_window"});
+    "commit.dispatched_unverified", "text_replacement", "control", "policy", "long_reading_window",
+    "selection_revision"});
 
 Json message(const char *type) {
     Json payload{{"fingerprint", "0123456789abcdef0123456789abcdef"},
@@ -173,7 +174,7 @@ private:
         require(value.at("type") == "hello", "unexpected native request");
         helloSeen_ = true;
         require(value.at("payload").at("capabilities") == capabilities,
-                "native client must advertise only append capabilities");
+                "native client must advertise exactly its capabilities");
         auto enabled = capabilities;
         if (scenario_ == "extra-capability") enabled.push_back("clipboard");
         send(Json{{"v", 2}, {"type", "hello.ack"}, {"id", "fcitx.hello"}, {"mono_ms", 0},

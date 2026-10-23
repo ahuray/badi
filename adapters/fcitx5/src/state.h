@@ -1,5 +1,7 @@
 #pragma once
 
+#include "revision.h"
+
 #include <fcitx-utils/capabilityflags.h>
 #include <fcitx-utils/key.h>
 
@@ -139,6 +141,14 @@ struct DismissRequest {
     std::string suggestionId;
 };
 
+// A selection's scalar anchor and head, as a revision's grant names them.
+struct SelectionRange {
+    std::uint64_t anchor = 0;
+    std::uint64_t head = 0;
+
+    bool operator==(const SelectionRange &) const = default;
+};
+
 struct CommitPrepare {
     Coordinates coordinates;
     std::string controlId;
@@ -146,6 +156,8 @@ struct CommitPrepare {
     std::string text;
     std::string acceptance;
     std::optional<std::string> replaceBefore = std::nullopt;
+    // A revision's grant: `text` replaces exactly this selection (ADR 0012).
+    std::optional<SelectionRange> replaceSelection = std::nullopt;
 };
 
 struct CommitDispatch {
@@ -154,6 +166,35 @@ struct CommitDispatch {
     std::string suggestionId;
     std::string text;
     std::optional<std::string> replaceBefore = std::nullopt;
+    std::optional<SelectionRange> replaceSelection = std::nullopt;
+};
+
+// An explicit revision request for one selection (ADR 0012). It is a field
+// revision of its own, whose fingerprint covers the selection.
+struct RevisionUpdate {
+    Coordinates coordinates;
+    std::string requestId;
+    std::string mode; // "grammar" or "refine"
+    SelectionWindow selection;
+    std::string appId;
+    std::string targetId;
+};
+
+// The broker's revision of that selection, until applied or retired.
+struct Revision {
+    Coordinates coordinates;
+    std::string requestId;
+    std::string revisionId;
+    std::string mode;
+    std::string original;
+    std::string text;
+    std::uint64_t expiresAtMs = 0;
+};
+
+struct RevisionClear {
+    Coordinates coordinates;
+    std::optional<std::string> revisionId;
+    std::string reason;
 };
 
 struct PanelObservation {
@@ -233,6 +274,8 @@ inline constexpr std::string_view kThinking = "Badi is thinking…";
 inline constexpr std::string_view kLineUnknown = "Badi lost track of this line — press Enter or Ctrl+U";
 inline constexpr std::string_view kRequestFailed = "Badi request failed — check the tray status";
 inline constexpr std::string_view kCorrectionUnconfirmed = "Badi could not confirm that correction — check the text";
+inline constexpr std::string_view kRevisionSelection = "Badi revises one line of up to 600 characters — select again";
+inline constexpr std::string_view kRevisionUnconfirmed = "Badi could not confirm that revision — check the text";
 } // namespace notice
 
 // How an explicit request (the invoke chord, or Tab on the manual path) proceeds.
@@ -522,6 +565,23 @@ public:
                            const std::optional<std::string> &suggestionId);
     void clearSuggestion();
 
+    // Explicit revision of one selection (ADR 0012). A request supersedes
+    // the caret's context and any suggestion; every later field change,
+    // focus change or invalidation retires it with the revision shown.
+    std::optional<RevisionUpdate> requestRevision(SelectionWindow selection, std::string mode);
+    bool showRevision(Revision revision, std::uint64_t nowMs);
+    std::optional<AcceptRequest> requestRevisionAcceptance(std::uint64_t nowMs, const PanelObservation &panel);
+    std::optional<DismissRequest> requestRevisionDismissal(std::uint64_t nowMs, const PanelObservation &panel);
+    std::optional<CommitDispatch> authorizeRevisionCommit(const CommitPrepare &prepare, std::uint64_t nowMs,
+                                                          const PanelObservation &panel);
+    // Retires the request at `coordinates` and its revision, unless a shown
+    // revision has another id than `revisionId`.
+    bool clearRevisionIf(const Coordinates &coordinates, const std::optional<std::string> &revisionId);
+    void clearRevision();
+    [[nodiscard]] const std::optional<RevisionUpdate> &revisionRequest() const { return revisionRequest_; }
+    [[nodiscard]] const std::optional<Revision> &visibleRevision() const { return revision_; }
+    [[nodiscard]] bool revisionAcceptancePending() const { return revisionAcceptance_.has_value(); }
+
     [[nodiscard]] bool focused() const { return focused_; }
     [[nodiscard]] bool editingAvailable() const {
         return nativeEditingAvailable(appId_, editTarget_, editPath_);
@@ -542,6 +602,7 @@ public:
 
 private:
     std::string nextFingerprint(const ContextWindow &context) const;
+    std::string fingerprintOf(std::string_view material) const;
 
     Coordinates coordinates_;
     std::string appId_;
@@ -553,6 +614,9 @@ private:
     std::optional<ContextUpdate> lastContext_;
     std::optional<Suggestion> visible_;
     std::optional<AcceptRequest> pendingAcceptance_;
+    std::optional<RevisionUpdate> revisionRequest_;
+    std::optional<Revision> revision_;
+    std::optional<AcceptRequest> revisionAcceptance_;
 };
 
 } // namespace badi::fcitx5

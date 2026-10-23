@@ -7,6 +7,14 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Select a line of text and press Ctrl+Shift+Space: Badi checks its grammar,
+  and pressing it again offers a refined wording, shown with removed words
+  struck through and new ones bold. Tab applies it as one edit over the
+  selection, read back afterwards; Escape keeps your text. It works in
+  English, German, French, Spanish and Portuguese, never drops a number,
+  address or name, and runs a separate local model (Qwen3 1.7B) only while
+  you use it (`badi revise`, `badi revise install`;
+  [ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md)).
 - While you share your screen, Badi shows no suggestions, so grey text with
   words from the window or ones it learned never appears on someone else's
   screen, also while the session helper restarts; they return a second

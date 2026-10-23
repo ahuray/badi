@@ -79,6 +79,23 @@ enum Launcher {
     ParentDeathHelper,
 }
 
+/// Which of the broker's runtimes a launch is: each has its own socket, so
+/// the revision runtime (ADR 0012) never replaces the writing runtime's.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SocketRole {
+    Writing,
+    Revision,
+}
+
+impl SocketRole {
+    fn socket_name(self, pid: u32) -> String {
+        match self {
+            Self::Writing => format!("llama-{pid}.sock"),
+            Self::Revision => format!("llama-{pid}-revision.sock"),
+        }
+    }
+}
+
 /// The settings of a writing launch. The runtime identity records every field
 /// except the checkpoint limit, so a profile that differs from production in
 /// any way must name its own launch contract.
@@ -168,6 +185,7 @@ pub struct LlamaCppLaunch {
     /// Private directory that will hold `llama-<pid>.sock`. `None` uses
     /// `$XDG_RUNTIME_DIR/badi`, which the service unit creates mode 0700.
     runtime_directory: Option<PathBuf>,
+    socket_role: SocketRole,
 }
 
 impl LlamaCppLaunch {
@@ -189,6 +207,7 @@ impl LlamaCppLaunch {
             profile: WritingProfile::PRODUCTION,
             launcher: Launcher::Direct,
             runtime_directory: None,
+            socket_role: SocketRole::Writing,
         };
         launch.validate()?;
         Ok(launch)
@@ -224,6 +243,7 @@ impl LlamaCppLaunch {
             profile: WritingProfile::PRODUCTION,
             launcher: Launcher::Direct,
             runtime_directory: None,
+            socket_role: SocketRole::Writing,
         };
         launch.validate()?;
         Ok(launch)
@@ -238,6 +258,14 @@ impl LlamaCppLaunch {
         self.profile = profile;
         self.validate()?;
         Ok(self)
+    }
+
+    /// This launch as the revision runtime: `llama-<pid>-revision.sock`
+    /// beside the writing runtime's socket.
+    #[must_use]
+    pub const fn for_revision(mut self) -> Self {
+        self.socket_role = SocketRole::Revision;
+        self
     }
 
     /// Launches through this executable's parent-death helper, so the runtime
@@ -255,7 +283,8 @@ impl LlamaCppLaunch {
     ) -> Result<OwnedRuntime, RuntimeError> {
         self.validate()?;
 
-        let socket_path = prepare_runtime_socket(&self.runtime_directory_path()?)?;
+        let socket_path =
+            prepare_runtime_socket(&self.runtime_directory_path()?, self.socket_role)?;
         let token = if self.fixture_behavior.is_some() {
             SecretToken::fixture()
         } else {
@@ -874,7 +903,7 @@ impl fmt::Debug for SecretToken {
     }
 }
 
-fn prepare_runtime_socket(directory: &Path) -> Result<PathBuf, RuntimeError> {
+fn prepare_runtime_socket(directory: &Path, role: SocketRole) -> Result<PathBuf, RuntimeError> {
     if !directory.is_absolute() {
         return Err(RuntimeError::InvalidConfig("runtime_dir"));
     }
@@ -897,7 +926,7 @@ fn prepare_runtime_socket(directory: &Path) -> Result<PathBuf, RuntimeError> {
     // A fixed name would let a test, or a second broker, unlink the socket the
     // running service is still using. Each process owns only its own name.
     retire_dead_runtime_sockets(directory)?;
-    let path = directory.join(format!("llama-{}.sock", std::process::id()));
+    let path = directory.join(role.socket_name(std::process::id()));
     if path.as_os_str().len() >= 108 {
         return Err(RuntimeError::InvalidConfig("runtime_socket"));
     }
@@ -927,6 +956,7 @@ fn retire_dead_runtime_sockets(directory: &Path) -> Result<(), RuntimeError> {
         let Some(pid) = name
             .strip_prefix("llama-")
             .and_then(|rest| rest.strip_suffix(".sock"))
+            .map(|rest| rest.strip_suffix("-revision").unwrap_or(rest))
             .and_then(|pid| pid.parse::<u32>().ok())
         else {
             continue;

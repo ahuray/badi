@@ -14,7 +14,7 @@ machine. Badi is pre-release software.
 | **Ctrl+→** | Accept all of it. |
 | Keep typing | Typing the suggestion's next letters keeps the rest. |
 | **Escape** | Dismiss. |
-| **Ctrl+Shift+Space** | Ask for a suggestion. |
+| **Ctrl+Shift+Space** | Ask for a suggestion. On selected text, check its grammar; press it again for a refined wording. **Tab** applies what it shows, **Escape** keeps your text. |
 | **Ctrl+Shift+Tab** | Type a real Tab instead of accepting: the suggestion goes away and the app gets Tab. Where Badi would not take Tab, it stays the app's key (a browser's previous tab). |
 
 Every surface uses that order: Obsidian with Ctrl/Command+→ for all of it,
@@ -30,6 +30,17 @@ observed apps below, Badi stays quiet on its own in file dialogs and very
 narrow fields; Ctrl+Shift+Space still asks there. `badi escape-quiet 60` (or
 the settings panel) also keeps a dismissed field quiet for a minute across
 edits; asking explicitly ends that sooner.
+
+A revision works on one line of up to 600 characters in English, German,
+French, Spanish or Portuguese, wherever Badi may suggest (not in terminals).
+It shows your text with the removed words struck through and the new ones
+bold, and changes nothing until you press Tab. Its model, Qwen3 1.7B
+(1.3 GB, Apache-2.0), starts on the first request, which takes a few
+seconds, and stops after ten idle minutes; `badi revise` says whether it is
+installed and `badi revise install` downloads it. A grammar check keeps your
+wording and changes at most half of the words; neither mode may drop a
+number, address or name, or answer in another language. In Chromium-based
+apps it works in plain text fields, not yet in rich editors.
 
 In the middle of a sentence Badi suggests only what fits before the next word:
 the rest of a word you are typing, or words the model would write right before

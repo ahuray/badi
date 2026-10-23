@@ -7,6 +7,8 @@ import { parseArgs } from 'node:util';
 import { createLabServer, validateConfigs, LENGTHS } from './server.mjs';
 import { LabWorker } from './worker.mjs';
 import { validateSuite, planComparison, warmSchedule, summarizeResults } from './cases.mjs';
+import { REVISION_MODES, validateRevisionSuite, planRevision, revisionRequest, validateRevisionResult, scoreRevision,
+  summarizeRevision } from './revision.mjs';
 import { modelArtifactPath, readModelArtifact, modelArtifactProvenance, modelArtifactArgs,
   assertModelArtifactUnchanged, assertModelArtifactIdentity } from './model-artifact.mjs';
 
@@ -22,7 +24,7 @@ const LAB_SCRIPTS = ['evaluation/writing/lab/run.mjs', 'evaluation/writing/lab/p
   'evaluation/writing/lab/discovery.mjs', 'evaluation/writing/lab/discovery-server.mjs',
   'evaluation/writing/lab/qualification-evidence.mjs', 'evaluation/writing/lab/qualification-diagnostics.mjs',
   'evaluation/writing/lab/qualification-server.mjs',
-  'evaluation/writing/lab/public/confidence.mjs'];
+  'evaluation/writing/lab/revision.mjs', 'evaluation/writing/lab/public/confidence.mjs'];
 export const LAB_CRATE = 'evaluation/writing/lab-worker';
 const BUILD_INPUTS = ['broker/Cargo.toml', 'Cargo.toml', 'Cargo.lock', 'broker/data/writing-lexicon/en.txt'];
 export const WORKER_BUILD = ['build', '--release', '--locked', '-p', 'badi-writing-lab'];
@@ -33,8 +35,8 @@ export function parseOptions(args, cwd = process.cwd()) {
   const { values } = parseArgs({ args, strict: true, options: {
     suite: { type: 'string' }, output: { type: 'string' },
     modes: { type: 'string', default: 'production_boundary,context' },
-    'budget-ms': { type: 'string', default: '550' }, 'max-tokens': { type: 'string', default: '8' },
-    seed: { type: 'string', default: '42' }, 'cache-prompt': { type: 'string', default: 'true' },
+    'budget-ms': { type: 'string' }, 'max-tokens': { type: 'string' },
+    seed: { type: 'string', default: '42' }, 'cache-prompt': { type: 'string' },
     'warm-prefix': { type: 'string' },
     'model-artifact': { type: 'string' }, 'prefill-batch': { type: 'string' },
     'memory-map': { type: 'string' }, lengths: { type: 'string' },
@@ -45,6 +47,19 @@ export function parseOptions(args, cwd = process.cwd()) {
     if (!/^(0|[1-9][0-9]*)$/u.test(value) || Number(value) < min || Number(value) > max) throw new Error(`--${name} must be an integer from ${min} to ${max}.`);
     return Number(value);
   };
+  const modes = values.modes.split(',');
+  if (modes.some(mode => Object.hasOwn(REVISION_MODES, mode))) {
+    // The revision lane runs the broker's own request on its own runtime:
+    // nothing about the launch or the request is selectable.
+    if (!modes.every(mode => Object.hasOwn(REVISION_MODES, mode)) || new Set(modes).size !== modes.length) {
+      throw new Error(`Run the revision modes (${Object.keys(REVISION_MODES).join(', ')}) apart from prediction modes, each once.`);
+    }
+    const fixed = ['budget-ms', 'max-tokens', 'cache-prompt', 'warm-prefix', 'model-artifact', 'prefill-batch', 'memory-map', 'lengths'];
+    if (fixed.some(name => values[name] !== undefined)) throw new Error('The revision modes use the broker revision settings; drop the prediction options.');
+    return { revision: true, suitePath: resolve(cwd, values.suite), outputPath: resolve(cwd, values.output),
+      modes: modes.map(mode => REVISION_MODES[mode]), seed: integer('seed', 0, 2147483647) };
+  }
+  values['budget-ms'] ??= '550'; values['max-tokens'] ??= '8'; values['cache-prompt'] ??= 'true';
   const budget = integer('budget-ms', 550, 10000);
   const tokens = integer('max-tokens', 8, 64);
   const seed = integer('seed', 0, 2147483647);
@@ -59,7 +74,7 @@ export function parseOptions(args, cwd = process.cwd()) {
   if (!lengths.length || new Set(lengths).size !== lengths.length || lengths.some(length => !LENGTHS.includes(length))) {
     throw new Error('Use --lengths with distinct values from short and normal.');
   }
-  const configs = validateConfigs(values.modes.split(',').flatMap(mode => {
+  const configs = validateConfigs(modes.flatMap(mode => {
     const fixed = mode === 'production_boundary' || mode === 'framed' || mode === 'field_context' || mode === 'following_text' ||
       mode === 'context_bias' || mode === 'vocabulary';
     const config = { id: mode, mode, budget_ms: fixed ? 550 : budget, max_tokens: fixed ? 8 : tokens,
@@ -354,6 +369,102 @@ export async function runSuite(options, { worker: suppliedWorker, outputRoot = O
   return { output, session, report };
 }
 
+/**
+ * The revision lane: every planned case through one revision worker and its
+ * one runtime, with the run directory, provenance and cleanup records of
+ * `runSuite`. `worker` is injectable for tests.
+ */
+export async function runRevisionSuite(options, { worker: suppliedWorker, outputRoot = OUTPUT_ROOT, signal, onProgress = () => {} } = {}) {
+  signal?.throwIfAborted();
+  const suiteBytes = await readFile(options.suitePath);
+  if (suiteBytes.length > 512 * 1024) throw new Error('Suite input exceeds 512 KiB.');
+  let document;
+  try { document = JSON.parse(suiteBytes.toString('utf8')); }
+  catch { throw new Error('Suite input must contain valid JSON.'); }
+  const suite = validateRevisionSuite(document);
+  const plan = planRevision(suite.cases, options.modes, options.seed);
+  if (!plan.length) throw new Error('The suite has no case for the selected revision modes.');
+  if (plan.length > 300) throw new Error('Run at most 300 cases at a time.');
+  const output = await prepareOutput(options.outputPath, outputRoot);
+  const save = (name, value) => open(resolve(output, name), 'wx', 0o600).then(async file => {
+    try { await file.writeFile(typeof value === 'string' || Buffer.isBuffer(value) ? value : jsonBytes(value)); }
+    finally { await file.close(); }
+  });
+  const beforeSources = await sourceHashes();
+  const worker = suppliedWorker ?? new ObservedWorker({ revision: true });
+  const declaredWorker = suppliedWorker ? null : await fileIdentity(WORKER_BINARY);
+  const started = new Date().toISOString();
+  const initial = { schema: 'badi.prediction-lab.revision-run.v1', started_at: started,
+    input: { path: await realpath(options.suitePath), sha256: hash(suiteBytes), bytes: suiteBytes.length },
+    normalized_suite_sha256: hash(jsonBytes(suite)), modes: options.modes, order_seed: options.seed, plan,
+    provenance: { execution_kind: suppliedWorker ? 'injected_fixture' : 'local_model_worker', node: process.version,
+      declared_worker: declaredWorker, source_sha256: beforeSources },
+    evidence: 'Explicit development cases; expected corrections and facts are scoring-only. One revision runtime serves the run, as the broker keeps one, and its startup is excluded from latency. No display, acceptance or application edit is measured.' };
+  await save('suite-input.json', suiteBytes);
+  await save('run.json', initial);
+  const eventFile = await open(resolve(output, 'events.ndjson'), 'wx', 0o600);
+  const event = value => eventFile.write(JSON.stringify(value) + '\n');
+  const records = [];
+  let failure = null; let cleanupError = null; let receipt = null; let summary = null;
+  try {
+    await event({ type: 'plan', plan });
+    for (const item of plan) {
+      signal?.throwIfAborted();
+      const testCase = suite.cases.find(value => value.id === item.case_id);
+      await event({ type: 'progress', case_id: item.case_id, mode: item.mode, completed: records.length, total: plan.length });
+      const request = revisionRequest(testCase);
+      const requested = performance.now();
+      let result = await worker.predict(request, signal);
+      if (result.type === 'error') result = { ...result, type: 'revision_result', outcome: 'error', text: null, output: null,
+        latency_ms: performance.now() - requested, timing_includes_worker_startup: true };
+      try {
+        validateRevisionResult(result);
+        if (result.id !== request.id) throw new Error('mismatched id');
+      } catch {
+        result = { type: 'revision_result', id: request.id, outcome: 'error', error: 'invalid_model_output', text: null, output: null,
+          latency_ms: performance.now() - requested, timing_includes_worker_startup: true };
+      }
+      const record = { case: testCase, mode: item.mode, result, score: scoreRevision(testCase, result) };
+      records.push(record);
+      await event({ type: 'record', record });
+      onProgress({ completed: records.length, total: plan.length, case_id: item.case_id, mode: item.mode });
+    }
+    summary = summarizeRevision(records);
+  } catch (error) { failure = signal?.aborted ? 'Run cancelled.' : error.message; }
+  finally {
+    // No selection remains in the runtime after the run.
+    try {
+      receipt = await worker.stop();
+      if (receipt) {
+        validateCleanup(receipt);
+        await event({ type: 'cleanup', cleanup: receipt });
+        if (!receipt.reaped) cleanupError = 'The owned runtime was not confirmed reaped.';
+      }
+    } catch (error) { cleanupError = error.message; }
+    await event(failure ? { type: signal?.aborted ? 'cancelled' : 'error', error: failure } : { type: 'complete', summary });
+    await eventFile.close();
+  }
+  let afterSources = null;
+  try { afterSources = await sourceHashes(); } catch { failure ??= 'Could not capture final source provenance.'; }
+  const executions = worker.executions ?? [];
+  const sourceStable = JSON.stringify(beforeSources) === JSON.stringify(afterSources);
+  const executedHashes = [...new Set(executions.map(value => value.executable.sha256))];
+  const complete = !failure && !cleanupError && records.length === plan.length;
+  const session = { schema: 'badi.prediction-lab.revision-session.v1', suite, modes: options.modes, seed: options.seed, plan, records, complete };
+  const report = { schema: 'badi.prediction-lab.revision-report.v1', started_at: started, finished_at: new Date().toISOString(),
+    input: initial.input, normalized_suite_sha256: initial.normalized_suite_sha256,
+    complete, cancelled: Boolean(signal?.aborted), error: failure,
+    cleanup: { completed: !cleanupError, error: cleanupError, runtime_receipt: receipt, worker_receipts: worker.cleanups ?? [] },
+    completed_requests: records.length, scheduled_requests: plan.length,
+    provenance: { ...initial.provenance, executed_workers: executions, source_sha256_after: afterSources, source_stable: sourceStable,
+      valid_executed_identity: !suppliedWorker && executions.length > 0 && executedHashes.length === 1
+        && executedHashes[0] === declaredWorker?.sha256 && sourceStable },
+    measurements: summary, limitation: initial.evidence };
+  await save('session.json', session);
+  await save('report.json', report);
+  return { output, session, report };
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const cancellation = new AbortController();
   const cancel = () => cancellation.abort();
@@ -361,8 +472,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     const options = parseOptions(process.argv.slice(2));
     await buildWorker();
-    const result = await runSuite(options, { signal: cancellation.signal,
-      onProgress: progress => process.stdout.write(`${progress.completed}/${progress.total} ${progress.case_id} ${progress.config_id}\n`) });
+    const run = options.revision ? runRevisionSuite : runSuite;
+    const result = await run(options, { signal: cancellation.signal,
+      onProgress: progress => process.stdout.write(`${progress.completed}/${progress.total} ${progress.case_id} ${progress.config_id ?? progress.mode}\n`) });
     process.stdout.write(JSON.stringify({ output: result.output, complete: result.report.complete,
       requests: result.report.completed_requests, valid_executed_identity: result.report.provenance.valid_executed_identity }) + '\n');
     if (!result.report.complete || !result.report.provenance.valid_executed_identity) process.exitCode = 1;

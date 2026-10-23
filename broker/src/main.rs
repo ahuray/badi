@@ -78,6 +78,7 @@ async fn run(arguments: Vec<OsString>) -> Result<(), ExitError> {
         .snapshot()
         .ok()
         .and_then(|snapshot| snapshot.settings.writing_model);
+    let reviser = reviser(provider, model_directory.clone());
     let provider = start_provider(provider, model_directory, chosen_model).await?;
     let broker = Broker::with_control_plane(provider, BrokerConfig::default(), control_plane)
         .map_err(|error| match error {
@@ -94,6 +95,9 @@ async fn run(arguments: Vec<OsString>) -> Result<(), ExitError> {
                 configuration: false,
             },
         })?;
+    if let Some(reviser) = reviser {
+        broker.install_reviser(reviser);
+    }
     server::run(&socket_path, broker)
         .await
         .map_err(|error| match error {
@@ -108,6 +112,40 @@ async fn run(arguments: Vec<OsString>) -> Result<(), ExitError> {
 const BROKER_USAGE: &str = "Usage: badi-broker [--socket ABSOLUTE] [--provider local|phrase] [--model-directory ABSOLUTE]\n\
 Runs the local Unix-socket suggestion broker.\n\
 Options:\n  --provider local|phrase  Local LLM (default) or deterministic integration fixture\n  --model-directory ABSOLUTE  Override the Badi model/runtime data directory\n  --socket ABSOLUTE  Override $XDG_RUNTIME_DIR/badi/broker.sock\n  -h, --help         Show this help\n  --version          Print the version and embedded source commit\n";
+
+/// The model behind explicit revisions (ADR 0012): the fixture with the
+/// phrase provider, else the on-demand local runtime, which starts only when
+/// a revision is asked for. Without it a request is refused, never fatal.
+fn reviser(
+    kind: ProviderSelection,
+    directory: Option<PathBuf>,
+) -> Option<Arc<dyn badi_broker::revision::service::Reviser>> {
+    match kind {
+        ProviderSelection::Phrase => Some(Arc::new(badi_broker::revision::service::FixtureReviser)),
+        ProviderSelection::Local => {
+            #[cfg(all(feature = "local-model", target_os = "linux"))]
+            {
+                let reviser = directory
+                    .map_or_else(badi_broker::writing::data_directory, Ok)
+                    .ok()
+                    .and_then(|directory| {
+                        badi_broker::revision::runtime::LocalReviser::new(directory, true).ok()
+                    });
+                if reviser.is_none() {
+                    eprintln!("badi-broker: revisions unavailable");
+                }
+                reviser.map(|reviser| {
+                    Arc::new(reviser) as Arc<dyn badi_broker::revision::service::Reviser>
+                })
+            }
+            #[cfg(not(all(feature = "local-model", target_os = "linux")))]
+            {
+                let _ = directory;
+                None
+            }
+        }
+    }
+}
 
 #[cfg_attr(
     not(all(feature = "local-model", target_os = "linux")),

@@ -311,6 +311,85 @@ correct and the broker diagnostic matched the frozen candidate. These are
 language-selection results, not suggestion usefulness or new-language
 qualification. Short and uncertain input retains its adapter hint.
 
+## Selection revision
+
+The revision lane measures the grammar check and refinement of
+[ADR 0012](../../docs/decisions/0012-explicit-revision-of-one-selection.md)
+from the terminal; the page has no revision tab. Each selection goes through
+the broker's own revision request (`revision::runtime::complete`) to the
+installed revision model in the broker's revision launch, and the engine's
+decision follows: a truncated answer is never shown, any other goes through
+`revision::accept` with the text before and after the selection.
+
+```sh
+node evaluation/writing/lab/run.mjs \
+  --suite evaluation/writing/lab/examples/revision-development.json \
+  --modes revision_grammar,revision_refine --seed 42 \
+  --output output/writing/my-revision-run
+```
+
+- **Modes.** `revision_grammar` and `revision_refine` run apart from the
+  prediction modes and take no budget, token, cache or launch option. One
+  runtime serves the run, as the broker keeps one; modes, then languages,
+  then cases run in seeded order, so a language's prompt prefix stays cached
+  after its first case. Startup is excluded from latency, and the run files
+  are those of any terminal run.
+- **Suites** use `badi.revision-suite.v1`: `id`, `language` (`en`, `de`,
+  `fr`, `es`, `pt`), `mode`, a one-line `selected` of at most 600 characters
+  and optional `before` (512) and `after` (128). A `grammar` case is
+  `kind: "error"` with its `expected` corrections, or `kind: "correct"`,
+  which should come back unchanged. A `refine` case lists `facts` found in
+  its selection. Expected text and facts never reach the worker.
+- **Records** keep the outcome (`shown`, the gate's class such as
+  `unchanged` or `edits`, `truncated`, `timeout`, `failed`), the model's
+  answer, the shown text, changed-word share, latency, generated tokens, the
+  answer's confidently detected language and the broker's field-language
+  choice. **Fixed** means shown and equal to an expected correction after
+  whitespace normalization; **facts kept** means every declared fact appears
+  in the shown text.
+
+The [development set](lab/examples/revision-development.json) has 27 cases
+per language: 15 grammar errors (three mid-sentence), 4 correct inputs (one
+mid-sentence) and 8 refinements carrying a number, name, address or phone
+number. It was written for this lane, so it is development data.
+
+| Language | Grammar fixed | Shown, not expected | Errors returned unchanged | Correct inputs unchanged | Refinements shown, all keeping their facts | Grammar / refine p50 · p90 |
+| --- | --- | --- | --- | --- | --- | --- |
+| English | 12/15 | 1 | 2 | 4/4 | 5/8 | 1.0 · 1.5 s / 1.9 · 3.7 s |
+| German | 11/15 | 1 | 3 | 4/4 | 6/8 | 1.3 · 2.1 s / 2.0 · 4.7 s |
+| French | 11/15 | 3 | 1 | 3/4 | 4/8 | 1.4 · 1.6 s / 2.2 · 3.3 s |
+| Spanish | 7/15 | 4 | 4 | 4/4 | 4/8 | 1.2 · 1.5 s / 2.2 · 3.5 s |
+| Portuguese | 9/15 | 5 | 1 | 4/4 | 4/8 | 1.2 · 1.7 s / 2.3 · 4.9 s |
+
+- Runs with seed 42 are deterministic: three runs of the first prompt gave
+  identical answers and outcomes for all 135 cases. The gate's only
+  abstention is `unchanged`, no answer came back in another language, and
+  every expected correction passes the gate verbatim.
+- Paired with the run before the change (same suite, modes and seed), giving
+  a mid-sentence selection its sentence's start and dropping an added period
+  whenever anything follows on the line fixed 50 of 75 errors instead of 46
+  and showed 14 wrong answers instead of 18. Only the eight mid-sentence
+  cases changed: the period before a following comma is gone, and a German
+  clause after "dass" keeps its verb last, so a correct input is no longer
+  reordered (19 of 20 come back unchanged instead of 18). One German
+  refinement that reordered such a clause now comes back unchanged instead.
+  A changed sentence start (`context`) never occurred.
+- Of the 14 shown answers that differ from the expected text, several are
+  acceptable alternatives ("bezahlt wurde", "pour que nous puissions"); the
+  rest are wrong or partial words the model invents within the edit bound
+  ("Nós vão", "vena", "mon clé", "puedamos").
+- Against the earlier generic prompt (no language name or example; same
+  launch, request and gate), the language-specific prompt fixed 46 of 75
+  errors instead of 25. The generic prompt mostly returned errors unchanged
+  (40 of 75), and neither came back in another language.
+
+Tested with Qwen3-1.7B-Q4_K_M (launch `badi-revision-qwen3-v1`: 4 threads,
+1,024 context, batch 64, copied weights, 1.5 GiB peak RSS, 3.0 s startup)
+on llama.cpp b10726, i7-12700H at the 15 W PL1 on AC with the performance
+profile (busy cores 1.4–1.7 GHz), 2026-10-23, from the paired run with no
+other build running. Runs: `output/writing/2026-10-23-revision/`
+(`shipped-3` before, `after-lead` after, `generic/`).
+
 ## Local API
 
 Every route needs the served page's `X-Badi-Lab-Token` and a matching local

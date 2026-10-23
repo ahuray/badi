@@ -618,6 +618,7 @@ bool SessionState::focusIn(std::string sessionId, std::string targetId,
     focused_ = true;
     lastContext_.reset();
     clearSuggestion();
+    clearRevision();
     return true;
 }
 
@@ -625,6 +626,7 @@ void SessionState::focusOut() {
     focused_ = false;
     lastContext_.reset();
     clearSuggestion();
+    clearRevision();
     coordinates_ = {};
     appId_.clear();
     targetId_.clear();
@@ -651,6 +653,7 @@ void SessionState::invalidateContext() {
     coordinates_.fingerprint.clear();
     lastContext_.reset();
     clearSuggestion();
+    clearRevision();
 }
 
 std::optional<ContextUpdate>
@@ -672,6 +675,7 @@ SessionState::updateContext(ContextWindow context) {
                                 : coordinates_.revision + 1;
     coordinates_.fingerprint = nextFingerprint(context);
     clearSuggestion();
+    clearRevision();
     ContextUpdate update{
         .coordinates = coordinates_,
         .context = std::move(context),
@@ -809,13 +813,135 @@ void SessionState::clearSuggestion() {
     pendingAcceptance_.reset();
 }
 
+std::optional<RevisionUpdate> SessionState::requestRevision(SelectionWindow selection, std::string mode) {
+    if (!focused_ || !editingAvailable() || (mode != "grammar" && mode != "refine") ||
+        (imeParityApp(appId_) && !selection.identityKnown) || !validLanguageTag(selection.language) ||
+        !safeRevisionText(selection.selected, kMaxSelectedScalars) || !validContextText(selection.before) ||
+        !validContextText(selection.after) || selection.anchor == selection.head) {
+        invalidateContext();
+        return std::nullopt;
+    }
+    coordinates_.revision = coordinates_.revision >= kMaxSafeCounter ? 1 : coordinates_.revision + 1;
+    coordinates_.fingerprint = fingerprintOf("revision\x1f" + selection.before + "\x1e" + selection.selected +
+                                             "\x1e" + selection.after + "\x1f" + selection.language + "\x1f" +
+                                             std::to_string(selection.anchor) + ":" +
+                                             std::to_string(selection.head));
+    lastContext_.reset();
+    clearSuggestion();
+    clearRevision();
+    revisionRequest_ = RevisionUpdate{
+        .coordinates = coordinates_,
+        .requestId = "fcitx.revise." + std::to_string(coordinates_.focusEpoch) + "." +
+                     std::to_string(coordinates_.revision),
+        .mode = std::move(mode),
+        .selection = std::move(selection),
+        .appId = appId_,
+        .targetId = targetId_,
+    };
+    return revisionRequest_;
+}
+
+bool SessionState::showRevision(Revision revision, std::uint64_t nowMs) {
+    if (!focused_ || !editingAvailable() || !revisionRequest_ || revision_ ||
+        revision.coordinates != revisionRequest_->coordinates || revision.coordinates != coordinates_ ||
+        revision.requestId != revisionRequest_->requestId || revision.mode != revisionRequest_->mode ||
+        revision.original != revisionRequest_->selection.selected || revision.text == revision.original ||
+        !safeRevisionText(revision.text, kMaxRevisedScalars) || !validOpaqueId(revision.revisionId) ||
+        revision.expiresAtMs <= nowMs || revision.expiresAtMs > kMaxSafeCounter) {
+        return false;
+    }
+    revision_ = std::move(revision);
+    return true;
+}
+
+std::optional<AcceptRequest> SessionState::requestRevisionAcceptance(std::uint64_t nowMs,
+                                                                     const PanelObservation &panel) {
+    if (!focused_ || !editingAvailable() || !revision_ || revisionAcceptance_ || !hasOwnedCandidate(panel) ||
+        hasForeignImeUi(panel) || revision_->coordinates != coordinates_) {
+        return std::nullopt;
+    }
+    if (revision_->expiresAtMs <= nowMs) {
+        clearRevision();
+        return std::nullopt;
+    }
+    revisionAcceptance_ = AcceptRequest{
+        .coordinates = revision_->coordinates,
+        .controlId = "fcitx.revise.accept." + std::to_string(revision_->coordinates.focusEpoch) + "." +
+                     std::to_string(revision_->coordinates.revision),
+        .suggestionId = revision_->revisionId,
+        .expectedText = revision_->text,
+        .acceptance = "all",
+    };
+    return revisionAcceptance_;
+}
+
+std::optional<DismissRequest> SessionState::requestRevisionDismissal(std::uint64_t nowMs,
+                                                                     const PanelObservation &panel) {
+    if (!focused_ || !revision_ || revisionAcceptance_ || revision_->coordinates != coordinates_ ||
+        revision_->expiresAtMs <= nowMs || hasForeignImeUi(panel)) {
+        clearRevision();
+        return std::nullopt;
+    }
+    DismissRequest request{
+        .coordinates = revision_->coordinates,
+        .controlId = "fcitx.revise.dismiss." + std::to_string(revision_->coordinates.focusEpoch) + "." +
+                     std::to_string(revision_->coordinates.revision),
+        .suggestionId = revision_->revisionId,
+    };
+    clearRevision();
+    return request;
+}
+
+std::optional<CommitDispatch> SessionState::authorizeRevisionCommit(const CommitPrepare &prepare,
+                                                                    std::uint64_t nowMs,
+                                                                    const PanelObservation &panel) {
+    if (!focused_ || !editingAvailable() || !revision_ || !revisionRequest_ || !revisionAcceptance_ ||
+        !hasOwnedCandidate(panel) || revision_->expiresAtMs <= nowMs || prepare.coordinates != coordinates_ ||
+        prepare.coordinates != revisionAcceptance_->coordinates ||
+        prepare.controlId != revisionAcceptance_->controlId ||
+        prepare.suggestionId != revisionAcceptance_->suggestionId || prepare.text != revision_->text ||
+        prepare.acceptance != "all" || prepare.replaceBefore ||
+        prepare.replaceSelection != SelectionRange{revisionRequest_->selection.anchor,
+                                                   revisionRequest_->selection.head}) {
+        return std::nullopt;
+    }
+    CommitDispatch dispatch{
+        .coordinates = prepare.coordinates,
+        .controlId = prepare.controlId,
+        .suggestionId = prepare.suggestionId,
+        .text = prepare.text,
+        .replaceSelection = prepare.replaceSelection,
+    };
+    clearRevision();
+    return dispatch;
+}
+
+bool SessionState::clearRevisionIf(const Coordinates &coordinates,
+                                   const std::optional<std::string> &revisionId) {
+    // Before a revision is shown its id is unknown here; the coordinates
+    // name the request.
+    if (!revisionRequest_ || coordinates != revisionRequest_->coordinates ||
+        (revisionId && revision_ && *revisionId != revision_->revisionId)) {
+        return false;
+    }
+    clearRevision();
+    return true;
+}
+
+void SessionState::clearRevision() {
+    revisionRequest_.reset();
+    revision_.reset();
+    revisionAcceptance_.reset();
+}
+
 std::string SessionState::nextFingerprint(const ContextWindow &context) const {
+    return fingerprintOf(context.before + "\x1f" + observedAfter(context) + "\x1f" + context.language + "\x1f" +
+                         std::to_string(context.anchor) + ":" + std::to_string(context.head));
+}
+
+std::string SessionState::fingerprintOf(std::string_view field) const {
     const auto material = fingerprintSalt_ + "\x1f" + coordinates_.sessionId +
-                          "\x1f" + appId_ + "\x1f" + targetId_ + "\x1f" +
-                          context.before + "\x1f" + observedAfter(context) + "\x1f" +
-                          context.language + "\x1f" +
-                          std::to_string(context.anchor) + ":" +
-                          std::to_string(context.head) + ":" +
+                          "\x1f" + appId_ + "\x1f" + targetId_ + "\x1f" + std::string(field) + ":" +
                           std::to_string(coordinates_.focusEpoch) + ":" +
                           std::to_string(coordinates_.revision);
     const std::array hashes{

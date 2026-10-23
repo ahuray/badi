@@ -270,6 +270,13 @@ async fn run_worker() {
         }
         return;
     }
+    if args.first().is_some_and(|arg| arg == "--revision-lab") {
+        if let Err(code) = revision_worker(&args[1..]).await {
+            let _ = error(None, code);
+            std::process::exit(1);
+        }
+        return;
+    }
     if args.first().is_some_and(|arg| arg == "--paced-probe") {
         match paced_probe(&args[1..]).await {
             Ok(true) => {}
@@ -421,35 +428,7 @@ async fn worker(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
         tokio::select! { _ = terminate.recv() => {}, _ = tokio::signal::ctrl_c() => {} }
         signal_cancel.cancel();
     });
-    let (sender, mut receiver) = tokio::sync::mpsc::channel::<Result<Vec<u8>, &'static str>>(1);
-    let input_cancel = cancellation.clone();
-    // A normal thread avoids Tokio's uninterruptible stdin blocking task keeping
-    // its runtime alive after SIGTERM. Process exit need not join this reader.
-    std::thread::spawn(move || {
-        let mut input = std::io::BufReader::new(std::io::stdin());
-        loop {
-            let mut frame = Vec::new();
-            let read = input
-                .by_ref()
-                .take((MAX_FRAME_BYTES + 1) as u64)
-                .read_until(b'\n', &mut frame);
-            match read {
-                Ok(0) => {
-                    input_cancel.cancel();
-                    return;
-                }
-                Ok(_) if frame.len() <= MAX_FRAME_BYTES && frame.last() == Some(&b'\n') => {
-                    if sender.blocking_send(Ok(frame)).is_err() {
-                        return;
-                    }
-                }
-                _ => {
-                    let _ = sender.blocking_send(Err("invalid_frame"));
-                    return;
-                }
-            }
-        }
-    });
+    let mut receiver = frame_reader(cancellation.clone());
     // Linux parent-death signalling tracks the thread that spawns the child.
     // Keep activate directly polled by main's block_on until shutdown; never
     // move the spawn into a temporary thread or a spawn_blocking task.
@@ -495,6 +474,109 @@ async fn worker(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
                 .map_err(|_| "output_closed")?,
             Err(failure) => error(
                 (id.len() <= 128 && !id.chars().any(char::is_control)).then_some(id.as_str()),
+                &failure.to_string(),
+            )
+            .map_err(|_| "output_closed")?,
+        }
+    }
+    let cleanup = runtime.shutdown().map_err(|_| "runtime_shutdown_failed")?;
+    let _ = emit(&json!({"type":"stopped","cleanup":cleanup}));
+    Ok(())
+}
+
+/// Bounded stdin request lines; end of input cancels the session.
+fn frame_reader(
+    cancellation: CancellationToken,
+) -> tokio::sync::mpsc::Receiver<Result<Vec<u8>, &'static str>> {
+    let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Vec<u8>, &'static str>>(1);
+    // A normal thread avoids Tokio's uninterruptible stdin blocking task keeping
+    // its runtime alive after SIGTERM. Process exit need not join this reader.
+    std::thread::spawn(move || {
+        let mut input = std::io::BufReader::new(std::io::stdin());
+        loop {
+            let mut frame = Vec::new();
+            let read = input
+                .by_ref()
+                .take((MAX_FRAME_BYTES + 1) as u64)
+                .read_until(b'\n', &mut frame);
+            match read {
+                Ok(0) => {
+                    cancellation.cancel();
+                    return;
+                }
+                Ok(_) if frame.len() <= MAX_FRAME_BYTES && frame.last() == Some(&b'\n') => {
+                    if sender.blocking_send(Ok(frame)).is_err() {
+                        return;
+                    }
+                }
+                _ => {
+                    let _ = sender.blocking_send(Err("invalid_frame"));
+                    return;
+                }
+            }
+        }
+    });
+    receiver
+}
+
+/// The revision lane: the installed revision model in the broker's revision
+/// launch, one request line in and one result line out.
+async fn revision_worker(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
+    use badi_writing_lab::revision::{self, RevisionRequest};
+    let directory = directory_from(args)?;
+    let cancellation = CancellationToken::new();
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|_| "signal_unavailable")?;
+    let signal_cancel = cancellation.clone();
+    tokio::spawn(async move {
+        tokio::select! { _ = terminate.recv() => {}, _ = tokio::signal::ctrl_c() => {} }
+        signal_cancel.cancel();
+    });
+    let mut receiver = frame_reader(cancellation.clone());
+    // As in `worker`: the contained runtime is spawned from main's block_on.
+    let runtime = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => return Ok(()),
+        runtime = revision::activate(directory) => runtime.map_err(|_| "runtime_start_failed")?,
+    };
+    let timeout_ms = u64::try_from(badi_broker::engine::REVISION_TIMEOUT.as_millis())
+        .map_err(|_| "invalid_timeout")?;
+    emit(
+        &json!({"type":"ready","identity":runtime.identity(),"runtime_pid":runtime.process_id(),
+        "schema":"badi.prediction-lab.worker.v1","request_timeout_ms":timeout_ms}),
+    )
+    .map_err(|_| "output_closed")?;
+    loop {
+        let frame = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => break,
+            frame = receiver.recv() => frame,
+        };
+        let Some(frame) = frame else {
+            break;
+        };
+        let frame = match frame {
+            Ok(frame) => frame,
+            Err(code) => {
+                error(None, code).map_err(|_| "output_closed")?;
+                break;
+            }
+        };
+        let Ok(request) = serde_json::from_slice::<RevisionRequest>(&frame) else {
+            error(None, "invalid_request").map_err(|_| "output_closed")?;
+            continue;
+        };
+        let result = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => break,
+            result = revision::run(&runtime, &request) => result,
+        };
+        match result {
+            Ok(record) => emit(&serde_json::to_value(record).map_err(|_| "serialization_failed")?)
+                .map_err(|_| "output_closed")?,
+            Err(failure) => error(
+                (request.id.len() <= 128 && !request.id.chars().any(char::is_control))
+                    .then_some(request.id.as_str()),
                 &failure.to_string(),
             )
             .map_err(|_| "output_closed")?,

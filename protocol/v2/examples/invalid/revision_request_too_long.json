@@ -1,0 +1,33 @@
+{
+  "v": 2,
+  "id": "revise-1",
+  "type": "revision.request",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 4,
+  "revision": 9,
+  "mono_ms": 10,
+  "payload": {
+    "fingerprint": "revision_context_0001",
+    "mode": "grammar",
+    "before": "Yesterday ",
+    "selected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "after": " with Anna.",
+    "selection": {
+      "anchor": 10,
+      "head": 611,
+      "unit": "unicode_scalar_values"
+    },
+    "field": {
+      "purpose": "normal",
+      "editable": true,
+      "multiline": true,
+      "composing": false,
+      "sensitive": false,
+      "identity_known": true,
+      "focused": true,
+      "lock_screen": false
+    },
+    "activation": "always",
+    "language": "en"
+  }
+}

@@ -306,6 +306,16 @@ class FieldBackend:
         return {**metadata, "caret": caret, "total_chars": count, "selection_count": selections,
                 "blocks": rich.blocks if rich else None, "caret_block": rich.caret_block if rich else None}
 
+    def selection(self, metadata):
+        """(start, end) of a plain field's one selection, in its own offsets."""
+        self.budget()
+        text = metadata["node"].get_text_iface()
+        if text.get_n_selections() != 1:
+            raise Denied("stale_binding")
+        selected = self.atspi.Text.get_selection(text, 0)
+        start, end = sorted((selected.start_offset, selected.end_offset))
+        return start, end
+
     def text(self, metadata, start, end):
         """The field's text in [start, end) of its flattened coordinates."""
         self.budget()

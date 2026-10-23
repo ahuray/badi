@@ -17,6 +17,7 @@ class FakeBackend:
         self.lock_checks = []
         self.positions = 0
         self.change = None
+        self.selected = (0, 0)
         self.meta = {"bus": ":1.25", "path": "/org/a11y/atspi/accessible/2", "process_id": 42,
                      "app_id": "chromium", "uri": "https://example.test/writing", "browser": True, "web": True,
                      "role": "entry", "tag": "textarea", "input_type": "textarea", "focused": True,
@@ -34,6 +35,12 @@ class FakeBackend:
     def position(self, metadata):
         self.positions += 1
         return {**metadata, **{key: self.meta[key] for key in ("caret", "total_chars", "selection_count")}}
+
+    def selection(self, metadata):
+        selected = self.selected
+        if callable(selected):
+            return selected()
+        return selected
 
     def text(self, metadata, start, end):
         self.reads.append((start, end))
@@ -374,6 +381,66 @@ class ContractTests(unittest.TestCase):
         for uri in ("file:///note", "about:blank", "https://user:password@example.test", "https://example.test:0", "not-a-uri"):
             with self.assertRaises(Denied):
                 canonical_origin(uri)
+
+
+class SelectionTests(unittest.TestCase):
+    """An explicit revision reads one selection (ADR 0012)."""
+
+    def setUp(self):
+        self.backend = FakeBackend()
+        self.backend.content = "Yesterday i has went to the shop with Anna."
+        self.backend.meta.update(caret=32, total_chars=len(self.backend.content), selection_count=1)
+        self.backend.selected = (10, 32)
+        self.observer = Observer(self.backend)
+        self.observer.notify = lambda _event: None
+
+    def request(self, op, **fields):
+        return self.observer.request({"schema": SCHEMA, "id": "s", "op": op, **fields})
+
+    def test_inspect_with_a_selection_reads_no_prose_and_without_it_denies(self):
+        self.assertEqual(self.request("inspect", app_id="chromium")["error"], "selection_present")
+        result = self.request("inspect", app_id="chromium", selection=True)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["focus"]["selection_count"], 1)
+        self.assertNotIn("selected", result["focus"])
+        self.assertEqual(self.backend.reads, [])
+        self.backend.meta["selection_count"] = 0
+        self.assertEqual(self.request("inspect", app_id="chromium", selection=True)["error"], "selection_absent")
+
+    def test_a_selection_snapshot_returns_the_selection_and_the_bounded_text_around_it(self):
+        focus = self.request("inspect", app_id="chromium", selection=True)["focus"]
+        result = self.request("snapshot", binding=focus["binding"], policy_target=focus["target"], selection=True)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual((result["focus"]["before"], result["focus"]["selected"], result["focus"]["after"]),
+                         ("Yesterday ", "i has went to the shop", " with Anna."))
+        self.assertEqual(self.backend.reads[0], (0, len(self.backend.content)))
+
+    def test_a_selection_across_lines_too_long_or_moving_is_refused(self):
+        focus = self.request("inspect", app_id="chromium", selection=True)["focus"]
+        snapshot = lambda: self.request("snapshot", binding=focus["binding"], policy_target=focus["target"],
+                                        selection=True)
+        self.backend.content = "Yesterday i has\nwent to the shop with Anna."
+        self.assertEqual(snapshot()["error"], "unsupported_selection")
+        focus = self.request("inspect", app_id="chromium", selection=True)["focus"]
+        self.backend.content = "x" * 700
+        self.backend.meta["total_chars"] = 700
+        self.backend.selected = (0, 650)
+        self.assertEqual(snapshot()["error"], "unsupported_selection")
+        focus = self.request("inspect", app_id="chromium", selection=True)["focus"]
+        ranges = iter([(10, 32), (10, 31)])
+        self.backend.selected = lambda: next(ranges)
+        self.assertEqual(snapshot()["error"], "stale_binding")
+
+    def test_a_rich_editor_selection_is_unsupported_and_flags_must_be_booleans(self):
+        focus = self.request("inspect", app_id="chromium", selection=True)["focus"]
+        self.backend.meta["blocks"] = [{"kind": "text"}]
+        self.assertEqual(self.request("snapshot", binding=focus["binding"], policy_target=focus["target"],
+                                      selection=True)["error"], "unsupported_selection")
+        self.backend.meta.pop("blocks")
+        focus = self.request("inspect", app_id="chromium", selection=True)["focus"]
+        self.assertEqual(self.request("snapshot", binding=focus["binding"], policy_target=focus["target"],
+                                      selection=True, window=True)["error"], "invalid_request")
+        self.assertEqual(self.request("inspect", app_id="chromium", selection="yes")["error"], "invalid_request")
 
 
 class CredentialLabelTests(unittest.TestCase):

@@ -52,6 +52,8 @@ WireCallbacks BadiAddon::callbacksFor(BadiAddon *addon) {
                             bool contextWords) {
             addon->onPolicy(session, allowed, reason, std::move(language), contextWords);
         },
+        .onRevision = [addon](Revision revision) { addon->onRevision(std::move(revision)); },
+        .onRevisionClear = [addon](const RevisionClear &clear) { addon->onRevisionClear(clear); },
     };
 }
 
@@ -129,6 +131,8 @@ void BadiAddon::focusIn(::fcitx::InputContext &inputContext) {
     binding.typeThroughTyped.clear();
     binding.typeThroughWaits = 0;
     binding.inspection.input();
+    binding.revisionWaiting.reset();
+    binding.revisionExpected.reset();
     binding.surroundingFreshness.focusIn();
     binding.surroundingEcho.reset();
     binding.typedLine.clear();
@@ -151,6 +155,7 @@ void BadiAddon::focusOut(::fcitx::InputContext &inputContext) {
     dropHeldTab(*binding);
     dropLiteralTabs(*binding);
     clearOwnedPanel(*binding);
+    binding->revisionWaiting.reset();
     binding->state.focusOut();
     binding->surroundingFreshness.focusOut();
     binding->surroundingEcho.reset();
@@ -174,8 +179,10 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     if (!binding) return;
     binding->surroundingFreshness.surroundingTextUpdated();
     binding->surroundingEcho.surroundingTextUpdated(inputContext.capabilityFlags());
-    // The app's own report of its text after an IME-parity correction.
+    // The app's own report of its text after an IME-parity correction or a
+    // revision.
     readBackCorrection(*binding);
+    readBackRevision(*binding);
     const auto digest = surroundingDigest(inputContext.surroundingText());
     if (digest != binding->surroundingDigest) {
         binding->surroundingDigest = digest;
@@ -198,6 +205,9 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     // itself: observed targets of other classes still require invalidation
     // and fresh field metadata below.
     if (binding->state.focused() && !nativeObservationAvailable(binding->state.appId())) return;
+    // The selection a revision waits or shows for keeps it; nothing is
+    // inspected meanwhile, since an inspection would decline the selection.
+    if (revisionSurvives(*binding)) return;
     const bool unchangedObserved = binding->observed() &&
         matchesCapturedContext(binding->state.lastContext(), currentContext(*binding));
     invalidateChangedContext(*binding);

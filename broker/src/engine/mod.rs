@@ -11,6 +11,7 @@ mod events;
 mod generation;
 mod outcomes;
 mod probe;
+mod revision;
 mod session;
 mod settings;
 mod snooze;
@@ -44,6 +45,7 @@ pub use desktop::{QUIET_START_DELAY, SCREEN_SHARE_GRACE};
 pub use error::BrokerError;
 pub use events::{BrokerEvent, BrokerEventSink};
 pub use outcomes::OutcomeRecorderHealth;
+pub use revision::{REVISION_TIMEOUT, REVISION_TTL};
 pub use status::HealthSnapshot;
 
 use outcomes::OutcomeRecorder;
@@ -228,6 +230,10 @@ struct BrokerInner {
     provider: Arc<dyn CompletionProvider>,
     provider_admissions: Arc<Semaphore>,
     provider_kind: ProviderKind,
+    /// The model behind explicit revisions (ADR 0012), when there is one.
+    reviser: std::sync::OnceLock<Arc<dyn crate::revision::service::Reviser>>,
+    /// One revision runs at a time.
+    revision_admissions: Arc<Semaphore>,
     config: BrokerConfig,
     metrics: Arc<Metrics>,
     shutdown: CancellationToken,
@@ -300,6 +306,8 @@ struct SessionState {
     cancellation: Option<CancellationToken>,
     visible: Option<VisibleSuggestion>,
     pending: Option<PendingCommit>,
+    /// An explicit revision of the selection, running or shown (ADR 0012).
+    revision: Option<revision::SessionRevision>,
     escape_quiet: Option<EscapeQuiet>,
     sink: BrokerEventSink,
 }
@@ -413,6 +421,8 @@ struct PendingCommit {
     expires_at: Instant,
     /// Content-free estimate; counted only after a valid successful result.
     saved_words: u64,
+    /// A revision's grant: no saved words, statistics or style sample.
+    revision: bool,
 }
 
 impl Broker {
@@ -457,6 +467,8 @@ impl Broker {
                 provider_kind: provider.kind(),
                 provider,
                 provider_admissions: Arc::new(Semaphore::new(config.provider_concurrency)),
+                reviser: std::sync::OnceLock::new(),
+                revision_admissions: Arc::new(Semaphore::new(1)),
                 config,
                 metrics: Arc::new(Metrics::default()),
                 shutdown: CancellationToken::new(),

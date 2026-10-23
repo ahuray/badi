@@ -22,7 +22,11 @@ interaction, the exact editing authority and the policy around them.
 ## Authorship and editing contract
 
 - Badi appends a short suffix. It never answers for you, rewrites several
-  places, executes commands or submits text; Enter stays your action.
+  places, executes commands or submits text; Enter stays your action. The
+  one exception you ask for explicitly: a selection you mark can be checked
+  for grammar or refined, shown in full and applied only when you accept it
+  ([ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md),
+  user decision 2026-10-23).
 - Acceptance is explicit and one-shot. Spelling replacement is a separate,
   narrow mode that requires negotiated replacement support, an exactly bound
   range and explicit acceptance.
@@ -83,7 +87,7 @@ Persian support keeps its safety and regression gates.
 
 - Claiming support for every Linux app, toolkit, compositor or distribution.
 - Global input capture, virtual keyboards or synthetic typing as architecture.
-- Chat, arbitrary rewrite, agent actions or code execution while typing.
+- Chat, unrequested rewrite, agent actions or code execution while typing.
 - Remote inference, raw-history learning, accounts, sync or telemetry by default.
 
 ## North star

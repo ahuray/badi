@@ -37,6 +37,9 @@ serializeSessionOpenEnvelope(const Coordinates &coordinates,
                              std::uint64_t monoMs);
 std::optional<std::string> serializeContextEnvelope(const ContextUpdate &update,
                                                     std::uint64_t monoMs);
+// A revision request (ADR 0012), or nullopt when the selection is not one the
+// broker would accept.
+std::optional<std::string> serializeRevisionEnvelope(const RevisionUpdate &update, std::uint64_t monoMs);
 
 class FrameDecoder {
 public:
@@ -91,6 +94,10 @@ struct WireCallbacks {
     // Session, allowed, the broker's resolution reason, language override,
     // and whether context is on there (context_words).
     std::function<void(std::string_view, bool, std::string, std::string, bool)> onPolicy;
+    // Explicit revision of one selection (ADR 0012); adapters that leave
+    // these empty never ask for one.
+    std::function<void(Revision)> onRevision = {};
+    std::function<void(const RevisionClear &)> onRevisionClear = {};
 };
 
 class Transport {
@@ -110,6 +117,10 @@ public:
     bool openSession(const Coordinates &coordinates, const nlohmann::json &target);
     bool closeSession(const Coordinates &coordinates);
     bool publishContext(const ContextUpdate &update);
+    bool requestRevision(const RevisionUpdate &update);
+    // Ends the broker's work on the request at `coordinates` (a revision
+    // still running).
+    bool cancelRequest(const Coordinates &coordinates);
     bool requestAcceptance(const AcceptRequest &request);
     bool requestDismissal(const DismissRequest &request);
     bool reportCommit(const Coordinates &coordinates,

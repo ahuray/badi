@@ -37,6 +37,21 @@ nlohmann::json previewRequest(const nlohmann::json &focus, std::string_view text
 
 bool observerAnswered(const nlohmann::json &reply);
 
+// Explicit revision of one selection (ADR 0012). The inspection allows the
+// field's one selection and reads no text; the snapshot of that bound field
+// returns the selection with the text around it.
+nlohmann::json revisionInspectRequest(std::string_view appId);
+nlohmann::json selectionSnapshotRequest(const nlohmann::json &focus);
+// The edit target of an inspected field of this app that holds one
+// selection, as inspectedEditTarget() judges a caret.
+std::optional<NativeEditTarget> revisionEditTarget(const nlohmann::json &focus, std::string_view appId);
+// The same binding and target, still holding one selection.
+bool sameSelectedField(const nlohmann::json &captured, const nlohmann::json &observed);
+// The observer's selection is exactly Fcitx's, and Fcitx's text around it
+// is the observer's as far as Fcitx's window reaches (Chromium may cut its
+// surrounding text shorter, or end it with a paragraph end).
+bool observerAgreesSelection(const nlohmann::json &observed, const SelectionWindow &window);
+
 // Same binding, target and caret on a plain-text field without a selection. A
 // cropped toolkit buffer can be identical at different absolute positions, so
 // snapshots and previews (requireLength) must also agree on the field length.

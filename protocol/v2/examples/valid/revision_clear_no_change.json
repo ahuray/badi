@@ -1,0 +1,13 @@
+{
+  "v": 2,
+  "id": "revise-2",
+  "type": "revision.clear",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 4,
+  "revision": 10,
+  "mono_ms": 3100,
+  "payload": {
+    "fingerprint": "revision_context_0002",
+    "reason": "no_change"
+  }
+}

@@ -48,6 +48,52 @@ bool observerAnswered(const Json &reply) {
     return reply.value("ok", Json()) == true && reply.contains("focus");
 }
 
+Json revisionInspectRequest(std::string_view appId) {
+    auto request = inspectRequest(appId);
+    request["selection"] = true;
+    return request;
+}
+
+Json selectionSnapshotRequest(const Json &focus) {
+    auto request = snapshotRequest(focus);
+    request["selection"] = true;
+    return request;
+}
+
+std::optional<NativeEditTarget> revisionEditTarget(const Json &focus, std::string_view appId) {
+    if (!focus.is_object() || focus.value("selection_count", Json()) != 1) return std::nullopt;
+    // The same identity and target checks as a caret, on a copy that reads
+    // as one; the selection itself is checked against Fcitx before use.
+    auto caret = focus;
+    caret["selection_count"] = 0;
+    return inspectedEditTarget(caret, appId);
+}
+
+bool sameSelectedField(const Json &captured, const Json &observed) {
+    return captured.is_object() && observed.is_object() &&
+           observed.value("binding", Json()) == captured.value("binding", Json()) &&
+           observed.value("target", Json()) == captured.value("target", Json()) &&
+           observed.value("purpose", Json()) == "plain_text" && observed.value("selection_count", Json()) == 1;
+}
+
+bool observerAgreesSelection(const Json &observed, const SelectionWindow &window) {
+    if (!observed.is_object()) return false;
+    const auto before = observed.value("before", Json());
+    const auto selected = observed.value("selected", Json());
+    const auto after = observed.value("after", Json());
+    if (!before.is_string() || !selected.is_string() || !after.is_string() ||
+        observed.contains("scope") || selected != window.selected) {
+        return false;
+    }
+    const auto &observedBefore = before.get_ref<const std::string &>();
+    const auto &observedAfter = after.get_ref<const std::string &>();
+    // Fcitx may hold less of the field than the observer, never other text;
+    // Chromium ends a block with a paragraph end the field's text lacks.
+    const bool afterAgrees = observedAfter.starts_with(window.after) || window.after == observedAfter + "\n" ||
+                             window.after == observedAfter + "\n\n";
+    return observedBefore.ends_with(window.before) && afterAgrees;
+}
+
 bool matchesObservedFocus(const Json &captured, const Json &observed, bool requireLength) {
     if (!captured.is_object() || !observed.is_object() ||
         observed.value("binding", Json()) != captured.value("binding", Json()) ||

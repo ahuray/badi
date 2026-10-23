@@ -216,7 +216,9 @@ impl Field {
         match event {
             BrokerEvent::SuggestionShow { payload, .. } => Some(payload.text),
             BrokerEvent::SuggestionClear { .. } => None,
-            other @ BrokerEvent::CommitPrepare { .. } => panic!("unexpected {other:?}"),
+            other @ (BrokerEvent::CommitPrepare { .. }
+            | BrokerEvent::RevisionShow { .. }
+            | BrokerEvent::RevisionClear { .. }) => panic!("unexpected {other:?}"),
         }
     }
 

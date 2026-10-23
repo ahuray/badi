@@ -72,6 +72,7 @@ void BadiAddon::onAuthority(const AuthoritySnapshot &snapshot) {
         // The broker already retired these sessions at the new authority epoch.
         binding.broker.retire();
         binding.requestExplicit = false;
+        binding.revisionWaiting.reset();
         dropHeldTab(binding);
         binding.state.invalidateContext();
         binding.surroundingFreshness.capabilityChanged();
@@ -89,6 +90,7 @@ void BadiAddon::onPolicy(std::string_view session, bool allowed, const std::stri
     if (allowed && reason == "matched_default" && !binding->observed()) {
         binding->broker.answer(false);
         debug_.record("policy", binding->state.appId(), "app_rule_required");
+        if (binding->revisionWaiting) continueRevision(*binding);
         return;
     }
     binding->broker.answer(allowed, std::move(language), contextWords, reason == "snoozed");
@@ -100,6 +102,8 @@ void BadiAddon::onPolicy(std::string_view session, bool allowed, const std::stri
                   : reason == "editor_focused" ? "editor_focused"
                   : reason == "snoozed"        ? "snoozed"
                                                : "app_disabled");
+    // A revision waiting for this policy goes on instead of a context read.
+    if (binding->revisionWaiting) return continueRevision(*binding);
     if (!allowed) return;
     if (binding->observed()) requestObservedContext(*binding);
     open(*binding);
@@ -297,6 +301,7 @@ void BadiAddon::onClear(const ClearNotice &clear) {
 }
 
 void BadiAddon::onCommitPrepare(const CommitPrepare &prepare) {
+    if (revisionCommit(prepare)) return;
     auto *binding = bindingFor(prepare.coordinates.sessionId);
     if (!binding || !binding->observed()) {
         // SessionState keeps IME-parity apps off the unobserved path; a
@@ -482,6 +487,7 @@ void BadiAddon::onDisconnected() {
         ++binding.observationGeneration;
         binding.observationExplicit = false;
         binding.requestExplicit = false;
+        binding.revisionWaiting.reset();
         dropHeldTab(binding);
         binding.state.invalidateContext();
         binding.surroundingFreshness.transportLost();

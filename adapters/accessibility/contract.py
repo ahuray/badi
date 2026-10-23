@@ -15,6 +15,8 @@ SCHEMA = "badi.accessibility.v1"
 MAX_FRAME = 16 * 1024
 MAX_BEFORE = 512
 MAX_AFTER = 128
+# A revision reads one selection of at most this many characters (ADR 0012).
+MAX_SELECTED = 600
 MAX_PREVIEW_TTL_MS = 15_000
 MAX_POSITION = 2**31 - 1
 ID = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
@@ -27,7 +29,9 @@ REQUEST_FIELDS = {"inspect": {"schema", "id", "op", "app_id"},
                   "hide": {"schema", "id", "op"}}
 # A preview may add the caret rectangle the app gave its input method.
 # A snapshot may ask once per field for the window's text (ADR 0010).
-OPTIONAL_FIELDS = {"preview": {"caret_rect"}, "snapshot": {"window"}}
+# Inspect and snapshot may ask for the field's one selection instead of a
+# caret, for an explicit revision (ADR 0012).
+OPTIONAL_FIELDS = {"preview": {"caret_rect"}, "snapshot": {"window", "selection"}, "inspect": {"selection"}}
 CARET_RECT_FIELDS = frozenset({"x", "y", "width", "height", "scale"})
 IDENTITY = ("bus", "path", "process_id", "app_id", "uri")
 BINDING_FIELDS = frozenset({"epoch", *IDENTITY})
@@ -84,14 +88,18 @@ def credential_label(*labels):
     return any(isinstance(label, str) and CREDENTIAL_LABEL.search(label) for label in labels)
 
 
-def eligible(metadata):
-    """Reject purpose/selection before asking a provider for any prose."""
+def eligible(metadata, selection=False):
+    """Reject purpose/selection before asking a provider for any prose.
+
+    A suggestion needs a caret without a selection; a revision exactly one
+    selection.
+    """
     if metadata["role"] == "password text":
         raise Denied("sensitive_field")
     if not all(metadata.get(flag, False) for flag in ("focused", "editable", "showing", "visible", "enabled")):
         raise Denied("ineligible_field")
-    if metadata["selection_count"] != 0:
-        raise Denied("selection_present")
+    if metadata["selection_count"] != (1 if selection else 0):
+        raise Denied("selection_absent" if selection else "selection_present")
     # A web contenteditable root without role=textbox is a section: a div (Lexical,
     # Quill) or an editing iframe's body (TinyMCE).
     web_root = metadata["web"] and metadata["role"] == "section" and metadata.get("tag") in ("div", "body")
@@ -199,14 +207,21 @@ class Observer:
         return {"hidden": True, "epoch": self.epoch}
 
     def inspect(self, request):
-        _metadata, focus = self.describe(checked_app_id(request["app_id"]), check_lock=True)
+        selection = flag(request, "selection")
+        _metadata, focus = self.describe(checked_app_id(request["app_id"]), check_lock=True,
+                                         selection=selection)
         return {"focus": focus}
 
     def snapshot(self, request):
         if request.get("window", True) is not True:
             raise Denied("invalid_request")
-        metadata, focus = self.bound_focus(request)
+        selection = flag(request, "selection")
+        if selection and "window" in request:
+            raise Denied("invalid_request")
+        metadata, focus = self.bound_focus(request, selection=selection)
         self.authorize(focus["binding"], metadata.get("node"))
+        if selection:
+            return {"focus": self.selected_window(metadata, focus)}
         if metadata.get("sentence_bounded"):
             metadata["sentence_start"] = self.backend.sentence_start(metadata)
         caret = metadata["caret"]
@@ -242,6 +257,29 @@ class Observer:
             if window:
                 focus["window_text"] = window
         return {"focus": focus}
+
+    def selected_window(self, metadata, focus):
+        """The field's one selection on one line, with the text around it.
+
+        Only a plain field: a rich editor's blocks serialize differently for
+        Fcitx, so its selection cannot be confirmed exactly.
+        """
+        if metadata.get("blocks") or metadata.get("sentence_bounded"):
+            raise Denied("unsupported_selection")
+        start, end = self.backend.selection(metadata)
+        total = metadata["total_chars"]
+        if not 0 <= start < end <= total or end - start > MAX_SELECTED:
+            raise Denied("unsupported_selection")
+        first, last = max(0, start - MAX_BEFORE), min(total, end + MAX_AFTER)
+        text = self.stable_text(metadata, focus["binding"]["epoch"], first, last)
+        if self.backend.selection(metadata) != (start, end):
+            raise Denied("stale_binding")
+        selected = text[start - first:end - first]
+        if "\n" in selected or "\r" in selected or not selected.strip():
+            raise Denied("unsupported_selection")
+        focus.update(before=text[:start - first], selected=selected, after=text[end - first:],
+                     total_chars=total)
+        return focus
 
     def preview(self, request):
         if not well_formed_preview(request):
@@ -286,14 +324,15 @@ class Observer:
         if not result["focus"]["rendered"]:
             self.invalidate("field_changed")
 
-    def bound_focus(self, request, calibrate=False, caret_rect=None):
+    def bound_focus(self, request, calibrate=False, caret_rect=None, selection=False):
         """The field as it is now, which must still be the request's binding and policy target."""
         binding = request["binding"]
         if not isinstance(binding, dict) or set(binding) != BINDING_FIELDS:
             raise Denied("invalid_request")
         if type(binding["epoch"]) is not int or binding["epoch"] != self.epoch:
             raise Denied("stale_binding")
-        metadata, focus = self.describe(checked_app_id(binding["app_id"]), calibrate=calibrate, caret_rect=caret_rect)
+        metadata, focus = self.describe(checked_app_id(binding["app_id"]), calibrate=calibrate,
+                                        caret_rect=caret_rect, selection=selection)
         if request["binding"] != focus["binding"]:
             raise Denied("stale_binding")
         if request["policy_target"] != focus["target"]:
@@ -315,12 +354,12 @@ class Observer:
             raise Denied("invalid_text")
         return text
 
-    def describe(self, app_id, calibrate=False, check_lock=False, caret_rect=None):
+    def describe(self, app_id, calibrate=False, check_lock=False, caret_rect=None, selection=False):
         # Only a preview draws, so only it pays for per-request calibration.
         # Only inspect issues a binding, so only it checks the session lock;
         # snapshot and preview require that binding's unchanged epoch.
         metadata = self.backend.metadata(app_id, calibrate, check_lock, caret_rect)
-        eligible(metadata)
+        eligible(metadata, selection)
         key = {name: metadata[name] for name in IDENTITY}
         if self.tracked is not None and self.tracked != key:
             self.invalidate("focus_changed")
@@ -364,6 +403,14 @@ def operation_name(request):
             or not REQUEST_FIELDS[op] <= set(request) <= REQUEST_FIELDS[op] | OPTIONAL_FIELDS.get(op, set())):
         raise Denied("invalid_request")
     return op
+
+
+def flag(request, name):
+    """An optional boolean request field: absent is false, anything but a boolean is malformed."""
+    value = request.get(name, False)
+    if type(value) is not bool:
+        raise Denied("invalid_request")
+    return value
 
 
 def checked_app_id(app_id):

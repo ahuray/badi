@@ -134,6 +134,35 @@ observer wire details.
   first removed `the ` and the second restored `teh `. Telegram and Xournal++
   were not retried.
 
+### Revising a selection
+
+Ctrl+Shift+Space on a selection asks for a grammar check of it, and pressing
+it again while the revision shows asks for a refined wording (and back);
+without a selection the chord keeps its meaning
+([ADR 0012](../../docs/decisions/0012-explicit-revision-of-one-selection.md),
+[wire](WIRE_PROTOCOL.md#revision)). The selection must be one line of 1–600
+characters that Fcitx reports with its surrounding text. In an app the
+observer reads, the observer also binds the field: inspect with `selection`
+(no text), then, once policy allows the app, a selection snapshot whose
+selection and surrounding text Fcitx's must match. Native exact apps the
+observer cannot read use the manual contract; IME-parity apps have no
+fallback, and the observer reads only plain fields there, not rich editors.
+While the request runs, the panel says Badi is checking, and no inspection
+runs; an edit, a changed selection, a focus change or an observer
+invalidation retires the request.
+
+The revision shows as Badi's candidate list: lines of up to 64 characters,
+removed words struck through, added ones bold in the highlight colour, and a
+help line (`Grammar · Tab apply · Esc dismiss · Ctrl+Shift+Space refine`).
+Tab applies it, Escape dismisses it, and any other key retires it and keeps
+its own meaning, so typing still replaces the selection. Applying checks the
+selection again (the observer too, for an observed field), commits the
+revision once and reads the field back for a second: the text before the
+caret must end as the selection's prefix plus the revision, and the text
+after it must be unchanged, or a notice names an unconfirmed revision. One
+Ctrl+Z restores the selection where the app merges the commit into one undo
+step, as it does for typing over a selection.
+
 ## App classes
 
 `classifyNativeApp` (`src/state.cpp`) decides every path from the canonical id:

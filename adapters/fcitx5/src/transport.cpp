@@ -57,7 +57,7 @@ bool validFingerprint(const Json &value) {
 }
 
 bool exactCapabilities(const Json &value) {
-    if (!value.is_array() || value.size() != kRequiredCapabilities.size() + 1) return false;
+    if (!value.is_array() || value.size() != kRequiredCapabilities.size() + 2) return false;
     for (const auto capability : kRequiredCapabilities) {
         const auto matches = std::count_if(
             value.begin(), value.end(), [capability](const Json &candidate) {
@@ -65,10 +65,13 @@ bool exactCapabilities(const Json &value) {
             });
         if (matches != 1) return false;
     }
-    const auto replacements = std::count_if(value.begin(), value.end(), [](const Json &candidate) {
-        return candidate.is_string() && candidate == "text_replacement";
-    });
-    return replacements == 1;
+    for (const auto optional : {"text_replacement", "selection_revision"}) {
+        const auto matches = std::count_if(value.begin(), value.end(), [optional](const Json &candidate) {
+            return candidate.is_string() && candidate == optional;
+        });
+        if (matches != 1) return false;
+    }
+    return true;
 }
 
 bool allowsReplacementKey(const Json &value, std::initializer_list<std::string_view> keys) {
@@ -89,7 +92,8 @@ bool validReason(const Json &value) {
         "manual_required", "no_context", "no_suggestion", "paused", "policy_never",
         "provider_error", "provider_timeout", "session_closed", "settings_commit_unknown",
         "settings_committed_degraded", "settings_conflict", "settings_rejected", "stale",
-        "superseded", "unknown_session", "unsupported_version"};
+        "superseded", "unknown_session", "unsupported_version", "no_change",
+        "unsupported_language", "revision_unavailable"};
     return value.is_string() &&
            std::find(reasons.begin(), reasons.end(), value.get<std::string>()) !=
                reasons.end();
@@ -332,7 +336,61 @@ std::optional<Json> contextEnvelope(const ContextUpdate &update,
         monoMs, payload, &coordinates);
 }
 
+std::optional<Json> revisionEnvelope(const RevisionUpdate &update, std::uint64_t monoMs) {
+    const auto &coordinates = update.coordinates;
+    const auto &selection = update.selection;
+    const auto before = decodeUtf8(selection.before);
+    const auto after = decodeUtf8(selection.after);
+    const auto selected = decodeUtf8(selection.selected);
+    const auto span = selection.anchor > selection.head ? selection.anchor - selection.head
+                                                        : selection.head - selection.anchor;
+    if (!validLinuxAppId(update.appId) || !validOpaqueId(update.targetId) ||
+        !validSessionId(coordinates.sessionId) || coordinates.fingerprint.size() < 16 ||
+        !validOpaqueId(coordinates.fingerprint) || !validOpaqueId(update.requestId) ||
+        (update.mode != "grammar" && update.mode != "refine") || !validLanguageTag(selection.language) ||
+        !validContextText(selection.before) || !validContextText(selection.after) || !before ||
+        before->size() > kMaxBeforeScalars || !after || after->size() > kMaxAfterScalars || !selected ||
+        !safeRevisionText(selection.selected, kMaxSelectedScalars) || span != selected->size()) {
+        return std::nullopt;
+    }
+    Json payload{
+        {"fingerprint", coordinates.fingerprint},
+        {"mode", update.mode},
+        {"before", selection.before},
+        {"selected", selection.selected},
+        {"after", selection.after},
+        {"selection", Json{{"anchor", selection.anchor},
+                            {"head", selection.head},
+                            {"unit", "unicode_scalar_values"}}},
+        {"field", Json{{"purpose", selection.identityKnown ? "normal" : "unknown"},
+                        {"editable", true},
+                        {"multiline", selection.multiline},
+                        {"composing", false},
+                        {"sensitive", false},
+                        {"identity_known", selection.identityKnown},
+                        {"focused", true},
+                        {"lock_screen", false}}},
+        {"activation", "manual"},
+        {"language", selection.language},
+    };
+    return envelope("revision.request", update.requestId, monoMs, payload, &coordinates);
+}
+
+// A revision's anchor and head as the broker repeats them in its grant.
+std::optional<SelectionRange> parseSelectionRange(const Json &value) {
+    if (!exactKeys(value, {"anchor", "head", "unit"}) || !counter(value["anchor"]) || !counter(value["head"]) ||
+        value["unit"] != "unicode_scalar_values" || value["anchor"] == value["head"]) {
+        return std::nullopt;
+    }
+    return SelectionRange{value["anchor"].get<std::uint64_t>(), value["head"].get<std::uint64_t>()};
+}
+
 } // namespace
+
+std::optional<std::string> serializeRevisionEnvelope(const RevisionUpdate &update, std::uint64_t monoMs) {
+    const auto message = revisionEnvelope(update, monoMs);
+    return message ? serialized(*message) : std::nullopt;
+}
 
 bool strictBoundedJsonObject(std::string_view body) {
     return parseStrictObject(body).has_value();
@@ -615,6 +673,20 @@ public:
             &coordinates));
     }
 
+    bool requestRevision(const RevisionUpdate &update) {
+        if (!ready()) return false;
+        const auto body = serializeRevisionEnvelope(update, nowMs());
+        return body && queueBody(*body);
+    }
+
+    bool cancelRequest(const Coordinates &coordinates) {
+        if (!ready()) return false;
+        return queue(envelope(
+            "suggest.cancel",
+            "fcitx.cancel." + std::to_string(coordinates.focusEpoch) + "." + std::to_string(coordinates.revision),
+            nowMs(), Json{{"fingerprint", coordinates.fingerprint}, {"reason", "cancelled"}}, &coordinates));
+    }
+
     bool requestAcceptance(const AcceptRequest &request) {
         if (!ready()) return false;
         return queue(envelope(
@@ -728,7 +800,8 @@ private:
                               {"version", "0.1.0"}}},
             {"capabilities", Json::array({"context", "suggestion",
                                            "commit.dispatched_unverified",
-                                           "text_replacement", "control", "policy", "long_reading_window"})},
+                                           "text_replacement", "control", "policy", "long_reading_window",
+                                           "selection_revision"})},
         };
         if (!queue(envelope("hello", "fcitx.hello", nowMs(), helloPayload))) {
             return false;
@@ -840,6 +913,8 @@ private:
                 return sessionControlResult(value, payload);
             }
             if (type == "commit.prepare") return handleCommit(value, payload);
+            if (type == "revision.show") return handleRevision(value, payload);
+            if (type == "revision.clear") return handleRevisionClear(value, payload);
             return false;
         }();
         if (accepted) return true;
@@ -981,7 +1056,64 @@ private:
         return dispatchSuggestionClear(value, callbacks_.onClear);
     }
 
+    bool handleRevision(const Json &value, const Json &payload) {
+        if (!exactKeys(value, {"v", "id", "type", "session_id", "focus_epoch", "revision", "mono_ms", "payload"}) ||
+            !value["id"].is_string() || !validOpaqueId(value["id"].get_ref<const std::string &>()) ||
+            !exactKeys(payload, {"fingerprint", "revision_id", "mode", "original", "text", "ttl_ms", "provider"}) ||
+            !payload["revision_id"].is_string() ||
+            !validOpaqueId(payload["revision_id"].get_ref<const std::string &>()) ||
+            (payload["mode"] != "grammar" && payload["mode"] != "refine") || !payload["original"].is_string() ||
+            !payload["text"].is_string() ||
+            !safeRevisionText(payload["original"].get_ref<const std::string &>(), kMaxSelectedScalars) ||
+            !safeRevisionText(payload["text"].get_ref<const std::string &>(), kMaxRevisedScalars) ||
+            !payload["ttl_ms"].is_number_unsigned() || payload["ttl_ms"].get<std::uint64_t>() < 1 ||
+            payload["ttl_ms"].get<std::uint64_t>() > kMaxRevisionTtlMs ||
+            (payload["provider"] != "phrase_v1" && payload["provider"] != "local_model")) {
+            return false;
+        }
+        const auto coordinates = parseCoordinates(value, payload);
+        if (!coordinates) return false;
+        if (callbacks_.onRevision) {
+            callbacks_.onRevision(Revision{
+                .coordinates = *coordinates,
+                .requestId = value["id"].get<std::string>(),
+                .revisionId = payload["revision_id"].get<std::string>(),
+                .mode = payload["mode"].get<std::string>(),
+                .original = payload["original"].get<std::string>(),
+                .text = payload["text"].get<std::string>(),
+                .expiresAtMs = nowMs() + payload["ttl_ms"].get<std::uint64_t>(),
+            });
+        }
+        return true;
+    }
+
+    bool handleRevisionClear(const Json &value, const Json &payload) {
+        const bool exactPayload = exactKeys(payload, {"fingerprint", "reason"}) ||
+                                  exactKeys(payload, {"fingerprint", "revision_id", "reason"});
+        if (!exactKeys(value, {"v", "id", "type", "session_id", "focus_epoch", "revision", "mono_ms", "payload"}) ||
+            !value["id"].is_string() || !validOpaqueId(value["id"].get_ref<const std::string &>()) ||
+            !exactPayload || !validReason(payload["reason"]) ||
+            (payload.contains("revision_id") &&
+             (!payload["revision_id"].is_string() ||
+              !validOpaqueId(payload["revision_id"].get_ref<const std::string &>())))) {
+            return false;
+        }
+        const auto coordinates = parseCoordinates(value, payload);
+        if (!coordinates) return false;
+        if (callbacks_.onRevisionClear) {
+            callbacks_.onRevisionClear(RevisionClear{
+                .coordinates = *coordinates,
+                .revisionId = payload.contains("revision_id")
+                    ? std::optional<std::string>(payload["revision_id"].get<std::string>())
+                    : std::nullopt,
+                .reason = payload["reason"].get<std::string>(),
+            });
+        }
+        return true;
+    }
+
     bool handleCommit(const Json &value, const Json &payload) {
+        if (payload.contains("replace_selection")) return handleRevisionCommit(value, payload);
         if (!exactKeys(value, {"v", "id", "type", "session_id",
                                "focus_epoch", "revision", "mono_ms", "payload"}) ||
             !value["id"].is_string() ||
@@ -1009,6 +1141,34 @@ private:
                 .text = *text,
                 .acceptance = payload["acceptance"].get<std::string>(),
                 .replaceBefore = std::move(replaceBefore),
+            });
+        }
+        return true;
+    }
+
+    // A revision's grant: the revised text over exactly its selection.
+    bool handleRevisionCommit(const Json &value, const Json &payload) {
+        if (!exactKeys(value, {"v", "id", "type", "session_id", "focus_epoch", "revision", "mono_ms", "payload"}) ||
+            !value["id"].is_string() || !validOpaqueId(value["id"].get_ref<const std::string &>()) ||
+            !exactKeys(payload, {"fingerprint", "suggestion_id", "text", "replace_selection", "acceptance"}) ||
+            !payload["suggestion_id"].is_string() ||
+            !validOpaqueId(payload["suggestion_id"].get_ref<const std::string &>()) ||
+            !payload["text"].is_string() ||
+            !safeRevisionText(payload["text"].get_ref<const std::string &>(), kMaxRevisedScalars) ||
+            payload["acceptance"] != "all") {
+            return false;
+        }
+        const auto coordinates = parseCoordinates(value, payload);
+        const auto selection = parseSelectionRange(payload["replace_selection"]);
+        if (!coordinates || !selection) return false;
+        if (callbacks_.onCommitPrepare) {
+            callbacks_.onCommitPrepare(CommitPrepare{
+                .coordinates = *coordinates,
+                .controlId = value["id"].get<std::string>(),
+                .suggestionId = payload["suggestion_id"].get<std::string>(),
+                .text = payload["text"].get<std::string>(),
+                .acceptance = "all",
+                .replaceSelection = *selection,
             });
         }
         return true;
@@ -1060,6 +1220,12 @@ bool Transport::closeSession(const Coordinates &coordinates) {
 }
 bool Transport::publishContext(const ContextUpdate &update) {
     return impl_->publishContext(update);
+}
+bool Transport::requestRevision(const RevisionUpdate &update) {
+    return impl_->requestRevision(update);
+}
+bool Transport::cancelRequest(const Coordinates &coordinates) {
+    return impl_->cancelRequest(coordinates);
 }
 bool Transport::requestAcceptance(const AcceptRequest &request) {
     return impl_->requestAcceptance(request);

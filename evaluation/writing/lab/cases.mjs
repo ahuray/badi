@@ -275,7 +275,7 @@ export function pairedFirstWord(rows) {
   return pairs;
 }
 
-function randomFrom(seed) {
+export function randomFrom(seed) {
   if (!Number.isSafeInteger(seed) || seed < 0 || seed > 0xffffffff) throw new Error('Comparison seed must be an unsigned 32-bit integer');
   let state = seed;
   return () => {
@@ -286,7 +286,7 @@ function randomFrom(seed) {
   };
 }
 
-function shuffle(values, random) {
+export function shuffle(values, random) {
   const copy = [...values];
   for (let i = copy.length - 1; i > 0; i--) {
     const j = Math.floor(random() * (i + 1));

@@ -26,10 +26,10 @@ use crate::protocol::{
     GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
     MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SAFE_COUNTER, MAX_SUGGESTION_CHARS,
     MAX_SUGGESTION_WORDS, MemoryStatusPayload, MessageType, PROTOCOL_VERSION, PolicyQueryPayload,
-    PolicyResolutionReason, ProbeRequestPayload, ProtocolError, ReasonCode, SessionClosePayload,
-    SessionControlRequestPayload, SessionId, SessionOpenPayload, SettingsReplacePayload,
-    SettingsStatusPayload, StyleKeyPayload, StyleSamplesPayload, StyleStatusPayload,
-    SuggestCancelPayload, SuggestRequestPayload, WireEnvelope,
+    PolicyResolutionReason, ProbeRequestPayload, ProtocolError, ReasonCode, RevisionRequestPayload,
+    SessionClosePayload, SessionControlRequestPayload, SessionId, SessionOpenPayload,
+    SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload, StyleSamplesPayload,
+    StyleStatusPayload, SuggestCancelPayload, SuggestRequestPayload, WireEnvelope,
 };
 use crate::settings::{SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2};
 use crate::style::{StyleKey, StyleKeyState};
@@ -533,6 +533,7 @@ impl MessageHandler<'_> {
             MessageType::ContextChanged => self.update_context(envelope).await,
             MessageType::SuggestRequest => self.request_suggestion(envelope).await,
             MessageType::SuggestCancel => self.cancel_suggestion(envelope).await,
+            MessageType::RevisionRequest => self.request_revision(envelope).await,
             MessageType::ControlRequest => self.control(envelope).await,
             MessageType::CommitResult => self.commit_result(envelope).await,
             MessageType::HealthRequest => self.health(envelope).await,
@@ -570,6 +571,8 @@ impl MessageHandler<'_> {
             | MessageType::StyleSamples
             | MessageType::ContextStatus
             | MessageType::StatsStatus
+            | MessageType::RevisionShow
+            | MessageType::RevisionClear
             | MessageType::Error => Err(ServerError::InvalidMessage),
         }
     }
@@ -645,6 +648,20 @@ impl MessageHandler<'_> {
         let payload: SuggestRequestPayload = envelope.decode_payload()?;
         self.broker
             .request_suggestion(coordinates, payload, envelope.id)
+            .await?;
+        Ok(())
+    }
+
+    async fn request_revision(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
+        self.broker
+            .require_current_authority_ack(self.connection_id)
+            .await?;
+        require_capability(self.authority, Capability::SelectionRevision)?;
+        let coordinates = envelope.coordinates()?;
+        ensure_owned(self.owned_sessions, coordinates.session_id)?;
+        let payload: RevisionRequestPayload = envelope.decode_payload()?;
+        self.broker
+            .request_revision(coordinates, payload, envelope.id)
             .await?;
         Ok(())
     }

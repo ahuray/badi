@@ -103,14 +103,17 @@ Where code lives inside the larger components:
   acceptance, type-through and desktop holds, with its tests in
   `engine/tests/` by topic; `settings/` is the private settings document
   (identity, permissions, policy, paths, private files, the compare-and-swap
-  store); `writing.rs` and `semantic/` run the local model; `style.rs`,
+  store); `writing.rs` and `semantic/` run the local model; `revision.rs`,
+  `revision/` and `engine/revision.rs` revise a selection on request
+  (ADR 0012); `style.rs`,
   `personalization.rs`, `stats.rs`, `model_selection.rs` and
   `control_plane.rs` are what their names say; `bin/badictl/` is the control CLI. A module's unit tests
   live beside it in `<module>/tests.rs`.
 - **Fcitx addon** (`adapters/fcitx5/src/`): `addon.h` declares the addon;
   `addon.cpp` (lifecycle and input-context events), `addon_keys.cpp`,
-  `addon_observer.cpp`, `addon_broker.cpp` (broker events and display) and
-  `addon_session.cpp` implement it over the tested core in `state`,
+  `addon_observer.cpp`, `addon_broker.cpp` (broker events and display),
+  `addon_session.cpp` and `addon_revision.cpp` (selection revision)
+  implement it over the tested core in `state`, `revision`,
   `observation`, `transport`, `accessibility`, `sanitizer` and `debug`.
 - **Observer** (`adapters/accessibility/`): `daemon.py` (the private
   Unix-socket service and AT-SPI events), `desktop.py` (active window, Omarchy lock and

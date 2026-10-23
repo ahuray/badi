@@ -461,6 +461,13 @@ pub(crate) fn select_installed_writing_model(
         .ok_or(AdviceReason::InsufficientUsableMemory)
 }
 
+/// The host memory `model` needs to run, in MiB: its weights plus runtime
+/// headroom, as every fit check counts it.
+#[must_use]
+pub fn required_memory_mib(model: ModelArtifact) -> u64 {
+    memory_fit(model, 0).required_host_memory_mib
+}
+
 /// Whether `model` can start now, with its runtime headroom, without eating
 /// into the host reserve.
 #[cfg(feature = "local-model")]
