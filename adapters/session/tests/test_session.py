@@ -379,6 +379,8 @@ class ScreenCastTests(unittest.TestCase):
         self.backoff = daemon.BACKOFF_SECONDS
         daemon.BACKOFF_SECONDS = (0, 0, 0)
         self.addCleanup(setattr, daemon, "BACKOFF_SECONDS", self.backoff)
+        self.addCleanup(setattr, daemon, "RELEASE_SECONDS", daemon.RELEASE_SECONDS)
+        daemon.RELEASE_SECONDS = 0.1
 
     def watch(self):
         self.refreshes = []
@@ -419,6 +421,25 @@ class ScreenCastTests(unittest.TestCase):
         self.until(lambda: not self.reporter.screen_shared, "the share ending")
         self.assertEqual(self.fake.reports[-1], ("active", False, False, False))
         self.assertEqual(self.refreshes, [True, False], "the bar mark reads each change once the broker has it")
+
+    def test_a_share_that_changes_streams_is_never_released_in_between(self):
+        daemon.RELEASE_SECONDS = 1.0
+        screencast = self.watch()
+        self.until(lambda: screencast.streams.synced, "the first dump")
+        preview = node(124, "Video/Source", "xdg-desktop-portal-hyprland", "xdph-streaming-1")
+        self.change(preview)
+        self.until(lambda: self.reporter.screen_shared, "the preview")
+        self.change({"id": 124, "info": None})
+        self.until(lambda: not screencast.streams.ids, "the preview ending")
+        self.assertTrue(self.reporter.screen_shared, "held through the gap")
+        self.change(SCREENCAST)
+        self.until(lambda: screencast.streams.ids == {123}, "the share")
+        self.until(lambda: screencast._release is None, "the release cancelled")
+        self.assertEqual(self.fake.reports, [("active", False, False, True)], "one report for the whole share")
+        started = time.monotonic()
+        self.change({"id": 123, "info": None})
+        self.until(lambda: not self.reporter.screen_shared, "the share ending", timeout=4)
+        self.assertGreaterEqual(time.monotonic() - started, 0.9, "released only after the delay")
 
     def test_a_crashed_dump_keeps_the_hold_until_a_new_dump_replaces_it(self):
         screencast = self.watch()

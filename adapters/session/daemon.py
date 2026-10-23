@@ -83,6 +83,10 @@ SCREENCAST_NODE_PREFIX = "xdg-desktop-portal-"
 SCREENCAST_MEDIA_PREFIX = "xdph-streaming-"
 # The first dump of a busy graph is a few hundred kilobytes.
 DUMP_LIMIT = 16 * 1024 * 1024
+# A share that changes streams removes one before it adds the next (Chromium's
+# preview became the share 18 ms later on 2026-10-23), so a share ends only
+# when no stream has returned for this long.
+RELEASE_SECONDS = 1.0
 DBUS_TIMEOUT_MS = 2000
 # While the keyring is locked, look again this often; never prompt.
 KEY_RETRY_SECONDS = 120
@@ -467,7 +471,9 @@ class ScreenCast:
     exists in PipeWire, from its creation until it is destroyed. Frame activity
     is not used: screenshots produce it too.
 
-    A pw-dump that ends after showing anything is restarted with backoff and
+    A share starts at once and ends ``RELEASE_SECONDS`` after its last
+    stream, so a share that changes streams is never released in between. A
+    pw-dump that ends after showing anything is restarted with backoff and
     the streams it saw stay until a new dump replaces them, so a crash never
     ends a hold early. One that ends without any output could not reach
     PipeWire, where no portal stream can exist.
@@ -482,6 +488,7 @@ class ScreenCast:
         self._cancellable = None
         self._received = False
         self._retry = None
+        self._release = None
         self._attempt = 0
         self.problem = None
         self._start()
@@ -533,7 +540,24 @@ class ScreenCast:
         self._read(process)
 
     def _publish(self):
-        shared = bool(self.streams.ids)
+        if self.streams.ids:
+            self._keep()
+            self._report(True)
+        elif self.reporter.screen_shared and self._release is None:
+            self._release = GLib.timeout_add(int(RELEASE_SECONDS * 1000), self._released)
+
+    def _released(self):
+        self._release = None
+        if not self.streams.ids:
+            self._report(False)
+        return GLib.SOURCE_REMOVE
+
+    def _keep(self):
+        if self._release is not None:
+            GLib.source_remove(self._release)
+            self._release = None
+
+    def _report(self, shared):
         if shared != self.reporter.screen_shared:
             self.reporter.screen_shared = shared
             # The broker holds before the reply, so the bar then reads the hold.
@@ -564,6 +588,7 @@ class ScreenCast:
         if self._retry is not None:
             GLib.source_remove(self._retry)
             self._retry = None
+        self._keep()
         self._stop()
 
 

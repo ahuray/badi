@@ -61,7 +61,11 @@ a video source too, but the session manager creates it, so it never counts.
 Frame activity is not used: screenshots and the share picker's previews
 produce it without a share.
 
-- While any such stream exists the report says `screen_shared: true`. With
+- While any such stream exists the report says `screen_shared: true`, from
+  the moment the first one appears until one second after the last one
+  ends, so a share that changes streams (Chromium's preview becoming the
+  share replaced one stream with the next 18 ms later) is never released in
+  between. With
   settings `screen_share: hold` (the default, `badi screen-share hold`) the
   broker holds every grant as for an inactive session; `badi screen-share
   suggest` keeps suggesting. `badi status`, `badi doctor` and the panel name
