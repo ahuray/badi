@@ -77,9 +77,14 @@ Detection is the toolkit's mark, not the words in the field.
   date, or time.
 - The observer refuses an accessible whose role is `password text`, or whose
   `text-input-type` is `password`, before it reads the caret or any text.
-- It does not look at the label, placeholder, accessible name, or HTML
-  `autocomplete` value. A `type=text` password, PIN, or card field that the
-  toolkit does not mark is handled like other prose.
+- It also refuses one whose accessible name or description names a secret
+  in Badi's languages (`contract.CREDENTIAL_LABEL`: password, Passwort, mot
+  de passe, contraseña, senha, PIN, one-time or verification code, CVV,
+  card number, …), so a password a page's "show password" button turned
+  into `type=text`, or a plain-text card or code field, is never read. The
+  placeholder and the HTML `autocomplete` value are not exposed and not
+  used; an unlabelled secret field the toolkit does not mark is still
+  handled like prose.
 
 ## Authority boundary
 

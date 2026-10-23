@@ -61,14 +61,20 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     };
     const auto action = decidePreKey(pressed, binding->state.editingAvailable(), !binding->ownedAuxiliary.empty(),
                                      binding->state.suggestionVisible(), panel);
-    if (!pressed.modifier) {
-        // A key that types text is named only in a text run; control keys
-        // such as Tab and Escape also "type" a control character.
-        const bool printable = !typed.empty() && static_cast<unsigned char>(typed[0]) >= 0x20 && typed != "\x7f";
+    // A password field's keys leave no line at all: even without text,
+    // their count and timing would describe the password.
+    const bool sensitive =
+        static_cast<bool>(event.inputContext()->capabilityFlags() & ::fcitx::CapabilityFlag::PasswordOrSensitive);
+    if (!pressed.modifier && !sensitive) {
+        // A key that types text is named only in a text run, and only in a
+        // field Badi edits for an allowed app: never a password, a denied
+        // field (the observer's credential labels), nor an app not allowed.
+        const auto text =
+            tracedKeyText(typed, binding->broker.policyAllowed && binding->state.editingAvailable());
         debug_.trace("key", app,
-            {{"key", printable ? "printable" : key.toString()}, {"action", preKeyActionName(action)},
+            {{"key", printableKey(typed) ? "printable" : key.toString()}, {"action", preKeyActionName(action)},
              {"ghost_visible", binding->state.suggestionVisible()}},
-            printable ? nlohmann::json{{"typed", typed}} : nlohmann::json(nullptr));
+            text ? nlohmann::json{{"typed", *text}} : nlohmann::json(nullptr));
     }
     // A Tab in the gap after a word acceptance, while its remainder is
     // still returning on its own, is held for that remainder instead of
@@ -256,6 +262,13 @@ void BadiAddon::tabKey(::fcitx::KeyEvent &event, Binding &binding, const PanelOb
 // Badi cannot see, so tracking stops until the next empty line.
 void BadiAddon::lineKey(Binding &binding, const ::fcitx::Key &key, std::string_view typed) {
     if (key.isModifier()) return;
+    // Until the user allows this terminal, nothing typed is held (ADR 0009):
+    // the line restarts at every key and is followed from where it is once
+    // the policy allows it, as a line that had text at focus is.
+    if (!binding.broker.policyAllowed) {
+        binding.typedLine.restart();
+        return;
+    }
     binding.typedLine.apply(lineEditFor(key, typed), typed);
     requestLineAfterPause(binding);
 }

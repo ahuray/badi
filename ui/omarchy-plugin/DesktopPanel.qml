@@ -598,8 +598,15 @@ Item {
         list.push({key: "context_app_" + app.appId, section: "Context", kind: "toggle", label: app.name,
           detail: on ? sources[app.context] : "Off here · its learned words are deleted",
           checked: on, enabled: !controlsBusy,
-          activate: function() { root.runAction(["context", "app", app.appId, on ? "off" : "on"], "Updating context",
-            app.name + (on ? ": context off" : ": context on")) }})
+          activate: function() {
+            var change = function() {
+              root.runAction(["context", "app", app.appId, on ? "off" : "on"], "Updating context",
+                app.name + (on ? ": context off" : ": context on"))
+            }
+            // Turning it off deletes the words learned there: ask first.
+            if (on) root.confirm("Turn context off in " + app.name + "? Its learned words are deleted.", "Turn off", change)
+            else change()
+          }})
       })
       list.push({key: "context_forget", section: "Context", kind: "action", label: "Forget learned words",
         detail: "Deletes every learned word; the keyring key stays", enabled: !controlsBusy,

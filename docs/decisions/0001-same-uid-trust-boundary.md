@@ -60,6 +60,23 @@ boundary capable of protecting the issued capability.
 
 ## Consequences
 
+The 2026-10-23 audit listed what a same-UID process can therefore do, all
+within this decision: declare any adapter kind and capability, export the
+decrypted style samples and rewrite settings as a `cli` client, deliver its
+own style key, accept the focused field's suggestion without a keypress,
+seed learned words with a crafted context, start a text debug trace, and
+read the model runtime's token from `/proc`. Kernel ptrace scope 1 keeps it
+from reading the broker's memory.
+
+The reverse direction is enforced: text the broker reads is untrusted input
+to the model runtime, so the broker's unit confines both to their own
+files. Home is read-only except `~/.config/badi` and `~/.local/share/badi`;
+the runtime directory holds only `badi/`, so neither the session bus nor
+the user manager is reachable; there is no network, no device, no new
+privilege and no core dump; and system calls are limited to
+`@system-service`. A runtime compromised through page text can neither
+edit a shell profile or the Fcitx addon nor start an unconfined unit.
+
 The design stays compact and honest for a single-user Linux desktop. It does
 not claim confidentiality or control integrity against malicious same-UID
 software. Any future remote listener, system service, shared account, sandbox

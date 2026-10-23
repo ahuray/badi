@@ -42,11 +42,19 @@ text. In both modes:
 - A run expires after 15 minutes; writers check the control file, and a
   disabled one at most once a second.
 - The trace lives in the runtime directory, which is memory-backed and
-  cleared at logout. Nothing is sent anywhere.
+  cleared at logout. `badi debug on` also asks the user manager for a
+  one-shot timer (`systemd-run --user`) that deletes the run's files when it
+  ends, unless a newer run replaced it (amended 2026-10-23). Nothing is sent
+  anywhere.
 - Writers stop at 16 MiB.
 - The broker never records context text from a field that reports itself
   sensitive or not plain prose. Sensitive fields are denied before any
   adapter acquires their text, so none reaches the trace.
+- A typed key is recorded with its text only from a field Badi may read
+  itself, and a password or sensitive field's keys leave no line at all, so
+  neither a password nor its length and rhythm reach the trace (amended
+  2026-10-23: the Fcitx addon used to record every printable key in a text
+  run).
 
 ## Consequences
 

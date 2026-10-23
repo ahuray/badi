@@ -654,6 +654,13 @@ impl SettingsV2 {
             .clone_from(&current.language_overrides);
         self.spelling_languages
             .clone_from(&current.spelling_languages);
+        // A v1 document cannot name these either; without them a v1 write
+        // turned suggestions back on in languages the user had turned off.
+        self.writing_model.clone_from(&current.writing_model);
+        self.writing_languages
+            .clone_from(&current.writing_languages);
+        self.trailing_space_healing
+            .clone_from(&current.trailing_space_healing);
         self.subjects.extend(
             current
                 .subjects

@@ -145,6 +145,22 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
+def private_directory(path, top):
+    """Creates `path` 0700 and tightens it and every directory up to `top`
+    (Badi's state directory) that an older install left group- or
+    world-readable."""
+    path, top = Path(path), Path(top)
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    directory = path
+    while True:
+        info = directory.lstat()
+        if stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and info.st_mode & 0o077:
+            directory.chmod(0o700)
+        if directory == top or directory.parent == directory:
+            return path
+        directory = directory.parent
+
+
 def atomic_write(path, data, mode=0o600):
     """Replace `path` with `data` in one rename.
 
@@ -459,8 +475,8 @@ class Installation:
         if self.changes:
             directory = self._backup_directory()
         else:
-            directory = self.home / STATE_DIRECTORY / BACKUP_DIRECTORIES[self.installer] / "notes"
-            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            directory = private_directory(self.home / STATE_DIRECTORY / BACKUP_DIRECTORIES[self.installer] / "notes",
+                                          self.home / STATE_DIRECTORY)
         path = directory / name
         atomic_write(path, (json.dumps(document) + "\n").encode(), 0o600)
         return path
@@ -505,7 +521,9 @@ class Installation:
     def _backup_directory(self):
         if self.directory is None:
             root = self.home / STATE_DIRECTORY / BACKUP_DIRECTORIES[self.installer]
-            root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if root.is_symlink():
+                raise RuntimeError(f"Inspect the symlinked backup directory {root}")
+            private_directory(root, self.home / STATE_DIRECTORY)
             if root.is_symlink():
                 raise RuntimeError(f"Inspect the symlinked backup directory {root}")
             first = not any(backup_time(entry.name) is not None and entry.is_dir() and not entry.is_symlink()

@@ -18,6 +18,12 @@ NoNewPrivileges=yes
 LockPersonality=yes
 # logind, UPower, the portal, PipeWire and the broker are all local Unix sockets.
 RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+# A core dump would keep the style-learning key on disk.
+LimitCORE=0
 KillMode=control-group
 TimeoutStopSec=5
 

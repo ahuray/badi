@@ -376,5 +376,18 @@ class ContractTests(unittest.TestCase):
                 canonical_origin(uri)
 
 
+class CredentialLabelTests(unittest.TestCase):
+    def test_labels_that_name_a_secret_are_credentials_and_prose_fields_are_not(self):
+        from contract import credential_label
+        for label in ("Password", "New password", "Passwort", "Kennwort", "PIN", "Enter PIN code", "OTP",
+                      "One-time code", "Verification code", "CVV", "Card number", "Mot de passe",
+                      "Contraseña", "Senha", "Palavra-passe", "Wachtwoord", "Hasło", "Bestätigungscode"):
+            self.assertTrue(credential_label(label), label)
+        for label in ("Message", "Pinned notes", "Spinning class", "Comment", "Subject", "Code review notes",
+                      "Search", "", None):
+            self.assertFalse(credential_label(label), label)
+        self.assertTrue(credential_label("Message", "Your password"), "the description counts too")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -112,8 +112,8 @@ Where code lives inside the larger components:
   `addon_observer.cpp`, `addon_broker.cpp` (broker events and display) and
   `addon_session.cpp` implement it over the tested core in `state`,
   `observation`, `transport`, `accessibility`, `sanitizer` and `debug`.
-- **Observer** (`adapters/accessibility/`): `daemon.py` (the private D-Bus
-  service and AT-SPI events), `desktop.py` (active window, Omarchy lock and
+- **Observer** (`adapters/accessibility/`): `daemon.py` (the private
+  Unix-socket service and AT-SPI events), `desktop.py` (active window, Omarchy lock and
   process identity), `field.py` (acquisition, serialization and Lab-only
   window context), `contract.py` (the acquisition contract), `geometry.py`
   and `preview.py` (caret calibration and the overlay), `health.py`

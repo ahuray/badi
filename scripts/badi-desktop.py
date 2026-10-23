@@ -1479,22 +1479,56 @@ def private_directory():
     return directory
 
 
+DEBUG_FILES = ("debug-control.json", "debug-native.json", TRACE_FILE,
+               *(f"debug-{adapter}.json" for adapter in ("obsidian", "terminal", "neovim")))
+DEBUG_SECONDS = 900
+
+
+def schedule_debug_expiry(run_id):
+    """Asks the user manager to delete this run's files once it has ended, so
+    a text trace does not stay in memory until logout. Returns whether a timer
+    was set; without systemd-run the trace waits for badi debug off."""
+    if shutil.which("systemd-run") is None:
+        return False
+    command = ["systemd-run", "--user", "--quiet", "--collect", f"--unit=badi-debug-expiry-{run_id[:8]}",
+               f"--on-active={DEBUG_SECONDS + 1}", "--timer-property=AccuracySec=5s",
+               sys.executable, "-B", str(Path(__file__).resolve()), "debug", "expire", run_id]
+    try:
+        return subprocess.run(command, timeout=5, check=False, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def expire_debug(run_id):
+    """Deletes the debug files if `run_id` is still the current run."""
+    directory = private_directory()
+    try:
+        current = json.loads((directory / "debug-control.json").read_text()).get("id")
+    except (OSError, ValueError, AttributeError):
+        current = None
+    if current == run_id:
+        for name in DEBUG_FILES:
+            (directory / name).unlink(missing_ok=True)
+
+
 def debug_mode(mode, text=False):
     if mode in ("on", "off"):
         directory = private_directory()
-        for name in ("debug-control.json", "debug-native.json", TRACE_FILE,
-                     *(f"debug-{adapter}.json" for adapter in ("obsidian", "terminal", "neovim"))):
+        for name in DEBUG_FILES:
             (directory / name).unlink(missing_ok=True)
         if mode == "on":
             # The trace exists before the control names the run, so no writer
             # sees a run without its file; writers never create it.
             descriptor = os.open(directory / TRACE_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             os.close(descriptor)
-            marker = {"id": str(uuid.uuid4()), "expires_at": int(time.time()) + 900, "text": text}
+            marker = {"id": str(uuid.uuid4()), "expires_at": int(time.time()) + DEBUG_SECONDS, "text": text}
             badi_install.atomic_write(directory / "debug-control.json", json.dumps(marker).encode())
+            deleted = ("deleted when the run ends, by badi debug off or at logout"
+                       if schedule_debug_expiry(marker["id"]) else "deleted by badi debug off or at logout")
             print("Debug trace on for 15 minutes"
-                  + (", including context and suggestion text. It stays in memory"
-                     " ($XDG_RUNTIME_DIR) and is deleted by badi debug off or logout."
+                  + (", including context and suggestion text (never a password field's). It stays in memory"
+                     f" ($XDG_RUNTIME_DIR) and is {deleted}."
                      if text else "; no typed text is stored (add --text for it).")
                   + " Follow it with badi debug watch.")
         else:
@@ -1531,6 +1565,16 @@ def trace_entries(lines):
             yield entry
 
 
+def trace_fact(value):
+    """A trace value as the terminal may show it: a string with any control,
+    escape or format character is quoted and escaped, so no writer's value can
+    move the cursor, recolour or retitle the terminal."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+    text = str(value)
+    return text if text.isprintable() else json.dumps(text)
+
+
 def format_trace(entry):
     """One readable line: time, source, event, facts, then any text quoted."""
     at = entry.get("t")
@@ -1540,11 +1584,12 @@ def format_trace(entry):
     for key, value in entry.items():
         if key in ("t", "src", "ev") or key in TRACE_TEXT_FIELDS:
             continue
-        facts.append(f"{key}={json.dumps(value, ensure_ascii=False, separators=(',', ':')) if isinstance(value, (dict, list)) else value}")
+        facts.append(f"{trace_fact(key)}={trace_fact(value)}")
     for key in TRACE_TEXT_FIELDS:
         if isinstance(entry.get(key), str):
             facts.append(f"{key}={json.dumps(entry[key], ensure_ascii=False)}")
-    return f"{stamp}  {str(entry.get('src', '?')):<10} {str(entry.get('ev', '?')):<24} {' '.join(facts)}".rstrip()
+    source, event = trace_fact(entry.get("src", "?")), trace_fact(entry.get("ev", "?"))
+    return f"{stamp}  {source:<10} {event:<24} {' '.join(facts)}".rstrip()
 
 
 def open_trace(directory):
@@ -1649,6 +1694,10 @@ def main(arguments):
         return
     if arguments == ["settings"]:
         subprocess.run(["omarchy-shell", "badi-writing", "toggle"], check=True, timeout=4)
+        return
+    if (arguments[:2] == ["debug", "expire"] and len(arguments) == 3
+            and re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", arguments[2])):
+        expire_debug(arguments[2])
         return
     if arguments[:1] == ["debug"] and arguments[1:] in (["on"], ["on", "--text"], ["off"], ["status"], ["watch"]):
         try:

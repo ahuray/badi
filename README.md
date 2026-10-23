@@ -381,8 +381,9 @@ backoff; a missing or oversized model stops it for `badi doctor` to explain.
 `--text` the trace holds lengths, ids, reasons and positions only. With
 `--text` it also holds the text before and after the caret, typed characters
 and every suggestion; it stays in memory, ends after 15 minutes and is
-deleted at logout, and a field that reports itself sensitive contributes no
-text ([ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
+deleted when the run ends (or by `badi debug off`, or at logout), a field
+that reports itself sensitive contributes no text, and a password field's
+keys are not recorded at all ([ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
 Test commands set `BADI_DEBUG_TRACE=off`, which keeps a process out of a
 running trace.
 

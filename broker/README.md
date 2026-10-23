@@ -288,7 +288,9 @@ prints pinned download advice and downloads nothing
   (`$XDG_RUNTIME_DIR/badi/llama-<pid>.sock`, mode `0600`), with a bearer token
   that does not cross TCP. The pid in the name keeps another process from
   replacing the running service's socket. The service unit has no network
-  namespace address.
+  namespace address, and the runtime starts with its slots endpoint off
+  (`LLAMA_ARG_ENDPOINT_SLOTS=0`), which would describe the prompt it is
+  processing; metrics and properties stay off by default.
   Requests are never proxied, retried or pooled. Dropping a request closes
   its connection, which cancels it.
 - **Launch.** One 512-token slot reuses the common prompt prefix (KV cache).

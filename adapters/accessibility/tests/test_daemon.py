@@ -868,9 +868,17 @@ class FakeStates:
 
 
 class FakeNode:
-    def __init__(self, states=(), pid=42, children=(), uri=None, role="entry", parent=None, interfaces=()):
+    def __init__(self, states=(), pid=42, children=(), uri=None, role="entry", parent=None, interfaces=(),
+                 name="", description=""):
         self.states, self.pid, self.children, self.uri, self.role = states, pid, list(children), uri, role
         self.parent, self.interfaces = parent, list(interfaces)
+        self.name, self.description = name, description
+
+    def get_name(self):
+        return self.name
+
+    def get_description(self):
+        return self.description
 
     def get_state_set(self):
         return FakeStates(self.states)
@@ -1666,6 +1674,14 @@ class GeckoMetadataTests(unittest.TestCase):
             with self.subTest(role=role, attributes=attributes), self.assertRaisesRegex(Denied, "sensitive_field"):
                 self.backend.metadata("zen", True)
             self.assertEqual(self.inspect()["error"], "sensitive_field")
+        # A password its page revealed is a text input; its label still says
+        # what it holds, as a plain-text card or one-time-code field's does.
+        for name, description in (("Password", ""), ("Passwort", ""), ("", "Enter your PIN"),
+                                  ("Card number", ""), ("One-time code", ""), ("Mot de passe", "")):
+            self.node = self.field("entry", {"tag": "input", "text-input-type": "text"})
+            self.node.name, self.node.description = name, description
+            with self.subTest(name=name, description=description), self.assertRaisesRegex(Denied, "sensitive_field"):
+                self.backend.metadata("zen", True)
         self.assertEqual(self.calibrations, [])
 
     def test_unexposed_or_unsupported_purposes_are_ineligible(self):

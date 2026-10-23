@@ -298,6 +298,15 @@ bool typesSuggestionStart(std::string_view typed, std::string_view suggestion) {
     return !typed.empty() && typed.size() < suggestion.size() && suggestion.starts_with(typed);
 }
 
+bool printableKey(std::string_view typed) {
+    return !typed.empty() && static_cast<unsigned char>(typed[0]) >= 0x20 && typed != "\x7f";
+}
+
+std::optional<std::string> tracedKeyText(std::string_view typed, bool fieldReadable) {
+    if (!fieldReadable || !printableKey(typed)) return std::nullopt;
+    return std::string(typed);
+}
+
 bool tabMayHoldForRest(bool restPending, bool restAutomatic, bool foreignIme,
                        bool suggestionVisible) {
     return restPending && restAutomatic && !foreignIme && !suggestionVisible;
