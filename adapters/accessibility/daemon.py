@@ -202,6 +202,12 @@ class Daemon:
         if signal in {"BoundsChanged", "VisibleDataChanged"}:
             self.observer.reposition_preview()
             return
+        # Text attributes change neither the text nor the caret. Chromium's
+        # spellchecker underlines a misspelled word about 150 ms after it is
+        # typed (measured 2026-10-23), which would otherwise end the
+        # suggestion shown for it, a correction above all.
+        if signal == "TextAttributesChanged":
+            return
         self.observer.invalidate("field_changed")
 
     def ancestor_event(self, _connection, _sender, _path, _interface, signal, _parameters, _data):

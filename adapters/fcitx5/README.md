@@ -121,9 +121,15 @@ observer wire details.
 - **Replacement.** Native exact fields (`omawrite`, Telegram, Xournal++, and
   other granted native ids) may delete the exact typed suffix and then
   `commitString` the correction, still reported as `dispatched-unverified`.
-  The suffix must still be the text before the caret. IME-parity apps stay
-  append-only: a replacement is not shown or applied there
-  ([ADR 0003](../../docs/decisions/0003-ime-parity-append-only.md)). In Omawrite
+  The suffix must still be the text before the caret. IME-parity apps but
+  LibreOffice take a spelling correction the same way, after the observer
+  re-confirms the field ([ADR 0011](../../docs/decisions/0011-checked-corrections-in-append-only-apps.md)).
+  The preview draws it as `→ address`, and the panel fallback as
+  `adress → address`. For a second after the commit, the addon waits for the
+  app's surrounding text to end as the correction left it, and records
+  `correction_confirmed` or `correction_unconfirmed`; an unconfirmed one also
+  gets the notice "Badi could not confirm that correction — check the text".
+  An update between the two edits gives no verdict. In Omawrite
   0.5.0 on 2026-10-12, accepting `teh ` → `the ` took two native undos: the
   first removed `the ` and the second restored `teh `. Telegram and Xournal++
   were not retried.
@@ -291,7 +297,7 @@ toolkit in general.
 
 | App (version, date) | Reaches Fcitx through | Result | Boundary |
 | --- | --- | --- | --- |
-| Chromium 154 (2026-10-19/20) | text-input-v3 (`wayland_v2`); observed, IME-parity | The installed-flow matrix below; as an Omarchy web app (`chrome-<site>__-Default`) 4/4 inline in 168–321 ms, with window words | Page fields carry no purpose hints, so the observer's checks deny passwords; the omnibox's `Url` purpose is denied before any observer request. Needs Fcitx 5.1.23 |
+| Chromium 154 (2026-10-19/20), 155 (2026-10-23) | text-input-v3 (`wayland_v2`); observed, IME-parity | The installed-flow matrix below; as an Omarchy web app (`chrome-<site>__-Default`) 4/4 inline in 168–321 ms, with window words. On 155, `adress ` showed `→ address`; Tab corrected it, the read-back confirmed it and one Ctrl+Z restored the typo. A page that moves focus on the deletion split it, and the notice named it ([ADR 0011](../../docs/decisions/0011-checked-corrections-in-append-only-apps.md)) | Page fields carry no purpose hints, so the observer's checks deny passwords; the omnibox's `Url` purpose is denied before any observer request. Needs Fcitx 5.1.23 |
 | Brave Origin 1.97 (2026-10-20) | as above | 5/5 in a textarea, 3/3 in a contenteditable, 4/4 as an `--app` web app; Ctrl+→ takes all, Escape hides without editing | as above |
 | Zen 1.23.3b, Gecko 158 (2026-10-20) | `wayland_v2`, `zen` | Suggestions and window words | The urlbar shares the page's context with no `Url` hint, so the observer denies it. Gecko sends only the caret's paragraph. One Ctrl+Z undoes an acceptance alone. A fresh profile once showed the suggestion in Fcitx's candidate box |
 | VS Code 1.142 (2026-10-20) | as Chromium | 3/3; the saved file read back exactly | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. `wtype` trials need `"keyboard.dispatch": "keyCode"` |

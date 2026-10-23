@@ -920,6 +920,37 @@ def session(root, report):
             checks.append(label + ': observer disagreement at request, display and dispatch, and an unanswered '
                           'dispatch snapshot, fail closed with distinct content-free reasons')
 
+            # ADR 0011: a typo is corrected in place once the observer has
+            # confirmed the field: Fcitx asks the app to delete exactly the
+            # typed typo, commits the fix, then reads the app's text back.
+            typo, fixed = 'Please send it to the adress ', 'Please send it to the address '
+            confirmed, unconfirmed = reason_count('correction_confirmed'), reason_count('correction_unconfirmed')
+            change(typo)
+            wait(lambda: context.candidate() == 'adress \u2192 address', label + ' a correction names its typo')
+            first = len(context.events)
+            assert context.key(desktop.TAB)
+            wait(lambda: context.commits()[-1:] == ['address '], label + ' Tab commits the fix')
+            edits = [(name, values) for name, values in context.events[first:]
+                     if name in ('DeleteSurroundingText', 'CommitString')]
+            assert edits == [('DeleteSurroundingText', (-7, 7)), ('CommitString', ('address ',))], \
+                label + f' deletes exactly the typed typo, then commits the fix: {edits}'
+            quiet(.2)
+            assert reason_count('correction_confirmed') == confirmed, label + ' no verdict before the app reports'
+            change(fixed)
+            wait(lambda: reason_count('correction_confirmed') > confirmed,
+                 label + " the app's own text confirms the correction")
+            # A page that loses the edit: the read-back gives up and says so.
+            change(typo)
+            wait(lambda: context.candidate() == 'adress \u2192 address', label + ' a second correction')
+            assert context.key(desktop.TAB)
+            wait(lambda: context.commits()[-1:] == ['address '], label + ' the second fix is committed')
+            wait(lambda: reason_count('correction_unconfirmed') > unconfirmed,
+                 label + ' an unconfirmed correction is recorded', timeout=3)
+            wait(lambda: 'could not confirm that correction' in auxiliary(), label + ' and named in a notice')
+            assert reason_count('correction_confirmed') == confirmed + 1
+            checks.append(label + ': a typo shows as typo → fix; Tab deletes exactly the typed typo, commits the fix '
+                          'and confirms it from the app\'s own text, or names an unconfirmed correction')
+
         ime_parity('brave-origin', True, CHROMIUM_HINT, 'IME-parity browser (brave-origin, exact origin)')
 
         # Type-through (ADR 0004). Each edit ends the observer's binding, so the
@@ -1221,8 +1252,8 @@ def session(root, report):
                       'notice, Tab types one word and Ctrl+Right the rest, and a correction erases '
                       'exactly the typo before typing its fix')
 
-        # Replacement is not negotiated. A peer that injects one anyway, on an
-        # otherwise valid IME-parity observed session, loses the connection.
+        # A correction is negotiated on IME-parity observed sessions too
+        # (ADR 0011): one bound to the typed text shows as typo → fix.
         broker_metrics = control('status')['metrics']
         stop(broker)
         broker = None
@@ -1254,8 +1285,8 @@ def session(root, report):
             fake.respond(fake_request(), 'suggestion.show', {
                 'suggestion_id': 'injected-show', 'text': SUFFIX, 'accept_word': ' for', 'ttl_ms': 3000,
                 'provider': 'phrase_v1', 'replace_before': 'you'})
-            fake_quiet(.2)
-            assert fake.client_closes == closes and context.candidate() is None and context.commits() == []
+            fake_wait(lambda: context.candidate() == 'you \u2192 for your time', app + ' a correction from the broker')
+            assert fake.client_closes == closes and context.commits() == []
             fake.respond(fake_request(), 'suggestion.show', {
                 'suggestion_id': 'append-show', 'text': SUFFIX, 'accept_word': ' for', 'ttl_ms': 3000,
                 'provider': 'phrase_v1'})

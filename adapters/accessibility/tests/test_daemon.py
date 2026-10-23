@@ -299,6 +299,14 @@ class EventTests(unittest.TestCase):
         self.assertEqual(moved, [True, True])
         self.assert_invalidated("field_changed")
 
+    def test_a_spelling_underline_is_no_field_change(self):
+        # Chromium marks a misspelled word ~150 ms after it is typed: only its
+        # attributes change, so the suggestion for it must stand.
+        epoch = self.daemon.observer.epoch
+        self.daemon.field_event(None, ":1.7", "/field", "org.a11y.atspi.Event.Object", "TextAttributesChanged",
+                                object(), None)
+        self.assertEqual((self.daemon.observer.epoch, self.notifications), (epoch, []))
+
     def test_only_the_focus_listener_is_global(self):
         registered = []
         listener = SimpleNamespace(register=registered.append)

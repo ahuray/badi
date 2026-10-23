@@ -168,6 +168,10 @@ hide the preview. After an approved snapshot, the field's events (text, caret,
 selection, editable, showing, defunct, role) are subscribed on a separate
 D-Bus connection, matched to that exact sender and path, so other fields'
 events never arrive. Their payloads, including typed text, are never unpacked.
+A bounds or visible-data event is a scroll that moves the preview. A text
+attributes event changes neither text nor caret and is ignored. Chromium's
+spellchecker sends one about 150 ms after a misspelled word, which used to end
+the suggestion for it, a correction above all.
 
 ## Same-window context (Lab only)
 
