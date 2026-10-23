@@ -339,6 +339,20 @@ toolkit in general.
 
 What the live trials established, beyond those cells:
 
+- **Selection revision** (Chromium 155, installed `2956224`, 2026-10-23,
+  [ADR 0012](../../docs/decisions/0012-explicit-revision-of-one-selection.md)):
+  - In a textarea, "She dont know where is the station" showed its grammar
+    fix with marked changes after 4.1 s, the runtime starting cold.
+    Ctrl+Shift+Space again showed a refinement in 2.3 s. Escape left the
+    text and selection as they were. The fix, asked for again (0.4 s), was
+    applied with Tab and confirmed by the read-back.
+  - A German clause after "dass" came back with its verb last
+    ("die Rechnung bereits bezahlt worden ist"), applied and confirmed.
+  - A correct selection said Badi found nothing to change. A selection in
+    a password field sent no request and left no key lines.
+  - Writer refuses, since it gives Fcitx only the caret's sentence. Native
+    GTK editors were not tried (none installed).
+
 - **Display and timing** (Chromium 152, 2026-10-13): 20/20 warm suggestions
   shown and accepted, visible p50 228 ms and p95 284 ms from the last key
   release; a 280 CSS px input used the overflow panel above the field.
