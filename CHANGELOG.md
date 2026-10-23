@@ -7,6 +7,14 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Badi builds, packages and installs on Debian 13 and Ubuntu 24.04:
+  `packaging/debian/build-deb.sh` makes a `.deb`, and CI builds, tests,
+  lints and installs it on both. The Fcitx addon builds against Fcitx 5.1.7
+  and 5.1.12 too. Without Omarchy, `scripts/install-desktop.py` leaves out
+  the panel, hooks and Hyprland rule, needs no Node, and lets Fcitx load the
+  addon at the next login; the Fcitx 5.1.23 floor applies only where the
+  compositor offers input-method-v2, and `badi spelling` names apt packages
+  ([runbook](packaging/debian/README.md)).
 - While you share your screen, Badi shows no suggestions, so grey text with
   words from the window or ones it learned never appears on someone else's
   screen, also while the session helper restarts; they return a second

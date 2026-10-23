@@ -107,6 +107,106 @@ def lock_state(timeout=4):
     return json.loads(result.stdout)
 
 
+# The desktops the installers and the CLI tell apart. Omarchy has the shell's
+# lock IPC, bar panel, hooks and omarchy-fcitx5.service; any other desktop
+# (GNOME, KDE Plasma, another compositor) starts Fcitx its own way, through
+# im-config, XDG autostart or the compositor.
+OMARCHY = "omarchy"
+GENERIC = "generic"
+# Where a generic desktop's Fcitx learns Badi's user-local addon directory:
+# systemd's user environment generator reads it at login, and the session
+# passes it on to whatever starts Fcitx. Always under ~/.config, as systemd
+# reads it there whatever an interactive shell's XDG_CONFIG_HOME says.
+FCITX_ENVIRONMENT = Path(".config/environment.d/50-badi-fcitx5.conf")
+# The D-Bus name a running Fcitx 5 owns on the session bus.
+FCITX_BUS_NAME = "org.fcitx.Fcitx5"
+
+
+def desktop_platform():
+    """OMARCHY where Omarchy's shell command is installed, otherwise GENERIC."""
+    return OMARCHY if shutil.which("omarchy-shell") else GENERIC
+
+
+def os_release(path=Path("/etc/os-release")):
+    """The distribution's os-release fields; empty when it cannot be read."""
+    fields = {}
+    try:
+        lines = Path(path).read_text().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return fields
+    for line in lines:
+        key, separator, value = line.partition("=")
+        if separator and re.fullmatch(r"[A-Z_][A-Z0-9_]*", key):
+            try:
+                fields[key] = " ".join(shlex.split(value)) if value else ""
+            except ValueError:
+                continue
+    return fields
+
+
+def distribution_family(release=None):
+    """"debian" (Debian, Ubuntu and their derivatives), "arch", or None."""
+    release = os_release() if release is None else release
+    names = {release.get("ID", ""), *release.get("ID_LIKE", "").split()}
+    if names & {"debian", "ubuntu"}:
+        return "debian"
+    if "arch" in names:
+        return "arch"
+    return None
+
+
+def fcitx_addon_directory(root=Path("/"), multiarch=None):
+    """The directory the system's Fcitx loads its own addons from, or None.
+
+    Fcitx keeps them in fcitx5/ beside libFcitx5Core: /usr/lib/fcitx5 on
+    Arch, /usr/lib/<multiarch>/fcitx5 on Debian and Ubuntu, /usr/lib64/fcitx5
+    on Fedora. Setting FCITX_ADDON_DIRS replaces that default, so it must
+    name this directory after Badi's own.
+    """
+    if multiarch is None:
+        import sysconfig
+        multiarch = sysconfig.get_config_var("MULTIARCH") or ""
+    candidates = ([f"usr/lib/{multiarch}"] if multiarch else []) + ["usr/lib64", "usr/lib"]
+    for relative in candidates:
+        library = Path(root) / relative
+        if (library / "fcitx5").is_dir() and any(library.glob("libFcitx5Core.so*")):
+            return Path("/") / relative / "fcitx5"
+    return None
+
+
+def fcitx_environment(home, system_addons):
+    """The environment.d file that adds Badi's user-local addon to Fcitx.
+
+    The same two directories as Omarchy's service drop-in
+    (packaging/systemd/fcitx-badi.conf), with this system's addon directory.
+    """
+    home = Path(home)
+    return ("# Badi: Fcitx loads the user-local Badi addon beside the system's own addons.\n"
+            f"FCITX_ADDON_DIRS={home}/.local/lib/fcitx5:{system_addons}\n"
+            f"FCITX_DATA_DIRS={home}/.local/share/fcitx5:/usr/local/share/fcitx5:/usr/share/fcitx5\n")
+
+
+def fcitx_bus_process(timeout=3):
+    """The process id of the Fcitx 5 that owns its name on this session bus,
+    0 when none does, or None when the bus cannot be asked."""
+    def ask(method, reply):
+        try:
+            result = subprocess.run(["busctl", "--user", f"--timeout={timeout}s", "call", "org.freedesktop.DBus",
+                                     "/org/freedesktop/DBus", "org.freedesktop.DBus", method, "s", FCITX_BUS_NAME],
+                                    capture_output=True, text=True, timeout=timeout + 1)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        match = re.fullmatch(reply, result.stdout.strip()) if result.returncode == 0 else None
+        return match[1] if match else None
+
+    # Bus implementations word a missing owner differently, so ask first.
+    owned = ask("NameHasOwner", r"b (true|false)")
+    if owned != "true":
+        return 0 if owned == "false" else None
+    pid = ask("GetConnectionUnixProcessID", r"u (\d+)")
+    return int(pid) if pid else None
+
+
 def unit_properties(unit, *names, timeout=3):
     """The named properties of a systemd user unit, as a dict of strings."""
     result = subprocess.run(["systemctl", "--user", "show", unit, "--property=" + ",".join(names)],

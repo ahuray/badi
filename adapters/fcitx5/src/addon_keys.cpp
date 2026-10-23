@@ -27,7 +27,7 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     auto *binding = bindingFor(*event.inputContext());
     if (!binding || !binding->state.focused()) return;
     if (!key.isModifier()) binding->inspection.input();
-    const bool literalChord = key.check(literalTabChord());
+    const bool literalChord = isLiteralTabChord(event.key());
     if (binding->literalTabs && !literalChord) {
         // A key after the chord's modifiers came up, even a modifier whose
         // own update follows it, lets the waiting Tabs go first; another key

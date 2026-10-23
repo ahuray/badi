@@ -360,6 +360,13 @@ provisioned model, an active Omarchy session and an unlocked desktop. Xournal++
 gets a launcher override with `GTK_IM_MODULE=fcitx` for its exact identity.
 `--broker-only` updates only the broker and commands, while locked.
 
+On other desktops (GNOME, KDE Plasma, Debian and Ubuntu), the desktop
+starts Fcitx, so the installer never restarts it. It writes
+`~/.config/environment.d/50-badi-fcitx5.conf` with the same two directories
+as Omarchy's drop-in and this system's own addon directory
+(`/usr/lib/x86_64-linux-gnu/fcitx5` there), and Fcitx loads the addon at the
+next login ([Debian and Ubuntu](../../packaging/debian/README.md#install-from-a-checkout)).
+
 Each run that changes something backs up what it replaced under
 `~/.local/state/badi/install-backups/<UTC time>/`. There, `changes.json` lists
 every path, its action (`create`, `replace` or `remove`), the saved original
@@ -422,6 +429,18 @@ without an editor.
 ## Build and test
 
 Needs CMake, Ninja, a C++20 compiler, Fcitx5Core and nlohmann-json.
+
+The addon builds and passes its suites against Fcitx 5.1.23 (Arch), 5.1.12
+(Debian 13) and 5.1.7 (Ubuntu 24.04), and those Fcitx versions load it
+([tested with](../../packaging/debian/README.md#tested-with)). Fcitx 5.1.7
+predates `add_fcitx5_addon`, `FCITX_ADDON_FACTORY_V2` and
+`eventloopinterface.h`. There CMake builds the same `MODULE` library the
+macro builds, the addon exports the unnamed factory symbol that 5.1.7's loader
+resolves, and [`fcitx_event.h`](src/fcitx_event.h) includes the event-source
+header only where it exists. The literal-Tab chord is matched on the key as
+the frontend sent it (Tab or ISO_Left_Tab under exactly Ctrl and Shift),
+because 5.1.7's `Key::normalize()` turns Ctrl+Shift+Tab into Ctrl+Tab. No
+other difference is known; neither older version has run in a live session.
 
 | Command | Covers |
 | --- | --- |

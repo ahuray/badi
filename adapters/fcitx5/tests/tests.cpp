@@ -790,13 +790,16 @@ void literalTabIsARealTabWhereBadiWouldTakeTab() {
           "a foreign input method keeps the chord");
     check(preKeyActionName(PreKeyAction::LiteralTab) == "literal_tab", "the trace names the chord");
 
-    const auto normalized = [](const char *name) { return ::fcitx::Key(name).normalize(); };
-    check(normalized("Control+Shift+ISO_Left_Tab").check(literalTabChord()) &&
-              normalized("Control+Shift+Tab").check(literalTabChord()),
+    const auto sent = [](const char *name) { return ::fcitx::Key(name); };
+    check(isLiteralTabChord(sent("Control+Shift+ISO_Left_Tab")) && isLiteralTabChord(sent("Control+Shift+Tab")),
           "Ctrl+Shift+Tab matches whichever keysym the layout sends with Shift");
-    check(!normalized("Control+Tab").check(literalTabChord()) &&
-              !normalized("Shift+ISO_Left_Tab").check(literalTabChord()) &&
-              !normalized("Control+Alt+Shift+ISO_Left_Tab").check(literalTabChord()),
+    check(isLiteralTabChord(::fcitx::Key(FcitxKey_Tab, ::fcitx::KeyStates{::fcitx::KeyState::Ctrl,
+                                                                          ::fcitx::KeyState::Shift,
+                                                                          ::fcitx::KeyState::NumLock})),
+          "a lock state does not change the chord");
+    check(!isLiteralTabChord(sent("Control+Tab")) && !isLiteralTabChord(sent("Shift+ISO_Left_Tab")) &&
+              !isLiteralTabChord(sent("Shift+Tab")) && !isLiteralTabChord(sent("Control+Alt+Shift+ISO_Left_Tab")) &&
+              !isLiteralTabChord(sent("Control+Shift+space")),
           "only the exact chord is a literal Tab");
 
     check(lastModifierReleased(::fcitx::Key("Control+Control_L")) &&

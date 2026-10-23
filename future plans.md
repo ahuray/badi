@@ -66,6 +66,10 @@ links to it. A tested app version is not a claim about Linux in general.
   words learned in that app ([ADR 0010](docs/decisions/0010-context-finishes-words.md));
   prompt-text window context stays Lab-only. Style learning stores sealed
   samples behind `badi style on`, and no prompt reads them yet.
+- **Distribution:** an Arch package candidate (step 6) and a
+  [Debian 13 and Ubuntu 24.04 package](packaging/debian/README.md), which CI
+  builds, lints and installs in containers (2026-10-23); neither is
+  published, and no GNOME or KDE session has run Badi (step 7).
 
 Standing user decisions:
 - IME-parity for Chromium-based apps, Zen and LibreOffice Writer
@@ -201,6 +205,19 @@ publish need the user's go-ahead first; the rest can start at once.
    install, update and removal on a fresh Omarchy leave nothing behind, the
    panel's model-terms row has been tried live, and publication then waits
    only for the naming review.
+7. **Run Badi in real GNOME and KDE Plasma sessions.** The
+   [Debian and Ubuntu package](packaging/debian/README.md) and the
+   user-local installer pass in Debian 13 and Ubuntu 24.04 containers, but no
+   graphical session has run them. Still open:
+   - field observer backends outside Hyprland, so Chromium-based apps, Zen,
+     VS Code and Writer's grey preview suggest there; the observer unit's
+     Hyprland condition goes with them;
+   - in a VM with GNOME 48 (Debian 13) and Plasma: `im-config -n fcitx5`
+     or Plasma's Virtual Keyboard starting Fcitx with the environment.d
+     addon directory, the user units, a manual Tab request in a GTK and a Qt
+     app, the editors and Writer, and package install, update and purge.
+   *Done when* those pass with zero wrong-field edits and the runbook's
+   tested-with matrix records them.
 
 ## Later, by area
 
@@ -351,7 +368,7 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       each after a live trial of its app id and `commitString`.
 - [ ] Panel rows for per-app language overrides and style learning, which
       are terminal-only today.
-- [ ] Later: other Linux desktops, a standard tray and personal snippets.
+- [ ] Later: a standard tray (other desktops are step 7) and personal snippets.
       Emoji stays with Fcitx: QuickPhrase and the Emoji module, not a Badi
       colon shortcode.
 
