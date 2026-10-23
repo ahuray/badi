@@ -294,6 +294,9 @@ impl LlamaCppLaunch {
             .env("LLAMA_ARG_UI", "0")
             .env("LLAMA_ARG_OFFLINE", "1")
             .env("LLAMA_ARG_LOG_DISABLE", "1")
+            // The slots endpoint describes the prompt being processed; the
+            // broker never reads it, so nothing may.
+            .env("LLAMA_ARG_ENDPOINT_SLOTS", "0")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

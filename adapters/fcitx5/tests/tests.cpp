@@ -754,6 +754,10 @@ void preInputKeysConsumeOnlyBadiUi() {
               !typesSuggestionStart(" for your time", " for your time") &&
               !typesSuggestionStart(" ", ""),
           "only a non-empty proper prefix of the suggestion types through it");
+    check(tracedKeyText("s", true) == std::optional<std::string>("s") && !tracedKeyText("s", false) &&
+              !tracedKeyText("\t", true) && !tracedKeyText("\x7f", true) && !tracedKeyText("", true) &&
+              printableKey("é") && !printableKey("\x1b"),
+          "a --text trace holds a typed key only from a field Badi may read, never a password's");
     check(typeThroughContextReady("Thank you", " ", "Thank you ") &&
               !typeThroughContextReady("Thank you", " ", "Thank you") &&
               !typeThroughContextReady("Thank you", " ", "Thank youx") &&

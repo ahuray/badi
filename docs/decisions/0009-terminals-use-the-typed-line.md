@@ -51,6 +51,11 @@ input context since its last boundary, in memory, and uses it as the context:
   show `^?` instead.
 - A field marked password or sensitive is never read. The line is never
   written anywhere except a `badi debug on --text` trace (ADR 0008).
+- Nothing is followed in a terminal the user has not allowed: until the
+  policy allows it, every key restarts the line, and once allowed the line
+  is followed from there, as a line that had text at focus is (amended
+  2026-10-23: Fcitx used to hold up to 512 scalars of any Ghostty or foot
+  line, `sudo` prompts included, before the rule existed).
 - An editor with its own Badi integration owns the keys typed into it.
   Neovim reports when it holds its terminal's focus (`editor.focus`, added
   2026-10-17), and while it does the broker withholds every desktop-application

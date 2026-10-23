@@ -8,7 +8,7 @@ import time
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
-from contract import Denied, canonical_origin
+from contract import Denied, canonical_origin, credential_label
 from desktop import Desktop
 from geometry import (calibrated_geometry, gecko_calibrated_geometry, input_method_geometry,
                       native_calibrated_geometry, visual_direction)
@@ -196,6 +196,9 @@ class FieldBackend:
             raise Denied("unsupported_field")
         attributes = node.get_attributes()
         if role == "password text" or attributes.get("text-input-type") == "password":
+            raise Denied("sensitive_field")
+        # A revealed password or a plain-text card or code field: its label.
+        if credential_label(node.get_name(), node.get_description()):
             raise Denied("sensitive_field")
         return attributes
 

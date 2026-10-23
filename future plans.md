@@ -271,8 +271,10 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       each bar instance registers the `badi-writing` IPC target (several
       monitors may duplicate it), and no non-US Fcitx keyboard group has been
       tried.
-- [ ] Signed updates. The broker service is already sandboxed: `PrivateNetwork=yes`,
-      a Unix-only runtime socket, and a read-only model directory.
+- [ ] Signed updates. The broker service is already sandboxed: no network,
+      a read-only home except its own two directories, only `badi/` in the
+      runtime directory, a read-only model directory and no core dumps
+      ([ADR 0001](docs/decisions/0001-same-uid-trust-boundary.md)).
 
 ### Suggestion quality
 

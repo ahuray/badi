@@ -80,6 +80,11 @@ class DesktopTests(unittest.TestCase):
         bar = patch.object(desktop, 'refresh_bar')
         self.bar = bar.start()
         self.addCleanup(bar.stop)
+        # Nor set timers in this machine's user manager.
+        self.schedule_debug_expiry = desktop.schedule_debug_expiry
+        expiry = patch.object(desktop, 'schedule_debug_expiry', return_value=True)
+        self.expiry = expiry.start()
+        self.addCleanup(expiry.stop)
 
     def desktop_socket(self, mode=0o600):
         endpoint = self.directory / 'broker.sock'
@@ -947,6 +952,39 @@ class DesktopTests(unittest.TestCase):
             desktop.debug_mode('off')
             self.assertFalse(native.exists())
             self.assertFalse(desktop.debug_activity()['enabled'])
+
+    def test_a_debug_run_is_deleted_when_it_ends_unless_a_newer_run_replaced_it(self):
+        with patch.object(desktop, 'runtime_directory', return_value=self.directory), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(['debug', 'on', '--text'])
+            run = desktop.private_json(self.directory / 'debug-control.json')['id']
+            self.expiry.assert_called_once_with(run)
+            self.assertIn('deleted when the run ends', output.getvalue())
+            self.assertIn('never a password field', output.getvalue())
+            desktop.main(['debug', 'expire', '00000000-0000-4000-8000-000000000000'])
+            self.assertTrue((self.directory / 'debug-trace.jsonl').exists(), 'another run is not this one')
+            desktop.main(['debug', 'expire', run])
+            self.assertFalse((self.directory / 'debug-trace.jsonl').exists())
+            self.assertFalse((self.directory / 'debug-control.json').exists())
+        # The timer is the user manager's: fixed arguments, the run's own id,
+        # and nothing at all without systemd-run.
+        with patch.object(desktop.shutil, 'which', return_value='/usr/bin/systemd-run'), \
+             patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as command:
+            self.assertTrue(self.schedule_debug_expiry('0f1e2d3c-0000-4000-8000-000000000000'))
+        argv = command.call_args.args[0]
+        self.assertEqual(argv[:6], ['systemd-run', '--user', '--quiet', '--collect',
+                                    '--unit=badi-debug-expiry-0f1e2d3c', '--on-active=901'])
+        self.assertEqual(argv[-3:], ['debug', 'expire', '0f1e2d3c-0000-4000-8000-000000000000'])
+        with patch.object(desktop.shutil, 'which', return_value=None):
+            self.assertFalse(self.schedule_debug_expiry('0f1e2d3c-0000-4000-8000-000000000000'))
+
+    def test_trace_lines_escape_any_control_character_a_writer_sent(self):
+        line = desktop.format_trace({'t': 0, 'src': 'fcitx\x1b[2J', 'ev': 'key', 'app': 'evil\x1b]0;title\x07',
+                                     'reason': 'plain'})
+        self.assertNotIn('\x1b', line)
+        self.assertNotIn('\x07', line)
+        self.assertIn('reason=plain', line)
+        self.assertIn('app="evil\\u001b]0;title\\u0007"', line)
 
     def test_debug_on_creates_a_private_trace_and_text_only_when_asked(self):
         trace = self.directory / 'debug-trace.jsonl'

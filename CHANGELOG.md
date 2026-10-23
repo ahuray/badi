@@ -7,6 +7,13 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Security pass: a `badi debug on --text` trace no longer records keys typed
+  into password fields, and deletes itself when the run ends; terminals are
+  not followed until allowed; fields labelled as a password, PIN, card
+  number or one-time code are never read, even when a page reveals the
+  password; Badi's services write no core dumps; and the broker and model
+  runtime can no longer write to home or reach the session bus
+  ([ADR 0001](docs/decisions/0001-same-uid-trust-boundary.md)).
 - The bar mark dims at once when a shortcut or `badi pause` pauses, instead
   of when the popout next opens, through Omarchy 4.5's fast shell IPC.
   Forget learned words and Forget usage statistics ask first in Omarchy's

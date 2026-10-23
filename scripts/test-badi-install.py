@@ -221,6 +221,18 @@ class InstallationTests(unittest.TestCase):
         self.assertTrue(saved.is_symlink(), 'The link itself is saved, not what it names')
         self.assertFalse(link.is_symlink())
 
+    def test_older_loose_backup_directories_become_private(self):
+        state = self.home / '.local/state/badi'
+        self.backups.mkdir(parents=True)
+        for directory in (state, self.backups):
+            directory.chmod(0o755)
+        installation = badi_install.Installation(self.home, 'desktop')
+        installation.write(self.home / '.bashrc', b'changed\n', 0o644)
+        for directory in (state, self.backups, installation.directory):
+            self.assertEqual(directory.stat().st_mode & 0o777, 0o700, directory)
+        self.assertNotEqual((self.home / '.local').stat().st_mode & 0o777, 0o700,
+                            'nothing above the state directory is touched')
+
     def test_a_note_alone_does_not_create_a_backup_directory(self):
         installation = badi_install.Installation(self.home, 'desktop')
         note = installation.note('accessibility-setting.json', {'bus_enabled': False})

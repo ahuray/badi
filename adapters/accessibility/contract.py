@@ -66,6 +66,24 @@ def canonical_origin(uri):
         raise Denied("unsupported_origin") from None
 
 
+# Words that name a secret in a field's label, in Badi's languages. A page's
+# "show password" button turns a password into an ordinary text input, and
+# card or one-time-code fields are often plain text from the start: their
+# label is then all that marks them.
+CREDENTIAL_LABEL = re.compile(
+    r"\b(?:password|passwort|kennwort|passphrase|passcode|pin|pin code|otp|one[- ]time (?:code|password)|"
+    r"verification code|security code|authentication code|2fa|cvv|cvc|csc|card number|"
+    r"mot de passe|code de v[ée]rification|contrase[ñn]a|clave|c[óo]digo de verificaci[óo]n|"
+    r"senha|palavra[- ]passe|c[óo]digo de verifica[çc][ãa]o|wachtwoord|has[łl]o|"
+    r"best[äa]tigungscode|sicherheitscode|kartennummer)\b",
+    re.IGNORECASE)
+
+
+def credential_label(*labels):
+    """Whether a field's accessible name or description names a secret."""
+    return any(isinstance(label, str) and CREDENTIAL_LABEL.search(label) for label in labels)
+
+
 def eligible(metadata):
     """Reject purpose/selection before asking a provider for any prose."""
     if metadata["role"] == "password text":

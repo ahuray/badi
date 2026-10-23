@@ -257,6 +257,8 @@ impl Broker {
     }
 
     pub async fn forget_learned(&self) -> Result<LearnedStatus, BrokerError> {
+        // Forgetting also drops the words this run counted toward learning.
+        self.inner.state.lock().await.learned_visits.clear();
         let recorder = self
             .inner
             .outcome_recorder

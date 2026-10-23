@@ -617,8 +617,11 @@ def install_prepared_files(plan, installation):
         install(ROOT / "packaging/systemd/fcitx-badi.conf",
                 home / ".config/systemd/user/omarchy-fcitx5.service.d/50-badi.conf")
     settings = plan.config_home / "badi/settings.json"
+    # The broker's unit keeps home read-only except these two directories,
+    # so they must exist before it starts.
+    (home / ".local/share/badi").mkdir(parents=True, exist_ok=True, mode=0o700)
+    settings.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if not settings.exists():
-        settings.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with settings.open("x") as stream:
             os.chmod(settings, 0o600)
             json.dump(default_settings(), stream)

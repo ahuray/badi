@@ -198,6 +198,11 @@ impl BrokerState {
         let generation = spelling.enable(&settings.spelling_languages);
         // Dictionaries load off the runtime; a newer setting supersedes it.
         std::thread::spawn(move || spelling.load(generation));
+        // The words already counted per field visit are kept only while
+        // context is on (ADR 0010).
+        if settings.context_words != Some(true) {
+            self.learned_visits.clear();
+        }
         self.settings = Some(settings);
     }
 }
