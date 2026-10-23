@@ -57,6 +57,7 @@ fn launch_contract() -> Option<(PathBuf, String)> {
         ("LLAMA_ARG_N_GPU_LAYERS", "0"),
         ("LLAMA_ARG_UI", "0"),
         ("LLAMA_ARG_OFFLINE", "1"),
+        ("LLAMA_ARG_ENDPOINT_SLOTS", "0"),
         ("LLAMA_ARG_CACHE_PROMPT", "1"),
         ("LLAMA_ARG_CACHE_RAM", "128"),
         ("LLAMA_ARG_CACHE_REUSE", "16"),

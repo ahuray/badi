@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import stat
 import subprocess
 
@@ -31,8 +32,9 @@ def install_fcitx_theme(installation, home, generator):
     target = home / ".local/lib/badi/omarchy/fcitx-theme.py"
     installation.write(target, generator, 0o755)
     hook = (f"#!/bin/sh\n# Badi: dress Fcitx's panel in the new Omarchy theme or font.\n"
-            f"exec python3 '{target}' \"$@\"\n").encode()
-    hooks = badi_install.config_home(home) / "omarchy/hooks"
+            f"exec python3 {shlex.quote(str(target))} \"$@\"\n").encode()
+    # omarchy-hook reads ~/.config whatever XDG_CONFIG_HOME says.
+    hooks = home / ".config/omarchy/hooks"
     for event in HOOK_EVENTS:
         installation.write(hooks / f"{event}.d/badi-fcitx-theme", hook, 0o755)
     try:

@@ -1,5 +1,8 @@
 # Source this file in interactive Bash. Ctrl-X Tab requests/accepts; Ctrl-X Escape dismisses.
 [[ $- == *i* ]] || return 0
+# A root shell that kept the user's HOME (sudo -E -s) would load the user's
+# own, user-writable preview module as root: Badi stays out of it.
+(( EUID == 0 )) && return 0
 
 _badi_clear_preview() {
   if [[ $(type -t badi_preview) == builtin ]]; then badi_preview clear; fi

@@ -60,6 +60,7 @@ pub async fn run(socket_path: &Path, broker: Broker) -> Result<(), ServerError> 
     let provider_exited = broker.provider_exited();
     tokio::pin!(provider_exited);
     let mut accept_failing = false;
+    let mut at_capacity = false;
     let outcome = loop {
         tokio::select! {
             () = &mut provider_exited => break Err(ServerError::ProviderExited),
@@ -80,9 +81,16 @@ pub async fn run(socket_path: &Path, broker: Broker) -> Result<(), ServerError> 
                     Err(error) => break Err(ServerError::Io(error)),
                 };
                 let Ok(permit) = Arc::clone(&admissions).try_acquire_owned() else {
+                    // Refused without a reply; say so once per run of refusals,
+                    // so a client holding every slot is visible in the journal.
+                    if !at_capacity {
+                        eprintln!("badi-broker: {MAX_CONNECTIONS} connections open; refusing new ones");
+                    }
+                    at_capacity = true;
                     drop(stream);
                     continue;
                 };
+                at_capacity = false;
                 let connection_broker = broker.clone();
                 let connection_shutdown = shutdown.clone();
                 connections.spawn(async move {

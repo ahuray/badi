@@ -381,6 +381,13 @@ PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeS
 bool tabEligibleContext(const std::optional<ContextWindow> &context);
 // `typed` (a key's text) is a non-empty proper prefix of `suggestion`.
 bool typesSuggestionStart(std::string_view typed, std::string_view suggestion);
+// A key that types text, not a control key (Tab and Escape "type" one too).
+bool printableKey(std::string_view typed);
+// What a key adds to a `badi debug on --text` trace: a printable key's own
+// text, only from a field Badi may edit for an allowed app (ADR 0008). A
+// password or denied field, or an app or terminal the user has not allowed,
+// adds nothing; a sensitive field's keys are not traced at all.
+std::optional<std::string> tracedKeyText(std::string_view typed, bool fieldReadable);
 // A Tab pressed while the type-through remainder of a word acceptance is
 // still on its way back may be held for it, instead of reaching the app.
 // Only a remainder that returns on its own (an observed field, a terminal's

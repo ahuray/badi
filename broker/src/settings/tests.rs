@@ -168,6 +168,12 @@ fn legacy_browser_clients_neither_see_nor_erase_the_all_web_default() {
     current
         .language_overrides
         .insert("omawrite".to_owned(), super::PredictionLanguage::German);
+    // Suggestions turned off for every language must stay off.
+    current.writing_languages = Vec::new();
+    current.writing_model = Some("gemma-3-1b-pt-q4_k_m.gguf".to_owned());
+    current
+        .trailing_space_healing
+        .insert(super::PredictionLanguage::German, false);
     let legacy = current.wire_document(1).expect("v1 wire document");
     assert!(legacy.get("all_web_origins").is_none());
     assert_eq!(legacy["subjects"], serde_json::json!([]));
@@ -179,6 +185,12 @@ fn legacy_browser_clients_neither_see_nor_erase_the_all_web_default() {
     assert_eq!(merged.language_overrides, current.language_overrides);
     assert_eq!(merged.mid_line, current.mid_line);
     assert_eq!(merged.escape_quiet_seconds, current.escape_quiet_seconds);
+    assert_eq!(merged.writing_languages, current.writing_languages);
+    assert_eq!(merged.writing_model, current.writing_model);
+    assert_eq!(
+        merged.trailing_space_healing,
+        current.trailing_space_healing
+    );
     assert_eq!(
         current.wire_document(2).expect("v2 wire document")["all_web_origins"],
         true

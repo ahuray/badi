@@ -304,7 +304,12 @@ struct SessionState {
 struct WordStart {
     before: String,
     after: String,
+    /// Field text is not kept longer than typing a word takes.
+    expires_at: Instant,
 }
+
+/// How long a word start lasts without a new context at it.
+const WORD_START_LIFETIME: Duration = Duration::from_secs(30);
 
 impl BrokerState {
     /// Whether `context`, in `scope`, holds letters typed at the last word
@@ -338,10 +343,12 @@ impl WordStart {
             return Some(Self {
                 before: context.before.clone(),
                 after: context.after.clone(),
+                expires_at: Instant::now() + WORD_START_LIFETIME,
             });
         }
         previous.filter(|start| {
-            start.after == context.after
+            Instant::now() < start.expires_at
+                && start.after == context.after
                 && context
                     .before
                     .strip_prefix(start.before.as_str())
@@ -353,7 +360,8 @@ impl WordStart {
 
     /// Whether `context` is this word start with letters typed at it.
     fn typed_in(&self, context: &ContextChangedPayload) -> bool {
-        self.after == context.after
+        Instant::now() < self.expires_at
+            && self.after == context.after
             && context.before.len() > self.before.len()
             && context.before.starts_with(&self.before)
     }
@@ -499,6 +507,7 @@ impl Broker {
     fn publish_authority_change(&self, mut state: MutexGuard<'_, BrokerState>) {
         // Derived text never outlives the authority it was shown under.
         state.type_through = None;
+        state.word_start = None;
         let event = state.authority_changed();
         drop(state);
         let _ = self.inner.authority_events.send(event);
@@ -569,6 +578,7 @@ impl BrokerState {
         }
         self.sessions.clear();
         self.type_through = None;
+        self.word_start = None;
         self.rebound_quiet = None;
     }
 }

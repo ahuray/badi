@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import tomllib
 
 THEME_NAME = "badi-omarchy"
@@ -198,10 +199,23 @@ def reload():
 
 
 def write(path, text):
+    """Replaces `path` in one rename from a new, unpredictably named file, so
+    a planted symlink is never followed and readers never see half a theme."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.badi-{os.getpid()}")
-    temporary.write_text(text)
-    os.replace(temporary, path)
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=f".{path.name}.", delete=False) as stream:
+        staged = Path(stream.name)
+        try:
+            os.fchmod(stream.fileno(), 0o644)
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        except BaseException:
+            staged.unlink(missing_ok=True)
+            raise
+    try:
+        os.replace(staged, path)
+    finally:
+        staged.unlink(missing_ok=True)
 
 
 def main():

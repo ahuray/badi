@@ -316,3 +316,24 @@ async fn the_word_start_outlives_a_reopened_session_of_the_same_site() {
         Some("al ")
     );
 }
+
+#[tokio::test]
+async fn a_pause_ends_the_word_start_with_the_authority_it_was_seen_under() {
+    let fixture = fixture();
+    let mut field = Field::open_as(&fixture.broker, "visit-1").await;
+    field
+        .context(&fixture.broker, "Please find the ", "report today")
+        .await;
+    fixture.broker.set_paused(true).await.expect("pause");
+    fixture.broker.set_paused(false).await.expect("resume");
+    // The pause closed the session; the field opens again after it.
+    let mut reopened = Field::open_as(&fixture.broker, "visit-2").await;
+    reopened
+        .context(&fixture.broker, "Please find the fin", "report today")
+        .await;
+    assert_eq!(
+        reopened.suggestion(&fixture.broker).await,
+        None,
+        "no field text outlives the authority it was seen under"
+    );
+}
