@@ -246,5 +246,8 @@ agreed, and the events-only debug trace named `screen_share: held` without
 text. At `29ec777`, `systemctl --user restart badi-session.service` and a
 SIGKILL (systemd restarted it 3 s later) mid-share each kept the hold: the
 authority epoch did not move, typing in that gap showed nothing, and the
-trace held only `held` until the share ended. Not tried: window or region
-shares, OBS, meeting apps and other portal backends.
+trace held only `held` until the share ended. At `827492a`, under the
+unit's `RestrictRealtime`, `RestrictNamespaces`, `SystemCallArchitectures`
+and `LimitCORE` limits, `pw-dump` still ran as the helper's child and the
+same share held and released. Not tried: window or region shares, OBS,
+meeting apps and other portal backends.
