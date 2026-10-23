@@ -44,7 +44,8 @@
       "observed": true,
       "session": "active",
       "low_power": true,
-      "automatic": "explicit_only"
+      "automatic": "explicit_only",
+      "screen_share": "none"
     }
   }
 }

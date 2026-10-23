@@ -13,7 +13,8 @@ depends=('gcc-libs' 'glibc' 'python' 'python-gobject' 'python-cairo' 'at-spi2-co
 makedepends=('git' 'cargo' 'cmake' 'ninja' 'nlohmann-json')
 optdepends=('curl: download the separately verified writing assets'
             'libsecret: keep the opt-in style-learning key in the desktop keyring'
-            'xdg-desktop-portal: pause and settings shortcuts through the desktop portal')
+            'xdg-desktop-portal: pause and settings shortcuts through the desktop portal'
+            'pipewire: hold suggestions while the screen is shared (pw-dump)')
 provides=('badi')
 conflicts=('badi')
 # The repository's release profile strips Rust symbols; do not emit an empty

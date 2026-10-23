@@ -507,7 +507,8 @@ impl Broker {
 
 impl BrokerState {
     /// Paused by the user, while the control plane is degraded or
-    /// mid-mutation, or while the login session is inactive or asleep.
+    /// mid-mutation, while the login session is inactive or asleep, or while
+    /// the screen is shared and settings hold suggestions then.
     fn runtime_paused(&self) -> bool {
         self.paused
             || self.control_plane_condition.is_degraded()

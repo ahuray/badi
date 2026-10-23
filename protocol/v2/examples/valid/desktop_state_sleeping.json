@@ -6,6 +6,7 @@
   "payload": {
     "session": "sleeping",
     "on_battery": true,
-    "power_saver": false
+    "power_saver": false,
+    "screen_shared": false
   }
 }

@@ -8,9 +8,10 @@ use crate::personalization::{
     PersonalizationSignal, PersonalizationStore, PersonalizationStoreError, PersonalizationV1,
 };
 use crate::settings::{
-    PermissionDecision, PrivateStorage, PrivateStorageError, RetentionPermission, SettingsStore,
-    SettingsStoreError, SettingsV2, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule,
-    read_private_limited, remove_private_file, remove_private_temporary_files,
+    PermissionDecision, PrivateStorage, PrivateStorageError, RetentionPermission, ScreenShareMode,
+    SettingsStore, SettingsStoreError, SettingsV2, StableIdentity, StoragePaths,
+    SubjectPermissions, SubjectRule, read_private_limited, remove_private_file,
+    remove_private_temporary_files,
 };
 use crate::stats::{
     STATS_FILE_NAME, StatsError, StatsEvent, StatsStore, StatsSummary, local_today,
@@ -734,6 +735,12 @@ fn personalization_privacy_floor(current: &SettingsV2, next: &SettingsV2) -> Set
         mid_line: current.mid_line,
         escape_quiet_seconds: current.escape_quiet_seconds,
         battery_mode: current.battery_mode,
+        // Holding while the screen is shared is the more private choice.
+        screen_share: if current.screen_share.is_hold() || next.screen_share.is_hold() {
+            ScreenShareMode::Hold
+        } else {
+            ScreenShareMode::Suggest
+        },
         suggestion_length: current.suggestion_length,
         languages_chosen: current.languages_chosen,
         style_learning: current.style_learning && next.style_learning,

@@ -1,10 +1,11 @@
 # Badi session helper
 
 `badi-session` tells the broker, without any text, whether the login session
-is in the foreground, whether the machine is about to sleep, and whether it
-runs on battery or in the power-saver profile. It also offers three desktop
-shortcuts through the GlobalShortcuts portal. It never reads a field, opens a
-suggestion session, edits anything or changes a system setting.
+is in the foreground, whether the machine is about to sleep, whether it runs
+on battery or in the power-saver profile, and whether the screen is being
+shared. It also offers three desktop shortcuts through the GlobalShortcuts
+portal. It never reads a field, opens a suggestion session, edits anything or
+changes a system setting.
 
 | Signal | Source | Broker effect |
 | --- | --- | --- |
@@ -13,13 +14,14 @@ suggestion session, edits anything or changes a system setting.
 | Resumed | `PrepareForSleep(false)` | Hold ends; adapters acquire their fields afresh |
 | On battery | UPower `OnBattery` | Low power: automatic scheduling follows `badi battery` |
 | Power-saver profile | power-profiles-daemon `ActiveProfile` | Low power, as above |
+| Screen shared | A desktop portal screencast stream in PipeWire (`pw-dump --monitor`) | Hold until the stream ends, unless `badi screen-share suggest` |
 
 ## Broker contract
 
 The helper speaks protocol v2 with the single capability `desktop_signals`
 (adapter kind `session`) and sends `desktop.state`
-`{session: active|inactive|sleeping, on_battery, power_saver}` whenever one
-changes; the reply is `desktop.status`
+`{session: active|inactive|sleeping, on_battery, power_saver, screen_shared}`
+whenever one changes; the reply is `desktop.status`
 ([schema](../../protocol/v2/schema.json), [broker runbook](../../broker/README.md#desktop-session-signals)).
 
 - A report only withholds. Entering or leaving a hold advances the authority
@@ -32,7 +34,8 @@ changes; the reply is `desktop.status`
 - Unknown is permissive only where nothing is at stake: without logind the
   session counts as active (adapters keep their own focus, lock and expiry
   checks), and without UPower or power-profiles-daemon the machine counts as
-  on mains power.
+  on mains power. Without PipeWire the screen counts as not shared, because
+  a portal screencast cannot exist without it.
 - `LockedHint` is not used. It is a hint, not proof of unlock; the observer
   keeps its fresh Omarchy lock check.
 
@@ -44,6 +47,36 @@ for the broker's acknowledgement (at most 1.5 s), then closes the inhibitor so
 sleep proceeds. A broker that is offline or slow never holds sleep longer than
 that. A restarted logind forgets inhibitors; the helper takes a new one when
 the name returns.
+
+## Screen sharing
+
+A browser's `getDisplayMedia`, OBS or a meeting app asks
+`xdg-desktop-portal` to share the screen, a window or a region, and the
+portal backend publishes the picture as a PipeWire video source for the
+whole share. The helper runs `pw-dump --monitor` (part of PipeWire) and
+counts a node as a share when its `media.class` is `Video/Source` and its
+`node.name` starts with `xdg-desktop-portal-` or its `media.name` with
+`xdph-streaming-`, the prefix Omarchy 4.5's notifications watch. A camera is
+a video source too, but the session manager creates it, so it never counts.
+Frame activity is not used: screenshots and the share picker's previews
+produce it without a share.
+
+- While any such stream exists the report says `screen_shared: true`. With
+  settings `screen_share: hold` (the default, `badi screen-share hold`) the
+  broker holds every grant as for an inactive session; `badi screen-share
+  suggest` keeps suggesting. `badi status`, `badi doctor` and the panel name
+  the hold; the debug trace shows it as `screen_share: held` on
+  `desktop.status`.
+- Only node ids are kept. Node names, applications and media titles (a
+  playing song's, for example) are read to classify a node and dropped; the
+  journal says only `screen_shared=true|false`.
+- If `pw-dump` ends after it showed anything, the helper restarts it (1, 2,
+  5, 10, then 30 s) and keeps the streams it last saw until the new dump
+  replaces them, so a crash never ends a hold early. A `pw-dump` that ends
+  without output could not reach PipeWire, and the share ends. Without
+  `pw-dump` nothing is detected, and `badi doctor` says so.
+- Other portal backends' node names are not checked yet: only
+  xdg-desktop-portal-hyprland has been tried (see below).
 
 ## Battery
 
@@ -140,7 +173,7 @@ what the broker last heard. The journal holds fixed, content-free lines only.
 ```sh
 npm run session:check         # broker link, report de-duplication, sleep order
 npm run session:integration   # real phrase broker, private bus with fake logind, UPower, profiles and portal,
-                              # and an isolated GNOME Keyring when gnome-keyring-daemon is installed
+                              # a fake pw-dump, and an isolated GNOME Keyring when gnome-keyring-daemon is installed
 python3 evaluation/power/battery-trial.py --broker target/release/badi-broker   # real model, paced typing
 ```
 
@@ -149,8 +182,14 @@ changes (no authority change), sleep with the hold acknowledged before the
 inhibitor is released, resume with a new inhibitor, a session switch and
 return, a restarted logind, the three shortcuts and an unknown one, a broker
 restart with the report resent, and helper exit releasing the hold, the
-inhibitor and the portal session. With `gnome-keyring-daemon` installed, a
-second test stores a key in an isolated keyring on the private bus, restarts
+inhibitor and the portal session. A second test shares the screen through
+the fake `pw-dump`: the broker holds, `screen-share suggest` lifts the hold
+while the share lasts, `hold` restores it, the stream's removal ends it, and
+a helper that exits mid-share takes its hold along; no stream name reaches
+the journal. The unit lane parses split and compact dump output, restarts
+after a crash without lapsing the hold, and ends the share when PipeWire is
+gone. With `gnome-keyring-daemon` installed, a
+third test stores a key in an isolated keyring on the private bus, restarts
 the broker and checks that the helper delivered it without logging it.
 
 ### Tested on this workstation

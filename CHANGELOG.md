@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- While you share your screen, Badi shows no suggestions, so grey text with
+  words from the window or ones it learned never appears on someone else's
+  screen; they return when sharing stops. `badi status`, `badi doctor`, the
+  panel and the debug trace name the hold, and `badi screen-share suggest`
+  (or the panel's While sharing the screen row) keeps suggesting.
 - The bar mark dims at once when a shortcut or `badi pause` pauses, instead
   of when the popout next opens, through Omarchy 4.5's fast shell IPC.
   Forget learned words and Forget usage statistics ask first in Omarchy's

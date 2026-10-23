@@ -9,11 +9,12 @@ use super::{
 use badi_broker::metrics::MetricsSnapshot;
 use badi_broker::model_selection::ModelUseCase;
 use badi_broker::protocol::{
-    ActiveLocator, CURRENT_PROTOCOL_VERSION, ControlAction, ControlResultPayload,
-    GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, MAX_AFTER_CHARS,
-    MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SUGGESTION_CHARS, MAX_SUGGESTION_WORDS, MessageType,
-    ProbeRequestPayload, ProbeResultPayload, ProviderKind, ReasonCode, SessionId,
-    SettingsStatusPayload, SnoozeStatus, WireEnvelope,
+    ActiveLocator, AutomaticScheduling, CURRENT_PROTOCOL_VERSION, ControlAction,
+    ControlResultPayload, DesktopSession, DesktopStatusPayload, GlobalControlRequestPayload,
+    HealthStatusPayload, HelloAckPayload, MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES,
+    MAX_SUGGESTION_CHARS, MAX_SUGGESTION_WORDS, MessageType, ProbeRequestPayload,
+    ProbeResultPayload, ProviderKind, ReasonCode, ScreenShare, SessionId, SettingsStatusPayload,
+    SnoozeStatus, WireEnvelope,
 };
 use badi_broker::settings::{LinuxAdapter, SettingsV2, StableIdentity};
 use jsonschema::Registry;
@@ -81,6 +82,14 @@ fn overview_matches_its_versioned_schema() {
         build_overview(
             HealthStatusPayload {
                 provider: ProviderKind::LocalModel,
+                // The panel names a screen-share hold from this report.
+                desktop: Some(DesktopStatusPayload {
+                    observed: true,
+                    session: DesktopSession::Active,
+                    low_power: false,
+                    automatic: AutomaticScheduling::Normal,
+                    screen_share: ScreenShare::Held,
+                }),
                 ..health.clone()
             },
             status.clone(),
@@ -88,6 +97,10 @@ fn overview_matches_its_versioned_schema() {
         .expect("local overview"),
     )
     .expect("json");
+    assert_eq!(
+        local_overview.pointer("/broker/desktop/screen_share"),
+        Some(&json!("held"))
+    );
     assert_eq!(
         local_overview.pointer("/models/writing/installed"),
         Some(&json!(true))
@@ -99,7 +112,12 @@ fn overview_matches_its_versioned_schema() {
     let overview = serde_json::to_value(build_overview(health, status).expect("overview"))
         .expect("overview json");
     let validator = overview_schema_validator();
-    assert!(validator.is_valid(&local_overview));
+    if let Err(error) = validator.validate(&local_overview) {
+        panic!("local overview failed schema: {error}");
+    }
+    let mut shared = local_overview.clone();
+    shared["broker"]["desktop"]["screen_share"] = json!("shown");
+    assert!(!validator.is_valid(&shared));
     if let Err(error) = validator.validate(&overview) {
         panic!("overview failed schema: {error}");
     }

@@ -57,3 +57,11 @@ do is make Badi quieter.
   snooze (2026-10-20) is the same kind of input: runtime broker state keyed
   by the exact app id or site origin, which only revokes and withholds and
   ends on its own, on `badi resume` or with the broker.
+- A live screen share (2026-10-23) holds like an inactive session: the
+  helper reports `screen_shared` while a desktop portal screencast stream
+  exists in PipeWire, and the broker holds every grant until it ends unless
+  the user chose `screen_share: suggest`. Grey text, which may carry window
+  and learned words ([ADR 0010](0010-context-finishes-words.md)), then never
+  reaches a shared screen. Unknown stays withholding where it can: a watcher
+  that crashes keeps the streams it last saw, and only a PipeWire that cannot
+  be reached, where no portal stream can exist, ends a share.

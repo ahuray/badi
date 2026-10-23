@@ -1,6 +1,7 @@
 //! Desktop session helper reports: a login session that is not in the
-//! foreground (or a machine going to sleep) holds every grant, and battery
-//! power or the power-saver profile changes how automatic requests start.
+//! foreground (or a machine going to sleep) holds every grant, a live screen
+//! share holds them too unless settings keep suggesting, and battery power or
+//! the power-saver profile changes how automatic requests start.
 //!
 //! A report never grants authority. Each one is bound to the connection that
 //! sent it, so a helper that exits takes its hold and low-power state with it.
@@ -12,9 +13,10 @@ use tokio::sync::MutexGuard;
 use super::{Broker, BrokerError, BrokerState};
 use crate::protocol::{
     AutomaticScheduling, DesktopSession, DesktopStatePayload, DesktopStatusPayload, ReasonCode,
+    ScreenShare,
 };
 use crate::provider::RequestTrigger;
-use crate::settings::BatteryMode;
+use crate::settings::{BatteryMode, ScreenShareMode};
 
 /// In quiet battery mode an automatic request waits this long before the
 /// model starts; any newer request or edit cancels it first, so keys typed
@@ -79,9 +81,28 @@ impl Broker {
 }
 
 impl BrokerState {
-    /// Any helper reports an inactive or sleeping session.
+    /// Any helper reports an inactive or sleeping session, or a screen share
+    /// while settings hold suggestions during one.
     pub(super) fn desktop_hold(&self) -> bool {
         self.desktop.values().any(|report| report.session.holds())
+            || self.screen_share() == ScreenShare::Held
+    }
+
+    /// Whether any helper reports a live screen share, and what settings do
+    /// with it. A settings change already closes every session and advances
+    /// the epoch, so switching the mode needs no transition of its own.
+    fn screen_share(&self) -> ScreenShare {
+        if !self.desktop.values().any(|report| report.screen_shared) {
+            return ScreenShare::None;
+        }
+        match self
+            .settings
+            .as_ref()
+            .map_or_else(ScreenShareMode::default, |settings| settings.screen_share)
+        {
+            ScreenShareMode::Hold => ScreenShare::Held,
+            ScreenShareMode::Suggest => ScreenShare::Suggesting,
+        }
     }
 
     fn low_power(&self) -> bool {
@@ -112,7 +133,7 @@ impl BrokerState {
             .any(|report| report.session == DesktopSession::Sleeping)
         {
             DesktopSession::Sleeping
-        } else if self.desktop_hold() {
+        } else if self.desktop.values().any(|report| report.session.holds()) {
             DesktopSession::Inactive
         } else {
             DesktopSession::Active
@@ -122,6 +143,7 @@ impl BrokerState {
             session,
             low_power: self.low_power(),
             automatic: self.automatic_scheduling(),
+            screen_share: self.screen_share(),
         }
     }
 

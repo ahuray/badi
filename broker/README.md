@@ -90,20 +90,29 @@ and whether they were dirty (`--version` prints both; packagers may set
 ## Desktop session signals
 
 ([ADR 0005](../docs/decisions/0005-desktop-signals-withhold-authority.md)) The [session helper](../adapters/session/README.md) reports
-`desktop.state {session: active|inactive|sleeping, on_battery, power_saver}`
-on a `desktop_signals` connection and receives `desktop.status
-{observed, session, low_power, automatic}`, the combined view of every
-connected helper. Each report belongs to its connection and disappears when
-the connection closes.
+`desktop.state {session: active|inactive|sleeping, on_battery, power_saver,
+screen_shared}` on a `desktop_signals` connection and receives
+`desktop.status {observed, session, low_power, automatic, screen_share}`, the
+combined view of every connected helper. Each report belongs to its
+connection and disappears when the connection closes.
 
-- **Hold.** While any helper reports an inactive or sleeping session, the
+- **Hold.** While any helper reports an inactive or sleeping session, or a
+  shared screen while settings `screen_share` is `hold` (the default), the
   broker is runtime-paused like `badictl pause`: entering the hold advances
   the authority epoch, revokes every session's context, cancels pending
-  inference, withdraws visible suggestions and pending commits, ends the
-  type-through carry and fences queued outcome writes before it replies.
-  Leaving it advances the epoch again, so adapters reacquire their fields;
-  nothing from before the hold can be accepted. `health.status` reports
-  `paused: true` during a hold. A report never grants anything.
+  inference, withdraws visible suggestions (`suggestion.clear` reason
+  `paused`) and pending commits, ends the type-through carry and fences
+  queued outcome writes before it replies. Leaving it advances the epoch
+  again, so adapters reacquire their fields; nothing from before the hold
+  can be accepted. `health.status` reports `paused: true` during a hold. A
+  report never grants anything.
+- **Screen share.** `screen_share` is `none` unless a helper reports a live
+  share; then `held`, or `suggesting` after `badi screen-share suggest`
+  (settings `screen_share: suggest`). A share is not a session hold:
+  `session` stays `active`. Changing the setting is a settings write, which
+  already advances the epoch, so a share starts holding or stops at once.
+  The debug trace records each `desktop.state` and `desktop.status` whole;
+  neither carries text.
 - **Low power.** Battery power or the power-saver profile from any helper
   makes `low_power` true. That changes no authority and advances no epoch; it
   selects automatic scheduling from `battery_mode` (below).

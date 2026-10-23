@@ -1262,8 +1262,9 @@ pub enum AutomaticScheduling {
     ExplicitOnly,
 }
 
-/// The session helper's content-free report: login session and power state.
-/// It never grants authority; holding the session only removes it.
+/// The session helper's content-free report: login session, power state and
+/// whether the screen is being shared. It never grants authority; holding
+/// the session only removes it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DesktopStatePayload {
@@ -1272,6 +1273,22 @@ pub struct DesktopStatePayload {
     pub on_battery: bool,
     /// The power-saver profile is active; false when unknown.
     pub power_saver: bool,
+    /// A desktop portal screencast stream is live in `PipeWire`; false
+    /// without `PipeWire`, where no portal stream can exist.
+    pub screen_shared: bool,
+}
+
+/// What a live screen share does to suggestions right now.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenShare {
+    /// No helper reports a live screen share.
+    #[default]
+    None,
+    /// The screen is shared and settings hold every suggestion until it stops.
+    Held,
+    /// The screen is shared and the user chose to keep suggestions.
+    Suggesting,
 }
 
 /// An editor's report that it holds, or no longer holds, the focus of the
@@ -1291,7 +1308,7 @@ pub struct EditorStatusPayload {
 }
 
 /// The broker's combined view after a report: every reporting connection's
-/// session hold and low-power state, and the scheduling that results.
+/// session hold, low-power state and screen share, and what results.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DesktopStatusPayload {
@@ -1300,13 +1317,15 @@ pub struct DesktopStatusPayload {
     pub session: DesktopSession,
     pub low_power: bool,
     pub automatic: AutomaticScheduling,
+    pub screen_share: ScreenShare,
 }
 
 impl DesktopStatusPayload {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         let unobserved_default = !self.session.holds()
             && !self.low_power
-            && self.automatic == AutomaticScheduling::Normal;
+            && self.automatic == AutomaticScheduling::Normal
+            && self.screen_share == ScreenShare::None;
         if (!self.observed && !unobserved_default)
             || (!self.low_power && self.automatic != AutomaticScheduling::Normal)
         {
@@ -1660,10 +1679,11 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AdapterDescriptor, AdapterKind, CURRENT_PROTOCOL_VERSION, Capability, HelloPayload,
+        AdapterDescriptor, AdapterKind, AutomaticScheduling, CURRENT_PROTOCOL_VERSION, Capability,
+        DesktopSession, DesktopStatePayload, DesktopStatusPayload, HelloPayload,
         LIBREOFFICE_WRITER_APP_ID, MAX_SAFE_COUNTER, MessageType, Origin, OriginScheme,
-        PROTOCOL_VERSION, PolicyQueryPayload, ProtocolError, SessionId, TargetDescriptor,
-        TargetKind, WireEnvelope, valid_language_tag,
+        PROTOCOL_VERSION, PolicyQueryPayload, ProtocolError, ScreenShare, SessionId,
+        TargetDescriptor, TargetKind, WireEnvelope, valid_language_tag,
     };
 
     #[test]
@@ -2006,6 +2026,39 @@ mod tests {
             &format!("{} ", "a".repeat(33)),
             &format!("{} ", "b".repeat(33))
         ));
+    }
+
+    #[test]
+    fn a_desktop_report_names_the_screen_share_and_an_unobserved_status_holds_nothing() {
+        let shared: DesktopStatePayload = serde_json::from_value(serde_json::json!({
+            "session": "active", "on_battery": false, "power_saver": false, "screen_shared": true,
+        }))
+        .expect("a complete report");
+        assert!(shared.screen_shared);
+        assert!(
+            serde_json::from_value::<DesktopStatePayload>(serde_json::json!({
+                "session": "active", "on_battery": false, "power_saver": false,
+            }))
+            .is_err(),
+            "every report says whether the screen is shared"
+        );
+        let held = DesktopStatusPayload {
+            observed: true,
+            session: DesktopSession::Active,
+            low_power: false,
+            automatic: AutomaticScheduling::Normal,
+            screen_share: ScreenShare::Held,
+        };
+        held.validate().expect("a reported share may hold");
+        assert!(
+            DesktopStatusPayload {
+                observed: false,
+                ..held
+            }
+            .validate()
+            .is_err(),
+            "no helper, no screen-share hold"
+        );
     }
 
     #[test]

@@ -363,6 +363,9 @@ struct OverviewBroker {
     max_frame_bytes: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     snoozes: Vec<SnoozeStatus>,
+    /// The session helper's content-free report, when the broker sends one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    desktop: Option<DesktopStatusPayload>,
 }
 
 #[derive(Debug, Serialize)]
@@ -469,6 +472,7 @@ fn build_overview(
             socket_mode: health.socket_mode,
             max_frame_bytes: health.max_frame_bytes,
             snoozes: health.snoozes,
+            desktop: health.desktop,
         },
         settings,
         privacy: OverviewPrivacy {

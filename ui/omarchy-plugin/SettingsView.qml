@@ -39,6 +39,8 @@ Item {
   readonly property var mode: controller.loading ? {glyph: "◌", text: "Loading", tone: "dim"}
     : !client.brokerReachable ? {glyph: "○", text: "Model offline", tone: "dim"}
     : client.controlPlaneDegraded ? {glyph: "!", text: "Settings need attention", tone: "urgent"}
+    : controller.paused && controller.sharingHeld && client.settings.paused !== true
+      ? {glyph: "⏸", text: "Held · screen shared", tone: "dim"}
     : controller.paused ? {glyph: "⏸", text: "Paused", tone: "dim"}
     : !controller.anyAppEnabled ? {glyph: "◇", text: "No app allowed", tone: "dim"}
     : {glyph: "⏵⏵", text: "Suggesting", tone: "accent"}
@@ -127,7 +129,9 @@ Item {
       trailingControl: Component {
         ToggleSwitch {
           id: pauseSwitch
-          checked: client.brokerReachable && !client.brokerPaused
+          // A screen-share hold is not the user's pause: the switch stays on.
+          checked: client.brokerReachable
+            && (!client.brokerPaused || (controller.sharingHeld && client.settings.paused !== true))
           busy: client.mutating
           interactive: client.canMutateSettings
           foreground: view.foreground

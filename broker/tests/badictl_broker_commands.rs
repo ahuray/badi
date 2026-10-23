@@ -70,13 +70,15 @@ fn broker_commands_print_their_replies_and_refusals() {
     );
     assert_eq!(
         status["desktop"],
-        json!({"observed": false, "session": "active", "low_power": false, "automatic": "normal"})
+        json!({"observed": false, "session": "active", "low_power": false, "automatic": "normal",
+               "screen_share": "none"})
     );
 
     let overview = broker.succeeds(&["overview", "--json"]);
     assert!(overview.starts_with("{\n  \"schema\": \"badi.overview.v2\",\n"));
     let overview: Value = serde_json::from_str(&overview).expect("overview JSON");
     assert_eq!(overview["broker"]["settings_revision"], 1);
+    assert_eq!(overview["broker"]["desktop"], status["desktop"]);
     assert_eq!(overview["settings"]["revision"], 1);
 
     assert_eq!(

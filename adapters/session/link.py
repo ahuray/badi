@@ -1,7 +1,7 @@
 """The session helper's broker connection: one negotiated capability, no text.
 
-The helper reports only the login session and power state, and hands over
-the keyring's style-learning key. It opens no session, reads no field and
+The helper reports only the login session, power state and whether the screen
+is shared, and hands over the keyring's style-learning key. It opens no session, reads no field and
 holds no editing grant, so it negotiates only ``desktop_signals`` and
 ``style_key`` on protocol v2.
 """
@@ -18,6 +18,7 @@ import time
 FRAME_LIMIT = 65536
 SESSIONS = ("active", "inactive", "sleeping")
 AUTOMATIC = ("normal", "deferred", "explicit_only")
+SCREEN_SHARE = ("none", "held", "suggesting")
 CAPABILITIES = ["desktop_signals", "style_key"]
 STYLE_KEYS = ("absent", "ready", "mismatch")
 
@@ -55,19 +56,24 @@ def encode(message):
     return struct.pack("<I", len(body)) + body
 
 
-def report(session, on_battery, power_saver):
-    if session not in SESSIONS or type(on_battery) is not bool or type(power_saver) is not bool:
+def report(session, on_battery, power_saver, screen_shared):
+    if (session not in SESSIONS or type(on_battery) is not bool or type(power_saver) is not bool
+            or type(screen_shared) is not bool):
         raise LinkError("invalid_report")
-    return {"session": session, "on_battery": on_battery, "power_saver": power_saver}
+    return {"session": session, "on_battery": on_battery, "power_saver": power_saver,
+            "screen_shared": screen_shared}
 
 
 def valid_status(payload):
     """The broker's combined view, checked like the protocol schema does."""
-    if (type(payload) is not dict or set(payload) != {"observed", "session", "low_power", "automatic"}
+    if (type(payload) is not dict
+            or set(payload) != {"observed", "session", "low_power", "automatic", "screen_share"}
             or type(payload["observed"]) is not bool or payload["session"] not in SESSIONS
-            or type(payload["low_power"]) is not bool or payload["automatic"] not in AUTOMATIC):
+            or type(payload["low_power"]) is not bool or payload["automatic"] not in AUTOMATIC
+            or payload["screen_share"] not in SCREEN_SHARE):
         return False
-    if not payload["observed"] and (payload["session"] != "active" or payload["low_power"]):
+    if not payload["observed"] and (payload["session"] != "active" or payload["low_power"]
+                                    or payload["screen_share"] != "none"):
         return False
     return payload["low_power"] or payload["automatic"] == "normal"
 
@@ -131,12 +137,13 @@ class Link:
             self.close()
             raise
 
-    def send_report(self, session, on_battery, power_saver):
+    def send_report(self, session, on_battery, power_saver, screen_shared):
         """Returns the broker's validated combined status."""
         if self.socket is None:
             raise LinkError("broker_offline")
         try:
-            reply = self._exchange("desktop.state", report(session, on_battery, power_saver), "desktop.status")
+            reply = self._exchange("desktop.state", report(session, on_battery, power_saver, screen_shared),
+                                   "desktop.status")
         except LinkError:
             self.close()
             raise

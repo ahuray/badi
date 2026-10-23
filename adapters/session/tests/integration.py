@@ -2,9 +2,9 @@
 """The session helper against a real phrase broker and a fake desktop bus.
 
 Starts a private dbus-daemon with fake logind, UPower, power-profiles and
-portal services, the broker built by cargo (``--provider phrase``) in
-disposable XDG directories, and the helper itself. Nothing touches the user's
-desktop, keyring, power profile or real broker.
+portal services, a fake pw-dump, the broker built by cargo (``--provider
+phrase``) in disposable XDG directories, and the helper itself. Nothing
+touches the user's desktop, keyring, power profile, PipeWire or real broker.
 """
 import json
 import os
@@ -27,6 +27,12 @@ HERE = Path(__file__).resolve().parent
 BROKER = Path(os.environ.get("BADI_TEST_BROKER", ROOT / "target/debug/badi-broker"))
 BADICTL = BROKER.with_name("badictl")
 SESSION_PATH = "/org/freedesktop/login1/session/_31"
+AUDIO = {"id": 52, "type": "PipeWire:Interface:Node",
+         "info": {"props": {"media.class": "Stream/Output/Audio", "node.name": "quickshell"}}}
+# What xdg-desktop-portal-hyprland 1.4.1 creates for a shared screen.
+SCREENCAST = {"id": 123, "type": "PipeWire:Interface:Node",
+              "info": {"props": {"media.class": "Video/Source", "node.name": "xdg-desktop-portal-hyprland",
+                                 "media.name": "xdph-streaming-789568"}}}
 
 
 def wait_for(predicate, timeout=6.0, message="condition"):
@@ -63,6 +69,10 @@ class SessionHelperIntegration(unittest.TestCase):
             "XDG_STATE_HOME": str(root / "state"), "HOME": str(root / "home"),
         }
         (root / "home").mkdir()
+        # The fake pw-dump's controls: a graph without any screencast to start.
+        self.pipewire = root / "pipewire"
+        self.pipewire.mkdir()
+        (self.pipewire / "graph.json").write_text(json.dumps([AUDIO]))
         bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"],
                                stdout=subprocess.PIPE, text=True, env=self.environment)
         self.addCleanup(self.stop, bus)
@@ -89,7 +99,9 @@ class SessionHelperIntegration(unittest.TestCase):
             self.helper = subprocess.Popen(
                 [sys.executable, "-B", str(ROOT / "adapters/session/daemon.py")],
                 env={**self.environment, "BADI_SESSION_CONTROLLER": str(controller),
-                     "BADI_SESSION_NOTIFICATIONS": "off"},
+                     "BADI_SESSION_NOTIFICATIONS": "off",
+                     "BADI_SESSION_PIPEWIRE_DUMP": str(HERE / "fake_pw_dump.py"),
+                     "BADI_TEST_PW_DUMP_DIR": str(self.pipewire)},
                 stdout=subprocess.DEVNULL, stderr=log)
         self.addCleanup(self.stop, self.helper)
 
@@ -213,6 +225,59 @@ class SessionHelperIntegration(unittest.TestCase):
         log = self.helper_log.read_text()
         self.assertNotIn("Traceback", log)
 
+
+    def pipewire_change(self, *entries):
+        self.changes = getattr(self, "changes", 0) + 1
+        (self.pipewire / f"change-{self.changes:06d}.json").write_text(json.dumps(list(entries)))
+
+    def settings(self, change):
+        shown = subprocess.run([str(BADICTL), "settings", "show", "--json"], env=self.environment,
+                               capture_output=True, text=True, timeout=5, check=True)
+        document = json.loads(shown.stdout)
+        revision = document["revision"]
+        change(document)
+        document["revision"] = revision + 1
+        subprocess.run([str(BADICTL), "settings", "replace", "--if-revision", str(revision), "--json", "-"],
+                       env=self.environment, input=json.dumps(document), capture_output=True, text=True,
+                       timeout=5, check=True)
+
+    def test_a_screen_share_holds_suggestions_until_it_stops(self):
+        self.wait_desktop("initial report", observed=True, screen_share="none")
+        # A new broker's settings start paused; only a hold may pause it here.
+        self.settings(lambda document: document.update(paused=False))
+        self.assertFalse(self.health()["paused"])
+        epoch = self.health()["authority_epoch"]
+
+        # A portal screencast appears: every grant is held, the session stays active.
+        self.pipewire_change(SCREENCAST)
+        self.wait_desktop("screen shared", screen_share="held", session="active")
+        health = self.health()
+        self.assertTrue(health["paused"])
+        self.assertGreater(health["authority_epoch"], epoch)
+
+        # The user keeps suggestions while sharing, then holds them again.
+        self.settings(lambda document: document.update(screen_share="suggest"))
+        self.wait_desktop("suggesting while shared", screen_share="suggesting")
+        self.assertFalse(self.health()["paused"])
+        self.settings(lambda document: document.pop("screen_share"))
+        self.wait_desktop("held again", screen_share="held")
+        self.assertTrue(self.health()["paused"])
+
+        # The stream ends: the hold ends with it.
+        self.pipewire_change({"id": 123, "info": None})
+        self.wait_desktop("sharing stopped", screen_share="none")
+        self.assertFalse(self.health()["paused"])
+
+        # A helper that exits while the screen is shared takes the hold with it.
+        self.pipewire_change(SCREENCAST)
+        self.wait_desktop("shared again", screen_share="held")
+        self.stop(self.helper)
+        self.wait_desktop("helper gone", observed=False, screen_share="none")
+        self.assertFalse(self.health()["paused"])
+        log = self.helper_log.read_text()
+        self.assertIn("screen_shared=true", log)
+        self.assertNotIn("xdph-streaming", log, "stream names stay out of the journal")
+        self.assertNotIn("Traceback", log)
 
     @unittest.skipUnless(shutil.which("gnome-keyring-daemon"), "gnome-keyring-daemon is not installed")
     def test_the_keyring_style_key_reaches_the_broker_and_is_never_logged(self):

@@ -36,6 +36,10 @@
       "enum": ["normal", "quiet", "explicit"],
       "description": "Automatic suggestions while the desktop session helper reports battery power or the power-saver profile. quiet (the default) starts the model only after a 300 ms typing pause; normal keeps mains scheduling; explicit leaves only explicit requests. Explicit requests and the resident model are never changed. Producers omit the property when quiet."
     },
+    "screen_share": {
+      "enum": ["hold", "suggest"],
+      "description": "Suggestions while the desktop session helper reports a live screen share (a desktop portal screencast in PipeWire). hold (the default) holds every grant until sharing stops, so grey text with window or learned words never reaches a shared screen; suggest keeps suggesting. Producers omit the property when hold."
+    },
     "suggestion_length": {
       "enum": ["short", "normal"],
       "description": "How many words a model continuation shows: short one or two, normal (the default) up to four, within the same token and time budget. Producers omit the property when normal."

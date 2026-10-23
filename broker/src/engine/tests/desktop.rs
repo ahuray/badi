@@ -1,4 +1,5 @@
-//! Desktop helper reports: session holds and battery scheduling.
+//! Desktop helper reports: session and screen-share holds, and battery
+//! scheduling.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,13 +18,14 @@ use crate::engine::{
 use crate::protocol::{
     Activation, AdapterKind, AutomaticScheduling, Capability, ContextChangedPayload, Coordinates,
     DesktopSession, DesktopStatePayload, FieldDescriptor, FieldPurpose, OffsetUnit, Origin,
-    OriginScheme, ProviderKind, ReasonCode, Selection, SessionId, SessionOpenPayload,
+    OriginScheme, ProviderKind, ReasonCode, ScreenShare, Selection, SessionId, SessionOpenPayload,
     SuggestRequestPayload, TargetDescriptor, TargetKind,
 };
 use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
 use crate::settings::{
     BatteryMode, BrowserAdapter, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA,
-    SettingsV2, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
+    ScreenShareMode, SettingsV2, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule,
+    WebScheme,
 };
 
 const HELPER: &str = "c:desktop-helper";
@@ -94,6 +96,7 @@ fn settings(battery_mode: BatteryMode) -> SettingsV2 {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode,
+        screen_share: crate::settings::ScreenShareMode::Hold,
         suggestion_length: crate::settings::SuggestionLength::Normal,
         languages_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
@@ -149,6 +152,18 @@ async fn fixture(battery_mode: BatteryMode) -> Fixture {
         Arc::clone(&control_plane),
     )
     .expect("broker");
+    let (session_id, events) = open(&broker).await.expect("open session");
+    Fixture {
+        broker,
+        provider,
+        session_id,
+        events,
+        _storage: storage,
+    }
+}
+
+/// Opens the fixture's browser field; a settings change closes it again.
+async fn open(broker: &Broker) -> Result<(SessionId, mpsc::Receiver<BrokerEvent>), BrokerError> {
     let session_id = SessionId::new();
     let (sink, events) = mpsc::channel(32);
     broker
@@ -170,15 +185,8 @@ async fn fixture(battery_mode: BatteryMode) -> Fixture {
             },
             BrokerEventSink::new(sink, CancellationToken::new()),
         )
-        .await
-        .expect("open session");
-    Fixture {
-        broker,
-        provider,
-        session_id,
-        events,
-        _storage: storage,
-    }
+        .await?;
+    Ok((session_id, events))
 }
 
 fn coordinates(session_id: SessionId, revision: u64) -> Coordinates {
@@ -261,10 +269,48 @@ impl Fixture {
                     session,
                     on_battery,
                     power_saver: false,
+                    screen_shared: false,
                 },
             )
             .await
             .expect("desktop report");
+    }
+
+    async fn report_sharing(&self, screen_shared: bool) {
+        self.broker
+            .report_desktop_state(
+                HELPER,
+                DesktopStatePayload {
+                    session: DesktopSession::Active,
+                    on_battery: false,
+                    power_saver: false,
+                    screen_shared,
+                },
+            )
+            .await
+            .expect("desktop report");
+    }
+
+    /// Replaces the fixture's settings with `change` applied, then opens the
+    /// field again where the new authority epoch allows it, as an adapter does.
+    async fn change_settings(
+        &mut self,
+        change: impl FnOnce(&mut SettingsV2),
+    ) -> Result<(), BrokerError> {
+        let snapshot = self
+            .broker
+            .control_plane_snapshot()
+            .await
+            .expect("settings snapshot");
+        let mut next = snapshot.settings.clone();
+        change(&mut next);
+        next.revision = snapshot.settings.revision + 1;
+        self.broker
+            .replace_settings(snapshot.settings.revision, next)
+            .await
+            .expect("replace settings");
+        (self.session_id, self.events) = open(&self.broker).await?;
+        Ok(())
     }
 }
 
@@ -431,6 +477,7 @@ async fn explicit_only_battery_mode_abstains_automatic_requests_before_the_model
                 session: DesktopSession::Active,
                 on_battery: false,
                 power_saver: true,
+                screen_shared: false,
             },
         )
         .await
@@ -460,4 +507,109 @@ async fn explicit_only_battery_mode_abstains_automatic_requests_before_the_model
         panic!("an explicit request still reaches the model");
     };
     assert_eq!(fixture.provider.calls(), 1);
+}
+
+#[tokio::test]
+async fn a_screen_share_holds_every_suggestion_until_it_stops() {
+    let mut fixture = fixture(BatteryMode::Normal).await;
+    fixture
+        .request(1, "Thank you for", false)
+        .await
+        .expect("request");
+    let BrokerEvent::SuggestionShow { .. } = fixture.next_event().await else {
+        panic!("expected a visible suggestion before sharing");
+    };
+    let mut authority = fixture.broker.subscribe_authority_changes();
+    let before = fixture.broker.authority_snapshot().await.authority_epoch;
+
+    fixture.report_sharing(true).await;
+
+    let BrokerEvent::SuggestionClear { payload, .. } = fixture.next_event().await else {
+        panic!("a screen share must withdraw the visible suggestion");
+    };
+    assert_eq!(payload.reason, ReasonCode::Paused);
+    let held = authority.recv().await.expect("hold epoch");
+    assert_eq!(held.authority_epoch, before + 1);
+    assert!(held.paused);
+    let status = fixture.broker.desktop_status().await;
+    status.validate().expect("valid status");
+    assert_eq!(status.screen_share, ScreenShare::Held);
+    assert_eq!(
+        status.session,
+        DesktopSession::Active,
+        "sharing is not a session hold"
+    );
+    assert!(fixture.broker.health_snapshot().await.paused);
+    assert!(
+        fixture
+            .request(2, "Thank you for the", false)
+            .await
+            .is_err(),
+        "nothing is requested while the screen is shared"
+    );
+    assert_eq!(fixture.provider.calls(), 1);
+
+    // A repeated report changes nothing.
+    fixture.report_sharing(true).await;
+    assert_eq!(
+        fixture.broker.authority_snapshot().await.authority_epoch,
+        before + 1
+    );
+
+    fixture.report_sharing(false).await;
+    let resumed = authority.recv().await.expect("resume epoch");
+    assert_eq!(resumed.authority_epoch, before + 2);
+    assert!(!resumed.paused);
+    assert_eq!(
+        fixture.broker.desktop_status().await.screen_share,
+        ScreenShare::None
+    );
+}
+
+#[tokio::test]
+async fn suggest_while_sharing_keeps_suggestions_and_hold_returns_at_once() {
+    let mut fixture = fixture(BatteryMode::Normal).await;
+    fixture
+        .change_settings(|settings| settings.screen_share = ScreenShareMode::Suggest)
+        .await
+        .expect("open after the change");
+    fixture.report_sharing(true).await;
+    let status = fixture.broker.desktop_status().await;
+    status.validate().expect("valid status");
+    assert_eq!(status.screen_share, ScreenShare::Suggesting);
+    assert!(!fixture.broker.health_snapshot().await.paused);
+    fixture
+        .request(1, "Thank you for", false)
+        .await
+        .expect("request while sharing");
+    let BrokerEvent::SuggestionShow { .. } = fixture.next_event().await else {
+        panic!("suggestions continue while the user chose to keep them");
+    };
+
+    assert!(
+        fixture
+            .change_settings(|settings| settings.screen_share = ScreenShareMode::Hold)
+            .await
+            .is_err(),
+        "the share holds as soon as the setting returns to hold"
+    );
+    assert!(fixture.broker.health_snapshot().await.paused);
+    assert!(fixture.broker.authority_snapshot().await.paused);
+    assert_eq!(
+        fixture.broker.desktop_status().await.screen_share,
+        ScreenShare::Held
+    );
+}
+
+#[tokio::test]
+async fn a_closed_helper_takes_its_screen_share_hold_with_it() {
+    let fixture = fixture(BatteryMode::Normal).await;
+    let mut authority = fixture.broker.subscribe_authority_changes();
+    fixture.report_sharing(true).await;
+    assert!(authority.recv().await.expect("hold").paused);
+    fixture.broker.forget_desktop_state(HELPER).await;
+    assert!(!authority.recv().await.expect("release").paused);
+    let status = fixture.broker.desktop_status().await;
+    assert_eq!(status.screen_share, ScreenShare::None);
+    status.validate().expect("unobserved status is the default");
 }

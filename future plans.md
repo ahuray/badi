@@ -34,8 +34,9 @@ links to it. A tested app version is not a claim about Linux in general.
   preview ([ADR 0006](docs/decisions/0006-grey-preview-is-an-overlay.md))
   reaches VS Code, iframe editors, Qt apps and Writer.
 - **Desktop signals:** the installed [session helper](adapters/session/README.md)
-  holds grants across sleep and session switches and defers automatic
-  requests on battery ([ADR 0005](docs/decisions/0005-desktop-signals-withhold-authority.md)).
+  holds grants across sleep and session switches and while the screen is
+  shared, and defers automatic requests on battery
+  ([ADR 0005](docs/decisions/0005-desktop-signals-withhold-authority.md)).
 - **Speed:** with a full sliding-window cache (2026-10-19), Gemma 3 reads 1.5
   new prompt tokens per keystroke and a Chromium suggestion showed at p50 241
   ms after the key ([runtime](broker/README.md#writing-model-runtime)). The
@@ -368,9 +369,10 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] The Lab test "process exit rejects the active request and a later
       request starts a fresh process" (`worker.test.mjs`) failed once in CI
       with "Could not confirm cleanup of the owned model process" (#110, a
-      docs-only change) and passed on rerun and in three local runs. If it
-      recurs, find the timing that `cleanupRuntime` races after the
-      fixture's exit.
+      docs-only change) and passed on rerun and in three local runs. It
+      failed the same way once locally on 2026-10-23 inside a full `npm run
+      check` (the screen-share hold, no Lab change) and passed twice alone.
+      Find the timing that `cleanupRuntime` races after the fixture's exit.
 - [ ] `adapters/neovim/broker.test.mjs` timed out once in CI waiting for
       `paused` after `badi pause` and an explicit request (#118, a change
       outside Neovim), and passed on rerun and in three local runs. If it
