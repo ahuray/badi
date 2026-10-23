@@ -840,7 +840,75 @@ class DesktopTests(unittest.TestCase):
     def test_atomically_replaced_native_addon_is_reported_as_loaded_but_pending(self):
         with patch.object(desktop.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'ActiveState=active\nMainPID=123\n', '')), \
              patch.object(desktop.Path, 'read_text', return_value='metadata /private/libbadi-fcitx5.so (deleted)\n'):
-            self.assertEqual(desktop.native_state(), {'active': 'active', 'addon_loaded': True, 'addon_update_pending': True})
+            self.assertEqual(desktop.native_state(), {'active': 'active', 'addon_loaded': True, 'addon_update_pending': True,
+                                                      'launcher': 'omarchy-fcitx5.service'})
+
+    def test_without_omarchys_fcitx_unit_the_session_bus_owner_is_inspected(self):
+        missing = subprocess.CompletedProcess([], 0, 'LoadState=not-found\nActiveState=inactive\nMainPID=0\n', '')
+        for owner, maps, expected in (
+                (4242, '7f00 r-xp 0 00:01 9 /home/someone/.local/lib/fcitx5/libbadi-fcitx5.so\n',
+                 {'active': 'active', 'addon_loaded': True, 'addon_update_pending': False}),
+                (4242, '7f00 r-xp 0 00:01 9 /usr/lib/x86_64-linux-gnu/fcitx5/libdbus.so\n',
+                 {'active': 'active', 'addon_loaded': False, 'addon_update_pending': False}),
+                (0, '', {'active': 'inactive', 'addon_loaded': False, 'addon_update_pending': False}),
+                (None, '', {'active': 'unknown', 'addon_loaded': None, 'addon_update_pending': None,
+                            'inspection_error': 'native_process_uninspectable'})):
+            with self.subTest(owner=owner), \
+                 patch.object(desktop.subprocess, 'run', return_value=missing), \
+                 patch.object(desktop.badi_install, 'fcitx_bus_process', return_value=owner), \
+                 patch.object(desktop.Path, 'read_text', return_value=maps) as read:
+                self.assertEqual(desktop.native_state(), {**expected, 'launcher': 'session'})
+                if owner:
+                    self.assertEqual(read.call_count, 1)
+
+    def test_doctor_names_the_session_way_to_load_the_addon(self):
+        service = {'loaded': True, 'active': 'active', 'state': 'running', 'autostart': True}
+        broker = {'provider': 'local_model', 'paused': False, 'metrics': {'provider_calls': 3}}
+        for native, message, action in (
+                ({'active': 'active', 'addon_loaded': False, 'launcher': 'session'},
+                 'The running Fcitx has not loaded Badi.', 'Log out and back in'),
+                ({'active': 'inactive', 'addon_loaded': False, 'launcher': 'session'},
+                 'Fcitx is not running in this session.', 'im-config -n fcitx5')):
+            with self.subTest(native=native), \
+                 patch.object(desktop, 'service_state', return_value=service), \
+                 patch.object(desktop, 'accessibility_state', return_value={'loaded': False, 'ready': False}), \
+                 patch.object(desktop, 'native_state', return_value=native), \
+                 patch.object(desktop, 'install_state', return_value={}), \
+                 patch.object(desktop, 'control', return_value=json.dumps(broker)):
+                problem, = desktop.health_report()['problems']
+            self.assertEqual((problem['code'], problem['message']), ('native_addon_unavailable', message))
+            self.assertIn(action, problem['action'])
+
+    def test_an_observer_skipped_by_its_session_condition_is_a_note_not_a_problem(self):
+        skipped = ('LoadState=loaded\nActiveState=inactive\nMainPID=0\nConditionResult=no\n'
+                   'ConditionTimestampMonotonic=123456\n')
+        never_started = skipped.replace('ConditionTimestampMonotonic=123456', 'ConditionTimestampMonotonic=0')
+        for fields, unmet in ((skipped, True), (never_started, False)):
+            with self.subTest(fields=fields), \
+                 patch.object(desktop.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, fields, '')):
+                self.assertEqual(desktop.observer_service_state().get('condition_unmet', False), unmet)
+        service = {'loaded': True, 'active': 'active', 'state': 'running', 'autostart': True}
+        with patch.object(desktop, 'service_state', return_value=service), \
+             patch.object(desktop, 'accessibility_state',
+                          return_value={'loaded': True, 'ready': False, 'active': 'inactive', 'condition_unmet': True}), \
+             patch.object(desktop, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+             patch.object(desktop, 'install_state', return_value={}), \
+             patch.object(desktop, 'control', return_value='{"metrics":{"provider_calls":1}}'):
+            report = desktop.health_report()
+        self.assertEqual(report['problems'], [])
+        self.assertIn(desktop.OBSERVER_SKIPPED_NOTE, report['notes'])
+        self.assertIn('Field observer: not for this session', desktop.doctor_text(report))
+
+    def test_the_settings_panel_is_omarchys(self):
+        with patch.object(desktop.badi_install, 'desktop_platform', return_value=desktop.badi_install.GENERIC), \
+             patch.object(desktop.subprocess, 'run') as command:
+            with self.assertRaisesRegex(RuntimeError, "part of Omarchy's bar.*badi --help"):
+                desktop.main(['settings'])
+            command.assert_not_called()
+        with patch.object(desktop.badi_install, 'desktop_platform', return_value=desktop.badi_install.OMARCHY), \
+             patch.object(desktop.subprocess, 'run') as command:
+            desktop.main(['settings'])
+        self.assertEqual(command.call_args.args[0], ['omarchy-shell', 'badi-writing', 'toggle'])
 
     def test_startup_diagnosis_reports_missing_model_without_exposing_logs(self):
         with patch.object(desktop.subprocess, 'run') as command:
@@ -1200,13 +1268,24 @@ class DesktopTests(unittest.TestCase):
             desktop.set_spelling(document, "fa", True)
         (self.directory / "de_AT.aff").write_text("SET UTF-8\n")
         (self.directory / "de_AT.dic").write_text("1\nHaus\n")
-        with patch.object(desktop, "DICTIONARY_DIRECTORIES", (self.directory,)):
+        with patch.object(desktop, "DICTIONARY_DIRECTORIES", (self.directory,)), \
+             patch.object(desktop.badi_install, "distribution_family", return_value="arch"):
             report = {entry["language"]: entry for entry in
                       desktop.spelling_report({"spelling_languages": ["en", "de", "fr"]})}
         self.assertEqual(report["en"]["dictionary"], "built in")
         self.assertEqual(report["de"]["dictionary"], "de_AT")
         self.assertEqual((report["fr"]["dictionary"], report["fr"]["package"]), (None, "hunspell-fr-comprehensive"))
+        self.assertEqual(report["fr"]["install"], "sudo pacman -S hunspell-fr-comprehensive")
+        self.assertIsNone(report["en"]["install"])
         self.assertFalse(report["es"]["enabled"])
+        for family, command in (("debian", "sudo apt install hunspell-fr"),
+                                (None, "sudo pacman -S hunspell-fr-comprehensive")):
+            with self.subTest(family=family), patch.object(desktop, "DICTIONARY_DIRECTORIES", (self.directory,)), \
+                 patch.object(desktop.badi_install, "distribution_family", return_value=family), \
+                 contextlib.redirect_stdout(io.StringIO()) as printed:
+                desktop.print_spelling(desktop.spelling_report({"spelling_languages": ["en", "fr"]}))
+            self.assertIn(f"needs: {command} (or its", printed.getvalue())
+        self.assertEqual(set(desktop.DEBIAN_DICTIONARIES), set(desktop.SPELLING) - {"en"})
 
     def test_debug_refuses_public_symlink_expired_and_malformed_data(self):
         flag = self.directory / 'debug-control.json'

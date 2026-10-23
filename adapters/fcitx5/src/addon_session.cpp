@@ -1,8 +1,7 @@
 #include "addon.h"
+#include "fcitx_event.h"
 
 #include <fcitx-utils/capabilityflags.h>
-#include <fcitx-utils/event.h>
-#include <fcitx-utils/eventloopinterface.h>
 #include <fcitx/candidatelist.h>
 #include <fcitx/inputcontext.h>
 #include <fcitx/inputmethodentry.h>

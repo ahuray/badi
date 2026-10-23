@@ -411,6 +411,11 @@ inline const ::fcitx::Key &literalTabChord() {
     static const ::fcitx::Key key("Control+Shift+Tab");
     return key;
 }
+// Whether a key, as the frontend sent it, is that chord: Tab or the
+// ISO_Left_Tab a layout sends with Shift, under exactly Ctrl and Shift of the
+// four modifiers. Not Key::normalize(): Fcitx 5.1.7 (Ubuntu 24.04) drops the
+// Shift of Ctrl+Shift+Tab there, which would make it plain Ctrl+Tab.
+bool isLiteralTabChord(const ::fcitx::Key &key);
 
 // A forwarded key carries the modifiers still held: Wayland's
 // input-method-v2 frontend sends it through its virtual keyboard under the

@@ -1,8 +1,7 @@
+#include "fcitx_event.h"
 #include "state.h"
 #include "transport.h"
 
-#include <fcitx-utils/event.h>
-#include <fcitx-utils/eventloopinterface.h>
 #include <nlohmann/json.hpp>
 
 #include <array>

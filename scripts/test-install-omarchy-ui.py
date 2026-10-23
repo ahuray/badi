@@ -15,6 +15,22 @@ installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 
 
+def setUpModule():
+    # These tests describe Omarchy; the host running them may be another desktop.
+    platform = patch.object(installer.badi_install, 'desktop_platform', return_value=installer.badi_install.OMARCHY)
+    platform.start()
+    unittest.addModuleCleanup(platform.stop)
+
+
+class PlatformTests(unittest.TestCase):
+    def test_another_desktop_is_refused_before_anything_runs(self):
+        with patch.object(installer.badi_install, 'desktop_platform', return_value=installer.badi_install.GENERIC), \
+             patch.object(installer.subprocess, 'run') as command, patch('sys.argv', ['install-omarchy-ui.py']):
+            with self.assertRaisesRegex(RuntimeError, "Omarchy's bar.*nothing was changed"):
+                installer.main()
+        command.assert_not_called()
+
+
 class LockBoundaryTests(unittest.TestCase):
     def test_only_explicitly_unlocked_state_allows_reload(self):
         state = dict.fromkeys(('locked', 'secure', 'requested', 'pending', 'sessionLocked'), False)

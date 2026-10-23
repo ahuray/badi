@@ -1,7 +1,7 @@
 #pragma once
 
-#include <fcitx-utils/eventloopinterface.h>
-#include <fcitx-utils/event.h>
+#include "fcitx_event.h"
+
 #include <nlohmann/json.hpp>
 
 #include <functional>
