@@ -58,6 +58,9 @@ Item {
   property var serviceState: ({})
   property string serviceError: ""
   property string actionMessage: ""
+  // A destructive row asks first, in Omarchy's own confirm dialog.
+  property var confirmation: null
+  readonly property bool confirming: confirmation !== null
   property string actionSuccess: ""
   property string actionVerb: ""
   property bool actionFailed: false
@@ -406,6 +409,19 @@ Item {
   }
 
   // `timeout` in ms; a model download needs minutes, the rest seconds.
+  // Asks before `then` runs: `message` says what is lost, `label` names the
+  // confirming button.
+  function confirm(message, label, then) {
+    if (controlsBusy) return
+    confirmation = {message: message, label: label, then: then}
+  }
+
+  function resolveConfirmation(accepted) {
+    var pending = confirmation
+    confirmation = null
+    if (accepted && pending) pending.then()
+  }
+
   function runAction(arguments, verb, success, timeout) {
     if (controlsBusy) return
     actionTimeout.interval = timeout || 20000
@@ -573,7 +589,11 @@ Item {
       })
       list.push({key: "context_forget", section: "Context", kind: "action", label: "Forget learned words",
         detail: "Deletes every learned word; the keyring key stays", enabled: !controlsBusy,
-        activate: function() { root.runAction(["context", "forget"], "Forgetting learned words", "Learned words deleted") }})
+        activate: function() {
+          root.confirm("Forget every word Badi learned? This cannot be undone.", "Forget", function() {
+            root.runAction(["context", "forget"], "Forgetting learned words", "Learned words deleted")
+          })
+        }})
     }
     var length = client.settings.suggestion_length || "normal"
     list.push({key: "suggestion_length", section: "Writing", kind: "choice", label: "Suggestion length",
@@ -665,7 +685,11 @@ Item {
         detail: statsAvailable ? "Counts per day and app, kept 90 days · badi stats"
           : "⚠ Unreadable and kept as it is · forgetting starts the count again",
         enabled: !controlsBusy,
-        activate: function() { root.runAction(["stats", "forget"], "Forgetting usage statistics", "Usage statistics deleted") }})
+        activate: function() {
+          root.confirm("Forget every usage count? This cannot be undone.", "Forget", function() {
+            root.runAction(["stats", "forget"], "Forgetting usage statistics", "Usage statistics deleted")
+          })
+        }})
     }
 
     var autostart = serviceState.autostart

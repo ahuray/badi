@@ -11,21 +11,28 @@ import qs.Commons as Commons
 Panel {
   id: root
   moduleName: "io.github.ahuray.badi"
-  // This panel owns the badi-writing target to add state() beside toggle.
+  // This panel owns the badi-writing target to add state() and refresh()
+  // beside toggle.
   manageIpc: false
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
   DesktopPanel { id: badi }
 
-  IpcHandler {
+  // ShellIpc also answers on the shell's own socket, so omarchy-shell
+  // reaches it in milliseconds without a qs ipc client.
+  ShellIpc {
     target: "badi-writing"
     function toggle(): void { root.toggle() }
     function open(): void { root.open() }
     function close(): void { root.close() }
+    // The mark reads the broker only while the popout is open; a pause or
+    // snooze from the terminal or a shortcut asks it to look now.
+    function refresh(): void { badi.client.refresh(true) }
     function state(): string {
       return JSON.stringify({visible: root.opened, status: badi.statusLabel, page: view.cursor,
-        paused: badi.paused, snoozed: badi.snoozeLabel, service: badi.serviceState})
+        paused: badi.paused, snoozed: badi.snoozeLabel, service: badi.serviceState,
+        confirming: badi.confirming})
     }
   }
 
@@ -77,12 +84,27 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       blocked: view.editing
-      onMoveRequested: function(dx, dy) { view.move(dx, dy) }
-      onActivateRequested: view.activate()
-      onDeleteRequested: view.remove()
-      onCloseRequested: root.close()
-      onTabRequested: function(direction) { root.switchPanel(direction) }
+      // While the dialog asks, the keys answer it: h/l or arrows choose,
+      // Enter decides, Escape cancels.
+      onMoveRequested: function(dx, dy) {
+        if (badi.confirming) { if (dx !== 0) confirm.selectedIndex = confirm.selectedIndex === 0 ? 1 : 0 }
+        else view.move(dx, dy)
+      }
+      onActivateRequested: {
+        if (badi.confirming) badi.resolveConfirmation(confirm.selectedIndex === 1)
+        else view.activate()
+      }
+      onDeleteRequested: if (!badi.confirming) view.remove()
+      onCloseRequested: {
+        if (badi.confirming) badi.resolveConfirmation(false)
+        else root.close()
+      }
+      onTabRequested: function(direction) {
+        if (badi.confirming) confirm.selectedIndex = confirm.selectedIndex === 0 ? 1 : 0
+        else root.switchPanel(direction)
+      }
       onTextKey: function(text) {
+        if (badi.confirming) return
         if (text === "/") view.focusSearch()
         else if (text === "p" || text === "P") badi.togglePause()
         else if (text === "r" || text === "R") badi.refresh()
@@ -96,6 +118,19 @@ Panel {
         bar: root.bar
         onEditingFinished: keyCatcher.forceActiveFocus()
         onCloseRequested: root.close()
+      }
+
+      ConfirmDialog {
+        id: confirm
+        anchors.fill: parent
+        z: 10
+        opened: badi.confirming
+        message: badi.confirming ? badi.confirmation.message : ""
+        confirmText: badi.confirming ? badi.confirmation.label : ""
+        cancelText: "Cancel"
+        onOpenedChanged: if (opened) selectedIndex = 0
+        onCanceled: badi.resolveConfirmation(false)
+        onConfirmed: badi.resolveConfirmation(true)
       }
     }
   }

@@ -321,6 +321,7 @@ class ShortcutTests(unittest.TestCase):
         notes = []
         shortcuts = daemon.Shortcuts.__new__(daemon.Shortcuts)
         shortcuts._running = {"snooze"}
+        shortcuts.osd = False
         shortcuts._notification = lambda summary, body: notes.append((summary, body))
 
         class Process:
@@ -346,6 +347,43 @@ class ShortcutTests(unittest.TestCase):
             ("Badi did not snooze", "Run badi doctor in a terminal."),
         ])
         self.assertEqual(shortcuts._running, set())
+
+    def test_omarchy_shows_confirmations_on_its_display_and_failures_stay_toasts(self):
+        shown, notes = [], []
+        shortcuts = daemon.Shortcuts.__new__(daemon.Shortcuts)
+        shortcuts._running = set()
+        shortcuts.osd = True
+        shortcuts._osd = lambda icon, message: shown.append((icon, message)) or True
+        shortcuts._notification = lambda summary, body: notes.append((summary, body))
+
+        class Process:
+            def __init__(self, successful, output):
+                self.successful, self.output = successful, output
+
+            def communicate_utf8_finish(self, _result):
+                return True, self.output, ""
+
+            def get_successful(self):
+                return self.successful
+
+        for shortcut, process in (("pause-toggle", Process(True, "Predictions paused.\n")),
+                                  ("pause-toggle", Process(True, "Predictions resumed.\n")),
+                                  ("snooze", Process(True, "Badi is snoozed in telegram for 10 minutes. "
+                                                           "badi resume ends it sooner.\n")),
+                                  ("pause-toggle", Process(False, ""))):
+            shortcuts._running.add(shortcut)
+            shortcuts._finished(process, None, shortcut)
+        self.assertEqual(shown, [("media-pause", "Badi paused"), ("media-play", "Badi resumed"),
+                                 (daemon.SNOOZE_GLYPH, "Snoozed in telegram")])
+        self.assertEqual(daemon.snooze_message("Badi is snoozed in mail.example.org for 1 minute. x"),
+                         "Snoozed in mail.example.org")
+        self.assertEqual(daemon.snooze_message(""), "Badi snoozed")
+        self.assertEqual(notes, [("Badi could not change pause", "Run badi doctor in a terminal.")])
+        # A display that could not start falls back to the toast.
+        shortcuts._osd = lambda icon, message: False
+        shortcuts._running.add("pause-toggle")
+        shortcuts._finished(Process(True, "Predictions paused.\n"), None, "pause-toggle")
+        self.assertEqual(notes[-1], ("Badi paused", "Suggestions stay off until you resume."))
 
 
 if __name__ == "__main__":

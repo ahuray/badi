@@ -28,7 +28,11 @@
       "shell/Ui/PanelToolTip.qml": "sha256:fa62fbdbe132bb90d9fca95b97b3ed7c5f0f7ca345fa9bac643ab15fce03f2ca",
       "shell/Ui/PanelSeparator.qml": "sha256:54b970d6a6e5683583906517c808f271227f5b47a3a1ac3a58faa3f41d822316",
       "shell/Ui/PanelSectionHeader.qml": "sha256:7747685a102cb8a5f8f239acb72ce43c7c3a0326eb884db71e8427ab9c62e597",
-      "shell/Ui/BarIconButton.qml": "sha256:687e79d601419d9ac66a071dded6869d5aea7d9df05b6a37d14ccf58c15a9c8c"
+      "shell/Ui/BarIconButton.qml": "sha256:687e79d601419d9ac66a071dded6869d5aea7d9df05b6a37d14ccf58c15a9c8c",
+      "shell/Commons/ShellIpc.qml": "sha256:53bcdaf6125f750029088a36c4565b7a163070f6a6cfb58067f9621e99b53809",
+      "shell/Commons/IpcRegistry.qml": "sha256:e3da03778f65eed0b47a5249abc9c22afe936dd0ce49077d3cd0b3d710b0eda2",
+      "shell/Ui/ConfirmDialog.qml": "sha256:6ee99c757e443af24f3d1db366665654436c488018091018580014c889ac25ac",
+      "shell/Ui/BorderSurface.qml": "sha256:e17d8150d0b0e60f431bd6df5e661f5d9fe1f5eec9c2e2420f6eff2179a45baf"
     }
   },
   "quickshell": "0.3.2-1",

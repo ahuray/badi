@@ -7,6 +7,11 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- The bar mark dims at once when a shortcut or `badi pause` pauses, instead
+  of when the popout next opens, through Omarchy 4.5's fast shell IPC.
+  Forget learned words and Forget usage statistics ask first in Omarchy's
+  confirm dialog, and shortcut pause, resume and snooze show on Omarchy's
+  on-screen display.
 - Half-typed English words are finished where Badi used to run on after
   them (`can sh` gave `uck off the background`): `rep`, `fin` or `whet`
   complete to `report`, `final` and `whether`, in the Lab 75 of 134 times

@@ -367,11 +367,13 @@ def snooze(minutes):
         if refusal:
             raise RuntimeError(refusal) from None
         raise
+    refresh_bar()
     return reply["payload"]["snooze"]
 
 
 def end_snoozes():
     control(["snooze", "end"])
+    refresh_bar()
 
 
 def no_suggestion_summary(metrics):
@@ -818,8 +820,23 @@ def update_settings(change):
     change(document)
     document["revision"] = revision + 1
     # Let the broker reject concurrent changes; never overwrite newer settings.
-    return control(["settings", "replace", "--if-revision", str(revision),
-                    "--json", "-"], input_text=json.dumps(document))
+    reply = control(["settings", "replace", "--if-revision", str(revision),
+                     "--json", "-"], input_text=json.dumps(document))
+    refresh_bar()
+    return reply
+
+
+def refresh_bar():
+    """Asks the Omarchy bar mark to read the broker now: it otherwise does so
+    only while its popout is open, so a pause from a shortcut or a terminal
+    left it undimmed. Best effort, and quiet where Omarchy is not running."""
+    if shutil.which("omarchy-shell") is None:
+        return
+    try:
+        subprocess.run(["omarchy-shell", "-q", "badi-writing", "refresh"], timeout=3, check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def set_app(document, app, enabled):
