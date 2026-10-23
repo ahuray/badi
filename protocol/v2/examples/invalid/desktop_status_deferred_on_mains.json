@@ -7,6 +7,7 @@
     "observed": true,
     "session": "active",
     "low_power": false,
-    "automatic": "deferred"
+    "automatic": "deferred",
+    "screen_share": "none"
   }
 }

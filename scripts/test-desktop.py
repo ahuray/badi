@@ -317,6 +317,66 @@ class DesktopTests(unittest.TestCase):
                 desktop.main(invalid)
             command.assert_not_called()
 
+    def test_screen_share_hold_is_the_default_and_omitted(self):
+        settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'subjects': []}
+        for arguments, expected, said in ((['screen-share', 'suggest'], 'suggest', 'can appear on the shared screen'),
+                                          (['screen-share', 'hold'], None, 'shows no suggestions')):
+            with self.subTest(arguments=arguments), \
+                 patch.object(desktop, 'control', side_effect=[json.dumps(settings), '{}']) as command, \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                desktop.main(arguments)
+            self.assertEqual(command.call_args.args[0], ['settings', 'replace', '--if-revision', '7', '--json', '-'])
+            sent = json.loads(command.call_args.kwargs['input_text'])
+            self.assertEqual(sent.get('screen_share'), expected)
+            self.assertEqual((sent['revision'], sent['subjects']), (8, []))
+            self.assertIn(said, output.getvalue())
+        for invalid in (['screen-share'], ['screen-share', 'off'], ['screen-share', 'on'],
+                        ['screen-share', 'hold', 'now']):
+            with patch.object(desktop, 'control') as command, self.assertRaises(RuntimeError):
+                desktop.main(invalid)
+            command.assert_not_called()
+
+    def test_status_and_doctor_name_a_screen_share_hold_without_text(self):
+        metrics = {'provider_calls': 3, 'suggestions_shown': 1, 'provider_errors': 0, 'no_suggestion': BREAKDOWN}
+        settings = {'schema': 'badi.settings.v2', 'revision': 2, 'paused': False, 'subjects': []}
+        shared = {'observed': True, 'session': 'active', 'low_power': False, 'automatic': 'normal',
+                  'screen_share': 'held'}
+        health = {'paused': True, 'provider': 'local_model', 'metrics': metrics, 'desktop': shared}
+        text = desktop.status_text(health, settings)
+        self.assertTrue(text.startswith('Badi: Held while the screen is shared'), text)
+        self.assertIn('Screen sharing: shared, every suggestion held until it stops', text)
+        self.assertTrue(desktop.status_text(health, {**settings, 'paused': True}).startswith('Badi: Paused'))
+        suggesting = {**health, 'paused': False, 'desktop': {**shared, 'screen_share': 'suggesting'}}
+        self.assertIn('Screen sharing: shared, still suggesting', desktop.status_text(suggesting, settings))
+        idle = {**health, 'paused': False, 'desktop': {**shared, 'screen_share': 'none'}}
+        self.assertIn('Screen sharing: not shared · holds suggestions while shared',
+                      desktop.status_text(idle, settings))
+        self.assertIn('Screen sharing: not shared · still suggests while shared',
+                      desktop.status_text(idle, {**settings, 'screen_share': 'suggest'}))
+        self.assertNotIn('Screen sharing', desktop.status_text({**idle, 'desktop': None}, settings))
+        gone = {**health, 'desktop': {**shared, 'observed': False}}
+        self.assertIn('the session helper stopped during a share; suggestions stay held',
+                      desktop.status_text(gone, settings))
+        self.assertNotIn('Screen sharing', desktop.status_text({**gone, 'desktop': {**gone['desktop'],
+                                                                                     'screen_share': 'none'}}, settings))
+        service = {'loaded': True, 'active': 'active', 'state': 'running', 'autostart': True}
+        for broker_health, note, absent in (
+                (health, 'holds every suggestion until sharing stops', 'Predictions are paused'),
+                (suggesting, 'can appear on the shared screen', 'holds every suggestion')):
+            def control(arguments, endpoint=None, health=broker_health):
+                return json.dumps(settings if arguments[0] == 'settings' else health)
+            with self.subTest(note=note), \
+                 patch.object(desktop, 'service_state', return_value=service), \
+                 patch.object(desktop, 'session_helper_state', return_value={'loaded': True, 'active': 'active'}), \
+                 patch.object(desktop, 'accessibility_state', return_value={'loaded': False, 'ready': False}), \
+                 patch.object(desktop, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+                 patch.object(desktop.shutil, 'which', return_value='/usr/bin/pw-dump'), \
+                 patch.object(desktop, 'control', side_effect=control):
+                report = desktop.health_report()
+            self.assertTrue(any(note in line for line in report['notes']), report['notes'])
+            self.assertFalse(any(absent in line for line in report['notes']), report['notes'])
+            self.assertEqual(report['problems'], [])
+
     def test_suggestion_length_is_omitted_when_normal(self):
         settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'suggestion_length': 'short',
                     'subjects': []}

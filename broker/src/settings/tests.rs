@@ -9,8 +9,8 @@ use super::{
     ALL_LINUX_APPS_PERMISSIONS, BatteryMode, BrowserAdapter, LinuxAdapter,
     MAX_ESCAPE_QUIET_SECONDS, MAX_SETTINGS_BYTES, MAX_SUBJECTS, PermissionDecision,
     PredictionLanguage, PrivateStorage, PrivateStorageError, RetentionPermission, SETTINGS_SCHEMA,
-    SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2, SettingsValidationError, StableIdentity,
-    StoragePaths, SubjectPermissions, SubjectRule, SuggestionLength, WebScheme,
+    SETTINGS_SCHEMA_V1, ScreenShareMode, SettingsStoreError, SettingsV2, SettingsValidationError,
+    StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, SuggestionLength, WebScheme,
 };
 use crate::protocol::{
     MAX_FRAME_BYTES, Origin, OriginScheme, TargetDescriptor, TargetKind, WireEnvelope,
@@ -43,6 +43,7 @@ fn settings_with(rule: SubjectRule) -> SettingsV2 {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
+        screen_share: crate::settings::ScreenShareMode::Hold,
         suggestion_length: crate::settings::SuggestionLength::Normal,
         languages_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
@@ -311,6 +312,50 @@ fn battery_mode_round_trips_omits_quiet_and_rejects_v1() {
         "battery_mode": "off", "subjects": [],
     });
     assert!(serde_json::from_value::<SettingsV2>(unknown).is_err());
+}
+
+#[test]
+fn screen_share_round_trips_omits_hold_and_survives_a_v1_write() {
+    let mut settings = settings_with(SubjectRule {
+        identity: identity("mail.example"),
+        permissions: allowed(None),
+    });
+    assert_eq!(settings.screen_share, ScreenShareMode::Hold);
+    let encoded = serde_json::to_value(&settings).expect("encode settings");
+    assert!(encoded.get("screen_share").is_none(), "hold is omitted");
+    settings.screen_share = ScreenShareMode::Suggest;
+    let encoded = serde_json::to_value(&settings).expect("encode settings");
+    assert_eq!(encoded["screen_share"], "suggest");
+    let decoded: SettingsV2 = serde_json::from_value(encoded).expect("decode settings");
+    assert_eq!(decoded, settings);
+    let mut explicit_hold = serde_json::to_value(&settings).expect("encode settings");
+    explicit_hold["screen_share"] = serde_json::json!("hold");
+    let decoded: SettingsV2 = serde_json::from_value(explicit_hold).expect("hold");
+    assert_eq!(decoded.screen_share, ScreenShareMode::Hold);
+    assert_eq!(
+        SettingsV2::deny_by_default().screen_share,
+        ScreenShareMode::Hold
+    );
+
+    // A protocol v1 client manages browser origins only and keeps the choice.
+    let v1_write = SettingsV2::deny_by_default().preserving_v2_policy_from(&settings);
+    assert_eq!(v1_write.screen_share, ScreenShareMode::Suggest);
+
+    let legacy = serde_json::json!({
+        "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
+        "screen_share": "hold", "subjects": [],
+    });
+    assert!(
+        serde_json::from_value::<SettingsV2>(legacy).is_err(),
+        "v1 cannot name it"
+    );
+    for value in [serde_json::json!("off"), serde_json::json!(false)] {
+        let unknown = serde_json::json!({
+            "schema": SETTINGS_SCHEMA, "revision": 1, "paused": false,
+            "screen_share": value, "subjects": [],
+        });
+        assert!(serde_json::from_value::<SettingsV2>(unknown).is_err());
+    }
 }
 
 #[test]
@@ -642,6 +687,7 @@ fn linux_adapters_sort_by_wire_name_like_the_desktop_clients() {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
+        screen_share: crate::settings::ScreenShareMode::Hold,
         suggestion_length: crate::settings::SuggestionLength::Normal,
         languages_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
@@ -682,6 +728,7 @@ fn settings_require_sorted_unique_subjects() {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
+        screen_share: crate::settings::ScreenShareMode::Hold,
         suggestion_length: crate::settings::SuggestionLength::Normal,
         languages_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
@@ -730,6 +777,7 @@ fn maximum_shape_settings_fit_storage_and_wire_limits() {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
+        screen_share: crate::settings::ScreenShareMode::Hold,
         suggestion_length: crate::settings::SuggestionLength::Normal,
         languages_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],

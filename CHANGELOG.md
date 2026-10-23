@@ -7,6 +7,12 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- While you share your screen, Badi shows no suggestions, so grey text with
+  words from the window or ones it learned never appears on someone else's
+  screen, also while the session helper restarts; they return a second
+  after sharing stops. `badi status`, `badi doctor`, the panel, its bar
+  mark and the debug trace name the hold, and `badi screen-share suggest`
+  (or the panel's While sharing the screen row) keeps suggesting.
 - Security pass: a `badi debug on --text` trace no longer records keys typed
   into password fields, and deletes itself when the run ends; terminals are
   not followed until allowed; fields labelled as a password, PIN, card

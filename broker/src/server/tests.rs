@@ -456,6 +456,7 @@ async fn v1_settings_roundtrip_projects_browser_rules_and_preserves_native_rules
                 mid_line: false,
                 escape_quiet_seconds: 0,
                 battery_mode: crate::settings::BatteryMode::Normal,
+                screen_share: crate::settings::ScreenShareMode::Hold,
                 suggestion_length: crate::settings::SuggestionLength::Normal,
                 languages_chosen: false,
                 style_learning: false,
@@ -1058,6 +1059,7 @@ async fn desktop_helper_hold_lasts_until_it_reports_active_or_disconnects() {
             session: DesktopSession::Sleeping,
             on_battery: true,
             power_saver: false,
+            screen_shared: false,
         },
     )
     .await;
@@ -1097,6 +1099,7 @@ async fn desktop_reports_need_the_negotiated_capability_and_protocol_v2() {
             session: DesktopSession::Inactive,
             on_battery: false,
             power_saver: false,
+            screen_shared: false,
         },
     )
     .await;

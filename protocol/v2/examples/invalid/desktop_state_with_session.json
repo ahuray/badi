@@ -9,6 +9,7 @@
   "payload": {
     "session": "inactive",
     "on_battery": false,
-    "power_saver": false
+    "power_saver": false,
+    "screen_shared": false
   }
 }

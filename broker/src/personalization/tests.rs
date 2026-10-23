@@ -29,6 +29,7 @@ fn settings(retention: RetentionPermission) -> SettingsV2 {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: crate::settings::BatteryMode::Normal,
+        screen_share: crate::settings::ScreenShareMode::Hold,
         suggestion_length: crate::settings::SuggestionLength::Normal,
         languages_chosen: false,
         style_learning: false,

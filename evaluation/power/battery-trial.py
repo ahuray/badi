@@ -238,7 +238,8 @@ def run(arguments):
         assert health(path)["provider"] == "local_model"
         helper = Connection(path)
         helper.hello("session", ["desktop_signals"])
-        status = helper.request("desktop.state", {"session": "active", "on_battery": True, "power_saver": False},
+        status = helper.request("desktop.state", {"session": "active", "on_battery": True, "power_saver": False,
+                                                 "screen_shared": False},
                                 "desktop.status")["payload"]
         assert status["low_power"], status
         control = Connection(path)

@@ -7,6 +7,7 @@
     "observed": false,
     "session": "sleeping",
     "low_power": false,
-    "automatic": "normal"
+    "automatic": "normal",
+    "screen_share": "none"
   }
 }

@@ -2,16 +2,20 @@
 """Badi desktop session helper.
 
 Tells the broker, without any text, whether the login session is in the
-foreground or the machine is going to sleep (logind), and whether it runs on
-battery or in the power-saver profile (UPower, power-profiles-daemon). It also
-offers pause, snooze and settings shortcuts through the GlobalShortcuts portal.
+foreground or the machine is going to sleep (logind), whether it runs on
+battery or in the power-saver profile (UPower, power-profiles-daemon), and
+whether the screen is being shared (a desktop portal screencast in PipeWire).
+It also offers pause, snooze and settings shortcuts through the
+GlobalShortcuts portal.
 
 It never reads a field, opens a suggestion session or edits anything. A
-report can only withhold authority: an inactive or sleeping session holds
-every grant, and the broker drops this helper's report when it disconnects.
+report can only withhold authority: an inactive or sleeping session, or a
+shared screen, holds every grant, and the broker drops this helper's report
+when it disconnects.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -68,6 +72,21 @@ ACTIONS = {
     "open-settings": ("settings",),
 }
 BACKOFF_SECONDS = (1, 2, 5, 10, 30)
+# PipeWire's own dump tool: a full dump of the graph, then one JSON array per
+# change, a removed object as {"id": N, "info": null}.
+PIPEWIRE_DUMP = ("pw-dump", "--monitor", "--no-colors")
+# A portal screencast is a video source the portal backend creates:
+# xdg-desktop-portal-hyprland 1.4.1 names the node after itself and the stream
+# xdph-streaming-<id>, the prefix Omarchy 4.5's notifications watch. Cameras
+# are video sources too, but the session manager makes them.
+SCREENCAST_NODE_PREFIX = "xdg-desktop-portal-"
+SCREENCAST_MEDIA_PREFIX = "xdph-streaming-"
+# The first dump of a busy graph is a few hundred kilobytes.
+DUMP_LIMIT = 16 * 1024 * 1024
+# A share that changes streams removes one before it adds the next (Chromium's
+# preview became the share 18 ms later on 2026-10-23), so a share ends only
+# when no stream has returned for this long.
+RELEASE_SECONDS = 1.0
 DBUS_TIMEOUT_MS = 2000
 # While the keyring is locked, look again this often; never prompt.
 KEY_RETRY_SECONDS = 120
@@ -144,6 +163,7 @@ class Reporter:
         self.sleeping = False
         self.on_battery = False
         self.power_saver = False
+        self.screen_shared = False
         self.acknowledged = None
         self._watch = None
         self._retry = None
@@ -152,7 +172,7 @@ class Reporter:
 
     def state(self):
         session = "sleeping" if self.sleeping else "active" if self.session_active else "inactive"
-        return session, self.on_battery, self.power_saver
+        return session, self.on_battery, self.power_saver, self.screen_shared
 
     def publish(self):
         """Sends the current state unless the broker already has it; returns
@@ -171,7 +191,8 @@ class Reporter:
             return False
         if self.acknowledged != state:
             log(f"reported session={state[0]} on_battery={str(state[1]).lower()} "
-                f"power_saver={str(state[2]).lower()}; automatic={status['automatic']}")
+                f"power_saver={str(state[2]).lower()} screen_shared={str(state[3]).lower()}; "
+                f"automatic={status['automatic']} screen_share={status['screen_share']}")
         self.acknowledged = state
         self._attempt = 0
         self.problem = None
@@ -358,6 +379,229 @@ class Power:
     def close(self):
         for watch in self._watches:
             watch.close()
+
+
+def refresh_bar():
+    """Asks Omarchy's bar mark to read the broker now, as a pause from the
+    terminal does: it otherwise looks only while its popout is open. Best
+    effort, and nothing where Omarchy is not running."""
+    if shutil.which("omarchy-shell") is None:
+        return
+    try:
+        Gio.Subprocess.new(["omarchy-shell", "-q", "badi-writing", "refresh"],
+                           Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE)
+    except GLib.Error:
+        pass
+
+
+def pipewire_dump_command(environment=os.environ):
+    """pw-dump, or the fake a test names."""
+    configured = environment.get("BADI_SESSION_PIPEWIRE_DUMP")
+    return [configured, *PIPEWIRE_DUMP[1:]] if configured else list(PIPEWIRE_DUMP)
+
+
+def screencast_stream(entry):
+    """Whether one pw-dump object is a desktop portal screencast stream."""
+    if type(entry) is not dict or entry.get("type") != "PipeWire:Interface:Node":
+        return False
+    info = entry.get("info")
+    props = info.get("props") if type(info) is dict else None
+    if type(props) is not dict or props.get("media.class") != "Video/Source":
+        return False
+    node, media = props.get("node.name"), props.get("media.name")
+    return ((type(node) is str and node.startswith(SCREENCAST_NODE_PREFIX))
+            or (type(media) is str and media.startswith(SCREENCAST_MEDIA_PREFIX)))
+
+
+class Streams:
+    """The screencast streams one pw-dump process has shown so far.
+
+    Only node ids are kept; names, applications and media titles are read to
+    classify a node and then dropped.
+    """
+
+    def __init__(self):
+        self.ids = set()
+        self.synced = False
+        self._buffer = b""
+
+    def restart(self):
+        """A new process: its full dump will replace what the last one saw."""
+        self.synced = False
+        self._buffer = b""
+
+    def feed(self, data):
+        """Consumes output; returns whether the set of live streams changed.
+        Raises ``ValueError`` for output that is not pw-dump's."""
+        self._buffer += data
+        if len(self._buffer) > DUMP_LIMIT:
+            raise ValueError("dump_too_large")
+        before = set(self.ids)
+        # An array ends with a bracket alone on its line; nested ones are indented.
+        end = self._buffer.rfind(b"\n]\n")
+        if end < 0:
+            return False
+        text, self._buffer = self._buffer[:end + 3].decode(), self._buffer[end + 3:]
+        decoder, position = json.JSONDecoder(), 0
+        while (position := len(text) - len(text[position:].lstrip())) < len(text):
+            entries, position = decoder.raw_decode(text, position)
+            if type(entries) is not list:
+                raise ValueError("dump_not_a_list")
+            self._apply(entries)
+        return self.ids != before
+
+    def _apply(self, entries):
+        if not self.synced:
+            self.ids.clear()
+            self.synced = True
+        for entry in entries:
+            if type(entry) is not dict or type(entry.get("id")) is not int:
+                continue
+            info = entry.get("info", ...)
+            if info is None:
+                self.ids.discard(entry["id"])
+            elif screencast_stream(entry):
+                self.ids.add(entry["id"])
+            elif entry.get("type") == "PipeWire:Interface:Node" and type(info) is dict and "props" in info:
+                self.ids.discard(entry["id"])
+
+
+class ScreenCast:
+    """Whether the screen is being shared: a desktop portal screencast stream
+    exists in PipeWire, from its creation until it is destroyed. Frame activity
+    is not used: screenshots produce it too.
+
+    Until the first dump arrives the screen counts as shared: a helper that
+    restarted mid-share must not tell the broker, which keeps the share held
+    for a grace, that nothing is shared before it has looked. A share starts
+    at once and ends ``RELEASE_SECONDS`` after its last stream, so a share
+    that changes streams is never released in between. A pw-dump that ends
+    after showing anything is restarted with backoff and the streams it saw
+    stay until a new dump replaces them, so a crash never ends a hold early.
+    One that ends without any output could not reach PipeWire, where no
+    portal stream can exist.
+    """
+
+    def __init__(self, reporter, command=None, refresh=refresh_bar):
+        self.reporter = reporter
+        self.command = command or pipewire_dump_command()
+        self.refresh = refresh
+        self.reporter.screen_shared = True
+        self.known = False
+        self.streams = Streams()
+        self.process = None
+        self._cancellable = None
+        self._received = False
+        self._retry = None
+        self._release = None
+        self._attempt = 0
+        self.problem = None
+        self._start()
+
+    def _start(self):
+        self._retry = None
+        self.streams.restart()
+        self._received = False
+        try:
+            self.process = Gio.Subprocess.new(
+                self.command, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
+        except GLib.Error:
+            self.process = None
+            self._ended("pw-dump unavailable")
+            return GLib.SOURCE_REMOVE
+        self._cancellable = Gio.Cancellable()
+        self._read(self.process)
+        return GLib.SOURCE_REMOVE
+
+    def _read(self, process):
+        process.get_stdout_pipe().read_bytes_async(
+            65536, GLib.PRIORITY_DEFAULT, self._cancellable, self._readable, process)
+
+    def _readable(self, stream, result, process):
+        if process is not self.process:
+            return
+        try:
+            data = stream.read_bytes_finish(result).get_data()
+        except GLib.Error:
+            data = b""
+        if not data:
+            self._stop()
+            self._ended("pw-dump ended")
+            return
+        self._received = True
+        try:
+            changed = self.streams.feed(data)
+        except ValueError:
+            self._stop()
+            self._ended("pw-dump output unreadable")
+            return
+        if self.streams.synced:
+            self._attempt = 0
+            if self.problem is not None:
+                log("watching PipeWire for screen sharing again")
+                self.problem = None
+        if self.streams.synced and not self.known:
+            # The first look settles the startup assumption at once.
+            self.known = True
+            self._keep()
+            self._report(bool(self.streams.ids))
+        elif changed:
+            self._publish()
+        self._read(process)
+
+    def _publish(self):
+        if self.streams.ids:
+            self._keep()
+            self._report(True)
+        elif self.reporter.screen_shared and self._release is None:
+            self._release = GLib.timeout_add(int(RELEASE_SECONDS * 1000), self._released)
+
+    def _released(self):
+        self._release = None
+        if not self.streams.ids:
+            self._report(False)
+        return GLib.SOURCE_REMOVE
+
+    def _keep(self):
+        if self._release is not None:
+            GLib.source_remove(self._release)
+            self._release = None
+
+    def _report(self, shared):
+        if shared != self.reporter.screen_shared:
+            self.reporter.screen_shared = shared
+            # The broker holds before the reply, so the bar then reads the hold.
+            if self.reporter.publish():
+                self.refresh()
+
+    def _ended(self, reason):
+        if not self._received:
+            # It never reached PipeWire, so no portal stream can be live.
+            self.streams.ids.clear()
+            self.known = True
+            self._keep()
+            self._report(False)
+        if reason != self.problem:
+            log(f"{reason}; screen sharing is watched again after a backoff")
+            self.problem = reason
+        delay = BACKOFF_SECONDS[min(self._attempt, len(BACKOFF_SECONDS) - 1)]
+        self._attempt += 1
+        self._retry = GLib.timeout_add_seconds(delay, self._start)
+
+    def _stop(self):
+        if self._cancellable is not None:
+            self._cancellable.cancel()
+            self._cancellable = None
+        if self.process is not None:
+            self.process.force_exit()
+            self.process = None
+
+    def close(self):
+        if self._retry is not None:
+            GLib.source_remove(self._retry)
+            self._retry = None
+        self._keep()
+        self._stop()
 
 
 # The OSD icon for a snooze: Material Design's "sleep" in Omarchy's Nerd Font.
@@ -566,7 +810,9 @@ def main(arguments):
         return 2
     loop = GLib.MainLoop()
     reporter = Reporter(Link(), style_key.lookup if style_key is not None else None)
-    parts = []
+    # Tests turn off every desktop side effect: toasts, the OSD and bar refreshes.
+    desktop_ui = os.environ.get("BADI_SESSION_NOTIFICATIONS") != "off"
+    parts = [ScreenCast(reporter, refresh=refresh_bar if desktop_ui else lambda: None)]
     try:
         system = bus_for("system")
         parts.append(Logind(system, reporter))
@@ -576,8 +822,7 @@ def main(arguments):
         reporter.publish()
     if shortcuts_enabled:
         try:
-            parts.append(Shortcuts(bus_for("session"), controller_path(),
-                                   notify=os.environ.get("BADI_SESSION_NOTIFICATIONS") != "off"))
+            parts.append(Shortcuts(bus_for("session"), controller_path(), notify=desktop_ui))
         except GLib.Error:
             log("session bus unavailable; no global shortcuts")
 

@@ -1,4 +1,5 @@
-"""Fast checks for the session helper: broker link, reports and sleep order."""
+"""Fast checks for the session helper: broker link, reports, sleep order and
+the PipeWire screen-share watcher."""
 import json
 import os
 from pathlib import Path
@@ -7,13 +8,16 @@ import struct
 import sys
 import tempfile
 import threading
+import time
 import unittest
+import warnings
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import daemon  # noqa: E402
 import link  # noqa: E402
 
-STATUS = {"observed": True, "session": "active", "low_power": False, "automatic": "normal"}
+STATUS = {"observed": True, "session": "active", "low_power": False, "automatic": "normal",
+          "screen_share": "none"}
 
 
 def frame(message):
@@ -84,7 +88,8 @@ def well_behaved(message):
     low = payload["on_battery"] or payload["power_saver"]
     return {"v": 2, "id": message["id"], "type": "desktop.status", "mono_ms": 2, "payload": {
         "observed": True, "session": payload["session"], "low_power": low,
-        "automatic": "deferred" if low else "normal"}}
+        "automatic": "deferred" if low else "normal",
+        "screen_share": "held" if payload["screen_shared"] else "none"}}
 
 
 class LinkTests(unittest.TestCase):
@@ -103,14 +108,16 @@ class LinkTests(unittest.TestCase):
         connection = link.Link(broker.path)
         self.addCleanup(connection.close)
         connection.connect()
-        status = connection.send_report("sleeping", True, False)
-        self.assertEqual(status, {"observed": True, "session": "sleeping", "low_power": True, "automatic": "deferred"})
+        status = connection.send_report("sleeping", True, False, True)
+        self.assertEqual(status, {"observed": True, "session": "sleeping", "low_power": True, "automatic": "deferred",
+                                  "screen_share": "held"})
         hello, report = broker.received
         self.assertEqual(hello["payload"]["adapter"]["kind"], "session")
         self.assertEqual(hello["payload"]["capabilities"], ["desktop_signals", "style_key"])
         self.assertEqual((hello["payload"]["min_v"], hello["payload"]["max_v"]), (2, 2))
         self.assertEqual(report["type"], "desktop.state")
-        self.assertEqual(report["payload"], {"session": "sleeping", "on_battery": True, "power_saver": False})
+        self.assertEqual(report["payload"], {"session": "sleeping", "on_battery": True, "power_saver": False,
+                                             "screen_shared": True})
         self.assertNotIn("session_id", report)
 
     def test_refuses_a_public_socket_or_a_directory_others_can_enter(self):
@@ -144,7 +151,7 @@ class LinkTests(unittest.TestCase):
         connection = link.Link(self.broker(malformed).path)
         connection.connect()
         with self.assertRaisesRegex(link.LinkError, "invalid_status"):
-            connection.send_report("active", False, False)
+            connection.send_report("active", False, False, False)
         self.assertFalse(connection.connected)
 
     def test_a_closed_broker_is_noticed(self):
@@ -155,7 +162,7 @@ class LinkTests(unittest.TestCase):
         connection = link.Link(self.broker(once).path)
         connection.connect()
         with self.assertRaises(link.LinkError):
-            connection.send_report("active", False, False)
+            connection.send_report("active", False, False, False)
         self.assertFalse(connection.connected)
         self.assertTrue(connection.closed_by_peer())
 
@@ -166,10 +173,16 @@ class LinkTests(unittest.TestCase):
         self.assertFalse(link.valid_status({**STATUS, "automatic": "explicit_only"}))
         self.assertTrue(link.valid_status({**STATUS, "low_power": True, "automatic": "explicit_only"}))
         self.assertFalse(link.valid_status({**STATUS, "extra": 1}))
+        self.assertTrue(link.valid_status({**STATUS, "screen_share": "suggesting"}))
+        self.assertTrue(link.valid_status({**STATUS, "observed": False, "screen_share": "held"}),
+                        "a share stays held for a grace after its helper left")
+        self.assertFalse(link.valid_status({key: value for key, value in STATUS.items() if key != "screen_share"}))
         with self.assertRaises(link.LinkError):
-            link.report("locked", False, False)
+            link.report("locked", False, False, False)
         with self.assertRaises(link.LinkError):
-            link.report("active", 1, False)
+            link.report("active", 1, False, False)
+        with self.assertRaises(link.LinkError):
+            link.report("active", False, False, None)
 
 
 class FakeLink:
@@ -192,10 +205,11 @@ class FakeLink:
     def fileno(self):
         return os.open(os.devnull, os.O_RDONLY)
 
-    def send_report(self, session, on_battery, power_saver):
-        self.reports.append((session, on_battery, power_saver))
+    def send_report(self, session, on_battery, power_saver, screen_shared):
+        self.reports.append((session, on_battery, power_saver, screen_shared))
         low = on_battery or power_saver
-        return {"observed": True, "session": session, "low_power": low, "automatic": "normal"}
+        return {"observed": True, "session": session, "low_power": low, "automatic": "normal",
+                "screen_share": "held" if screen_shared else "none"}
 
     def close(self):
         self.connected = False
@@ -219,8 +233,11 @@ class ReporterTests(unittest.TestCase):
         reporter.publish()
         reporter.on_battery = True
         reporter.publish()
-        self.assertEqual(fake.reports, [("active", False, False), ("inactive", False, False),
-                                        ("sleeping", False, False), ("sleeping", True, False)])
+        reporter.screen_shared = True
+        reporter.publish()
+        self.assertEqual(fake.reports, [("active", False, False, False), ("inactive", False, False, False),
+                                        ("sleeping", False, False, False), ("sleeping", True, False, False),
+                                        ("sleeping", True, False, True)])
 
     def test_a_failed_report_is_retried_with_backoff_and_resent_after_reconnect(self):
         fake = FakeLink(failures=1)
@@ -229,8 +246,8 @@ class ReporterTests(unittest.TestCase):
         self.assertIsNotNone(reporter._retry)
         self.assertIsNone(reporter.acknowledged)
         reporter._retry_now()
-        self.assertEqual(fake.reports, [("active", False, False)])
-        self.assertEqual(reporter.acknowledged, ("active", False, False))
+        self.assertEqual(fake.reports, [("active", False, False, False)])
+        self.assertEqual(reporter.acknowledged, ("active", False, False, False))
 
 
 class StyleKeyTests(unittest.TestCase):
@@ -278,6 +295,191 @@ class StyleKeyTests(unittest.TestCase):
         for value in ("", "AB" * 16 + " " + "cd" * 32, "ab" * 16 + "  " + "cd" * 32, "secret words"):
             with self.assertRaises(style_key.KeyringError):
                 style_key.parse(value)
+
+
+def node(node_id, media_class, node_name, media_name=None):
+    props = {"media.class": media_class, "node.name": node_name}
+    if media_name is not None:
+        props["media.name"] = media_name
+    return {"id": node_id, "type": "PipeWire:Interface:Node", "info": {"state": "running", "props": props}}
+
+
+# The xdg-desktop-portal-hyprland 1.4.1 stream seen on 2026-10-23, a camera,
+# Chromium's consuming stream and an audio stream.
+SCREENCAST = node(123, "Video/Source", "xdg-desktop-portal-hyprland", "xdph-streaming-789568")
+CAMERA = node(70, "Video/Source", "v4l2_input.pci-0000_00_14.0-usb-0_1_1.0")
+CONSUMER = node(120, "Stream/Input/Video", "chromium", "webrtc-consume-stream")
+AUDIO = node(52, "Stream/Output/Audio", "quickshell", "Playback")
+
+
+def dump(*entries):
+    return ((json.dumps(list(entries), indent=2) if entries else "[\n]") + "\n").encode()
+
+
+class StreamsTests(unittest.TestCase):
+    def test_a_portal_stream_counts_and_cameras_or_consumers_do_not(self):
+        self.assertTrue(daemon.screencast_stream(SCREENCAST))
+        # Either name alone is enough: the node is named after the portal backend.
+        self.assertTrue(daemon.screencast_stream(node(124, "Video/Source", "xdg-desktop-portal-hyprland")))
+        self.assertTrue(daemon.screencast_stream(node(125, "Video/Source", "obs", "xdph-streaming-1")))
+        for other in (CAMERA, CONSUMER, AUDIO, node(126, "Audio/Source", "xdg-desktop-portal-hyprland"),
+                      {"id": 1, "type": "PipeWire:Interface:Client", "info": {"props": {}}}, {"id": 2, "info": None}):
+            self.assertFalse(daemon.screencast_stream(other), other)
+
+    def test_a_full_dump_then_changes_and_removals_in_any_pieces(self):
+        streams = daemon.Streams()
+        first = dump(AUDIO, CAMERA)
+        self.assertFalse(streams.feed(first[:40]), "half an array is not read yet")
+        self.assertFalse(streams.feed(first[40:]))
+        self.assertTrue(streams.synced)
+        output = dump(SCREENCAST) + dump(CONSUMER)
+        self.assertTrue(streams.feed(output[:-1]))
+        self.assertEqual(streams.ids, {123})
+        self.assertFalse(streams.feed(output[-1:]))
+        # A node that changes keeps or loses its place by what it is now.
+        self.assertFalse(streams.feed(dump(SCREENCAST)))
+        renamed = node(123, "Video/Source", "something-else", "other")
+        self.assertTrue(streams.feed(dump(renamed)))
+        self.assertTrue(streams.feed(dump(SCREENCAST)))
+        self.assertTrue(streams.feed(dump({"id": 123, "info": None})))
+        self.assertEqual(streams.ids, set())
+
+    def test_a_new_process_replaces_what_the_last_one_saw(self):
+        streams = daemon.Streams()
+        streams.feed(dump(SCREENCAST))
+        streams.restart()
+        self.assertEqual(streams.ids, {123}, "kept until the new dump arrives")
+        self.assertTrue(streams.feed(dump(AUDIO)))
+        self.assertEqual(streams.ids, set())
+        streams.restart()
+        self.assertTrue(streams.feed(b"[]\n" + dump(SCREENCAST)), "a compact empty array is read too")
+        self.assertEqual(streams.ids, {123})
+
+    def test_output_that_is_not_pw_dumps_is_refused(self):
+        for output in (b"{\n]\n", b"\"text\"\n]\n", b'{"id": 1}\n]\n'):
+            with self.assertRaises(ValueError):
+                daemon.Streams().feed(output)
+        with self.assertRaises(ValueError):
+            daemon.Streams().feed(b"[" + b" " * daemon.DUMP_LIMIT)
+
+
+class ScreenCastTests(unittest.TestCase):
+    """The watcher around a fake pw-dump, driven through its control files."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="bs-pw")
+        self.addCleanup(self.temporary.cleanup)
+        self.controls = Path(self.temporary.name)
+        (self.controls / "graph.json").write_text(json.dumps([AUDIO]))
+        os.environ["BADI_TEST_PW_DUMP_DIR"] = str(self.controls)
+        self.addCleanup(os.environ.pop, "BADI_TEST_PW_DUMP_DIR", None)
+        self.fake = FakeLink()
+        self.reporter = daemon.Reporter(self.fake)
+        self.reporter._watch_link = lambda: None
+        self.addCleanup(self.reporter.close)
+        self.backoff = daemon.BACKOFF_SECONDS
+        daemon.BACKOFF_SECONDS = (0, 0, 0)
+        self.addCleanup(setattr, daemon, "BACKOFF_SECONDS", self.backoff)
+        self.addCleanup(setattr, daemon, "RELEASE_SECONDS", daemon.RELEASE_SECONDS)
+        daemon.RELEASE_SECONDS = 0.1
+
+    def watch(self):
+        self.refreshes = []
+        screencast = daemon.ScreenCast(self.reporter, [sys.executable, "-B", str(Path(__file__).parent / "fake_pw_dump.py")],
+                                       refresh=lambda: self.refreshes.append(self.reporter.screen_shared))
+        self.addCleanup(screencast.close)
+        return screencast
+
+    def until(self, predicate, message, timeout=5.0):
+        context = daemon.GLib.MainContext.default()
+        deadline = time.monotonic() + timeout
+        # PyGObject's asyncio policy warns on every iteration under Python 3.14.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            while time.monotonic() < deadline:
+                if predicate():
+                    return
+                context.iteration(False)
+                time.sleep(0.01)
+        self.fail(f"timed out waiting for {message}")
+
+    def change(self, *entries):
+        index = len(list(self.controls.glob("change-*.json"))) + time.monotonic_ns()
+        (self.controls / f"change-{index:024d}.json").write_text(json.dumps(list(entries)))
+
+    def starts(self):
+        path = self.controls / "starts"
+        return len(path.read_text().splitlines()) if path.exists() else 0
+
+    def test_a_share_is_reported_while_its_stream_lives(self):
+        screencast = self.watch()
+        self.assertTrue(self.reporter.screen_shared, "shared until PipeWire first answers")
+        self.until(lambda: screencast.streams.synced, "the first dump")
+        self.assertFalse(self.reporter.screen_shared, "the first dump settles it at once")
+        self.change(SCREENCAST)
+        self.until(lambda: self.reporter.screen_shared, "the share")
+        self.assertEqual(self.fake.reports[-1], ("active", False, False, True))
+        self.change({"id": 123, "info": None})
+        self.until(lambda: not self.reporter.screen_shared, "the share ending")
+        self.assertEqual(self.fake.reports[-1], ("active", False, False, False))
+        self.assertEqual(self.refreshes, [False, True, False], "the bar mark reads each change once the broker has it")
+
+    def test_a_share_that_changes_streams_is_never_released_in_between(self):
+        daemon.RELEASE_SECONDS = 1.0
+        screencast = self.watch()
+        self.until(lambda: screencast.streams.synced, "the first dump")
+        preview = node(124, "Video/Source", "xdg-desktop-portal-hyprland", "xdph-streaming-1")
+        self.change(preview)
+        self.until(lambda: self.reporter.screen_shared, "the preview")
+        self.change({"id": 124, "info": None})
+        self.until(lambda: not screencast.streams.ids, "the preview ending")
+        self.assertTrue(self.reporter.screen_shared, "held through the gap")
+        self.change(SCREENCAST)
+        self.until(lambda: screencast.streams.ids == {123}, "the share")
+        self.until(lambda: screencast._release is None, "the release cancelled")
+        self.assertEqual(self.fake.reports, [("active", False, False, False), ("active", False, False, True)],
+                         "one report for the whole share")
+        started = time.monotonic()
+        self.change({"id": 123, "info": None})
+        self.until(lambda: not self.reporter.screen_shared, "the share ending", timeout=4)
+        self.assertGreaterEqual(time.monotonic() - started, 0.9, "released only after the delay")
+
+    def test_a_crashed_dump_keeps_the_hold_until_a_new_dump_replaces_it(self):
+        screencast = self.watch()
+        self.until(lambda: screencast.streams.synced, "the first dump")
+        self.change(SCREENCAST)
+        self.until(lambda: self.reporter.screen_shared, "the share")
+        (self.controls / "graph.json").write_text(json.dumps([AUDIO, SCREENCAST]))
+        (self.controls / "exit").touch()
+        self.until(lambda: self.starts() == 2 and screencast.streams.synced, "a restarted dump")
+        self.assertTrue(self.reporter.screen_shared, "the share is still live in the new dump")
+        (self.controls / "graph.json").write_text(json.dumps([AUDIO]))
+        (self.controls / "exit").touch()
+        self.until(lambda: self.starts() == 3 and not self.reporter.screen_shared, "the new dump without it")
+        self.assertNotIn(("active", False, False, False), self.fake.reports[1:-1],
+                         "the hold never lapsed between the two dumps")
+
+    def test_pipewire_down_ends_the_share_and_a_missing_tool_reports_none(self):
+        screencast = self.watch()
+        self.until(lambda: screencast.streams.synced, "the first dump")
+        self.change(SCREENCAST)
+        self.until(lambda: self.reporter.screen_shared, "the share")
+        (self.controls / "refuse").touch()
+        (self.controls / "exit").touch()
+        self.until(lambda: not self.reporter.screen_shared, "PipeWire gone")
+        self.assertGreaterEqual(self.starts(), 2)
+        missing = daemon.ScreenCast(self.reporter, [str(self.controls / "no-such-pw-dump")], refresh=lambda: None)
+        self.addCleanup(missing.close)
+        self.assertIsNone(missing.process)
+        self.assertEqual(missing.problem, "pw-dump unavailable")
+        self.assertFalse(self.reporter.screen_shared, "nothing to watch settles it at once")
+
+    def test_a_dump_that_shows_a_share_at_start_keeps_the_startup_hold(self):
+        (self.controls / "graph.json").write_text(json.dumps([AUDIO, SCREENCAST]))
+        screencast = self.watch()
+        self.until(lambda: screencast.streams.synced, "the first dump")
+        self.assertTrue(self.reporter.screen_shared)
+        self.assertEqual(self.fake.reports, [], "nothing changed, so nothing was sent")
 
 
 class SleepOrderTests(unittest.TestCase):

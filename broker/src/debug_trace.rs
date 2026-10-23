@@ -301,7 +301,8 @@ fn describe(entry: &mut Entry, adapter: AdapterKind, envelope: &WireEnvelope) {
             ],
         ),
         MessageType::Error => entry.copy(payload, &[("code", "/code")]),
-        // Content-free desktop signals: session state and power.
+        // Content-free desktop signals: session state, power and whether
+        // the screen is shared, with the hold that results.
         MessageType::DesktopState | MessageType::DesktopStatus => {
             entry.put("state", payload.clone());
         }

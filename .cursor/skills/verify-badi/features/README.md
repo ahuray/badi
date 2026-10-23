@@ -54,6 +54,7 @@ Each feature file starts with an H1 and one paragraph of user-visible behavior, 
 - [Spelling](./spelling.md) covers an unambiguous English correction on the Bash path, and the real-model and Writer paths that a VM cannot stand in for.
 - [Snooze](./snooze.md) covers turning Badi off in the focused app or site, and the refusal when nothing is focused.
 - [Pause and access](./pause-and-access.md) covers pause, app grants, status, and doctor.
+- [Screen-share hold](./screen-share-hold.md) covers holding every suggestion while the screen is shared, and keeping them on request.
 - [Usage statistics](./usage-stats.md) covers the content-free counts of suggestions, acceptances and words saved.
 - [Omarchy panel](./omarchy-panel.md) covers the bar mark and the settings popout.
 - [Prediction Lab](./prediction-lab.md) covers comparing a draft on the local model without changing the installed broker.

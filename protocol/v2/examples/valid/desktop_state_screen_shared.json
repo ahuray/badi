@@ -1,0 +1,12 @@
+{
+  "v": 2,
+  "id": "session.state.9",
+  "type": "desktop.state",
+  "mono_ms": 46,
+  "payload": {
+    "session": "active",
+    "on_battery": false,
+    "power_saver": false,
+    "screen_shared": true
+  }
+}

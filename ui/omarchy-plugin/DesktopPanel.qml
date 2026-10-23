@@ -73,11 +73,17 @@ Item {
     || siteRules().some(function(rule) { return rule.allowed })
   readonly property bool ready: client.brokerReachable && !client.brokerPaused && !client.controlPlaneDegraded && anyAppEnabled
   readonly property bool paused: client.brokerReachable && client.brokerPaused
+  // The session helper's report (badi-session), when the broker sends one:
+  // while the screen is shared, settings hold every suggestion by default.
+  readonly property var sessionHelper: client.objectValue(client.broker, "desktop")
+  readonly property bool sharingHeld: sessionHelper.screen_share === "held"
   readonly property bool controlsBusy: action.running || client.mutating
   readonly property bool canChange: client.canMutateSettings && !action.running
   readonly property string statusLabel: !client.brokerReachable
     ? (serviceState.active === "active" ? "Model starting or unavailable" : "Model offline")
-    : client.controlPlaneDegraded ? "Settings need attention" : paused ? "Predictions paused"
+    : client.controlPlaneDegraded ? "Settings need attention"
+    : paused && sharingHeld && client.settings.paused !== true ? "Held while the screen is shared"
+    : paused ? "Predictions paused"
     : !anyAppEnabled ? "Applications disabled" : "Model ready"
   // Apps and sites snoozed now (badi snooze or its shortcut; runtime only),
   // each a settings identity and the milliseconds left.
@@ -165,7 +171,8 @@ Item {
     if (client.brokerPaused && snoozes.length > 0) return runAction(["resume"], "Resuming", "Resumed · snooze ended")
     actionMessage = ""
     var document = client.cloneSettings()
-    document.paused = !client.brokerPaused
+    // A screen-share hold is not a pause: the switch then pauses for good.
+    document.paused = sharingHeld ? client.settings.paused !== true : !client.brokerPaused
     client.replaceSettings(document, document.paused ? "Paused · persists after restart" : "Resumed")
   }
 
@@ -254,6 +261,13 @@ Item {
       if (mode === "quiet") delete document.battery_mode
       else document.battery_mode = mode
     }, "On battery: " + batteryLabel(mode).toLowerCase())
+  }
+
+  function setScreenShare(mode) {
+    change(function(document) {
+      if (mode === "hold") delete document.screen_share
+      else document.screen_share = mode
+    }, mode === "hold" ? "No suggestions while the screen is shared" : "Suggestions continue while the screen is shared")
   }
 
   function setSuggestionLength(length) {
@@ -622,6 +636,14 @@ Item {
       detail: batteryLabel(battery) + " · explicit requests never change", value: battery, enabled: canChange,
       options: [{value: "quiet", label: "Pause first"}, {value: "normal", label: "As on mains"}, {value: "explicit", label: "Ask only"}],
       choose: function(value) { if (value !== battery) root.setBatteryMode(value) }})
+    var sharing = client.settings.screen_share === "suggest" ? "suggest" : "hold"
+    var shared = sessionHelper.screen_share === "held" || sessionHelper.screen_share === "suggesting"
+    list.push({key: "screen_share", section: "Writing", kind: "choice", label: "While sharing the screen",
+      detail: (shared ? "Shared now · " : "")
+        + (sharing === "hold" ? "No suggestions until sharing stops" : "Grey text can appear on the shared screen"),
+      value: sharing, enabled: canChange,
+      options: [{value: "hold", label: "Hold"}, {value: "suggest", label: "Suggest"}],
+      choose: function(value) { if (value !== sharing) root.setScreenShare(value) }})
 
     var writing = writingLanguages()
     var healingChoices = client.objectValue(client.settings, "trailing_space_healing")

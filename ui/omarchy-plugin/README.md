@@ -33,8 +33,12 @@ Every open starts compact, and search always covers every setting. From the
 top:
 
 - **Hero:** the mark, the model as a pill, Badi's mode as a glyph and word
-  (`⏵⏵ SUGGESTING`, `⏸ PAUSED`, `◌ LOADING`, `○ MODEL OFFLINE`,
-  `◇ NO APP ALLOWED`) and a switch that pauses or resumes.
+  (`⏵⏵ SUGGESTING`, `⏸ PAUSED`, `⏸ HELD · SCREEN SHARED`, `◌ LOADING`,
+  `○ MODEL OFFLINE`, `◇ NO APP ALLOWED`) and a switch that pauses or
+  resumes. While the screen-share hold is on (the session helper's report in
+  `badictl overview`, [runbook](../../adapters/session/README.md#screen-sharing)),
+  the status reads "Held while the screen is shared"; the switch stays on,
+  since the hold is not your pause, and still pauses for good.
 - **Activity:** while something runs, a spinner, a verb and the elapsed
   seconds (`Saving…`, `Loading the model… 3s`); otherwise a status dot and
   the counts since model start.
@@ -61,7 +65,7 @@ top:
   Turn on and Not now; afterwards a switch, and while it is on a row per
   allowed app and Forget learned words, each running `badi context`, which
   also hands the keyring key over; Forget asks first in Omarchy's own
-  confirm dialog, with Cancel selected), Writing (suggestion length: Short or Normal, as `badi length` sets it; mid-sentence, Escape quiet, battery), Suggestions (each
+  confirm dialog, with Cancel selected), Writing (suggestion length: Short or Normal, as `badi length` sets it; mid-sentence, Escape quiet, battery; while sharing the screen: Hold or Suggest, as `badi screen-share` sets it), Suggestions (each
   European language: Off, Auto (heal as the running model's review decided), Heal or
   Keep space, as `badi suggest` sets them; French, Spanish and Portuguese are
   marked experimental), Spelling (each language and its dictionary, naming the package when one is

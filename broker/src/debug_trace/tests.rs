@@ -123,3 +123,22 @@ fn context_keeps_its_last_and_suggestions_their_first_characters() {
     assert_eq!(tail("ab", 3), "ab");
     assert_eq!(tail("سلام دنیا", 4), "دنیا");
 }
+
+#[test]
+fn a_screen_share_hold_is_named_in_the_trace() {
+    let directory = run_directory(Some(true), 600);
+    let status = WireEnvelope::global(
+        MessageType::DesktopStatus,
+        0,
+        &json!({"observed": true, "session": "active", "low_power": false,
+                "automatic": "normal", "screen_share": "held"}),
+    )
+    .expect("frame");
+    let tracer = Tracer::new(Some(directory.path().to_owned()));
+    tracer.emit("out desktop.status", |entry| {
+        describe(entry, AdapterKind::Session, &status);
+    });
+    let [line] = lines(&directory).try_into().expect("one line");
+    assert_eq!(line["adapter"], "session");
+    assert_eq!(line["state"]["screen_share"], "held");
+}

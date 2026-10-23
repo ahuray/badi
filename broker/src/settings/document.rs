@@ -94,6 +94,26 @@ impl BatteryMode {
     }
 }
 
+/// What suggestions do while the desktop helper reports a live screen share.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ScreenShareMode {
+    /// The default, omitted from documents: every suggestion is held until
+    /// sharing stops, so grey text never reaches someone else's screen.
+    #[default]
+    #[serde(rename = "hold")]
+    Hold,
+    /// Suggestions continue while the screen is shared.
+    #[serde(rename = "suggest")]
+    Suggest,
+}
+
+impl ScreenShareMode {
+    #[must_use]
+    pub const fn is_hold(&self) -> bool {
+        matches!(self, Self::Hold)
+    }
+}
+
 /// How many words a model continuation may show, within the same token and
 /// time budget. Corrections, vocabulary completions and the deterministic
 /// fixture ignore it.
@@ -159,6 +179,9 @@ pub struct SettingsV2 {
     /// Omitted when quiet, the default.
     #[serde(default, skip_serializing_if = "BatteryMode::is_quiet")]
     pub battery_mode: BatteryMode,
+    /// Suggestions while the screen is shared. Omitted when hold, the default.
+    #[serde(default, skip_serializing_if = "ScreenShareMode::is_hold")]
+    pub screen_share: ScreenShareMode,
     /// How many words a continuation shows. Omitted when normal, the default.
     #[serde(default, skip_serializing_if = "SuggestionLength::is_normal")]
     pub suggestion_length: SuggestionLength,
@@ -238,6 +261,8 @@ struct SettingsDocument {
     #[serde(default)]
     battery_mode: Option<BatteryMode>,
     #[serde(default)]
+    screen_share: Option<ScreenShareMode>,
+    #[serde(default)]
     suggestion_length: Option<SuggestionLength>,
     #[serde(default)]
     languages_chosen: Option<bool>,
@@ -287,6 +312,10 @@ impl SettingsDocument {
             (
                 self.battery_mode.is_some(),
                 "battery_mode_requires_settings_v2",
+            ),
+            (
+                self.screen_share.is_some(),
+                "screen_share_requires_settings_v2",
             ),
             (
                 self.suggestion_length.is_some(),
@@ -359,6 +388,7 @@ impl<'de> Deserialize<'de> for SettingsV2 {
             mid_line: decoded.mid_line.unwrap_or(false),
             escape_quiet_seconds: decoded.escape_quiet_seconds.unwrap_or(0),
             battery_mode: decoded.battery_mode.unwrap_or_default(),
+            screen_share: decoded.screen_share.unwrap_or_default(),
             suggestion_length: decoded.suggestion_length.unwrap_or_default(),
             languages_chosen: decoded.languages_chosen.unwrap_or(false),
             style_learning: decoded.style_learning.unwrap_or(false),
@@ -427,6 +457,7 @@ impl SettingsV2 {
             mid_line: false,
             escape_quiet_seconds: 0,
             battery_mode: BatteryMode::Quiet,
+            screen_share: ScreenShareMode::Hold,
             suggestion_length: SuggestionLength::Normal,
             languages_chosen: false,
             style_learning: false,
@@ -612,6 +643,7 @@ impl SettingsV2 {
         self.mid_line = current.mid_line;
         self.escape_quiet_seconds = current.escape_quiet_seconds;
         self.battery_mode = current.battery_mode;
+        self.screen_share = current.screen_share;
         self.suggestion_length = current.suggestion_length;
         self.languages_chosen = current.languages_chosen;
         self.style_learning = current.style_learning;

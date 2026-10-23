@@ -193,6 +193,7 @@ badi pause                          # persists across restarts; badi resume
 badi pause toggle                   # what the session helper's shortcut runs
 badi snooze                         # off in the focused app or site for 10 minutes; badi resume ends it
 badi battery normal                 # on battery: keep mains scheduling (default: quiet)
+badi screen-share suggest           # keep suggesting while the screen is shared (default: hold)
 badi languages en de fr             # the languages you write in: suggestions and typo fixes in each
 badi length short                   # one or two words per suggestion; normal (default) up to four
 badi mid-line on                    # suggestions when a word follows the caret; off by default
@@ -249,12 +250,18 @@ heals the languages its blind review cleared (Gemma 3 1B: all six); `badi sugges
 nothing right after a space. The panel's Suggestions rows set the same
 choices.
 
-### Sleep, session switches, battery and shortcuts
+### Sleep, session switches, screen sharing, battery and shortcuts
 
 The `badi-session` user service, installed with the desktop installer,
 withdraws every suggestion and grant before the machine sleeps and while
 another session or VT is in the foreground; after resume, each field is
-acquired afresh. On battery or in the power-saver profile, Badi by default
+acquired afresh. While you share your screen (a desktop portal screencast,
+as browsers, OBS and meeting apps start through `xdg-desktop-portal-hyprland`),
+Badi shows no suggestions, so grey text with words from the window or ones it
+learned never appears on someone else's screen; they return when sharing
+stops. `badi status` and the settings panel say when that hold is on, and
+`badi screen-share suggest` (or the panel's **While sharing the screen**
+row) keeps suggesting instead. On battery or in the power-saver profile, Badi by default
 starts the model only once you pause typing for 300 ms instead of on every
 key; `badi battery explicit` shows suggestions only when you ask and `badi
 battery normal` keeps mains behavior. The model stays loaded in every mode.

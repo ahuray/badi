@@ -48,6 +48,15 @@ SNOOZE_REFUSALS = {
 }
 DESKTOP_AUTOMATIC = {"normal": "as on mains", "deferred": "after the typing pause",
                      "explicit_only": "only when asked"}
+SCREEN_SHARE_TEXT = {
+    "hold": "While the screen is shared, Badi shows no suggestions until sharing stops (the default).",
+    "suggest": ("Badi keeps suggesting while the screen is shared, so its grey text, with words from the "
+                "window or learned ones, can appear on the shared screen. badi screen-share hold undoes it."),
+}
+SHARE_HELD_NOTE = ("The screen is being shared, so Badi holds every suggestion until sharing stops "
+                   "(badi screen-share suggest keeps suggesting).")
+SHARE_SUGGESTING_NOTE = ("The screen is being shared and Badi keeps suggesting, so its grey text can appear on the "
+                         "shared screen (badi screen-share hold).")
 HELP = """Badi — local writing controls
 
   badi status [--json]          Model health and counters
@@ -69,6 +78,11 @@ HELP = """Badi — local writing controls
                                power-saver profile: start the model only
                                after a typing pause (default), as on mains,
                                or only when asked. Needs badi-session
+  badi screen-share hold|suggest
+                               While the screen is shared (a desktop portal
+                               screencast): hold every suggestion until it
+                               stops (default), or keep suggesting. Needs
+                               badi-session
   badi length short|normal      How many words a suggestion shows: one or
                                two, or up to four (default)
   badi mid-line on|off         Suggestions with a word after the caret (off
@@ -342,11 +356,30 @@ def desktop_text(desktop, settings=None):
     if not isinstance(desktop, dict):
         return None
     if not desktop.get("observed"):
-        return "Desktop: no session helper (suspend and battery modes need badi-session)"
+        return "Desktop: no session helper (suspend, battery modes and the screen-share hold need badi-session)"
     mode = (settings or {}).get("battery_mode", "quiet")
     power = "on battery or power saver" if desktop.get("low_power") else "on mains power"
     automatic = DESKTOP_AUTOMATIC.get(desktop.get("automatic"), "unknown")
     return f"Desktop: session {desktop.get('session', 'unknown')} · {power} · battery mode {mode} · automatic {automatic}"
+
+
+def screen_share_text(desktop, settings=None):
+    """Whether the screen is shared and what that does to suggestions, or None
+    without a session helper."""
+    if not isinstance(desktop, dict):
+        return None
+    state = desktop.get("screen_share")
+    if not desktop.get("observed"):
+        # The broker keeps a share held for a few seconds after its helper left.
+        return ("Screen sharing: the session helper stopped during a share; suggestions stay held "
+                "for up to 10 s or until it reports again") if state == "held" else None
+    suggest = (settings or {}).get("screen_share") == "suggest"
+    if state == "held":
+        return "Screen sharing: shared, every suggestion held until it stops (badi screen-share suggest keeps them)"
+    if state == "suggesting":
+        return "Screen sharing: shared, still suggesting (badi screen-share hold holds them)"
+    return ("Screen sharing: not shared · " + ("still suggests" if suggest else "holds suggestions")
+            + " while shared (badi screen-share hold|suggest)")
 
 
 def snooze_text(snoozes):
@@ -588,22 +621,31 @@ def health_report():
     helper = report["session_helper"] = session_helper_state()
     desktop = broker.get("desktop") if broker else None
     if broker and helper.get("loaded") is False:
-        report["notes"].append("The desktop session helper (badi-session) is not installed, so suspend, session switches and "
-                               "battery modes are not reported to the broker. Adapters keep their own focus, lock and expiry checks.")
+        report["notes"].append("The desktop session helper (badi-session) is not installed, so suspend, session switches, "
+                               "battery modes and screen sharing are not reported to the broker. Adapters keep their own focus, "
+                               "lock and expiry checks.")
     elif isinstance(desktop, dict) and desktop.get("session") in ("inactive", "sleeping"):
         report["notes"].append("The session helper reports this login session as not in the foreground, so every grant is held "
                                "until it returns.")
     elif isinstance(desktop, dict) and desktop.get("automatic") in ("deferred", "explicit_only"):
         report["notes"].append("On battery or in the power-saver profile, automatic suggestions start "
                                + DESKTOP_AUTOMATIC[desktop["automatic"]] + " (badi battery normal restores mains behavior).")
+    if broker and helper.get("loaded") and shutil.which("pw-dump") is None:
+        report["notes"].append("pw-dump (PipeWire) is not installed, so the session helper cannot see a screen share "
+                               "and suggestions are not held while one runs.")
+    sharing = desktop.get("screen_share") if isinstance(desktop, dict) else None
     if report["native"].get("addon_update_pending"):
         report["notes"].append("Fcitx is still using the previous addon build. Apply the native update after normal desktop unlock.")
-    if broker.get("paused"):
+    if sharing == "held":
+        report["notes"].append(SHARE_HELD_NOTE)
+    elif broker.get("paused"):
         report["notes"].append("Predictions are paused. Run badi resume when you want suggestions again.")
     elif snooze_text(broker.get("snoozes")):
         report["notes"].append(snooze_text(broker["snoozes"]) + " sooner; it withholds only that app or site.")
     elif broker and broker.get("metrics", {}).get("provider_calls") == 0:
         report["notes"].append("The model is ready but has received no prediction requests since startup. Run badi debug on and badi debug watch, then type in a supported field. Native manual fields require Tab; observed fields need matching accessibility and Fcitx context.")
+    if sharing == "suggesting":
+        report["notes"].append(SHARE_SUGGESTING_NOTE)
     settings = web_settings() if broker else {}
     if settings.get("all_web_origins") is True:
         report["notes"].append(ALL_SITES_NOTE)
@@ -688,7 +730,9 @@ def length_text(length):
 
 
 def status_text(health, settings=None):
-    state = "Paused" if health["paused"] else "Model ready"
+    held = isinstance(health.get("desktop"), dict) and health["desktop"].get("screen_share") == "held"
+    state = ("Held while the screen is shared" if held and not (settings or {}).get("paused")
+             else "Paused" if health["paused"] else "Model ready")
     counters = health["metrics"]
     summary = no_suggestion_summary(counters)
     if summary is None:
@@ -710,6 +754,7 @@ def status_text(health, settings=None):
             + f"Length: {length_text((settings or {}).get('suggestion_length'))}\n"
             + f"Escape: dismiss (quiet: {quiet_text}) · Why nothing appeared: badi doctor; badi debug on; badi debug watch"
             + "".join(f"\n{line}" for line in [desktop_text(health.get("desktop"), settings),
+                                                 screen_share_text(health.get("desktop"), settings),
                                                  snooze_text(health.get("snoozes"))] if line))
 
 
@@ -1023,6 +1068,14 @@ def context_command(arguments):
         print("Every learned word was deleted. The keyring key stays for style learning; badi style forget removes it.")
     else:
         raise RuntimeError("Usage: badi context on|off|status|forget, or badi context app ID|site ORIGIN on|off")
+
+
+def set_screen_share(document, mode):
+    # Absent is the canonical hold, the default.
+    if mode == "hold":
+        document.pop("screen_share", None)
+    else:
+        document["screen_share"] = mode
 
 
 def set_suggestion_length(document, length):
@@ -1687,6 +1740,10 @@ def main(arguments):
     if len(arguments) == 2 and arguments[0] == "battery" and arguments[1] in BATTERY_TEXT:
         update_settings(lambda document: set_battery_mode(document, arguments[1]))
         print(BATTERY_TEXT[arguments[1]])
+        return
+    if len(arguments) == 2 and arguments[0] == "screen-share" and arguments[1] in SCREEN_SHARE_TEXT:
+        update_settings(lambda document: set_screen_share(document, arguments[1]))
+        print(SCREEN_SHARE_TEXT[arguments[1]])
         return
     if len(arguments) == 2 and arguments[0] == "length" and arguments[1] in LENGTH_TEXT:
         update_settings(lambda document: set_suggestion_length(document, arguments[1]))

@@ -43,6 +43,8 @@ interaction, the exact editing authority and the policy around them.
   controls are separate from prediction permission. Window context cannot
   authorize an edit, cross a window or site boundary, or override current
   draft facts. It is processed on the device, never sent to a remote service.
+  While the screen is shared, suggestions are held unless the user chose
+  otherwise, so window and learned words never reach another person's screen.
 - Activation, context, inference, learning and retention are separate
   decisions; deny wins. Ordinary context is ephemeral. Enabled style learning
   uses only authorized samples, stays encrypted locally, and supports one-step

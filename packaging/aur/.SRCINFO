@@ -32,6 +32,7 @@ pkgbase = badi-git
 	optdepends = curl: download the separately verified writing assets
 	optdepends = libsecret: keep the opt-in style-learning key in the desktop keyring
 	optdepends = xdg-desktop-portal: pause and settings shortcuts through the desktop portal
+	optdepends = pipewire: hold suggestions while the screen is shared (pw-dump)
 	provides = badi
 	conflicts = badi
 	options = !debug

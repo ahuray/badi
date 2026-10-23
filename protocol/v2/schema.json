@@ -1427,24 +1427,26 @@
     "desktopStatePayload": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Content-free report from the desktop session helper (capability desktop_signals). It never grants authority. Unknown power state is reported as false.",
-      "required": ["session", "on_battery", "power_saver"],
+      "description": "Content-free report from the desktop session helper (capability desktop_signals). It never grants authority. Unknown power state is reported as false. screen_shared is true while a desktop portal screencast stream is live in PipeWire, and false without PipeWire, where no portal stream can exist.",
+      "required": ["session", "on_battery", "power_saver", "screen_shared"],
       "properties": {
         "session": { "$ref": "#/$defs/desktopSession" },
         "on_battery": { "type": "boolean" },
-        "power_saver": { "type": "boolean" }
+        "power_saver": { "type": "boolean" },
+        "screen_shared": { "type": "boolean" }
       }
     },
     "desktopStatusPayload": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The broker's combined view of every connected helper's report. automatic is normal unless low_power is true and settings choose a battery mode.",
-      "required": ["observed", "session", "low_power", "automatic"],
+      "description": "The broker's combined view of every connected helper's report. automatic is normal unless low_power is true and settings choose a battery mode. screen_share is none unless a helper reports a live screen share, or one that did left less than the broker's grace (10 s) ago without another report since; then held (settings screen_share hold, the default: every grant is held as in an inactive session) or suggesting (settings screen_share suggest). Only that grace outlives a helper, so observed may be false while a share is held.",
+      "required": ["observed", "session", "low_power", "automatic", "screen_share"],
       "properties": {
         "observed": { "type": "boolean" },
         "session": { "$ref": "#/$defs/desktopSession" },
         "low_power": { "type": "boolean" },
-        "automatic": { "enum": ["normal", "deferred", "explicit_only"] }
+        "automatic": { "enum": ["normal", "deferred", "explicit_only"] },
+        "screen_share": { "enum": ["none", "held", "suggesting"] }
       },
       "allOf": [
         {

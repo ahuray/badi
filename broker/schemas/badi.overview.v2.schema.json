@@ -55,6 +55,19 @@
               "remaining_ms": { "type": "integer", "minimum": 0, "maximum": 86400000 }
             }
           }
+        },
+        "desktop": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The broker's combined view of the session helper's reports, as health.status carries it (protocol v2 desktopStatusPayload); omitted by a broker that sends none.",
+          "required": ["observed", "session", "low_power", "automatic", "screen_share"],
+          "properties": {
+            "observed": { "type": "boolean" },
+            "session": { "enum": ["active", "inactive", "sleeping"] },
+            "low_power": { "type": "boolean" },
+            "automatic": { "enum": ["normal", "deferred", "explicit_only"] },
+            "screen_share": { "enum": ["none", "held", "suggesting"] }
+          }
         }
       }
     },

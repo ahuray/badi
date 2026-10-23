@@ -54,6 +54,7 @@ fn settings(revision: u64, style_learning: bool, learn: bool) -> SettingsV2 {
         mid_line: false,
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Quiet,
+        screen_share: crate::settings::ScreenShareMode::Hold,
         suggestion_length: crate::settings::SuggestionLength::Normal,
         languages_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
