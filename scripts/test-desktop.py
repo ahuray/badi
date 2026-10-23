@@ -75,6 +75,11 @@ class DesktopTests(unittest.TestCase):
         helper = patch.object(desktop, 'session_helper_state', return_value={'loaded': True, 'active': 'active'})
         helper.start()
         self.addCleanup(helper.stop)
+        # Nor ask this machine's Omarchy bar to refresh.
+        self.refresh_bar = desktop.refresh_bar
+        bar = patch.object(desktop, 'refresh_bar')
+        self.bar = bar.start()
+        self.addCleanup(bar.stop)
 
     def desktop_socket(self, mode=0o600):
         endpoint = self.directory / 'broker.sock'
@@ -1025,6 +1030,33 @@ class DesktopTests(unittest.TestCase):
         self.assertNotIn("trailing_space_healing", document)
         with self.assertRaisesRegex(RuntimeError, "Usage: badi suggest"):
             desktop.set_healing(document, "fr", "maybe")
+
+    def test_state_changes_ask_the_bar_mark_to_look_again(self):
+        settings = {'schema': 'badi.settings.v2', 'revision': 3, 'paused': False, 'subjects': []}
+        for arguments, replies in ((['pause'], [json.dumps(settings), '{}']),
+                                   (['snooze', 'end'], ['{}']),
+                                   (['length', 'short'], [json.dumps(settings), '{}'])):
+            self.bar.reset_mock()
+            with self.subTest(arguments=arguments), \
+                 patch.object(desktop, 'control', side_effect=replies), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                desktop.main(arguments)
+            self.bar.assert_called_once_with()
+        # One quiet, bounded call where Omarchy runs; nothing anywhere else,
+        # and a shell that cannot answer changes nothing.
+        with patch.object(desktop.shutil, 'which', return_value='/usr/bin/omarchy-shell'), \
+             patch.object(desktop.subprocess, 'run') as command:
+            self.refresh_bar()
+        command.assert_called_once()
+        self.assertEqual(command.call_args.args[0], ['omarchy-shell', '-q', 'badi-writing', 'refresh'])
+        self.assertEqual(command.call_args.kwargs['timeout'], 3)
+        with patch.object(desktop.shutil, 'which', return_value=None), \
+             patch.object(desktop.subprocess, 'run') as command:
+            self.refresh_bar()
+        command.assert_not_called()
+        with patch.object(desktop.shutil, 'which', return_value='/usr/bin/omarchy-shell'), \
+             patch.object(desktop.subprocess, 'run', side_effect=subprocess.TimeoutExpired('omarchy-shell', 3)):
+            self.refresh_bar()
 
     def test_languages_set_suggestions_and_typo_fixes_in_one_write(self):
         document = {"writing_languages": ["en", "de", "fa"], "trailing_space_healing": {"de": False}}

@@ -109,9 +109,12 @@ hl.bind("SUPER + ALT + GRAVE", hl.dsp.global("io.github.ahuray.badi:snooze"))
 hl.bind("SUPER + ALT + PERIOD", hl.dsp.global("io.github.ahuray.badi:open-settings"))
 ```
 
-A pause or resume shows a desktop notification. A snooze shows the
-controller's own line, naming the app or site and the minutes, or why
-nothing was snoozed (no focused field Badi follows, or fields of two apps);
+A pause, resume or snooze shows on Omarchy's on-screen display, as volume
+and the touchpad toggle do (`omarchy-osd -i media-pause -m "Badi paused"`;
+a snooze reads `Snoozed in` and the app or site), and as a desktop
+notification where `omarchy-osd` is missing. A snooze the controller
+refused stays a notification with its own line, saying why nothing was
+snoozed (no focused field Badi follows, or fields of two apps);
 the snooze itself is [broker runtime state](../../broker/README.md#snooze)
 that only withholds, and `badi resume` ends it sooner. Interface version 1 is
 all this needs: it has no `ConfigureShortcuts`, and the helper never calls

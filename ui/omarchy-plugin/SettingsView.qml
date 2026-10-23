@@ -44,6 +44,7 @@ Item {
     : {glyph: "⏵⏵", text: "Suggesting", tone: "accent"}
 
   function reset() {
+    controller.confirmation = null
     cursor = -1
     chip = 0
     search.text = ""

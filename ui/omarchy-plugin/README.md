@@ -60,25 +60,33 @@ top:
   until you choose, one question, "Finish words from what you see?", with
   Turn on and Not now; afterwards a switch, and while it is on a row per
   allowed app and Forget learned words, each running `badi context`, which
-  also hands the keyring key over), Writing (suggestion length: Short or Normal, as `badi length` sets it; mid-sentence, Escape quiet, battery), Suggestions (each
+  also hands the keyring key over; Forget asks first in Omarchy's own
+  confirm dialog, with Cancel selected), Writing (suggestion length: Short or Normal, as `badi length` sets it; mid-sentence, Escape quiet, battery), Suggestions (each
   European language: Off, Auto (heal as the running model's review decided), Heal or
   Keep space, as `badi suggest` sets them; French, Spanish and Portuguese are
   marked experimental), Spelling (each language and its dictionary, naming the package when one is
   missing), Apps (the list mode and each supported app), Websites (the list
   mode, each rule, an add field: Enter allows, Shift+Enter blocks),
-  Statistics (Forget usage statistics, which runs `badi stats forget`) and
+  Statistics (Forget usage statistics, which runs `badi stats forget` after
+  the same confirm dialog) and
   System (start at login, debug trace, restart, start or stop).
 
 Keys: j/k or arrows move one cursor through the rows, space or Enter toggles
 or runs, h/l changes a choice or walks a chip row's chips (space toggles the
 one under the cursor), a shows all or fewer settings, x removes a site rule,
 p pauses, r refreshes,
-Tab moves to the neighbouring bar panel and Escape closes. The footer shows
-the last result (`✓ Spelling on`, `✗ …`) or these keys.
+Tab moves to the neighbouring bar panel and Escape closes. While the confirm
+dialog asks, h/l, arrows or Tab choose, Enter decides and Escape cancels. The
+footer shows the last result (`✓ Spelling on`, `✗ …`) or these keys.
 
 Settings writes use the broker's compare-and-swap API and fail visibly on a
 conflict instead of retrying over another change. `badi settings` toggles the
-popout through the `badi-writing` IPC target. The terminal equivalents are in
+popout through the `badi-writing` IPC target, an Omarchy `ShellIpc` handler
+that `omarchy-shell` reaches over the shell's own socket (8 ms against about
+45 ms for a `qs ipc` client). The mark reads the broker only while the popout
+is open, so every `badi` settings write, snooze and snooze end calls its
+`refresh()` (`omarchy-shell -q badi-writing refresh`, quiet where Omarchy is
+not running): a pause from a shortcut or a terminal dims the mark at once. The terminal equivalents are in
 the [README](../../README.md#choose-where-badi-writes).
 Per-app language overrides are currently set from the terminal. Panel writes
 validate and preserve them.

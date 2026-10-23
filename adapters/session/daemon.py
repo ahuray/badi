@@ -13,6 +13,7 @@ every grant, and the broker drops this helper's report when it disconnects.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -359,6 +360,17 @@ class Power:
             watch.close()
 
 
+# The OSD icon for a snooze: Material Design's "sleep" in Omarchy's Nerd Font.
+SNOOZE_GLYPH = "\U000f04b2"
+
+
+def snooze_message(line):
+    """The on-screen display's short form of the controller's snooze line:
+    the display shows about twenty characters before it cuts the text."""
+    match = re.match(r"Badi is snoozed in (.+) for \d+ minutes?\b", line or "")
+    return f"Snoozed in {match.group(1)}" if match else "Badi snoozed"
+
+
 class Shortcuts:
     """Registers pause, snooze and settings shortcuts with the GlobalShortcuts
     portal.
@@ -373,6 +385,9 @@ class Shortcuts:
         self.bus = bus
         self.controller = controller
         self.notify = notify and shutil.which("notify-send") is not None
+        # Omarchy 4.5 shows brief confirmations on its own on-screen display,
+        # as it does for volume or the touchpad; elsewhere they stay toasts.
+        self.osd = notify and shutil.which("omarchy-osd") is not None
         self.session_handle = None
         self.version = None
         self.bound = ()
@@ -489,8 +504,11 @@ class Shortcuts:
             if not process.get_successful():
                 log("snooze refused or failed")
             line = first_line(output if process.get_successful() else error)
-            self._notification("Badi snoozed" if process.get_successful() else "Badi did not snooze",
-                               line or "Run badi doctor in a terminal.")
+            if process.get_successful():
+                self._confirm(SNOOZE_GLYPH, snooze_message(line), "Badi snoozed",
+                              line or "Run badi doctor in a terminal.")
+            else:
+                self._notification("Badi did not snooze", line or "Run badi doctor in a terminal.")
             return
         if not process.get_successful():
             log(f"{shortcut_id} failed")
@@ -498,8 +516,23 @@ class Shortcuts:
             return
         if shortcut_id == "pause-toggle":
             paused = (output or "").startswith("Predictions paused")
-            self._notification("Badi paused" if paused else "Badi resumed",
-                               "Suggestions stay off until you resume." if paused else "Suggestions are on again.")
+            self._confirm("media-pause" if paused else "media-play", "Badi paused" if paused else "Badi resumed",
+                          "Badi paused" if paused else "Badi resumed",
+                          "Suggestions stay off until you resume." if paused else "Suggestions are on again.")
+
+    def _confirm(self, icon, message, summary, body):
+        """A brief confirmation: Omarchy's on-screen display where it runs,
+        otherwise a toast with `summary` and `body`."""
+        if not (self.osd and self._osd(icon, message)):
+            self._notification(summary, body)
+
+    def _osd(self, icon, message):
+        try:
+            Gio.Subprocess.new(["omarchy-osd", "-i", icon, "-m", message],
+                               Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE)
+        except GLib.Error:
+            return False
+        return True
 
     def _notification(self, summary, body):
         if not self.notify:

@@ -10,7 +10,7 @@ The **b** mark on the Omarchy bar opens Badi's settings and shows whether sugges
 - `panel-search` filters rows from `/`.
 - `panel-length` sets Short or Normal on the Writing row.
 - `panel-snooze` shows a Snoozed row while an app or site is quiet, and ending it resumes that target.
-- `panel-stats` shows words saved for the last seven days and the leading apps in the History header, and Forget usage statistics on the Statistics row clears them.
+- `panel-stats` shows words saved for the last seven days and the leading apps in the History header, and Forget usage statistics on the Statistics row clears them after Omarchy's confirm dialog.
 
 ## How to get to it (user POV)
 
