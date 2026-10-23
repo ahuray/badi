@@ -243,5 +243,8 @@ showed and no model started, `badi screen-share suggest` showed suggestions
 during the share and `hold` withdrew them again, and afterwards they
 returned. `badi status`, the panel and Omarchy's `notifications probe`
 agreed, and the events-only debug trace named `screen_share: held` without
-text. Not tried: window or region shares, OBS, meeting apps and other portal
-backends.
+text. At `29ec777`, `systemctl --user restart badi-session.service` and a
+SIGKILL (systemd restarted it 3 s later) mid-share each kept the hold: the
+authority epoch did not move, typing in that gap showed nothing, and the
+trace held only `held` until the share ended. Not tried: window or region
+shares, OBS, meeting apps and other portal backends.
