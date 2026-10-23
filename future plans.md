@@ -9,7 +9,7 @@ When an item is done, delete it and record what is now true in the
 keeps the history of what shipped. Evidence lives in the runbooks; this file
 links to it. A tested app version is not a claim about Linux in general.
 
-## Where Badi stands (2026-10-20)
+## Where Badi stands (2026-10-24)
 
 - **Coverage** is ahead of every Linux alternative found: Chromium-based apps
   and any website, Zen, Omarchy web apps in Chromium or Brave, Telegram,
@@ -22,20 +22,28 @@ links to it. A tested app version is not a claim about Linux in general.
   Brave Origin, a web app, Zen, Writer, Obsidian, Neovim, Ghostty and VS
   Code. Omawrite and other observed Qt fields suggest again despite a
   fcitx5-qt 5.1.16 bug, but cannot replace a typo until it is fixed
-  (step 2). German,
-  French, Spanish, Italian, Dutch and Polish spelling are opt-in
-  (`badi spelling`). The closest Omarchy alternative, Oma Tab, replaces the
-  input method and ships a 4.8 GB model.
+  (step 2). German, French, Spanish, Italian, Dutch and Polish spelling are
+  opt-in (`badi spelling`). The closest Omarchy alternative, Oma Tab,
+  replaces the input method and ships a 4.8 GB model; of the alternatives
+  found on 2026-10-24, only ibus-llm-assist (IBus) reaches a desktop Badi
+  does not run on yet, GNOME.
 - **Interaction:** type-through returns a typed-through remainder in about
   50 ms with no model call, also when a browser re-admits the field
   ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md));
-  Tab takes a word and Ctrl+→ the rest; `badi length short` shows one or
-  two words instead of up to four; search boxes stay quiet; the inline
+  Tab takes a word and Ctrl+→ the rest; a half-typed word is finished, also
+  in front of the next word; `badi length short` shows one or
+  two words instead of up to four; search boxes stay quiet; Ctrl+Shift+Space
+  on a selected line checks its grammar or refines it, shown with marked
+  changes and applied by Tab
+  ([ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md));
+  typos in Chromium-based apps are corrected after checks
+  ([ADR 0011](docs/decisions/0011-checked-corrections-in-append-only-apps.md)); the inline
   preview ([ADR 0006](docs/decisions/0006-grey-preview-is-an-overlay.md))
   reaches VS Code, iframe editors, Qt apps and Writer.
 - **Desktop signals:** the installed [session helper](adapters/session/README.md)
   holds grants across sleep and session switches and while the screen is
-  shared, and defers automatic requests on battery
+  shared (a portal screencast in PipeWire), and defers automatic requests on
+  battery
   ([ADR 0005](docs/decisions/0005-desktop-signals-withhold-authority.md)).
 - **Speed:** with a full sliding-window cache (2026-10-19), Gemma 3 reads 1.5
   new prompt tokens per keystroke and a Chromium suggestion showed at p50 241
@@ -56,6 +64,16 @@ links to it. A tested app version is not a claim about Linux in general.
   ([model fit](docs/architecture/model-selection.md)). Mid-sentence
   suggestions rarely help, and longer Tab chains drift; the model, not the
   context window, is the limit ([why](broker/README.md#suggestion-limits)).
+  Revision with Qwen3 1.7B fixed 50 of 75 development errors across the five
+  languages (Spanish 7/15, weakest) and left 19 of 20 correct inputs alone
+  ([Lab](evaluation/writing/README.md#selection-revision)).
+- **Security:** a review on 2026-10-23 found nothing critical or high; the
+  broker and runtime run sandboxed (no network, read-only home but Badi's
+  two directories, no core dumps), and password-labelled fields are never
+  read ([ADR 0001](docs/decisions/0001-same-uid-trust-boundary.md)). The
+  pinned llama.cpp b10726 predates a `/completion` double-free fix (b11393);
+  only the broker can reach its socket, so it is upkeep, not an exposure
+  ([Engineering upkeep](#engineering-upkeep)).
 - **Diagnosis:** `badi debug on [--text]`, `badi debug watch` and `badi debug
   log` trace every request (with first-token time and new and reused prompt
   tokens), suggestion, key and ghost ([README](README.md#debug-trace),
@@ -127,11 +145,15 @@ Open decisions, for the user:
 Each step ends with its completion test. Steps that install to the desktop or
 publish need the user's go-ahead first; the rest can start at once.
 
-1. **Close the Cotypist gaps that fit Badi.** Cotypist 0.22 (researched
-   2026-10-20 from its site, help pages and reviews) offers these, and Badi
-   does not yet:
+1. **Close the Cotypist gaps that fit Badi.** Cotypist (0.22 researched
+   2026-10-20; its 2026.x releases and pricing page rechecked 2026-10-24) is
+   still Mac-only, defaults to Gemma 4 E2B, and offers these, which Badi does
+   not yet:
    - global and per-app instructions, and personalized word choice (Badi's
      style samples are stored but not yet read, step 5);
+   - a numbered list of alternative words for the next word, and synonyms
+     for a selected word (added mid-2026; Badi's candidate panel and its
+     selection revision could carry both);
    - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
      4B–30B): a llama.cpp Vulkan or CUDA runtime for machines with a GPU,
      measured with the [bench](evaluation/llm-bench/README.md) and the Lab.
@@ -149,7 +171,9 @@ publish need the user's go-ahead first; the rest can start at once.
      rather than screen recording;
    - learned words, battery modes, no telemetry, no account, MIT;
    - a snooze for the focused app or site (`badi snooze`, a portal
-     shortcut) and Ctrl+Shift+Tab for a real Tab while a suggestion shows.
+     shortcut) and Ctrl+Shift+Tab for a real Tab while a suggestion shows;
+   - grammar checks and refined wording of a selection, which Cotypist says
+     it does not do.
 
    Left out on purpose: clipboard awareness and screen recording (the
    [context firewall](VISION.md#context-firewall)), sync and telemetry
@@ -169,7 +193,11 @@ publish need the user's go-ahead first; the rest can start at once.
    ([contract](adapters/fcitx5/README.md#contract)). Removing the text only
    when the query asked for it would fix it upstream; reported as
    [fcitx/fcitx5-qt#91](https://github.com/fcitx/fcitx5-qt/issues/91) on
-   2026-10-20. *Done when* a fixed fcitx5-qt
+   2026-10-20; on 2026-10-24 it had no reply and `master` no fix, so a fix
+   would ship in 5.1.17 at the earliest. Debian forky and sid ship 5.1.16
+   too; Debian 13 (5.1.9) and Ubuntu 24.04 to 26.10 (5.1.4–5.1.15) predate
+   the change. Offering the patch upstream is publication and needs the
+   user's go-ahead. *Done when* a fixed fcitx5-qt
    restores the replacement in Omawrite (two native undos), and a Qt
    Widgets app (Telegram) has been checked.
 3. **Finish the installed-flow matrix with someone present.** Still open: a
@@ -211,11 +239,25 @@ publish need the user's go-ahead first; the rest can start at once.
    graphical session has run them. Still open:
    - field observer backends outside Hyprland, so Chromium-based apps, Zen,
      VS Code and Writer's grey preview suggest there; the observer unit's
-     Hyprland condition goes with them;
+     Hyprland condition goes with them. The observer needs the focused
+     window's process and app id (checked 2026-10-24):
+     - KWin offers `org_kde_plasma_window_management` (app id, and process
+       id since version 8; Fcitx itself uses it) or a KWin script reading
+       `workspace.activeWindow`, so Plasma comes first;
+     - GNOME's `org.gnome.Shell.Introspect` gives no process id and answers
+       only the portal backends, so GNOME needs a Shell extension of Badi's
+       own that the user installs;
+     - AT-SPI's own process id is a debugging aid, and its application name
+       is not the app id;
    - in a VM with GNOME 48 (Debian 13) and Plasma: `im-config -n fcitx5`
      or Plasma's Virtual Keyboard starting Fcitx with the environment.d
      addon directory, the user units, a manual Tab request in a GTK and a Qt
      app, the editors and Writer, and package install, update and purge.
+     On GNOME, Fcitx stands in for IBus (Mutter speaks only text-input-v3)
+     and needs the Kimpanel extension for its panel; Plasma launches Fcitx
+     through input-method-v1. A reported GNOME 50.0–50.3 loss of forwarded
+     keys ([fcitx5#1692](https://github.com/fcitx/fcitx5/issues/1692),
+     unverified) would affect Ubuntu 26.04.
    *Done when* those pass with zero wrong-field edits and the runbook's
    tested-with matrix records them.
 
@@ -252,9 +294,14 @@ publish need the user's go-ahead first; the rest can start at once.
       [observer](adapters/accessibility/README.md#selection-for-a-revision)).
 - [ ] A Revisions row in the settings panel: whether the revision model is
       installed, its size and an install button (`badi revise install`).
-- [ ] Measure a stronger revision model where memory allows (Qwen3 4B) in the
-      Lab's revision lane before offering it; downloading it needs the
-      user's go-ahead.
+- [ ] Pair-run stronger revision models in the Lab's revision lane before
+      offering one; each download needs the user's go-ahead. Candidates
+      (Apache-2.0, checked 2026-10-24): Qwen3.5-2B (1.28 GB at Q4, about
+      Qwen3 1.7B's memory, multilingual MMLU 56.9 against 46.7; thinks by
+      default, so thinking must be off), Qwen3.5-4B (2.74 GB, 76.1),
+      Qwen3-4B-Instruct-2507 (2.50 GB, no thinking) and Ministral 3 3B
+      Instruct (2.15 GB). No published grammar-correction benchmark covers
+      Spanish, French or Portuguese, so the lane's 75 errors are the measure.
 
 ### Speed and footprint
 
@@ -292,8 +339,15 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       floating-terminal installer, menu entries for settings and removal,
       default keys for the session helper's `pause-toggle` and
       `open-settings` portal shortcuts, and theme colours for the preview.
-- [ ] Support [omarchy#12139](https://github.com/omacom/omarchy/pull/12139)
-      (`--enable-wayland-ime` by default); keep the per-app flags until it lands.
+- [ ] [omarchy#12139](https://github.com/omacom/omarchy/pull/12139)
+      (`--enable-wayland-ime` by default) closed unmerged on 2026-10-15:
+      Chromium has used text-input-v3 without the flag since 137. Check live
+      whether Badi's per-app flags can go for current Chromium and Brave;
+      Electron apps on an older Chromium may still need them.
+- [ ] Re-pin the panel to Omarchy 4.5 once it is tagged (still `v4.5.0-rc1`
+      on 2026-10-24; `quattro` is 47 commits past it, including the
+      notification panel's removal, omarchy#16430, which Badi does not use:
+      the screen-share hold reads PipeWire). Run the host lane first.
 - [ ] Leftovers of the 2026-10-20 Omarchy 4.0.6 audit: the panel's Fcitx
       theme takes its font size only from Ghostty's config (`fcitx-theme.py`),
       each bar instance registers the `badi-writing` IPC target (several
@@ -351,6 +405,17 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       useful against Gemma 3 1B's 46%, but Qwen3 0.6B was not screened.
 - [ ] Spelling for Persian, which has no cased letters and needs its own word
       shape rather than the European one.
+- [ ] Screen the base models no Lab run has seen yet (checked 2026-10-24; no
+      family released a new 0.5–2B text base model in the four months
+      before): EuroMoE-2.6B-A0.6B (Apache-2.0, 0.6B active, 1.62 GB at Q4)
+      and LFM2.5-2.6B-Base (LFM Open License, a hybrid that re-reads the
+      prompt after a backspace, 1.67 GB); Ministral 3 3B Base only for
+      larger machines. Tiny Aya (non-commercial), MiniCPM5 (English and
+      Chinese) and Granite SWASH (English) are out.
+- [ ] Condition on the text after the caret. Oma Tab feeds it to a
+      fill-in-the-middle model; Gemma 3 has no such tokens, and Badi uses the
+      after-text only to shape a suggestion. Measure mid-sentence usefulness
+      with a model that has them before choosing.
 - [ ] Measure Cotypist parity with the same tasks on a named Cotypist version on
       a Mac.
 
@@ -383,6 +448,15 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       colon shortcode.
 
 ### Engineering upkeep
+
+- [ ] Move the pinned llama.cpp runtime (b10726) past b11393, which fixes a
+      use-after-free and double free reachable through a client-supplied
+      `chat_parser` on `/completion`
+      ([llama.cpp#29942](https://github.com/ggml-org/llama.cpp/pull/29942)).
+      Avoid b11555–b11634, which slowed quantized kernels (#30270, partly
+      reverted in #30342), and check the Unix-socket bind rewritten in
+      #28690. Badi never sends that field and only the broker reaches the
+      socket. Pair writing and revision runs before and after.
 
 - [ ] The partial-suggestion path (`KeepPartial`, `shown_partial` in
       `broker/src/engine/generation.rs`) no longer runs: the confidence gate
