@@ -46,27 +46,27 @@ umask 077
 badi_data="$HOME/.local/share/badi"
 mkdir -p "$badi_data/models" "$badi_data/runtimes/downloads"
 test ! -e "$badi_data/models/Qwen3-1.7B-Q4_K_M.gguf"
-test ! -e "$badi_data/runtimes/llama-b10726"
-test ! -e "$badi_data/runtimes/downloads/llama-b10726-bin-ubuntu-x64.tar.gz"
+test ! -e "$badi_data/runtimes/llama-b11840"
+test ! -e "$badi_data/runtimes/downloads/llama-b11840-bin-ubuntu-x64.tar.gz"
 badi_stage=$(mktemp -d "$badi_data/.download.XXXXXXXX")
 trap 'rm -rf -- "$badi_stage"' EXIT
 curl --fail --location --connect-timeout 20 --max-time 1800 \
   --output "$badi_stage/Qwen3-1.7B-Q4_K_M.gguf" \
   'https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF/resolve/daeb8e2d528a760970442092f6bf1e55c3b659eb/Qwen3-1.7B-Q4_K_M.gguf'
 curl --fail --location --connect-timeout 20 --max-time 300 \
-  --output "$badi_stage/llama-b10726-bin-ubuntu-x64.tar.gz" \
-  'https://github.com/ggml-org/llama.cpp/releases/download/b10726/llama-b10726-bin-ubuntu-x64.tar.gz'
+  --output "$badi_stage/llama-b11840-bin-ubuntu-x64.tar.gz" \
+  'https://github.com/ggml-org/llama.cpp/releases/download/b11840/llama-b11840-bin-ubuntu-x64.tar.gz'
 (
   cd "$badi_stage"
   sha256sum --check <<'SUMS'
 d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5  Qwen3-1.7B-Q4_K_M.gguf
-d3c4e406b2911c8c75d2d0858459645960f8f592c1ab372d565cf145b870c901  llama-b10726-bin-ubuntu-x64.tar.gz
+5f6e72e772a1264df279d6b7a848570fdc00e5d968b72e7a917d19e07da96400  llama-b11840-bin-ubuntu-x64.tar.gz
 SUMS
-  tar --extract --gzip --file llama-b10726-bin-ubuntu-x64.tar.gz --no-same-owner
+  tar --extract --gzip --file llama-b11840-bin-ubuntu-x64.tar.gz --no-same-owner
 )
 mv --no-clobber "$badi_stage/Qwen3-1.7B-Q4_K_M.gguf" "$badi_data/models/"
-mv --no-clobber "$badi_stage/llama-b10726" "$badi_data/runtimes/"
-mv --no-clobber "$badi_stage/llama-b10726-bin-ubuntu-x64.tar.gz" "$badi_data/runtimes/downloads/"
+mv --no-clobber "$badi_stage/llama-b11840" "$badi_data/runtimes/"
+mv --no-clobber "$badi_stage/llama-b11840-bin-ubuntu-x64.tar.gz" "$badi_data/runtimes/downloads/"
 ```
 
 ## User activation and removal

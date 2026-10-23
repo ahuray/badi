@@ -190,7 +190,7 @@ device: it names the model, its size and any terms that come with it, and
 downloads it (pinned and hash-checked) only after you accept. Unattended,
 `--model ID` picks the model and `--accept-model-license` accepts its terms.
 After the install, `badi model` switches models ([below](#choose-the-writing-model)). The pinned
-llama.cpp runtime is `~/.local/share/badi/runtimes/llama-b10726`, with its
+llama.cpp runtime is `~/.local/share/badi/runtimes/llama-b11840`, with its
 archive in `runtimes/downloads/`. `install-desktop.py` checks those pinned
 hashes before it builds, and the broker checks them again before it starts.
 

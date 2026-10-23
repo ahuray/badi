@@ -534,19 +534,19 @@ def unit_enabled(unit):
 # and does not download; the broker has no network code of its own. Writing
 # models come from the broker's own catalog (badictl models writing).
 WRITING_ASSETS = (
-    ("runtimes/llama-b10726/llama-server",
-     "4c20c6b55baa75eafeb02c17f118ce93314ba69aef89a9b4156284d58dcbc0c8",
-     17_896),
-    ("runtimes/downloads/llama-b10726-bin-ubuntu-x64.tar.gz",
-     "d3c4e406b2911c8c75d2d0858459645960f8f592c1ab372d565cf145b870c901",
-     16_702_536),
+    ("runtimes/llama-b11840/llama-server",
+     "a929dd0ce172a69aef809b39c0bd8ce61356e3587c71aad75cf292f0d108b33f",
+     17_864),
+    ("runtimes/downloads/llama-b11840-bin-ubuntu-x64.tar.gz",
+     "5f6e72e772a1264df279d6b7a848570fdc00e5d968b72e7a917d19e07da96400",
+     22_423_573),
 )
 
 
 def require_writing_assets(home):
     """Refuse to build until the pinned llama.cpp runtime matches.
 
-    The broker reads runtimes/llama-b10726 and checks these hashes again at
+    The broker reads runtimes/llama-b11840 and checks these hashes again at
     startup. A size mismatch is rejected before the file is read.
     """
     data = Path(home) / ".local/share/badi"
@@ -560,7 +560,7 @@ def require_writing_assets(home):
             problems.append(f"{path} does not match the pinned hash")
     if problems:
         raise RuntimeError(
-            "The pinned llama.cpp b10726 runtime is not ready. "
+            "The pinned llama.cpp b11840 runtime is not ready. "
             "The desktop installer checks the pinned hashes before building. " + " ".join(problems)
         )
 

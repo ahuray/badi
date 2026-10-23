@@ -71,9 +71,8 @@ links to it. A tested app version is not a claim about Linux in general.
   broker and runtime run sandboxed (no network, read-only home but Badi's
   two directories, no core dumps), and password-labelled fields are never
   read ([ADR 0001](docs/decisions/0001-same-uid-trust-boundary.md)). The
-  pinned llama.cpp b10726 predates a `/completion` double-free fix (b11393);
-  only the broker can reach its socket, so it is upkeep, not an exposure
-  ([Engineering upkeep](#engineering-upkeep)).
+  pinned llama.cpp runtime is b11840, past the `/completion` double-free fix
+  (b11393).
 - **Diagnosis:** `badi debug on [--text]`, `badi debug watch` and `badi debug
   log` trace every request (with first-token time and new and reused prompt
   tokens), suggestion, key and ghost ([README](README.md#debug-trace),
@@ -448,15 +447,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       colon shortcode.
 
 ### Engineering upkeep
-
-- [ ] Move the pinned llama.cpp runtime (b10726) past b11393, which fixes a
-      use-after-free and double free reachable through a client-supplied
-      `chat_parser` on `/completion`
-      ([llama.cpp#29942](https://github.com/ggml-org/llama.cpp/pull/29942)).
-      Avoid b11555–b11634, which slowed quantized kernels (#30270, partly
-      reverted in #30342), and check the Unix-socket bind rewritten in
-      #28690. Badi never sends that field and only the broker reaches the
-      socket. Pair writing and revision runs before and after.
 
 - [ ] The partial-suggestion path (`KeepPartial`, `shown_partial` in
       `broker/src/engine/generation.rs`) no longer runs: the confidence gate

@@ -876,14 +876,21 @@ fn an_installed_filename_does_not_bypass_model_verification() {
     let directory = tempfile::tempdir().expect("model directory");
     let model = crate::model_selection::catalog(crate::model_selection::ModelUseCase::Writing)[1];
     std::fs::create_dir(directory.path().join("models")).expect("models");
-    std::fs::create_dir_all(directory.path().join("runtimes/llama-b10726")).expect("runtime");
+    std::fs::create_dir_all(directory.path().join(format!(
+        "runtimes/{}",
+        crate::semantic::pinned_runtime::RUNTIME_DIRECTORY
+    )))
+    .expect("runtime");
     std::fs::write(
         directory.path().join("models").join(model.filename),
         b"corrupt",
     )
     .expect("invalid weights");
     std::fs::write(
-        directory.path().join("runtimes/llama-b10726/llama-server"),
+        directory.path().join(format!(
+            "runtimes/{}/llama-server",
+            crate::semantic::pinned_runtime::RUNTIME_DIRECTORY
+        )),
         b"unused",
     )
     .expect("unused runtime");

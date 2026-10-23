@@ -116,7 +116,7 @@ export class DeviceQualification {
     // evaluator/HTTP/review implementation. A JS-only change invalidates saved
     // measurements just as a changed model worker does.
     const evaluator = await Promise.all(evaluatorSources.map(async path => [path, digest(await readFile(new URL(path, import.meta.url)))]));
-    return { runtime_identity: digest({ worker_sha256: workerSha, evaluator, ...(!this.memoryMap ? { memory_map: false } : {}) }), runtime_version: 'b10726', runtime_architecture: 'x86_64', required_cpu_features: ['avx2'], backend: 'cpu', context_tokens: 2048,
+    return { runtime_identity: digest({ worker_sha256: workerSha, evaluator, ...(!this.memoryMap ? { memory_map: false } : {}) }), runtime_version: 'b11840', runtime_architecture: 'x86_64', required_cpu_features: ['avx2'], backend: 'cpu', context_tokens: 2048,
       batch_tokens: this.prefillBatch, threads: 4, parallel_sequences: 1, cache_element_bytes: 2,
       recurrent_snapshots: 0, context_checkpoints: 0, prompt_format: config.mode,
       generation_settings_sha256: digest(config), languages: [...languages].sort(), evaluation_version: 'badi.prediction-quality.v2' };
