@@ -76,6 +76,9 @@ def main():
     args = parser.parse_args()
     if not 0 <= args.wait_for_unlock <= 86400:
         parser.error("wait must be between 0 and 86400 seconds")
+    if badi_install.desktop_platform() != badi_install.OMARCHY:
+        raise RuntimeError("The Badi panel lives in Omarchy's bar, and this desktop has no omarchy-shell; nothing "
+                           "was changed. The badi commands set the same things (badi --help).")
     home = Path.home()
     target = plugin_directory(home)
     fresh = not target.exists()

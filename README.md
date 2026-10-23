@@ -152,18 +152,34 @@ review; it has not been published. The current desktop installer remains:
 On Omarchy with Fcitx 5, from this checkout:
 
 ```sh
-npm ci
 python3 scripts/install-desktop.py      # model service, Fcitx addon, observer, session helper, `badi` command
 python3 scripts/install-omarchy-ui.py   # bar mark and settings panel
+npm ci                                  # once, for the Obsidian plugin's build
 python3 scripts/install-editors.py --vault /path/to/vault --bash --neovim   # optional: Obsidian, Bash, Neovim
 python3 scripts/install-editors.py --libreoffice   # optional: Writer spelling; close LibreOffice first
 ```
 
-Prerequisites on the machine: Rust, Node.js, cmake, ninja, a C++20 compiler,
-Fcitx 5 headers, PyGObject, GTK 4 and gtk4-layer-shell.
+Prerequisites on the machine: Rust, cmake, ninja, a C++20 compiler, Fcitx 5
+headers, PyGObject, GTK 4 and gtk4-layer-shell; Node.js for the editor
+integrations (the Bash and Neovim bridges, the Obsidian plugin's build) and
+the checks, not for the desktop install.
+
+### Debian and Ubuntu
+
+On Debian 13 and Ubuntu 24.04 (x86-64), build a package with
+`packaging/debian/build-deb.sh` and install it with `sudo apt install
+./target/debian/badi_*.deb`, or run `python3 scripts/install-desktop.py`
+from a checkout as above; there is no settings panel, so `badi` commands set
+everything. Each user then downloads the writing assets, enables the
+services, chooses Fcitx with `im-config -n fcitx5` and logs in again
+([steps](packaging/debian/README.md)). Under GNOME or KDE Plasma, Fcitx's
+manual fields, Obsidian, Neovim, Bash and the Writer spelling extension
+work; Chromium-based apps, Zen, VS Code and Writer's grey preview need the
+field observer, which runs only in a Hyprland session so far. Neither has
+been tried in a real GNOME or KDE session yet.
 
 The installers build user-local files, back up everything they replace and
-restart Badi's services and Fcitx. The newest three backups of each installer
+restart Badi's services and, on Omarchy, Fcitx. The newest three backups of each installer
 are kept, and the first backup — the files as they were before Badi — is kept
 as well. `python3 scripts/badi_install.py restore DIR` rolls one back, reloads
 user units when a service file was restored, and updates the install receipt

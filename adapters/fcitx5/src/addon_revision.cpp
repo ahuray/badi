@@ -4,8 +4,8 @@
 // applies it with one commit over exactly the revised selection, read back.
 
 #include "addon.h"
+#include "fcitx_event.h"
 
-#include <fcitx-utils/event.h>
 #include <fcitx/candidatelist.h>
 #include <fcitx/inputcontext.h>
 #include <fcitx/inputmethodentry.h>

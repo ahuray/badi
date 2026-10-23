@@ -318,6 +318,13 @@ bool heldTabMatchesRest(std::string_view rest, const Suggestion &suggestion) {
            rest.starts_with(suggestion.acceptWord);
 }
 
+bool isLiteralTabChord(const ::fcitx::Key &key) {
+    const ::fcitx::KeyStates modifiers{::fcitx::KeyState::Ctrl, ::fcitx::KeyState::Alt, ::fcitx::KeyState::Shift,
+                                       ::fcitx::KeyState::Super};
+    return (key.sym() == FcitxKey_Tab || key.sym() == FcitxKey_ISO_Left_Tab) &&
+        (key.states() & modifiers) == literalTabChord().states();
+}
+
 bool lastModifierReleased(const ::fcitx::Key &release) {
     if (!release.isModifier()) return false;
     const ::fcitx::KeyStates held{::fcitx::KeyState::Ctrl, ::fcitx::KeyState::Alt, ::fcitx::KeyState::Shift,

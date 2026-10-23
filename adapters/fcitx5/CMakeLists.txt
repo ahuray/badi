@@ -29,7 +29,7 @@ target_include_directories(badi-fcitx5-core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/
 target_link_libraries(badi-fcitx5-core PUBLIC Fcitx5::Core nlohmann_json::nlohmann_json)
 target_compile_options(badi-fcitx5-core PRIVATE ${BADI_WARNINGS})
 
-add_fcitx5_addon(badi-fcitx5
+set(BADI_ADDON_SOURCES
     src/addon.cpp
     src/addon_broker.cpp
     src/addon_keys.cpp
@@ -37,6 +37,15 @@ add_fcitx5_addon(badi-fcitx5
     src/addon_revision.cpp
     src/addon_session.cpp
 )
+if(COMMAND add_fcitx5_addon)
+    add_fcitx5_addon(badi-fcitx5 ${BADI_ADDON_SOURCES})
+else()
+    # Fcitx 5.1.7 (Ubuntu 24.04) predates add_fcitx5_addon. Build what the
+    # macro builds by default: a loadable MODULE marked as a Fcitx addon,
+    # libbadi-fcitx5.so, which badi.conf names as a SharedLibrary.
+    add_library(badi-fcitx5 MODULE ${BADI_ADDON_SOURCES})
+    set_target_properties(badi-fcitx5 PROPERTIES FCITX_ADDON TRUE)
+endif()
 target_compile_features(badi-fcitx5 PRIVATE cxx_std_20)
 target_link_libraries(badi-fcitx5 PRIVATE badi-fcitx5-core Fcitx5::Core)
 target_compile_options(badi-fcitx5 PRIVATE ${BADI_WARNINGS})

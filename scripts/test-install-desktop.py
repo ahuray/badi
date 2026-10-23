@@ -10,8 +10,10 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import struct
 import subprocess
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -31,6 +33,14 @@ NATIVE_SOURCES = ('target/release/badi-broker', 'target/release/badictl', 'scrip
                   'THIRD-PARTY-NOTICES.txt') + tuple(
                   'adapters/accessibility/' + name for name in installer.OBSERVER_MODULES) + tuple(
                   'adapters/session/' + name for name in installer.SESSION_MODULES)
+
+
+def setUpModule():
+    # These tests describe Omarchy unless a test names another desktop; the
+    # host running them (a CI runner, a Debian container) is neither.
+    platform = patch.object(receipts, 'desktop_platform', return_value=receipts.OMARCHY)
+    platform.start()
+    unittest.addModuleCleanup(platform.stop)
 
 
 def only_backup(home):
@@ -1084,6 +1094,190 @@ class ObservedAppInstallTests(FullInstall, unittest.TestCase):
                 installer.main()
         self.assertEqual(stopped.exception.code, 2)
         command.assert_not_called()
+
+
+SYSTEM_ADDONS = Path('/usr/lib/x86_64-linux-gnu/fcitx5')
+
+
+class GenericInstallTests(unittest.TestCase):
+    """A desktop without Omarchy: GNOME or KDE Plasma on Debian or Ubuntu."""
+
+    def generic_install(self, root, argv=(), environment=None, fcitx_process=0, mapped=False, wayland_v2=False):
+        home, project, runtime = root / 'home', root / 'project', root / 'runtime'
+        native_project(project)
+        profile = home / '.config/fcitx5/profile'
+        profile.parent.mkdir(parents=True, exist_ok=True)
+        profile.write_text('preserve keyboard profile')
+        calls = []
+
+        def execute(command, **kwargs):
+            calls.append(command)
+            if command[0] == 'loginctl':
+                return subprocess.CompletedProcess(command, 0, str(runtime), '')
+            if command[:2] == ['fcitx5', '--version']:
+                return subprocess.CompletedProcess(command, 0, '5.1.12\n', '')
+            output = 'loaded' if '--property=LoadState' in command else 'disabled' if '--property=UnitFileState' in command and 'badi-accessibility.service' in command else 'enabled' if '--property=UnitFileState' in command else '{}'
+            return subprocess.CompletedProcess(command, 0, output, '')
+
+        with patch.object(receipts, 'desktop_platform', return_value=receipts.GENERIC), \
+             patch.object(receipts, 'fcitx_addon_directory', return_value=SYSTEM_ADDONS), \
+             patch.object(receipts, 'fcitx_bus_process', return_value=fcitx_process), \
+             patch.object(installer, 'process_maps_file', return_value=mapped), \
+             patch.object(installer, 'offers_input_method_v2', return_value=wayland_v2), \
+             patch.object(installer, 'ROOT', project), \
+             patch.object(installer, 'require_writing_assets'), \
+             patch.object(installer, 'require_writing_model'), \
+             patch.object(installer, 'require_accessibility_runtime') as runtime_check, \
+             patch.object(installer.Path, 'home', return_value=home), \
+             patch.object(installer.subprocess, 'run', side_effect=execute), \
+             patch.object(installer, 'wait_session_helper', return_value=True), \
+             patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
+             patch.object(installer, 'wait_accessibility') as observer, \
+             patch.object(installer, 'wait_native_addon') as omarchy_addon, \
+             patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(runtime),
+                                     'XDG_CONFIG_HOME': str(home / '.config'), 'HYPRLAND_INSTANCE_SIGNATURE': '',
+                                     **(environment or {})}), \
+             patch('sys.argv', ['install-desktop.py', *argv]), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            try:
+                installer.main()
+            finally:
+                self.output = output.getvalue()
+        omarchy_addon.assert_not_called()
+        self.observer_waited = observer.called
+        self.runtime_checked = runtime_check.called
+        return home, calls
+
+    def test_a_generic_install_leaves_omarchy_out_and_never_restarts_fcitx(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home, calls = self.generic_install(Path(temporary), fcitx_process=4242)
+            flat = [' '.join(map(str, call)) for call in calls]
+            self.assertFalse([call for call in flat if 'omarchy' in call or call.startswith('npm')], flat)
+            self.assertFalse([call for call in flat if call.startswith('systemctl') and 'fcitx' in call])
+            self.assertIn(['ctest', '--test-dir', str(Path(temporary) / 'project/adapters/fcitx5/build'),
+                           '--output-on-failure'], calls)
+            environment = home / '.config/environment.d/50-badi-fcitx5.conf'
+            self.assertEqual(environment.read_text().splitlines()[1:], [
+                f'FCITX_ADDON_DIRS={home}/.local/lib/fcitx5:{SYSTEM_ADDONS}',
+                f'FCITX_DATA_DIRS={home}/.local/share/fcitx5:/usr/local/share/fcitx5:/usr/share/fcitx5'])
+            self.assertEqual(environment.stat().st_mode & 0o777, 0o644)
+            for path in ('.local/lib/fcitx5/libbadi-fcitx5.so', '.local/share/fcitx5/addon/badi.conf',
+                         '.local/lib/badi/accessibility/daemon.py', '.config/systemd/user/badi-accessibility.service'):
+                self.assertTrue((home / path).is_file(), path)
+            for path in ('.config/hypr', '.config/omarchy', '.config/systemd/user/omarchy-fcitx5.service.d',
+                         '.local/share/applications/io.github.ahuray.badi.desktop'):
+                self.assertFalse((home / path).exists(), path)
+            self.assertEqual((home / '.config/fcitx5/profile').read_text(), 'preserve keyboard profile')
+            # The observer is enabled for a later Hyprland session but not started here.
+            self.assertIn(['systemctl', '--user', 'enable', 'badi-accessibility.service'], calls)
+            self.assertNotIn(['systemctl', '--user', 'restart', 'badi-accessibility.service'], calls)
+            self.assertFalse(self.observer_waited or self.runtime_checked)
+            self.assertIn('next login', self.output)
+            self.assertIn('Fcitx was not restarted', self.output)
+            self.assertIn('runs only in a Hyprland session', self.output)
+            _backup, _document, changed = only_backup(home)
+            self.assertIn('.config/environment.d/50-badi-fcitx5.conf', changed, 'the file has a scoped rollback')
+
+    def test_without_a_running_fcitx_the_report_names_the_distribution_way_to_start_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            self.generic_install(Path(temporary), fcitx_process=0)
+            self.assertIn('im-config -n fcitx5', self.output)
+            self.assertNotIn('Fcitx was not restarted', self.output)
+
+    def test_a_running_fcitx_that_maps_this_build_needs_no_login(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            self.generic_install(Path(temporary), fcitx_process=4242, mapped=True)
+            self.assertIn('already uses this addon build', self.output)
+            self.assertNotIn('next login', self.output)
+
+    def test_a_generic_hyprland_session_starts_and_verifies_the_observer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _home, calls = self.generic_install(Path(temporary), environment={'HYPRLAND_INSTANCE_SIGNATURE': 'fixture'})
+            self.assertIn(['systemctl', '--user', 'restart', 'badi-accessibility.service'], calls)
+            self.assertTrue(self.observer_waited and self.runtime_checked)
+            self.assertNotIn('runs only in a Hyprland session', self.output)
+
+    def test_desktop_wide_accessibility_options_are_refused_before_any_change(self):
+        for argv in (['--observed-app', 'chromium'], ['--screen-reader-accessibility']):
+            with self.subTest(argv=argv), tempfile.TemporaryDirectory() as temporary:
+                with self.assertRaisesRegex(RuntimeError, 'not available'):
+                    self.generic_install(Path(temporary), argv)
+                self.assertFalse((Path(temporary) / 'home/.local').exists())
+
+    def test_the_5_1_23_floor_applies_only_where_the_wayland_v2_frontend_serves_apps(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            self.generic_install(Path(temporary), wayland_v2=False)
+            self.assertIn('requirement of the wayland_v2 frontend does not apply', self.output)
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(RuntimeError, 'needs Fcitx 5.1.23 or later; this desktop has 5.1.12.*'
+                                                      'input-method-v2.*does not apply'):
+                self.generic_install(Path(temporary), wayland_v2=True)
+            self.assertFalse((Path(temporary) / 'home/.local').exists())
+        with patch.object(installer.subprocess, 'run',
+                          return_value=subprocess.CompletedProcess(['fcitx5'], 0, '5.1.7\n', '')):
+            self.assertEqual(installer.require_fcitx_version(False, receipts.GENERIC), (5, 1, 7))
+            with self.assertRaisesRegex(RuntimeError, r'omarchy-update'):
+                installer.require_fcitx_version()
+
+    def test_omarchy_always_has_the_wayland_v2_floor_and_others_ask_the_compositor(self):
+        with patch.object(installer, 'wayland_globals') as globals_:
+            self.assertTrue(installer.offers_input_method_v2(receipts.OMARCHY))
+            globals_.assert_not_called()
+            for names, expected in (({'wl_compositor', installer.INPUT_METHOD_V2}, True),
+                                    ({'wl_compositor', 'zwp_input_method_v1'}, False), (None, True)):
+                globals_.return_value = names
+                self.assertEqual(installer.offers_input_method_v2(receipts.GENERIC), expected, names)
+
+
+class WaylandRegistryTests(unittest.TestCase):
+    @staticmethod
+    def event(sender, opcode, body=b''):
+        return struct.pack('=II', sender, (8 + len(body)) << 16 | opcode) + body
+
+    @classmethod
+    def global_(cls, name, interface, version):
+        text = interface.encode() + b'\0'
+        text += b'\0' * (-len(text) % 4)
+        return cls.event(2, 0, struct.pack('=II', name, len(interface) + 1) + text + struct.pack('=I', version))
+
+    def compositor(self, *events):
+        """A one-shot compositor socket; returns its environment and the request it read."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / 'wayland-test'
+        server = socket.socket(socket.AF_UNIX)
+        server.bind(str(path))
+        server.listen(1)
+        received = []
+
+        def serve():
+            with server, server.accept()[0] as connection:
+                received.append(connection.recv(24))
+                for event in events:
+                    connection.sendall(event)
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        return {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': directory.name}, received
+
+    def test_globals_are_read_until_the_sync_is_done(self):
+        events = [self.global_(1, 'wl_compositor', 6), self.event(1, 1, struct.pack('=I', 9)),
+                  self.global_(7, installer.INPUT_METHOD_V2, 1), self.event(3, 0, struct.pack('=I', 0)),
+                  self.global_(8, 'after_the_sync', 1)]
+        # A message split across reads is reassembled.
+        stream = b''.join(events)
+        environment, received = self.compositor(stream[:13], stream[13:])
+        self.assertEqual(installer.wayland_globals(environment), {'wl_compositor', installer.INPUT_METHOD_V2})
+        self.assertEqual(received, [struct.pack('=IIIIII', 1, 12 << 16 | 1, 2, 1, 12 << 16, 3)])
+
+    def test_an_error_a_hangup_or_no_display_is_unknown(self):
+        environment, _received = self.compositor(self.event(1, 0, struct.pack('=III', 1, 0, 0)))
+        self.assertIsNone(installer.wayland_globals(environment))
+        environment, _received = self.compositor(self.global_(1, 'wl_compositor', 6))
+        self.assertIsNone(installer.wayland_globals(environment))
+        self.assertIsNone(installer.wayland_globals({'XDG_RUNTIME_DIR': '/nonexistent'}))
+        self.assertIsNone(installer.wayland_globals({'WAYLAND_DISPLAY': '/nonexistent/wayland-0'}))
 
 
 if __name__ == '__main__':

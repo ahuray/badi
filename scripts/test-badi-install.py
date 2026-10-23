@@ -115,6 +115,70 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(badi_install.home_relative(home, Path('/srv/vault/main.js')), '/srv/vault/main.js')
 
 
+class PlatformTests(unittest.TestCase):
+    def test_omarchy_is_where_its_shell_command_is_installed(self):
+        with patch.object(badi_install.shutil, 'which', return_value='/usr/bin/omarchy-shell'):
+            self.assertEqual(badi_install.desktop_platform(), badi_install.OMARCHY)
+        with patch.object(badi_install.shutil, 'which', return_value=None):
+            self.assertEqual(badi_install.desktop_platform(), badi_install.GENERIC)
+
+    def test_distribution_family_reads_id_and_id_like(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            release = Path(temporary) / 'os-release'
+            for text, family in (('ID=debian\nVERSION_ID="13"\n', 'debian'),
+                                 ('ID=ubuntu\nID_LIKE=debian\nVERSION_ID="24.04"\n', 'debian'),
+                                 ("ID=linuxmint\nID_LIKE='ubuntu debian'\n", 'debian'),
+                                 ('ID=arch\n', 'arch'), ('ID=fedora\n', None), ('garbage\n', None)):
+                with self.subTest(text=text):
+                    release.write_text(text)
+                    self.assertEqual(badi_install.distribution_family(badi_install.os_release(release)), family)
+            self.assertEqual(badi_install.os_release(Path(temporary) / 'missing'), {})
+            release.write_text('ID="debian"\nPRETTY_NAME="Debian GNU/Linux 13 (trixie)"\n')
+            self.assertEqual(badi_install.os_release(release)['PRETTY_NAME'], 'Debian GNU/Linux 13 (trixie)')
+
+    def test_the_fcitx_addon_directory_sits_beside_the_fcitx_core_library(self):
+        layouts = {'debian': ('usr/lib/x86_64-linux-gnu', 'x86_64-linux-gnu'), 'arch': ('usr/lib', ''),
+                   'fedora': ('usr/lib64', '')}
+        for name, (library, multiarch) in layouts.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / library / 'fcitx5').mkdir(parents=True)
+                (root / library / 'libFcitx5Core.so.7').write_bytes(b'')
+                # A directory without the core library is not the one Fcitx reads.
+                (root / 'usr/lib/fcitx5').mkdir(parents=True, exist_ok=True)
+                self.assertEqual(badi_install.fcitx_addon_directory(root, multiarch), Path('/') / library / 'fcitx5')
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertIsNone(badi_install.fcitx_addon_directory(Path(temporary), 'x86_64-linux-gnu'))
+
+    def test_the_environment_file_names_badi_before_the_system_addons(self):
+        text = badi_install.fcitx_environment(Path('/home/someone'), Path('/usr/lib/x86_64-linux-gnu/fcitx5'))
+        self.assertTrue(text.startswith('# Badi: '))
+        self.assertIn('FCITX_ADDON_DIRS=/home/someone/.local/lib/fcitx5:/usr/lib/x86_64-linux-gnu/fcitx5\n', text)
+        self.assertIn('FCITX_DATA_DIRS=/home/someone/.local/share/fcitx5:/usr/local/share/fcitx5:/usr/share/fcitx5\n', text)
+        # The same directories as Omarchy's service drop-in.
+        drop_in = (Path(__file__).resolve().parents[1] / 'packaging/systemd/fcitx-badi.conf').read_text()
+        self.assertIn('FCITX_DATA_DIRS=%h/.local/share/fcitx5:/usr/local/share/fcitx5:/usr/share/fcitx5', drop_in)
+        self.assertIn('FCITX_ADDON_DIRS=%h/.local/lib/fcitx5:', drop_in)
+
+    def test_the_running_fcitx_is_its_session_bus_name_owner(self):
+        def bus(owner, pid='u 4242', failure=None):
+            def reply(command, **kwargs):
+                if failure:
+                    raise failure
+                if 'NameHasOwner' in command:
+                    return subprocess.CompletedProcess(command, 0, f'b {owner}\n', '')
+                return subprocess.CompletedProcess(command, 0 if pid else 1, f'{pid}\n' if pid else '', '')
+            return reply
+        for reply, expected in ((bus('true'), 4242), (bus('false'), 0), (bus('true', pid=None), None),
+                                (bus('true', failure=FileNotFoundError('busctl')), None),
+                                (bus('true', failure=subprocess.TimeoutExpired('busctl', 4)), None)):
+            with patch.object(badi_install.subprocess, 'run', side_effect=reply) as command:
+                self.assertEqual(badi_install.fcitx_bus_process(), expected)
+                if expected:
+                    self.assertEqual(command.call_args.args[0][-3:], ['GetConnectionUnixProcessID', 's',
+                                                                      'org.fcitx.Fcitx5'])
+
+
 class InstallationTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

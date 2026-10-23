@@ -1,9 +1,8 @@
 #include "transport.h"
 
+#include "fcitx_event.h"
 #include "sanitizer.h"
 
-#include <fcitx-utils/event.h>
-#include <fcitx-utils/eventloopinterface.h>
 #include <fcitx-utils/log.h>
 #include <nlohmann/json.hpp>
 

@@ -93,7 +93,7 @@ should serve current work.
 | `adapters/obsidian/`, `adapters/shell/`, `adapters/neovim/`, `adapters/shared/` | Editor-owned clients with exact acquisition, mutation and native undo. [Editors](adapters/shared/README.md), [Bash](adapters/shell/README.md), [Neovim](adapters/neovim/README.md). |
 | `adapters/libreoffice/` | Python UNO Writer extension: explicit English spelling replacement in one undo context, verified by reading back. [Runbook](adapters/libreoffice/README.md). |
 | `ui/omarchy-plugin/` | Omarchy bar mark and settings panel. [Runbook](ui/omarchy-plugin/README.md). |
-| `scripts/`, `packaging/` | `badi` desktop controller, user-local installers, service units, the [Arch package candidate](packaging/aur/README.md). |
+| `scripts/`, `packaging/` | `badi` desktop controller, user-local installers, service units, the [Arch package candidate](packaging/aur/README.md), the [Debian and Ubuntu package](packaging/debian/README.md). |
 | `evaluation/` | Prediction Lab and its worker crate `badi-writing-lab`, which uses only the broker's public API. The broker never references the Lab. [Runbook](evaluation/writing/README.md), [model fit](docs/architecture/model-selection.md). `evaluation/power/` holds the paced battery trial; `evaluation/llm-bench/` the [local LLM bench](evaluation/llm-bench/README.md) for runtime and model speed. |
 
 Where code lives inside the larger components:
@@ -198,6 +198,7 @@ Every change also runs `npm run agent-rules:check`, the first step of `npm run c
 | Obsidian, Bash, Neovim, shared clients | `npm run editors:check`, `npm run editors:integration` |
 | LibreOffice Writer extension | `npm run libreoffice:check`, `npm run libreoffice:integration` |
 | Desktop controller, installers | `npm run desktop:check` |
+| Debian and Ubuntu package | `packaging/debian/ci.sh` steps in a Debian 13 and an Ubuntu 24.04 container ([runbook](packaging/debian/README.md#tested-with)) |
 | Prediction Lab | `npm run writing:check`, `cargo test --locked -p badi-writing-lab`; a real-model `run.mjs` comparison when inference changes |
 | Omarchy panel | `npm run omarchy:check`; the host and lifecycle lanes in its runbook for QML or runtime changes |
 | Schemas, dependencies, broad changes | The Rust gate plus `npm run check` and affected integrations |

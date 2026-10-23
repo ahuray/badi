@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Install the Badi broker and cooperative addon into this Omarchy user session."""
+"""Install the Badi broker and cooperative addon into this user session.
+
+On Omarchy it also wires the Hyprland preview rule, Omarchy's hooks and
+omarchy-fcitx5.service. Elsewhere (GNOME, KDE Plasma, another compositor) it
+leaves those out, and Fcitx loads the addon at the next login.
+"""
 
 import argparse
 from dataclasses import dataclass
@@ -209,7 +214,17 @@ def native_addon_loaded(addon):
     pid = initial.get("MainPID", "0")
     if initial.get("ActiveState") != "active" or not pid.isdigit() or int(pid) <= 0:
         return False
-    target = addon.resolve(strict=True)
+    mapped = process_maps_file(pid, addon)
+    # A load log can precede a crash/restart; verify the process again after
+    # reading maps instead of treating a historical message as current health.
+    final = state()
+    return mapped and final.get("ActiveState") == "active" and final.get("MainPID") == pid
+
+
+def process_maps_file(pid, path):
+    """Whether process `pid` maps exactly this installed file: its inode on
+    its filesystem, not a replaced earlier build. False when unreadable."""
+    target = path.resolve(strict=True)
     metadata = target.stat()
     try:
         mappings = Path(f"/proc/{pid}/maps").read_text().splitlines()
@@ -231,10 +246,7 @@ def native_addon_loaded(addon):
             continue
         if mapped:
             break
-    # A load log can precede a crash/restart; verify the process again after
-    # reading maps instead of treating a historical message as current health.
-    final = state()
-    return mapped and final.get("ActiveState") == "active" and final.get("MainPID") == pid
+    return mapped
 
 
 def wait_native_addon(addon):
@@ -242,9 +254,12 @@ def wait_native_addon(addon):
         raise RuntimeError("The running Fcitx service did not load the installed Badi addon. Inspect badi doctor and the Fcitx user-service journal.")
 
 
-# Chromium-based apps keep the text around the caret current only from Fcitx
-# 5.1.23 on Hyprland (the adapter runbook's tested-with section).
+# Where the compositor offers input-method-v2, Fcitx serves apps through its
+# wayland_v2 frontend, which keeps Chromium-based apps' text around the caret
+# current only from Fcitx 5.1.23 (upstream PR #1690; the adapter runbook's
+# tested-with section). GNOME and KDE Plasma do not offer it.
 MIN_FCITX_VERSION = (5, 1, 23)
+INPUT_METHOD_V2 = "zwp_input_method_manager_v2"
 
 
 def fcitx_version(output):
@@ -253,7 +268,9 @@ def fcitx_version(output):
     return tuple(int(part) for part in match.groups()) if match else None
 
 
-def require_fcitx_version():
+def require_fcitx_version(wayland_v2=True, platform=badi_install.OMARCHY):
+    """The installed Fcitx version; refused below 5.1.23 where its wayland_v2
+    frontend serves apps (always on Omarchy, which is Hyprland)."""
     try:
         result = run(["fcitx5", "--version"], capture_output=True, text=True, timeout=5)
         version = fcitx_version(result.stdout)
@@ -261,10 +278,67 @@ def require_fcitx_version():
         version = None
     needed = ".".join(map(str, MIN_FCITX_VERSION))
     if version is None:
-        raise RuntimeError(f"Could not read the Fcitx version with fcitx5 --version; Badi needs Fcitx {needed} or later.")
-    if version < MIN_FCITX_VERSION:
+        floor = f"; Badi needs Fcitx {needed} or later" if wayland_v2 else ""
+        raise RuntimeError(f"Could not read the Fcitx version with fcitx5 --version{floor}. Install Fcitx 5 first.")
+    if wayland_v2 and version < MIN_FCITX_VERSION:
+        update = ("Update the system (omarchy-update) before installing." if platform == badi_install.OMARCHY
+                  else "Update Fcitx before installing; on a desktop without input-method-v2 (GNOME, KDE Plasma) "
+                       "this requirement does not apply.")
         raise RuntimeError(f"Badi needs Fcitx {needed} or later; this desktop has {'.'.join(map(str, version))}. "
-                           "Update the system (omarchy-update) before installing.")
+                           "This compositor offers input-method-v2, where Fcitx's wayland_v2 frontend before "
+                           f"{needed} stops Chromium-based apps sending the text around the caret. " + update)
+    return version
+
+
+def wayland_globals(environment=None, timeout=2):
+    """The interface names the compositor's Wayland registry advertises, or
+    None when they cannot be read. A plain wire-protocol read: get_registry,
+    then sync, collecting each global until the sync's done event."""
+    environment = os.environ if environment is None else environment
+    display = environment.get("WAYLAND_DISPLAY") or ""
+    if not display:
+        return None
+    path = display if display.startswith("/") else os.path.join(environment.get("XDG_RUNTIME_DIR") or "", display)
+    # wl_display (object 1): get_registry (opcode 1) as object 2, sync (opcode 0) as object 3.
+    request = struct.pack("=IIIIII", 1, 12 << 16 | 1, 2, 1, 12 << 16 | 0, 3)
+    names, buffer = set(), b""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(timeout)
+            connection.connect(path)
+            connection.sendall(request)
+            while len(buffer) < 1 << 20:
+                chunk = connection.recv(65536)
+                if not chunk:
+                    return None
+                buffer += chunk
+                while len(buffer) >= 8:
+                    sender, word = struct.unpack_from("=II", buffer)
+                    size, opcode = word >> 16, word & 0xFFFF
+                    if size < 8 or size % 4:
+                        return None
+                    if len(buffer) < size:
+                        break
+                    body, buffer = buffer[8:size], buffer[size:]
+                    if sender == 2 and opcode == 0 and len(body) >= 8:  # wl_registry.global
+                        length = struct.unpack_from("=I", body, 4)[0]
+                        names.add(body[8:8 + max(0, length - 1)].decode("ascii", "replace"))
+                    elif sender == 3 and opcode == 0:  # wl_callback.done
+                        return names
+                    elif sender == 1 and opcode == 0:  # wl_display.error
+                        return None
+    except (OSError, struct.error):
+        return None
+    return None
+
+
+def offers_input_method_v2(platform):
+    """Whether the 5.1.23 floor applies: on Omarchy always (Hyprland), and
+    elsewhere when the compositor offers input-method-v2 or cannot be asked."""
+    if platform == badi_install.OMARCHY:
+        return True
+    names = wayland_globals()
+    return names is None or INPUT_METHOD_V2 in names
 
 
 def require_accessibility_runtime():
@@ -282,7 +356,10 @@ from gi.repository import Atspi, Gtk, Gtk4LayerShell, GLibUnix
     try:
         run(["/usr/bin/python3", "-B", "-c", code], capture_output=True, text=True, timeout=4)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-        raise RuntimeError("The accessibility helper needs system Python with PyGObject, pycairo, AT-SPI, GTK4 and gtk4-layer-shell. Install the missing runtime before updating native integration.") from None
+        hint = (" (Debian: python3-gi-cairo gir1.2-atspi-2.0 gir1.2-gtk-4.0 gir1.2-gtk4layershell-1.0; Ubuntu 24.04 "
+                "has no gtk4-layer-shell package)" if badi_install.distribution_family() == "debian" else "")
+        raise RuntimeError("The accessibility helper needs system Python with PyGObject, pycairo, AT-SPI, GTK4 and "
+                           f"gtk4-layer-shell. Install the missing runtime{hint} before updating native integration.") from None
 
 
 def accessibility_health_module():
@@ -348,10 +425,25 @@ class Plan:
     # The user disabled the session helper; it is updated but stays disabled.
     session_disabled: bool = False
     session_ready: bool | None = None
+    # badi_install.OMARCHY or GENERIC. A generic desktop starts Fcitx its own
+    # way, so the installer writes FCITX_ENVIRONMENT and never restarts it.
+    platform: str = badi_install.OMARCHY
+    # Generic only: the system Fcitx's own addon directory.
+    system_addons: Path | None = None
+    # Whether this is a Hyprland session, where the field observer runs.
+    observer_session: bool = True
+    # Generic only, after the install: the running Fcitx and whether it maps
+    # the installed addon (None when no Fcitx runs or it cannot be inspected).
+    fcitx_process: int | None = None
+    addon_loaded: bool | None = None
 
     @property
     def native(self):
         return not self.args.broker_only
+
+    @property
+    def omarchy(self):
+        return self.platform == badi_install.OMARCHY
 
 
 def parse_arguments():
@@ -378,10 +470,30 @@ def preflight(args):
     home = Path.home().resolve()
     if not os.environ.get("WAYLAND_DISPLAY") or not os.environ.get("XDG_RUNTIME_DIR"):
         raise RuntimeError("Run the installer from your graphical session")
-    if not args.broker_only:
+    platform = badi_install.desktop_platform()
+    observer_session = bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
+    system_addons = None
+    if not args.broker_only and platform == badi_install.OMARCHY:
         require_unlocked()
         require_accessibility_runtime()
         require_fcitx_version()
+    elif not args.broker_only:
+        if args.observed_app or args.screen_reader_accessibility:
+            raise RuntimeError("--observed-app and --screen-reader-accessibility change desktop-wide accessibility "
+                               "for the field observer and need Omarchy's lock status; on this desktop they are "
+                               "not available. Nothing was changed.")
+        system_addons = badi_install.fcitx_addon_directory()
+        if system_addons is None:
+            raise RuntimeError("Could not find the system Fcitx's addon directory (fcitx5/ beside libFcitx5Core). "
+                               "Install Fcitx 5 and its development files first (Debian, Ubuntu: fcitx5, "
+                               "libfcitx5core-dev, fcitx5-modules-dev).")
+        version = require_fcitx_version(offers_input_method_v2(platform), platform)
+        if version < MIN_FCITX_VERSION:
+            print(f"Fcitx {'.'.join(map(str, version))}: this compositor does not offer input-method-v2, so the "
+                  f"Fcitx {'.'.join(map(str, MIN_FCITX_VERSION))} requirement of the wayland_v2 frontend does not "
+                  "apply here.", flush=True)
+        if observer_session:
+            require_accessibility_runtime()
     config_home = badi_install.config_home(home)
     flag_updates, flags_present = {}, []
     for app in dict.fromkeys(args.observed_app):
@@ -397,6 +509,7 @@ def preflight(args):
     accessibility_enabled, hypr_update = False, None
     if not args.broker_only:
         accessibility_enabled = unit_enabled("badi-accessibility.service")
+    if not args.broker_only and platform == badi_install.OMARCHY:
         run(["systemctl", "--user", "is-active", "omarchy-fcitx5.service"], capture_output=True)
         hyprland = config_home / "hypr/hyprland.lua"
         if hyprland.exists() and not hyprland.is_symlink():
@@ -407,7 +520,8 @@ def preflight(args):
     session_disabled = badi_install.unit_value(SESSION_SERVICE, "UnitFileState", timeout=4) == "disabled"
     return Plan(args, home, config_home, runtime, flag_updates, flags_present,
                 broker_updating, accessibility_enabled, hypr_update=hypr_update,
-                session_disabled=session_disabled)
+                session_disabled=session_disabled, platform=platform, system_addons=system_addons,
+                observer_session=observer_session or platform == badi_install.OMARCHY)
 
 
 def unit_enabled(unit):
@@ -501,8 +615,19 @@ def build(plan):
     run(["cargo", "build", "--release", "--locked", "-p", "badi-broker", "--bins"], cwd=ROOT)
     require_writing_model(plan.home, ROOT / "target/release/badictl", plan.args.model, plan.args.accept_model_license)
     if plan.native:
-        run(["npm", "run", "fcitx5:check"], cwd=ROOT)
-        require_unlocked()
+        build_addon()
+        if plan.omarchy:
+            require_unlocked()
+
+
+def build_addon():
+    """Build the Fcitx addon against this system's Fcitx and run its tests,
+    as `npm run fcitx5:check` does, without needing Node."""
+    build = ROOT / "adapters/fcitx5/build"
+    run(["cmake", "-S", str(ROOT / "adapters/fcitx5"), "-B", str(build), "-G", "Ninja",
+         "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTING=ON"], cwd=ROOT)
+    run(["cmake", "--build", str(build)], cwd=ROOT)
+    run(["ctest", "--test-dir", str(build), "--output-on-failure"], cwd=ROOT)
 
 
 def default_settings():
@@ -572,10 +697,12 @@ def install_prepared_files(plan, installation):
         installation.link(target, destination,
                           replace_link=target.is_symlink() and target.resolve() == ROOT / "scripts/badi-desktop.py")
     badi_install.forget(home, "desktop", [home / ".local/bin" / name for name in commands])
-    install(ROOT / "packaging/io.github.ahuray.badi.desktop",
-            home / ".local/share/applications/io.github.ahuray.badi.desktop")
-    install(ROOT / "packaging/io.github.ahuray.badi.svg",
-            home / ".local/share/icons/hicolor/scalable/apps/io.github.ahuray.badi.svg")
+    if plan.omarchy:
+        # The launcher opens the Omarchy bar's settings panel.
+        install(ROOT / "packaging/io.github.ahuray.badi.desktop",
+                home / ".local/share/applications/io.github.ahuray.badi.desktop")
+        install(ROOT / "packaging/io.github.ahuray.badi.svg",
+                home / ".local/share/icons/hicolor/scalable/apps/io.github.ahuray.badi.svg")
     # The writing binary embeds a modified English lexicon; ship its complete
     # notices on both update paths even though inference needs no external file.
     for name in ("LICENSE", "README.md"):
@@ -590,6 +717,7 @@ def install_prepared_files(plan, installation):
             install(ROOT / "adapters/accessibility" / name, library / "accessibility" / name)
         install(ROOT / "packaging/systemd/badi-accessibility.service",
                 home / ".config/systemd/user/badi-accessibility.service")
+    if native and plan.omarchy:
         install(ROOT / "packaging/hypr/badi.lua", plan.config_home / "hypr/badi.lua")
         # Omarchy runs these at every login and after omarchy-update; its
         # refresh commands replace hyprland.lua and the browser flag files.
@@ -613,9 +741,12 @@ def install_prepared_files(plan, installation):
     for name in SESSION_MODULES:
         install(ROOT / "adapters/session" / name, library / "session" / name)
     install(ROOT / "packaging/systemd" / SESSION_SERVICE, home / ".config/systemd/user" / SESSION_SERVICE)
-    if native:
+    if native and plan.omarchy:
         install(ROOT / "packaging/systemd/fcitx-badi.conf",
                 home / ".config/systemd/user/omarchy-fcitx5.service.d/50-badi.conf")
+    elif native:
+        installation.write(home / badi_install.FCITX_ENVIRONMENT,
+                           badi_install.fcitx_environment(home, plan.system_addons).encode(), 0o644)
     settings = plan.config_home / "badi/settings.json"
     # The broker's unit keeps home read-only except these two directories,
     # so they must exist before it starts.
@@ -655,6 +786,9 @@ def restart(plan, installation):
         plan.session_ready = wait_session_helper(home / ".local/lib/badi/badictl", runtime / "badi/broker.sock")
     if not plan.native:
         return probe
+    if not plan.omarchy:
+        restart_generic(plan)
+        return probe
     require_unlocked()
     if not plan.accessibility_enabled:
         run(["systemctl", "--user", "enable", "badi-accessibility.service"])
@@ -677,6 +811,47 @@ def restart(plan, installation):
     return probe
 
 
+def restart_generic(plan):
+    """A generic desktop's observer and Fcitx. The desktop, not Badi, starts
+    Fcitx (im-config's autostart, or the compositor on KDE Plasma), and a
+    replacement started from here would lose what that launcher gave it, so
+    Fcitx is never restarted: it loads the addon at the next login. The
+    observer starts only in a Hyprland session, which its unit requires."""
+    home, runtime = plan.home, plan.runtime
+    if not plan.accessibility_enabled:
+        run(["systemctl", "--user", "enable", "badi-accessibility.service"])
+    if plan.observer_session:
+        run(["systemctl", "--user", "reset-failed", "badi-accessibility.service"])
+        run(["systemctl", "--user", "restart", "badi-accessibility.service"])
+        wait_accessibility(home / ".local/lib/badi/accessibility/daemon.py", runtime / "badi/accessibility.sock")
+    plan.fcitx_process = badi_install.fcitx_bus_process()
+    if plan.fcitx_process:
+        try:
+            plan.addon_loaded = process_maps_file(plan.fcitx_process, home / ".local/lib/fcitx5/libbadi-fcitx5.so")
+        except OSError:
+            plan.addon_loaded = None
+
+
+def generic_report(plan):
+    """What a generic desktop install leaves for the user to do."""
+    environment = "~/" + str(badi_install.FCITX_ENVIRONMENT)
+    if plan.addon_loaded:
+        print("The running Fcitx already uses this addon build.")
+    elif plan.fcitx_process:
+        print(f"Fcitx loads the addon at your next login: {environment} adds ~/.local/lib/fcitx5 before "
+              f"{plan.system_addons}. Log out and back in, then run badi doctor. Fcitx was not restarted.")
+    else:
+        print(f"Fcitx is not running in this session. Choose it as the input method (Debian, Ubuntu: im-config -n "
+              f"fcitx5; KDE Plasma: Fcitx 5 as the Virtual Keyboard in System Settings), then log out and back "
+              f"in; {environment} lets it load the addon. Run badi doctor afterwards.")
+    if not plan.observer_session:
+        print("Browser and other observed fields need the field observer, which runs only in a Hyprland session so "
+              "far: Chromium-based apps, Zen, VS Code and Writer's grey preview get no suggestions on this desktop. "
+              "Fcitx's manual fields (Tab requests in apps you allow with badi app ID on), the editors "
+              "(Obsidian, Neovim, Bash: scripts/install-editors.py) and the LibreOffice Writer spelling extension "
+              "work without it. The observer is installed and starts by itself in a Hyprland session.")
+
+
 def report(plan, probe):
     if plan.session_disabled:
         print("The session helper is disabled (systemctl --user enable --now badi-session.service turns it on); "
@@ -691,6 +866,12 @@ def report(plan, probe):
     pause_note = " Predictions remain paused; use badi resume when wanted." if probe["paused"] else ""
     if not plan.native:
         print("Local model ready. Broker and controls updated; native input addon was not restarted." + pause_note)
+        return
+    if not plan.omarchy:
+        helper = " and accessibility helper" if plan.observer_session else ""
+        print(f"Local model{helper} ready. Fcitx addon installed in ~/.local/lib/fcitx5. Application accessibility "
+              "and exact target policy determine coverage; use badi doctor to inspect setup." + pause_note)
+        generic_report(plan)
         return
     print("Local model and accessibility helper ready. Desktop addon loaded by the normal Fcitx service. Keyboard profile preserved. Application accessibility and exact target policy determine coverage; use badi doctor to inspect setup." + pause_note)
     if plan.args.observed_app:

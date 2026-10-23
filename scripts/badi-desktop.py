@@ -194,6 +194,13 @@ ALL_SITES_NOTE = ("Every http(s) site is allowed for predictions unless its exac
 ALL_APPS_NOTE = ("Apps use the blocklist: every app Badi supports is allowed unless its rule blocks it "
                  "(badi apps allowlist to return to allowed apps only). The default opens only fields the "
                  "accessibility observer corroborates; a manual Tab-request app still needs badi app APP on.")
+OBSERVER_SKIPPED_NOTE = ("The field observer is installed, but systemd skipped it: it runs only in a Hyprland session "
+                         "so far. Browser and other observed fields (Chromium-based apps, Zen, VS Code, Writer's "
+                         "grey preview) get no suggestions here; Fcitx's manual fields, Obsidian, Neovim, Bash and "
+                         "the Writer spelling extension work without it.")
+SESSION_FCITX_ACTION = (f"Log out and back in: Fcitx reads Badi's addon at login, from ~/{badi_install.FCITX_ENVIRONMENT}"
+                        " after scripts/install-desktop.py, or from the system addon directory after the badi "
+                        "package. ")
 INSTALLED_BROKER = ".local/lib/badi/badi-broker"
 # Broker no-suggestion classes; counters never include typed text.
 NO_SUGGESTION = {
@@ -234,8 +241,23 @@ def service_state():
             "autostart": fields.get("UnitFileState") == "enabled"}
 
 
+FCITX_UNIT = "omarchy-fcitx5.service"
+
+
 def native_state():
-    fields = badi_install.unit_properties("omarchy-fcitx5.service", "ActiveState", "MainPID", timeout=4)
+    """The running Fcitx and whether it maps Badi's addon. Omarchy runs Fcitx
+    as omarchy-fcitx5.service; where that unit does not exist, the desktop
+    started it (im-config's autostart, or the compositor), and the process
+    that owns Fcitx's session bus name is the one to inspect."""
+    fields = badi_install.unit_properties(FCITX_UNIT, "LoadState", "ActiveState", "MainPID", timeout=4)
+    launcher = FCITX_UNIT
+    if fields.get("LoadState") == "not-found":
+        launcher = "session"
+        pid = badi_install.fcitx_bus_process()
+        if pid is None:
+            return {"active": "unknown", "addon_loaded": None, "addon_update_pending": None,
+                    "inspection_error": "native_process_uninspectable", "launcher": launcher}
+        fields = {"ActiveState": "active" if pid else "inactive", "MainPID": str(pid)}
     pid = fields.get("MainPID", "0")
     loaded = False
     update_pending = False
@@ -248,9 +270,10 @@ def native_state():
             loaded = update_pending or any(line.rstrip().endswith("/libbadi-fcitx5.so") for line in mappings)
         except OSError:
             return {"active": fields.get("ActiveState", "unknown"), "addon_loaded": None,
-                    "addon_update_pending": None, "inspection_error": "native_process_uninspectable"}
+                    "addon_update_pending": None, "inspection_error": "native_process_uninspectable",
+                    "launcher": launcher}
     return {"active": fields.get("ActiveState", "unknown"), "addon_loaded": loaded,
-            "addon_update_pending": update_pending}
+            "addon_update_pending": update_pending, "launcher": launcher}
 
 
 def startup_problem():
@@ -304,11 +327,18 @@ def startup_problem():
 
 
 def observer_service_state():
-    fields = badi_install.unit_properties(ACCESSIBILITY_SERVICE, "LoadState", "ActiveState", "MainPID")
+    fields = badi_install.unit_properties(ACCESSIBILITY_SERVICE, "LoadState", "ActiveState", "MainPID",
+                                          "ConditionResult", "ConditionTimestampMonotonic")
     pid = fields.get("MainPID", "0")
-    return {"loaded": fields.get("LoadState") == "loaded",
-            "active": fields.get("ActiveState", "unknown"),
-            "process_id": int(pid) if pid.isdigit() else 0}
+    state = {"loaded": fields.get("LoadState") == "loaded",
+             "active": fields.get("ActiveState", "unknown"),
+             "process_id": int(pid) if pid.isdigit() else 0}
+    # systemd checked the unit's start condition (a Hyprland session, so far)
+    # and skipped the start: expected on other desktops, not a failure.
+    if (state["active"] == "inactive" and fields.get("ConditionResult") == "no"
+            and fields.get("ConditionTimestampMonotonic", "0") not in ("", "0")):
+        state["condition_unmet"] = True
+    return state
 
 
 def observer_probe(endpoint, expected_pid):
@@ -573,7 +603,9 @@ def health_report():
     problems = report["problems"]
     observer = report["accessibility"] = accessibility_state()
     if observer.get("loaded"):
-        if not observer["ready"]:
+        if observer.get("condition_unmet"):
+            report["notes"].append(OBSERVER_SKIPPED_NOTE)
+        elif not observer["ready"]:
             problems.append({"code": "accessibility_unavailable",
                              "message": "The accessibility field observer is unavailable.",
                              "action": "Inspect systemctl --user status badi-accessibility.service and the accessibility runbook."})
@@ -606,6 +638,15 @@ def health_report():
     if report["native"].get("inspection_error"):
         problems.append({"code": "native_status_unknown", "message": "Native input integration could not be inspected.",
                          "action": "Inspect the Fcitx user service from the graphical session. Browser and editor broker health is reported separately."})
+    elif report["native"]["addon_loaded"] is False and report["native"].get("launcher") == "session":
+        running = report["native"].get("active") == "active"
+        problems.append({"code": "native_addon_unavailable",
+                         "message": "The running Fcitx has not loaded Badi." if running
+                         else "Fcitx is not running in this session.",
+                         "action": (SESSION_FCITX_ACTION if running else "Choose Fcitx 5 as the input method "
+                                    "(Debian, Ubuntu: im-config -n fcitx5; KDE Plasma: Fcitx 5 as the Virtual "
+                                    "Keyboard), then log out and back in. ") + "Native manual, observed and "
+                                   "IME-parity fields all need the loaded addon."})
     elif report["native"]["addon_loaded"] is False:
         problems.append({"code": "native_addon_unavailable", "message": "The running Fcitx service has not loaded Badi.",
                          "action": "Check the native installation in the Badi runbook. Native manual, observed and IME-parity fields all need the loaded addon."})
@@ -702,7 +743,8 @@ def doctor_text(report):
              f"  Service: {service.get('active', 'unknown')} ({service.get('state', 'unknown')})",
              f"  Model: {model}" + (f" · {broker['provider']}" if broker.get("provider") else ""),
              f"  Fcitx addon: {addon}",
-             "  Field observer: " + ("ready" if observer.get("ready") else "unavailable"),
+             "  Field observer: " + ("ready" if observer.get("ready") else
+                                     "not for this session" if observer.get("condition_unmet") else "unavailable"),
              "  Session helper: " + {True: report.get("session_helper", {}).get("active", "unknown"),
                                       False: "not installed"}.get(report.get("session_helper", {}).get("loaded"), "unknown")]
     installed = report.get("install", {}).get("desktop") or {}
@@ -1287,6 +1329,19 @@ SPELLING = {
     "nl": ("Dutch", ("nl_NL",), "hunspell-nl"),
     "pl": ("Polish", ("pl_PL",), "hunspell-pl"),
 }
+# The Debian 13 and Ubuntu 24.04 packages that install those dictionaries in
+# /usr/share/hunspell (fr_FR and nl_NL are links to fr and nl there).
+DEBIAN_DICTIONARIES = {"de": "hunspell-de-de", "fr": "hunspell-fr", "es": "hunspell-es", "it": "hunspell-it",
+                       "nl": "hunspell-nl", "pl": "hunspell-pl"}
+PACKAGE_INSTALL = {"arch": "sudo pacman -S", "debian": "sudo apt install"}
+
+
+def dictionary_package(language, family):
+    """This distribution's package for a language's dictionary; Arch's name
+    where the distribution is not known."""
+    if family == "debian":
+        return DEBIAN_DICTIONARIES.get(language)
+    return SPELLING[language][2]
 # The broker's dictionary_directories(): the user's own, then the system's.
 DICTIONARY_DIRECTORIES = (
     Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "hunspell",
@@ -1304,9 +1359,15 @@ def installed_dictionary(language):
 
 def spelling_report(settings):
     enabled = settings.get("spelling_languages", ["en"])
-    return [{"language": code, "name": name, "enabled": code in enabled,
-             "dictionary": installed_dictionary(code), "package": package}
-            for code, (name, _names, package) in SPELLING.items()]
+    family = badi_install.distribution_family()
+    install = PACKAGE_INSTALL.get(family, PACKAGE_INSTALL["arch"])
+    report = []
+    for code, (name, _names, _package) in SPELLING.items():
+        package = dictionary_package(code, family)
+        report.append({"language": code, "name": name, "enabled": code in enabled,
+                       "dictionary": installed_dictionary(code), "package": package,
+                       "install": f"{install} {package}" if package else None})
+    return report
 
 
 def set_spelling(document, language, enabled):
@@ -1367,7 +1428,7 @@ def print_spelling(report):
         mark = "✓" if entry["enabled"] and ready else "!" if entry["enabled"] else "·"
         detail = (entry["dictionary"] if entry["dictionary"] == "built in"
                   else f"dictionary {entry['dictionary']}" if ready
-                  else f"needs: sudo pacman -S {entry['package']} (or its .aff/.dic in ~/.local/share/hunspell)")
+                  else f"needs: {entry['install']} (or its .aff/.dic in ~/.local/share/hunspell)")
         print(f"  {mark} {entry['name']:<8} {'on ' if entry['enabled'] else 'off'}  {detail}")
     print("Turn one on or off: badi spelling LANG on|off  (" + " ".join(SPELLING) + ")")
 
@@ -1735,6 +1796,9 @@ def main(arguments):
         print(HELP, end="")
         return
     if arguments == ["settings"]:
+        if badi_install.desktop_platform() != badi_install.OMARCHY:
+            raise RuntimeError("The settings panel is part of Omarchy's bar. On this desktop the badi commands "
+                               "set the same things: badi --help lists them, badi doctor checks the setup.")
         subprocess.run(["omarchy-shell", "badi-writing", "toggle"], check=True, timeout=4)
         return
     if (arguments[:2] == ["debug", "expire"] and len(arguments) == 3

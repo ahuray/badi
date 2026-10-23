@@ -271,4 +271,10 @@ public:
 } // namespace badi::fcitx5
 
 
+#ifdef FCITX_ADDON_FACTORY_V2
 FCITX_ADDON_FACTORY_V2(badi, badi::fcitx5::BadiModuleFactory)
+#else
+// Fcitx 5.1.7 (Ubuntu 24.04) has no per-addon factory symbol; its loader
+// resolves only the unnamed fcitx_addon_factory_instance.
+FCITX_ADDON_FACTORY(badi::fcitx5::BadiModuleFactory)
+#endif

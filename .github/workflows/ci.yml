@@ -156,6 +156,45 @@ jobs:
           ! grep -F ' E: ' namcap.txt
           bsdtar -tf "$package" | grep -Fx 'usr/share/licenses/badi-git/THIRD-PARTY-NOTICES.txt'
 
+  debian-package:
+    name: Package / ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian 13
+            image: debian:trixie@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308
+          - name: Ubuntu 24.04
+            image: ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
+    env:
+      IMAGE: ${{ matrix.image }}
+    steps:
+      - name: Check out source with history for the package version
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Docker on the runner, not a job container: the last step needs a
+      # second, fresh container of the same release.
+      - name: Start the pinned build container
+        run: docker run --detach --name build --volume "$GITHUB_WORKSPACE:/src" --workdir /src "$IMAGE" sleep infinity
+      - name: Install the release's build dependencies
+        run: docker exec build packaging/debian/ci.sh deps
+      - name: Build and test the Fcitx addon against the release's Fcitx
+        run: docker exec build packaging/debian/ci.sh addon
+      - name: Test the broker with the release's Rust 1.85
+        run: docker exec build packaging/debian/ci.sh broker
+      - name: Run the desktop, observer and session unit tests
+        run: docker exec build packaging/debian/ci.sh python
+      - name: Build and lint the package
+        run: docker exec build packaging/debian/ci.sh package
+      - name: Install it into a fresh container and smoke-test it
+        run: |
+          docker run --rm --volume "$GITHUB_WORKSPACE:/src:ro" --workdir /src "$IMAGE" \
+            packaging/debian/ci.sh smoke target/debian/badi_*_amd64.deb
+
   fcitx5:
     name: Fcitx5 addon / pinned Arch
     runs-on: ubuntu-latest
