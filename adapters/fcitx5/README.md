@@ -348,6 +348,8 @@ What the live trials established, beyond those cells:
     applied with Tab and confirmed by the read-back.
   - A German clause after "dass" came back with its verb last
     ("die Rechnung bereits bezahlt worden ist"), applied and confirmed.
+  - One Ctrl+Z after an applied revision restored the original text,
+    selected again.
   - A correct selection said Badi found nothing to change. A selection in
     a password field sent no request and left no key lines.
   - Writer refuses, since it gives Fcitx only the caret's sentence. Native
