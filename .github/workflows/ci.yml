@@ -153,7 +153,11 @@ jobs:
           namcap PKGBUILD | tee namcap.txt
           namcap "$package" | tee -a namcap.txt
           # namcap marks errors with ' E: '; warnings are reviewed in the package README.
-          ! grep -F ' E: ' namcap.txt
+          # A negated command never fails a step under bash -e (SC2251), so test it.
+          if grep -F ' E: ' namcap.txt; then
+            echo 'namcap reported errors' >&2
+            exit 1
+          fi
           bsdtar -tf "$package" | grep -Fx 'usr/share/licenses/badi-git/THIRD-PARTY-NOTICES.txt'
 
   debian-package:
