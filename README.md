@@ -33,7 +33,10 @@ edits; asking explicitly ends that sooner.
 
 In the middle of a sentence Badi suggests only what fits before the next word:
 the rest of a word you are typing, or words the model would write right before
-the text that follows. When the caret is already after a space and a word
+the text that follows. A word you start right in front of another
+(`the fin|report`) is finished with a space, so it stays apart (`al ` gives
+`the final report`), and English stems that are words themselves, such as `fin`
+or `rep`, are finished too. When the caret is already after a space and a word
 follows, the suggestion keeps one space so it does not join that word. Where
 grey text would cover those words, it shows in a small box under the line
 instead, and that box keeps the separating space.

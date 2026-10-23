@@ -235,6 +235,9 @@ pub struct ObservedCompletion {
     cache_tokens: Option<u32>,
     /// Tokens generated (the runtime's count, else streamed events seen).
     generated_tokens: u32,
+    /// Bytes of the first generated token, a healed echo included, when the
+    /// request asked for probabilities.
+    first_token_bytes: Option<usize>,
 }
 
 impl ObservedCompletion {
@@ -251,6 +254,11 @@ impl ObservedCompletion {
     #[must_use]
     pub fn output(&self) -> Option<&str> {
         self.output.as_deref()
+    }
+
+    /// The first generated token as streamed, a healed echo included.
+    fn first_token(&self) -> Option<&str> {
+        self.raw.as_deref()?.get(..self.first_token_bytes?)
     }
 
     #[must_use]
@@ -316,6 +324,7 @@ impl ObservedCompletion {
             prompt_tokens: None,
             cache_tokens: None,
             generated_tokens: 0,
+            first_token_bytes: None,
         }
     }
 
@@ -335,6 +344,7 @@ impl ObservedCompletion {
             prompt_tokens: None,
             cache_tokens: None,
             generated_tokens: 0,
+            first_token_bytes: None,
         }
     }
 }
@@ -659,39 +669,34 @@ impl SemanticClient {
         if plan.sends_nothing() {
             return Ok(ObservedCompletion::language_abstention());
         }
-        let mut payload = plan.payload();
         let words = crate::writing::bias_words(
             &request.before,
             self.window_context.as_deref().unwrap_or(""),
             request.language.as_deref(),
         );
-        if let Some(bias) = self.context_bias(&words).await {
-            payload["logit_bias"] = bias;
+        let bias = self.context_bias(&words).await;
+        let run = |plan| {
+            self.complete_plan(
+                plan,
+                bias.as_ref(),
+                &cancellation,
+                started,
+                budget,
+                StreamShape {
+                    echoed_prefix: None,
+                    partials: partials.as_ref(),
+                    confidence_floor: Some(crate::writing::CONFIDENCE_FLOOR),
+                    length,
+                    first_token_must_extend: false,
+                },
+            )
+        };
+        let mut observed = run(plan).await?;
+        // A healed lexicon word whose answer began with a shorter token is
+        // taken as finished, within the same budget.
+        if let Some(finished) = plan.finished_word(observed.first_token()) {
+            observed = run(finished).await?;
         }
-        // The confidence gate needs each token's probability before sampling.
-        payload["n_probs"] = serde_json::json!(1);
-        payload["post_sampling_probs"] = serde_json::json!(false);
-        let payload = serde_json::to_vec(&payload).map_err(|_| ClientError::InvalidRequest)?;
-        let operation = self.complete_inner(
-            payload,
-            started,
-            budget,
-            cancellation.clone(),
-            StreamShape {
-                echoed_prefix: plan.echo,
-                partials: partials.as_ref(),
-                confidence_floor: Some(crate::writing::CONFIDENCE_FLOOR),
-                length,
-            },
-        );
-        let deadline = started + budget + WRITING_RESULT_GRACE;
-        let observed = tokio::select! {
-            biased;
-            () = cancellation.cancelled() => Err(ClientError::Cancelled),
-            result = tokio::time::timeout_at(deadline.into(), operation) => {
-                result.map_err(|_| ClientError::Timeout)?
-            }
-        }?;
         if observed.output.as_deref().is_some_and(|output| {
             !request
                 .language
@@ -708,6 +713,49 @@ impl SemanticClient {
             });
         }
         Ok(observed)
+    }
+
+    /// Sends one completion plan and reads it as `shape` says, with the
+    /// plan's echo, within the writing budget that began at `started`.
+    async fn complete_plan(
+        &self,
+        plan: crate::writing::CompletionPlan<'_>,
+        bias: Option<&serde_json::Value>,
+        cancellation: &CancellationToken,
+        started: Instant,
+        budget: Duration,
+        shape: StreamShape<'_>,
+    ) -> Result<ObservedCompletion, ClientError> {
+        let mut payload = plan.payload();
+        if let Some(bias) = bias.and_then(serde_json::Value::as_array) {
+            match payload["logit_bias"].as_array_mut() {
+                Some(entries) => entries.extend(bias.iter().cloned()),
+                None => payload["logit_bias"] = serde_json::Value::Array(bias.clone()),
+            }
+        }
+        // The confidence gate needs each token's probability before sampling.
+        payload["n_probs"] = serde_json::json!(1);
+        payload["post_sampling_probs"] = serde_json::json!(false);
+        let payload = serde_json::to_vec(&payload).map_err(|_| ClientError::InvalidRequest)?;
+        let operation = self.complete_inner(
+            payload,
+            started,
+            budget,
+            cancellation.clone(),
+            StreamShape {
+                echoed_prefix: plan.echo,
+                first_token_must_extend: plan.finished_word_prompt.is_some(),
+                ..shape
+            },
+        );
+        let deadline = started + budget + WRITING_RESULT_GRACE;
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => Err(ClientError::Cancelled),
+            result = tokio::time::timeout_at(deadline.into(), operation) => {
+                result.map_err(|_| ClientError::Timeout)?
+            }
+        }
     }
 
     /// The rest of the word at the caret from the request's vocabulary, in a
@@ -1356,6 +1404,27 @@ impl StreamAccumulator {
 }
 
 impl StreamAccumulator {
+    /// Every content token arrived with a probability, and together they
+    /// cover the streamed content exactly.
+    fn probabilities_known(&self) -> bool {
+        let covered: usize = self.token_logprobs.iter().map(|(bytes, _)| bytes).sum();
+        !self.probabilities_unknown && covered == self.content_bytes
+    }
+
+    fn first_token_bytes(&self) -> Option<usize> {
+        self.token_logprobs.first().map(|&(bytes, _)| bytes)
+    }
+
+    /// Whether the first streamed token, once known, fails to begin with the
+    /// whole `echo`; unknown probabilities leave nothing to check it by.
+    fn first_token_breaks(&self, echo: Option<&str>) -> bool {
+        let first = self
+            .first_token_bytes()
+            .and_then(|bytes| self.output.get(..bytes));
+        (self.probabilities_unknown || first.is_some())
+            && !first.is_some_and(|token| echo.is_some_and(|echo| token.starts_with(echo)))
+    }
+
     /// Records each streamed token's probability. A stop token whose text
     /// the runtime withholds (no bytes) is not part of the output.
     fn accept_probabilities(&mut self, value: Option<&serde_json::Value>, content: &str) {
@@ -1396,8 +1465,7 @@ impl StreamAccumulator {
     /// the echo counts. `None` when any probability is missing or the tokens
     /// do not cover the streamed content exactly.
     fn shown_min_logprob(&self, echo_bytes: usize, shown_bytes: usize) -> Option<f64> {
-        let covered: usize = self.token_logprobs.iter().map(|(bytes, _)| bytes).sum();
-        if self.probabilities_unknown || covered != self.content_bytes {
+        if !self.probabilities_known() {
             return None;
         }
         let end = echo_bytes.saturating_add(shown_bytes);
@@ -1527,6 +1595,7 @@ fn observed_completion(
         prompt_tokens,
         cache_tokens,
         generated_tokens,
+        first_token_bytes: accumulator.first_token_bytes(),
     }
 }
 
@@ -1539,6 +1608,10 @@ struct StreamShape<'a> {
     partials: Option<&'a UnboundedSender<String>>,
     confidence_floor: Option<f64>,
     length: crate::writing::SuggestionLength,
+    /// The echo is a typed lexicon word: stop reading as soon as the first
+    /// token shows it does not write that whole word, so the unhealed
+    /// request keeps the rest of the budget.
+    first_token_must_extend: bool,
 }
 
 /// What the stream had produced when the writing budget ran out: its
@@ -1574,11 +1647,11 @@ fn deadline_observation(
             response_body_bytes,
         ),
         accumulator,
-        shape.echoed_prefix,
-        shape.confidence_floor,
+        shape,
     )
 }
 
+#[allow(clippy::too_many_lines)]
 async fn read_stream(
     mut response: Response,
     request_body_bytes: usize,
@@ -1592,7 +1665,7 @@ async fn read_stream(
     // A gated suggestion is judged whole, so no partial may show first.
     let partials = shape.partials.filter(|_| shape.confidence_floor.is_none());
     let gate = |observed: ObservedCompletion, accumulator: &StreamAccumulator| {
-        gate_confidence(observed, accumulator, echoed_prefix, shape.confidence_floor)
+        gate_confidence(observed, accumulator, shape)
     };
     let mut shown_partial = String::new();
     let mut pending = Vec::new();
@@ -1629,6 +1702,17 @@ async fn read_stream(
                 continue;
             };
             saw_done = accumulator.accept_event(&data, started)?;
+            if shape.first_token_must_extend && accumulator.first_token_breaks(echoed_prefix) {
+                return Ok(observed_completion(
+                    &accumulator,
+                    CompletionDisposition::ModelAbstained,
+                    Some(NoSuggestionReason::ModelAbstained),
+                    None,
+                    started,
+                    request_body_bytes,
+                    response_body_bytes,
+                ));
+            }
             if crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
                 .is_none_or(str::is_empty)
             {
@@ -1693,22 +1777,36 @@ async fn read_stream(
 
 /// Applies the confidence floor to a finished observation: a suggestion is
 /// kept only when every token of its shown text was at least as likely as
-/// `floor`; unknown likelihood fails closed. Without a floor nothing changes.
+/// the floor; unknown likelihood fails closed. Without a floor nothing
+/// changes.
 fn gate_confidence(
     mut observed: ObservedCompletion,
     accumulator: &StreamAccumulator,
-    echoed_prefix: Option<&str>,
-    floor: Option<f64>,
+    shape: StreamShape<'_>,
 ) -> ObservedCompletion {
-    let Some(floor) = floor else {
+    let Some(floor) = shape.confidence_floor else {
         return observed;
     };
     let Some(output) = observed.output.as_deref() else {
         return observed;
     };
-    let minimum = accumulator.shown_min_logprob(echoed_prefix.map_or(0, str::len), output.len());
+    let echo_bytes = shape.echoed_prefix.map_or(0, str::len);
+    // The token that writes a typed lexicon word (` whether` after `whet`)
+    // was chosen among those the stem allows; its probability is how likely
+    // that word was before anything was typed, so it is not counted. A
+    // suggestion that only finishes the word is judged by that choice and
+    // the lexicon alone.
+    let counted_from = accumulator
+        .first_token_bytes()
+        .filter(|&bytes| shape.first_token_must_extend && bytes > echo_bytes)
+        .unwrap_or(echo_bytes);
+    let shown_end = echo_bytes + output.len();
+    let minimum =
+        accumulator.shown_min_logprob(counted_from, shown_end.saturating_sub(counted_from));
+    let word_only =
+        counted_from > echo_bytes && counted_from >= shown_end && accumulator.probabilities_known();
     observed.min_logprob = minimum;
-    if minimum.is_none_or(|minimum| minimum < floor) {
+    if !word_only && minimum.is_none_or(|minimum| minimum < floor) {
         observed.disposition = CompletionDisposition::ModelAbstained;
         observed.no_suggestion = Some(NoSuggestionReason::LowConfidence);
         observed.output = None;

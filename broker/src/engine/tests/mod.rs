@@ -45,6 +45,8 @@ mod spelling;
 mod stats;
 mod style;
 mod type_through;
+#[cfg(feature = "local-model")]
+mod word_start;
 
 struct CountingProvider {
     calls: AtomicU64,

@@ -247,6 +247,10 @@ struct BrokerState {
     sessions: HashMap<SessionId, SessionState>,
     /// The last shown continuation that typing may carry (ADR 0004).
     type_through: Option<type_through::TypeThrough>,
+    /// Where the caret last stood at a word start in front of another word,
+    /// in the app or site of that context. Like a carry it outlives the
+    /// session an observed field reopens on each edit, and it grants nothing.
+    word_start: Option<(type_through::CarryScope, WordStart)>,
     /// A denial only: a freshly authorized observed session may inherit this
     /// field visit's dismissal, never context or a suggestion/commit grant.
     rebound_quiet: Option<ReboundQuiet>,
@@ -291,6 +295,68 @@ struct SessionState {
     pending: Option<PendingCommit>,
     escape_quiet: Option<EscapeQuiet>,
     sink: BrokerEventSink,
+}
+
+/// A caret that stood at the start of a word in front of another word
+/// (`the |report`). While only letters are typed there and the text after
+/// the caret stays the same, those letters are a new word, not the start of
+/// the next one (`the fin|report`).
+struct WordStart {
+    before: String,
+    after: String,
+}
+
+impl BrokerState {
+    /// Whether `context`, in `scope`, holds letters typed at the last word
+    /// start in front of another word.
+    fn typed_at_word_start(
+        &self,
+        scope: &type_through::CarryScope,
+        context: &ContextChangedPayload,
+    ) -> bool {
+        self.word_start
+            .as_ref()
+            .is_some_and(|(start_scope, start)| start_scope == scope && start.typed_in(context))
+    }
+}
+
+impl WordStart {
+    /// The word start that still holds for `context`: the caret is at one
+    /// now, or only letters were typed at the earlier one since.
+    fn follow(previous: Option<Self>, context: &ContextChangedPayload) -> Option<Self> {
+        let at_start = context
+            .before
+            .chars()
+            .next_back()
+            .is_none_or(char::is_whitespace)
+            && context
+                .after
+                .chars()
+                .next()
+                .is_some_and(char::is_alphabetic);
+        if at_start {
+            return Some(Self {
+                before: context.before.clone(),
+                after: context.after.clone(),
+            });
+        }
+        previous.filter(|start| {
+            start.after == context.after
+                && context
+                    .before
+                    .strip_prefix(start.before.as_str())
+                    .is_some_and(|typed| {
+                        !typed.is_empty() && typed.chars().all(char::is_alphabetic)
+                    })
+        })
+    }
+
+    /// Whether `context` is this word start with letters typed at it.
+    fn typed_in(&self, context: &ContextChangedPayload) -> bool {
+        self.after == context.after
+            && context.before.len() > self.before.len()
+            && context.before.starts_with(&self.before)
+    }
 }
 
 /// A dismissal's timed quiet for automatic suggestions in one field visit.

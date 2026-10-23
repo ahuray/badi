@@ -222,6 +222,21 @@ pub fn word_follows_caret(after: &str) -> bool {
 pub fn mid_line_insertion(before: &str, line: &str, continuation: &str) -> Option<String> {
     let clause_mark = |character: char| matches!(character, '.' | ',' | '!' | '?' | ';' | ':');
     let start = line.len() - line.trim_start().len();
+    // Finishing the typed word into the line's own first word (`ha` + `d`
+    // before `had a good weekend`) repeats it, so that insertion never fits.
+    let stem = before
+        .rsplit(|character: char| !character.is_alphabetic())
+        .next()
+        .unwrap_or_default();
+    let fits = |insertion: &str| {
+        let repeats = !stem.is_empty()
+            && insertion.chars().all(char::is_alphabetic)
+            && line[start..]
+                .unicode_words()
+                .next()
+                .is_some_and(|next| next.eq_ignore_ascii_case(&format!("{stem}{insertion}")));
+        (!repeats).then(|| insertion.to_owned())
+    };
     let head_len = match line[start..].chars().next() {
         Some(first) if first.is_alphanumeric() => line[start..]
             .unicode_word_indices()
@@ -229,6 +244,21 @@ pub fn mid_line_insertion(before: &str, line: &str, continuation: &str) -> Optio
             .map_or(first.len_utf8(), |(_, word)| word.len()),
         Some(first) => first.len_utf8(),
         None => 0,
+    };
+    // A short next word (`the`, `to`) comes back by chance: ` the right
+    // place` does not rejoin ` the figures`. There the continuation must
+    // also reproduce the word after it.
+    let head_len = match line[start..]
+        .unicode_word_indices()
+        .take(2)
+        .collect::<Vec<_>>()[..]
+    {
+        [(_, first), (second_start, second)]
+            if head_len == first.len() && first.chars().count() <= 3 =>
+        {
+            second_start + second.len()
+        }
+        _ => head_len,
     };
     if head_len > 0 {
         let head = &line[..start + head_len];
@@ -244,7 +274,7 @@ pub fn mid_line_insertion(before: &str, line: &str, continuation: &str) -> Optio
                     && !continuation[index + head.len()..].starts_with(char::is_alphanumeric)
             });
         if let Some(index) = rejoin {
-            return Some(continuation[..index].to_owned());
+            return fits(&continuation[..index]);
         }
         if line[start..].starts_with(clause_mark) {
             if let Some(phrase) = continuation.trim_end().strip_suffix(clause_mark) {
@@ -258,7 +288,8 @@ pub fn mid_line_insertion(before: &str, line: &str, continuation: &str) -> Optio
         .find(|character: char| !character.is_alphabetic())
         .unwrap_or(continuation.len());
     (word_end > 0 && before.ends_with(char::is_alphabetic))
-        .then(|| continuation[..word_end].to_owned())
+        .then(|| fits(&continuation[..word_end]))
+        .flatten()
 }
 
 /// [`validate_suggestion_shape`], plus: a completion that continues a word
@@ -592,6 +623,7 @@ pub fn pinned_runtime_launch(
     )?)
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct CompletionPlan<'a> {
     pub(crate) prompt: &'a str,
     pub(crate) echo: Option<&'a str>,
@@ -599,6 +631,11 @@ pub(crate) struct CompletionPlan<'a> {
     /// Whether generation may write digits: only when the typed text has
     /// one, since [`introduces_unsupported_fact`] refuses any other number.
     pub(crate) digits: bool,
+    /// Set when the echo is a typed lexicon word that may be half written
+    /// (`rep`) or finished (`the`): the unhealed prompt, sent instead when the
+    /// healed answer's first token does not extend that word
+    /// ([`CompletionPlan::finished_word`]).
+    pub(crate) finished_word_prompt: Option<&'a str>,
 }
 
 /// Languages whose trailing ASCII space is healed in production. A language is
@@ -711,29 +748,34 @@ pub(crate) fn completion_plan<'a>(
         .language
         .as_deref()
         .and_then(WritingLanguage::from_tag);
-    let (prompt, echo, max_tokens) = healed_boundary(context, language, healed_languages);
+    let (prompt, echo, max_tokens, checked) = healed_boundary(context, language, healed_languages);
     CompletionPlan {
         prompt,
         echo,
         max_tokens,
         digits: request.before.chars().any(|c| ascii_digit(c).is_some()),
+        finished_word_prompt: checked.then_some(context),
     }
 }
 
 /// The production echo of `before`: separating spaces plus, for English, the
-/// last healable word. `None` when this language is not healed or the prompt
-/// would be empty.
+/// last healable word. `None` when this language is not healed, the prompt
+/// would be empty, or the word is a lexicon word that production heals only
+/// after checking the answer.
 #[must_use]
 pub fn production_healed_echo<'a>(before: &'a str, language_tag: &str) -> Option<&'a str> {
     let language = WritingLanguage::from_tag(language_tag);
-    healed_boundary(before, language, TRAILING_SPACE_HEALING).1
+    let (_, echo, _, checked) = healed_boundary(before, language, TRAILING_SPACE_HEALING);
+    echo.filter(|_| !checked)
 }
 
+/// The prompt, the echo the grammar reproduces, the token budget, and
+/// whether the echo is a lexicon word whose answer must extend it.
 fn healed_boundary<'a>(
     context: &'a str,
     language: Option<WritingLanguage>,
     healed_languages: &[WritingLanguage],
-) -> (&'a str, Option<&'a str>, u16) {
+) -> (&'a str, Option<&'a str>, u16, bool) {
     // A prompt that ends in a space tokenizes unlike the model's own " word"
     // tokens. The echo therefore owns every separating space and, for English,
     // the last healable word, whether or not the user already typed a space
@@ -749,13 +791,31 @@ fn healed_boundary<'a>(
                     &context[..start],
                     Some(&context[start..end]),
                     token_budget(language, 12),
+                    false,
                 );
             }
             // The whole field is that word. A trailing space falls through and
             // is healed with the word kept. With nothing else, an empty prompt
             // abstains instead of sending the bare stem.
             if context.len() == trimmed.len() {
-                return ("", None, token_budget(language, 8));
+                return ("", None, token_budget(language, 8), false);
+            }
+        }
+        // A lexicon word at the caret may still be half typed: unhealed, the
+        // model took `rep` and `sh` as finished and wrote ` to your email` or
+        // `uck off`. Heal it as well, and keep the answer only when its first
+        // token writes the whole word and more, or exactly the word.
+        if context.len() == trimmed.len() {
+            if let Some(word) = typed_lexicon_word(context) {
+                let (start, end) = healed_echo_span(context, word);
+                if start > 0 {
+                    return (
+                        &context[..start],
+                        Some(&context[start..end]),
+                        token_budget(language, 12),
+                        true,
+                    );
+                }
             }
         }
     }
@@ -766,9 +826,10 @@ fn healed_boundary<'a>(
             trimmed,
             Some(&context[trimmed.len()..]),
             token_budget(language, 8),
+            false,
         );
     }
-    (context, None, token_budget(language, 8))
+    (context, None, token_budget(language, 8), false)
 }
 
 /// The echo of `word` inside `context`, including the ASCII spaces that
@@ -807,6 +868,26 @@ impl CompletionPlan<'_> {
         self.prompt.trim().is_empty() || self.prompt.ends_with(' ')
     }
 
+    /// The plan that takes the typed lexicon word as finished, for a healed
+    /// answer whose first token does not write the whole word: it spelled out
+    /// something else from pieces (`and` became `andash`, `contains` became
+    /// `containsKey`). `None` when the answer may stand, because its first
+    /// token is the echo or extends it, or when the echo was no lexicon word.
+    pub(crate) fn finished_word(&self, first_token: Option<&str>) -> Option<Self> {
+        let prompt = self.finished_word_prompt?;
+        let echo = self.echo?;
+        if first_token.is_some_and(|token| token.starts_with(echo)) {
+            return None;
+        }
+        Some(Self {
+            prompt,
+            echo: None,
+            max_tokens: token_budget(Some(WritingLanguage::English), 8),
+            digits: self.digits,
+            finished_word_prompt: None,
+        })
+    }
+
     pub(crate) fn payload(&self) -> Value {
         // Per-token timings put the prompt/cache counts on the first token
         // already, so a call the writing budget cuts still reports how much
@@ -831,6 +912,13 @@ impl CompletionPlan<'_> {
             serde_json::to_string(echo).expect("echo is serializable") + " "
         });
         payload["grammar"] = Value::String(format!("root ::= {echo}{class}*"));
+        // Before a typed lexicon word, a lone space token let the model meet
+        // the echo without writing the word (` ` then `finger` for ` fin`).
+        // Forbidden, the first token writes it (` final`): on the 134 stem
+        // cases of 2026-10-23, 124 first tokens stood against 91.
+        if self.finished_word_prompt.is_some() {
+            payload["logit_bias"] = json!([[" ", false]]);
+        }
         payload
     }
 }
@@ -975,6 +1063,25 @@ pub fn healing_prefix(before: &str) -> Option<&str> {
             .all(|character| character.is_alphabetic() || character == '\u{200c}')
         && crate::segment::valid_orthographic_joiners(word))
     .then_some(word)
+}
+
+/// The trailing word of `before` that is a lexicon word but also begins a
+/// longer one, so it may be half typed: two to 24 ASCII letters, such as
+/// `rep`, `fin` or `the`.
+fn typed_lexicon_word(before: &str) -> Option<&str> {
+    let word = before.split_whitespace().next_back()?;
+    (before.ends_with(word)
+        && (2..=24).contains(&word.len())
+        && known_english_word(word)
+        && begins_longer_english_word(word))
+    .then_some(word)
+}
+
+fn begins_longer_english_word(word: &str) -> bool {
+    let word = word.to_ascii_lowercase();
+    // The first lexicon word above `word` in byte order is one of its
+    // extensions whenever one exists.
+    first_english_word_from(&format!("{word}\0")).is_some_and(|next| next.starts_with(&word))
 }
 
 pub(crate) fn strip_healed_prefix<'a>(raw: &'a str, echo: Option<&str>) -> Option<&'a str> {
