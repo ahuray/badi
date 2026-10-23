@@ -183,6 +183,7 @@ badi pause                          # persists across restarts; badi resume
 badi pause toggle                   # what the session helper's shortcut runs
 badi snooze                         # off in the focused app or site for 10 minutes; badi resume ends it
 badi battery normal                 # on battery: keep mains scheduling (default: quiet)
+badi languages en de fr             # the languages you write in: suggestions and typo fixes in each
 badi length short                   # one or two words per suggestion; normal (default) up to four
 badi mid-line on                    # suggestions when a word follows the caret; off by default
 badi escape-quiet 60                # a dismissal keeps its field quiet for a minute; off by default
@@ -213,19 +214,23 @@ A field the toolkit marks as a password is refused in every mode. A normal
 text field is not treated as sensitive from its label, placeholder, or
 autocomplete hint. The **b** mark in the
 Omarchy bar opens the same settings as a keyboard-driven popout (j/k, space,
-h/l, `/` to search), and right-clicking it pauses Badi. It shows the model's
-live state, content-free shown and accepted counts, an acceptance meter and
-estimated words saved since model start, and the words saved on each of the
-last seven days and by app ([counter definitions](ui/omarchy-plugin/README.md#statistics)).
+h/l, `/` to search), and right-clicking it pauses Badi. The first time, it
+asks which languages you write in. Afterwards it opens compact: the model's
+live state, the words saved on each of the last seven days, your languages,
+the suggestion length and context. **All settings** (or `a`) shows every
+other setting, the acceptance meter and the apps that saved the most
+([counter definitions](ui/omarchy-plugin/README.md#statistics)).
 
 A language override takes precedence over detection and the adapter's hint
 without granting access to an app or website. `badi language APP reset`
 restores automatic selection. For longer text, Badi conservatively detects
 English, German, Persian, French, Spanish or Portuguese from the authorized
 field; short or uncertain text keeps the app or keyboard hint. Badi suggests
-only in the languages turned on with `badi suggest` (English, German and
-Persian by default); French, Spanish and Portuguese are experimental and not
-yet qualified.
+only in the languages you choose (`badi languages`, the panel, or one at a
+time with `badi suggest`; English and German by default); French, Spanish
+and Portuguese are experimental and not yet qualified. Portuguese has no
+typo fixes yet, and Italian, Dutch and Polish have typo fixes only. Persian
+is not offered in the panel; `badi suggest fa on` still turns it on.
 
 **Healing** is what Badi does after you type a space: the model writes that
 space itself, so it starts the next word as it normally would. Each model

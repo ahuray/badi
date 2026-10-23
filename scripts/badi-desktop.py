@@ -98,12 +98,15 @@ HELP = """Badi — local writing controls
   badi model use ID            Download (pinned, hash-checked) and switch to
                                a model, for example gemma-3-1b
   badi model auto              Return to the device recommendation
+  badi languages [LANG...]     The languages you write in (en de fr es pt it
+                               nl pl): suggestions and typo fixes in each that
+                               has them; the panel asks this once
   badi spelling [LANG on|off] [--json]
                                Spelling languages (en de fr es it nl pl) and
                                their dictionaries; English is built in
   badi suggest [--json]        Suggestion languages and their healing
-  badi suggest LANG on|off     Suggest words in a language (en de fa; fr es
-                               pt are experimental)
+  badi suggest LANG on|off     Suggest words in a language (en de; fr es pt
+                               are experimental; fa only from here)
   badi suggest LANG healing on|off|auto
                                Heal a trailing space in that language, keep
                                it, or follow the model's reviewed default
@@ -1088,8 +1091,13 @@ def set_language(document, app, language):
 # The broker's PredictionLanguage order (broker/src/settings/document.rs).
 WRITING = {"en": "English", "de": "German", "fa": "Persian", "fr": "French", "es": "Spanish",
            "pt": "Portuguese"}
-DEFAULT_WRITING = ["en", "de", "fa"]
+DEFAULT_WRITING = ["en", "de"]
 EXPERIMENTAL_WRITING = ("fr", "es", "pt")
+# What `badi languages` and the panel's first-run question offer, European
+# only: the name, whether the model suggests in it, whether typos are fixed.
+LANGUAGES = {"en": ("English", True, True), "de": ("Deutsch", True, True), "fr": ("Français", True, True),
+             "es": ("Español", True, True), "pt": ("Português", True, False), "it": ("Italiano", False, True),
+             "nl": ("Nederlands", False, True), "pl": ("Polski", False, True)}
 
 
 def model_healing():
@@ -1108,6 +1116,9 @@ def writing_report(settings, model_default):
     choices = settings.get("trailing_space_healing", {})
     report = []
     for code, name in WRITING.items():
+        # Persian is listed only while it is on, so it can be turned off.
+        if code == "fa" and code not in enabled:
+            continue
         choice = {True: "on", False: "off"}.get(choices.get(code), "auto")
         report.append({"language": code, "name": name, "enabled": code in enabled,
                        "experimental": code in EXPERIMENTAL_WRITING, "healing": choice,
@@ -1148,7 +1159,7 @@ def print_writing(report, model_name):
         source = f"auto, as {model_name} was reviewed" if entry["healing"] == "auto" and model_name else entry["healing"]
         note = "experimental · " if entry["experimental"] else ""
         print(f"  {mark} {entry['name']:<8} {'on ' if entry['enabled'] else 'off'}  {note}{heal} ({source})")
-    print("Turn one on or off: badi suggest LANG on|off  (" + " ".join(WRITING) + ")")
+    print("Turn one on or off: badi suggest LANG on|off  (" + " ".join(code for code in WRITING if code != "fa") + ")")
     print("Healing lets the model write the space after your last word itself, so the next word")
     print("starts naturally: badi suggest LANG healing on|off|auto")
 
@@ -1196,6 +1207,44 @@ def set_spelling(document, language, enabled):
         document.pop("spelling_languages", None)
     else:
         document["spelling_languages"] = ordered
+
+
+def set_languages(document, codes):
+    """Suggestions and typo fixes in every listed language that has them, in
+    one write; a Persian choice made with badi suggest stays as it is."""
+    if not codes or len(set(codes)) != len(codes) or any(code not in LANGUAGES for code in codes):
+        raise RuntimeError("Usage: badi languages LANG... (" + " ".join(LANGUAGES) + ")")
+    keeps_persian = "fa" in document.get("writing_languages", DEFAULT_WRITING)
+    writing = [code for code in WRITING
+               if (code == "fa" and keeps_persian) or (code in codes and LANGUAGES[code][1])]
+    if writing == DEFAULT_WRITING:
+        document.pop("writing_languages", None)
+    else:
+        document["writing_languages"] = writing
+    spelling = [code for code in SPELLING if code in codes and LANGUAGES[code][2]]
+    if spelling == ["en"]:
+        document.pop("spelling_languages", None)
+    else:
+        document["spelling_languages"] = spelling
+    document["languages_chosen"] = True
+
+
+def languages_text(settings):
+    writing = settings.get("writing_languages", DEFAULT_WRITING)
+    spelling = settings.get("spelling_languages", ["en"])
+    lines = []
+    for code, (name, suggests, spells) in LANGUAGES.items():
+        if code not in writing and code not in spelling:
+            continue
+        what = [part for part, on in (("suggestions", code in writing), ("typo fixes", code in spelling)) if on]
+        missing = [part for part, offered, on in (("suggestions", suggests, code in writing),
+                                                  ("typo fixes", spells, code in spelling)) if not offered]
+        lines.append(f"  ✓ {name:<11} " + " and ".join(what) + (f" ({missing[0]} not offered)" if missing else ""))
+    head = "Languages: " + (", ".join(LANGUAGES[code][0] for code in LANGUAGES
+                                     if code in writing or code in spelling) or "none")
+    if not settings.get("languages_chosen"):
+        head += " · not chosen yet: the panel asks, or run badi languages LANG..."
+    return "\n".join([head, *lines, "Choose them: badi languages LANG...  (" + " ".join(LANGUAGES) + ")"])
 
 
 def print_spelling(report):
@@ -1633,6 +1682,13 @@ def main(arguments):
         language = arguments[1]
         update_settings(lambda document: set_spelling(document, language, arguments[2] == "on"))
         print_spelling(spelling_report(json.loads(control(["settings", "show", "--json"]))))
+        return
+    if arguments == ["languages"]:
+        print(languages_text(json.loads(control(["settings", "show", "--json"]))))
+        return
+    if arguments[:1] == ["languages"]:
+        update_settings(lambda document: set_languages(document, arguments[1:]))
+        print(languages_text(json.loads(control(["settings", "show", "--json"]))))
         return
     if arguments[:1] == ["suggest"] and arguments[1:] in ([], ["--json"]):
         name, model_default = model_healing()

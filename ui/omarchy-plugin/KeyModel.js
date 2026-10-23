@@ -1,7 +1,8 @@
 .pragma library
 // The settings popout's keyboard model, free of QML so it is tested without a
 // desktop (tests/key-model.test.mjs): one cursor over the controller's typed
-// rows, moved with j/k, a choice stepped with h/l, Enter and x, and search.
+// rows, moved with j/k, a choice stepped with h/l, a multi-select row's
+// chips walked with h/l and toggled with Enter, x, and search.
 
 // The cursor after j (dy 1) or k (dy -1); -1 is no row yet, and the first
 // move lands on the first row.
@@ -20,10 +21,20 @@ function choice(row, dx) {
   return next >= 0 && next < values.length ? values[next] : null
 }
 
-// What Enter does on a row: "focus" its text field, "activate" it, or null.
+// The chip h (dx -1) or l (dx 1) moves to on an enabled multi-select row,
+// clamped to its options; null on any other row.
+function chip(row, index, dx) {
+  if (!row || row.kind !== "multi" || !row.enabled || row.options.length === 0) return null
+  var from = index < 0 ? 0 : index
+  return Math.max(0, Math.min(row.options.length - 1, from + dx))
+}
+
+// What Enter does on a row: "focus" its text field, "toggle" the chip under
+// the cursor of a multi-select row, "activate" it, or null.
 function action(row) {
   if (!row || !row.enabled) return null
   if (row.kind === "field") return "focus"
+  if (row.kind === "multi") return row.toggle ? "toggle" : null
   return row.activate ? "activate" : null
 }
 

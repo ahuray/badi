@@ -735,6 +735,7 @@ fn personalization_privacy_floor(current: &SettingsV2, next: &SettingsV2) -> Set
         escape_quiet_seconds: current.escape_quiet_seconds,
         battery_mode: current.battery_mode,
         suggestion_length: current.suggestion_length,
+        languages_chosen: current.languages_chosen,
         style_learning: current.style_learning && next.style_learning,
         // Context stays on only where both documents keep it on.
         context_words: match (current.context_words, next.context_words) {

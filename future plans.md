@@ -88,6 +88,9 @@ Standing user decisions:
   [Fcitx contract](adapters/fcitx5/README.md#contract));
 - Gemma 4 E2B stays out of the catalog: no overall gain for four times the
   memory ([model fit](docs/architecture/model-selection.md));
+- the panel opens compact and offers European languages only (English,
+  German, French, Spanish, Portuguese, Italian, Dutch, Polish), chosen once
+  at first run; Persian is off by default and terminal-only (2026-10-23);
 - suggestions show one or two words (`short`) or up to four (`normal`, the
   default); up to eight was removed after it doubled harmful additions with
   Gemma 3 1B, and a longer length returns only with a model that writes it

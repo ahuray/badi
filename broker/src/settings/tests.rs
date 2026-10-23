@@ -7,10 +7,10 @@ use super::private_file::{PRIVATE_FILE_MODE, remove_private_file_with_sync};
 use super::store::write_settings;
 use super::{
     ALL_LINUX_APPS_PERMISSIONS, BatteryMode, BrowserAdapter, LinuxAdapter,
-    MAX_ESCAPE_QUIET_SECONDS, MAX_SETTINGS_BYTES, MAX_SUBJECTS, PermissionDecision, PrivateStorage,
-    PrivateStorageError, RetentionPermission, SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1,
-    SettingsStoreError, SettingsV2, SettingsValidationError, StableIdentity, StoragePaths,
-    SubjectPermissions, SubjectRule, SuggestionLength, WebScheme,
+    MAX_ESCAPE_QUIET_SECONDS, MAX_SETTINGS_BYTES, MAX_SUBJECTS, PermissionDecision,
+    PredictionLanguage, PrivateStorage, PrivateStorageError, RetentionPermission, SETTINGS_SCHEMA,
+    SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2, SettingsValidationError, StableIdentity,
+    StoragePaths, SubjectPermissions, SubjectRule, SuggestionLength, WebScheme,
 };
 use crate::protocol::{
     MAX_FRAME_BYTES, Origin, OriginScheme, TargetDescriptor, TargetKind, WireEnvelope,
@@ -44,6 +44,7 @@ fn settings_with(rule: SubjectRule) -> SettingsV2 {
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
         suggestion_length: crate::settings::SuggestionLength::Normal,
+        languages_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         context_words: None,
@@ -353,6 +354,73 @@ fn suggestion_length_round_trips_omits_normal_and_survives_a_v1_write() {
 }
 
 #[test]
+fn the_language_answer_round_trips_omits_false_and_survives_a_v1_write() {
+    let mut settings = settings_with(SubjectRule {
+        identity: identity("mail.example"),
+        permissions: allowed(None),
+    });
+    assert!(!settings.languages_chosen);
+    let encoded = serde_json::to_value(&settings).expect("encode settings");
+    assert!(
+        encoded.get("languages_chosen").is_none(),
+        "false is omitted"
+    );
+    settings.languages_chosen = true;
+    let encoded = serde_json::to_value(&settings).expect("encode settings");
+    assert_eq!(encoded["languages_chosen"], true);
+    let decoded: SettingsV2 = serde_json::from_value(encoded).expect("decode settings");
+    assert_eq!(decoded, settings);
+    let v1_write = SettingsV2::deny_by_default().preserving_v2_policy_from(&settings);
+    assert!(
+        v1_write.languages_chosen,
+        "a protocol v1 client keeps the answer"
+    );
+    let legacy = serde_json::json!({
+        "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
+        "languages_chosen": true, "subjects": [],
+    });
+    assert!(
+        serde_json::from_value::<SettingsV2>(legacy).is_err(),
+        "v1 cannot name it"
+    );
+    let unknown = serde_json::json!({
+        "schema": SETTINGS_SCHEMA, "revision": 1, "paused": false,
+        "languages_chosen": "yes", "subjects": [],
+    });
+    assert!(serde_json::from_value::<SettingsV2>(unknown).is_err());
+}
+
+#[test]
+fn english_and_german_are_the_default_writing_languages_and_persian_is_opt_in() {
+    let defaults = SettingsV2::deny_by_default();
+    assert_eq!(
+        defaults.writing_languages,
+        [PredictionLanguage::English, PredictionLanguage::German]
+    );
+    let preferences = defaults.language_preferences();
+    assert_eq!(preferences, crate::writing::LanguagePreferences::default());
+    assert!(!preferences.enables(crate::writing::WritingLanguage::Persian));
+    let mut persian = defaults.clone();
+    persian.writing_languages = vec![
+        PredictionLanguage::English,
+        PredictionLanguage::German,
+        PredictionLanguage::Persian,
+    ];
+    let encoded = serde_json::to_value(&persian).expect("encode settings");
+    assert_eq!(
+        encoded["writing_languages"],
+        serde_json::json!(["en", "de", "fa"])
+    );
+    assert!(
+        serde_json::to_value(&defaults)
+            .expect("encode settings")
+            .get("writing_languages")
+            .is_none(),
+        "English and German are omitted"
+    );
+}
+
+#[test]
 fn browser_target_resolution_is_exact_and_canonical() {
     let target = TargetDescriptor {
         kind: TargetKind::Browser,
@@ -563,6 +631,7 @@ fn linux_adapters_sort_by_wire_name_like_the_desktop_clients() {
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
         suggestion_length: crate::settings::SuggestionLength::Normal,
+        languages_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         context_words: None,
@@ -602,6 +671,7 @@ fn settings_require_sorted_unique_subjects() {
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
         suggestion_length: crate::settings::SuggestionLength::Normal,
+        languages_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         context_words: None,
@@ -649,6 +719,7 @@ fn maximum_shape_settings_fit_storage_and_wire_limits() {
         escape_quiet_seconds: 0,
         battery_mode: BatteryMode::Normal,
         suggestion_length: crate::settings::SuggestionLength::Normal,
+        languages_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         context_words: None,

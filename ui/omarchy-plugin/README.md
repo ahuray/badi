@@ -18,7 +18,19 @@ installed `badi-desktop` helper.
 Left-click the mark to open or close the popout; right-click pauses or
 resumes (a paused mark is dimmed). The popout hangs under the mark like
 Omarchy's own panels, takes the keyboard and polls the broker every three
-seconds only while open. From the top:
+seconds only while open. Until you choose your languages it asks one
+question, "Which languages do you write in?": a chip for each of English,
+Deutsch, Français, Español, Português, Italiano, Nederlands and Polski
+(Portuguese suggests only; the last three correct typos only), then Start,
+which saves suggestions and spelling for them and `languages_chosen` in one
+write, as `badi languages` does. Persian is never offered here. Afterwards the
+popout opens compact: the hero, the activity line, the week's words, search
+and only Languages (the same chips; toggling one turns its suggestions and
+typo fixes on or off together), Suggestion length and context. **All
+settings** (or `a`) adds the usage
+details and every row below, and Fewer settings (or `a` again) returns.
+Every open starts compact, and search always covers every setting. From the
+top:
 
 - **Hero:** the mark, the model as a pill, Badi's mode as a glyph and word
   (`⏵⏵ SUGGESTING`, `⏸ PAUSED`, `◌ LOADING`, `○ MODEL OFFLINE`,
@@ -26,12 +38,12 @@ seconds only while open. From the top:
 - **Activity:** while something runs, a spinner, a verb and the elapsed
   seconds (`Saving…`, `Loading the model… 3s`); otherwise a status dot and
   the counts since model start.
-- **Usage:** a ten-cell acceptance meter, words saved and the last
-  no-suggestion reason (`⎿ last miss: …`).
+- **Usage** (All settings only): a ten-cell acceptance meter, words saved
+  and the last no-suggestion reason (`⎿ last miss: …`).
 - **History:** seven bars of words saved per day, today's in the accent,
-  today's and the week's words saved, and the apps and sites that saved the
-  most this week (`⎿ most this week: …`), from `badi stats`; hidden while the
-  broker reports none.
+  today's and the week's words saved and, with All settings, the apps and
+  sites that saved the most this week (`⎿ most this week: …`), from
+  `badi stats`; hidden while the broker reports none.
 - **Search:** `/` filters every row by name, description or section.
 - **Snoozed:** while a snooze keeps an app or site quiet (`badi snooze` or
   the session helper's shortcut, [broker runbook](../../broker/README.md#snooze)),
@@ -39,7 +51,7 @@ seconds only while open. From the top:
   (`badi snooze end`). The mark's tooltip adds the same name, and the
   `badi-writing` IPC `state()` reports it as `snoozed`. Resuming from the
   switch, `p` or a right-click runs `badi resume`, which ends it too.
-- **Rows**, in sections: Model (the writing model: a chip for each model
+- **Rows** with All settings, in sections: Languages (the chips), Model (the writing model: a chip for each model
   that fits this device, ★ on the recommendation; picking an Apache-2.0
   model runs `badi model use`, which downloads it and restarts the model,
   while a Gemma or Llama model first adds a row naming its terms and their
@@ -49,7 +61,7 @@ seconds only while open. From the top:
   Turn on and Not now; afterwards a switch, and while it is on a row per
   allowed app and Forget learned words, each running `badi context`, which
   also hands the keyring key over), Writing (suggestion length: Short or Normal, as `badi length` sets it; mid-sentence, Escape quiet, battery), Suggestions (each
-  language: Off, Auto (heal as the running model's review decided), Heal or
+  European language: Off, Auto (heal as the running model's review decided), Heal or
   Keep space, as `badi suggest` sets them; French, Spanish and Portuguese are
   marked experimental), Spelling (each language and its dictionary, naming the package when one is
   missing), Apps (the list mode and each supported app), Websites (the list
@@ -58,7 +70,9 @@ seconds only while open. From the top:
   System (start at login, debug trace, restart, start or stop).
 
 Keys: j/k or arrows move one cursor through the rows, space or Enter toggles
-or runs, h/l changes a choice, x removes a site rule, p pauses, r refreshes,
+or runs, h/l changes a choice or walks a chip row's chips (space toggles the
+one under the cursor), a shows all or fewer settings, x removes a site rule,
+p pauses, r refreshes,
 Tab moves to the neighbouring bar panel and Escape closes. The footer shows
 the last result (`✓ Spelling on`, `✗ …`) or these keys.
 
@@ -151,9 +165,11 @@ row, the first Escape left the search and the second closed the popout.
 ## Pinned host
 
 `compatibility.json` records the Omarchy host files the plugin depends on,
-byte-compared with Omarchy `v4.0.6` (`237f1b4071a0bff2296c6d740ba2b9fd695ebfa0`)
-under Quickshell 0.3.2 and Qt declarative 6.12.0 (none of the 21 changed
-since `v4.0.5`), including every `qs.Ui`
+byte-compared with Omarchy `v4.5.0-rc1` (`03ff1eff3812933f7088484533784d2f63eaf19a`),
+which the installed 4.5.0rc1-1 package matches file for file, under
+Quickshell 0.3.2 and Qt declarative 6.12.0. Sixteen of the 21 changed since
+`v4.0.6`; the only API change the popout meets is `PanelKeyCatcher`'s
+`textKey`, which now also passes the held modifiers. It includes every `qs.Ui`
 component the popout uses. The strict check fails when the installed host
 drifts. The manifest declares only the `bar-widget` kind.
 

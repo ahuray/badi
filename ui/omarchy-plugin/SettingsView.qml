@@ -6,8 +6,9 @@ import qs.Ui
 import "KeyModel.js" as KeyModel
 
 // The settings popout's content: a hero with Badi's mode and a pause
-// switch, a live activity line, usage, the week's history, a settings search
-// and one keyboard cursor over the controller's typed rows. Keys arrive from the host's
+// switch, a live activity line, the week's words, a settings search and one
+// keyboard cursor over the controller's typed rows, compact until All
+// settings shows every row (with usage details). Keys arrive from the host's
 // PanelKeyCatcher through move(), activate(), remove() and focusSearch().
 Item {
   id: view
@@ -15,6 +16,8 @@ Item {
   required property var controller
   required property QtObject bar
   property int cursor: -1
+  // The chip under the cursor on a multi-select row.
+  property int chip: 0
   // A text input owns the keyboard; the host's key catcher steps aside.
   readonly property bool editing: search.activeFocus || siteInputFocused
   property bool siteInputFocused: false
@@ -42,17 +45,23 @@ Item {
 
   function reset() {
     cursor = -1
+    chip = 0
     search.text = ""
     flick.contentY = 0
+    controller.showAll = false
+    controller.pickedLanguages = null
   }
 
   function move(dx, dy) {
     if (rows.length === 0) return
     if (dy !== 0) {
       cursor = KeyModel.step(cursor, rows.length, dy)
+      chip = 0
       reveal()
       return
     }
+    var next = KeyModel.chip(rows[cursor], chip, dx)
+    if (next !== null) { chip = next; return }
     var value = KeyModel.choice(rows[cursor], dx)
     if (value !== null) rows[cursor].choose(value)
   }
@@ -61,6 +70,7 @@ Item {
     var row = rows[cursor]
     var action = KeyModel.action(row)
     if (action === "focus") { if (siteInput) siteInput.forceActiveFocus() }
+    else if (action === "toggle") row.toggle(row.options[Math.min(chip, row.options.length - 1)].value)
     else if (action === "activate") row.activate()
   }
 
@@ -84,6 +94,11 @@ Item {
   }
 
   onRowsChanged: if (cursor >= rows.length) cursor = rows.length - 1
+  // Expanding or collapsing starts again at the top.
+  Connections {
+    target: view.controller
+    function onShowAllChanged() { view.cursor = -1; view.chip = 0; flick.contentY = 0 }
+  }
 
   // ---- Header: hero, activity, usage, history, search -----------------------
 
@@ -174,11 +189,12 @@ Item {
       }
     }
 
-    // Usage: a ten-cell acceptance meter, words saved and the last miss.
+    // Usage, with All settings: a ten-cell acceptance meter, words saved and
+    // the last miss.
     Column {
       width: parent.width
       spacing: Style.space(6)
-      visible: client.brokerReachable && view.shown > 0
+      visible: client.brokerReachable && view.shown > 0 && controller.showAll
 
       Row {
         spacing: Style.space(10)
@@ -268,6 +284,7 @@ Item {
       }
       Text {
         width: parent.width
+        visible: controller.showAll
         elide: Text.ElideRight
         textFormat: Text.PlainText
         text: history.leaders.length > 0
@@ -338,7 +355,7 @@ Item {
 
           Item {
             width: parent.width
-            visible: rowItem.opensSection
+            visible: rowItem.opensSection && rowItem.modelData.section !== ""
             implicitHeight: sectionColumn.implicitHeight
             Column {
               id: sectionColumn
@@ -355,6 +372,7 @@ Item {
             width: parent.width
             sourceComponent: rowItem.modelData.kind === "toggle" ? toggleRow
               : rowItem.modelData.kind === "choice" ? choiceRow
+              : rowItem.modelData.kind === "multi" ? multiRow
               : rowItem.modelData.kind === "site" ? siteRow
               : rowItem.modelData.kind === "field" ? fieldRow : actionRow
 
@@ -407,15 +425,25 @@ Item {
                 font.family: view.fontFamily
                 font.pixelSize: Style.font.body
               }
-              ButtonGroup {
-                options: rowItem.modelData.options
-                value: rowItem.modelData.value
-                enabled: rowItem.modelData.enabled
-                focusable: false
-                foreground: view.foreground
-                fontFamily: view.fontFamily
-                fontSize: Style.font.bodySmall
-                onChanged: function(value) { rowItem.modelData.choose(value) }
+              // One chip per option in a Flow, so a long choice wraps
+              // instead of running past the popout's edge.
+              Flow {
+                width: parent.width
+                spacing: Style.space(6)
+                Repeater {
+                  model: rowItem.modelData.options
+                  ButtonGroup {
+                    required property var modelData
+                    options: [modelData]
+                    value: rowItem.modelData.value === modelData.value ? modelData.value : ""
+                    enabled: rowItem.modelData.enabled
+                    focusable: false
+                    foreground: view.foreground
+                    fontFamily: view.fontFamily
+                    fontSize: Style.font.bodySmall
+                    onChanged: function(value) { rowItem.modelData.choose(value) }
+                  }
+                }
               }
               Text {
                 width: parent.width
@@ -423,6 +451,62 @@ Item {
                 textFormat: Text.PlainText
                 text: (rowItem.hasCursor ? "h/l · " : "") + rowItem.modelData.detail
                 color: view.dim
+                font.family: view.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+        }
+
+        // Several of the options at once: one bordered chip per option, lit
+        // when chosen; h/l walks them under the cursor and Enter toggles.
+        Component {
+          id: multiRow
+          CursorSurface {
+            hasCursor: rowItem.hasCursor
+            foreground: view.foreground
+            implicitHeight: multiColumn.implicitHeight + Style.spacing.rowPaddingX
+            opacity: rowItem.modelData.enabled ? 1 : 0.55
+            HoverHandler { onHoveredChanged: if (hovered) view.cursor = rowItem.index }
+            Column {
+              id: multiColumn
+              anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter
+                leftMargin: Style.spacing.rowPaddingX; rightMargin: Style.spacing.rowPaddingX }
+              spacing: Style.space(6)
+              Text {
+                width: parent.width
+                textFormat: Text.PlainText
+                text: rowItem.modelData.label
+                color: view.foreground
+                font.family: view.fontFamily
+                font.pixelSize: Style.font.body
+              }
+              Flow {
+                width: parent.width
+                spacing: Style.space(6)
+                Repeater {
+                  model: rowItem.modelData.options
+                  ButtonGroup {
+                    required property var modelData
+                    required property int index
+                    options: [modelData]
+                    value: rowItem.modelData.values.indexOf(modelData.value) >= 0 ? modelData.value : ""
+                    cursorIndex: rowItem.hasCursor && view.chip === index ? 0 : -1
+                    enabled: rowItem.modelData.enabled
+                    focusable: false
+                    foreground: view.foreground
+                    fontFamily: view.fontFamily
+                    fontSize: Style.font.bodySmall
+                    onChanged: function(value) { view.chip = index; rowItem.modelData.toggle(value) }
+                  }
+                }
+              }
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                textFormat: Text.PlainText
+                text: (rowItem.hasCursor ? "h/l · space · " : "") + rowItem.modelData.detail
+                color: rowItem.modelData.detail.indexOf("⚠") >= 0 ? Commons.Color.urgent : view.dim
                 font.family: view.fontFamily
                 font.pixelSize: Style.font.caption
               }
@@ -557,7 +641,7 @@ Item {
       elide: Text.ElideRight
       textFormat: Text.PlainText
       text: footer.message !== "" ? (footer.failed ? "✗ " : "✓ ") + footer.message
-        : "j/k move · space toggle · h/l choose · / search · esc close"
+        : "j/k h/l move · space toggle · / search · a " + (controller.showAll ? "fewer" : "all") + " · esc close"
       color: footer.message === "" ? view.dim : footer.failed ? Commons.Color.urgent : view.foreground
       font.family: view.fontFamily
       font.pixelSize: Style.font.caption
