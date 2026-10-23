@@ -33,7 +33,8 @@ authority or reduce work:
 - Low power selects automatic scheduling from the user's `battery_mode`. It
   never changes authority, explicit requests or the resident model.
 - A report belongs to its connection. When the helper exits, its hold and
-  low-power state go with it; the broker never stays held by a dead helper.
+  low-power state go with it; the broker never stays held by a dead helper,
+  except a live screen share for at most 10 s (below).
 - The helper takes a logind `delay` sleep inhibitor and releases it only after
   the broker acknowledged the hold, or after a bounded failure. It never holds
   sleep longer than its 1.5 s report timeout.
@@ -63,5 +64,10 @@ do is make Badi quieter.
   the user chose `screen_share: suggest`. Grey text, which may carry window
   and learned words ([ADR 0010](0010-context-finishes-words.md)), then never
   reaches a shared screen. Unknown stays withholding where it can: a watcher
-  that crashes keeps the streams it last saw, and only a PipeWire that cannot
-  be reached, where no portal stream can exist, ends a share.
+  that crashes keeps the streams it last saw, a helper that disconnects
+  mid-share leaves it held for 10 s or until a helper reports again, a
+  restarted helper counts the screen as shared until its first look at
+  PipeWire, and only a PipeWire that cannot be reached, where no portal
+  stream can exist, ends a share. Without that grace a helper crash or
+  restart mid-share would let grey text onto the shared screen until the
+  helper came back.

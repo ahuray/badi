@@ -94,11 +94,15 @@ class SessionHelperIntegration(unittest.TestCase):
         self.addCleanup(self.stop, self.fake)
         self.assertEqual(self.fake.stdout.readline().strip(), "ready")
         self.start_broker()
+        self.controller = controller
         self.helper_log = root / "helper.log"
-        with self.helper_log.open("w") as log:
+        self.start_helper()
+
+    def start_helper(self):
+        with self.helper_log.open("a") as log:
             self.helper = subprocess.Popen(
                 [sys.executable, "-B", str(ROOT / "adapters/session/daemon.py")],
-                env={**self.environment, "BADI_SESSION_CONTROLLER": str(controller),
+                env={**self.environment, "BADI_SESSION_CONTROLLER": str(self.controller),
                      "BADI_SESSION_NOTIFICATIONS": "off",
                      "BADI_SESSION_PIPEWIRE_DUMP": str(HERE / "fake_pw_dump.py"),
                      "BADI_TEST_PW_DUMP_DIR": str(self.pipewire)},
@@ -155,8 +159,10 @@ class SessionHelperIntegration(unittest.TestCase):
         return wait_for(matches, message=message)
 
     def test_session_power_sleep_shortcuts_and_restarts(self):
-        # Startup: on battery (the fake's initial state), session active, shortcuts bound.
-        self.wait_desktop("initial report", observed=True, session="active", low_power=True, automatic="deferred")
+        # Startup: on battery (the fake's initial state), session active, shortcuts bound,
+        # and the screen counted as shared only until the fake pw-dump's first dump.
+        self.wait_desktop("initial report", observed=True, session="active", low_power=True, automatic="deferred",
+                          screen_share="none")
         wait_for(lambda: self.state()["inhibitors_held"] == 1, message="delay inhibitor")
         state = wait_for(lambda: (state := self.state())["bound"] and state, message="bound shortcuts")
         self.assertEqual(state["bound"], ["open-settings", "pause-toggle", "snooze"])
@@ -268,9 +274,29 @@ class SessionHelperIntegration(unittest.TestCase):
         self.wait_desktop("sharing stopped", screen_share="none")
         self.assertFalse(self.health()["paused"])
 
-        # A helper that exits while the screen is shared takes the hold with it.
+        # A helper that restarts while the screen is shared never releases it:
+        # the broker keeps a grace, and the new helper counts the screen as
+        # shared until its first dump shows the stream again.
         self.pipewire_change(SCREENCAST)
         self.wait_desktop("shared again", screen_share="held")
+        (self.pipewire / "graph.json").write_text(json.dumps([AUDIO, SCREENCAST]))
+        epoch = self.health()["authority_epoch"]
+        self.stop(self.helper)
+        health = self.health()
+        self.assertEqual((health["desktop"]["observed"], health["desktop"]["screen_share"]), (False, "held"))
+        self.assertTrue(health["paused"])
+        reports = self.helper_log.read_text().count("screen_shared=true")
+        self.start_helper()
+        self.wait_desktop("restarted helper", observed=True, screen_share="held")
+        wait_for(lambda: self.helper_log.read_text().count("screen_shared=true") > reports,
+                 message="the new helper's report")
+        self.assertEqual(self.health()["authority_epoch"], epoch, "the hold never lapsed")
+        self.assertTrue(self.health()["paused"])
+
+        # The share ends, and a helper that exits while nothing is shared leaves
+        # no hold behind; the engine tests time the grace itself.
+        self.pipewire_change({"id": 123, "info": None})
+        self.wait_desktop("stopped after the restart", screen_share="none")
         self.stop(self.helper)
         self.wait_desktop("helper gone", observed=False, screen_share="none")
         self.assertFalse(self.health()["paused"])

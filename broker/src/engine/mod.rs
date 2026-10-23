@@ -40,7 +40,7 @@ use crate::provider::{CompletionProvider, RequestTrigger};
 use crate::settings::{SettingsV2, StableIdentity};
 
 pub use authority::AuthoritySnapshot;
-pub use desktop::QUIET_START_DELAY;
+pub use desktop::{QUIET_START_DELAY, SCREEN_SHARE_GRACE};
 pub use error::BrokerError;
 pub use events::{BrokerEvent, BrokerEventSink};
 pub use outcomes::OutcomeRecorderHealth;
@@ -87,6 +87,9 @@ pub struct BrokerConfig {
     pub context_authority_lease: Duration,
     /// Receiver-local lease; adapters must report the authorized commit before it expires.
     pub commit_result_lease: Duration,
+    /// How long a screen share stays held after the helper that reported it
+    /// disconnects, unless a helper reports again sooner.
+    pub screen_share_grace: Duration,
 }
 
 impl BrokerConfig {
@@ -174,6 +177,7 @@ impl Default for BrokerConfig {
             suggestion_ttl: Duration::from_millis(DEFAULT_SUGGESTION_TTL_MS),
             context_authority_lease: Duration::from_millis(DEFAULT_CONTEXT_AUTHORITY_LEASE_MS),
             commit_result_lease: Duration::from_millis(DEFAULT_COMMIT_RESULT_LEASE_MS),
+            screen_share_grace: SCREEN_SHARE_GRACE,
         }
     }
 }
@@ -256,6 +260,9 @@ struct BrokerState {
     rebound_quiet: Option<ReboundQuiet>,
     /// Each connected desktop helper's latest report, by connection.
     desktop: HashMap<String, DesktopStatePayload>,
+    /// Until when a share stays held after its helper disconnected mid-share;
+    /// any new report ends it, and only its own timer clears it otherwise.
+    share_grace: Option<Instant>,
     /// Editor connections that hold their terminal's focus.
     editor_focus: HashSet<String>,
     /// Apps and sites the user snoozed, until when (runtime only).

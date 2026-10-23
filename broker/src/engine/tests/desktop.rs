@@ -135,6 +135,10 @@ struct Fixture {
 }
 
 async fn fixture(battery_mode: BatteryMode) -> Fixture {
+    fixture_with(battery_mode, BrokerConfig::default()).await
+}
+
+async fn fixture_with(battery_mode: BatteryMode, config: BrokerConfig) -> Fixture {
     let storage = tempdir().expect("temporary directory");
     let paths = StoragePaths::new(
         storage.path().join("config/badi"),
@@ -146,12 +150,8 @@ async fn fixture(battery_mode: BatteryMode) -> Fixture {
         .replace_settings(0, settings(battery_mode))
         .expect("allow the fixture origin");
     let provider = TimedProvider::new();
-    let broker = Broker::with_control_plane(
-        provider.clone(),
-        BrokerConfig::default(),
-        Arc::clone(&control_plane),
-    )
-    .expect("broker");
+    let broker = Broker::with_control_plane(provider.clone(), config, Arc::clone(&control_plane))
+        .expect("broker");
     let (session_id, events) = open(&broker).await.expect("open session");
     Fixture {
         broker,
@@ -602,14 +602,100 @@ async fn suggest_while_sharing_keeps_suggestions_and_hold_returns_at_once() {
 }
 
 #[tokio::test]
-async fn a_closed_helper_takes_its_screen_share_hold_with_it() {
+async fn a_helper_that_leaves_mid_share_keeps_it_held_until_a_helper_reports_again() {
     let fixture = fixture(BatteryMode::Normal).await;
     let mut authority = fixture.broker.subscribe_authority_changes();
     fixture.report_sharing(true).await;
     assert!(authority.recv().await.expect("hold").paused);
+    let epoch = fixture.broker.authority_snapshot().await.authority_epoch;
+
+    // The helper crashes or restarts while the screen is still shared.
     fixture.broker.forget_desktop_state(HELPER).await;
+    let status = fixture.broker.desktop_status().await;
+    status
+        .validate()
+        .expect("a held share may outlive its helper");
+    assert!(!status.observed);
+    assert_eq!(status.screen_share, ScreenShare::Held);
+    assert!(fixture.broker.health_snapshot().await.paused);
+    assert_eq!(
+        fixture.broker.authority_snapshot().await.authority_epoch,
+        epoch,
+        "the hold continues; nothing is released"
+    );
+    assert!(
+        fixture.request(1, "Thank you for", false).await.is_err(),
+        "nothing is requested during the grace"
+    );
+
+    // Its successor reports what is shared now: not shared, so it ends.
+    fixture
+        .broker
+        .report_desktop_state(
+            "c:desktop-helper-restarted",
+            DesktopStatePayload {
+                session: DesktopSession::Active,
+                on_battery: false,
+                power_saver: false,
+                screen_shared: false,
+            },
+        )
+        .await
+        .expect("fresh report");
     assert!(!authority.recv().await.expect("release").paused);
+    assert_eq!(
+        fixture.broker.desktop_status().await.screen_share,
+        ScreenShare::None
+    );
+}
+
+#[tokio::test]
+async fn a_share_grace_ends_on_its_own_and_never_outlasts_its_bound() {
+    let fixture = fixture_with(
+        BatteryMode::Normal,
+        BrokerConfig {
+            screen_share_grace: Duration::from_millis(100),
+            ..BrokerConfig::default()
+        },
+    )
+    .await;
+    let mut authority = fixture.broker.subscribe_authority_changes();
+    fixture.report_sharing(true).await;
+    assert!(authority.recv().await.expect("hold").paused);
+    let left = Instant::now();
+    fixture.broker.forget_desktop_state(HELPER).await;
+    assert!(fixture.broker.health_snapshot().await.paused);
+
+    let released = timeout(Duration::from_secs(2), authority.recv())
+        .await
+        .expect("the grace ends")
+        .expect("release");
+    assert!(!released.paused);
+    assert!(left.elapsed() >= Duration::from_millis(100));
     let status = fixture.broker.desktop_status().await;
     assert_eq!(status.screen_share, ScreenShare::None);
     status.validate().expect("unobserved status is the default");
+
+    // A restarted helper that still sees the share keeps it held past the
+    // grace: the old grace's timer finds it ended by that report.
+    fixture.report_sharing(true).await;
+    assert!(authority.recv().await.expect("held again").paused);
+    fixture.broker.forget_desktop_state(HELPER).await;
+    fixture.report_sharing(true).await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(fixture.broker.health_snapshot().await.paused);
+    assert_eq!(
+        fixture.broker.desktop_status().await.screen_share,
+        ScreenShare::Held
+    );
+
+    // A helper that leaves while nothing is shared leaves no grace.
+    fixture.report_sharing(false).await;
+    assert!(!authority.recv().await.expect("released").paused);
+    fixture.broker.forget_desktop_state(HELPER).await;
+    assert_eq!(
+        fixture.broker.desktop_status().await.screen_share,
+        ScreenShare::None
+    );
+    assert!(!fixture.broker.health_snapshot().await.paused);
 }

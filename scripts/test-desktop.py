@@ -349,6 +349,11 @@ class DesktopTests(unittest.TestCase):
         self.assertIn('Screen sharing: not shared · still suggests while shared',
                       desktop.status_text(idle, {**settings, 'screen_share': 'suggest'}))
         self.assertNotIn('Screen sharing', desktop.status_text({**idle, 'desktop': None}, settings))
+        gone = {**health, 'desktop': {**shared, 'observed': False}}
+        self.assertIn('the session helper stopped during a share; suggestions stay held',
+                      desktop.status_text(gone, settings))
+        self.assertNotIn('Screen sharing', desktop.status_text({**gone, 'desktop': {**gone['desktop'],
+                                                                                     'screen_share': 'none'}}, settings))
         service = {'loaded': True, 'active': 'active', 'state': 'running', 'autostart': True}
         for broker_health, note, absent in (
                 (health, 'holds every suggestion until sharing stops', 'Predictions are paused'),

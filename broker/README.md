@@ -94,7 +94,8 @@ and whether they were dirty (`--version` prints both; packagers may set
 screen_shared}` on a `desktop_signals` connection and receives
 `desktop.status {observed, session, low_power, automatic, screen_share}`, the
 combined view of every connected helper. Each report belongs to its
-connection and disappears when the connection closes.
+connection and disappears when the connection closes, except a live screen
+share (below).
 
 - **Hold.** While any helper reports an inactive or sleeping session, or a
   shared screen while settings `screen_share` is `hold` (the default), the
@@ -108,7 +109,11 @@ connection and disappears when the connection closes.
   report never grants anything.
 - **Screen share.** `screen_share` is `none` unless a helper reports a live
   share; then `held`, or `suggesting` after `badi screen-share suggest`
-  (settings `screen_share: suggest`). A share is not a session hold:
+  (settings `screen_share: suggest`). A helper that disconnects while its
+  last report said shared leaves the share held for `screen_share_grace`
+  (`SCREEN_SHARE_GRACE`, 10 s) or until any helper reports again, so a
+  helper crash or restart never releases it early; `observed` is then false
+  while `screen_share` stays `held`. A share is not a session hold:
   `session` stays `active`. Changing the setting is a settings write, which
   already advances the epoch, so a share starts holding or stops at once.
   The debug trace records each `desktop.state` and `desktop.status` whole;

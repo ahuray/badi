@@ -72,8 +72,8 @@ def valid_status(payload):
             or type(payload["low_power"]) is not bool or payload["automatic"] not in AUTOMATIC
             or payload["screen_share"] not in SCREEN_SHARE):
         return False
-    if not payload["observed"] and (payload["session"] != "active" or payload["low_power"]
-                                    or payload["screen_share"] != "none"):
+    # Only a screen share outlives its helper, for the broker's grace.
+    if not payload["observed"] and (payload["session"] != "active" or payload["low_power"]):
         return False
     return payload["low_power"] or payload["automatic"] == "normal"
 

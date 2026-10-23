@@ -471,18 +471,23 @@ class ScreenCast:
     exists in PipeWire, from its creation until it is destroyed. Frame activity
     is not used: screenshots produce it too.
 
-    A share starts at once and ends ``RELEASE_SECONDS`` after its last
-    stream, so a share that changes streams is never released in between. A
-    pw-dump that ends after showing anything is restarted with backoff and
-    the streams it saw stay until a new dump replaces them, so a crash never
-    ends a hold early. One that ends without any output could not reach
-    PipeWire, where no portal stream can exist.
+    Until the first dump arrives the screen counts as shared: a helper that
+    restarted mid-share must not tell the broker, which keeps the share held
+    for a grace, that nothing is shared before it has looked. A share starts
+    at once and ends ``RELEASE_SECONDS`` after its last stream, so a share
+    that changes streams is never released in between. A pw-dump that ends
+    after showing anything is restarted with backoff and the streams it saw
+    stay until a new dump replaces them, so a crash never ends a hold early.
+    One that ends without any output could not reach PipeWire, where no
+    portal stream can exist.
     """
 
     def __init__(self, reporter, command=None, refresh=refresh_bar):
         self.reporter = reporter
         self.command = command or pipewire_dump_command()
         self.refresh = refresh
+        self.reporter.screen_shared = True
+        self.known = False
         self.streams = Streams()
         self.process = None
         self._cancellable = None
@@ -535,7 +540,12 @@ class ScreenCast:
             if self.problem is not None:
                 log("watching PipeWire for screen sharing again")
                 self.problem = None
-        if changed:
+        if self.streams.synced and not self.known:
+            # The first look settles the startup assumption at once.
+            self.known = True
+            self._keep()
+            self._report(bool(self.streams.ids))
+        elif changed:
             self._publish()
         self._read(process)
 
@@ -565,10 +575,12 @@ class ScreenCast:
                 self.refresh()
 
     def _ended(self, reason):
-        if not self._received and self.streams.ids:
+        if not self._received:
             # It never reached PipeWire, so no portal stream can be live.
             self.streams.ids.clear()
-            self._publish()
+            self.known = True
+            self._keep()
+            self._report(False)
         if reason != self.problem:
             log(f"{reason}; screen sharing is watched again after a backoff")
             self.problem = reason

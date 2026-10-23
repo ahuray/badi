@@ -1285,7 +1285,8 @@ pub enum ScreenShare {
     /// No helper reports a live screen share.
     #[default]
     None,
-    /// The screen is shared and settings hold every suggestion until it stops.
+    /// The screen is shared, or was when its helper left less than the grace
+    /// ago, and settings hold every suggestion until it stops.
     Held,
     /// The screen is shared and the user chose to keep suggestions.
     Suggesting,
@@ -1322,10 +1323,11 @@ pub struct DesktopStatusPayload {
 
 impl DesktopStatusPayload {
     pub fn validate(&self) -> Result<(), ProtocolError> {
+        // A share stays held for a grace after its helper left, so an
+        // unobserved status may still name one.
         let unobserved_default = !self.session.holds()
             && !self.low_power
-            && self.automatic == AutomaticScheduling::Normal
-            && self.screen_share == ScreenShare::None;
+            && self.automatic == AutomaticScheduling::Normal;
         if (!self.observed && !unobserved_default)
             || (!self.low_power && self.automatic != AutomaticScheduling::Normal)
         {
@@ -2029,7 +2031,7 @@ mod tests {
     }
 
     #[test]
-    fn a_desktop_report_names_the_screen_share_and_an_unobserved_status_holds_nothing() {
+    fn a_desktop_report_names_the_screen_share_and_only_a_share_outlives_its_helper() {
         let shared: DesktopStatePayload = serde_json::from_value(serde_json::json!({
             "session": "active", "on_battery": false, "power_saver": false, "screen_shared": true,
         }))
@@ -2050,14 +2052,21 @@ mod tests {
             screen_share: ScreenShare::Held,
         };
         held.validate().expect("a reported share may hold");
+        DesktopStatusPayload {
+            observed: false,
+            ..held
+        }
+        .validate()
+        .expect("a share stays held for a grace after its helper left");
         assert!(
             DesktopStatusPayload {
                 observed: false,
+                session: DesktopSession::Sleeping,
                 ..held
             }
             .validate()
             .is_err(),
-            "no helper, no screen-share hold"
+            "no helper, no session hold"
         );
     }
 

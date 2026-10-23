@@ -1439,7 +1439,7 @@
     "desktopStatusPayload": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The broker's combined view of every connected helper's report. automatic is normal unless low_power is true and settings choose a battery mode. screen_share is none unless a helper reports a live screen share; then held (settings screen_share hold, the default: every grant is held as in an inactive session) or suggesting (settings screen_share suggest).",
+      "description": "The broker's combined view of every connected helper's report. automatic is normal unless low_power is true and settings choose a battery mode. screen_share is none unless a helper reports a live screen share, or one that did left less than the broker's grace (10 s) ago without another report since; then held (settings screen_share hold, the default: every grant is held as in an inactive session) or suggesting (settings screen_share suggest). Only that grace outlives a helper, so observed may be false while a share is held.",
       "required": ["observed", "session", "low_power", "automatic", "screen_share"],
       "properties": {
         "observed": { "type": "boolean" },
@@ -1451,7 +1451,7 @@
       "allOf": [
         {
           "if": { "properties": { "observed": { "const": false } }, "required": ["observed"] },
-          "then": { "properties": { "session": { "const": "active" }, "low_power": { "const": false }, "screen_share": { "const": "none" } } }
+          "then": { "properties": { "session": { "const": "active" }, "low_power": { "const": false } } }
         },
         {
           "if": { "properties": { "low_power": { "const": false } }, "required": ["low_power"] },

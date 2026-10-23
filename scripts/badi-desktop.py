@@ -366,10 +366,14 @@ def desktop_text(desktop, settings=None):
 def screen_share_text(desktop, settings=None):
     """Whether the screen is shared and what that does to suggestions, or None
     without a session helper."""
-    if not isinstance(desktop, dict) or not desktop.get("observed"):
+    if not isinstance(desktop, dict):
         return None
-    suggest = (settings or {}).get("screen_share") == "suggest"
     state = desktop.get("screen_share")
+    if not desktop.get("observed"):
+        # The broker keeps a share held for a few seconds after its helper left.
+        return ("Screen sharing: the session helper stopped during a share; suggestions stay held "
+                "for up to 10 s or until it reports again") if state == "held" else None
+    suggest = (settings or {}).get("screen_share") == "suggest"
     if state == "held":
         return "Screen sharing: shared, every suggestion held until it stops (badi screen-share suggest keeps them)"
     if state == "suggesting":

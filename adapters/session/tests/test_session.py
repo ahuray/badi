@@ -174,7 +174,8 @@ class LinkTests(unittest.TestCase):
         self.assertTrue(link.valid_status({**STATUS, "low_power": True, "automatic": "explicit_only"}))
         self.assertFalse(link.valid_status({**STATUS, "extra": 1}))
         self.assertTrue(link.valid_status({**STATUS, "screen_share": "suggesting"}))
-        self.assertFalse(link.valid_status({**STATUS, "observed": False, "screen_share": "held"}))
+        self.assertTrue(link.valid_status({**STATUS, "observed": False, "screen_share": "held"}),
+                        "a share stays held for a grace after its helper left")
         self.assertFalse(link.valid_status({key: value for key, value in STATUS.items() if key != "screen_share"}))
         with self.assertRaises(link.LinkError):
             link.report("locked", False, False, False)
@@ -412,15 +413,16 @@ class ScreenCastTests(unittest.TestCase):
 
     def test_a_share_is_reported_while_its_stream_lives(self):
         screencast = self.watch()
+        self.assertTrue(self.reporter.screen_shared, "shared until PipeWire first answers")
         self.until(lambda: screencast.streams.synced, "the first dump")
-        self.assertFalse(self.reporter.screen_shared)
+        self.assertFalse(self.reporter.screen_shared, "the first dump settles it at once")
         self.change(SCREENCAST)
         self.until(lambda: self.reporter.screen_shared, "the share")
         self.assertEqual(self.fake.reports[-1], ("active", False, False, True))
         self.change({"id": 123, "info": None})
         self.until(lambda: not self.reporter.screen_shared, "the share ending")
         self.assertEqual(self.fake.reports[-1], ("active", False, False, False))
-        self.assertEqual(self.refreshes, [True, False], "the bar mark reads each change once the broker has it")
+        self.assertEqual(self.refreshes, [False, True, False], "the bar mark reads each change once the broker has it")
 
     def test_a_share_that_changes_streams_is_never_released_in_between(self):
         daemon.RELEASE_SECONDS = 1.0
@@ -435,7 +437,8 @@ class ScreenCastTests(unittest.TestCase):
         self.change(SCREENCAST)
         self.until(lambda: screencast.streams.ids == {123}, "the share")
         self.until(lambda: screencast._release is None, "the release cancelled")
-        self.assertEqual(self.fake.reports, [("active", False, False, True)], "one report for the whole share")
+        self.assertEqual(self.fake.reports, [("active", False, False, False), ("active", False, False, True)],
+                         "one report for the whole share")
         started = time.monotonic()
         self.change({"id": 123, "info": None})
         self.until(lambda: not self.reporter.screen_shared, "the share ending", timeout=4)
@@ -469,7 +472,14 @@ class ScreenCastTests(unittest.TestCase):
         self.addCleanup(missing.close)
         self.assertIsNone(missing.process)
         self.assertEqual(missing.problem, "pw-dump unavailable")
-        self.assertFalse(self.reporter.screen_shared)
+        self.assertFalse(self.reporter.screen_shared, "nothing to watch settles it at once")
+
+    def test_a_dump_that_shows_a_share_at_start_keeps_the_startup_hold(self):
+        (self.controls / "graph.json").write_text(json.dumps([AUDIO, SCREENCAST]))
+        screencast = self.watch()
+        self.until(lambda: screencast.streams.synced, "the first dump")
+        self.assertTrue(self.reporter.screen_shared)
+        self.assertEqual(self.fake.reports, [], "nothing changed, so nothing was sent")
 
 
 class SleepOrderTests(unittest.TestCase):

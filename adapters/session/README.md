@@ -29,8 +29,9 @@ whenever one changes; the reply is `desktop.status`
   pending commits and the type-through carry; leaving it makes every adapter
   reacquire. A Tab pressed before reacquisition finds no grant.
 - The report is bound to the helper's connection. If the helper exits, the
-  broker drops its hold and low-power state; after a broker restart the helper
-  reconnects (1, 2, 5, 10, then 30 s) and reports again.
+  broker drops its hold and low-power state, except that a live screen share
+  stays held for 10 s or until a helper reports again; after a broker restart
+  the helper reconnects (1, 2, 5, 10, then 30 s) and reports again.
 - Unknown is permissive only where nothing is at stake: without logind the
   session counts as active (adapters keep their own focus, lock and expiry
   checks), and without UPower or power-profiles-daemon the machine counts as
@@ -75,6 +76,9 @@ produce it without a share.
 - Only node ids are kept. Node names, applications and media titles (a
   playing song's, for example) are read to classify a node and dropped; the
   journal says only `screen_shared=true|false`.
+- A helper that starts counts the screen as shared until its first dump, so
+  a helper that restarted mid-share never tells the broker, which keeps that
+  share held for its 10 s grace, that nothing is shared before it looked.
 - If `pw-dump` ends after it showed anything, the helper restarts it (1, 2,
   5, 10, then 30 s) and keeps the streams it last saw until the new dump
   replaces them, so a crash never ends a hold early. A `pw-dump` that ends
@@ -190,7 +194,8 @@ restart with the report resent, and helper exit releasing the hold, the
 inhibitor and the portal session. A second test shares the screen through
 the fake `pw-dump`: the broker holds, `screen-share suggest` lifts the hold
 while the share lasts, `hold` restores it, the stream's removal ends it, and
-a helper that exits mid-share takes its hold along; no stream name reaches
+a helper restarted mid-share keeps the hold without a new authority epoch;
+no stream name reaches
 the journal. The unit lane parses split and compact dump output, restarts
 after a crash without lapsing the hold, and ends the share when PipeWire is
 gone. With `gnome-keyring-daemon` installed, a
