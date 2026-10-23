@@ -112,6 +112,12 @@ HELP = """Badi — local writing controls
   badi model use ID            Download (pinned, hash-checked) and switch to
                                a model, for example gemma-3-1b
   badi model auto              Return to the device recommendation
+  badi revise [--json]         Fix or refine selected text: select one line
+                               and press Ctrl+Shift+Space for grammar, again
+                               for a refined wording, Tab to apply; shows
+                               whether its model is installed
+  badi revise install          Download that model (Qwen3 1.7B, 1.3 GB,
+                               Apache-2.0, pinned and hash-checked)
   badi languages [LANG...]     The languages you write in (en de fr es pt it
                                nl pl): suggestions and typo fixes in each that
                                has them; the panel asks this once
@@ -861,6 +867,42 @@ def print_models(report):
               f"{score:15} {model['license']:20} {state}")
     print("Scores are blind-reviewed useful suggestions in Badi's 2026-10-17 development screen, "
           "not a qualification. Switch with: badi model use ID")
+
+
+# The instruction model explicit revisions use (broker ADR 0012).
+REVISION_MODEL = "qwen3-1.7b"
+
+
+def revision_report():
+    """Whether the revision model is installed, from the broker's catalog."""
+    model = next((entry for entry in model_advice()["catalog"] if entry["id"] == REVISION_MODEL), None)
+    if model is None:
+        raise RuntimeError("This Badi build has no revision model in its catalog.")
+    return {"schema": "badi.revision.v1", "model": model["id"], "name": model["name"],
+            "bytes": model["download_bytes"], "license": model["license"], "fits": model["fits"],
+            "installed": (MODEL_DIRECTORY / model["filename"]).is_file()}, model
+
+
+def print_revision(report):
+    print("Select one line of text and press Ctrl+Shift+Space: Badi checks its grammar. Press it again "
+          "for a refined wording; Tab applies what it shows, Esc keeps your text.")
+    if report["installed"]:
+        print(f"{report['name']} is installed; it starts on first use and stops after ten idle minutes.")
+    elif not report["fits"]:
+        print(f"{report['name']} does not fit this device's memory, so revisions are unavailable.")
+    else:
+        print(f"{report['name']} ({report['bytes'] / 1e9:.1f} GB, {report['license']}) is not installed. "
+              "Install it with: badi revise install")
+
+
+def install_revision_model():
+    report, model = revision_report()
+    if report["installed"]:
+        return report, False
+    if not report["fits"]:
+        raise RuntimeError(f"{report['name']} does not fit this device's memory with Badi's safety reserve.")
+    badi_install.download_model(model, MODEL_DIRECTORY)
+    return {**report, "installed": True}, True
 
 
 def use_model(model_id, accept_license):
@@ -1851,6 +1893,17 @@ def main(arguments):
         loaded = active_model_file()
         print(f"Badi now writes with {model['name']}." if loaded == model["filename"]
               else f"{model['name']} is chosen, but the broker loaded {loaded or 'no model'}; badi model explains why.")
+        return
+    if arguments in (["revise"], ["revise", "--json"]):
+        report, _model = revision_report()
+        print(json.dumps(report, indent=2) if arguments[1:] else "", end="")
+        if not arguments[1:]:
+            print_revision(report)
+        return
+    if arguments == ["revise", "install"]:
+        report, downloaded = install_revision_model()
+        print(f"{report['name']} is " + ("installed. Select text and press Ctrl+Shift+Space." if downloaded
+                                         else "already installed."))
         return
     if arguments == ["model", "auto"]:
         update_settings(lambda document: document.pop("writing_model", None))

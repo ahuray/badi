@@ -286,10 +286,14 @@ fn describe(entry: &mut Entry, adapter: AdapterKind, envelope: &WireEnvelope) {
                 &[("id", "/suggestion_id"), ("acceptance", "/acceptance")],
             );
             entry.chars("chars", payload, "/text");
+            entry.copy(payload, &[("selection", "/replace_selection")]);
             entry.copy_text(payload, &["text", "replace_before"]);
         }
         MessageType::CommitResult => {
             entry.copy(payload, &[("id", "/suggestion_id"), ("status", "/status")]);
+        }
+        MessageType::RevisionRequest | MessageType::RevisionShow | MessageType::RevisionClear => {
+            describe_revision(entry, envelope.message_type, payload);
         }
         MessageType::SessionOpen => entry.copy(
             payload,
@@ -314,6 +318,45 @@ fn describe(entry: &mut Entry, adapter: AdapterKind, envelope: &WireEnvelope) {
         // Settings, style keys and samples, memory, statistics and probes:
         // the type only.
         _ => {}
+    }
+}
+
+/// A revision's lengths and outcome; its text only in a text run
+/// (ADR 0012), and never from a field that is not plain prose.
+fn describe_revision(entry: &mut Entry, message_type: MessageType, payload: &Value) {
+    match message_type {
+        MessageType::RevisionRequest => {
+            entry.copy(
+                payload,
+                &[
+                    ("mode", "/mode"),
+                    ("language", "/language"),
+                    ("purpose", "/field/purpose"),
+                ],
+            );
+            entry.chars("chars", payload, "/selected");
+            entry.chars("before_chars", payload, "/before");
+            entry.chars("after_chars", payload, "/after");
+            let prose = payload.pointer("/field/sensitive") == Some(&Value::Bool(false))
+                && payload.pointer("/field/purpose").and_then(Value::as_str) == Some("normal");
+            if prose {
+                entry.copy_text(payload, &["selected"]);
+            }
+        }
+        MessageType::RevisionShow => {
+            entry.copy(
+                payload,
+                &[
+                    ("id", "/revision_id"),
+                    ("mode", "/mode"),
+                    ("ttl_ms", "/ttl_ms"),
+                    ("provider", "/provider"),
+                ],
+            );
+            entry.chars("chars", payload, "/text");
+            entry.copy_text(payload, &["text"]);
+        }
+        _ => entry.copy(payload, &[("reason", "/reason"), ("id", "/revision_id")]),
     }
 }
 

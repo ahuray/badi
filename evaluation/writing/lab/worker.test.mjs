@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { LabWorker, parseProcessStat, processIdentity } from './worker.mjs';
-import { copyFile, mkdtemp, chmod, readFile, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, chmod, readFile, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -270,4 +270,51 @@ test('runtime batch and memory loading choices must agree with readiness', async
   await assert.rejects(mismatch.start(), error => /ownership and cleanup/u.test(error.message)
     && /memory loading mode/u.test(error.cause?.message));
   await assert.rejects(mismatch.stop(), /ownership and cleanup/u);
+});
+
+test('the revision worker takes no launch option and bounds a request by the timeout it announces', async t => {
+  assert.deepEqual(new LabWorker({ revision: true }).args, ['--revision-lab']);
+  for (const options of [{ revision: true, prefillBatch: 64 }, { revision: true, memoryMap: false }, { revision: 'yes' },
+    { args: ['--revision-lab'] }]) assert.throws(() => new LabWorker(options));
+  const directory = await mkdtemp(join(tmpdir(), 'badi-lab-revision-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const runtimePath = join(directory, 'llama-server');
+  await copyFile('/usr/bin/sleep', runtimePath); await chmod(runtimePath, 0o700);
+  const digest = createHash('sha256').update(await readFile(runtimePath)).digest('hex');
+  // The broker fixes the revision launch: batch 64 and copied weights, which
+  // the default prediction expectations (16, mapped) would refuse.
+  const script = join(directory, 'revision-worker.mjs');
+  await writeFile(script, `
+import { createInterface } from 'node:readline';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+const [flag, runtimePath, digest] = process.argv.slice(2);
+if (flag !== '--revision-lab') process.exit(2);
+const emit = value => process.stdout.write(JSON.stringify(value) + '\\n');
+const runtime = spawn(runtimePath, ['60'], { detached: true, stdio: 'ignore' });
+const exited = once(runtime, 'exit');
+await once(runtime, 'spawn');
+process.on('SIGTERM', async () => {
+  runtime.kill('SIGTERM'); await exited;
+  process.stdout.write(JSON.stringify({ type: 'stopped', cleanup: { process_id: runtime.pid, runtime_identity_sha256: digest,
+    challenge_completed: true, reaped: true, exit_code: 0 } }) + '\\n', () => process.exit(0));
+});
+emit({ type: 'ready', schema: 'badi.prediction-lab.worker.v1', runtime_pid: runtime.pid, request_timeout_ms: 40000,
+  identity: { pid: process.pid, batch_size: 64, ubatch_size: 64, memory_map: false, binary_sha256: digest } });
+createInterface({ input: process.stdin }).on('line', line => {
+  const request = JSON.parse(line);
+  emit({ type: 'revision_result', id: request.id, outcome: 'unchanged', text: null, latency_ms: 1, has_config: 'config' in request });
+});
+`);
+  const wrapper = join(directory, 'revision-worker');
+  await writeFile(wrapper, `#!/bin/sh\nexec '${process.execPath}' '${script}' "$@"\n`); await chmod(wrapper, 0o700);
+  const worker = new LabWorker({ executable: wrapper, args: [runtimePath, digest], revision: true, startupMs: 2000 });
+  t.after(() => worker.stop());
+  const identity = await worker.start();
+  assert.equal(worker.session.requestTimeoutMs, 40000);
+  const reply = await worker.predict({ schema: 'badi.prediction-lab.revision-request.v1', id: 'revision-1', language: 'en',
+    mode: 'grammar', before: '', selected: 'She dont know.', after: '' });
+  assert.deepEqual([reply.id, reply.outcome, reply.has_config], ['revision-1', 'unchanged', false]);
+  assert.equal((await worker.stop()).reaped, true);
+  reaped(identity.pid);
 });

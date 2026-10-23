@@ -21,8 +21,9 @@ observer's (`badi.accessibility.v1`) requests and reply checks are in
 The first frame is `hello` with `v: 2`, `min_v: 2`, `max_v: 2`, adapter
 `{kind:"fcitx",name:"badi-fcitx5",version:"0.1.0"}`, and the exact capabilities
 `context`, `suggestion`, `commit.dispatched_unverified`, `text_replacement`,
-`control`, `policy`, and `long_reading_window`. `text_replacement` is applied only for native exact
-fields; IME-parity sessions stay append-only.
+`control`, `policy`, `long_reading_window` and `selection_revision`. `text_replacement` is applied only for native exact
+fields; IME-parity sessions stay append-only. `selection_revision` is the
+explicit revision below; `hello.ack` must enable exactly these.
 `long_reading_window` admits suggestion TTLs up to 15,000 ms. It needs an
 updated broker; older clients without it keep the five-second ceiling.
 Commit-result deadlines and every acceptance binding remain unchanged.
@@ -134,3 +135,35 @@ once and emits:
 ```
 
 No success claim stronger than dispatch is available at the Fcitx boundary.
+
+## Revision
+
+An explicit revision of one selection
+([ADR 0012](../../docs/decisions/0012-explicit-revision-of-one-selection.md)).
+`revision.request` is a field revision of its own, with its own salted
+fingerprint over the selection: `mode` (`grammar` or `refine`), `before`
+(≤512 scalars), `selected` (1–600 scalars on one line), `after` (≤128),
+`selection` (Fcitx's anchor and cursor, which span exactly `selected`),
+`field`, `activation: "manual"` and `language`. It supersedes the field's
+context and any suggestion.
+
+The broker answers once: `revision.show` (`revision_id`, `mode`, `original`,
+`text`, `ttl_ms` ≤ 60,000, `provider`), or `revision.clear` with a reason:
+`no_change`, `invalid_output`, `unsupported_language`,
+`revision_unavailable`, `provider_timeout`, `provider_error`, or a policy
+refusal (`paused`, `policy_never`, `field_*`), which is answered rather than
+an `error` frame. Both repeat the request's coordinates. `original` must equal
+the selection sent, and both texts must be one line with no control or format
+character and no whitespace but U+0020, U+00A0 and U+202F. A later
+`revision.clear` with `superseded`, `dismissed`, `expired` or
+`session_closed` retires a shown revision.
+
+`suggest.cancel` with the request's fingerprint ends one still running.
+`control.request` `dismiss` or `accept_all`, with `suggestion_id` set to the
+`revision_id`, retires or accepts the shown one; `accept_word` is refused.
+The grant is `commit.prepare` with `replace_selection` (the request's
+`anchor`, `head` and `unicode_scalar_values`), `acceptance: "all"` and the
+revised `text`. A grant naming another selection, or one that also carries
+`replace_before`, is refused. The addon checks that Fcitx (and the observer,
+for an observed field) still report exactly that selection, calls
+`commitString(text)` once over it and reports `dispatched-unverified`.

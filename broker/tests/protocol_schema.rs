@@ -7,11 +7,11 @@ use badi_broker::protocol::{
     DesktopStatusPayload, EditorFocusPayload, EditorStatusPayload, EmptyPayload, ErrorPayload,
     GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
     MemoryStatusPayload, MessageType, PolicyQueryPayload, PolicyStatusPayload, ProbeRequestPayload,
-    ProbeResultPayload, ProviderKind, SessionClosePayload, SessionControlRequestPayload,
-    SessionOpenPayload, SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload,
-    StyleSamplesPayload, StyleStatusPayload, SuggestCancelPayload, SuggestRequestPayload,
-    SuggestionClearPayload, SuggestionShowPayload, WireEnvelope, valid_opaque_id,
-    validate_fingerprint,
+    ProbeResultPayload, ProviderKind, RevisionClearPayload, RevisionRequestPayload,
+    RevisionShowPayload, SessionClosePayload, SessionControlRequestPayload, SessionOpenPayload,
+    SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload, StyleSamplesPayload,
+    StyleStatusPayload, SuggestCancelPayload, SuggestRequestPayload, SuggestionClearPayload,
+    SuggestionShowPayload, WireEnvelope, valid_opaque_id, validate_fingerprint,
 };
 use badi_broker::segment::{accept_word, sanitize_suggestion};
 use badi_broker::{Metrics, NoSuggestionReason};
@@ -228,7 +228,10 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         }
         MessageType::CommitPrepare => {
             let payload: CommitPreparePayload = decode(envelope);
-            if let Some(original) = payload.replace_before.as_deref() {
+            if payload.replace_selection.is_some() {
+                assert!(payload.replace_before.is_none());
+                assert!(badi_broker::revision::safe_revision_text(&payload.text));
+            } else if let Some(original) = payload.replace_before.as_deref() {
                 assert!(badi_broker::protocol::valid_spelling_replacement(
                     original,
                     &payload.text
@@ -243,6 +246,16 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         MessageType::CommitResult => decode::<CommitResultPayload>(envelope)
             .validate()
             .expect("valid commit result"),
+        MessageType::RevisionRequest => decode::<RevisionRequestPayload>(envelope)
+            .validate()
+            .expect("valid revision request"),
+        MessageType::RevisionShow => decode::<RevisionShowPayload>(envelope)
+            .validate()
+            .expect("valid revision"),
+        MessageType::RevisionClear => {
+            let payload: RevisionClearPayload = decode(envelope);
+            validate_fingerprint(&payload.fingerprint).expect("valid fingerprint");
+        }
         MessageType::HealthRequest
         | MessageType::SettingsGet
         | MessageType::MemoryClear

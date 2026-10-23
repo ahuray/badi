@@ -13,6 +13,7 @@ mod midline;
 pub mod paced_probe;
 pub mod prefill_probe;
 pub mod qualification;
+pub mod revision;
 pub mod spelling;
 pub mod stop_token_probe;
 mod transport;

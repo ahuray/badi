@@ -14,6 +14,7 @@ pub mod personalization;
 pub mod policy;
 pub mod protocol;
 pub mod provider;
+pub mod revision;
 pub mod segment;
 #[cfg(feature = "local-model")]
 pub mod semantic;

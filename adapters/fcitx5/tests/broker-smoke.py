@@ -97,6 +97,19 @@ def run(args):
                         raise RuntimeError(
                             f"type-through generated instead of carrying: calls={calls} shown={shown}"
                         )
+                    earlier = status["metrics"]
+                    subprocess.run([args.client, "--revision", str(socket), "omawrite"],
+                                   env=environment, check=True, timeout=10)
+                    metrics = json.loads(subprocess.run(
+                        [args.cli, "status"], env=environment, check=True,
+                        capture_output=True, text=True, timeout=5,
+                    ).stdout)["metrics"]
+                    # A revision is not a suggestion: its one grant is a
+                    # prepared commit, and nothing is shown or generated.
+                    added = {name: metrics[name] - earlier[name]
+                             for name in ("suggestions_shown", "provider_calls", "commits_prepared", "commit_failures")}
+                    if added != {"suggestions_shown": 0, "provider_calls": 0, "commits_prepared": 1, "commit_failures": 0}:
+                        raise RuntimeError(f"unexpected revision counters: {added}")
                     recovery = subprocess.Popen(
                         [args.client, "--reconnect", str(socket), "omawrite"],
                         env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,

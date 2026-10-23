@@ -173,11 +173,16 @@ impl Broker {
         session: &mut SessionState,
         generation_timeout: Duration,
     ) {
-        session.invalidate_context_lease();
         let lease = self
             .inner
             .config
             .context_authority_lease_for(&session.authority, generation_timeout);
+        self.arm_context_authority_lease(session, lease);
+    }
+
+    /// Revokes `session`'s context authority after `lease` of silence.
+    pub(super) fn arm_context_authority_lease(&self, session: &mut SessionState, lease: Duration) {
+        session.invalidate_context_lease();
         let session_id = session.coordinates.session_id;
         let lease_generation = session.context_lease_generation;
         let cancellation = CancellationToken::new();
@@ -242,6 +247,7 @@ impl SessionState {
             cancellation: None,
             visible: None,
             pending: None,
+            revision: None,
             escape_quiet: None,
             sink,
         }
@@ -315,13 +321,20 @@ impl SessionState {
     }
 
     /// Matches the current context, or the visible suggestion once context
-    /// authority has lapsed.
+    /// authority has lapsed, or the selection a revision was asked for.
     pub(super) fn ensure_fingerprint(&self, fingerprint: &str) -> Result<(), BrokerError> {
-        let current = self.context_fingerprint().or_else(|| {
-            self.visible
-                .as_ref()
-                .map(|visible| visible.payload.fingerprint.as_str())
-        });
+        let current = self
+            .context_fingerprint()
+            .or_else(|| {
+                self.visible
+                    .as_ref()
+                    .map(|visible| visible.payload.fingerprint.as_str())
+            })
+            .or_else(|| {
+                self.revision
+                    .as_ref()
+                    .map(super::revision::SessionRevision::fingerprint)
+            });
         if current == Some(fingerprint) {
             Ok(())
         } else {
@@ -329,7 +342,7 @@ impl SessionState {
         }
     }
 
-    fn ensure_newer_context(&self, coordinates: Coordinates) -> Result<(), BrokerError> {
+    pub(super) fn ensure_newer_context(&self, coordinates: Coordinates) -> Result<(), BrokerError> {
         let current = self.coordinates;
         let is_older = (coordinates.focus_epoch, coordinates.revision)
             < (current.focus_epoch, current.revision);
@@ -371,6 +384,10 @@ impl SessionState {
         if let Some(clear) = clear {
             let _ = self.sink.send(clear);
         }
+        // A revision is derived from the same field state and ends with it.
+        if let Some(revision) = self.revision.take() {
+            let _ = self.sink.send(revision.retire(self.coordinates, reason));
+        }
         if provider_cancelled || commit_cancelled {
             metrics.record_cancellation();
         }
@@ -402,7 +419,10 @@ pub(super) fn evaluate_context(
     })
 }
 
-const fn restrictive_activation(configured: Activation, claimed: Activation) -> Activation {
+pub(super) const fn restrictive_activation(
+    configured: Activation,
+    claimed: Activation,
+) -> Activation {
     match (configured, claimed) {
         (Activation::Never, _) | (_, Activation::Never) => Activation::Never,
         (Activation::Manual, _) | (_, Activation::Manual) => Activation::Manual,

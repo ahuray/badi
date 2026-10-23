@@ -33,6 +33,9 @@ void BadiAddon::observeLater(Binding &binding, bool explicitRequest, bool retry,
 }
 
 void BadiAddon::inspectField(Binding &binding) {
+    // A revision's selection is the field's own state: an inspection for a
+    // caret would decline it.
+    if (revisionActive(binding)) return;
     // Inspection reads only the focused accessible, so fcitx5-qt's
     // withdrawal echo does not stop it; reading text waits for observation.
     if (!nativeObservationAvailable(binding.state.appId()) ||
@@ -142,6 +145,12 @@ void BadiAddon::observerInvalidated(const Json &event) {
     for (auto &[_, binding] : bindings_) {
         if (!binding.state.focused() || !invalidates(event, binding.state.appId())) continue;
         debug_.record("observer", binding.state.appId(), "observer_invalidated");
+        // A revision's own inspection is binding the focused field: the
+        // observer may first retire the field it tracked before. Its reply
+        // must still arrive.
+        if (binding.revisionWaiting && !binding.observed()) continue;
+        // The field changed under a revision: it ends, as for any edit.
+        if (revisionActive(binding)) cancelRevision(binding);
         ++binding.observationGeneration;
         if (binding.observed()) retireObservedField(binding);
         if (binding.inspection.reinspectAfterInvalidation(fieldChanged)) observeLater(binding);

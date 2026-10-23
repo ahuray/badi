@@ -256,7 +256,7 @@ fn runtime_socket_stays_inside_a_private_directory() -> Result<(), Box<dyn Error
     fs::create_dir(&open)?;
     fs::set_permissions(&open, fs::Permissions::from_mode(0o755))?;
     assert!(matches!(
-        super::prepare_runtime_socket(&open),
+        super::prepare_runtime_socket(&open, super::SocketRole::Writing),
         Err(RuntimeError::InvalidConfig("runtime_dir"))
     ));
     let private = fs::canonicalize(temporary.path())?.join("private");
@@ -264,9 +264,11 @@ fn runtime_socket_stays_inside_a_private_directory() -> Result<(), Box<dyn Error
     fs::set_permissions(&private, fs::Permissions::from_mode(0o700))?;
     let live = private.join("llama-1.sock");
     let dead = private.join("llama-999999999.sock");
+    let dead_revision = private.join("llama-999999999-revision.sock");
     let _live_listener = std::os::unix::net::UnixListener::bind(&live)?;
     std::os::unix::net::UnixListener::bind(&dead)?;
-    let socket = super::prepare_runtime_socket(&private)?;
+    std::os::unix::net::UnixListener::bind(&dead_revision)?;
+    let socket = super::prepare_runtime_socket(&private, super::SocketRole::Writing)?;
     assert_eq!(
         socket,
         private.join(format!("llama-{}.sock", std::process::id()))
@@ -274,6 +276,23 @@ fn runtime_socket_stays_inside_a_private_directory() -> Result<(), Box<dyn Error
     assert!(!socket.exists());
     assert!(live.exists(), "a live process keeps its socket");
     assert!(!dead.exists(), "a dead process does not keep a socket");
+    assert!(!dead_revision.exists(), "nor its revision runtime");
+    // The revision runtime's socket sits beside the writing runtime's and
+    // never replaces it.
+    let writing = std::os::unix::net::UnixListener::bind(&socket)?;
+    let revision = super::prepare_runtime_socket(&private, super::SocketRole::Revision)?;
+    assert_eq!(
+        revision,
+        private.join(format!("llama-{}-revision.sock", std::process::id()))
+    );
+    assert!(socket.exists(), "the writing socket stays");
+    assert!(crate::semantic::client::is_owned_runtime_socket_name(
+        revision
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+    ));
+    drop(writing);
     Ok(())
 }
 

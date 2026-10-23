@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { parseOptions, validateOutputPath, prepareOutput, fileIdentity, sourceHashes, labCrateSources, brokerSources, buildWorker, WORKER_BUILD, validateCleanup, decodeEvents, runSuite, ObservedWorker } from './run.mjs';
+import { parseOptions, validateOutputPath, prepareOutput, fileIdentity, sourceHashes, labCrateSources, brokerSources, buildWorker, WORKER_BUILD, validateCleanup, decodeEvents, runSuite, runRevisionSuite, ObservedWorker } from './run.mjs';
 import { createLabServer } from './server.mjs';
 import { readModelArtifact } from './model-artifact.mjs';
 
@@ -439,4 +439,65 @@ test('invalid suite input fails before creating an output directory or starting 
     assert.equal(error.message.includes('PRIVATE_TEXT'), false);
     return true;
   });
+});
+
+const revisionSuite = { schema: 'badi.revision-suite.v1', name: 'Revision CLI fixture', cases: [
+  { id: 'en-g', language: 'en', mode: 'grammar', kind: 'error', before: 'I said ', selected: 'she dont know', after: ' twice.',
+    expected: ['PRIVATE_EXPECTED'] },
+  { id: 'en-r', language: 'en', mode: 'refine', selected: 'pls call Tom at 14:30', facts: ['Tom', '14:30'] }] };
+
+test('revision modes run apart from prediction modes and take no prediction option', () => {
+  const base = ['--suite', 'suite.json', '--output', 'output/writing/new'];
+  assert.deepEqual(parseOptions([...base, '--modes', 'revision_refine,revision_grammar', '--seed', '9'], '/work/badi'),
+    { revision: true, suitePath: '/work/badi/suite.json', outputPath: '/work/badi/output/writing/new', modes: ['refine', 'grammar'], seed: 9 });
+  for (const extra of [['--modes', 'revision_grammar,context'], ['--modes', 'revision_grammar,revision_grammar'],
+    ['--modes', 'revision_grammar', '--budget-ms', '550'], ['--modes', 'revision_grammar', '--cache-prompt', 'true'],
+    ['--modes', 'revision_refine', '--prefill-batch', '64'], ['--modes', 'revision_refine', '--warm-prefix', 'true']]) {
+    assert.throws(() => parseOptions([...base, ...extra]));
+  }
+  assert.equal(parseOptions([...base, '--budget-ms', '2500', '--modes', 'context']).configs[0].budget_ms, 2500);
+});
+
+test('a revision run keeps answers out of requests and records outcomes, scores and cleanup', async t => {
+  const f = await fixture(t, revisionSuite);
+  const worker = new FakeWorker(async request => ({ type: 'revision_result', id: request.id,
+    ...(request.mode === 'grammar' ? { outcome: 'shown', text: "she doesn't know", output: "She doesn't know." }
+      : { outcome: 'facts', text: null, output: 'Please call him at 14:30.' }), latency_ms: 5, generated_tokens: 4 }));
+  const progress = [];
+  const options = { revision: true, suitePath: f.suitePath, outputPath: f.options.outputPath, modes: ['grammar', 'refine'], seed: 3 };
+  const result = await runRevisionSuite(options, { worker, outputRoot: f.outputRoot, onProgress: value => progress.push(value) });
+  assert.equal(result.report.complete, true);
+  assert.equal(result.report.cleanup.completed, true);
+  assert.deepEqual(result.report.cleanup.runtime_receipt, cleanupReceipt);
+  assert.equal(worker.calls.length, 2);
+  assert.equal(JSON.stringify(worker.calls).includes('PRIVATE_EXPECTED'), false);
+  assert.ok(worker.calls.every(call => !Object.hasOwn(call, 'facts') && !Object.hasOwn(call, 'expected')));
+  assert.deepEqual(worker.calls.find(call => call.mode === 'grammar').after, ' twice.');
+  assert.equal(JSON.stringify(progress).includes('dont'), false);
+  const grammar = result.report.measurements.by_mode.grammar.by_language.en;
+  assert.deepEqual(grammar.errors, { cases: 1, fixed: 0, shown_wrong: 1, not_shown: {} });
+  const refine = result.report.measurements.by_mode.refine.overall;
+  assert.deepEqual([refine.shown, refine.not_shown], [0, { facts: 1 }]);
+  for (const name of ['suite-input.json', 'run.json', 'events.ndjson', 'session.json', 'report.json']) {
+    assert.equal((await stat(join(result.output, name))).mode & 0o777, 0o600);
+  }
+  const events = (await readFile(join(result.output, 'events.ndjson'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(events.map(event => event.type), ['plan', 'progress', 'record', 'progress', 'record', 'cleanup', 'complete']);
+  assert.deepEqual(JSON.parse(await readFile(join(result.output, 'run.json'), 'utf8')).plan, result.session.plan);
+});
+
+test('a revision worker failure keeps partial evidence and an incomplete report', async t => {
+  const f = await fixture(t, revisionSuite);
+  let calls = 0;
+  const worker = new FakeWorker(async request => {
+    if (calls++) throw new Error('Disposable revision worker stopped');
+    return { type: 'error', id: request.id, error: 'invalid_request' };
+  });
+  const options = { revision: true, suitePath: f.suitePath, outputPath: f.options.outputPath, modes: ['grammar', 'refine'], seed: 3 };
+  const result = await runRevisionSuite(options, { worker, outputRoot: f.outputRoot });
+  assert.equal(result.report.complete, false);
+  assert.match(result.report.error, /stopped/u);
+  assert.equal(result.session.records.length, 1);
+  assert.equal(result.session.records[0].result.outcome, 'error');
+  assert.ok(worker.stopped >= 1);
 });

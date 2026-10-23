@@ -23,7 +23,7 @@ pub const MAX_SUGGESTION_CHARS: usize = 64;
 pub const MAX_SUGGESTION_WORDS: usize = 8;
 pub const MAX_ID_CHARS: usize = 128;
 pub const DEFAULT_SUGGESTION_TTL_MS: u64 = 600;
-pub const CAPABILITY_COUNT: usize = 13;
+pub const CAPABILITY_COUNT: usize = 14;
 /// The only app id the Writer extension target may claim.
 pub const LIBREOFFICE_WRITER_APP_ID: &str = "libreoffice-writer";
 
@@ -133,6 +133,10 @@ pub enum Capability {
     /// terminal's focus (Neovim only); it only withholds (ADR 0009).
     #[serde(rename = "editor_focus")]
     EditorFocus,
+    /// Revises one selection on an explicit request (ADR 0012): the Fcitx
+    /// addon only, protocol v2.
+    #[serde(rename = "selection_revision")]
+    SelectionRevision,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -261,6 +265,12 @@ pub enum ReasonCode {
     Superseded,
     UnknownSession,
     UnsupportedVersion,
+    /// A revision found nothing to change in the selection.
+    NoChange,
+    /// The selection's language has no revision model prompt.
+    UnsupportedLanguage,
+    /// No revision model is installed, or it cannot start now.
+    RevisionUnavailable,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -351,6 +361,12 @@ pub enum MessageType {
     EditorFocus,
     #[serde(rename = "editor.status")]
     EditorStatus,
+    #[serde(rename = "revision.request")]
+    RevisionRequest,
+    #[serde(rename = "revision.show")]
+    RevisionShow,
+    #[serde(rename = "revision.clear")]
+    RevisionClear,
 }
 
 impl MessageType {
@@ -367,6 +383,9 @@ impl MessageType {
                 | Self::SuggestionClear
                 | Self::CommitPrepare
                 | Self::CommitResult
+                | Self::RevisionRequest
+                | Self::RevisionShow
+                | Self::RevisionClear
         )
     }
 }
@@ -594,6 +613,14 @@ impl HelloPayload {
         if self.capabilities.contains(&Capability::EditorFocus)
             && (self.adapter.kind != AdapterKind::Neovim
                 || frame_version != CURRENT_PROTOCOL_VERSION)
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        if self.capabilities.contains(&Capability::SelectionRevision)
+            && (!matches!(
+                self.adapter.kind,
+                AdapterKind::Fcitx | AdapterKind::Test | AdapterKind::Cli
+            ) || frame_version != CURRENT_PROTOCOL_VERSION)
         {
             return Err(ProtocolError::InvalidPayload);
         }
@@ -1166,7 +1193,95 @@ pub struct CommitPreparePayload {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replace_before: Option<String>,
+    /// A revision's grant (ADR 0012): `text` replaces exactly this
+    /// selection, which the adapter confirms is unchanged before it commits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace_selection: Option<Selection>,
     pub acceptance: Acceptance,
+}
+
+/// An explicit request to revise one selection (ADR 0012). It is a context
+/// snapshot of its own: `before` and `after` surround the selection, whose
+/// scalar offsets span exactly `selected`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevisionRequestPayload {
+    pub fingerprint: String,
+    pub mode: crate::revision::RevisionMode,
+    pub before: String,
+    pub selected: String,
+    pub after: String,
+    pub selection: Selection,
+    pub field: FieldDescriptor,
+    pub activation: Activation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
+impl RevisionRequestPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fingerprint(&self.fingerprint)?;
+        let selected = self.selected.chars().count();
+        let span = self.selection.anchor.abs_diff(self.selection.head);
+        if self.selection.unit != OffsetUnit::UnicodeScalarValues
+            || self.selection.anchor > MAX_SAFE_COUNTER
+            || self.selection.head > MAX_SAFE_COUNTER
+            || !(1..=crate::revision::MAX_SELECTED_SCALARS).contains(&selected)
+            || u64::try_from(selected).ok() != Some(span)
+            || self.selected.trim().is_empty()
+            || !crate::revision::safe_revision_text(&self.selected)
+            || self.before.chars().count() > MAX_BEFORE_CHARS
+            || self.after.chars().count() > MAX_AFTER_CHARS
+            || self
+                .language
+                .as_ref()
+                .is_some_and(|language| !valid_language_tag(language))
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
+}
+
+/// A revision the user may apply with one acceptance, shown with its
+/// changes marked against `original`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevisionShowPayload {
+    pub fingerprint: String,
+    pub revision_id: String,
+    pub mode: crate::revision::RevisionMode,
+    pub original: String,
+    pub text: String,
+    pub ttl_ms: u64,
+    pub provider: ProviderKind,
+}
+
+impl RevisionShowPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fingerprint(&self.fingerprint)?;
+        if !valid_opaque_id(&self.revision_id)
+            || !crate::revision::safe_revision_text(&self.original)
+            || !crate::revision::safe_revision_text(&self.text)
+            || self.original.chars().count() > crate::revision::MAX_SELECTED_SCALARS
+            || self.text.chars().count() > crate::revision::MAX_REVISED_SCALARS
+            || self.original == self.text
+            || !(1..=crate::revision::REVISION_TTL_MS).contains(&self.ttl_ms)
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
+}
+
+/// Ends a revision request or a shown revision.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevisionClearPayload {
+    pub fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
+    pub reason: ReasonCode,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1832,6 +1947,35 @@ mod tests {
         query
             .validate_for_version(CURRENT_PROTOCOL_VERSION)
             .expect("a Neovim target is a v2 contract");
+    }
+
+    #[test]
+    fn only_the_fcitx_addon_on_v2_negotiates_selection_revision() {
+        let hello = |kind, version| HelloPayload {
+            min_v: version,
+            max_v: version,
+            adapter: AdapterDescriptor {
+                kind,
+                name: "adapter".to_owned(),
+                version: "1".to_owned(),
+            },
+            capabilities: vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::SelectionRevision,
+            ],
+        };
+        hello(AdapterKind::Fcitx, 2)
+            .validate_for_frame(2)
+            .expect("the v2 Fcitx addon");
+        assert!(hello(AdapterKind::Fcitx, 1).validate_for_frame(1).is_err());
+        for kind in [
+            AdapterKind::Browser,
+            AdapterKind::Obsidian,
+            AdapterKind::Terminal,
+        ] {
+            assert!(hello(kind, 2).validate_for_frame(2).is_err(), "{kind:?}");
+        }
     }
 
     #[test]

@@ -159,6 +159,19 @@ Fails closed before prose:
 EditContext editors (VS Code's default, CodeMirror on recent Chromium) expose
 no editable node and stay unavailable.
 
+## Selection for a revision
+
+An explicit revision ([ADR 0012](../../docs/decisions/0012-explicit-revision-of-one-selection.md))
+reads one selection instead of a caret. `inspect` with `"selection": true`
+accepts a field with exactly one selection (`selection_absent` otherwise) and,
+like every inspect, reads no text. A `snapshot` of that binding with
+`"selection": true` (never with `window`) returns `before` (≤512
+characters), `selected` (1–600, one line) and `after` (≤128), read with the
+same stable-text rule and the selection range read again afterwards
+(`stale_binding` if it moved). Rich editors, sentence-bounded apps, a
+selection across lines and a longer one are `unsupported_selection`. Without
+the flag a selection still denies the field (`selection_present`).
+
 ## Snapshots and field events
 
 `snapshot` must repeat the exact binding (bus, path, process, app, URI, epoch)

@@ -26,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "addon_support.h"
@@ -120,6 +121,15 @@ private:
         // gives up on it.
         std::optional<std::string> correctionExpected;
         std::unique_ptr<::fcitx::EventSourceTime> correctionTimer;
+        // An explicit revision on its way (ADR 0012): the selection and mode
+        // waiting for the observer's field, its policy or its session.
+        std::optional<std::pair<SelectionWindow, std::string>> revisionWaiting;
+        unsigned int revisionRetries = 0;
+        std::unique_ptr<::fcitx::EventSourceTime> revisionTimer;
+        std::unique_ptr<::fcitx::EventSourceTime> revisionNoticeTimer;
+        // An applied revision's selection and text, until the field reads so.
+        std::optional<std::pair<SelectionWindow, std::string>> revisionExpected;
+        std::unique_ptr<::fcitx::EventSourceTime> revisionReadBackTimer;
 
         [[nodiscard]] bool observed() const { return !observedFocus.is_null(); }
     };
@@ -194,6 +204,29 @@ private:
     void refuseCommit(const CommitPrepare &prepare, Binding *binding);
     void reportStale(const CommitPrepare &prepare);
     void onDisconnected();
+
+    // Explicit revision of one selection (addon_revision.cpp).
+    bool revisionActive(const Binding &binding) const;
+    std::optional<SelectionWindow> currentSelection(const Binding &binding) const;
+    bool revisionChord(Binding &binding);
+    void startRevision(Binding &binding, SelectionWindow selection, std::string mode);
+    void inspectForRevision(Binding &binding);
+    void revisionInspected(Binding &binding, const Json &reply);
+    void revisionByManualContract(Binding &binding);
+    void continueRevision(Binding &binding);
+    void sendRevision(Binding &binding, const std::optional<Json> &observed);
+    void endRevision(Binding &binding, std::string_view message, std::string_view reason);
+    void onRevision(Revision revision);
+    void showRevisionCandidate(Binding &binding, const Revision &revision);
+    void showRevisionNotice(Binding &binding, std::string_view message);
+    void onRevisionClear(const RevisionClear &clear);
+    void acceptRevision(Binding &binding);
+    void cancelRevision(Binding &binding);
+    bool revisionKey(::fcitx::KeyEvent &event, Binding &binding);
+    bool revisionCommit(const CommitPrepare &prepare);
+    void applyRevision(Binding &binding, const CommitPrepare &prepare);
+    void readBackRevision(Binding &binding);
+    bool revisionSurvives(Binding &binding);
 
     // The broker session.
     bool open(Binding &binding);

@@ -62,6 +62,11 @@ impl Broker {
         let session = state.session_with_data_access(coordinates.session_id)?;
         session.ensure_coordinates(coordinates)?;
         session.ensure_fingerprint(&payload.fingerprint)?;
+        if session.has_revision(payload.suggestion_id.as_deref()) {
+            session.control_revision(self, &payload.fingerprint, acceptance, request_id)?;
+            state.type_through = None;
+            return Ok(());
+        }
         let suggestion_id = payload
             .suggestion_id
             .as_deref()
@@ -142,6 +147,7 @@ impl Broker {
                 Acceptance::All => shown.text,
             },
             replace_before: shown.replace_before,
+            replace_selection: None,
             acceptance,
         };
         let expires_at = Instant::now() + self.inner.config.commit_result_lease;
@@ -152,6 +158,7 @@ impl Broker {
             request_id: request_id.clone(),
             expires_at,
             saved_words: saved_words(&commit),
+            revision: false,
         };
         let prepare = BrokerEvent::CommitPrepare {
             coordinates,
@@ -227,10 +234,12 @@ impl Broker {
             CommitStatus::Stale | CommitStatus::Blocked | CommitStatus::Failed => {}
         }
         // Usage statistics count an acceptance once the adapter says it landed.
-        let landed = matches!(
-            payload.status,
-            CommitStatus::Applied | CommitStatus::DispatchedUnverified
-        )
+        // A revision is not a suggestion and teaches nothing (ADR 0012).
+        let landed = (!pending.revision
+            && matches!(
+                payload.status,
+                CommitStatus::Applied | CommitStatus::DispatchedUnverified
+            ))
         .then(|| {
             (
                 session.target.target.clone(),
@@ -243,10 +252,11 @@ impl Broker {
         // text, and only after the adapter reports the edit landed.
         let style_sample = style_revision
             .filter(|_| {
-                matches!(
-                    payload.status,
-                    CommitStatus::Applied | CommitStatus::DispatchedUnverified
-                )
+                !pending.revision
+                    && matches!(
+                        payload.status,
+                        CommitStatus::Applied | CommitStatus::DispatchedUnverified
+                    )
             })
             .and_then(|revision| {
                 let context = session.context.as_ref()?;
@@ -264,7 +274,7 @@ impl Broker {
         Ok(())
     }
 
-    async fn expire_pending_commit(
+    pub(super) async fn expire_pending_commit(
         &self,
         coordinates: Coordinates,
         suggestion_id: String,

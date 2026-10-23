@@ -36,15 +36,17 @@ export async function processIdentity(pid) {
   }
 }
 
-async function verifyRuntime(message, workerPid, cache, prefillBatch, memoryMap) {
+// `launch` is the selected prompt batch and memory loading, or null for the
+// revision runtime, whose launch the broker fixes.
+async function verifyRuntime(message, workerPid, cache, launch) {
   if (message.schema !== 'badi.prediction-lab.worker.v1' || !message.identity || typeof message.identity !== 'object'
     || Array.isArray(message.identity) || typeof message.identity.binary_sha256 !== 'string'
     || !/^[a-f0-9]{64}$/u.test(message.identity.binary_sha256)) throw new Error('Invalid verified runtime identity.');
-  if (message.identity.batch_size !== prefillBatch || message.identity.ubatch_size !== prefillBatch) {
+  if (launch && (message.identity.batch_size !== launch.prefillBatch || message.identity.ubatch_size !== launch.prefillBatch)) {
     throw new Error('The model runtime does not match the selected prompt-processing batch.');
   }
-  if (Object.hasOwn(message.identity, 'memory_map') && typeof message.identity.memory_map !== 'boolean'
-    || (message.identity.memory_map ?? true) !== memoryMap) {
+  if (launch && (Object.hasOwn(message.identity, 'memory_map') && typeof message.identity.memory_map !== 'boolean'
+    || (message.identity.memory_map ?? true) !== launch.memoryMap)) {
     throw new Error('The model runtime does not match the selected memory loading mode.');
   }
   const runtime = await processIdentity(message.runtime_pid);
@@ -97,14 +99,18 @@ async function cleanupRuntime(identity) {
 
 // The browser never selects an executable, model path, runtime address or key.
 export class LabWorker {
-  constructor({ executable = binary, args = [], startupMs = 30000, prefillBatch = 16, memoryMap = true } = {}) {
+  // `revision` starts the revision lane's worker, whose runtime launch the
+  // broker fixes, so it takes no batch or loading option.
+  constructor({ executable = binary, args = [], startupMs = 30000, prefillBatch = 16, memoryMap = true, revision = false } = {}) {
     if (![16, 64].includes(prefillBatch) || typeof memoryMap !== 'boolean' || !Array.isArray(args)
-      || args.some(arg => typeof arg !== 'string' || ['--prefill-batch', '--memory-map']
+      || typeof revision !== 'boolean' || (revision && (prefillBatch !== 16 || !memoryMap))
+      || args.some(arg => typeof arg !== 'string' || ['--prefill-batch', '--memory-map', '--revision-lab']
         .some(flag => arg === flag || arg.startsWith(flag + '=')))) {
       throw new Error('Select prefillBatch 16 or 64 and a boolean memoryMap through worker options, not raw arguments.');
     }
     this.executable = resolve(executable);
-    this.args = [...args, ...(prefillBatch === 64 ? ['--prefill-batch', '64'] : []),
+    this.revision = revision;
+    this.args = revision ? ['--revision-lab', ...args] : [...args, ...(prefillBatch === 64 ? ['--prefill-batch', '64'] : []),
       ...(!memoryMap ? ['--memory-map', 'false'] : [])];
     this.originalArgs = [...this.args];
     this.prefillBatch = prefillBatch;
@@ -176,10 +182,15 @@ export class LabWorker {
           session.readyAnnounced = true;
           session.captureRuntime = (async () => {
             try {
-              session.runtime = await verifyRuntime(message, child.pid, this.runtimeExecutableCache, this.prefillBatch, this.memoryMap);
+              session.runtime = await verifyRuntime(message, child.pid, this.runtimeExecutableCache,
+                this.revision ? null : { prefillBatch: this.prefillBatch, memoryMap: this.memoryMap });
               assertModelArtifactIdentity(message.identity, this.modelArtifact);
               if (session.closed || session.stopping) return;
               session.identity = message.identity;
+              // A request without its own budget (a revision) is bounded by
+              // the timeout the worker announces.
+              session.requestTimeoutMs = Number.isSafeInteger(message.request_timeout_ms)
+                && message.request_timeout_ms > 0 && message.request_timeout_ms <= 120000 ? message.request_timeout_ms : null;
               session.startupMs = performance.now() - startupStarted;
               session.peakRss = 0;
               session.sampleResource = async () => {
@@ -238,12 +249,14 @@ export class LabWorker {
       signal?.throwIfAborted();
       const session = this.session;
       if (!session || session.pending) throw new Error('A model request is already running.');
+      const budget = request.config?.budget_ms ?? session.requestTimeoutMs;
+      if (!Number.isSafeInteger(budget)) throw new Error('The model request has no time budget.');
       const requestStarted = performance.now();
       return await new Promise((resolveResult, rejectResult) => {
         const timer = setTimeout(() => {
           rejectResult(new Error('Model request timed out.'));
           void this.stop().catch(() => {});
-        }, request.config.budget_ms + 15000);
+        }, budget + 15000);
         session.pending = { id: request.id,
           resolve: result => { clearTimeout(timer); resolveResult({ ...result, local_measurement: {
             worker_startup_ms: session.startupMs, request_roundtrip_ms: performance.now() - requestStarted,

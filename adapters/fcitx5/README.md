@@ -134,6 +134,35 @@ observer wire details.
   first removed `the ` and the second restored `teh `. Telegram and Xournal++
   were not retried.
 
+### Revising a selection
+
+Ctrl+Shift+Space on a selection asks for a grammar check of it, and pressing
+it again while the revision shows asks for a refined wording (and back);
+without a selection the chord keeps its meaning
+([ADR 0012](../../docs/decisions/0012-explicit-revision-of-one-selection.md),
+[wire](WIRE_PROTOCOL.md#revision)). The selection must be one line of 1–600
+characters that Fcitx reports with its surrounding text. In an app the
+observer reads, the observer also binds the field: inspect with `selection`
+(no text), then, once policy allows the app, a selection snapshot whose
+selection and surrounding text Fcitx's must match. Native exact apps the
+observer cannot read use the manual contract; IME-parity apps have no
+fallback, and the observer reads only plain fields there, not rich editors.
+While the request runs, the panel says Badi is checking, and no inspection
+runs; an edit, a changed selection, a focus change or an observer
+invalidation retires the request.
+
+The revision shows as Badi's candidate list: lines of up to 64 characters,
+removed words struck through, added ones bold in the highlight colour, and a
+help line (`Grammar · Tab apply · Esc dismiss · Ctrl+Shift+Space refine`).
+Tab applies it, Escape dismisses it, and any other key retires it and keeps
+its own meaning, so typing still replaces the selection. Applying checks the
+selection again (the observer too, for an observed field), commits the
+revision once and reads the field back for a second: the text before the
+caret must end as the selection's prefix plus the revision, and the text
+after it must be unchanged, or a notice names an unconfirmed revision. One
+Ctrl+Z restores the selection where the app merges the commit into one undo
+step, as it does for typing over a selection.
+
 ## App classes
 
 `classifyNativeApp` (`src/state.cpp`) decides every path from the canonical id:
@@ -309,6 +338,22 @@ toolkit in general.
 | Telegram (Qt) | `dbus`, canonicalized to `telegram` | Not retried since fcitx5-qt 5.1.16 | Probably needs the echo handling, like Omawrite |
 
 What the live trials established, beyond those cells:
+
+- **Selection revision** (Chromium 155, installed `2956224`, 2026-10-23,
+  [ADR 0012](../../docs/decisions/0012-explicit-revision-of-one-selection.md)):
+  - In a textarea, "She dont know where is the station" showed its grammar
+    fix with marked changes after 4.1 s, the runtime starting cold.
+    Ctrl+Shift+Space again showed a refinement in 2.3 s. Escape left the
+    text and selection as they were. The fix, asked for again (0.4 s), was
+    applied with Tab and confirmed by the read-back.
+  - A German clause after "dass" came back with its verb last
+    ("die Rechnung bereits bezahlt worden ist"), applied and confirmed.
+  - One Ctrl+Z after an applied revision restored the original text,
+    selected again.
+  - A correct selection said Badi found nothing to change. A selection in
+    a password field sent no request and left no key lines.
+  - Writer refuses, since it gives Fcitx only the caret's sentence. Native
+    GTK editors were not tried (none installed).
 
 - **Display and timing** (Chromium 152, 2026-10-13): 20/20 warm suggestions
   shown and accepted, visible p50 228 ms and p95 284 ms from the last key

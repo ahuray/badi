@@ -53,7 +53,10 @@
         "stats.forget",
         "stats.status",
         "editor.focus",
-        "editor.status"
+        "editor.status",
+        "revision.request",
+        "revision.show",
+        "revision.clear"
       ]
     },
     "session_id": { "$ref": "#/$defs/sessionId" },
@@ -124,6 +127,27 @@
       "properties": {
         "type": { "const": "suggestion.show" },
         "payload": { "$ref": "#/$defs/suggestionShowPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "revision.request" },
+        "payload": { "$ref": "#/$defs/revisionRequestPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "revision.show" },
+        "payload": { "$ref": "#/$defs/revisionShowPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "revision.clear" },
+        "payload": { "$ref": "#/$defs/revisionClearPayload" }
       }
     },
     {
@@ -464,13 +488,14 @@
         "long_reading_window",
         "desktop_signals",
         "style_key",
-        "editor_focus"
+        "editor_focus",
+        "selection_revision"
       ]
     },
     "capabilities": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 13,
+      "maxItems": 14,
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/capability" }
     },
@@ -636,7 +661,10 @@
         "stale",
         "superseded",
         "unknown_session",
-        "unsupported_version"
+        "unsupported_version",
+        "no_change",
+        "unsupported_language",
+        "revision_unavailable"
       ]
     },
     "helloPayload": {
@@ -1155,13 +1183,87 @@
         "fingerprint": { "$ref": "#/$defs/fingerprint" },
         "suggestion_id": { "$ref": "#/$defs/opaqueId" },
         "replace_before": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32} ?$", "description": "Exact suffix replaced only by adapters negotiating text_replacement; bound to the original context and commit grant." },
+        "replace_selection": { "$ref": "#/$defs/selection", "description": "A revision's grant (ADR 0012), sent only to adapters negotiating selection_revision: text replaces exactly this selection, which the adapter confirms is unchanged before one commit." },
         "text": { "type": "string" },
         "acceptance": { "enum": ["word", "all"] }
       },
       "if": { "required": ["replace_before"] },
-      "then": { "$ref": "#/$defs/spellingSuffixPair" },
+      "then": {
+        "allOf": [{ "$ref": "#/$defs/spellingSuffixPair" }],
+        "not": { "required": ["replace_selection"] }
+      },
       "else": {
-        "properties": { "text": { "$ref": "#/$defs/safeSuggestionText" } }
+        "if": { "required": ["replace_selection"] },
+        "then": {
+          "properties": {
+            "text": { "$ref": "#/$defs/revisionText", "maxLength": 1100 },
+            "acceptance": { "const": "all" }
+          }
+        },
+        "else": {
+          "properties": { "text": { "$ref": "#/$defs/safeSuggestionText" } }
+        }
+      }
+    },
+    "revisionMode": {
+      "enum": ["grammar", "refine"],
+      "description": "grammar fixes grammar, spelling, capitalization and punctuation and keeps the wording; refine rewrites for clarity and keeps meaning, names and numbers."
+    },
+    "revisionText": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One line of a selection or its revision: no C0/C1 control, Unicode format (Cf) or line-separator character, and no whitespace other than U+0020, U+00A0 and U+202F.",
+      "allOf": [
+        { "$ref": "#/$defs/safeSuggestionText/allOf/0" },
+        { "pattern": "^[^\\t-\\r\\u0085\\u1680\\u2000-\\u200a\\u2028\\u2029\\u205f\\u3000]+$" }
+      ]
+    },
+    "revisionRequestPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An explicit request (ADR 0012) to revise one selection of 1-600 Unicode scalar values on one line. It is a context snapshot of its own: before and after surround the selection, whose offsets span exactly selected. Sent only by adapters negotiating selection_revision.",
+      "required": ["fingerprint", "mode", "before", "selected", "after", "selection", "field", "activation"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "mode": { "$ref": "#/$defs/revisionMode" },
+        "before": { "$ref": "#/$defs/contextText", "maxLength": 512 },
+        "selected": { "$ref": "#/$defs/revisionText", "maxLength": 600 },
+        "after": { "$ref": "#/$defs/contextText", "maxLength": 128 },
+        "selection": { "$ref": "#/$defs/selection" },
+        "field": { "$ref": "#/$defs/field" },
+        "activation": { "$ref": "#/$defs/activation" },
+        "language": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 35,
+          "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$"
+        }
+      }
+    },
+    "revisionShowPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A revision of original that applies only through one accept_all control request before ttl_ms, as a commit.prepare carrying replace_selection.",
+      "required": ["fingerprint", "revision_id", "mode", "original", "text", "ttl_ms", "provider"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "revision_id": { "$ref": "#/$defs/opaqueId" },
+        "mode": { "$ref": "#/$defs/revisionMode" },
+        "original": { "$ref": "#/$defs/revisionText", "maxLength": 600 },
+        "text": { "$ref": "#/$defs/revisionText", "maxLength": 1100 },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 60000 },
+        "provider": { "enum": ["phrase_v1", "local_model"] }
+      }
+    },
+    "revisionClearPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ends a revision request or a shown revision. no_change: the selection needs none; invalid_output: the model's answer failed the broker's gate; unsupported_language and revision_unavailable: no revision could be asked for.",
+      "required": ["fingerprint", "reason"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "revision_id": { "$ref": "#/$defs/opaqueId" },
+        "reason": { "$ref": "#/$defs/reasonCode" }
       }
     },
     "commitResultPayload": {

@@ -226,6 +226,87 @@ void runTypeThrough(const std::string &socket, const std::string &appId) {
     transport.disconnect();
 }
 
+// An explicit revision of one selection (ADR 0012), against the broker's
+// fixture reviser: shown, applied once over exactly the selection, refined
+// and dismissed, and "nothing to change" answered without a revision.
+void runRevision(const std::string &socket, const std::string &appId) {
+    ::fcitx::EventLoop loop;
+    SessionState state;
+    require(state.focusIn("550e8400-e29b-41d4-a716-446655440003", "revision-context", appId,
+                          "0123456789abcdef0123456789abcdef"));
+    Transport *wire = nullptr;
+    unsigned int shown = 0;
+    bool applied = false;
+    bool dismissed = false;
+    bool unchanged = false;
+    std::unique_ptr<::fcitx::EventSourceTime> readingTimer;
+    const auto ask = [&](std::string_view text, std::size_t from, std::size_t to, std::string mode) {
+        auto selection = captureSelectionWindow(text, to, from, true, "en");
+        require(selection.has_value());
+        const auto update = state.requestRevision(std::move(*selection), std::move(mode));
+        require(update && wire->requestRevision(*update));
+    };
+    Transport transport(loop, WireCallbacks{
+        .onReady = [&] {
+            require(wire->openSession(state.coordinates(), targetOf(state)));
+            ask("Yesterday i has went to the shop with Anna.", 10, 32, "grammar");
+        },
+        .onAuthority = [](const AuthoritySnapshot &authority) { require(authority.initial && !authority.paused); },
+        .onSuggestion = [](Suggestion) { require(false); },
+        .onClear = [](const ClearNotice &) {},
+        .onCommitPrepare = [&](const CommitPrepare &prepare) {
+            require(prepare.replaceSelection == SelectionRange{10, 32});
+            const auto dispatch = state.authorizeRevisionCommit(prepare, wire->nowMs(), kPanel);
+            require(dispatch && dispatch->text == "i went to the shop" && !applied);
+            applied = true;
+            require(wire->reportCommit(dispatch->coordinates, dispatch->controlId, dispatch->suggestionId,
+                                       "dispatched-unverified"));
+            ask("their going home", 0, 16, "refine");
+        },
+        .onDisconnected = [&] { loop.exit(); },
+        .onPolicy = {},
+        .onRevision = [&](Revision revision) {
+            ++shown;
+            require(state.showRevision(revision, wire->nowMs()));
+            if (shown == 1) {
+                require(revision.mode == "grammar" && revision.text == "i went to the shop");
+                // A person reads the marked changes before applying them.
+                readingTimer = loop.addTimeEvent(CLOCK_MONOTONIC, 0, 0, [&](::fcitx::EventSourceTime *, std::uint64_t) {
+                    const auto acceptance = state.requestRevisionAcceptance(wire->nowMs(), kPanel);
+                    require(acceptance && wire->requestAcceptance(*acceptance));
+                    return true;
+                });
+                readingTimer->setNextInterval(1'500'000);
+                readingTimer->setOneShot();
+                return;
+            }
+            require(shown == 2 && revision.mode == "refine" && revision.text == "They're going home.");
+            const auto dismissal = state.requestRevisionDismissal(wire->nowMs(), kPanel);
+            require(dismissal && wire->requestDismissal(*dismissal));
+        },
+        .onRevisionClear = [&](const RevisionClear &clear) {
+            if (shown == 2 && !dismissed) {
+                require(clear.reason == "dismissed");
+                dismissed = true;
+                ask("Thanks for the reply.", 0, 21, "grammar");
+                return;
+            }
+            require(dismissed && clear.reason == "no_change" && clear.coordinates == state.coordinates());
+            unchanged = true;
+            loop.exit();
+        },
+    }, socket);
+    wire = &transport;
+    auto deadline = loop.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
+        [&](::fcitx::EventSourceTime *, std::uint64_t) { loop.exit(); return true; });
+    deadline->setNextInterval(8'000'000);
+    deadline->setOneShot();
+    require(transport.connect());
+    loop.exec();
+    require(applied && shown == 2 && dismissed && unchanged);
+    transport.disconnect();
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -233,6 +314,10 @@ int main(int argc, char **argv) {
     try {
         if (argc == 4 && std::string(argv[1]) == "--reconnect") {
             runReconnect(argv[2], argv[3]);
+        } else if (argc == 4 && std::string(argv[1]) == "--revision") {
+            runRevision(argv[2], argv[3]);
+            std::cout << "Native transport: revision shown, applied, refined, dismissed, unchanged passed\n";
+            return 0;
         } else if (argc == 4 && std::string(argv[1]) == "--type-through") {
             runTypeThrough(argv[2], argv[3]);
             std::cout << "Native transport: type-through and word acceptance passed\n";

@@ -245,6 +245,16 @@ publish need the user's go-ahead first; the rest can start at once.
       a zero glyph box, so its overlay keeps the caret-size fallback.
 - [ ] Browser event cost on large pages (`daemon.py` focus handling and
       `field.py` serialization).
+- [ ] Revise a selection in rich editors (contenteditable with several
+      blocks) in Chromium-based apps: the observer refuses them now
+      (`unsupported_selection`), since their blocks serialize differently for
+      Fcitx ([ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md),
+      [observer](adapters/accessibility/README.md#selection-for-a-revision)).
+- [ ] A Revisions row in the settings panel: whether the revision model is
+      installed, its size and an install button (`badi revise install`).
+- [ ] Measure a stronger revision model where memory allows (Qwen3 4B) in the
+      Lab's revision lane before offering it; downloading it needs the
+      user's go-ahead.
 
 ### Speed and footprint
 

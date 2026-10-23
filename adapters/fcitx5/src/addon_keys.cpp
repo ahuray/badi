@@ -26,6 +26,7 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     debug_.record(tab ? "tab" : "input", app, app.empty() ? "unidentified_app" : "input_received");
     auto *binding = bindingFor(*event.inputContext());
     if (!binding || !binding->state.focused()) return;
+    if (revisionActive(*binding) && revisionKey(event, *binding)) return;
     if (!key.isModifier()) binding->inspection.input();
     const bool literalChord = isLiteralTabChord(event.key());
     if (binding->literalTabs && !literalChord) {
@@ -319,6 +320,11 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
     const auto key = event.key().normalize();
     const bool invokeChordPressed = key.check(invokeChord());
     const bool foreignIme = hasForeignImeUi(panel);
+    // On a selection the chord asks for a revision of it (ADR 0012).
+    if (invokeChordPressed && !foreignIme && revisionChord(*binding)) {
+        event.filterAndAccept();
+        return;
+    }
     const bool claimInvoke = claimInvokeChord(binding->state.editingAvailable(),
                                                binding->broker.policyAllowed, foreignIme);
     if (invokeChordPressed && !claimInvoke && !foreignIme) {
