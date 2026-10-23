@@ -68,7 +68,10 @@ links to it. A tested app version is not a claim about Linux in general.
 
 Standing user decisions:
 - IME-parity for Chromium-based apps, Zen and LibreOffice Writer
-  ([ADR 0003](docs/decisions/0003-ime-parity-append-only.md));
+  ([ADR 0003](docs/decisions/0003-ime-parity-append-only.md)), with typo
+  corrections on by default in all but Writer: checked before and read back
+  after, at the accepted risk that a page moving focus splits one
+  (2026-10-23, [ADR 0011](docs/decisions/0011-checked-corrections-in-append-only-apps.md));
 - promote a quality fix only without a per-language harm increase;
 - keep the model resident; explicit requests get about 1.2 s;
 - Tab accepts one word and Ctrl+→ all of it, on every surface;
@@ -135,7 +138,8 @@ publish need the user's go-ahead first; the rest can start at once.
      of it, Escape quiet and a request key;
    - a length setting for one or two words (`badi length short`) or up to
      four;
-   - mid-line completion and typo correction where the editor allows it;
+   - mid-line completion, and typo correction in browsers and Electron apps
+     too ([ADR 0011](docs/decisions/0011-checked-corrections-in-append-only-apps.md));
    - terminal agent prompts, and on-screen words through accessibility
      rather than screen recording;
    - learned words, battery modes, no telemetry, no account, MIT;

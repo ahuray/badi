@@ -1,6 +1,6 @@
 # ADR 0003: extension-free editing accepts one append-only IME commit
 
-- Status: accepted
+- Status: accepted; corrections amended by [ADR 0011](0011-checked-corrections-in-append-only-apps.md) (2026-10-23)
 - Date: 2026-09-26, extended 2026-10-06, 2026-10-07, 2026-10-12 and 2026-10-20
 - Scope: Fcitx IME-parity apps: Chromium, Brave Origin and its `--app` windows
   (Omarchy web apps), Zen (exact `zen` identity only), Codex desktop, Claude
@@ -38,8 +38,10 @@ Every other guard stays: sensitive and purpose denial, foreign composition
 yield, exact observer identity with snapshot and caret agreement before display
 and dispatch, revision, fingerprint and expiry binding, one-shot acceptance,
 and no retries or synthetic keys. These apps stay append-only. The Fcitx connection also serves native exact
-fields, so it advertises `text_replacement`; the broker withholds a correction
-for every app in this decision. Obsidian, Bash and the
+fields, so it advertises `text_replacement`. Since 2026-10-23 a spelling
+correction is the one exception to append-only for every app here but
+LibreOffice: the observer confirms the field first, and the result is read
+back ([ADR 0011](0011-checked-corrections-in-append-only-apps.md)). Obsidian, Bash and the
 [LibreOffice Writer extension](../../adapters/libreoffice/README.md) (its own
 `libreoffice-writer` grant, never the Fcitx `libreoffice` one) keep their own
 replacement channels. A native exact field may delete the exact typed suffix and then

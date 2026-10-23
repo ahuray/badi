@@ -108,9 +108,16 @@ when several fit, the local model picks one from the sentence, and text
 confidently in a language that is not turned on is never corrected. In LibreOffice Writer the
 [Badi extension](adapters/libreoffice/README.md) shows a correction after you
 finish a misspelled word, or on Alt+F7 for the word at the caret, and replaces
-it through Writer's own text and undo APIs; one Ctrl+Z restores the typo. The apps in the section above, plus Writer's
-grey preview, VS Code, Cursor, Codex, Claude, Discord and Grok Bot, stay append-only,
-so a typo there is not deleted. In Omawrite 0.5.0 a spelling
+it through Writer's own text and undo APIs; one Ctrl+Z restores the typo. In
+the browsers above and in VS Code, Cursor, Codex, Claude, Discord and Grok Bot,
+a typo shows as `→ address` in grey after the word. Tab deletes exactly the
+typed typo and types the fix, once the observer confirms the field. Badi then
+reads the app's text back: if the correction did not land where it should, a
+notice says "Badi could not confirm that correction — check the text". A page
+that moves focus at that moment can still split it, the typo deleted in one
+field and the fix typed into another
+([decision](docs/decisions/0011-checked-corrections-in-append-only-apps.md)).
+In Chromium one Ctrl+Z restores the typo. In Omawrite 0.5.0 a spelling
 replacement is two native undos: the first removes the correction and the
 second restores the mistyped word. With fcitx5-qt 5.1.16, Qt drops the
 deletion, so Omawrite 0.7.0 gets no spelling replacement. Telegram and

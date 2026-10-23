@@ -1347,6 +1347,64 @@ void canonicalAppIdsFoldAsciiCase() {
     }
 }
 
+// ADR 0011: corrections reach every append-only app but LibreOffice, and
+// the read-back looks only at the end of the app's text.
+void appendOnlyAppsCorrectAfterChecks() {
+    for (const auto app : {"chromium", "chromium-browser", "brave-origin", "zen", "chatgpt", "code",
+                           "com.anthropic.claude", "cursor", "discord", "grok-bot"}) {
+        check(imeParityApp(app) && correctsAfterChecks(app), "an append-only app corrects after checks");
+    }
+    check(imeParityApp("libreoffice") && !correctsAfterChecks("libreoffice"),
+          "LibreOffice keeps its Writer extension for corrections");
+    check(!correctsAfterChecks("omawrite") && !correctsAfterChecks("com.mitchellh.ghostty"),
+          "native and terminal fields keep their own replacement paths");
+
+    check(correctionLanded("Please send it to the address ", "Please send it to the address "),
+          "the corrected text confirms");
+    check(!correctionLanded("Please send it to the ", "Please send it to the address "),
+          "the typo deleted, the fix not yet typed, is no verdict");
+    check(!correctionLanded("Please send it to the adress ", "Please send it to the address "),
+          "the typo still there does not confirm");
+    check(!correctionLanded("", ""), "nothing expected never confirms");
+    const std::string longer(100, 'x');
+    check(correctionLanded("slid " + longer + " address ", "older " + longer + " address "),
+          "only the last 64 bytes count, since the window may slide");
+    check(correctionLanded("…é address ", "é address "), "a UTF-8 tail is cut at a scalar boundary");
+
+    SessionState state;
+    check(state.focusIn(kSession, "observed-target", "brave-origin", kSalt, NativeEditTarget::BrowserOrigin,
+                        NativeEditPath::Observed) && state.editingAvailable(),
+          "an observed Brave field may edit");
+    auto base = focusedState();
+    auto observed = explicitContext(base).context;
+    observed.identityKnown = true;
+    observed.before = "Please send it to the adress ";
+    observed.anchor = observed.head = 29;
+    const auto update = state.updateContext(observed);
+    check(update.has_value(), "observed context for a correction");
+    auto correction = suggestionFor(*update);
+    correction.text = "address ";
+    correction.acceptWord = "address ";
+    correction.replaceBefore = "adress ";
+    check(state.showSuggestion(correction, 0), "an observed append-only field displays a correction");
+    const auto parts = candidateParts(correction);
+    check(parts.lead == "adress \u2192 " && parts.strong == "address", "the panel names the typo before its fix");
+    check(previewText(correction) == "\u2192 address", "the grey preview draws the fix after an arrow");
+    check(previewText(suggestionFor(*update)) == suggestionFor(*update).text, "a continuation previews itself");
+
+    SessionState writer;
+    check(writer.focusIn(kSession, "observed-target", "libreoffice", kSalt, NativeEditTarget::DesktopApplication,
+                         NativeEditPath::Observed) && writer.editingAvailable(),
+          "an observed Writer paragraph may edit");
+    const auto paragraph = writer.updateContext(observed);
+    auto writerCorrection = suggestionFor(*paragraph);
+    writerCorrection.text = "address ";
+    writerCorrection.acceptWord = "address ";
+    writerCorrection.replaceBefore = "adress ";
+    check(paragraph && !writer.showSuggestion(writerCorrection, 0),
+          "Writer corrections stay with its extension");
+}
+
 void imeParityRequiresObservedAppendOnlyField() {
     auto allowedState = focusedState();
     const auto manual = explicitContext(allowedState).context;
@@ -1870,6 +1928,7 @@ int main(int argc, char **argv) {
         {"canonical app ids", canonicalAppIdsFoldAsciiCase},
         {"debug reasons and clear notices", reasonsAndNoticesNameTheBlockedPath},
         {"IME parity requires an observed append-only field", imeParityRequiresObservedAppendOnlyField},
+        {"append-only apps correct after checks", appendOnlyAppsCorrectAfterChecks},
         {"unobserved IME parity and unavailable apps", unobservedParityAndUnavailableAppsCannotEdit},
         {"observer replies fail closed", observerRepliesFailClosed},
         {"observer requests name the bound field", observerRequestsNameTheBoundField},

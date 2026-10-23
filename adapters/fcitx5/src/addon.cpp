@@ -174,6 +174,8 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     if (!binding) return;
     binding->surroundingFreshness.surroundingTextUpdated();
     binding->surroundingEcho.surroundingTextUpdated(inputContext.capabilityFlags());
+    // The app's own report of its text after an IME-parity correction.
+    readBackCorrection(*binding);
     const auto digest = surroundingDigest(inputContext.surroundingText());
     if (digest != binding->surroundingDigest) {
         binding->surroundingDigest = digest;

@@ -36,8 +36,16 @@ enum class NativeAppClass {
 
 NativeAppClass classifyNativeApp(std::string_view appId);
 bool imeParityApp(std::string_view appId);
+// IME-parity apps whose typos Badi corrects in place once the observer has
+// confirmed the exact field (ADR 0011): all but LibreOffice, whose Writer
+// extension owns its corrections.
+bool correctsAfterChecks(std::string_view appId);
+// Whether the app's own text before the caret now ends as a correction left
+// it, `expected` being that text: its last 64 bytes at most, since the
+// surrounding window may slide.
+bool correctionLanded(std::string_view before, std::string_view expected);
 // UTF-8 scalar count of `suffix` when a native field's text before the caret
-// ends with that exact suffix. IME-parity apps stay append-only.
+// ends with that exact suffix; none for an append-only (`imeParity`) app.
 std::optional<unsigned> nativeReplacementChars(bool imeParity, std::string_view before,
                                                 std::string_view suffix);
 // Whether this app may be inspected by the observer at all.
@@ -224,6 +232,7 @@ inline constexpr std::string_view kModelNotConnected = "Badi model is not connec
 inline constexpr std::string_view kThinking = "Badi is thinking…";
 inline constexpr std::string_view kLineUnknown = "Badi lost track of this line — press Enter or Ctrl+U";
 inline constexpr std::string_view kRequestFailed = "Badi request failed — check the tray status";
+inline constexpr std::string_view kCorrectionUnconfirmed = "Badi could not confirm that correction — check the text";
 } // namespace notice
 
 // How an explicit request (the invoke chord, or Tab on the manual path) proceeds.
@@ -411,6 +420,10 @@ struct CandidateParts {
     std::string rest;
 };
 CandidateParts candidateParts(const Suggestion &suggestion);
+// What the grey preview draws at the caret: a continuation itself, or a
+// correction as `→ the`, since the typo it replaces is already in view.
+// The Fcitx panel, its fallback, names the typo as well.
+std::string previewText(const Suggestion &suggestion);
 // The field text includes the characters typed through a suggestion whose
 // context was `base`. A shorter window may keep only the last 128 bytes of
 // `base`, matching the broker's type-through slide rule.

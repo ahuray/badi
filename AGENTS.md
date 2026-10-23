@@ -142,7 +142,11 @@ Where code lives inside the larger components:
   undo there. Every other guard stays: sensitive and purpose denial,
   foreign-composition yield, exact observer identity with snapshot and caret
   agreement before display and dispatch, revision, fingerprint and expiry
-  binding, one-shot acceptance, no retries or synthetic keys. Replacement stays
+  binding, one-shot acceptance, no retries or synthetic keys. The one
+  exception is a spelling correction
+  ([ADR 0011](docs/decisions/0011-checked-corrections-in-append-only-apps.md)):
+  the observer confirms the field, then the exact typed typo is deleted, the
+  fix committed and the app's text read back. Any other replacement stays
   editor-owned. Only the exact `zen` identity covers Gecko, and the observer
   alone denies its urlbar.
 - **Type-through** ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md))

@@ -115,6 +115,11 @@ private:
         // A terminal's typed line and its typing-pause request.
         TypedLine typedLine;
         std::unique_ptr<::fcitx::EventSourceTime> lineTimer;
+        // An IME-parity correction's expected text before the caret, until
+        // the app's own text confirms it (ADR 0011), and the timer that
+        // gives up on it.
+        std::optional<std::string> correctionExpected;
+        std::unique_ptr<::fcitx::EventSourceTime> correctionTimer;
 
         [[nodiscard]] bool observed() const { return !observedFocus.is_null(); }
     };
@@ -205,6 +210,8 @@ private:
     std::string_view unavailableContextReason(const Binding &binding) const;
     void invalidateChangedContext(Binding &binding);
     void showNotice(Binding &binding, std::string_view message);
+    void expectCorrection(Binding &binding, std::string expected);
+    void readBackCorrection(Binding &binding);
     void clearOwnedPanel(Binding &binding);
     static std::optional<CaretRect> caretRect(const ::fcitx::InputContext &input);
     void hidePreview();

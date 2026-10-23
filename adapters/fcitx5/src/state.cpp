@@ -166,6 +166,17 @@ bool imeParityApp(std::string_view appId) {
     return kind == NativeAppClass::ImeParityBrowser || kind == NativeAppClass::ImeParityDesktop;
 }
 
+bool correctsAfterChecks(std::string_view appId) {
+    return imeParityApp(appId) && appId != "libreoffice";
+}
+
+bool correctionLanded(std::string_view before, std::string_view expected) {
+    constexpr std::size_t kReadBackBytes = 64;
+    auto tail = expected.size() > kReadBackBytes ? expected.substr(expected.size() - kReadBackBytes) : expected;
+    while (!tail.empty() && (static_cast<unsigned char>(tail.front()) & 0xC0U) == 0x80U) tail.remove_prefix(1);
+    return !tail.empty() && before.ends_with(tail);
+}
+
 std::optional<unsigned> nativeReplacementChars(bool imeParity, std::string_view before,
                                                 std::string_view suffix) {
     if (imeParity || suffix.empty() || !before.ends_with(suffix)) return std::nullopt;
@@ -323,6 +334,11 @@ CandidateParts candidateParts(const Suggestion &suggestion) {
     }
     if (word.empty() || !text.starts_with(word)) return {{}, std::string(text), {}};
     return {{}, std::string(word), std::string(text.substr(word.size()))};
+}
+
+std::string previewText(const Suggestion &suggestion) {
+    if (!suggestion.replaceBefore) return suggestion.text;
+    return "\u2192 " + candidateParts(suggestion).strong;
 }
 
 bool typeThroughContextReady(std::string_view base, std::string_view typed, std::string_view before) {
@@ -677,7 +693,7 @@ bool SessionState::showSuggestion(Suggestion suggestion, std::uint64_t nowMs) {
     suggestion.text = *clean;
     if (suggestion.replaceBefore) {
         const auto saved = lastContext();
-        if (imeParityApp(appId_) || !saved ||
+        if ((imeParityApp(appId_) && !correctsAfterChecks(appId_)) || !saved ||
             !saved->context.before.ends_with(*suggestion.replaceBefore)) {
             clearSuggestion();
             return false;

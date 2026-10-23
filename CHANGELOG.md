@@ -7,6 +7,13 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Typos are corrected in Chromium, Brave, Zen, the Claude app, VS Code,
+  Cursor, Codex, Discord and Grok Bot, where they used to go by
+  ([ADR 0011](docs/decisions/0011-checked-corrections-in-append-only-apps.md)).
+  The fix shows as `→ address`; Tab applies it after the observer confirms
+  the field, and Badi reads the text back, with a notice if the fix did not
+  land. Suggestions after a misspelled word no longer vanish when Chromium
+  underlines it.
 - The settings panel opens compact and asks once which languages you write
   in (also `badi languages en de fr`), with one chip per European language
   for suggestions and typo fixes together; All settings (or `a`) shows the

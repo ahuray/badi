@@ -323,25 +323,35 @@ async fn manual_unknown_identity_never_receives_spelling_authority() {
     assert_eq!(broker.metrics().snapshot().commits_prepared, 0);
 }
 
+/// Corrections reach append-only apps, which apply them only after the
+/// observer confirms the exact field (ADR 0011); `libreoffice` keeps its
+/// own spelling channel, the Writer extension.
 #[tokio::test]
-async fn ime_parity_apps_do_not_receive_spelling_authority() {
-    for app_id in ["chromium", "code", "libreoffice", "zen"] {
-        let allowed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+async fn append_only_apps_receive_corrections_except_where_spelling_lives_elsewhere() {
+    for (app_id, offered) in [
+        ("chromium", true),
+        ("code", true),
+        ("zen", true),
+        ("com.anthropic.claude", true),
+        ("libreoffice", false),
+    ] {
+        let allowed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(!offered));
         let broker = Broker::new(
             std::sync::Arc::new(ReplacementAuthorityProbe(std::sync::Arc::clone(&allowed))),
             BrokerConfig::default(),
         );
         let session_id = SessionId::new();
         let (sink, mut events) = mpsc::channel(32);
+        let browser = matches!(app_id, "chromium" | "zen");
         broker
             .open_session(
                 coordinates(session_id, 0),
                 SessionOpenPayload {
                     target: TargetDescriptor {
-                        kind: if app_id == "libreoffice" {
-                            TargetKind::DesktopApplication
-                        } else {
+                        kind: if browser {
                             TargetKind::Browser
+                        } else {
+                            TargetKind::DesktopApplication
                         },
                         app_id: app_id.to_owned(),
                         target_id: "field-1".to_owned(),
@@ -381,19 +391,29 @@ async fn ime_parity_apps_do_not_receive_spelling_authority() {
             )
             .await
             .expect("request");
-        let BrokerEvent::SuggestionClear { payload, .. } =
-            timeout(Duration::from_millis(100), events.recv())
-                .await
-                .expect("deadline")
-                .expect("event")
-        else {
-            panic!("{app_id} received a spelling suggestion")
-        };
-        assert_eq!(payload.reason, ReasonCode::InvalidCapability, "{app_id}");
-        assert!(
-            !allowed.load(std::sync::atomic::Ordering::SeqCst),
-            "{app_id} was offered replacement"
-        );
+        let event = timeout(Duration::from_millis(100), events.recv())
+            .await
+            .expect("deadline")
+            .expect("event");
+        if offered {
+            let BrokerEvent::SuggestionShow { payload, .. } = event else {
+                panic!("{app_id} received no correction")
+            };
+            assert_eq!(payload.replace_before.as_deref(), Some("teh "), "{app_id}");
+            assert!(
+                allowed.load(std::sync::atomic::Ordering::SeqCst),
+                "{app_id} was not offered replacement"
+            );
+        } else {
+            let BrokerEvent::SuggestionClear { payload, .. } = event else {
+                panic!("{app_id} received a spelling suggestion")
+            };
+            assert_eq!(payload.reason, ReasonCode::InvalidCapability, "{app_id}");
+            assert!(
+                !allowed.load(std::sync::atomic::Ordering::SeqCst),
+                "{app_id} was offered replacement"
+            );
+        }
     }
 }
 

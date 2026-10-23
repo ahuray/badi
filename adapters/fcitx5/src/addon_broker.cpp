@@ -170,7 +170,7 @@ void BadiAddon::showObservedPreview(Binding &binding, const Suggestion &suggesti
     if (!safeToObserve(binding) || suggestion.expiresAtMs <= now) return;
     const auto &focus = binding.observedFocus;
     const bool sent = accessibility_->request(
-        previewRequest(focus, suggestion.text, suggestion.expiresAtMs - now, caretRect(*binding.inputContext)),
+        previewRequest(focus, previewText(suggestion), suggestion.expiresAtMs - now, caretRect(*binding.inputContext)),
         [this, suggestion, focus, generation = binding.observationGeneration](const Json &reply) {
             const bool verified = observerAnswered(reply) && reply["focus"].is_object();
             const bool rendered = verified && reply["focus"].value("rendered", Json()) == true;
@@ -384,8 +384,10 @@ void BadiAddon::applyCommitPrepare(const CommitPrepare &prepare) {
         binding->typeThroughTyped.clear();
     }
     std::string terminalErase;
+    std::optional<std::string> correctionExpected;
     if (dispatch->replaceBefore) {
-        if (imeParityApp(binding->state.appId())) return refuseCommit(prepare, binding);
+        const bool appendOnly = imeParityApp(binding->state.appId());
+        if (appendOnly && !correctsAfterChecks(binding->state.appId())) return refuseCommit(prepare, binding);
         // fcitx5-qt applies the delete request to its own copy of the text,
         // which its echo cleared (SurroundingEcho): the typo would stay.
         if (binding->surroundingEcho.withdrawn()) {
@@ -407,11 +409,19 @@ void BadiAddon::applyCommitPrepare(const CommitPrepare &prepare) {
             terminalErase = std::string(*count, '\x7f');
         } else {
             binding->inputContext->deleteSurroundingText(-static_cast<int>(*count), *count);
+            // The observer confirmed this exact field just before (see
+            // corroborateCommit), but an IME-parity app applies the delete
+            // and the commit as two edits that page script could split
+            // (ADR 0011), so its own text is read back afterwards.
+            if (appendOnly) {
+                correctionExpected = context->before.substr(0, context->before.size() - dispatch->replaceBefore->size()) +
+                                     dispatch->text;
+            }
         }
     }
-    // One append, like typed text. Fcitx cannot see the client apply it,
-    // so the result is dispatched-unverified, never applied. A native
-    // replacement deletes the exact suffix first; IME-parity stays append-only.
+    // One commit, like typed text. Fcitx cannot see the client apply it,
+    // so the result is dispatched-unverified, never applied. A replacement
+    // deletes the exact typed suffix first.
     binding->inputContext->commitString(terminalErase + dispatch->text);
     if (binding->state.editPath() == NativeEditPath::TypedLine) {
         binding->typedLine.type(dispatch->text);
@@ -420,6 +430,36 @@ void BadiAddon::applyCommitPrepare(const CommitPrepare &prepare) {
     debug_.record("commit", binding->state.appId(), "dispatched_unverified");
     transport_.reportCommit(dispatch->coordinates, dispatch->controlId, dispatch->suggestionId,
                             "dispatched-unverified");
+    if (correctionExpected) expectCorrection(*binding, std::move(*correctionExpected));
+}
+
+// Waits up to a second for the app to report the corrected text. An update
+// between its two edits (the typo gone, the fix not yet typed) is no verdict.
+void BadiAddon::expectCorrection(Binding &binding, std::string expected) {
+    binding.correctionExpected = std::move(expected);
+    binding.correctionTimer = oneShot(1'000'000, [this, context = binding.inputContext] {
+        auto *current = bindingFor(*context);
+        if (!current || !current->correctionExpected) return;
+        current->correctionExpected.reset();
+        debug_.record("commit", current->state.appId(), "correction_unconfirmed");
+        if (current->inputContext->hasFocus()) showNotice(*current, notice::kCorrectionUnconfirmed);
+    });
+    readBackCorrection(binding);
+}
+
+void BadiAddon::readBackCorrection(Binding &binding) {
+    if (!binding.correctionExpected) return;
+    // The app's own report of its text, whether or not Badi may still edit
+    // there: the observer retires a field once its text changes. Nothing
+    // read here leaves the addon; the language only satisfies the window.
+    const auto &surrounding = binding.inputContext->surroundingText();
+    if (!surrounding.isValid()) return;
+    const auto window = captureContextWindow(surrounding.text(), surrounding.cursor(), surrounding.anchor(),
+                                             false, "en");
+    if (!window || !correctionLanded(window->before, *binding.correctionExpected)) return;
+    binding.correctionExpected.reset();
+    if (binding.correctionTimer) binding.correctionTimer->setEnabled(false);
+    debug_.record("commit", binding.state.appId(), "correction_confirmed");
 }
 
 void BadiAddon::refuseCommit(const CommitPrepare &prepare, Binding *binding) {
