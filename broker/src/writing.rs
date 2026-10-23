@@ -17,7 +17,7 @@ use crate::model_selection::{
 use crate::provider::ProviderRequest;
 use crate::semantic::pinned_runtime::{
     RUNTIME_ARCHIVE_BYTES, RUNTIME_ARCHIVE_FILENAME, RUNTIME_ARCHIVE_SHA256,
-    RUNTIME_BUNDLE_MANIFEST_SHA256, RUNTIME_BYTES, RUNTIME_SHA256,
+    RUNTIME_BUNDLE_MANIFEST_SHA256, RUNTIME_BYTES, RUNTIME_DIRECTORY, RUNTIME_SHA256,
 };
 #[cfg(target_os = "linux")]
 pub use crate::semantic::process::{EXEC_HELPER_FLAG, exec_runtime_helper};
@@ -580,7 +580,7 @@ fn verified_launch(
     model: ModelArtifact,
     threads: usize,
 ) -> Result<LlamaCppLaunch, WritingError> {
-    let runtime = directory.join("runtimes/llama-b10726");
+    let runtime = directory.join("runtimes").join(RUNTIME_DIRECTORY);
     let weights = directory.join("models").join(model.filename);
     if !weights.is_file() || !runtime.join("llama-server").is_file() {
         return Err(WritingError::NotInstalled(model.filename));
@@ -601,7 +601,7 @@ pub fn pinned_runtime_launch(
     alias: &str,
     threads: usize,
 ) -> Result<LlamaCppLaunch, WritingError> {
-    let runtime = directory.join("runtimes/llama-b10726");
+    let runtime = directory.join("runtimes").join(RUNTIME_DIRECTORY);
     let bundle = verify_directory_manifest(&DirectoryManifestExpectation::new(
         &runtime,
         RUNTIME_BUNDLE_MANIFEST_SHA256,

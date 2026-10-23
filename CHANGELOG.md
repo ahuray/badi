@@ -7,6 +7,9 @@ in [future plans](<future plans.md>), and lasting decisions in
 
 ## 2026-10-13: desktop signals, new surfaces and a clean code base
 
+- Badi's local model runtime moves from llama.cpp b10726 to b11840
+  (2026-10-23), past the fix for a double free its completion endpoint could
+  reach (only Badi's broker can reach that endpoint).
 - Select a line of text and press Ctrl+Shift+Space: Badi checks its grammar,
   and pressing it again offers a refined wording, shown with removed words
   struck through and new ones bold. Tab applies it as one edit over the

@@ -267,6 +267,14 @@ prints pinned download advice and downloads nothing
 
 ## Writing model runtime
 
+- **Release.** llama.cpp b11840 (2026-10-23, the Ubuntu x64 CPU build),
+  pinned by `src/semantic/pinned_runtime.rs`: the archive, `llama-server` and
+  the unpacked bundle's manifest. It is past b11393, whose fix for a double
+  free through a client-supplied `chat_parser` on `/completion`
+  ([llama.cpp#29942](https://github.com/ggml-org/llama.cpp/pull/29942)) Badi
+  needs only as hardening (the broker never sends that field), and outside
+  b11555–b11634, which slowed quantized kernels. Measurements below dated
+  before 2026-10-24 used b10726.
 - **Selection.** Startup reads the settings' `writing_model` (the user's
   `badi model use` choice) and loads that installed catalog model when it
   fits total memory after a host reserve; otherwise the installed model the

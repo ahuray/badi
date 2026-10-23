@@ -92,7 +92,7 @@ class DesktopInstallTests(unittest.TestCase):
             home = Path(temporary)
             with self.assertRaisesRegex(RuntimeError, 'is missing'):
                 installer.require_writing_assets(home)
-            server = home / '.local/share/badi/runtimes/llama-b10726/llama-server'
+            server = home / '.local/share/badi/runtimes/llama-b11840/llama-server'
             server.parent.mkdir(parents=True)
             server.write_bytes(b'not the runtime')
             with self.assertRaisesRegex(RuntimeError, 'does not match the pinned hash'):
