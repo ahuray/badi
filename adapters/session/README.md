@@ -227,3 +227,16 @@ nothing, while the same page on port 47812 in the next tab still suggested.
 `badi resume` restored suggestions at once, and `badi snooze 1` ran out on its
 own 60.0 s later. A key bound with `hl.bind` was not tried; the dispatch
 reaches the same portal signal.
+
+On 2026-10-23 (installed `7b2d5fc`, PipeWire 1.6.9, xdg-desktop-portal
+1.22.1, xdg-desktop-portal-hyprland 1.4.1 with Omarchy's preview share
+picker, Chromium 155, real model) an entire-screen share from
+`getDisplayMedia` on a disposable local page held suggestions from the moment
+Chromium's dialog began previewing the screen, which is already a portal
+stream, until about a second after the share stopped: while shared nothing
+showed and no model started, `badi screen-share suggest` showed suggestions
+during the share and `hold` withdrew them again, and afterwards they
+returned. `badi status`, the panel and Omarchy's `notifications probe`
+agreed, and the events-only debug trace named `screen_share: held` without
+text. Not tried: window or region shares, OBS, meeting apps and other portal
+backends.
