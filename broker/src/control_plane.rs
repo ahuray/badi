@@ -796,6 +796,7 @@ fn personalization_privacy_floor(current: &SettingsV2, next: &SettingsV2) -> Set
         },
         suggestion_length: current.suggestion_length,
         languages_chosen: current.languages_chosen,
+        places_chosen: current.places_chosen,
         style_learning: current.style_learning && next.style_learning,
         // Context stays on only where both documents keep it on.
         context_words: match (current.context_words, next.context_words) {

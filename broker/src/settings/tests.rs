@@ -46,6 +46,7 @@ fn settings_with(rule: SubjectRule) -> SettingsV2 {
         screen_share: crate::settings::ScreenShareMode::Hold,
         suggestion_length: crate::settings::SuggestionLength::Normal,
         languages_chosen: false,
+        places_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         context_words: None,
@@ -394,6 +395,35 @@ fn the_language_answer_round_trips_and_omits_false() {
 }
 
 #[test]
+fn the_places_answer_round_trips_omits_false_and_grants_nothing() {
+    let mut settings = SettingsV2::deny_by_default();
+    settings.paused = false;
+    assert!(!settings.places_chosen);
+    let encoded = serde_json::to_value(&settings).expect("encode settings");
+    assert!(encoded.get("places_chosen").is_none(), "false is omitted");
+    settings.places_chosen = true;
+    settings.validate().expect("valid settings");
+    let encoded = serde_json::to_value(&settings).expect("encode settings");
+    assert_eq!(encoded["places_chosen"], true);
+    let decoded: SettingsV2 = serde_json::from_value(encoded).expect("decode settings");
+    assert_eq!(decoded, settings);
+    // The answer only stops the panel asking: without a list mode or a rule
+    // no site and no app is allowed.
+    let site = settings.resolve_identity(&identity("example.com"));
+    assert!(!site.configured() && !site.allows_suggestion());
+    let app = StableIdentity::linux_app(LinuxAdapter::Fcitx, "telegram").expect("app");
+    assert!(!settings.resolve_identity(&app).allows_suggestion());
+    let legacy = serde_json::json!({
+        "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
+        "places_chosen": true, "subjects": [],
+    });
+    assert!(
+        serde_json::from_value::<SettingsV2>(legacy).is_err(),
+        "v1 cannot name it"
+    );
+}
+
+#[test]
 fn english_and_german_are_the_default_writing_languages_and_persian_is_opt_in() {
     let defaults = SettingsV2::deny_by_default();
     assert_eq!(
@@ -636,6 +666,7 @@ fn linux_adapters_sort_by_wire_name_like_the_desktop_clients() {
         screen_share: crate::settings::ScreenShareMode::Hold,
         suggestion_length: crate::settings::SuggestionLength::Normal,
         languages_chosen: false,
+        places_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         context_words: None,
@@ -677,6 +708,7 @@ fn settings_require_sorted_unique_subjects() {
         screen_share: crate::settings::ScreenShareMode::Hold,
         suggestion_length: crate::settings::SuggestionLength::Normal,
         languages_chosen: false,
+        places_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         context_words: None,
@@ -726,6 +758,7 @@ fn maximum_shape_settings_fit_storage_and_wire_limits() {
         screen_share: crate::settings::ScreenShareMode::Hold,
         suggestion_length: crate::settings::SuggestionLength::Normal,
         languages_chosen: false,
+        places_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: false,
         context_words: None,

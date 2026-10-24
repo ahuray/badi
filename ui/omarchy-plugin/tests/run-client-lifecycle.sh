@@ -43,7 +43,13 @@ command -v qs >/dev/null 2>&1 || {
 }
 
 mkdir -p "$harness_dir" "$panel_dir" "$runtime_dir" "$test_root/config" "$test_root/cache" \
-  "$test_root/data" "$test_root/state"
+  "$test_root/data" "$test_root/state" "$test_root/system-data/applications"
+# The apps this machine has, for the places question: three supported ones,
+# an editor plugin's app (installed apart, never offered) and an unsupported one.
+for entry in omawrite org.telegram.desktop discord obsidian org.gnome.Calculator; do
+  printf '[Desktop Entry]\nType=Application\nName=%s\nExec=true\n' "$entry" \
+    >"$test_root/system-data/applications/$entry.desktop"
+done
 chmod 700 "$runtime_dir" "$test_root/config"
 cp -- "$harness_source" "$harness_dir/shell.qml"
 cp -- "$artifact_dir/BadiClient.qml" "$harness_dir/BadiClient.qml"
@@ -59,6 +65,7 @@ runtime_env=(
   "HOME=$test_root"
   "XDG_CONFIG_HOME=$test_root/config"
   "XDG_DATA_HOME=$test_root/data"
+  "XDG_DATA_DIRS=$test_root/system-data"
   "XDG_CACHE_HOME=$test_root/cache"
   "XDG_STATE_HOME=$test_root/state"
   "XDG_RUNTIME_DIR=$runtime_dir"
@@ -228,16 +235,19 @@ for value in '"off"' null true; do
     '{schema: "badi.settings.v2", revision: 1, paused: false, style_learning: $value, subjects: []}')
   [[ $(ipc validateSettings "$document") == $([[ $value == true ]] && echo true || echo false) ]]
 done
-# The first-run language answer is an optional boolean; producers omit false.
-for value in true false; do
-  document=$(jq -cn --argjson value "$value" \
-    '{schema: "badi.settings.v2", revision: 1, paused: false, languages_chosen: $value, subjects: []}')
-  [[ $(ipc validateSettings "$document") == true ]]
-done
-for value in '"yes"' null 1; do
-  document=$(jq -cn --argjson value "$value" \
-    '{schema: "badi.settings.v2", revision: 1, paused: false, languages_chosen: $value, subjects: []}')
-  [[ $(ipc validateSettings "$document") == false ]]
+# The first-run answers (languages, then places) are optional booleans;
+# producers omit false.
+for key in languages_chosen places_chosen; do
+  for value in true false; do
+    document=$(jq -cn --arg key "$key" --argjson value "$value" \
+      '{schema: "badi.settings.v2", revision: 1, paused: false, subjects: []} + {($key): $value}')
+    [[ $(ipc validateSettings "$document") == true ]] || fail "$key $value is refused"
+  done
+  for value in '"yes"' null 1; do
+    document=$(jq -cn --arg key "$key" --argjson value "$value" \
+      '{schema: "badi.settings.v2", revision: 1, paused: false, subjects: []} + {($key): $value}')
+    [[ $(ipc validateSettings "$document") == false ]] || fail "$key $value is accepted"
+  done
 done
 # The suggestion length is an optional choice; producers omit normal.
 for value in '"short"' '"normal"'; do
@@ -310,6 +320,7 @@ examples=$(jq -cn --argjson site "$site" '{
   language_overrides: [{}, {"brave-origin": "pt"}],
   languages_chosen: [true, false],
   mid_line: [true, false],
+  places_chosen: [true, false],
   screen_share: ["hold", "suggest"],
   spelling_languages: [[], ["en", "de", "fr", "es", "it", "nl", "pl"]],
   style_learning: [true, false],
@@ -453,8 +464,8 @@ ipc_dir=$panel_dir
 ipc_target=badi-panel-settings
 # Languages chosen: English suggestions off, English and German spelling;
 # sharing suggests.
-printf '%s\n' '{"languages_chosen": true, "screen_share": "suggest", "writing_languages": ["de"],
-  "spelling_languages": ["en", "de"]}' >"$settings_extra"
+printf '%s\n' '{"languages_chosen": true, "places_chosen": true, "screen_share": "suggest",
+  "writing_languages": ["de"], "spelling_languages": ["en", "de"]}' >"$settings_extra"
 start_shell
 wait_for_call_count 1
 wait_until_idle
@@ -509,6 +520,46 @@ wait_until_idle
 jq -e '.screen_share == "suggest"' "${call_log}.settings" >/dev/null || fail "suggest was not written"
 [[ $(jq -r '.message' <<<"$(ipc state)") == 'Suggestions continue while the screen is shared' ]] ||
   fail "the screen-share write did not succeed: $(ipc state)"
+
+# Languages answered, places not: the places question, with the supported
+# apps found here (once Quickshell's desktop-entry scan ends), each as
+# settings have it. `badi site all on` makes every website the start.
+printf '%s\n' '{"languages_chosen": true}' >"$settings_extra"
+ipc refresh >/dev/null
+wait_for_call_count 15
+wait_until_idle
+for _ in $(seq 1 80); do
+  rows=$(ipc rows)
+  jq -e 'any(.[]; .key == "places_app_telegram")' <<<"$rows" >/dev/null && break
+  sleep 0.05
+done
+jq -e '
+  map(.key) == ["places_sites", "places_app_omawrite", "places_app_telegram", "places_app_discord", "places_done"]
+  and .[0].value == "all"
+  and (map(select(.key | startswith("places_app_"))) | map(.checked) == [true, false, false])
+' <<<"$rows" >/dev/null || fail "unexpected places question: $rows"
+# Picks stay local until Done, which saves them in one write.
+ipc chooseRow places_sites allowed >/dev/null
+ipc activateRow places_app_telegram >/dev/null
+wait_for_call_count 15
+rows=$(ipc rows)
+jq -e '.[0].value == "allowed" and any(.[]; .key == "places_app_telegram" and .checked)
+  and any(.[]; .key == "places_done" and .detail == "Omawrite, Telegram and sites you add")' \
+  <<<"$rows" >/dev/null || fail "the places pick did not show: $rows"
+ipc activateRow places_done >/dev/null
+wait_for_call_count 17
+wait_until_idle
+jq -e '
+  .places_chosen == true and .languages_chosen == true and (has("all_web_origins") | not)
+  and any(.subjects[]; .identity == {kind: "linux_app", adapter: "fcitx", app_id: "telegram"}
+    and .permissions.suggest == "allow" and .permissions.learn == "block")
+  and all(.subjects[]; .identity.app_id != "discord")
+  and any(.subjects[]; .identity.app_id == "omawrite" and .permissions.suggest == "allow")
+  and any(.subjects[]; .identity.host == "example.com")
+' "${call_log}.settings" >/dev/null || fail "unexpected places answer: $(cat -- "${call_log}.settings")"
+[[ $(jq -r '.message' <<<"$(ipc state)") == 'Saved · All settings changes where Badi suggests' ]] ||
+  fail "the places write did not succeed: $(ipc state)"
+rm -- "$settings_extra"
 
 if grep -En 'TypeError|ReferenceError|Cannot assign|failed to load' "$shell_log"; then
   cat "$shell_log" >&2

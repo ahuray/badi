@@ -12,8 +12,9 @@ The Omarchy plugin `io.github.ahuray.badi`:
 | `StatsModel.js` | The history's numbers (the week's bars, the leading apps) without QML, tested by `tests/stats-model.test.mjs` |
 | `BadiClient.qml` | The shared `badictl` client |
 
-It uses only the host's `qs.Ui` and `qs.Commons` modules, `badictl` and the
-installed `badi-desktop` helper.
+It uses only the host's `qs.Ui` and `qs.Commons` modules, `badictl`, the
+installed `badi-desktop` helper and Quickshell's `DesktopEntries` index,
+which it reads only to find the supported apps installed.
 
 Left-click the mark to open or close the popout; right-click pauses or
 resumes (a paused mark is dimmed). The popout hangs under the mark like
@@ -23,7 +24,16 @@ question, "Which languages do you write in?": a chip for each of English,
 Deutsch, Français, Español, Português, Italiano, Nederlands and Polski
 (Portuguese suggests only; the last three correct typos only), then Start,
 which saves suggestions and spelling for them and `languages_chosen` in one
-write, as `badi languages` does. Persian is never offered here. Afterwards the
+write, as `badi languages` does. Persian is never offered here. Then it asks
+"Where should Badi suggest?": All websites (every site until you block one,
+`all_web_origins`) or Sites I add, and a switch for each supported app found
+on this computer by its desktop entry (Omawrite, Ghostty, foot, Xournal++,
+LibreOffice Writer, Telegram, Codex, VS Code, Cursor, Claude and Discord; the
+editor plugins come with `install-editors.py`), each starting as settings
+have it, so a fresh install shows only Omawrite and Xournal++ on. The picks
+stay in the popout until Done, which saves the websites mode, a rule for each
+app you changed and `places_chosen` in one write; closing the popout first
+drops them. Afterwards the
 popout opens compact: the hero, the activity line, the week's words, search
 and only Languages (the same chips; toggling one turns its suggestions and
 typo fixes on or off together and leaves every other language as it is),
@@ -208,8 +218,9 @@ bash ui/omarchy-plugin/tests/run-client-lifecycle.sh      # needs qs
   teardown during a write, invalidation of an in-flight read, a failed read
   cleared by the next good one, and an unknown settings key explained. It
   then loads the real `DesktopPanel.qml` through a fake `badi-desktop` and
-  checks the written documents for the language chips and the screen-share
-  choice.
+  checks the written documents for the language chips, the screen-share
+  choice and the places question, whose apps come from fake desktop entries
+  (an editor plugin's app and an unsupported app are never offered).
 - **`tests/check-host.sh`** is CI's strict lane. It runs against an exact
   Omarchy checkout (`BADI_OMARCHY_ROOT`) with the official validator, host-file
   hashes, `qmllint` and the lifecycle.
@@ -222,9 +233,12 @@ scaling or multi-monitor behavior, which need a real Omarchy session.
 | Omarchy | Quickshell, Qt declarative | Lane | Result |
 | --- | --- | --- | --- |
 | 4.5.0rc1-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | `omarchy:check` and the strict `check-source.sh` (qmllint, validator, host hashes, lifecycle) | pass; `check-host.sh` not run, it pins quickshell 0.3.2-1 and qt6-declarative 6.12.0-1 |
+| 4.5.0rc1-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | live, Tokyo Night, broker 0.2.0 | places question: eleven apps found by desktop entry, `l` picked Sites I add, Enter flipped Telegram, Done's summary counted the apps; nothing written before Done |
 | 4.0.5-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-1 | live, Tokyo Night | accent mark, `badi settings`, j/k and arrows one row each, `/ghost` search, Escape twice |
 | not recorded | not recorded | live, Tokyo Night | `l`/`h` on On battery wrote `battery_mode`, a restart showed `◌ LOADING` with `Loading the model… 3s` |
 
 Not yet live: the unknown-settings message, the language chip that changes
-only its own language, and rows that survive a poll with the cursor on its
-row.
+only its own language, rows that survive a poll with the cursor on its
+row, and the places question's Done against a broker that knows
+`places_chosen` (the lifecycle lane checks its document, and a real-broker
+test keeps it across a restart).

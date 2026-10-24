@@ -65,6 +65,7 @@ Item {
     flick.contentY = 0
     controller.showAll = false
     controller.pickedLanguages = null
+    controller.pickedPlaces = null
   }
 
   function move(dx, dy) {

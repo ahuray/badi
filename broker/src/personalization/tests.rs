@@ -32,6 +32,7 @@ fn settings(retention: RetentionPermission) -> SettingsV2 {
         screen_share: crate::settings::ScreenShareMode::Hold,
         suggestion_length: crate::settings::SuggestionLength::Normal,
         languages_chosen: false,
+        places_chosen: false,
         style_learning: false,
         context_words: None,
         context_words_off: Vec::new(),

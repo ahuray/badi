@@ -48,6 +48,10 @@
       "type": "boolean",
       "description": "The user chose their writing and spelling languages, in the settings panel's first-run question or with badi languages; until then the panel asks. Producers omit the property when false."
     },
+    "places_chosen": {
+      "type": "boolean",
+      "description": "The user answered where Badi suggests (websites and the apps found on the device) in the settings panel's first-run question, which follows the language question; until then the panel asks. It grants nothing: all_web_origins, all_linux_apps and the subject rules decide. Producers omit the property when false."
+    },
     "spelling_languages": {
       "type": "array",
       "items": { "enum": ["en", "de", "fr", "es", "it", "nl", "pl"] },

@@ -197,6 +197,7 @@ Scope {
     case "style_learning":
     case "context_words":
     case "languages_chosen":
+    case "places_chosen":
       return typeof value === "boolean"
     case "escape_quiet_seconds":
       return Number.isSafeInteger(value) && value >= 1 && value <= 3600

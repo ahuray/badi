@@ -52,6 +52,13 @@ Unreleased in the same commit.
 - Alternatives right after a finished word (`attached the`) start the next
   word; before, they could only end that word another way, so presses
   showed the same suggestion again.
+- After the language question, the panel's first run asks where Badi
+  should suggest: on every website or only the sites you add, and a switch
+  for each supported app it finds installed, as settings have them. Done
+  saves it in one write with the new `places_chosen` setting, so it is asked
+  once; an existing install sees it once too, and Done alone changes
+  nothing else. Before, a new install suggested only in Xournal++ and
+  Omawrite, and nothing said so.
 
 ## 0.2.0 (2026-10-24)
 
