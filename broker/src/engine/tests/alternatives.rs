@@ -69,6 +69,30 @@ async fn presses_show_new_first_words_then_the_shown_ones_again() {
 }
 
 #[tokio::test]
+async fn an_alternative_to_a_carried_remainder_asks_the_model() {
+    let broker = Broker::new(
+        std::sync::Arc::new(DeterministicPhraseProvider::default()),
+        BrokerConfig::default(),
+    );
+    let (first, mut events) = open_observed_session(&broker, "field-epoch-1").await;
+    shown_after(&broker, first, &mut events, "thank you")
+        .await
+        .expect("suggestion");
+    let (typed, mut events) = open_observed_session(&broker, "field-epoch-2").await;
+    let carried = shown_after(&broker, typed, &mut events, "thank you f")
+        .await
+        .expect("the remainder");
+    assert_eq!(carried.text, "or your time");
+    let calls = broker.metrics().snapshot().provider_calls;
+    let _ = alternative_to(&broker, typed, &mut events, &carried).await;
+    assert_eq!(
+        broker.metrics().snapshot().provider_calls,
+        calls + 1,
+        "the carry does not answer for the model"
+    );
+}
+
+#[tokio::test]
 async fn a_correction_or_another_suggestion_has_no_alternative() {
     let broker = Broker::new(
         std::sync::Arc::new(DeterministicPhraseProvider::default()),
