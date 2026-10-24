@@ -52,6 +52,15 @@ Unreleased in the same commit.
 - Alternatives right after a finished word (`attached the`) start the next
   word; before, they could only end that word another way, so presses
   showed the same suggestion again.
+- The desktop installer lists every writing model that fits the device,
+  the recommended one first, with its size, screen result and licence, so
+  someone who declines a model's terms can pick another (Qwen3 is
+  Apache-2.0). Before, declining the recommended model's terms ended the
+  install with nothing to choose. A model download now prints a line even
+  without a terminal, and one when its hash matches.
+- The panel's Writing model row names the licence with the model in use
+  (`Qwen3 0.6B, Apache-2.0 · Recommended: Gemma 3 1B`) instead of after the
+  recommended model's name.
 
 ## 0.2.0 (2026-10-24)
 

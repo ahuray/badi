@@ -558,14 +558,57 @@ def require_writing_assets(home):
         )
 
 
+def writing_model_choices(advice):
+    """The writing models that fit this device: the recommended one first,
+    then the most useful in Badi's blind development screen, unscreened ones
+    last."""
+    recommended = (advice.get("recommended") or {}).get("id")
+    fitting = [model for model in advice["catalog"] if model.get("fits", True)]
+    return sorted(fitting, key=lambda model: (model["id"] != recommended, model.get("screen_useful") is None,
+                                              -(model.get("screen_useful") or 0)))
+
+
+def licence_name(model):
+    """How a model's licence reads to a person: its terms' name, or the SPDX id."""
+    terms = badi_install.MODEL_TERMS.get(model.get("license"))
+    return terms[0].removeprefix("the ") if terms else model.get("license") or "unknown licence"
+
+
+def ask_writing_model(choices, recommended):
+    """The model the person picks on a terminal, or None when they stop. A
+    model's terms are asked for only once it is picked; declining them
+    returns to the list."""
+    print("Badi needs a writing model. It is downloaded once from Hugging Face, pinned and hash-checked.")
+    print("These fit this device (useful suggestions of 135 in Badi's blind development screen):", flush=True)
+    for number, model in enumerate(choices, 1):
+        score = (f"{model['screen_useful']} of 135 useful" if model.get("screen_useful") is not None
+                 else "not screened")
+        mark = "  recommended" if model["id"] == recommended else ""
+        print(f"  {number}  {model['name']:13} {model['download_bytes'] / 1e9:4.2f} GB  {score:18} "
+              f"{licence_name(model)}{mark}")
+    for _ in range(5):
+        answer = input(f"Download which one? [1-{len(choices)}, Enter for 1, q to stop] ").strip().lower()
+        if answer in ("q", "n", "no"):
+            return None
+        index = 1 if answer == "" else int(answer) if answer.isdigit() else 0
+        if not 1 <= index <= len(choices):
+            continue
+        model = choices[index - 1]
+        terms = badi_install.model_terms(model)
+        if terms is None or input(f"{model['name']} is provided under {terms}. Do you accept them? [y/N] "
+                                  ).strip().lower() in ("y", "yes"):
+            return model
+    return None
+
+
 def require_writing_model(home, badictl, model_id=None, accept_license=False):
     """At least one model of the freshly built broker's writing catalog is
     installed with its pinned size and hash; the broker picks among them.
 
-    Without one, the recommended model (or `model_id`) is downloaded, pinned
-    and hash-checked, after its size and any terms that come with it were
-    shown and accepted: asked on a terminal, otherwise only with
-    --model and --accept-model-license."""
+    Without one, a model is downloaded, pinned and hash-checked: on a
+    terminal the person picks one of the models that fit, and accepts its
+    terms if it has any; otherwise only `model_id`, with --accept-model-license
+    for a model with terms."""
     advice = json.loads(subprocess.run([str(badictl), "models", "writing", "--json"], capture_output=True,
                                        text=True, check=True, timeout=15).stdout)
     models = Path(home) / ".local/share/badi/models"
@@ -574,27 +617,37 @@ def require_writing_model(home, badictl, model_id=None, accept_license=False):
         if (path.is_file() and path.stat().st_size == model["download_bytes"]
                 and badi_install.file_sha256(path) == model["sha256"]):
             return model
-    wanted = model_id or (advice.get("recommended") or {}).get("id")
-    model = next((entry for entry in advice["catalog"] if entry["id"] == wanted), None)
-    if model is None or not model.get("fits", True):
-        choices = " ".join(entry["id"] for entry in advice["catalog"] if entry.get("fits", True))
-        raise RuntimeError(f"No writing model is installed in {models}, and {wanted or 'no model'} cannot be "
-                           f"downloaded for this device. Rerun with --model ID, one of: {choices}")
-    terms = badi_install.model_terms(model)
-    offer = f"{model['name']} ({model['download_bytes'] / 1e9:.2f} GB)" + (f", provided under {terms}" if terms else "")
-    # Only an explicit --model, with --accept-model-license for a model with
-    # terms, downloads without asking.
-    consented = model_id is not None and (accept_license or not terms)
-    if not consented:
+    choices = writing_model_choices(advice)
+    recommended = (advice.get("recommended") or {}).get("id")
+    if model_id is None:
+        if not choices:
+            raise RuntimeError(f"No writing model is installed in {models}, and none fits this device.")
         if not sys.stdin.isatty():
-            raise RuntimeError(f"No writing model is installed in {models}. Badi recommends {offer}. "
-                               f"Rerun with --model {model['id']}" + (" --accept-model-license" if terms else "")
-                               + " to download it.")
-        question = "Do you accept its terms and download it?" if terms else "Download it?"
-        if input(f"Badi needs a writing model. Recommended for this device: {offer}. {question} [y/N] "
-                 ).strip().lower() not in ("y", "yes"):
+            best = choices[0]
+            terms = badi_install.model_terms(best)
+            others = ", ".join(f"{model['id']} ({licence_name(model)})" for model in choices[1:])
+            raise RuntimeError(f"No writing model is installed in {models}. Badi recommends {best['name']} "
+                               f"({best['download_bytes'] / 1e9:.2f} GB)" + (f", provided under {terms}" if terms else "")
+                               + f". Rerun with --model {best['id']}" + (" --accept-model-license" if terms else "")
+                               + " to download it" + (f", or with another that fits: {others}" if others else "") + ".")
+        model = ask_writing_model(choices, recommended)
+        if model is None:
             raise RuntimeError("No writing model was downloaded; nothing was installed.")
-    if terms:
+    else:
+        model = next((entry for entry in choices if entry["id"] == model_id), None)
+        if model is None:
+            fitting = " ".join(entry["id"] for entry in choices)
+            raise RuntimeError(f"No writing model is installed in {models}, and {model_id} cannot be "
+                               f"downloaded for this device. Rerun with --model ID, one of: {fitting}")
+        terms = badi_install.model_terms(model)
+        if terms and not accept_license:
+            if not sys.stdin.isatty():
+                raise RuntimeError(f"{model['name']} is provided under {terms}. Rerun with --model {model['id']} "
+                                   "--accept-model-license to accept them and download it.")
+            if input(f"{model['name']} is provided under {terms}. Do you accept them? [y/N] "
+                     ).strip().lower() not in ("y", "yes"):
+                raise RuntimeError("No writing model was downloaded; nothing was installed.")
+    if badi_install.model_terms(model):
         badi_install.record_model_terms(home, model)
     badi_install.download_model(model, models)
     return model

@@ -558,8 +558,11 @@ Item {
       var licences = {"Gemma": "Gemma terms", "Llama-3.2-Community": "Llama 3.2 licence", "Apache-2.0": "Apache-2.0"}
       var pending = fitting.filter(function(model) { return model.id === root.pendingModel })[0]
       list.push({key: "model", section: "Model", kind: "choice", label: "Writing model",
-        detail: (activeModel.id === recommendedId ? "Recommended for this device" : "Recommended: " + (client.objectValue(modelAdvice, "recommended").name || "none"))
-          + " · " + (licences[activeModel.license] || activeModel.license || ""),
+        // The licence is the model in use's, so it is named with that model.
+        detail: activeModel.id === recommendedId
+          ? "Recommended for this device · " + (licences[activeModel.license] || activeModel.license || "")
+          : (modelName ? modelName + ", " + (licences[activeModel.license] || activeModel.license || "") + " · " : "")
+            + "Recommended: " + (client.objectValue(modelAdvice, "recommended").name || "none"),
         value: pending ? pending.id : activeModel.id || "", enabled: !controlsBusy,
         options: fitting.map(function(model) {
           return {value: model.id, label: model.name + (model.id === recommendedId ? " ★" : "")}

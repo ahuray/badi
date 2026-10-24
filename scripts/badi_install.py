@@ -941,6 +941,9 @@ def download_model(model, directory):
     url = f"https://huggingface.co/{model['repository']}/resolve/{model['revision']}/{model['filename']}"
     digest = hashlib.sha256()
     received = 0
+    # A line even without a terminal, so a log shows what the wait is.
+    print(f"Downloading {model['name']} ({model['download_bytes'] / 1e9:.2f} GB) from "
+          f"huggingface.co/{model['repository']}", flush=True)
     try:
         with urllib.request.urlopen(url, timeout=60) as response, open(partial, "wb") as out:
             os.fchmod(out.fileno(), 0o600)
@@ -951,8 +954,7 @@ def download_model(model, directory):
                 if received > model["download_bytes"]:
                     break
                 if sys.stdout.isatty():
-                    print(f"\rDownloading {model['name']}: {100 * received // model['download_bytes']}%", end="",
-                          flush=True)
+                    print(f"\r  {100 * received // model['download_bytes']}%", end="", flush=True)
             out.flush()
             os.fsync(out.fileno())
         if sys.stdout.isatty():
@@ -964,6 +966,7 @@ def download_model(model, directory):
         partial.unlink(missing_ok=True)
         raise
     partial.rename(target)
+    print(f"{model['filename']} matches its pinned size and SHA-256.", flush=True)
     return target
 
 
