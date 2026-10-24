@@ -1,0 +1,1079 @@
+"""The focused field over AT-SPI: exact selection, purpose metadata, caret
+position and bounded text, including Chromium rich-editor flattening."""
+from __future__ import annotations
+
+import contextlib
+from dataclasses import dataclass
+import math
+import time
+from typing import NamedTuple
+import unicodedata
+from urllib.parse import urlsplit
+
+from contract import Denied, arabic_joiner, canonical_origin, credential_label
+from desktop import Desktop
+from geometry import (calibrated_geometry, gecko_calibrated_geometry, input_method_geometry,
+                      native_calibrated_geometry, visual_direction)
+
+# Empty sentence answers skipped back from the caret (trailing spaces).
+MAX_SENTENCE_STEPS = 8
+MAX_APPLICATIONS = 64
+MAX_MATCHES = 8
+MAX_TREE_NODES = 192
+MAX_CHILDREN = 128
+MAX_DOCUMENT_DEPTH = 24
+MAX_FRAME_DEPTH = 96
+MAX_URI_BYTES = 4096
+# A rich editor root exposes each block as one U+FFFC embedded object. Larger
+# documents are unsupported rather than slow; each block costs a few calls.
+EMBEDDED_OBJECT = "￼"
+MAX_RICH_BLOCKS = 64
+# Chromium frames whose document has its creator's origin (HTML: initial and srcdoc documents).
+INHERITED_ORIGIN_URIS = frozenset({"about:blank", "about:srcdoc"})
+# Chromium's text-input-v3 surrounding text ends each block of a rich editor
+# when anything is rendered after the editor: a <p> (role paragraph) with two
+# line breaks and a <div> (role section) with one, and with one fewer when the
+# block's own text already ends in a line break (an empty line, a trailing <br>).
+BLOCK_ENDS = {"paragraph": "\n\n", "heading": "\n\n", "section": "\n"}
+# Inline elements inside a block (<strong>, <em>, <code>, <span>, <a>, <mark>,
+# <sub>, <sup>) whose text Chromium serializes in place of their U+FFFC.
+INLINE_ROLES = frozenset({"static", "link", "mark", "subscript", "superscript"})
+MAX_INLINE_OBJECTS = 64
+MAX_INLINE_DEPTH = 4
+# Same-window context (Lab only until qualified): the nearest heading above
+# the field and the end of the paragraph just before it, from the field's own
+# web document. Each part is bounded, and the walk visits few nodes.
+WINDOW_HEADING_CHARS = 120
+WINDOW_PARAGRAPH_CHARS = 240
+MAX_WINDOW_NODES = 96
+MAX_WINDOW_DEPTH = 12
+WINDOW_ROLES = frozenset({"heading", "paragraph"})
+# Window text for finishing words (ADR 0010): displayed text near the field,
+# nearest first, within the broker's 2,048-character bound.
+VOCABULARY_CHARS = 2000
+VOCABULARY_NODES = 400
+VOCABULARY_DEPTH = 24
+VOCABULARY_SECONDS = 0.12
+VOCABULARY_HEADROOM_SECONDS = 0.05
+
+
+class CaretText(NamedTuple):
+    """The Text interface holding the glyph before the caret, in its own coordinates."""
+    text: object
+    caret: int
+    length: int
+
+
+@dataclass(frozen=True)
+class RichLayout:
+    """A rich editor root's paragraphs in Chromium's flattened coordinates."""
+    blocks: list
+    caret: int
+    total_chars: int
+    selections: int
+    caret_text: CaretText
+    caret_block: int
+
+
+def narrow_field(field, glyph):
+    """Whether a field is very narrow, judged in its own reported units.
+
+    Both rectangles come from the same SCREEN extents, so scale and font size
+    cancel: the field must be under twelve glyphs wide and no taller than one
+    padded line (three glyph heights). Anything unreadable or degenerate is
+    unknown, not narrow: a field narrower than two glyphs is a caret-wide
+    proxy (VS Code's input textarea), and zero glyph boxes (Qt) say nothing.
+    """
+    if field is None or glyph is None:
+        return False
+    if min(field.width, field.height, glyph.width, glyph.height) <= 0:
+        return False
+    if field.width < 2 * glyph.width or field.height > 3 * glyph.height:
+        return False
+    return field.width < 12 * glyph.width
+
+
+_WEIGHTS = {
+    "thin": 100, "hairline": 100, "extralight": 200, "ultralight": 200,
+    "light": 300, "normal": 400, "regular": 400, "book": 400, "medium": 500,
+    "semibold": 600, "demibold": 600, "bold": 700, "extrabold": 800,
+    "ultrabold": 800, "black": 900, "heavy": 900,
+}
+
+
+def _family(value):
+    if not isinstance(value, str):
+        return None
+    name = value.split(",", 1)[0].strip().strip("'\"")
+    if not 1 <= len(name) <= 64 or any(ord(char) < 32 or char in "\\{}<>;" for char in name):
+        return None
+    return name
+
+
+def _font_size(value):
+    """(points, pixels). A bare AT-SPI size is in points; an explicit px is pixels."""
+    if isinstance(value, bool) or value is None:
+        return None, None
+    unit = "pt"
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        text = value.strip().lower()
+        if text.endswith("px"):
+            unit, text = "px", text[:-2].strip()
+        elif text.endswith("pt"):
+            text = text[:-2].strip()
+        try:
+            number = float(text)
+        except ValueError:
+            return None, None
+    else:
+        return None, None
+    if not math.isfinite(number) or not 4 <= number <= 96:
+        return None, None
+    return (None, number) if unit == "px" else (number, None)
+
+
+def _font_weight(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, str):
+        named = _WEIGHTS.get(value.strip().lower().replace(" ", "").replace("-", ""))
+        if named is not None:
+            return named
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+    elif isinstance(value, (int, float)) and math.isfinite(value):
+        number = float(value)
+    else:
+        return None
+    if not math.isfinite(number) or not 100 <= number <= 900:
+        return None
+    return int(round(number / 100) * 100)
+
+
+def font_facts(attributes):
+    """Family, size and weight from one AT-SPI text-attribute run.
+
+    Missing or unusable values are omitted. The caret glyph then supplies the size.
+    """
+    if not isinstance(attributes, dict):
+        return {}
+    facts = {}
+    family = _family(attributes.get("family-name", attributes.get("font-family")))
+    if family:
+        facts["family"] = family
+    points, pixels = _font_size(attributes.get("size", attributes.get("font-size")))
+    if points is not None:
+        facts["size_pt"] = points
+    elif pixels is not None:
+        facts["size_px"] = pixels
+    weight = _font_weight(attributes.get("weight", attributes.get("font-weight")))
+    if weight is not None:
+        facts["weight"] = weight
+    return facts
+
+
+class FieldBackend:
+    """The Observer's backend: the one focused field of the verified active window.
+
+    Every AT-SPI and desktop call first checks the operation's `deadline`,
+    which the daemon sets for each request and each field event it handles.
+    """
+
+    def __init__(self, atspi, apps):
+        self.atspi = atspi
+        self.deadline = 0
+        self.desktop = Desktop(apps, self.remaining)
+
+    def budget(self):
+        if time.monotonic() >= self.deadline:
+            raise Denied("operation_timeout")
+
+    def remaining(self, limit):
+        self.budget()
+        return min(limit, max(.001, self.deadline - time.monotonic()))
+
+    def metadata(self, app_id, calibrate=False, check_lock=False, caret_rect=None):
+        """The focused field's identity, purpose, state and caret; never its text.
+
+        With `check_lock`, the session lock query runs while the field is
+        read, and its denial replaces the field's result. `caret_rect` is the
+        caret rectangle the app gave its input method, a fallback for
+        calibration when the field reports no glyph extents.
+        """
+        self.budget()
+        app = self.desktop.app(app_id)
+        with self.desktop.lock_query() if check_lock else contextlib.nullcontext():
+            return self.field_metadata(app_id, app, calibrate, caret_rect)
+
+    def field_metadata(self, app_id, app, calibrate, caret_rect=None):
+        window = self.desktop.window(app)
+        node = self.focused(window["pid"], app.browser, app.gecko)
+        node.clear_cache()
+        flags = node.get_state_set()
+        role = node.get_role_name()
+        if app.roles is not None and role not in app.roles:
+            raise Denied("unsupported_field")
+        attributes = self.text_attributes(node, role)
+        uri = self.page_address(node, app)
+        # Gecko serializes block boundaries differently and is unverified;
+        # its embedded objects stay in the plain text and never agree.
+        flatten = app.web and not app.gecko
+        caret, count, selections, rich = self.caret_position(node, flatten)
+        local = rich.caret_text if rich else CaretText(node.get_text_iface(), caret, count)
+        # The sentence boundary is prose. Inspect stops at metadata; snapshot
+        # asks for it only after the binding is authorized.
+        geometry = None
+        if (calibrate and 1 <= local.caret <= local.length and flags.contains(self.atspi.StateType.SHOWING) and
+                window.get("xwayland") is False):
+            if app.web:
+                geometry = self.geometry(node, local.text, local.caret, window, app.gecko, caret)
+            else:
+                geometry = self.native_geometry(node, local.text, local.caret, window, caret, caret_rect)
+        direction, font = self.caret_appearance(local)
+        result = {"quiet": self.quiet_reason(node, local),
+                "direction": direction, "bus": node.app.bus_name, "path": node.path,
+                "process_id": window["pid"], "app_id": app_id, "uri": uri, "browser": app.browser, "web": app.web,
+                "gecko": app.gecko,
+                "role": role, "tag": attributes.get("tag", ""), "input_type": attributes.get("text-input-type", ""),
+                "xml_roles": attributes.get("xml-roles", ""),
+                **self.states(flags), "caret": caret, "total_chars": count, "selection_count": selections,
+                "geometry": geometry, "node": node, "flatten": flatten, "blocks": rich.blocks if rich else None,
+                "caret_block": rich.caret_block if rich else None,
+                "sentence_bounded": app.sentence_bounded, "sentence_start": 0}
+        if font:
+            result["font"] = font
+        return result
+
+    def sentence_start(self, metadata):
+        """Where the caret's sentence starts. LibreOffice Writer gives Fcitx only
+        that sentence as surrounding text, so a snapshot must begin there to agree.
+
+        Call this only from snapshot, after authorize. The lookup returns the
+        sentence text; inspect must not call it.
+        """
+        if not metadata.get("sentence_bounded"):
+            return 0
+        caret = metadata["caret"]
+        if caret < 1:
+            return 0
+        self.budget()
+        text = metadata["node"].get_text_iface()
+        # Writer reports an empty range (0, 0) at a trailing space that ends
+        # its paragraph, while the letters before it report the sentence
+        # including that space. Step back only over empty answers; the
+        # sentence found must still contain the caret's character.
+        for offset in range(caret - 1, max(-1, caret - 1 - MAX_SENTENCE_STEPS), -1):
+            sentence = self.atspi.Text.get_string_at_offset(text, offset, self.atspi.TextGranularity.SENTENCE)
+            if sentence is None or sentence.start_offset != sentence.end_offset:
+                break
+        if sentence is None or not 0 <= sentence.start_offset <= caret - 1 < sentence.end_offset:
+            raise Denied("invalid_caret")
+        return sentence.start_offset
+
+    def text_attributes(self, node, role):
+        """A text field's attributes; a password fails before any caret, extent or text call."""
+        if "Text" not in node.get_interfaces():
+            raise Denied("unsupported_field")
+        attributes = node.get_attributes()
+        if role == "password text" or attributes.get("text-input-type") == "password":
+            raise Denied("sensitive_field")
+        # A revealed password or a plain-text card or code field: its label.
+        if credential_label(node.get_name(), node.get_description()):
+            raise Denied("sensitive_field")
+        return attributes
+
+    def page_address(self, node, app):
+        if not app.browser:
+            return ""
+        return self.gecko_document_url(node) if app.gecko else self.document_uri(node)
+
+    def states(self, flags):
+        state = self.atspi.StateType
+        return {"focused": flags.contains(state.FOCUSED), "editable": flags.contains(state.EDITABLE),
+                "showing": flags.contains(state.SHOWING), "visible": flags.contains(state.VISIBLE),
+                "enabled": flags.contains(state.ENABLED)}
+
+    def text_run(self, local):
+        """The attribute map of the glyph before the caret, or {}."""
+        text, caret, length = local
+        if not length or caret < 0:
+            return {}
+        run = self.atspi.Text.get_attribute_run(text, min(max(caret - 1, 0), length - 1), True)
+        attributes = run[0] if isinstance(run, (tuple, list)) else run
+        return attributes if isinstance(attributes, dict) else {}
+
+    def caret_appearance(self, local):
+        """(direction, host font) for the caret's text run.
+
+        Direction falls back to glyph order. The font is only what the run
+        actually reports.
+        """
+        text, caret, length = local
+        attributes = self.text_run(local)
+        direction = attributes.get("direction", "")
+        if not isinstance(direction, str):
+            direction = ""
+        if not direction and 2 <= caret <= length:
+            screen = self.atspi.CoordType.SCREEN
+            direction = visual_direction(text.get_character_extents(caret - 2, screen),
+                                         text.get_character_extents(caret - 1, screen))
+        return direction, font_facts(attributes)
+
+    def quiet_reason(self, node, local):
+        """Why automatic suggestions stay off in this field, or None.
+
+        A fact for the caller's automatic path, never a denial: the field
+        stays eligible and an explicit request still reads it. An unreadable
+        fact is unknown and quiets nothing.
+        """
+        if self.in_file_dialog(node):
+            return "file_dialog"
+        if self.narrow(node, local):
+            return "narrow_field"
+        return None
+
+    def in_file_dialog(self, node):
+        """The field or an ancestor is a file chooser; an unreadable parent ends the walk."""
+        current = node
+        for _ in range(12):
+            self.budget()
+            if current is None:
+                return False
+            try:
+                role = current.get_role_name()
+                if role == "file chooser":
+                    return True
+                if role in ("frame", "application"):
+                    return False
+                current = current.get_parent()
+            except Exception:
+                return False
+        return False
+
+    def narrow(self, node, local):
+        """The field is very narrow for its own glyph size (`narrow_field`)."""
+        text, caret, _length = local
+        if caret < 1:
+            return False
+        try:
+            if "Component" not in node.get_interfaces():
+                return False
+            self.budget()
+            field = node.get_component_iface().get_extents(self.atspi.CoordType.SCREEN)
+            self.budget()
+            glyph = text.get_character_extents(caret - 1, self.atspi.CoordType.SCREEN)
+            return narrow_field(field, glyph)
+        except Denied as error:
+            if error.timed_out:
+                raise
+            return False
+        except Exception:
+            return False
+
+    def caret_position(self, node, flatten):
+        """(caret, length, selections, rich layout or None) in the field's flattened coordinates."""
+        self.budget()
+        text = node.get_text_iface()
+        caret, count, selections = text.get_caret_offset(), text.get_character_count(), text.get_n_selections()
+        rich = self.rich_layout(node, count, caret) if flatten else None
+        if rich is not None:
+            caret, count, selections = rich.caret, rich.total_chars, selections + rich.selections
+        return caret, count, selections, rich
+
+    def position(self, metadata):
+        """`metadata` with the same field's caret, length and selections read again."""
+        caret, count, selections, rich = self.caret_position(metadata["node"], metadata["flatten"])
+        return {**metadata, "caret": caret, "total_chars": count, "selection_count": selections,
+                "blocks": rich.blocks if rich else None, "caret_block": rich.caret_block if rich else None}
+
+    def selection(self, metadata):
+        """(start, end) of a plain field's one selection, in its own offsets."""
+        self.budget()
+        text = metadata["node"].get_text_iface()
+        if text.get_n_selections() != 1:
+            raise Denied("stale_binding")
+        selected = self.atspi.Text.get_selection(text, 0)
+        start, end = sorted((selected.start_offset, selected.end_offset))
+        return start, end
+
+    def text(self, metadata, start, end):
+        """The field's text in [start, end) of its flattened coordinates."""
+        self.budget()
+        if not metadata.get("blocks"):
+            return self.atspi.Text.get_text(metadata["node"].get_text_iface(), start, end)
+        return rich_text(metadata["blocks"], start, end, self.read_block)
+
+    def serialized(self, metadata, start, before, after):
+        """A rich root's `before` and `after` the caret as Chromium sends them to Fcitx."""
+        return chromium_text(metadata["blocks"], start, before + after, start + len(before), self.read_block,
+                             self.inline_text)
+
+    def rich_window(self, metadata, start, end):
+        """The snapshot window and its scope.
+
+        The whole window when every block in it serializes exactly; otherwise
+        only the caret's own block, which Fcitx's text must end with.
+        """
+        blocks = metadata["blocks"]
+        if not any(block["kind"] == "opaque" and block["start"] < end and
+                   start < block["start"] + block["length"] + len(block["end"]) for block in blocks):
+            return start, end, "field"
+        block = blocks[metadata["caret_block"]]
+        return (max(start, block["start"]), min(end, block["start"] + block["length"] + len(block["end"])), "block")
+
+    def read_block(self, block, first, last):
+        self.budget()
+        return self.atspi.Text.get_text(block["node"].get_text_iface(), first, last)
+
+    def focused(self, pid, browser=False, gecko=False):
+        """The process's one focused editable field; browser UI never counts."""
+        editable = self.atspi.StateType.EDITABLE
+        fields = [node for node in self.focused_nodes(pid) if node.get_state_set().contains(editable)]
+        if gecko:
+            return self.gecko_page_field(fields, pid)
+        if browser:
+            fields = self.chromium_page_fields(fields)
+        return only_field(fields, pid)
+
+    def gecko_page_field(self, fields, pid):
+        """Gecko reports exactly one focused editable node: the urlbar while
+        it has the keyboard, otherwise the page field. The urlbar shares the
+        page's Fcitx input context without a Url purpose, so this observer,
+        not the addon, must deny it: the one field's nearest Document must be
+        web content with an HTTP(S) DocURL.
+        """
+        field = only_field(fields, pid)
+        self.gecko_document_url(field)
+        return field
+
+    def chromium_page_fields(self, fields):
+        """Chromium reports FOCUSED on the page field, the omnibox and its
+        popup at once, so browser UI is ignored and exactly one page field
+        must remain. Picking the page field while the omnibox has the
+        keyboard is safe: the omnibox's Url purpose denies it in the addon,
+        and every display and dispatch requires this field's snapshot to
+        equal Fcitx's live surrounding text and caret.
+        """
+        fields = [node for node in fields if self.page_content(node)]
+        if len(fields) == 1:
+            try:
+                canonical_origin(self.document_uri(fields[0]))
+            except Denied as error:
+                if error.timed_out:
+                    raise
+                raise Denied("focus_unavailable") from None
+        return fields
+
+    def focused_nodes(self, pid):
+        """Focused nodes of process `pid`, matched in its own applications."""
+        root = self.atspi.get_desktop(0)
+        nodes = []
+        for index in range(min(root.get_child_count(), MAX_APPLICATIONS)):
+            self.budget()
+            application = root.get_child_at_index(index)
+            if application.get_process_id() != pid:
+                continue
+            if "Collection" in application.get_interfaces():
+                nodes.extend(self.collection_matches(application))
+            else:
+                nodes.extend(self.walk_focused(application))
+        return nodes
+
+    def collection_matches(self, application):
+        """The application's own match of focused editable nodes; no document text is visited."""
+        A = self.atspi
+        states = A.StateSet.new([A.StateType.FOCUSED, A.StateType.EDITABLE])
+        rule = A.MatchRule.new(states, A.CollectionMatchType.ALL, {}, A.CollectionMatchType.ALL,
+                               [], A.CollectionMatchType.ALL, [], A.CollectionMatchType.ALL, False)
+        return application.get_collection_iface().get_matches(rule, A.CollectionSortOrder.CANONICAL, MAX_MATCHES, True)
+
+    def walk_focused(self, application):
+        """Focused nodes of an application without a Collection interface, breadth first."""
+        focused, queue, visited = [], [application], 0
+        while queue:
+            self.budget()
+            node = queue.pop(0)
+            visited += 1
+            if visited > MAX_TREE_NODES:
+                raise Denied("tree_limit")
+            if node.get_state_set().contains(self.atspi.StateType.FOCUSED):
+                focused.append(node)
+            queue.extend(node.get_child_at_index(i) for i in range(min(node.get_child_count(), MAX_CHILDREN)))
+        return focused
+
+    def page_content(self, node):
+        """False only for Chromium's own interface; True for any document field.
+
+        The omnibox has no document ancestor, and its popup (like other
+        browser panels) is a chrome://*.top-chrome WebUI document. Every other
+        document is page content, including a non-web one, and so is a field
+        whose document cannot be read: it can never be skipped as browser UI.
+        """
+        try:
+            uri = self.nearest_document_uri(node)
+        except Denied as error:
+            if error.timed_out:
+                raise
+            return True
+        return uri is not None and not browser_interface(uri)
+
+    def document_uri(self, node):
+        uri = self.nearest_document_uri(node)
+        if uri is None:
+            raise Denied("origin_unavailable")
+        return uri
+
+    def nearest_document_uri(self, node):
+        """The nearest document's URI; None only when no ancestor is a document.
+
+        An about:blank or about:srcdoc frame (TinyMCE's editing iframe, a
+        srcdoc widget) has its creator's origin, so its enclosing document's
+        URI stands for it.
+        """
+        for ancestor in self.ancestors(node):
+            if "Document" in ancestor.get_interfaces():
+                uri = self.document_attribute(ancestor, "URI")
+                if uri and uri not in INHERITED_ORIGIN_URIS:
+                    return uri
+        return None
+
+    def gecko_document_url(self, node):
+        """The HTTP(S) URL of a Gecko field's nearest Document, which must be a web page.
+
+        Gecko names the attribute DocURL (its URI is empty). Its browser window
+        is itself a Document (role frame), so the urlbar and other browser UI
+        resolve to a non-web document. Only the nearest Document counts: an
+        empty or non-HTTP(S) URL (about:, moz-extension:, file:, a loading
+        frame) is never replaced by an outer page's. Such fields are denied as
+        unsupported, without reading their text.
+        """
+        for ancestor in self.ancestors(node):
+            if "Document" in ancestor.get_interfaces():
+                if ancestor.get_role_name() != "document web":
+                    raise Denied("unsupported_field")
+                url = self.document_attribute(ancestor, "DocURL")
+                try:
+                    canonical_origin(url)
+                except Denied:
+                    raise Denied("unsupported_field") from None
+                return url
+        raise Denied("origin_unavailable")
+
+    def field_document(self, metadata):
+        """The address of the web document a field belongs to, or None.
+
+        Each engine names it its own way: Gecko's DocURL (its URI is empty),
+        Chromium's URI. A browser field's must equal the page address its
+        binding holds; a Chromium-based app's page has no browser origin, so
+        its own document's address stands alone. A later walk counts text only
+        once it reaches that document.
+        """
+        if not metadata.get("web"):
+            return None
+        node = metadata["node"]
+        try:
+            address = self.gecko_document_url(node) if metadata.get("gecko") else self.nearest_document_uri(node)
+        except Denied:
+            return None
+        if not address or (metadata.get("uri") and address != metadata["uri"]):
+            return None
+        return address
+
+    def window_context(self, metadata):
+        """The nearest heading above the field and the end of the paragraph
+        just before it, from the field's own web document, or None.
+
+        The walk goes backwards from the field: each ancestor's earlier
+        siblings, last first, down to the nearest `document web`. It never
+        reads another field (anything editable), a password, a hidden node or
+        a nested document (another frame, possibly another origin), and it
+        gives up rather than guess when the document cannot be found or its
+        address differs from the field's binding. Native apps get None.
+        """
+        if self.field_document(metadata) is None:
+            return None
+        node = metadata["node"]
+        found = {"heading": None, "paragraph": None}
+        visits = [0]
+        child, done = node, False
+        # Text found on the way counts only once a `document web` ancestor
+        # confirms it is inside the field's own document.
+        for ancestor in self.ancestors(node.get_parent()):
+            index = child.get_index_in_parent()
+            for sibling_index in range(min(index, MAX_CHILDREN) - 1, -1, -1):
+                if done:
+                    break
+                sibling = ancestor.get_child_at_index(sibling_index)
+                done = sibling is not None and self.window_walk(sibling, found, visits, 0)
+            if ancestor.get_role_name() == "document web":
+                return self.window_result(found)
+            child = ancestor
+        return None
+
+    def window_walk(self, node, found, visits, depth):
+        """Fills `found` from `node`'s subtree, last node first; True once
+        both parts are found or the visit budget is spent."""
+        visits[0] += 1
+        if visits[0] > MAX_WINDOW_NODES:
+            return True
+        self.budget()
+        role = node.get_role_name()
+        if role == "document web" or depth > MAX_WINDOW_DEPTH:
+            return False
+        flags = node.get_state_set()
+        state = self.atspi.StateType
+        if flags.contains(state.EDITABLE) or not flags.contains(state.SHOWING) or role == "password text":
+            return False
+        if role in WINDOW_ROLES:
+            part = "heading" if role == "heading" else "paragraph"
+            if found[part] is None and "Text" in node.get_interfaces():
+                text = node.get_text_iface()
+                count = text.get_character_count()
+                limit = WINDOW_HEADING_CHARS if part == "heading" else WINDOW_PARAGRAPH_CHARS
+                start = 0 if part == "heading" else max(0, count - 4 * limit)
+                value = window_text(self.atspi.Text.get_text(text, start, min(count, start + 4 * limit)),
+                                    limit, tail=part == "paragraph")
+                # A heading always closes the search: prose above it belongs
+                # to an earlier section.
+                if value:
+                    found[part] = value
+            return found["heading"] is not None
+        for index in range(min(node.get_child_count(), MAX_CHILDREN) - 1, -1, -1):
+            child = node.get_child_at_index(index)
+            if child is not None and self.window_walk(child, found, visits, depth + 1):
+                return True
+        return False
+
+    def vocabulary_text(self, metadata):
+        """Displayed text near a web field, nearest first, for finishing the
+        word being typed (ADR 0010), or None.
+
+        The walk starts at the field and visits each ancestor's earlier
+        siblings, last first, then its later siblings, until the field's own
+        `document web`. Like `window_context` it never reads another field
+        (anything editable), a password, a hidden node or a nested document,
+        and gives up when the document cannot be confirmed. It stops at
+        VOCABULARY_CHARS, VOCABULARY_NODES or VOCABULARY_SECONDS and returns
+        what it found by then. Native apps get None.
+        """
+        if self.field_document(metadata) is None:
+            return None
+        node = metadata["node"]
+        # The snapshot itself must still answer inside the operation deadline.
+        until = min(time.monotonic() + VOCABULARY_SECONDS, self.deadline - VOCABULARY_HEADROOM_SECONDS)
+        found = {"chunks": [], "chars": 0, "visits": 0, "until": until}
+        child = node
+        for ancestor in self.ancestors(node.get_parent()):
+            # Once the walk is full only the climb to the document remains,
+            # two calls per level, which the headroom is for.
+            if not self.vocabulary_full(found):
+                index = child.get_index_in_parent()
+                count = min(ancestor.get_child_count(), MAX_CHILDREN)
+                nearest = [*range(min(index, count) - 1, -1, -1), *range(index + 1, count)]
+                for sibling_index in nearest:
+                    if self.vocabulary_full(found):
+                        break
+                    sibling = ancestor.get_child_at_index(sibling_index)
+                    if sibling is not None:
+                        self.vocabulary_walk(sibling, found, 0)
+            if ancestor.get_role_name() == "document web":
+                text = " ".join(found["chunks"])
+                return window_text(text, VOCABULARY_CHARS, tail=False) if text else None
+            child = ancestor
+        return None
+
+    def vocabulary_full(self, found):
+        return (found["chars"] >= VOCABULARY_CHARS or found["visits"] >= VOCABULARY_NODES
+                or time.monotonic() >= found["until"])
+
+    def vocabulary_walk(self, node, found, depth):
+        """Adds `node`'s displayed text, then its children's, in order."""
+        if self.vocabulary_full(found) or depth > VOCABULARY_DEPTH:
+            return
+        found["visits"] += 1
+        self.budget()
+        role = node.get_role_name()
+        if role in ("document web", "password text"):
+            return
+        flags = node.get_state_set()
+        state = self.atspi.StateType
+        if flags.contains(state.EDITABLE) or not flags.contains(state.SHOWING):
+            return
+        if "Text" in node.get_interfaces():
+            text = node.get_text_iface()
+            count = min(text.get_character_count(), VOCABULARY_CHARS)
+            # A child element appears as one embedded object and is read itself.
+            value = displayed_text(self.atspi.Text.get_text(text, 0, count))
+            if value:
+                found["chunks"].append(value)
+                found["chars"] += len(value) + 1
+        for index in range(min(node.get_child_count(), MAX_CHILDREN)):
+            child = node.get_child_at_index(index)
+            if child is not None:
+                self.vocabulary_walk(child, found, depth + 1)
+
+    def window_result(self, found):
+        parts = {name: value for name, value in found.items() if value}
+        return parts or None
+
+    def ancestors(self, node):
+        """`node` and its ancestors, nearest first; origin_unavailable past MAX_DOCUMENT_DEPTH."""
+        for _ in range(MAX_DOCUMENT_DEPTH):
+            self.budget()
+            if node is None:
+                return
+            yield node
+            node = node.get_parent()
+        raise Denied("origin_unavailable")
+
+    def document_attribute(self, document, name):
+        value = self.atspi.Document.get_document_attribute_value(document.get_document_iface(), name) or ""
+        if len(value.encode()) > MAX_URI_BYTES:
+            raise Denied("origin_unavailable")
+        return value
+
+    def geometry(self, node, text, caret, window, gecko=False, reported=None):
+        """Calibrate this request's caret; None lets Fcitx show its own panel.
+
+        `text` and `caret` locate the glyph before the caret: the field's own
+        text, or a rich root's caret paragraph. `reported` is the caret in
+        the field's (flattened) coordinates, which the reply must name.
+        """
+        try:
+            extents = self.screen_extents(node, text, caret)
+            if extents is None:
+                return None
+            monitors = self.desktop.monitors()
+        except Denied as error:
+            if error.timed_out:
+                raise
+            return None
+        except Exception:
+            return None
+        rects = {name: {"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}
+                 for name, rect in extents.items() if rect is not None}
+        offset = caret if reported is None else reported
+        if gecko:
+            return gecko_calibrated_geometry(rects["frame"], rects["document"], rects["field"], rects["glyph"],
+                                             window, monitors, offset, rects.get("following"))
+        return calibrated_geometry(rects["frame"], rects["document"], rects["field"], rects["glyph"],
+                                   window, monitors, offset, rects.get("container"), rects.get("page"),
+                                   rects.get("following"))
+
+    def native_geometry(self, node, text, caret, window, reported, caret_rect):
+        """Calibrate a native toolkit field from WINDOW extents, else from the app's
+        input-method caret rectangle (`caret_rect`); None lets Fcitx show its panel."""
+        try:
+            monitors = self.desktop.monitors()
+        except Denied as error:
+            if error.timed_out:
+                raise
+            return None
+        except Exception:
+            return None
+        rects = self.window_extents(node, text, caret)
+        geometry = rects and native_calibrated_geometry(rects["frame"], rects["field"], rects["glyph"],
+                                                        window, monitors, reported, rects.get("following"))
+        if geometry is None and caret_rect is not None:
+            geometry = input_method_geometry(caret_rect, window, monitors, reported,
+                                             *((rects["frame"], rects["field"]) if rects else ()))
+        return geometry
+
+    def window_extents(self, node, text, caret):
+        """WINDOW extents of the toplevel frame, the field and the glyph before the caret, or None."""
+        try:
+            frame = self.frame_documents(node)[0]
+            if frame is None:
+                return None
+            window_coordinates = self.atspi.CoordType.WINDOW
+            extents = {}
+            for name, item in (("frame", frame), ("field", node)):
+                if "Component" not in item.get_interfaces():
+                    return None
+                self.budget()
+                extents[name] = item.get_component_iface().get_extents(window_coordinates)
+            self.budget()
+            extents["glyph"] = text.get_character_extents(caret - 1, window_coordinates)
+            extents["following"] = self.following_extents(text, caret, window_coordinates)
+        except Denied as error:
+            if error.timed_out:
+                raise
+            return None
+        except Exception:
+            return None
+        return {name: {"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}
+                for name, rect in extents.items() if rect is not None}
+
+    def screen_extents(self, node, text, caret):
+        """SCREEN extents of the outermost frame, nearest web document, field, glyph before the
+        caret and, when present, the outermost web document of an iframe field ("page") and
+        the field's parent (a caret-wide field's editor)."""
+        frame, document, page = self.frame_documents(node)
+        if frame is None or document is None:
+            return None
+        extents = {}
+        items = [("frame", frame), ("document", document), ("field", node)]
+        if page is not document:
+            items.append(("page", page))
+        for name, item in items:
+            if "Component" not in item.get_interfaces():
+                return None
+            self.budget()
+            extents[name] = item.get_component_iface().get_extents(self.atspi.CoordType.SCREEN)
+        self.budget()
+        extents["glyph"] = text.get_character_extents(caret - 1, self.atspi.CoordType.SCREEN)
+        extents["following"] = self.following_extents(text, caret, self.atspi.CoordType.SCREEN)
+        parent = node.get_parent()
+        if parent is not None and "Component" in parent.get_interfaces():
+            self.budget()
+            extents["container"] = parent.get_component_iface().get_extents(self.atspi.CoordType.SCREEN)
+        return extents
+
+    def following_extents(self, text, caret, coordinates):
+        """Extents of the glyph after the caret, or None within the budget.
+
+        At the end of the text there is no such glyph, and some toolkits
+        raise instead of answering. Missing proof only keeps the chip.
+        """
+        self.budget()
+        try:
+            return text.get_character_extents(caret, coordinates)
+        except Denied as error:
+            if error.timed_out:
+                raise
+            return None
+        except Exception:
+            return None
+
+    def frame_documents(self, node):
+        """The outermost frame, the nearest web document and the outermost web document."""
+        ancestor, frame, document, page = node.get_parent(), None, None, None
+        for _ in range(MAX_FRAME_DEPTH):
+            self.budget()
+            if ancestor is None or ancestor.get_role_name() == "application":
+                return frame, document, page
+            role = ancestor.get_role_name()
+            if role == "document web":
+                document = document or ancestor
+                page = ancestor
+            if role in ("frame", "window", "dialog"):
+                frame = ancestor
+            ancestor = ancestor.get_parent()
+        return None, None, None
+
+    def rich_layout(self, root, count, caret):
+        """Flattened coordinates of a Chromium rich editor root, or None for a plain field.
+
+        A rich editor (ProseMirror in Codex, Lexical, Quill, Draft.js, Slate,
+        CKEditor, TinyMCE, a contenteditable of <p> or <div> lines) is a focused
+        root whose text is one U+FFFC per block, and the root's caret is the
+        offset of the block holding the caret. A block is plain text, text with
+        inline objects (bold, code, links), or opaque (a list, quote, table or
+        image). Only roles, lengths, links, caret offsets and structure are read
+        here, never prose, so each block counts its raw length and full end; the
+        snapshot serializes them as Chromium does. The caret must be in a plain
+        or inline block. Anything else fails closed: root text that is not
+        solely embedded blocks, a foreign parent, or an ambiguous caret.
+        """
+        if "Hypertext" not in root.get_interfaces():
+            return None
+        self.budget()
+        hypertext = root.get_hypertext_iface()
+        links = self.atspi.Hypertext.get_n_links(hypertext)
+        if links == 0:
+            return None
+        if not 1 <= links <= MAX_RICH_BLOCKS or links != count:
+            raise Denied("unsupported_field")
+        blocks, carets, selections, start = [], [], 0, 0
+        for index in range(links):
+            node = self.linked_block(root, hypertext, index)
+            block = {"node": node, "start": start, **self.block_shape(node)}
+            if "Text" in node.get_interfaces():
+                text = node.get_text_iface()
+                block["length"], offset = text.get_character_count(), text.get_caret_offset()
+                selections += text.get_n_selections()
+            else:
+                block["length"], offset = 1, -1
+            blocks.append(block)
+            carets.append(offset)
+            start += block["length"] + len(block["end"])
+        return flattened_layout(blocks, carets, selections, start, caret)
+
+    def linked_block(self, root, hypertext, index):
+        """The child block that the root's embedded object `index` links to."""
+        A = self.atspi
+        self.budget()
+        link = A.Hypertext.get_link(hypertext, index)
+        if (link is None or A.Hyperlink.get_start_index(link) != index or
+                A.Hyperlink.get_end_index(link) != index + 1 or A.Hyperlink.get_n_anchors(link) != 1):
+            raise Denied("unsupported_field")
+        node = A.Hyperlink.get_object(link, 0)
+        parent = node.get_parent() if node is not None else None
+        if node is None or parent is None or (parent.app.bus_name, parent.path) != (root.app.bus_name, root.path):
+            raise Denied("unsupported_field")
+        return node
+
+    def block_shape(self, node):
+        """A block's kind, Chromium end and inline objects, from structure alone."""
+        role, interfaces = node.get_role_name(), node.get_interfaces()
+        opaque = {"kind": "opaque", "end": "\n", "inline": ()}
+        if role not in BLOCK_ENDS or "Text" not in interfaces or "Hypertext" not in interfaces:
+            return opaque
+        objects = self.inline_objects(node)
+        if objects is None:
+            return opaque
+        return {"kind": "inline" if objects else "plain", "end": BLOCK_ENDS[role], "inline": objects}
+
+    def inline_objects(self, node, depth=0):
+        """Each embedded object's offset and node when all are inline text, else None."""
+        A = self.atspi
+        self.budget()
+        hypertext = node.get_hypertext_iface()
+        count = A.Hypertext.get_n_links(hypertext)
+        if count > MAX_INLINE_OBJECTS or depth > MAX_INLINE_DEPTH:
+            return None
+        objects = []
+        for index in range(count):
+            link = A.Hypertext.get_link(hypertext, index)
+            if link is None or A.Hyperlink.get_n_anchors(link) != 1:
+                return None
+            offset = A.Hyperlink.get_start_index(link)
+            child = A.Hyperlink.get_object(link, 0)
+            if (A.Hyperlink.get_end_index(link) != offset + 1 or child is None or
+                    child.get_role_name() not in INLINE_ROLES or "Text" not in child.get_interfaces()):
+                return None
+            nested = self.inline_objects(child, depth + 1) if "Hypertext" in child.get_interfaces() else []
+            if nested is None:
+                return None
+            objects.append({"offset": offset, "node": child, "inline": nested})
+        return objects
+
+    def inline_text(self, entry):
+        """An inline object's text with its own inline objects in place."""
+        self.budget()
+        text = entry["node"].get_text_iface()
+        value = self.atspi.Text.get_text(text, 0, text.get_character_count())
+        for nested in sorted(entry["inline"], key=lambda item: item["offset"], reverse=True):
+            if value[nested["offset"]:nested["offset"] + 1] != EMBEDDED_OBJECT:
+                raise Denied("unsupported_field")
+            value = value[:nested["offset"]] + self.inline_text(nested) + value[nested["offset"] + 1:]
+        if EMBEDDED_OBJECT in value:
+            raise Denied("unsupported_field")
+        return value
+
+
+def displayed_text(value):
+    """`value` as the Fcitx addon accepts window text (validContextText).
+
+    Format characters (Unicode Cf: a soft hyphen, the zero-width joiner inside
+    an emoji sequence, a byte-order mark, bidi controls) are deleted, except a
+    zero-width non-joiner between two Arabic letters. Control characters (Cc)
+    and embedded objects become spaces, and spacing is collapsed.
+    """
+    kept = []
+    for index, char in enumerate(value):
+        category = unicodedata.category(char)
+        if char == EMBEDDED_OBJECT or category == "Cc":
+            kept.append(" ")
+        elif category != "Cf" or arabic_joiner(value, index):
+            kept.append(char)
+    return " ".join("".join(kept).split())
+
+
+def window_text(value, limit, tail):
+    """Prose from one heading or paragraph (`displayed_text`), cut at a word
+    boundary to `limit` characters."""
+    text = displayed_text(value)
+    if len(text) <= limit:
+        return text
+    if tail:
+        cut = text[-limit:]
+        space = cut.find(" ")
+        return cut[space + 1:] if 0 <= space < limit // 2 else cut
+    cut = text[:limit]
+    space = cut.rfind(" ")
+    return cut[:space] if space > limit // 2 else cut
+
+
+def only_field(fields, pid):
+    if len(fields) != 1 or fields[0].get_process_id() != pid:
+        raise Denied("focus_unavailable")
+    return fields[0]
+
+
+def browser_interface(uri):
+    """Chromium renders parts of its own interface (such as the omnibox popup) as top-chrome WebUI."""
+    try:
+        parsed = urlsplit(uri)
+        return parsed.scheme == "chrome" and (parsed.hostname or "").endswith(".top-chrome")
+    except ValueError:
+        return False
+
+
+def flattened_layout(blocks, carets, selections, total_chars, root_caret):
+    """The layout when exactly the text block that the root's caret names holds the caret."""
+    if 0 <= root_caret < len(blocks) and blocks[root_caret]["kind"] == "opaque":
+        raise Denied("unsupported_field")
+    if not 0 <= root_caret < len(blocks) or not 0 <= carets[root_caret] <= blocks[root_caret]["length"] or any(
+            offset != -1 for index, offset in enumerate(carets) if index != root_caret):
+        raise Denied("invalid_caret")
+    block, caret = blocks[root_caret], carets[root_caret]
+    return RichLayout(blocks, block["start"] + caret, total_chars, selections,
+                      CaretText(block["node"].get_text_iface(), caret, block["length"]), root_caret)
+
+
+def rich_text(blocks, start, end, read):
+    """Text of [start, end) in a rich root's flattened coordinates.
+
+    Each block is its own raw text, inline objects as U+FFFC, followed by its
+    full end ("\n\n" or "\n"). `read(block, first, last)` returns block-local
+    text; an opaque block, or an embedded object that is not one of the block's
+    inline objects, cannot be resolved.
+    """
+    parts = []
+    for block in blocks:
+        first, length = block["start"], block["length"]
+        separator = first + length
+        low, high = max(start, first), min(end, separator)
+        if low < high and block["kind"] == "opaque":
+            raise Denied("unsupported_field")
+        parts.append(_block_text(read(block, low - first, high - first), block, low - first) if low < high else "")
+        if start < separator + len(block["end"]) and separator < end:
+            parts.append(block["end"][max(start - separator, 0):end - separator])
+    return "".join(parts)
+
+
+def chromium_text(blocks, start, text, caret, read, inline_text):
+    """`text` from flattened position `start`, as Chromium serializes it, split at `caret`.
+
+    Each inline object's U+FFFC becomes its text. A block whose own text ends
+    in a line break (an empty line, a trailing <br>) is followed by one line
+    break fewer than its full end.
+    """
+    objects = {block["start"] + entry["offset"]: entry for block in blocks for entry in block["inline"]}
+    drop = set()
+    for block in blocks:
+        separator = block["start"] + block["length"]
+        if not block["length"] or not start <= separator < start + len(text):
+            continue
+        last = text[separator - 1 - start] if separator > start else read(block, block["length"] - 1, block["length"])
+        if last == "\n":
+            drop.add(separator)
+    kept = [(position, inline_text(objects[position]) if position in objects else char)
+            for position, char in enumerate(text, start) if position not in drop]
+    return "".join(char for position, char in kept if position < caret), \
+        "".join(char for position, char in kept if position >= caret)
+
+
+def _block_text(value, block, first):
+    """Block text whose only embedded objects are the block's own inline objects."""
+    if not isinstance(value, str):
+        raise Denied("unsupported_field")
+    offsets = {entry["offset"] for entry in block["inline"]}
+    if any(char == EMBEDDED_OBJECT and first + index not in offsets for index, char in enumerate(value)):
+        raise Denied("unsupported_field")
+    return value

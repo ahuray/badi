@@ -1,0 +1,73 @@
+# ADR 0005: desktop session signals withhold authority, never grant it
+
+- Status: accepted
+- Date: 2026-10-13
+- Scope: the broker's runtime pause, automatic scheduling and the
+  [session helper](../../adapters/session/README.md)
+
+## Context
+
+Suggestions are bound to a field's identity, revision, fingerprint, caret,
+focus and expiry, but nothing told the broker that the machine was about to
+sleep or that another login session had taken the screen. A suggestion shown
+before suspend could still be inside its reading window after resume, and a
+stale grant could meet a Tab pressed before the adapter reacquired its field.
+Battery power was equally invisible: every key in a known field started a
+generation that the next key cancelled.
+
+logind, UPower and power-profiles-daemon expose these facts on D-Bus. The
+broker runs with no network and no D-Bus client, and the observer belongs to
+Fcitx fields only, so neither is the right owner.
+
+## Decision
+
+A separate user service, the session helper, observes logind and power state
+and reports it to the broker over a dedicated protocol v2 capability,
+`desktop_signals`. The broker treats a report as an input that can only remove
+authority or reduce work:
+
+- An inactive or sleeping session is a runtime pause. Entering it advances the
+  authority epoch and revokes context, pending inference, visible suggestions,
+  pending commits and the type-through carry before the broker answers.
+  Leaving it advances the epoch again so every adapter reacquires.
+- Low power selects automatic scheduling from the user's `battery_mode`. It
+  never changes authority, explicit requests or the resident model.
+- A report belongs to its connection. When the helper exits, its hold and
+  low-power state go with it; the broker never stays held by a dead helper,
+  except a live screen share for at most 10 s (below).
+- The helper takes a logind `delay` sleep inhibitor and releases it only after
+  the broker acknowledged the hold, or after a bounded failure. It never holds
+  sleep longer than its 1.5 s report timeout.
+
+Any same-UID process could send the same report (ADR 0001); the worst it can
+do is make Badi quieter.
+
+## Consequences
+
+- Sleep and session switches no longer depend on each adapter's own expiry to
+  retire suggestions. Adapters need no change: they already retire grants at
+  every new epoch.
+- Without the helper, behavior is exactly as before. Unknown session state
+  counts as active and unknown power as mains, because the adapters' own
+  focus, lock and expiry checks still apply.
+- logind's `LockedHint` is not used as evidence of anything. The observer's
+  fresh Omarchy lock check remains the unlock proof.
+- Desktop shortcuts live in the same helper because they are desktop session
+  integration, not field acquisition; a shortcut can pause, snooze the
+  focused app or site, or open settings, but never request or accept. A
+  snooze (2026-10-20) is the same kind of input: runtime broker state keyed
+  by the exact app id or site origin, which only revokes and withholds and
+  ends on its own, on `badi resume` or with the broker.
+- A live screen share (2026-10-23) holds like an inactive session: the
+  helper reports `screen_shared` while a desktop portal screencast stream
+  exists in PipeWire, and the broker holds every grant until it ends unless
+  the user chose `screen_share: suggest`. Grey text, which may carry window
+  and learned words ([ADR 0010](0010-context-finishes-words.md)), then never
+  reaches a shared screen. Unknown stays withholding where it can: a watcher
+  that crashes keeps the streams it last saw, a helper that disconnects
+  mid-share leaves it held for 10 s or until a helper reports again, a
+  restarted helper counts the screen as shared until its first look at
+  PipeWire, and only a PipeWire that cannot be reached, where no portal
+  stream can exist, ends a share. Without that grace a helper crash or
+  restart mid-share would let grey text onto the shared screen until the
+  helper came back.

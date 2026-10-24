@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+: "${BADI_GROUP_PID_LOG:?BADI_GROUP_PID_LOG is required}"
+trap '' TERM
+
+bash -c 'trap "" TERM; while :; do /bin/sleep 1; done' &
+child_pid=$!
+printf '%s\n%s\n' "$$" "$child_pid" >"$BADI_GROUP_PID_LOG"
+while :; do
+  /bin/sleep 1
+done

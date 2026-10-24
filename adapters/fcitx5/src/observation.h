@@ -1,0 +1,156 @@
+#pragma once
+
+#include "state.h"
+
+#include <nlohmann/json.hpp>
+
+#include <cstdint>
+#include <optional>
+#include <string_view>
+
+namespace badi::fcitx5 {
+
+// What the accessibility observer's replies (badi.accessibility.v1) mean for
+// Badi's authority over one field. Missing or malformed data fails closed.
+
+nlohmann::json inspectRequest(std::string_view appId);
+// Re-reads the exact field an earlier reply bound (`focus`); with `window`,
+// also the text near it, once per field visit while context is on.
+nlohmann::json snapshotRequest(const nlohmann::json &focus, bool window = false);
+// A snapshot reply's window text when it is well-formed and bounded; empty
+// otherwise.
+std::string observedWindowText(const nlohmann::json &observed);
+// The caret rectangle an app gave its input method, relative to its window
+// in physical pixels (Qt's Fcitx module declares RelativeRect).
+struct CaretRect {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+    double scale = 1;
+};
+
+// Asks the observer to draw `text` at the caret it last verified for `focus`.
+// `caret` is the observer's fallback where the field reports no glyph extents.
+nlohmann::json previewRequest(const nlohmann::json &focus, std::string_view text, std::uint64_t ttlMs,
+                              const std::optional<CaretRect> &caret = std::nullopt);
+
+bool observerAnswered(const nlohmann::json &reply);
+
+// Explicit revision of one selection (ADR 0012). The inspection allows the
+// field's one selection and reads no text; the snapshot of that bound field
+// returns the selection with the text around it.
+nlohmann::json revisionInspectRequest(std::string_view appId);
+nlohmann::json selectionSnapshotRequest(const nlohmann::json &focus);
+// The edit target of an inspected field of this app that holds one
+// selection, as inspectedEditTarget() judges a caret.
+std::optional<NativeEditTarget> revisionEditTarget(const nlohmann::json &focus, std::string_view appId);
+// The same binding and target, still holding one selection.
+bool sameSelectedField(const nlohmann::json &captured, const nlohmann::json &observed);
+// The observer's selection is exactly Fcitx's, and Fcitx's text around it
+// is the observer's as far as Fcitx's window reaches (Chromium may cut its
+// surrounding text shorter, or end it with a paragraph end).
+bool observerAgreesSelection(const nlohmann::json &observed, const SelectionWindow &window);
+
+// Same binding, target and caret on a plain-text field without a selection. A
+// cropped toolkit buffer can be identical at different absolute positions, so
+// snapshots and previews (requireLength) must also agree on the field length.
+bool matchesObservedFocus(const nlohmann::json &captured, const nlohmann::json &observed,
+                          bool requireLength = false);
+
+// The same accessible and policy target, even after the caret moves. A
+// keystroke is not a new field.
+bool sameObservedField(const nlohmann::json &captured, const nlohmann::json &observed);
+// Previously verified identities only; preserves a denial, never an editing binding.
+bool sameObservedFieldIdentity(const nlohmann::json &previous, const nlohmann::json &current);
+
+// A snapshot of a field we already hold. The caret may have moved. The record
+// itself must still be a well-formed plain-text caret, and the caller still
+// has to match its text to Fcitx before publishing.
+bool continuedFieldSnapshot(const nlohmann::json &previous, const nlohmann::json &observed);
+
+// Nullopt when the inspected field's metadata is malformed or names another
+// app; prior authority is then retired rather than falling back.
+std::optional<NativeEditTarget> inspectedEditTarget(const nlohmann::json &focus, std::string_view appId);
+
+// Writer gives Fcitx only the caret's sentence, and at the end of a paragraph
+// that sentence leaves out the spaces just typed. When the observer's verified
+// text is Fcitx's plus only those spaces, with nothing after the caret, they
+// are restored; no other observer text ever enters the context.
+void restoreObservedTrailingSpaces(ContextWindow &context, const nlohmann::json &observed);
+
+// The observer's text around the caret equals Fcitx's live context.
+bool observerAgrees(const nlohmann::json &observed, const ContextWindow &context);
+
+// A snapshot of the same field, caret and length whose text equals Fcitx's.
+bool observerCorroborates(const nlohmann::json &captured, const nlohmann::json &observed,
+                          const ContextWindow &context);
+
+// The observer's quiet fact for this field ("file_dialog", "narrow_field", or
+// "quiet_field" for a fact this build does not name), or nullopt. Quiet binds
+// automatic requests only; an explicit request is the user's own action.
+std::optional<std::string_view> automaticQuietReason(const nlohmann::json &observed);
+
+// Why an observed snapshot cannot become a request for this Fcitx context;
+// nullopt when both agree on a nonempty prefix. Text may follow the caret: the
+// broker suggests only what fits before it. A quiet field blocks only an
+// automatic request.
+std::optional<std::string_view> observedRequestBlocked(const nlohmann::json &observed,
+                                                       const ContextWindow &context, bool foreignIme,
+                                                       bool automatic);
+
+// The field itself was declined (password, purpose, selection), as opposed
+// to an absent or blind observer.
+bool observerDeniedField(const nlohmann::json &error);
+
+std::string_view snapshotFailureReason(const nlohmann::json &error);
+
+// An invalidation that names no app concerns every app.
+bool invalidates(const nlohmann::json &event, std::string_view appId);
+
+// When the observer inspects the focused field again. Fcitx input (keys or
+// changed surrounding text) inspects once typing pauses. An invalidation
+// without input since the last inspection backs off (240, 480, 960 ms) and
+// then waits for input, so a busy page cannot drive an inspection loop; a
+// changed field always waits for input.
+class InspectionSchedule {
+public:
+    static constexpr std::uint64_t kTypingPauseUs = 120'000;
+    // After a key that typed the suggestion's next characters, or a word
+    // acceptance, the broker can answer at once (ADR 0004). This short pause
+    // lets the field's own accessibility events arrive first.
+    static constexpr std::uint64_t kTypeThroughPauseUs = 30'000;
+    static constexpr unsigned int kMaxIdleReinspections = 3;
+    // The previous keystroke's snapshot or preview reply can still be pending
+    // when typing pauses, or a previous field's after a focus switch. Its reply
+    // takes milliseconds, so retry soon, within the observer's 500 ms deadline.
+    static constexpr std::uint64_t kBusyRetryUs = 20'000;
+    static constexpr unsigned int kMaxBusyRetries = 25;
+
+    void input() {
+        ++inputSerial_;
+        idleInvalidations_ = 0;
+    }
+    void inspecting() { inspectedSerial_ = inputSerial_; }
+    [[nodiscard]] bool reinspectAfterInvalidation(bool fieldChanged);
+    [[nodiscard]] std::uint64_t delayUs(bool immediate, bool typedThrough = false, bool busyRetry = false,
+                                    bool early = false) const {
+        if (immediate) return 1;
+        if (busyRetry) return kBusyRetryUs;
+        // A keystroke in a field we already know starts inspection at once.
+        // The suggestion itself stays hidden until the typing pause elapses.
+        if (early) return 1;
+        if (typedThrough) return kTypeThroughPauseUs;
+        return kTypingPauseUs << idleInvalidations_;
+    }
+    void resetBusyRetries() { busyRetries_ = 0; }
+    [[nodiscard]] bool retryWhileBusy() { return busyRetries_++ < kMaxBusyRetries; }
+
+private:
+    std::uint64_t inputSerial_ = 0;
+    std::uint64_t inspectedSerial_ = 0;
+    unsigned int idleInvalidations_ = 0;
+    unsigned int busyRetries_ = 0;
+};
+
+} // namespace badi::fcitx5

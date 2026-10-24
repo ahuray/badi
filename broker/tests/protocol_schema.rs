@@ -1,0 +1,589 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use badi_broker::protocol::{
+    AuthorityAckPayload, AuthorityChangedPayload, CommitPreparePayload, CommitResultPayload,
+    ContextChangedPayload, ControlAction, ControlResultPayload, DesktopStatePayload,
+    DesktopStatusPayload, EditorFocusPayload, EditorStatusPayload, EmptyPayload, ErrorPayload,
+    GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
+    MemoryStatusPayload, MessageType, PolicyQueryPayload, PolicyStatusPayload, ProbeRequestPayload,
+    ProbeResultPayload, ProviderKind, RevisionClearPayload, RevisionRequestPayload,
+    RevisionShowPayload, SessionClosePayload, SessionControlRequestPayload, SessionOpenPayload,
+    SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload, StyleSamplesPayload,
+    StyleStatusPayload, SuggestCancelPayload, SuggestRequestPayload, SuggestionClearPayload,
+    SuggestionShowPayload, WireEnvelope, valid_opaque_id, validate_fingerprint,
+};
+use badi_broker::segment::{accept_word, sanitize_suggestion};
+use badi_broker::{Metrics, NoSuggestionReason};
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+
+fn protocol_v2_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("broker has workspace parent")
+        .join("protocol/v2")
+}
+
+fn rust_scalar_schema(mut schema: Value) -> Value {
+    // serde_json strings cannot contain lone UTF-16 surrogates. Keep the ECMA-only
+    // exclusion normative for ECMA consumers, assert its presence, and compile
+    // the scalar-representable remainder here.
+    for pointer in [
+        "/$defs/safeSuggestionText/allOf/0/pattern",
+        "/$defs/contextText/pattern",
+    ] {
+        let pattern = schema
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .expect("shared surrogate-safe pattern");
+        assert!(
+            pattern.contains(r"\ud800-\udfff"),
+            "the normative ECMA pattern must reject lone UTF-16 surrogates"
+        );
+        let scalar_pattern = if pointer == "/$defs/contextText/pattern" {
+            "(?s:.*)".to_owned()
+        } else {
+            pattern.replace(r"\ud800-\udfff", "")
+        };
+        *schema
+            .pointer_mut(pointer)
+            .expect("shared surrogate-safe pattern") = Value::String(scalar_pattern);
+    }
+    schema
+}
+
+fn decode<T: DeserializeOwned>(envelope: &WireEnvelope) -> T {
+    envelope.decode_payload().expect("typed payload")
+}
+
+#[test]
+fn spelling_replacements_match_the_shared_fixture_in_rust_and_the_schema() {
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../protocol/spelling-replacement-fixtures.json"
+    ))
+    .expect("spelling replacement fixtures");
+    let schema = rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("wire schema"),
+        )
+        .expect("wire schema JSON"),
+    );
+    let validator = jsonschema::validator_for(&schema).expect("v2 schema compiles");
+    let base: Value = serde_json::from_str(
+        &fs::read_to_string(
+            protocol_v2_root().join("examples/valid/suggestion_show_spelling_space.json"),
+        )
+        .expect("fixture"),
+    )
+    .expect("fixture JSON");
+    for fixture in fixtures["fixtures"].as_array().expect("fixtures") {
+        let name = fixture["name"].as_str().expect("name");
+        let original = fixture["original"].as_str().expect("original");
+        let replacement = fixture["replacement"].as_str().expect("replacement");
+        let valid = fixture["valid"].as_bool().expect("verdict");
+        let shape = fixture
+            .get("shape")
+            .map_or(valid, |shape| shape.as_bool().expect("shape"));
+        assert_eq!(
+            badi_broker::protocol::valid_spelling_replacement(original, replacement),
+            valid,
+            "rust: {name}"
+        );
+        let mut frame = base.clone();
+        frame["payload"]["replace_before"] = original.into();
+        frame["payload"]["text"] = replacement.into();
+        frame["payload"]["accept_word"] = replacement.into();
+        assert_eq!(validator.is_valid(&frame), shape, "schema: {name}");
+    }
+}
+
+#[test]
+fn contextual_persian_joiners_match_the_wire_schema_and_rust() {
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../protocol/orthographic-joiner-fixtures.json"
+    ))
+    .expect("orthographic fixtures");
+    {
+        let schema = rust_scalar_schema(
+            serde_json::from_str(
+                &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("wire schema"),
+            )
+            .expect("wire schema JSON"),
+        );
+        let validator = jsonschema::validator_for(&schema["$defs"]["safeSuggestionText"])
+            .expect("safe output schema");
+        for fixture in fixtures["fixtures"].as_array().expect("fixtures") {
+            let text = fixture["text"].as_str().expect("fixture text");
+            let valid = fixture["valid"].as_bool().expect("fixture verdict");
+            assert_eq!(
+                sanitize_suggestion(text).is_ok(),
+                valid,
+                "Rust {}",
+                fixture["name"]
+            );
+            assert_eq!(
+                validator.is_valid(&fixture["text"]),
+                valid,
+                "schema {}",
+                fixture["name"]
+            );
+        }
+    }
+}
+
+// One exhaustive match keeps Rust decoding coverage visibly aligned with the
+// protocol schema's complete message enum.
+#[allow(clippy::too_many_lines)]
+fn validate_rust_payload(envelope: &WireEnvelope) {
+    match envelope.message_type {
+        MessageType::Hello => decode::<HelloPayload>(envelope)
+            .validate()
+            .expect("valid hello payload"),
+        MessageType::HelloAck => {
+            decode::<HelloAckPayload>(envelope)
+                .validate()
+                .expect("valid hello acknowledgment");
+        }
+        MessageType::SessionOpen => decode::<SessionOpenPayload>(envelope)
+            .target
+            .validate_wire()
+            .expect("valid target"),
+        MessageType::SessionClose => {
+            let _: SessionClosePayload = decode(envelope);
+        }
+        MessageType::ContextChanged => decode::<ContextChangedPayload>(envelope)
+            .validate()
+            .expect("valid context"),
+        MessageType::SuggestRequest => {
+            let payload: SuggestRequestPayload = decode(envelope);
+            validate_fingerprint(&payload.fingerprint).expect("valid fingerprint");
+        }
+        MessageType::SuggestCancel => {
+            let payload: SuggestCancelPayload = decode(envelope);
+            validate_fingerprint(&payload.fingerprint).expect("valid fingerprint");
+        }
+        MessageType::SuggestionShow => {
+            let payload: SuggestionShowPayload = decode(envelope);
+            if let Some(original) = payload.replace_before.as_deref() {
+                assert!(badi_broker::protocol::valid_spelling_replacement(
+                    original,
+                    &payload.text
+                ));
+                assert_eq!(payload.text, payload.accept_word);
+            } else {
+                assert_eq!(
+                    sanitize_suggestion(&payload.text).expect("safe suggestion"),
+                    payload.text
+                );
+                assert_eq!(accept_word(&payload.text).accepted, payload.accept_word);
+            }
+            assert!(valid_opaque_id(&payload.suggestion_id));
+        }
+        MessageType::SuggestionClear => {
+            let payload: SuggestionClearPayload = decode(envelope);
+            validate_fingerprint(&payload.fingerprint).expect("valid fingerprint");
+        }
+        MessageType::ControlRequest => {
+            let action: ControlAction = serde_json::from_value(
+                envelope
+                    .payload
+                    .get("action")
+                    .expect("control action")
+                    .clone(),
+            )
+            .expect("known action");
+            if action.is_global() {
+                decode::<GlobalControlRequestPayload>(envelope)
+                    .validate()
+                    .expect("valid global control");
+            } else {
+                decode::<SessionControlRequestPayload>(envelope)
+                    .validate()
+                    .expect("valid session control");
+            }
+        }
+        MessageType::ControlResult => {
+            let _: ControlResultPayload = decode(envelope);
+        }
+        MessageType::CommitPrepare => {
+            let payload: CommitPreparePayload = decode(envelope);
+            if payload.replace_selection.is_some() {
+                assert!(payload.replace_before.is_none());
+                assert!(badi_broker::revision::safe_revision_text(&payload.text));
+            } else if let Some(original) = payload.replace_before.as_deref() {
+                assert!(badi_broker::protocol::valid_spelling_replacement(
+                    original,
+                    &payload.text
+                ));
+            } else {
+                assert_eq!(
+                    sanitize_suggestion(&payload.text).expect("safe commit text"),
+                    payload.text
+                );
+            }
+        }
+        MessageType::CommitResult => decode::<CommitResultPayload>(envelope)
+            .validate()
+            .expect("valid commit result"),
+        MessageType::RevisionRequest => decode::<RevisionRequestPayload>(envelope)
+            .validate()
+            .expect("valid revision request"),
+        MessageType::RevisionShow => decode::<RevisionShowPayload>(envelope)
+            .validate()
+            .expect("valid revision"),
+        MessageType::RevisionClear => {
+            let payload: RevisionClearPayload = decode(envelope);
+            validate_fingerprint(&payload.fingerprint).expect("valid fingerprint");
+        }
+        MessageType::HealthRequest
+        | MessageType::SettingsGet
+        | MessageType::MemoryClear
+        | MessageType::StyleQuery
+        | MessageType::StyleForget
+        | MessageType::StyleExport
+        | MessageType::ContextQuery
+        | MessageType::ContextForget
+        | MessageType::StatsQuery
+        | MessageType::StatsForget => {
+            let _: EmptyPayload = decode(envelope);
+        }
+        MessageType::HealthStatus => {
+            let _: HealthStatusPayload = decode(envelope);
+        }
+        MessageType::PolicyQuery => decode::<PolicyQueryPayload>(envelope)
+            .validate()
+            .expect("valid policy query"),
+        MessageType::PolicyStatus => decode::<PolicyStatusPayload>(envelope)
+            .validate()
+            .expect("valid policy status"),
+        MessageType::AuthorityChanged => decode::<AuthorityChangedPayload>(envelope)
+            .validate()
+            .expect("valid authority change"),
+        MessageType::AuthorityAck => decode::<AuthorityAckPayload>(envelope)
+            .validate()
+            .expect("valid authority acknowledgment"),
+        MessageType::SettingsReplace => decode::<SettingsReplacePayload>(envelope)
+            .validate()
+            .expect("valid settings replacement"),
+        MessageType::SettingsStatus => decode::<SettingsStatusPayload>(envelope)
+            .validate()
+            .expect("valid settings status"),
+        MessageType::MemoryStatus => decode::<MemoryStatusPayload>(envelope)
+            .validate()
+            .expect("valid memory status"),
+        MessageType::ProbeRequest => decode::<ProbeRequestPayload>(envelope)
+            .validate()
+            .expect("valid probe request"),
+        MessageType::ProbeResult => decode::<ProbeResultPayload>(envelope)
+            .validate()
+            .expect("valid probe result"),
+        MessageType::Error => {
+            let _: ErrorPayload = decode(envelope);
+        }
+        MessageType::DesktopState => {
+            let _: DesktopStatePayload = decode(envelope);
+        }
+        MessageType::DesktopStatus => decode::<DesktopStatusPayload>(envelope)
+            .validate()
+            .expect("valid desktop status"),
+        MessageType::EditorFocus => {
+            let _: EditorFocusPayload = decode(envelope);
+        }
+        MessageType::EditorStatus => {
+            let _: EditorStatusPayload = decode(envelope);
+        }
+        MessageType::StyleKey => {
+            let payload: StyleKeyPayload = decode(envelope);
+            badi_broker::style::StyleKey::from_hex(&payload.key_id, &payload.key)
+                .expect("valid style key");
+        }
+        MessageType::StyleStatus => {
+            let _: StyleStatusPayload = decode(envelope);
+        }
+        MessageType::ContextStatus => {
+            let _: badi_broker::protocol::ContextStatusPayload = decode(envelope);
+        }
+        MessageType::StatsStatus => {
+            let payload: badi_broker::protocol::StatsStatusPayload = decode(envelope);
+            assert!(payload.summary.subjects.len() <= 3 * badi_broker::stats::MAX_SUMMARY_SUBJECTS);
+        }
+        MessageType::StyleSamples => {
+            let payload: StyleSamplesPayload = decode(envelope);
+            assert!(payload.samples.len() <= badi_broker::style::MAX_STYLE_SAMPLES);
+        }
+    }
+}
+
+#[test]
+fn every_fixture_matches_the_schema_and_rust_contracts() {
+    let root = protocol_v2_root();
+    let schema = rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(root.join("schema.json")).expect("v2 schema file"),
+        )
+        .expect("v2 schema JSON"),
+    );
+    let validator = jsonschema::validator_for(&schema).expect("v2 schema compiles");
+
+    for kind in ["valid", "invalid"] {
+        let mut fixtures = fs::read_dir(root.join("examples").join(kind))
+            .expect("v2 fixture directory")
+            .map(|entry| entry.expect("v2 fixture entry").path())
+            .collect::<Vec<_>>();
+        fixtures.sort();
+        assert!(!fixtures.is_empty(), "v2 {kind} fixtures required");
+        for path in fixtures {
+            let instance: Value = serde_json::from_str(
+                &fs::read_to_string(&path).unwrap_or_else(|_| panic!("read {}", path.display())),
+            )
+            .unwrap_or_else(|_| panic!("parse {}", path.display()));
+            if kind == "valid" {
+                validator
+                    .validate(&instance)
+                    .unwrap_or_else(|error| panic!("{} failed schema: {error}", path.display()));
+                let envelope: WireEnvelope = serde_json::from_value(instance)
+                    .unwrap_or_else(|_| panic!("decode {}", path.display()));
+                envelope
+                    .validate_shape()
+                    .unwrap_or_else(|_| panic!("shape {}", path.display()));
+                validate_rust_payload(&envelope);
+            } else {
+                assert!(
+                    !validator.is_valid(&instance),
+                    "{} unexpectedly passed v2 schema",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn only_negotiated_spelling_payloads_may_preserve_a_trailing_space() {
+    let root = protocol_v2_root();
+    let schema = rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(root.join("schema.json")).expect("v2 schema file"),
+        )
+        .expect("v2 schema JSON"),
+    );
+    let validator = jsonschema::validator_for(&schema).expect("v2 schema compiles");
+    for filename in [
+        "suggestion_show_spelling_space.json",
+        "commit_prepare_spelling_space.json",
+    ] {
+        let fixture: Value = serde_json::from_str(
+            &fs::read_to_string(root.join("examples/valid").join(filename)).expect("fixture"),
+        )
+        .expect("fixture JSON");
+        assert!(validator.is_valid(&fixture));
+        for (original, corrected) in [
+            ("teh ", "the"),
+            ("teh", "the "),
+            ("teh  ", "the  "),
+            ("teh\n", "the\n"),
+            ("teh\t", "the\t"),
+            ("teh\u{00a0}", "the\u{00a0}"),
+            ("teh.", "the."),
+        ] {
+            let mut invalid = fixture.clone();
+            invalid["payload"]["replace_before"] = original.into();
+            invalid["payload"]["text"] = corrected.into();
+            if invalid["payload"].get("accept_word").is_some() {
+                invalid["payload"]["accept_word"] = corrected.into();
+            }
+            assert!(
+                !validator.is_valid(&invalid),
+                "{filename}: {original:?} -> {corrected:?}"
+            );
+        }
+        let mut continuation = fixture;
+        continuation["payload"]
+            .as_object_mut()
+            .expect("payload")
+            .remove("replace_before");
+        assert!(
+            validator.is_valid(&continuation),
+            "one trailing ASCII space is ordinary safe suggestion text"
+        );
+        let mut repeated = continuation;
+        repeated["payload"]["text"] = "the  ".into();
+        repeated["payload"]["accept_word"] = "the  ".into();
+        assert!(
+            !validator.is_valid(&repeated),
+            "a repeated trailing space stays off the wire"
+        );
+    }
+}
+
+#[test]
+fn schema_enforces_context_and_suggestion_bounds() {
+    let schema = rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("schema file"),
+        )
+        .expect("schema JSON"),
+    );
+    let validator = jsonschema::validator_for(&schema).expect("schema compiles");
+    let mut context: Value = serde_json::from_str(
+        &fs::read_to_string(protocol_v2_root().join("examples/valid/context_changed.json"))
+            .expect("context fixture"),
+    )
+    .expect("context JSON");
+
+    context["payload"]["before"] = Value::String("a".repeat(512));
+    assert!(validator.is_valid(&context));
+    context["payload"]["before"] = Value::String("a".repeat(513));
+    assert!(!validator.is_valid(&context));
+    context["payload"]["before"] = Value::String("line one\n\t\0🙂".to_owned());
+    context["payload"]["after"] = Value::String("\r\n🚀".to_owned());
+    assert!(validator.is_valid(&context));
+
+    let mut suggestion: Value = serde_json::from_str(
+        &fs::read_to_string(protocol_v2_root().join("examples/valid/suggestion_show.json"))
+            .expect("suggestion fixture"),
+    )
+    .expect("suggestion JSON");
+    suggestion["payload"]["text"] = Value::String("é".repeat(64));
+    suggestion["payload"]["accept_word"] = Value::String("é".repeat(64));
+    assert!(validator.is_valid(&suggestion));
+    suggestion["payload"]["text"] = Value::String("é".repeat(65));
+    assert!(!validator.is_valid(&suggestion));
+    // One trailing ASCII space is ordinary text; other spacing is not.
+    for invalid_spacing in ["\u{00a0}world", " world  again", "valid  "] {
+        suggestion["payload"]["text"] = Value::String(invalid_spacing.to_owned());
+        suggestion["payload"]["accept_word"] = Value::String(invalid_spacing.to_owned());
+        assert!(!validator.is_valid(&suggestion), "{invalid_spacing:?}");
+    }
+}
+
+#[test]
+fn normative_ecma_schema_declares_lone_surrogates_forbidden() {
+    let schema: Value = serde_json::from_str(
+        &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("schema file"),
+    )
+    .expect("schema JSON");
+    assert!(
+        schema["$defs"]["safeSuggestionText"]["allOf"][0]["pattern"]
+            .as_str()
+            .is_some_and(|pattern| pattern.contains(r"\ud800-\udfff"))
+    );
+    assert!(
+        schema["$defs"]["contextText"]["pattern"]
+            .as_str()
+            .is_some_and(|pattern| pattern.contains(r"\ud800-\udfff"))
+    );
+}
+
+#[test]
+fn diagnostics_match_broker_payloads() {
+    let v2_schema = rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("v2 schema file"),
+        )
+        .expect("v2 schema JSON"),
+    );
+    let v2 = jsonschema::validator_for(&v2_schema).expect("v2 schema compiles");
+
+    for name in [
+        "health_status_no_suggestion.json",
+        "probe_request.json",
+        "probe_request_explicit.json",
+    ] {
+        let fixture: Value = serde_json::from_str(
+            &fs::read_to_string(protocol_v2_root().join("examples/valid").join(name))
+                .expect("fixture"),
+        )
+        .expect("fixture JSON");
+        assert!(v2.is_valid(&fixture), "{name}");
+    }
+
+    let metrics = Metrics::default();
+    for reason in [
+        NoSuggestionReason::RequestAbstained,
+        NoSuggestionReason::BudgetPrefill,
+        NoSuggestionReason::BudgetStream,
+        NoSuggestionReason::ModelAbstained,
+        NoSuggestionReason::OutputRejected,
+        NoSuggestionReason::Stale,
+        NoSuggestionReason::Timeout,
+        NoSuggestionReason::ProviderError,
+    ] {
+        metrics.record_no_suggestion(reason);
+        let snapshot = metrics.snapshot();
+        let v2_metrics = jsonschema::validator_for(&serde_json::json!({
+            "$ref": "#/$defs/metrics", "$defs": v2_schema["$defs"].clone()
+        }))
+        .expect("v2 metrics schema");
+        assert!(v2_metrics.is_valid(&serde_json::to_value(snapshot).expect("v2 metrics")));
+    }
+
+    for result in [
+        ProbeResultPayload::suggested(
+            ProviderKind::LocalModel,
+            " for your time".to_owned(),
+            None,
+            12,
+        ),
+        ProbeResultPayload::suggested(
+            ProviderKind::LocalModel,
+            "address ".to_owned(),
+            Some("adress ".to_owned()),
+            1,
+        ),
+        ProbeResultPayload::no_suggestion(
+            ProviderKind::PhraseV1,
+            NoSuggestionReason::RequestAbstained,
+            0,
+        ),
+        ProbeResultPayload::paused(ProviderKind::LocalModel),
+    ] {
+        result.validate().expect("broker probe result");
+        let mut envelope =
+            WireEnvelope::global(MessageType::ProbeResult, 1, &result).expect("probe envelope");
+        envelope.id = Some("ctl:probe".to_owned());
+        let value = serde_json::to_value(&envelope).expect("probe JSON");
+        assert!(v2.is_valid(&value), "{value}");
+    }
+    let unsafe_text =
+        ProbeResultPayload::suggested(ProviderKind::LocalModel, " line\nbreak".to_owned(), None, 1);
+    assert!(unsafe_text.validate().is_err());
+    let oversized = ProbeRequestPayload {
+        before: "a".repeat(513),
+        after: String::new(),
+        language: Some("en".to_owned()),
+        allow_replacement: false,
+        explicit: false,
+    };
+    assert!(oversized.validate().is_err());
+}
+
+#[test]
+fn only_an_explicit_probe_names_its_budget() {
+    let v2 = jsonschema::validator_for(&rust_scalar_schema(
+        serde_json::from_str(
+            &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("v2 schema file"),
+        )
+        .expect("v2 schema JSON"),
+    ))
+    .expect("v2 schema compiles");
+    // The automatic probe keeps its original encoding.
+    for explicit in [false, true] {
+        let probe = ProbeRequestPayload {
+            before: "Vielen Dank für Ihre ".to_owned(),
+            after: String::new(),
+            language: Some("de".to_owned()),
+            allow_replacement: false,
+            explicit,
+        };
+        let mut envelope =
+            WireEnvelope::global(MessageType::ProbeRequest, 0, &probe).expect("probe request");
+        envelope.id = Some("ctl:probe".to_owned());
+        let value = serde_json::to_value(&envelope).expect("probe request JSON");
+        assert!(v2.is_valid(&value), "{value}");
+        assert_eq!(value["payload"].get("explicit").is_some(), explicit);
+        let decoded: ProbeRequestPayload = envelope.decode_payload().expect("decoded probe");
+        assert_eq!(decoded, probe);
+    }
+}

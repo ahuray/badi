@@ -1,0 +1,23 @@
+{
+  "v": 2,
+  "id": "revision-hello",
+  "type": "hello",
+  "mono_ms": 0,
+  "payload": {
+    "min_v": 2,
+    "max_v": 2,
+    "adapter": {
+      "kind": "fcitx",
+      "name": "badi-fcitx5",
+      "version": "0.1.0"
+    },
+    "capabilities": [
+      "context",
+      "suggestion",
+      "commit.dispatched_unverified",
+      "policy",
+      "long_reading_window",
+      "selection_revision"
+    ]
+  }
+}

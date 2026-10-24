@@ -1,0 +1,20 @@
+{
+  "v": 2,
+  "id": "accept-revision-1",
+  "type": "commit.prepare",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 4,
+  "revision": 9,
+  "mono_ms": 5000,
+  "payload": {
+    "fingerprint": "revision_context_0001",
+    "suggestion_id": "r:2f0c6b1e-6f3a-4c55-9a51-1a2b3c4d5e6f",
+    "text": "i went to the shop",
+    "replace_selection": {
+      "anchor": 10,
+      "head": 32,
+      "unit": "unicode_scalar_values"
+    },
+    "acceptance": "word"
+  }
+}

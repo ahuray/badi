@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+# Stands in for the installed desktop helper the panel runs: `ctl` passes
+# through to the fake badictl, and the service is always running.
+
+set -euo pipefail
+
+if [[ ${1:-} == ctl ]]; then
+  shift
+  exec "$(dirname -- "${BASH_SOURCE[0]}")/badictl" "$@"
+fi
+if [[ ${1:-} == service && ${2:-} == status ]]; then
+  printf '%s\n' '{"autostart":true,"active":"active"}'
+  exit 0
+fi
+printf 'unsupported fake badi-desktop argv\n' >&2
+exit 64

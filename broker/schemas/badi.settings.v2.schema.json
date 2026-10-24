@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:badi:schema:settings:v2",
+  "title": "Badi private settings v2",
+  "$comment": "Rust producer validation additionally requires canonical subject ordering, unique identities, canonical host/IP spelling, and permission dependency invariants. Clipboard, screen-capture, and cloud permissions do not exist in v2 and strict decoding rejects them because those capabilities are unsupported.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "revision", "paused", "subjects"],
+  "properties": {
+    "schema": { "const": "badi.settings.v2" },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "paused": { "type": "boolean" },
+    "all_web_origins": {
+      "type": "boolean",
+      "description": "Opt-in browser default. When true, an http(s) origin without an exact subject rule may read context, display and suggest, never learn or retain. Exact origin rules win. Producers omit the property when false."
+    },
+    "all_linux_apps": {
+      "type": "boolean",
+      "description": "Opt-in app default (blocklist mode). When true, a Linux app without an exact subject rule may read context, display and suggest, never learn or retain; the policy reply says matched_default, so adapters open only fields they can corroborate. Exact app rules win. Producers omit the property when false."
+    },
+    "mid_line": {
+      "type": "boolean",
+      "description": "Mid-sentence suggestions. When false or omitted, a word after the caret abstains before any model call. Punctuation after the caret can still complete the word being typed. Producers omit the property when false."
+    },
+    "escape_quiet_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600,
+      "description": "Seconds a dismissal (Escape) keeps its field quiet for automatic suggestions, across edits, until the focus epoch ends or an explicit request asks again. When omitted, only the adapters' own until-edit decline applies. Producers omit the property when zero."
+    },
+    "battery_mode": {
+      "enum": ["normal", "quiet", "explicit"],
+      "description": "Automatic suggestions while the desktop session helper reports battery power or the power-saver profile. quiet (the default) starts the model only after a 300 ms typing pause; normal keeps mains scheduling; explicit leaves only explicit requests. Explicit requests and the resident model are never changed. Producers omit the property when quiet."
+    },
+    "screen_share": {
+      "enum": ["hold", "suggest"],
+      "description": "Suggestions while the desktop session helper reports a live screen share (a desktop portal screencast in PipeWire). hold (the default) holds every grant until sharing stops, so grey text with window or learned words never reaches a shared screen; suggest keeps suggesting. Producers omit the property when hold."
+    },
+    "suggestion_length": {
+      "enum": ["short", "normal"],
+      "description": "How many words a model continuation shows: short one or two, normal (the default) up to four, within the same token and time budget. Producers omit the property when normal."
+    },
+    "languages_chosen": {
+      "type": "boolean",
+      "description": "The user chose their writing and spelling languages, in the settings panel's first-run question or with badi languages; until then the panel asks. Producers omit the property when false."
+    },
+    "spelling_languages": {
+      "type": "array",
+      "items": { "enum": ["en", "de", "fr", "es", "it", "nl", "pl"] },
+      "uniqueItems": true,
+      "maxItems": 7,
+      "description": "Languages whose spelling is corrected, in this enum's order. English uses Badi's own lexicon; the others use their installed Hunspell dictionary and correct nothing without one. Empty turns spelling off. Producers omit the property when it is exactly [\"en\"], the default."
+    },
+    "writing_languages": {
+      "type": "array",
+      "items": { "enum": ["en", "de", "fa", "fr", "es", "pt"] },
+      "uniqueItems": true,
+      "maxItems": 6,
+      "description": "Languages Badi suggests words in, in this enum's order; a request in any other language abstains before the model. French, Spanish, Portuguese and Persian are opt-in, and the first three are not yet qualified. Empty turns suggestions off. Producers omit the property when it is exactly [\"en\", \"de\"], the default."
+    },
+    "trailing_space_healing": {
+      "type": "object",
+      "propertyNames": { "enum": ["en", "de", "fa", "fr", "es", "pt"] },
+      "additionalProperties": { "type": "boolean" },
+      "description": "Per-language choice to heal a trailing space (true: the prompt ends before it and the model must reproduce it) or keep it in the prompt (false, where a request ending in a space abstains), over the running model's reviewed default (the model advice's healed_languages). A language without an entry follows that default. Producers omit the property when empty."
+    },
+    "writing_model": {
+      "type": "string",
+      "pattern": "^[a-z0-9.-]{1,64}$",
+      "description": "The writing model the user chose with `badi model use`, by catalog id (for example gemma-3-1b). The broker uses it at its next start when it is installed and fits; omitted, it uses the installed model the recommendation prefers. An unknown id is ignored."
+    },
+    "style_learning": {
+      "type": "boolean",
+      "description": "Opt-in style learning: sentences the user wrote before an accepted suggestion, in subjects that allow learning with bounded retention, sealed with a key held in the desktop keyring. No production prompt uses them yet. Producers omit the property when false."
+    },
+    "context_words": {
+      "type": "boolean",
+      "description": "Opt-in context: finish the word being typed with words in the same window (read by the accessibility observer, held in memory) and words the user wrote before in the same app (kept sealed with the keyring key for 90 days after last use). Absent until the user chooses, when the settings panel asks once; false keeps it off. Never grants acquisition, suggestions or edits."
+    },
+    "context_words_off": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/identity" },
+      "description": "Apps and sites where context stays off while context_words is true: no window words are read there and no words are learned or used. Rust validation requires canonical identity order. Producers omit the property when empty."
+    },
+    "language_overrides": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "maxLength": 128,
+        "pattern": "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)*$"
+      },
+      "additionalProperties": { "enum": ["en", "de", "fa", "fr", "es", "pt"] },
+      "description": "Explicit writing language by canonical app id. This never grants context access or suggestions; exact app/site policy still applies. Omitted when empty."
+    },
+    "subjects": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/subject" }
+    }
+  },
+  "$defs": {
+    "decision": {
+      "enum": ["allow", "block"]
+    },
+    "identity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter", "scheme", "host", "port"],
+          "properties": {
+            "kind": { "const": "browser_origin" },
+            "adapter": { "const": "chromium" },
+            "scheme": { "enum": ["http", "https"] },
+            "host": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[a-z0-9.:-]+$",
+              "description": "Canonical ASCII DNS name or IP literal. Rust validation is normative for label and canonical spelling rules."
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "Effective port; omitted HTTP/HTTPS ports are stored as 80/443."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter", "app_id"],
+          "properties": {
+            "kind": { "const": "linux_app" },
+            "adapter": { "enum": ["fcitx", "obsidian", "shell", "neovim", "libreoffice"] },
+            "app_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)*$",
+              "description": "Exact canonical adapter application identity; never a window title, executable path, or display label."
+            }
+          }
+        }
+      ]
+    },
+    "retention": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": { "const": "none" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "days"],
+          "properties": {
+            "mode": { "const": "bounded" },
+            "days": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 90
+            }
+          }
+        }
+      ]
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["suggest", "display", "context_read", "learn", "retention"],
+      "properties": {
+        "suggest": { "$ref": "#/$defs/decision" },
+        "display": { "$ref": "#/$defs/decision" },
+        "context_read": { "$ref": "#/$defs/decision" },
+        "learn": { "$ref": "#/$defs/decision" },
+        "retention": { "$ref": "#/$defs/retention" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "suggest": { "const": "allow" } },
+            "required": ["suggest"]
+          },
+          "then": {
+            "properties": {
+              "display": { "const": "allow" },
+              "context_read": { "const": "allow" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "learn": { "const": "allow" } },
+            "required": ["learn"]
+          },
+          "then": {
+            "properties": {
+              "suggest": { "const": "allow" },
+              "display": { "const": "allow" },
+              "context_read": { "const": "allow" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "retention": {
+                "type": "object",
+                "properties": { "mode": { "const": "bounded" } },
+                "required": ["mode"]
+              }
+            },
+            "required": ["retention"]
+          },
+          "then": {
+            "properties": { "learn": { "const": "allow" } }
+          }
+        }
+      ]
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "permissions"],
+      "properties": {
+        "identity": { "$ref": "#/$defs/identity" },
+        "permissions": { "$ref": "#/$defs/permissions" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "identity": {
+                "properties": { "kind": { "const": "linux_app" } },
+                "required": ["kind"]
+              }
+            },
+            "required": ["identity"]
+          },
+          "then": {
+            "properties": {
+              "permissions": {
+                "properties": { "learn": { "const": "block" } }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

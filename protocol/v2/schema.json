@@ -1,0 +1,1755 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://badi.invalid/protocol/v2/schema.json",
+  "title": "Badi local adapter protocol v2",
+  "description": "Normative framed-JSON protocol. A frame is a 4-byte little-endian length followed by one UTF-8 instance of this schema and is limited to 65536 bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "type", "mono_ms", "payload"],
+  "properties": {
+    "v": { "const": 2 },
+    "id": { "$ref": "#/$defs/opaqueId" },
+    "type": {
+      "enum": [
+        "hello",
+        "hello.ack",
+        "session.open",
+        "session.close",
+        "context.changed",
+        "suggest.request",
+        "suggest.cancel",
+        "suggestion.show",
+        "suggestion.clear",
+        "control.request",
+        "control.result",
+        "commit.prepare",
+        "commit.result",
+        "health.request",
+        "health.status",
+        "policy.query",
+        "policy.status",
+        "authority.changed",
+        "authority.ack",
+        "settings.get",
+        "settings.replace",
+        "settings.status",
+        "memory.clear",
+        "memory.status",
+        "probe.request",
+        "probe.result",
+        "error",
+        "desktop.state",
+        "desktop.status",
+        "style.key",
+        "style.query",
+        "style.forget",
+        "style.export",
+        "style.status",
+        "style.samples",
+        "context.query",
+        "context.forget",
+        "context.status",
+        "stats.query",
+        "stats.forget",
+        "stats.status",
+        "editor.focus",
+        "editor.status",
+        "revision.request",
+        "revision.show",
+        "revision.clear"
+      ]
+    },
+    "session_id": { "$ref": "#/$defs/sessionId" },
+    "focus_epoch": { "$ref": "#/$defs/counter" },
+    "revision": { "$ref": "#/$defs/counter" },
+    "mono_ms": {
+      "allOf": [{ "$ref": "#/$defs/counter" }],
+      "description": "Sender-local monotonic timestamp for ordering and latency only; never compare epochs across processes."
+    },
+    "payload": { "type": "object" }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "type": { "const": "hello" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/helloPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "hello.ack" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/helloAckPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "session.open" },
+        "payload": { "$ref": "#/$defs/sessionOpenPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "session.close" },
+        "payload": { "$ref": "#/$defs/sessionClosePayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "context.changed" },
+        "payload": { "$ref": "#/$defs/contextChangedPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "suggest.request" },
+        "payload": { "$ref": "#/$defs/suggestRequestPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "suggest.cancel" },
+        "payload": { "$ref": "#/$defs/suggestCancelPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "suggestion.show" },
+        "payload": { "$ref": "#/$defs/suggestionShowPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "revision.request" },
+        "payload": { "$ref": "#/$defs/revisionRequestPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "revision.show" },
+        "payload": { "$ref": "#/$defs/revisionShowPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "revision.clear" },
+        "payload": { "$ref": "#/$defs/revisionClearPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "suggestion.clear" },
+        "payload": { "$ref": "#/$defs/suggestionClearPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "control.request" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/globalControlRequestPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "control.request" },
+        "payload": { "$ref": "#/$defs/sessionControlRequestPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "control.result" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/controlResultPayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "commit.prepare" },
+        "payload": { "$ref": "#/$defs/commitPreparePayload" }
+      }
+    },
+    {
+      "required": ["session_id", "focus_epoch", "revision"],
+      "properties": {
+        "type": { "const": "commit.result" },
+        "payload": { "$ref": "#/$defs/commitResultPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "health.request" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "health.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/healthStatusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "policy.query" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/policyQueryPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "policy.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/policyStatusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "authority.changed" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "id": false,
+        "payload": { "$ref": "#/$defs/authorityChangedPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "authority.ack" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "id": false,
+        "payload": { "$ref": "#/$defs/authorityAckPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "settings.get" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "settings.replace" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/settingsReplacePayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "settings.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/settingsStatusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "memory.clear" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "memory.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/memoryStatusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "probe.request" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/probeRequestPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "probe.result" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/probeResultPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "error" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/errorPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "desktop.state" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/desktopStatePayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "desktop.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/desktopStatusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "editor.focus" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/editorFocusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "editor.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/editorStatusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "style.key" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/styleKeyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "style.query" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "style.forget" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "style.export" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "style.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/styleStatusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "style.samples" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/styleSamplesPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "enum": ["context.query", "context.forget"] },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "context.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/contextStatusPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "enum": ["stats.query", "stats.forget"] },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/emptyPayload" }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "stats.status" },
+        "session_id": false,
+        "focus_epoch": false,
+        "revision": false,
+        "payload": { "$ref": "#/$defs/statsStatusPayload" }
+      }
+    }
+  ],
+  "$defs": {
+    "counter": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "fingerprint": {
+      "type": "string",
+      "description": "Ephemeral opaque race token computed from a fresh session salt, stable target identity, bounded before/after context, and full-target Unicode scalar start/end offsets. Focus epoch and revision are independent address fields that must also match. It is equality data, not adapter authentication, and must not be logged or persisted.",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "capability": {
+      "enum": [
+        "context",
+        "suggestion",
+        "commit.applied",
+        "commit.dispatched_unverified",
+        "control",
+        "health",
+        "policy",
+        "settings",
+        "text_replacement",
+        "long_reading_window",
+        "desktop_signals",
+        "style_key",
+        "editor_focus",
+        "selection_revision"
+      ]
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 14,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name", "version"],
+      "properties": {
+        "kind": { "enum": ["obsidian", "fcitx", "cli", "test", "terminal", "session", "neovim", "libreoffice"] },
+        "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 32 }
+      }
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scheme", "host"],
+      "properties": {
+        "scheme": { "enum": ["http", "https", "file"] },
+        "host": { "type": "string", "minLength": 1, "maxLength": 253 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "target": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "app_id", "target_id", "origin"],
+          "properties": {
+            "kind": { "const": "browser" },
+            "app_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "target_id": { "$ref": "#/$defs/opaqueId" },
+            "origin": { "$ref": "#/$defs/origin" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "app_id", "target_id"],
+          "properties": {
+            "kind": { "const": "desktop_application" },
+            "app_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)*$",
+              "description": "Exact canonical Fcitx program identity; never a title or display label."
+            },
+            "target_id": { "$ref": "#/$defs/opaqueId" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "app_id", "target_id"],
+          "properties": {
+            "kind": { "enum": ["obsidian", "terminal", "fixture", "neovim"] },
+            "app_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "target_id": { "$ref": "#/$defs/opaqueId" },
+            "origin": { "$ref": "#/$defs/origin" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "app_id", "target_id"],
+          "properties": {
+            "kind": { "const": "libreoffice" },
+            "app_id": {
+              "const": "libreoffice-writer",
+              "description": "The LibreOffice Writer extension's only identity; its settings subject is linux_app/libreoffice."
+            },
+            "target_id": { "$ref": "#/$defs/opaqueId" }
+          }
+        }
+      ]
+    },
+    "activation": { "enum": ["always", "manual", "never"] },
+    "fieldPurpose": {
+      "enum": [
+        "normal",
+        "password",
+        "pin",
+        "otp",
+        "payment_secret",
+        "terminal",
+        "email",
+        "url",
+        "search",
+        "unknown"
+      ]
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "purpose",
+        "editable",
+        "multiline",
+        "composing",
+        "sensitive",
+        "identity_known",
+        "focused",
+        "lock_screen"
+      ],
+      "properties": {
+        "purpose": { "$ref": "#/$defs/fieldPurpose" },
+        "editable": { "type": "boolean" },
+        "multiline": { "type": "boolean" },
+        "composing": { "type": "boolean" },
+        "sensitive": { "type": "boolean" },
+        "identity_known": { "type": "boolean" },
+        "focused": { "type": "boolean" },
+        "lock_screen": { "type": "boolean" }
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Full-target selection offsets in Unicode scalar values as reported by the cooperative Fcitx surrounding-text adapter. The broker treats these as opaque state/equality data and performs no text indexing with them.",
+      "required": ["anchor", "head", "unit"],
+      "properties": {
+        "anchor": { "$ref": "#/$defs/counter" },
+        "head": { "$ref": "#/$defs/counter" },
+        "unit": { "const": "unicode_scalar_values" }
+      }
+    },
+    "fingerprintedPayload": {
+      "type": "object",
+      "required": ["fingerprint"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" }
+      }
+    },
+    "reasonCode": {
+      "enum": [
+        "accepted",
+        "ambiguous_session",
+        "cancelled",
+        "dismissed",
+        "expired",
+        "field_ambiguous",
+        "field_not_editable",
+        "field_sensitive",
+        "focus_changed",
+        "invalid_capability",
+        "invalid_frame",
+        "invalid_message",
+        "invalid_output",
+        "manual_required",
+        "no_context",
+        "no_suggestion",
+        "paused",
+        "policy_never",
+        "provider_error",
+        "provider_timeout",
+        "session_closed",
+        "settings_commit_unknown",
+        "settings_committed_degraded",
+        "settings_conflict",
+        "settings_rejected",
+        "stale",
+        "superseded",
+        "unknown_session",
+        "unsupported_version",
+        "no_change",
+        "unsupported_language",
+        "revision_unavailable"
+      ]
+    },
+    "helloPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_v", "max_v", "adapter", "capabilities"],
+      "properties": {
+        "min_v": { "const": 2 },
+        "max_v": { "const": 2 },
+        "adapter": { "$ref": "#/$defs/adapter" },
+        "capabilities": { "$ref": "#/$defs/capabilities" }
+      }
+    },
+    "helloAckPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selected_v",
+        "connection_id",
+        "enabled_capabilities",
+        "max_frame_bytes",
+        "max_before_chars",
+        "max_after_chars",
+        "max_suggestion_chars",
+        "max_suggestion_words",
+        "paused"
+      ],
+      "properties": {
+        "selected_v": { "const": 2 },
+        "connection_id": { "$ref": "#/$defs/opaqueId" },
+        "enabled_capabilities": { "$ref": "#/$defs/capabilities" },
+        "max_frame_bytes": { "const": 65536 },
+        "max_before_chars": { "const": 512 },
+        "max_after_chars": { "const": 128 },
+        "max_suggestion_chars": { "const": 64 },
+        "max_suggestion_words": { "const": 8 },
+        "paused": { "type": "boolean" }
+      }
+    },
+    "sessionOpenPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "activation"],
+      "properties": {
+        "target": { "$ref": "#/$defs/target" },
+        "activation": { "$ref": "#/$defs/activation" }
+      }
+    },
+    "policyResolutionReason": {
+      "enum": [
+        "default_policy",
+        "global_disabled",
+        "context_disabled",
+        "matched_rule",
+        "matched_default",
+        "suggestions_disabled",
+        "unknown_identity",
+        "editor_focused",
+        "snoozed"
+      ],
+      "description": "snoozed: the user snoozed this target's app or site for a few minutes (control action snooze); every grant there is withheld until it runs out or snooze_end."
+    },
+    "policyQueryPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target"],
+      "properties": {
+        "target": { "$ref": "#/$defs/target" }
+      }
+    },
+    "policyStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_epoch",
+        "settings_revision",
+        "paused",
+        "activation",
+        "context_allowed",
+        "display_allowed",
+        "suggestions_allowed",
+        "learning_allowed",
+        "reason"
+      ],
+      "properties": {
+        "authority_epoch": { "$ref": "#/$defs/counter" },
+        "settings_revision": { "$ref": "#/$defs/counter" },
+        "paused": { "type": "boolean" },
+        "activation": { "$ref": "#/$defs/activation" },
+        "context_allowed": { "type": "boolean" },
+        "display_allowed": { "type": "boolean" },
+        "suggestions_allowed": { "type": "boolean" },
+        "learning_allowed": { "type": "boolean" },
+        "reason": { "$ref": "#/$defs/policyResolutionReason" },
+        "language_override": { "enum": ["en", "de", "fa"] },
+        "context_words": {
+          "type": "boolean",
+          "description": "Context is on for this target (ADR 0010): an observed field may send the text near it as window_text. It grants nothing else. Producers omit it when false."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["paused"], "properties": { "paused": { "const": true } } },
+          "then": {
+            "properties": {
+              "activation": { "const": "never" },
+              "context_allowed": { "const": false },
+              "display_allowed": { "const": false },
+              "suggestions_allowed": { "const": false },
+              "learning_allowed": { "const": false }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["suggestions_allowed"],
+            "properties": { "suggestions_allowed": { "const": true } }
+          },
+          "then": {
+            "properties": {
+              "context_allowed": { "const": true },
+              "display_allowed": { "const": true }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["context_words"],
+            "properties": { "context_words": { "const": true } }
+          },
+          "then": { "properties": { "suggestions_allowed": { "const": true } } }
+        },
+        {
+          "if": {
+            "required": ["learning_allowed"],
+            "properties": { "learning_allowed": { "const": true } }
+          },
+          "then": {
+            "properties": {
+              "context_allowed": { "const": true },
+              "display_allowed": { "const": true },
+              "suggestions_allowed": { "const": true }
+            }
+          }
+        }
+      ]
+    },
+    "authorityChangedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority_epoch", "settings_revision", "paused"],
+      "properties": {
+        "authority_epoch": { "$ref": "#/$defs/counter" },
+        "settings_revision": { "$ref": "#/$defs/counter" },
+        "paused": { "type": "boolean" }
+      }
+    },
+    "authorityAckPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority_epoch"],
+      "properties": {
+        "authority_epoch": { "$ref": "#/$defs/counter" }
+      }
+    },
+    "settingsReplacePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected_revision", "document"],
+      "properties": {
+        "expected_revision": { "$ref": "#/$defs/counter" },
+        "document": { "type": "object" }
+      }
+    },
+    "settingsStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "document",
+        "personalization_revision",
+        "personalization_records",
+        "personalization_bytes",
+        "personalization_store_available",
+        "personalization_recorder_available",
+        "personalization_write_failures",
+        "personalization_dropped_signals"
+      ],
+      "properties": {
+        "document": { "type": "object" },
+        "personalization_revision": { "$ref": "#/$defs/counter" },
+        "personalization_records": { "$ref": "#/$defs/counter" },
+        "personalization_bytes": { "$ref": "#/$defs/counter" },
+        "personalization_store_available": { "type": "boolean" },
+        "personalization_recorder_available": { "type": "boolean" },
+        "personalization_write_failures": { "$ref": "#/$defs/counter" },
+        "personalization_dropped_signals": { "$ref": "#/$defs/counter" }
+      }
+    },
+    "memoryStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "records", "bytes", "changed"],
+      "properties": {
+        "revision": { "$ref": "#/$defs/counter" },
+        "records": { "$ref": "#/$defs/counter" },
+        "bytes": { "$ref": "#/$defs/counter" },
+        "changed": { "type": "boolean" }
+      }
+    },
+    "sessionClosePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason"],
+      "properties": {
+        "reason": { "$ref": "#/$defs/reasonCode" }
+      }
+    },
+    "contextText": {
+      "type": "string",
+      "description": "Bounded editor context. Controls and line breaks are permitted; lone UTF-16 surrogate code units U+D800-U+DFFF are rejected while valid astral scalar pairs remain allowed.",
+      "pattern": "^[^\\ud800-\\udfff]*$"
+    },
+    "contextChangedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "before", "after", "selection", "field", "activation", "explicit"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "before": { "$ref": "#/$defs/contextText", "maxLength": 512, "description": "UTF-8 wire text capped at 512 Unicode scalar values immediately before the selection." },
+        "after": { "$ref": "#/$defs/contextText", "maxLength": 128, "description": "UTF-8 wire text capped at 128 Unicode scalar values immediately after the selection." },
+        "window_text": { "$ref": "#/$defs/contextText", "maxLength": 2048, "description": "Text near an observed field in the same window, capped at 2,048 Unicode scalar values, sent only while the policy reply says context_words. The broker uses its words to finish the word being typed and keeps them only for this request (ADR 0010). Absent for denied, sensitive and unobserved fields." },
+        "selection": { "$ref": "#/$defs/selection" },
+        "field": { "$ref": "#/$defs/field" },
+        "activation": { "$ref": "#/$defs/activation" },
+        "explicit": { "type": "boolean" },
+        "language": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 35,
+          "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": ["activation"],
+                "properties": { "activation": { "const": "never" } }
+              },
+              {
+                "required": ["field"],
+                "properties": {
+                  "field": {
+                    "anyOf": [
+                      {
+                        "required": ["sensitive"],
+                        "properties": { "sensitive": { "const": true } }
+                      },
+                      {
+                        "required": ["lock_screen"],
+                        "properties": { "lock_screen": { "const": true } }
+                      },
+                      {
+                        "required": ["purpose"],
+                        "properties": {
+                          "purpose": { "enum": ["password", "pin", "otp", "payment_secret"] }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "properties": {
+              "before": { "maxLength": 0 },
+              "after": { "maxLength": 0 }
+            }
+          }
+        }
+      ]
+    },
+    "suggestRequestPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "explicit"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "explicit": { "type": "boolean" }
+      }
+    },
+    "suggestCancelPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "reason"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "reason": { "$ref": "#/$defs/reasonCode" }
+      }
+    },
+    "safeSuggestionText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "V2 safe output text. Permits only isolated U+0020 spaces (at most one leading and one trailing), rejects a repeated space and every other Unicode whitespace, C0/C1 controls, U+2028/U+2029, UTF-16 surrogate code units U+D800-U+DFFF, and the exact Unicode 16/17 Cf set: U+00AD, U+0600-U+0605, U+061C, U+06DD, U+070F, U+0890-U+0891, U+08E2, U+180E, U+200B, U+200D-U+200F, U+202A-U+202E, U+2060-U+2064, U+2066-U+206F, U+FEFF, U+FFF9-U+FFFB, U+110BD, U+110CD, U+13430-U+1343F, U+1BCA0-U+1BCA3, U+1D173-U+1D17A, U+E0001, and U+E0020-U+E007F. The broker shows a trailing space only when the caret already follows whitespace and a letter or digit follows the caret. A single U+200C (Persian ZWNJ) is permitted only immediately between Arabic-block letters U+0620-U+063F, U+0641-U+064A, U+066E-U+066F, U+0671-U+06D3, U+06D5, U+06E5-U+06E6, U+06EE-U+06EF, U+06FA-U+06FC or U+06FF; leading, trailing, repeated and cross-script joiners remain forbidden.",
+      "allOf": [
+        { "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u00ad\\u0600-\\u0605\\u061c\\u06dd\\u070f\\u0890-\\u0891\\u08e2\\u180e\\u200b\\u200d-\\u200f\\u2028-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ud800-\\udfff\\ufeff\\ufff9-\\ufffb\\u{110bd}\\u{110cd}\\u{13430}-\\u{1343f}\\u{1bca0}-\\u{1bca3}\\u{1d173}-\\u{1d17a}\\u{e0001}\\u{e0020}-\\u{e007f}]+$" },
+        { "pattern": "^ ?[^\\s](?: ?[^\\s])* ?$" },
+        { "pattern": "^(?:[^\\u200c]|[\\u0620-\\u063f\\u0641-\\u064a\\u066e-\\u066f\\u0671-\\u06d3\\u06d5\\u06e5-\\u06e6\\u06ee-\\u06ef\\u06fa-\\u06fc\\u06ff]\\u200c(?=[\\u0620-\\u063f\\u0641-\\u064a\\u066e-\\u066f\\u0671-\\u06d3\\u06d5\\u06e5-\\u06e6\\u06ee-\\u06ef\\u06fa-\\u06fc\\u06ff]))*$" }
+      ]
+    },
+    "spellingSuffixPair": {
+      "type": "object",
+      "description": "A negotiated spelling edit replaces one word of 2-32 characters with case (Unicode Lowercase or Uppercase; protocol/spelling-replacement-fixtures.json) and optionally preserves its one trailing ASCII space. Producers and consumers additionally require different words and, for suggestions, accept_word equal to text.",
+      "required": ["replace_before", "text"],
+      "properties": {
+        "replace_before": { "type": "string", "not": { "pattern": "[^\\p{Lowercase}\\p{Uppercase} ]" } },
+        "text": { "type": "string", "not": { "pattern": "[^\\p{Lowercase}\\p{Uppercase} ]" } },
+        "accept_word": { "type": "string", "not": { "pattern": "[^\\p{Lowercase}\\p{Uppercase} ]" } }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "replace_before": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32}$" },
+            "text": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32}$" },
+            "accept_word": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32}$" }
+          }
+        },
+        {
+          "properties": {
+            "replace_before": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32} $" },
+            "text": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32} $" },
+            "accept_word": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32} $" }
+          }
+        }
+      ]
+    },
+    "suggestionShowPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fingerprint",
+        "suggestion_id",
+        "text",
+        "accept_word",
+        "ttl_ms",
+        "provider"
+      ],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "suggestion_id": { "$ref": "#/$defs/opaqueId" },
+        "replace_before": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32} ?$", "description": "Exact suffix replaced only by adapters negotiating text_replacement; bound to the original context and commit grant." },
+        "text": { "type": "string" },
+        "accept_word": { "type": "string" },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 15000, "description": "Relative receiver-local lifetime starting when this frame is received. Native and editor clients negotiating long_reading_window receive up to 15 seconds; other native and editor clients retain five seconds, and browser leases remain 600 ms. Extensions and type-through never renew the original expiry." },
+        "provider": { "enum": ["phrase_v1", "local_model"] }
+      },
+      "if": { "required": ["replace_before"] },
+      "then": { "$ref": "#/$defs/spellingSuffixPair" },
+      "else": {
+        "properties": {
+          "text": { "$ref": "#/$defs/safeSuggestionText" },
+          "accept_word": { "$ref": "#/$defs/safeSuggestionText" }
+        }
+      }
+    },
+    "suggestionClearPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "reason"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "suggestion_id": { "$ref": "#/$defs/opaqueId" },
+        "reason": { "$ref": "#/$defs/reasonCode" }
+      }
+    },
+    "globalControlAction": {
+      "enum": ["pause", "resume", "pause_toggle", "snooze", "snooze_end"]
+    },
+    "sessionControlAction": {
+      "enum": ["request", "accept_word", "accept_all", "dismiss"]
+    },
+    "globalControlRequestPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action"],
+      "properties": {
+        "action": { "$ref": "#/$defs/globalControlAction" },
+        "minutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1440,
+          "description": "How long a snooze withholds the focused field's app or site. Present exactly for snooze."
+        }
+      },
+      "if": { "properties": { "action": { "const": "snooze" } } },
+      "then": { "required": ["minutes"] },
+      "else": { "properties": { "minutes": false } }
+    },
+    "sessionControlRequestPayload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "fingerprint"],
+          "properties": {
+            "action": { "const": "request" },
+            "fingerprint": { "$ref": "#/$defs/fingerprint" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "fingerprint", "suggestion_id"],
+          "properties": {
+            "action": { "enum": ["accept_word", "accept_all", "dismiss"] },
+            "fingerprint": { "$ref": "#/$defs/fingerprint" },
+            "suggestion_id": { "$ref": "#/$defs/opaqueId" }
+          }
+        }
+      ]
+    },
+    "controlAction": {
+      "enum": [
+        "request",
+        "accept_word",
+        "accept_all",
+        "dismiss",
+        "pause",
+        "resume",
+        "pause_toggle",
+        "snooze",
+        "snooze_end"
+      ]
+    },
+    "controlResultPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "accepted", "reason", "paused"],
+      "properties": {
+        "action": { "$ref": "#/$defs/controlAction" },
+        "accepted": { "type": "boolean" },
+        "reason": { "$ref": "#/$defs/reasonCode" },
+        "paused": { "type": "boolean" },
+        "snooze": { "$ref": "#/$defs/snoozeStatus" }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["snooze"] },
+          "then": {
+            "properties": {
+              "action": { "const": "snooze" },
+              "accepted": { "const": true },
+              "reason": { "const": "accepted" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "action": { "const": "snooze" }, "accepted": { "const": true } },
+            "required": ["action", "accepted"]
+          },
+          "then": { "required": ["snooze"] }
+        }
+      ]
+    },
+    "snoozeSubject": {
+      "description": "The exact settings identity a snooze withholds: a site origin or an app id, never a window title.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter", "scheme", "host", "port"],
+          "properties": {
+            "kind": { "const": "browser_origin" },
+            "adapter": { "const": "chromium" },
+            "scheme": { "enum": ["http", "https"] },
+            "host": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[a-z0-9.:-]+$" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter", "app_id"],
+          "properties": {
+            "kind": { "const": "linux_app" },
+            "adapter": { "enum": ["fcitx", "obsidian", "shell", "neovim", "libreoffice"] },
+            "app_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)*$"
+            }
+          }
+        }
+      ]
+    },
+    "snoozeStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "remaining_ms"],
+      "properties": {
+        "subject": { "$ref": "#/$defs/snoozeSubject" },
+        "remaining_ms": { "type": "integer", "minimum": 0, "maximum": 86400000 }
+      }
+    },
+    "commitPreparePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Single-use commit authorization. The broker's receiver-local result lease defaults to 1500 ms and is hard-clamped to 5000 ms; adapters must apply and report immediately, and a matching suggestion.clear revokes an authorization not yet applied.",
+      "required": ["fingerprint", "suggestion_id", "text", "acceptance"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "suggestion_id": { "$ref": "#/$defs/opaqueId" },
+        "replace_before": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32} ?$", "description": "Exact suffix replaced only by adapters negotiating text_replacement; bound to the original context and commit grant." },
+        "replace_selection": { "$ref": "#/$defs/selection", "description": "A revision's grant (ADR 0012), sent only to adapters negotiating selection_revision: text replaces exactly this selection, which the adapter confirms is unchanged before one commit." },
+        "text": { "type": "string" },
+        "acceptance": { "enum": ["word", "all"] }
+      },
+      "if": { "required": ["replace_before"] },
+      "then": {
+        "allOf": [{ "$ref": "#/$defs/spellingSuffixPair" }],
+        "not": { "required": ["replace_selection"] }
+      },
+      "else": {
+        "if": { "required": ["replace_selection"] },
+        "then": {
+          "properties": {
+            "text": { "$ref": "#/$defs/revisionText", "maxLength": 1100 },
+            "acceptance": { "const": "all" }
+          }
+        },
+        "else": {
+          "properties": { "text": { "$ref": "#/$defs/safeSuggestionText" } }
+        }
+      }
+    },
+    "revisionMode": {
+      "enum": ["grammar", "refine"],
+      "description": "grammar fixes grammar, spelling, capitalization and punctuation and keeps the wording; refine rewrites for clarity and keeps meaning, names and numbers."
+    },
+    "revisionText": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One line of a selection or its revision: no C0/C1 control, Unicode format (Cf) or line-separator character, and no whitespace other than U+0020, U+00A0 and U+202F.",
+      "allOf": [
+        { "$ref": "#/$defs/safeSuggestionText/allOf/0" },
+        { "pattern": "^[^\\t-\\r\\u0085\\u1680\\u2000-\\u200a\\u2028\\u2029\\u205f\\u3000]+$" }
+      ]
+    },
+    "revisionRequestPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An explicit request (ADR 0012) to revise one selection of 1-600 Unicode scalar values on one line. It is a context snapshot of its own: before and after surround the selection, whose offsets span exactly selected. Sent only by adapters negotiating selection_revision.",
+      "required": ["fingerprint", "mode", "before", "selected", "after", "selection", "field", "activation"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "mode": { "$ref": "#/$defs/revisionMode" },
+        "before": { "$ref": "#/$defs/contextText", "maxLength": 512 },
+        "selected": { "$ref": "#/$defs/revisionText", "maxLength": 600 },
+        "after": { "$ref": "#/$defs/contextText", "maxLength": 128 },
+        "selection": { "$ref": "#/$defs/selection" },
+        "field": { "$ref": "#/$defs/field" },
+        "activation": { "$ref": "#/$defs/activation" },
+        "language": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 35,
+          "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$"
+        }
+      }
+    },
+    "revisionShowPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A revision of original that applies only through one accept_all control request before ttl_ms, as a commit.prepare carrying replace_selection.",
+      "required": ["fingerprint", "revision_id", "mode", "original", "text", "ttl_ms", "provider"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "revision_id": { "$ref": "#/$defs/opaqueId" },
+        "mode": { "$ref": "#/$defs/revisionMode" },
+        "original": { "$ref": "#/$defs/revisionText", "maxLength": 600 },
+        "text": { "$ref": "#/$defs/revisionText", "maxLength": 1100 },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 60000 },
+        "provider": { "enum": ["phrase_v1", "local_model"] }
+      }
+    },
+    "revisionClearPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ends a revision request or a shown revision. no_change: the selection needs none; invalid_output: the model's answer failed the broker's gate; unsupported_language and revision_unavailable: no revision could be asked for.",
+      "required": ["fingerprint", "reason"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "revision_id": { "$ref": "#/$defs/opaqueId" },
+        "reason": { "$ref": "#/$defs/reasonCode" }
+      }
+    },
+    "commitResultPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "suggestion_id", "status"],
+      "properties": {
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "suggestion_id": { "$ref": "#/$defs/opaqueId" },
+        "status": { "enum": ["applied", "dispatched-unverified", "stale", "blocked", "failed"] }
+      }
+    },
+    "emptyPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 0
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context_updates",
+        "provider_calls",
+        "provider_input_bytes",
+        "provider_output_bytes",
+        "cancellations",
+        "stale_results",
+        "suggestions_shown",
+        "suggestions_expired",
+        "denied",
+        "manual_required",
+        "dismissals",
+        "commits_prepared",
+        "commits_applied",
+        "commit_failures",
+        "provider_errors"
+      ],
+      "properties": {
+        "context_updates": { "$ref": "#/$defs/counter" },
+        "provider_calls": { "$ref": "#/$defs/counter" },
+        "provider_input_bytes": { "$ref": "#/$defs/counter" },
+        "provider_output_bytes": { "$ref": "#/$defs/counter" },
+        "cancellations": { "$ref": "#/$defs/counter" },
+        "stale_results": { "$ref": "#/$defs/counter" },
+        "suggestions_shown": { "$ref": "#/$defs/counter" },
+        "suggestions_expired": { "$ref": "#/$defs/counter" },
+        "denied": { "$ref": "#/$defs/counter" },
+        "manual_required": { "$ref": "#/$defs/counter" },
+        "dismissals": { "$ref": "#/$defs/counter" },
+        "commits_prepared": { "$ref": "#/$defs/counter" },
+        "commits_applied": { "$ref": "#/$defs/counter" },
+        "commit_failures": { "$ref": "#/$defs/counter" },
+        "provider_errors": { "$ref": "#/$defs/counter" },
+        "no_suggestion": { "$ref": "#/$defs/noSuggestionMetrics" },
+        "type_through": { "$ref": "#/$defs/typeThroughMetrics" },
+        "word_savings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["applied", "dispatched_unverified"],
+          "properties": {
+            "applied": { "$ref": "#/$defs/counter" },
+            "dispatched_unverified": { "$ref": "#/$defs/counter" }
+          }
+        }
+      }
+    },
+    "noSuggestionReason": {
+      "enum": [
+        "request_abstained",
+        "budget_prefill",
+        "budget_stream",
+        "model_abstained",
+        "output_rejected",
+        "stale",
+        "timeout",
+        "provider_error",
+        "low_confidence"
+      ]
+    },
+    "carryMiss": {
+      "enum": [
+        "scope",
+        "after_changed",
+        "language_changed",
+        "deadline_tight",
+        "prefix_mismatch",
+        "shape_rejected"
+      ]
+    },
+    "typeThroughMetrics": {
+      "type": "object",
+      "description": "Content-free type-through outcomes (ADR 0004): requests answered from the carry, and admitted requests that reached the provider although a carry existed, by the gate that declined it. Optional for brokers that predate the breakdown.",
+      "additionalProperties": false,
+      "required": [
+        "carried",
+        "scope",
+        "after_changed",
+        "language_changed",
+        "deadline_tight",
+        "prefix_mismatch",
+        "shape_rejected"
+      ],
+      "properties": {
+        "carried": { "$ref": "#/$defs/counter" },
+        "scope": { "$ref": "#/$defs/counter" },
+        "after_changed": { "$ref": "#/$defs/counter" },
+        "language_changed": { "$ref": "#/$defs/counter" },
+        "deadline_tight": { "$ref": "#/$defs/counter" },
+        "prefix_mismatch": { "$ref": "#/$defs/counter" },
+        "shape_rejected": { "$ref": "#/$defs/counter" },
+        "last_miss": { "$ref": "#/$defs/carryMiss" }
+      }
+    },
+    "noSuggestionMetrics": {
+      "type": "object",
+      "description": "Content-free classes of provider calls that ended without a displayed suggestion; each call counts once. Optional for brokers that predate the breakdown.",
+      "additionalProperties": false,
+      "required": [
+        "request_abstained",
+        "budget_prefill",
+        "budget_stream",
+        "model_abstained",
+        "output_rejected",
+        "stale",
+        "timeout",
+        "provider_error"
+      ],
+      "properties": {
+        "request_abstained": { "$ref": "#/$defs/counter" },
+        "budget_prefill": { "$ref": "#/$defs/counter" },
+        "budget_stream": { "$ref": "#/$defs/counter" },
+        "model_abstained": { "$ref": "#/$defs/counter" },
+        "output_rejected": { "$ref": "#/$defs/counter" },
+        "stale": { "$ref": "#/$defs/counter" },
+        "timeout": { "$ref": "#/$defs/counter" },
+        "provider_error": { "$ref": "#/$defs/counter" },
+        "low_confidence": {
+          "$ref": "#/$defs/counter",
+          "description": "Suggestions withheld because a token was less likely than the confidence floor. Optional for brokers that predate the confidence gate."
+        },
+        "last": { "$ref": "#/$defs/noSuggestionReason" }
+      }
+    },
+    "probeRequestPayload": {
+      "type": "object",
+      "description": "Private same-UID CLI diagnostic. It opens no session, grants no commit authority, and its text is neither logged nor retained.",
+      "additionalProperties": false,
+      "required": ["before", "allow_replacement"],
+      "properties": {
+        "before": { "$ref": "#/$defs/contextText", "maxLength": 512 },
+        "after": { "$ref": "#/$defs/contextText", "maxLength": 128 },
+        "language": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 35,
+          "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$"
+        },
+        "allow_replacement": { "type": "boolean" },
+        "explicit": {
+          "type": "boolean",
+          "description": "Use the explicit-request writing budget (1200 ms) instead of the automatic one (550 ms)."
+        }
+      }
+    },
+    "probeResultPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "provider"],
+      "properties": {
+        "outcome": { "enum": ["suggested", "no_suggestion", "paused"] },
+        "provider": { "enum": ["phrase_v1", "local_model"] },
+        "text": { "type": "string" },
+        "replace_before": { "type": "string", "pattern": "^[\\p{Lowercase}\\p{Uppercase}]{2,32} ?$" },
+        "reason": { "$ref": "#/$defs/noSuggestionReason" },
+        "latency_ms": { "$ref": "#/$defs/counter" }
+      },
+      "oneOf": [
+        {
+          "properties": { "outcome": { "const": "suggested" }, "reason": false },
+          "required": ["text", "latency_ms"],
+          "if": { "required": ["replace_before"] },
+          "then": { "$ref": "#/$defs/spellingSuffixPair" },
+          "else": { "properties": { "text": { "$ref": "#/$defs/safeSuggestionText" } } }
+        },
+        {
+          "properties": {
+            "outcome": { "const": "no_suggestion" },
+            "text": false,
+            "replace_before": false
+          },
+          "required": ["reason", "latency_ms"]
+        },
+        {
+          "properties": {
+            "outcome": { "const": "paused" },
+            "text": false,
+            "replace_before": false,
+            "reason": false,
+            "latency_ms": false
+          }
+        }
+      ]
+    },
+    "activeLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "focus_epoch", "revision", "fingerprint"],
+      "properties": {
+        "session_id": { "$ref": "#/$defs/sessionId" },
+        "focus_epoch": { "$ref": "#/$defs/counter" },
+        "revision": { "$ref": "#/$defs/counter" },
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "suggestion_id": { "$ref": "#/$defs/opaqueId" }
+      }
+    },
+    "healthStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "paused",
+        "authority_epoch",
+        "settings_revision",
+        "control_plane_degraded",
+        "sessions",
+        "socket_mode",
+        "max_frame_bytes",
+        "metrics"
+      ],
+      "properties": {
+        "provider": { "enum": ["phrase_v1", "local_model"] },
+        "paused": { "type": "boolean" },
+        "authority_epoch": { "$ref": "#/$defs/counter" },
+        "settings_revision": { "$ref": "#/$defs/counter" },
+        "control_plane_degraded": { "type": "boolean" },
+        "sessions": { "$ref": "#/$defs/counter" },
+        "socket_mode": { "const": "0600" },
+        "max_frame_bytes": { "const": 65536 },
+        "metrics": { "$ref": "#/$defs/metrics" },
+        "active": { "$ref": "#/$defs/activeLocator" },
+        "desktop": { "$ref": "#/$defs/desktopStatusPayload" },
+        "snoozes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/snoozeStatus" },
+          "description": "Every app or site snoozed now, in identity order; omitted when none is."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "control_plane_degraded": { "const": true } },
+            "required": ["control_plane_degraded"]
+          },
+          "then": { "properties": { "paused": { "const": true } } }
+        }
+      ]
+    },
+    "desktopSession": {
+      "enum": ["active", "inactive", "sleeping"],
+      "description": "The login session as logind reports it. Inactive (another session or VT in the foreground) and sleeping hold every grant until the helper reports active again or disconnects."
+    },
+    "desktopStatePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Content-free report from the desktop session helper (capability desktop_signals). It never grants authority. Unknown power state is reported as false. screen_shared is true while a desktop portal screencast stream is live in PipeWire, and false without PipeWire, where no portal stream can exist.",
+      "required": ["session", "on_battery", "power_saver", "screen_shared"],
+      "properties": {
+        "session": { "$ref": "#/$defs/desktopSession" },
+        "on_battery": { "type": "boolean" },
+        "power_saver": { "type": "boolean" },
+        "screen_shared": { "type": "boolean" }
+      }
+    },
+    "desktopStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The broker's combined view of every connected helper's report. automatic is normal unless low_power is true and settings choose a battery mode. screen_share is none unless a helper reports a live screen share, or one that did left less than the broker's grace (10 s) ago without another report since; then held (settings screen_share hold, the default: every grant is held as in an inactive session) or suggesting (settings screen_share suggest). Only that grace outlives a helper, so observed may be false while a share is held.",
+      "required": ["observed", "session", "low_power", "automatic", "screen_share"],
+      "properties": {
+        "observed": { "type": "boolean" },
+        "session": { "$ref": "#/$defs/desktopSession" },
+        "low_power": { "type": "boolean" },
+        "automatic": { "enum": ["normal", "deferred", "explicit_only"] },
+        "screen_share": { "enum": ["none", "held", "suggesting"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "observed": { "const": false } }, "required": ["observed"] },
+          "then": { "properties": { "session": { "const": "active" }, "low_power": { "const": false } } }
+        },
+        {
+          "if": { "properties": { "low_power": { "const": false } }, "required": ["low_power"] },
+          "then": { "properties": { "automatic": { "const": "normal" } } }
+        }
+      ]
+    },
+    "editorFocusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An editor running in a terminal (capability editor_focus, Neovim only) reports whether it holds that terminal's focus. Content-free and bound to the reporting connection; it never grants authority.",
+      "required": ["focused"],
+      "properties": { "focused": { "type": "boolean" } }
+    },
+    "editorStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Whether any connected editor holds its terminal's focus. While one does, desktop_application targets resolve to policy reason editor_focused and every grant there is withheld.",
+      "required": ["native_withheld"],
+      "properties": { "native_withheld": { "type": "boolean" } }
+    },
+    "styleKeyPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The keyring's style-learning key (capability style_key). Never logged or stored by the broker.",
+      "required": ["key_id", "key"],
+      "properties": {
+        "key_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "key": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "styleStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Content-free style-learning state.",
+      "required": ["enabled", "available", "key", "samples", "subjects"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "available": { "type": "boolean" },
+        "key": { "enum": ["absent", "ready", "mismatch"] },
+        "samples": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "subjects": { "type": "integer", "minimum": 0, "maximum": 64 }
+      }
+    },
+    "contextStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Content-free state of opt-in context (ADR 0010): whether it is on, whether the user has chosen, and learned-word counts. Never a word.",
+      "required": ["enabled", "chosen", "available", "key", "subjects"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "chosen": { "type": "boolean" },
+        "available": { "type": "boolean" },
+        "key": { "enum": ["absent", "ready", "mismatch"] },
+        "subjects": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "words": { "type": "integer", "minimum": 0, "maximum": 32768 }
+      }
+    },
+    "styleSamplesPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An explicit export of decrypted style samples (settings capability, CLI only).",
+      "required": ["samples"],
+      "properties": {
+        "samples": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["identity", "day", "text"],
+            "properties": {
+              "identity": { "type": "object" },
+              "day": { "$ref": "#/$defs/counter" },
+              "text": { "type": "string", "minLength": 24, "maxLength": 240 }
+            }
+          }
+        }
+      }
+    },
+    "statsStatusPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Content-free usage statistics: suggestions shown, acceptances that landed and the words they saved, per local calendar day and per exact app id or site origin, kept 90 days. Never text.",
+      "required": ["available", "summary"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["today", "retention_days", "totals", "days", "subjects"],
+          "properties": {
+            "today": { "$ref": "#/$defs/calendarDay" },
+            "retention_days": { "const": 90 },
+            "totals": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["today", "last_7_days", "retained"],
+              "properties": {
+                "today": { "$ref": "#/$defs/statsCounts" },
+                "last_7_days": { "$ref": "#/$defs/statsCounts" },
+                "retained": { "$ref": "#/$defs/statsCounts" }
+              }
+            },
+            "days": {
+              "type": "array",
+              "maxItems": 91,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["day", "shown", "accepted", "words"],
+                "properties": {
+                  "day": { "$ref": "#/$defs/calendarDay" },
+                  "shown": { "$ref": "#/$defs/counter" },
+                  "accepted": { "$ref": "#/$defs/counter" },
+                  "words": { "$ref": "#/$defs/counter" }
+                }
+              }
+            },
+            "subjects": {
+              "type": "array",
+              "maxItems": 48,
+              "description": "The union of the 16 leading apps and sites of each window by words, then shown; the totals stay exact.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["identity", "today", "last_7_days", "retained"],
+                "properties": {
+                  "identity": { "$ref": "#/$defs/subjectIdentity" },
+                  "today": { "$ref": "#/$defs/statsCounts" },
+                  "last_7_days": { "$ref": "#/$defs/statsCounts" },
+                  "retained": { "$ref": "#/$defs/statsCounts" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "statsCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shown", "accepted", "words"],
+      "properties": {
+        "shown": { "$ref": "#/$defs/counter" },
+        "accepted": { "$ref": "#/$defs/counter" },
+        "words": { "$ref": "#/$defs/counter" }
+      }
+    },
+    "calendarDay": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "A local calendar date, YYYY-MM-DD."
+    },
+    "subjectIdentity": {
+      "description": "An exact app or site, as badi.settings.v2 names it.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter", "scheme", "host", "port"],
+          "properties": {
+            "kind": { "const": "browser_origin" },
+            "adapter": { "const": "chromium" },
+            "scheme": { "enum": ["http", "https"] },
+            "host": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[a-z0-9.:-]+$" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter", "app_id"],
+          "properties": {
+            "kind": { "const": "linux_app" },
+            "adapter": { "enum": ["fcitx", "obsidian", "shell", "neovim", "libreoffice"] },
+            "app_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)*$" }
+          }
+        }
+      ]
+    },
+    "errorPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code"],
+      "properties": {
+        "code": { "$ref": "#/$defs/reasonCode" },
+        "committed": { "type": "boolean" },
+        "settings_revision": { "$ref": "#/$defs/counter" },
+        "control_plane_degraded": { "type": "boolean" }
+      },
+      "dependentRequired": {
+        "committed": ["settings_revision", "control_plane_degraded"],
+        "settings_revision": ["control_plane_degraded"],
+        "control_plane_degraded": ["settings_revision"]
+      }
+    }
+  }
+}

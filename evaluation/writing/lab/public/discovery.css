@@ -1,0 +1,11 @@
+.discovery { margin-block: 1.5rem; }
+.discovery-search { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; }
+.discovery-search label { display: grid; gap: .35rem; flex: 1 1 18rem; }
+.discovery-search input { width: 100%; }
+.discovery-status { min-height: 2.5em; }
+.discovery-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 23rem), 1fr)); gap: 1rem; }
+.discovery-candidate { border: 1px solid var(--border, #59616a); border-radius: .5rem; padding: 1rem; min-width: 0; }
+.discovery-candidate h3, .discovery-candidate p { overflow-wrap: anywhere; }
+.discovery-candidate button { margin: .35rem .4rem .35rem 0; }
+.discovery-candidate pre { max-height: 28rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.discovery-rejection { color: var(--warning, #efba7d); }

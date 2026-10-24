@@ -1,0 +1,243 @@
+"""Window-local logical caret geometry from AT-SPI SCREEN extents.
+
+Every preview calibrates again; nothing is cached. Any inconsistency yields
+None, and the addon then uses the Fcitx panel.
+"""
+from __future__ import annotations
+
+import math
+
+CALIBRATED = "atspi_frame_calibrated"
+SCALE_TOLERANCE = 0.01
+EDGE_TOLERANCE = 1
+# Gecko's glyph extents are device pixels. Only integer scales keep device
+# pixels an exact multiple of logical ones; other scales use the Fcitx panel.
+GECKO_SCALES = (1, 2)
+RECT_KEYS = ("x", "y", "width", "height")
+MAX_COORDINATE = 10**7
+# Logical width at most of an input field that only marks the caret.
+CARET_MARK_WIDTH = 2
+
+
+def _following_x(glyph, following, to_local_x, bound_right):
+    """Window-local left edge of the glyph after the caret, or None.
+
+    Only a glyph on the caret's own line, starting no earlier than where
+    the caret glyph ends and inside the drawing bound, proves how much
+    inline room the line has before the following words.
+    """
+    if not _is_rect(following):
+        return None
+    if abs(following["y"] - glyph["y"]) > glyph["height"] / 2:
+        return None
+    if following["x"] < glyph["x"] + glyph["width"] - EDGE_TOLERANCE:
+        return None
+    value = to_local_x(following["x"])
+    return value if value <= bound_right + EDGE_TOLERANCE else None
+
+
+def calibrated_geometry(frame, document, field, glyph, window, monitors, caret, container=None, page=None,
+                        following=None):
+    """Window-local logical caret geometry for this request, or None.
+
+    Chromium and Electron report document, field and glyph SCREEN extents in
+    physical pixels offset by the frame's SCREEN origin times the scale; the
+    frame itself is logical and Electron's origin is arbitrary. The document
+    to frame width ratio must equal the monitor scale for this convention.
+    A field in an iframe has its own nearest document; then `page`, the
+    outermost web document, proves the scale and must contain it.
+
+    The glyph must lie inside the field, which bounds the drawing. An editor
+    that keeps its input field only as wide as the caret (VS Code with
+    `editor.editContext` off) places that field right after the glyph
+    instead; then `container`, the field's parent (the editor widget), must
+    hold both and bounds the drawing.
+    """
+    try:
+        output = _output(frame, document, field, glyph, window, monitors, caret)
+        if output is None:
+            return None
+        scale = output[1]
+        reference = document if page is None else page
+        if abs(reference["width"] / frame["width"] - scale) > SCALE_TOLERANCE:
+            return None
+        if not _inside(field, document) or (page is not None and not (_is_rect(page) and _inside(document, page))):
+            return None
+        bound = field
+        if not _inside(glyph, field):
+            if not (_marks_caret(field, glyph, scale) and _is_rect(container) and _inside(field, container)
+                    and _inside(glyph, container) and _inside(container, document)):
+                return None
+            bound = container
+        left, top = frame["x"] * scale, frame["y"] * scale
+
+        def local(value, origin):
+            return round((value - origin) / scale, 2)
+
+        bound_local = {"x": local(bound["x"], left), "y": local(bound["y"], top),
+                       "width": round(bound["width"] / scale, 2), "height": round(bound["height"] / scale, 2)}
+        return _reply(output, caret, local(glyph["x"] + glyph["width"], left), local(glyph["y"], top),
+                      round(glyph["height"] / scale, 2), bound_local, window,
+                      _following_x(glyph, following, lambda value: local(value, left),
+                                   bound_local["x"] + bound_local["width"]))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _marks_caret(field, glyph, scale):
+    """The field is caret-wide and starts where the glyph ends, on its line."""
+    return (field["width"] <= CARET_MARK_WIDTH * scale
+            and abs(glyph["x"] + glyph["width"] - field["x"]) <= scale
+            and glyph["y"] >= field["y"] - EDGE_TOLERANCE
+            and glyph["y"] + glyph["height"] <= field["y"] + field["height"] + EDGE_TOLERANCE)
+
+
+def gecko_calibrated_geometry(frame, document, field, glyph, window, monitors, caret, following=None):
+    """Window-local logical caret geometry for a Gecko field, or None.
+
+    Gecko on Wayland reports SCREEN extents relative to its own window: the
+    frame sits at (0, 0), and frame, document and field are logical pixels,
+    but character extents are device pixels. The frame must start at the
+    origin and span the window's width (a physical frame would be twice as
+    wide), the document must lie inside the frame, the field inside the
+    document and the scaled glyph inside the field. Gecko's surface can be
+    taller than the tile Hyprland shows, so the caret is bounded by the window
+    size, never by the frame height.
+    """
+    try:
+        output = _output(frame, document, field, glyph, window, monitors, caret)
+        if output is None:
+            return None
+        _monitor, scale, width, _height = output
+        if scale not in GECKO_SCALES:
+            return None
+        if frame["x"] != 0 or frame["y"] != 0 or abs(frame["width"] - width) > EDGE_TOLERANCE:
+            return None
+        logical = {key: glyph[key] / scale for key in RECT_KEYS}
+        if not _inside(document, frame) or not _inside(field, document) or not _inside(logical, field):
+            return None
+        return _reply(output, caret, round(logical["x"] + logical["width"], 2), round(logical["y"], 2),
+                      round(logical["height"], 2), {key: round(field[key], 2) for key in RECT_KEYS}, window,
+                      _following_x(glyph, following, lambda value: round(value / scale, 2),
+                                   field["x"] + field["width"]))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def native_calibrated_geometry(frame, field, glyph, window, monitors, caret, following=None):
+    """Window-local logical caret geometry for a native toolkit field, or None.
+
+    LibreOffice (VCL on Wayland) reports WINDOW extents in logical pixels
+    relative to its toplevel frame; its SCREEN extents carry a toolbar offset.
+    The frame must sit at the origin and span the Hyprland window (a frame
+    with drop shadows does not), the field must lie inside the frame and the
+    glyph inside the field. Qt reports no glyph extents and fails here.
+    """
+    try:
+        output = _output(frame, frame, field, glyph, window, monitors, caret)
+        if output is None:
+            return None
+        _monitor, _scale, width, height = output
+        if not _spans_window(frame, width, height) or not _inside(field, frame) or not _inside(glyph, field):
+            return None
+        return _reply(output, caret, round(glyph["x"] + glyph["width"], 2), round(glyph["y"], 2),
+                      round(glyph["height"], 2), {key: round(field[key], 2) for key in RECT_KEYS}, window,
+                      _following_x(glyph, following, lambda value: round(value, 2),
+                                   field["x"] + field["width"]))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def input_method_geometry(rect, window, monitors, caret, frame=None, field=None):
+    """Window-local logical caret geometry from the caret rectangle an app gave
+    its input method, or None.
+
+    Qt's Fcitx module (the RelativeRect capability) reports the caret relative
+    to its window in physical pixels, with its device pixel ratio as `scale`,
+    which must equal the monitor's. The field's WINDOW extents bound the
+    drawing when its frame spans the window and the field holds the caret;
+    otherwise the window does.
+    """
+    try:
+        if not isinstance(rect, dict) or set(rect) != {*RECT_KEYS, "scale"}:
+            return None
+        box = {key: rect[key] for key in RECT_KEYS}
+        output = _output(box, box, box, box, window, monitors, caret)
+        if output is None:
+            return None
+        _monitor, scale, width, height = output
+        if type(rect["scale"]) not in (int, float) or abs(rect["scale"] - scale) > SCALE_TOLERANCE:
+            return None
+        x, y, line = (round(box[key] / scale, 2) for key in ("x", "y", "height"))
+        bounds = {"x": 0, "y": y, "width": width, "height": line}
+        if (_is_rect(frame) and _is_rect(field) and _spans_window(frame, width, height) and _inside(field, frame)
+                and _inside({"x": x, "y": y, "width": 0, "height": line}, field)):
+            bounds = {key: round(field[key], 2) for key in RECT_KEYS}
+        return _reply(output, caret, x, y, line, bounds, window)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def visual_direction(previous, last):
+    """Run direction from the two glyphs before the caret, or "".
+
+    Gecko exposes no "direction" text attribute, so the caret edge follows
+    glyph order instead: on one line, a later glyph to the right means
+    left-to-right. Missing, empty or wrapped glyphs give "".
+    """
+    try:
+        boxes = [(float(box.x), float(box.y), float(box.width), float(box.height)) for box in (previous, last)]
+    except (AttributeError, TypeError, ValueError):
+        return ""
+    (x1, y1, w1, h1), (x2, y2, w2, h2) = boxes
+    if min(w1, w2, h1, h2) <= 0 or abs(y1 - y2) > min(h1, h2) / 2 or x1 == x2:
+        return ""
+    return "ltr" if x2 > x1 else "rtl"
+
+
+def _output(frame, document, field, glyph, window, monitors, caret):
+    """(monitor, scale, window width, window height) when the inputs are usable."""
+    if not all(_is_rect(value) for value in (frame, document, field, glyph)) or type(caret) is not int or caret < 1:
+        return None
+    matching = [item for item in monitors if isinstance(item, dict) and item.get("id") == window["monitor"]]
+    if len(matching) != 1 or window["xwayland"] is not False:
+        return None
+    monitor = matching[0]
+    scale, (width, height) = monitor["scale"], window["size"]
+    if (type(scale) not in (int, float) or not .5 <= scale <= 4 or monitor["transform"] != 0
+            or not all(type(value) in (int, float) and 1 <= value <= 32768 for value in (width, height))
+            or frame["width"] < 1 or glyph["height"] < 1):
+        return None
+    return monitor, scale, width, height
+
+
+def _reply(output, caret, x, y, line, field, window, following_x=None):
+    """The geometry reply; the caret must lie inside Hyprland's window size."""
+    monitor, scale, width, height = output
+    if not (0 <= x <= width and 0 <= y and y + line <= height):
+        return None
+    reply = {"coordinate_convention": CALIBRATED, "scale": scale, "character_offset": caret - 1,
+             "caret": {"x": x, "y": y, "height": line}, "field": field,
+             "window": {key: window[key] for key in ("pid", "address", "at", "size", "monitor", "xwayland")},
+             "monitor": {key: monitor[key] for key in ("name", "x", "y", "width", "height", "scale", "transform")}}
+    if following_x is not None and x < following_x <= width:
+        reply["following_x"] = following_x
+    return reply
+
+
+def _is_rect(value):
+    return (isinstance(value, dict) and all(type(value.get(key)) in (int, float) and math.isfinite(value[key])
+            and abs(value[key]) <= MAX_COORDINATE for key in RECT_KEYS)
+            and value["width"] >= 0 and value["height"] >= 0)
+
+
+def _spans_window(frame, width, height):
+    """A WINDOW-coordinate frame at the origin with the window's size."""
+    return (frame["x"] == 0 and frame["y"] == 0 and abs(frame["width"] - width) <= EDGE_TOLERANCE
+            and abs(frame["height"] - height) <= EDGE_TOLERANCE)
+
+
+def _inside(inner, outer):
+    return (inner["x"] >= outer["x"] - EDGE_TOLERANCE and inner["y"] >= outer["y"] - EDGE_TOLERANCE and
+            inner["x"] + inner["width"] <= outer["x"] + outer["width"] + EDGE_TOLERANCE and
+            inner["y"] + inner["height"] <= outer["y"] + outer["height"] + EDGE_TOLERANCE)

@@ -1,0 +1,2112 @@
+use std::fmt;
+
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
+use serde_json::Value;
+use thiserror::Error;
+use uuid::{Uuid, Variant};
+
+use crate::metrics::{MetricsSnapshot, NoSuggestionReason};
+
+/// The one protocol version the broker speaks; v1 is retired (ADR 0007).
+pub const CURRENT_PROTOCOL_VERSION: u8 = 2;
+pub const MAX_SAFE_COUNTER: u64 = 9_007_199_254_740_991;
+pub const MAX_FRAME_BYTES: usize = 65_536;
+pub const MAX_BEFORE_CHARS: usize = 512;
+pub const MAX_AFTER_CHARS: usize = 128;
+/// Window text an observed field may carry for finishing words (ADR 0010).
+pub const MAX_WINDOW_TEXT_CHARS: usize = 2048;
+pub const MAX_SUGGESTION_CHARS: usize = 64;
+pub const MAX_SUGGESTION_WORDS: usize = 8;
+pub const MAX_ID_CHARS: usize = 128;
+pub const DEFAULT_SUGGESTION_TTL_MS: u64 = 600;
+pub const CAPABILITY_COUNT: usize = 14;
+/// The only app id the Writer extension target may claim.
+pub const LIBREOFFICE_WRITER_APP_ID: &str = "libreoffice-writer";
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SessionId(Uuid);
+
+impl SessionId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for SessionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for SessionId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl Serialize for SessionId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        let parsed = Uuid::parse_str(&raw).map_err(D::Error::custom)?;
+        if parsed.to_string() != raw {
+            return Err(D::Error::custom("noncanonical_session_id"));
+        }
+        let version = parsed.get_version_num();
+        if !(1..=8).contains(&version) {
+            return Err(D::Error::custom("unsupported_session_id_version"));
+        }
+        if parsed.get_variant() != Variant::RFC4122 {
+            return Err(D::Error::custom("unsupported_session_id_variant"));
+        }
+        Ok(Self(parsed))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdapterKind {
+    Obsidian,
+    Fcitx,
+    Cli,
+    Test,
+    Terminal,
+    /// The desktop session helper: logind, power and portal signals only.
+    Session,
+    Neovim,
+    /// The Writer UNO extension: explicit, editor-owned spelling
+    /// replacement verified in the document with one native undo step.
+    Libreoffice,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum Capability {
+    #[serde(rename = "long_reading_window")]
+    LongReadingWindow,
+    #[serde(rename = "text_replacement")]
+    TextReplacement,
+    #[serde(rename = "context")]
+    Context,
+    #[serde(rename = "suggestion")]
+    Suggestion,
+    #[serde(rename = "commit.applied")]
+    CommitApplied,
+    #[serde(rename = "commit.dispatched_unverified")]
+    CommitDispatchedUnverified,
+    #[serde(rename = "control")]
+    Control,
+    #[serde(rename = "health")]
+    Health,
+    #[serde(rename = "policy")]
+    Policy,
+    #[serde(rename = "settings")]
+    Settings,
+    /// Content-free desktop session and power state from the session helper.
+    #[serde(rename = "desktop_signals")]
+    DesktopSignals,
+    /// Delivers the keyring's style-learning key (session helper, CLI).
+    #[serde(rename = "style_key")]
+    StyleKey,
+    /// An editor running in a terminal reports when it holds that
+    /// terminal's focus (Neovim only); it only withholds (ADR 0009).
+    #[serde(rename = "editor_focus")]
+    EditorFocus,
+    /// Revises one selection on an explicit request (ADR 0012): the Fcitx
+    /// addon only, protocol v2.
+    #[serde(rename = "selection_revision")]
+    SelectionRevision,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetKind {
+    Browser,
+    DesktopApplication,
+    Obsidian,
+    Terminal,
+    Fixture,
+    Neovim,
+    /// The Writer extension's exact app identity.
+    Libreoffice,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Activation {
+    Always,
+    Manual,
+    Never,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldPurpose {
+    Normal,
+    Password,
+    Pin,
+    Otp,
+    PaymentSecret,
+    Terminal,
+    Email,
+    Url,
+    Search,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    PhraseV1,
+    LocalModel,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlAction {
+    Request,
+    AcceptWord,
+    AcceptAll,
+    Dismiss,
+    Pause,
+    Resume,
+    PauseToggle,
+    /// Protocol v2: withhold every grant for the focused field's app or
+    /// site for `minutes` (runtime only).
+    Snooze,
+    /// Protocol v2: end every snooze early.
+    SnoozeEnd,
+}
+
+impl ControlAction {
+    #[must_use]
+    pub const fn is_global(self) -> bool {
+        matches!(
+            self,
+            Self::Pause | Self::Resume | Self::PauseToggle | Self::Snooze | Self::SnoozeEnd
+        )
+    }
+}
+
+/// The longest snooze `badi snooze` may ask for: one day.
+pub const MAX_SNOOZE_MINUTES: u16 = 1440;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Acceptance {
+    Word,
+    All,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum CommitStatus {
+    #[serde(rename = "applied")]
+    Applied,
+    #[serde(rename = "dispatched-unverified")]
+    DispatchedUnverified,
+    #[serde(rename = "stale")]
+    Stale,
+    #[serde(rename = "blocked")]
+    Blocked,
+    #[serde(rename = "failed")]
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasonCode {
+    Accepted,
+    AmbiguousSession,
+    Cancelled,
+    Dismissed,
+    Expired,
+    FieldAmbiguous,
+    FieldNotEditable,
+    FieldSensitive,
+    FocusChanged,
+    InvalidCapability,
+    InvalidFrame,
+    InvalidMessage,
+    InvalidOutput,
+    ManualRequired,
+    NoContext,
+    NoSuggestion,
+    Paused,
+    PolicyNever,
+    ProviderError,
+    ProviderTimeout,
+    SessionClosed,
+    SettingsCommitUnknown,
+    SettingsCommittedDegraded,
+    SettingsConflict,
+    SettingsRejected,
+    Stale,
+    Superseded,
+    UnknownSession,
+    UnsupportedVersion,
+    /// A revision found nothing to change in the selection.
+    NoChange,
+    /// The selection's language has no revision model prompt.
+    UnsupportedLanguage,
+    /// No revision model is installed, or it cannot start now.
+    RevisionUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum MessageType {
+    #[serde(rename = "hello")]
+    Hello,
+    #[serde(rename = "hello.ack")]
+    HelloAck,
+    #[serde(rename = "session.open")]
+    SessionOpen,
+    #[serde(rename = "session.close")]
+    SessionClose,
+    #[serde(rename = "context.changed")]
+    ContextChanged,
+    #[serde(rename = "suggest.request")]
+    SuggestRequest,
+    #[serde(rename = "suggest.cancel")]
+    SuggestCancel,
+    #[serde(rename = "suggestion.show")]
+    SuggestionShow,
+    #[serde(rename = "suggestion.clear")]
+    SuggestionClear,
+    #[serde(rename = "control.request")]
+    ControlRequest,
+    #[serde(rename = "control.result")]
+    ControlResult,
+    #[serde(rename = "commit.prepare")]
+    CommitPrepare,
+    #[serde(rename = "commit.result")]
+    CommitResult,
+    #[serde(rename = "health.request")]
+    HealthRequest,
+    #[serde(rename = "health.status")]
+    HealthStatus,
+    #[serde(rename = "policy.query")]
+    PolicyQuery,
+    #[serde(rename = "policy.status")]
+    PolicyStatus,
+    #[serde(rename = "authority.changed")]
+    AuthorityChanged,
+    #[serde(rename = "authority.ack")]
+    AuthorityAck,
+    #[serde(rename = "settings.get")]
+    SettingsGet,
+    #[serde(rename = "settings.replace")]
+    SettingsReplace,
+    #[serde(rename = "settings.status")]
+    SettingsStatus,
+    #[serde(rename = "memory.clear")]
+    MemoryClear,
+    #[serde(rename = "memory.status")]
+    MemoryStatus,
+    #[serde(rename = "probe.request")]
+    ProbeRequest,
+    #[serde(rename = "probe.result")]
+    ProbeResult,
+    #[serde(rename = "error")]
+    Error,
+    #[serde(rename = "desktop.state")]
+    DesktopState,
+    #[serde(rename = "desktop.status")]
+    DesktopStatus,
+    #[serde(rename = "style.key")]
+    StyleKey,
+    #[serde(rename = "style.query")]
+    StyleQuery,
+    #[serde(rename = "style.forget")]
+    StyleForget,
+    #[serde(rename = "style.export")]
+    StyleExport,
+    #[serde(rename = "style.status")]
+    StyleStatus,
+    #[serde(rename = "style.samples")]
+    StyleSamples,
+    #[serde(rename = "context.query")]
+    ContextQuery,
+    #[serde(rename = "context.forget")]
+    ContextForget,
+    #[serde(rename = "context.status")]
+    ContextStatus,
+    #[serde(rename = "stats.query")]
+    StatsQuery,
+    #[serde(rename = "stats.forget")]
+    StatsForget,
+    #[serde(rename = "stats.status")]
+    StatsStatus,
+    #[serde(rename = "editor.focus")]
+    EditorFocus,
+    #[serde(rename = "editor.status")]
+    EditorStatus,
+    #[serde(rename = "revision.request")]
+    RevisionRequest,
+    #[serde(rename = "revision.show")]
+    RevisionShow,
+    #[serde(rename = "revision.clear")]
+    RevisionClear,
+}
+
+impl MessageType {
+    #[must_use]
+    pub const fn requires_coordinates(self) -> bool {
+        matches!(
+            self,
+            Self::SessionOpen
+                | Self::SessionClose
+                | Self::ContextChanged
+                | Self::SuggestRequest
+                | Self::SuggestCancel
+                | Self::SuggestionShow
+                | Self::SuggestionClear
+                | Self::CommitPrepare
+                | Self::CommitResult
+                | Self::RevisionRequest
+                | Self::RevisionShow
+                | Self::RevisionClear
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Coordinates {
+    pub session_id: SessionId,
+    pub focus_epoch: u64,
+    pub revision: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WireEnvelope {
+    pub v: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "type")]
+    pub message_type: MessageType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus_epoch: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
+    pub mono_ms: u64,
+    pub payload: Value,
+}
+
+impl WireEnvelope {
+    pub fn session<P: Serialize>(
+        message_type: MessageType,
+        coordinates: Coordinates,
+        mono_ms: u64,
+        payload: &P,
+    ) -> Result<Self, ProtocolError> {
+        let envelope = Self {
+            v: CURRENT_PROTOCOL_VERSION,
+            id: None,
+            message_type,
+            session_id: Some(coordinates.session_id),
+            focus_epoch: Some(coordinates.focus_epoch),
+            revision: Some(coordinates.revision),
+            mono_ms,
+            payload: serde_json::to_value(payload)?,
+        };
+        envelope.validate_shape()?;
+        Ok(envelope)
+    }
+
+    pub fn global<P: Serialize>(
+        message_type: MessageType,
+        mono_ms: u64,
+        payload: &P,
+    ) -> Result<Self, ProtocolError> {
+        let envelope = Self {
+            v: CURRENT_PROTOCOL_VERSION,
+            id: None,
+            message_type,
+            session_id: None,
+            focus_epoch: None,
+            revision: None,
+            mono_ms,
+            payload: serde_json::to_value(payload)?,
+        };
+        envelope.validate_shape()?;
+        Ok(envelope)
+    }
+
+    pub fn validate_shape(&self) -> Result<(), ProtocolError> {
+        if self.v != CURRENT_PROTOCOL_VERSION {
+            return Err(ProtocolError::UnsupportedVersion(self.v));
+        }
+        if self.mono_ms > MAX_SAFE_COUNTER {
+            return Err(ProtocolError::CounterOutOfRange("mono_ms"));
+        }
+        if self.id.as_deref().is_some_and(|id| !valid_opaque_id(id)) {
+            return Err(ProtocolError::InvalidId);
+        }
+        if matches!(
+            self.message_type,
+            MessageType::AuthorityChanged | MessageType::AuthorityAck
+        ) && self.id.is_some()
+        {
+            return Err(ProtocolError::UnexpectedId);
+        }
+        if !self.payload.is_object() {
+            return Err(ProtocolError::PayloadNotObject);
+        }
+
+        let coordinate_count = usize::from(self.session_id.is_some())
+            + usize::from(self.focus_epoch.is_some())
+            + usize::from(self.revision.is_some());
+        if self.message_type.requires_coordinates() {
+            if coordinate_count != 3 {
+                return Err(ProtocolError::MissingCoordinates);
+            }
+            validate_coordinate_bounds(
+                self.focus_epoch.ok_or(ProtocolError::MissingCoordinates)?,
+                self.revision.ok_or(ProtocolError::MissingCoordinates)?,
+            )?;
+        } else if self.message_type == MessageType::ControlRequest {
+            if coordinate_count != 0 && coordinate_count != 3 {
+                return Err(ProtocolError::MissingCoordinates);
+            }
+            let action = self
+                .payload
+                .get("action")
+                .cloned()
+                .ok_or(ProtocolError::InvalidPayload)
+                .and_then(|value| {
+                    serde_json::from_value::<ControlAction>(value)
+                        .map_err(|_| ProtocolError::InvalidPayload)
+                })?;
+            if action.is_global() && coordinate_count != 0 {
+                return Err(ProtocolError::UnexpectedCoordinates);
+            }
+            if !action.is_global() && coordinate_count != 3 {
+                return Err(ProtocolError::MissingCoordinates);
+            }
+            if !action.is_global() {
+                validate_coordinate_bounds(
+                    self.focus_epoch.ok_or(ProtocolError::MissingCoordinates)?,
+                    self.revision.ok_or(ProtocolError::MissingCoordinates)?,
+                )?;
+            }
+        } else if coordinate_count != 0 {
+            return Err(ProtocolError::UnexpectedCoordinates);
+        }
+        Ok(())
+    }
+
+    pub fn coordinates(&self) -> Result<Coordinates, ProtocolError> {
+        self.validate_shape()?;
+        Ok(Coordinates {
+            session_id: self.session_id.ok_or(ProtocolError::MissingCoordinates)?,
+            focus_epoch: self.focus_epoch.ok_or(ProtocolError::MissingCoordinates)?,
+            revision: self.revision.ok_or(ProtocolError::MissingCoordinates)?,
+        })
+    }
+
+    pub fn decode_payload<T: DeserializeOwned>(&self) -> Result<T, ProtocolError> {
+        Ok(serde_json::from_value(self.payload.clone())?)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterDescriptor {
+    pub kind: AdapterKind,
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HelloPayload {
+    pub min_v: u8,
+    pub max_v: u8,
+    pub adapter: AdapterDescriptor,
+    pub capabilities: Vec<Capability>,
+}
+
+impl HelloPayload {
+    /// The hello must name exactly the current version, a bounded adapter
+    /// and unique capabilities that its adapter kind may negotiate.
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.min_v != CURRENT_PROTOCOL_VERSION || self.max_v != CURRENT_PROTOCOL_VERSION {
+            return Err(ProtocolError::VersionNegotiationFailed);
+        }
+        if self.adapter.name.is_empty()
+            || self.adapter.name.chars().count() > 64
+            || self.adapter.version.is_empty()
+            || self.adapter.version.chars().count() > 32
+            || self.capabilities.is_empty()
+            || self.capabilities.len() > CAPABILITY_COUNT
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        let mut unique = self.capabilities.clone();
+        unique.sort_by_key(|capability| *capability as u8);
+        unique.dedup();
+        if unique.len() != self.capabilities.len() {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        if self.capabilities.contains(&Capability::EditorFocus)
+            && self.adapter.kind != AdapterKind::Neovim
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        if self.capabilities.contains(&Capability::SelectionRevision)
+            && !matches!(
+                self.adapter.kind,
+                AdapterKind::Fcitx | AdapterKind::Test | AdapterKind::Cli
+            )
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HelloAckPayload {
+    pub selected_v: u8,
+    pub connection_id: String,
+    pub enabled_capabilities: Vec<Capability>,
+    pub max_frame_bytes: usize,
+    pub max_before_chars: usize,
+    pub max_after_chars: usize,
+    pub max_suggestion_chars: usize,
+    pub max_suggestion_words: usize,
+    pub paused: bool,
+}
+
+impl HelloAckPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.selected_v != CURRENT_PROTOCOL_VERSION
+            || !valid_opaque_id(&self.connection_id)
+            || self.enabled_capabilities.is_empty()
+            || self.enabled_capabilities.len() > CAPABILITY_COUNT
+            || self.max_frame_bytes != MAX_FRAME_BYTES
+            || self.max_before_chars != MAX_BEFORE_CHARS
+            || self.max_after_chars != MAX_AFTER_CHARS
+            || self.max_suggestion_chars != MAX_SUGGESTION_CHARS
+            || self.max_suggestion_words != MAX_SUGGESTION_WORDS
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        let mut unique = self.enabled_capabilities.clone();
+        unique.sort_by_key(|capability| *capability as u8);
+        unique.dedup();
+        if unique.len() != self.enabled_capabilities.len() {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Origin {
+    pub scheme: OriginScheme,
+    pub host: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum OriginScheme {
+    #[serde(rename = "http")]
+    Http,
+    #[serde(rename = "https")]
+    Https,
+    #[serde(rename = "file")]
+    File,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetDescriptor {
+    pub kind: TargetKind,
+    pub app_id: String,
+    pub target_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
+}
+
+impl TargetDescriptor {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.app_id.is_empty()
+            || self.app_id.chars().count() > 128
+            || !valid_opaque_id(&self.target_id)
+            || self.origin.as_ref().is_some_and(|origin| {
+                origin.host.is_empty()
+                    || origin.host.chars().count() > 253
+                    || origin.port == Some(0)
+            })
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        match self.kind {
+            TargetKind::DesktopApplication => {
+                if self.origin.is_some() || !valid_linux_app_id(&self.app_id) {
+                    return Err(ProtocolError::InvalidPayload);
+                }
+            }
+            TargetKind::Libreoffice => {
+                if self.origin.is_some() || self.app_id != LIBREOFFICE_WRITER_APP_ID {
+                    return Err(ProtocolError::InvalidPayload);
+                }
+            }
+            TargetKind::Browser
+            | TargetKind::Obsidian
+            | TargetKind::Terminal
+            | TargetKind::Fixture
+            | TargetKind::Neovim => {}
+        }
+        Ok(())
+    }
+
+    /// What a client may send: [`Self::validate`], and a browser target
+    /// names its origin.
+    pub fn validate_wire(&self) -> Result<(), ProtocolError> {
+        self.validate()?;
+        if self.kind == TargetKind::Browser && self.origin.is_none() {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyResolutionReason {
+    DefaultPolicy,
+    GlobalDisabled,
+    ContextDisabled,
+    MatchedRule,
+    /// Allowed by the app list mode (`all_linux_apps`), not an exact rule.
+    MatchedDefault,
+    SuggestionsDisabled,
+    UnknownIdentity,
+    /// An editor with its own Badi integration holds the focused terminal,
+    /// so the native input-method path stays out of its way.
+    EditorFocused,
+    /// The user snoozed this app or site for a few minutes.
+    Snoozed,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyQueryPayload {
+    pub target: TargetDescriptor,
+}
+
+impl PolicyQueryPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.target.validate_wire()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+// These are independent wire permissions; collapsing them into one enum would
+// hide partial externally-authored policies from strict clients.
+#[allow(clippy::struct_excessive_bools)]
+pub struct PolicyStatusPayload {
+    pub authority_epoch: u64,
+    pub settings_revision: u64,
+    pub paused: bool,
+    pub activation: Activation,
+    pub context_allowed: bool,
+    pub display_allowed: bool,
+    pub suggestions_allowed: bool,
+    pub learning_allowed: bool,
+    pub reason: PolicyResolutionReason,
+    /// Optional v2 quality preference; never grants acquisition or editing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_override: Option<crate::settings::PredictionLanguage>,
+    /// Context is on for this target: an observed field may send the text
+    /// near it as `window_text` (ADR 0010). It grants nothing else.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub context_words: bool,
+}
+
+impl PolicyStatusPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.authority_epoch > MAX_SAFE_COUNTER
+            || self.settings_revision > MAX_SAFE_COUNTER
+            || self.suggestions_allowed && (!self.context_allowed || !self.display_allowed)
+            || self.learning_allowed
+                && (!self.context_allowed || !self.display_allowed || !self.suggestions_allowed)
+            || self.paused
+                && (self.context_allowed
+                    || self.suggestions_allowed
+                    || self.display_allowed
+                    || self.learning_allowed
+                    || self.activation != Activation::Never)
+            || !self.context_allowed && self.activation == Activation::Always
+            || self.context_words && !self.suggestions_allowed
+        {
+            Err(ProtocolError::InvalidPayload)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthorityChangedPayload {
+    pub authority_epoch: u64,
+    pub settings_revision: u64,
+    pub paused: bool,
+}
+
+impl AuthorityChangedPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_authority_counter(self.authority_epoch, self.settings_revision)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthorityAckPayload {
+    pub authority_epoch: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsReplacePayload {
+    pub expected_revision: u64,
+    pub document: Value,
+}
+
+impl SettingsReplacePayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.expected_revision > MAX_SAFE_COUNTER || !self.document.is_object() {
+            Err(ProtocolError::InvalidPayload)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsStatusPayload {
+    pub document: Value,
+    pub personalization_revision: u64,
+    pub personalization_records: u64,
+    pub personalization_bytes: u64,
+    pub personalization_store_available: bool,
+    pub personalization_recorder_available: bool,
+    pub personalization_write_failures: u64,
+    pub personalization_dropped_signals: u64,
+}
+
+impl SettingsStatusPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if !self.document.is_object()
+            || self.personalization_revision > MAX_SAFE_COUNTER
+            || self.personalization_records > MAX_SAFE_COUNTER
+            || self.personalization_bytes > MAX_SAFE_COUNTER
+            || self.personalization_write_failures > MAX_SAFE_COUNTER
+            || self.personalization_dropped_signals > MAX_SAFE_COUNTER
+        {
+            Err(ProtocolError::InvalidPayload)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryStatusPayload {
+    pub revision: u64,
+    pub records: u64,
+    pub bytes: u64,
+    pub changed: bool,
+}
+
+impl MemoryStatusPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_authority_counter(self.revision, self.records)?;
+        if self.bytes > MAX_SAFE_COUNTER {
+            Err(ProtocolError::CounterOutOfRange("memory_bytes"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl AuthorityAckPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_authority_counter(self.authority_epoch, 0)
+    }
+}
+
+fn validate_authority_counter(
+    authority_epoch: u64,
+    settings_revision: u64,
+) -> Result<(), ProtocolError> {
+    if authority_epoch > MAX_SAFE_COUNTER || settings_revision > MAX_SAFE_COUNTER {
+        Err(ProtocolError::CounterOutOfRange("authority"))
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionOpenPayload {
+    pub target: TargetDescriptor,
+    pub activation: Activation,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionClosePayload {
+    pub reason: ReasonCode,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Selection {
+    pub anchor: u64,
+    pub head: u64,
+    pub unit: OffsetUnit,
+}
+
+/// Selections count Unicode scalar values; v1's UTF-16 units are retired.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum OffsetUnit {
+    #[serde(rename = "unicode_scalar_values")]
+    UnicodeScalarValues,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct FieldDescriptor {
+    pub purpose: FieldPurpose,
+    pub editable: bool,
+    pub multiline: bool,
+    pub composing: bool,
+    pub sensitive: bool,
+    pub identity_known: bool,
+    pub focused: bool,
+    pub lock_screen: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextChangedPayload {
+    pub fingerprint: String,
+    pub before: String,
+    pub after: String,
+    pub selection: Selection,
+    pub field: FieldDescriptor,
+    pub activation: Activation,
+    pub explicit: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Text near an observed field in the same window, for finishing the word
+    /// being typed when context is on (ADR 0010). Never sent for a denied,
+    /// sensitive or unobserved field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_text: Option<String>,
+}
+
+impl ContextChangedPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fingerprint(&self.fingerprint)?;
+        let hard_denied = self.activation == Activation::Never
+            || self.field.sensitive
+            || self.field.lock_screen
+            || matches!(
+                self.field.purpose,
+                FieldPurpose::Password
+                    | FieldPurpose::Pin
+                    | FieldPurpose::Otp
+                    | FieldPurpose::PaymentSecret
+            );
+        if self.before.chars().count() > MAX_BEFORE_CHARS
+            || self.after.chars().count() > MAX_AFTER_CHARS
+            || (hard_denied && (!self.before.is_empty() || !self.after.is_empty()))
+            || self.window_text.as_ref().is_some_and(|text| {
+                hard_denied
+                    || !self.field.identity_known
+                    || text.chars().count() > MAX_WINDOW_TEXT_CHARS
+            })
+            || self.selection.anchor > MAX_SAFE_COUNTER
+            || self.selection.head > MAX_SAFE_COUNTER
+            || self
+                .language
+                .as_ref()
+                .is_some_and(|language| !valid_language_tag(language))
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestRequestPayload {
+    pub fingerprint: String,
+    pub explicit: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestCancelPayload {
+    pub fingerprint: String,
+    pub reason: ReasonCode,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestionShowPayload {
+    pub fingerprint: String,
+    pub suggestion_id: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace_before: Option<String>,
+    pub accept_word: String,
+    pub ttl_ms: u64,
+    pub provider: ProviderKind,
+}
+
+/// The replacement route owns exactly one word of 2-32 characters with case
+/// (Unicode's Lowercase or Uppercase property) and, optionally, the one space
+/// just typed after it. Neither form can add, remove, or alter spacing. The
+/// schema, `text-safety.mjs` and the Writer extension's `text.py` follow
+/// `protocol/spelling-replacement-fixtures.json` with this function.
+#[must_use]
+pub fn valid_spelling_replacement(original: &str, corrected: &str) -> bool {
+    fn parts(value: &str) -> Option<(&str, bool)> {
+        let (word, space) = value
+            .strip_suffix(' ')
+            .map_or((value, false), |word| (word, true));
+        ((2..=32).contains(&word.chars().count())
+            && word.chars().all(crate::spelling::spelling_letter))
+        .then_some((word, space))
+    }
+    match (parts(original), parts(corrected)) {
+        (Some((original_word, original_space)), Some((corrected_word, corrected_space))) => {
+            original_word != corrected_word && original_space == corrected_space
+        }
+        _ => false,
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestionClearPayload {
+    pub fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion_id: Option<String>,
+    pub reason: ReasonCode,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlobalControlRequestPayload {
+    pub action: ControlAction,
+    /// How long a snooze lasts; present exactly for `snooze`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minutes: Option<u16>,
+}
+
+impl GlobalControlRequestPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let minutes_valid = match (self.action, self.minutes) {
+            (ControlAction::Snooze, Some(minutes)) => (1..=MAX_SNOOZE_MINUTES).contains(&minutes),
+            (ControlAction::Snooze, None) | (_, Some(_)) => false,
+            (_, None) => true,
+        };
+        if self.action.is_global() && minutes_valid {
+            Ok(())
+        } else {
+            Err(ProtocolError::InvalidPayload)
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionControlRequestPayload {
+    pub action: ControlAction,
+    pub fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion_id: Option<String>,
+}
+
+impl SessionControlRequestPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fingerprint(&self.fingerprint)?;
+        if self.action.is_global()
+            || (self.action == ControlAction::Request && self.suggestion_id.is_some())
+            || (self.action != ControlAction::Request
+                && self
+                    .suggestion_id
+                    .as_deref()
+                    .is_none_or(|id| !valid_opaque_id(id)))
+        {
+            Err(ProtocolError::InvalidPayload)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlResultPayload {
+    pub action: ControlAction,
+    pub accepted: bool,
+    pub reason: ReasonCode,
+    pub paused: bool,
+    /// The snooze an accepted `snooze` started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snooze: Option<SnoozeStatus>,
+}
+
+/// One snoozed app or site and how long it stays snoozed. The subject is the
+/// exact settings identity the snooze withholds, never a window title.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnoozeStatus {
+    pub subject: crate::settings::StableIdentity,
+    pub remaining_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommitPreparePayload {
+    pub fingerprint: String,
+    pub suggestion_id: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace_before: Option<String>,
+    /// A revision's grant (ADR 0012): `text` replaces exactly this
+    /// selection, which the adapter confirms is unchanged before it commits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace_selection: Option<Selection>,
+    pub acceptance: Acceptance,
+}
+
+/// An explicit request to revise one selection (ADR 0012). It is a context
+/// snapshot of its own: `before` and `after` surround the selection, whose
+/// scalar offsets span exactly `selected`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevisionRequestPayload {
+    pub fingerprint: String,
+    pub mode: crate::revision::RevisionMode,
+    pub before: String,
+    pub selected: String,
+    pub after: String,
+    pub selection: Selection,
+    pub field: FieldDescriptor,
+    pub activation: Activation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
+impl RevisionRequestPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fingerprint(&self.fingerprint)?;
+        let selected = self.selected.chars().count();
+        let span = self.selection.anchor.abs_diff(self.selection.head);
+        if self.selection.unit != OffsetUnit::UnicodeScalarValues
+            || self.selection.anchor > MAX_SAFE_COUNTER
+            || self.selection.head > MAX_SAFE_COUNTER
+            || !(1..=crate::revision::MAX_SELECTED_SCALARS).contains(&selected)
+            || u64::try_from(selected).ok() != Some(span)
+            || self.selected.trim().is_empty()
+            || !crate::revision::safe_revision_text(&self.selected)
+            || self.before.chars().count() > MAX_BEFORE_CHARS
+            || self.after.chars().count() > MAX_AFTER_CHARS
+            || self
+                .language
+                .as_ref()
+                .is_some_and(|language| !valid_language_tag(language))
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
+}
+
+/// A revision the user may apply with one acceptance, shown with its
+/// changes marked against `original`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevisionShowPayload {
+    pub fingerprint: String,
+    pub revision_id: String,
+    pub mode: crate::revision::RevisionMode,
+    pub original: String,
+    pub text: String,
+    pub ttl_ms: u64,
+    pub provider: ProviderKind,
+}
+
+impl RevisionShowPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fingerprint(&self.fingerprint)?;
+        if !valid_opaque_id(&self.revision_id)
+            || !crate::revision::safe_revision_text(&self.original)
+            || !crate::revision::safe_revision_text(&self.text)
+            || self.original.chars().count() > crate::revision::MAX_SELECTED_SCALARS
+            || self.text.chars().count() > crate::revision::MAX_REVISED_SCALARS
+            || self.original == self.text
+            || !(1..=crate::revision::REVISION_TTL_MS).contains(&self.ttl_ms)
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
+}
+
+/// Ends a revision request or a shown revision.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevisionClearPayload {
+    pub fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
+    pub reason: ReasonCode,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommitResultPayload {
+    pub fingerprint: String,
+    pub suggestion_id: String,
+    pub status: CommitStatus,
+}
+
+impl CommitResultPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fingerprint(&self.fingerprint)?;
+        if !valid_opaque_id(&self.suggestion_id) {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyPayload {}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealthStatusPayload {
+    pub provider: ProviderKind,
+    pub paused: bool,
+    pub authority_epoch: u64,
+    pub settings_revision: u64,
+    pub control_plane_degraded: bool,
+    pub sessions: u64,
+    pub socket_mode: String,
+    pub max_frame_bytes: usize,
+    pub metrics: MetricsSnapshot,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active: Option<ActiveLocator>,
+    /// Protocol v2 only: what the desktop session helper reported, if anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop: Option<DesktopStatusPayload>,
+    /// Protocol v2 only: every app or site snoozed now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub snoozes: Vec<SnoozeStatus>,
+}
+
+impl HealthStatusPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_authority_counter(self.authority_epoch, self.settings_revision)?;
+        if self.sessions > MAX_SAFE_COUNTER
+            || self.socket_mode != "0600"
+            || self.max_frame_bytes != MAX_FRAME_BYTES
+            || (self.control_plane_degraded && !self.paused)
+        {
+            Err(ProtocolError::InvalidPayload)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// The login session as the desktop helper observes it through logind.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopSession {
+    /// The user's graphical session is in the foreground.
+    #[default]
+    Active,
+    /// Another session or VT is in the foreground.
+    Inactive,
+    /// The machine is preparing to sleep or is asleep.
+    Sleeping,
+}
+
+impl DesktopSession {
+    /// Inactive and sleeping sessions hold every grant until they return.
+    #[must_use]
+    pub const fn holds(self) -> bool {
+        !matches!(self, Self::Active)
+    }
+}
+
+/// How automatic (typing-driven) requests are scheduled right now.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomaticScheduling {
+    /// The model starts on the request, as on mains power.
+    #[default]
+    Normal,
+    /// The model starts only once the field has been still for the typing pause.
+    Deferred,
+    /// Automatic requests abstain; explicit requests are unchanged.
+    ExplicitOnly,
+}
+
+/// The session helper's content-free report: login session, power state and
+/// whether the screen is being shared. It never grants authority; holding
+/// the session only removes it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopStatePayload {
+    pub session: DesktopSession,
+    /// The `UPower` `OnBattery` property; false when unknown.
+    pub on_battery: bool,
+    /// The power-saver profile is active; false when unknown.
+    pub power_saver: bool,
+    /// A desktop portal screencast stream is live in `PipeWire`; false
+    /// without `PipeWire`, where no portal stream can exist.
+    pub screen_shared: bool,
+}
+
+/// What a live screen share does to suggestions right now.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenShare {
+    /// No helper reports a live screen share.
+    #[default]
+    None,
+    /// The screen is shared, or was when its helper left less than the grace
+    /// ago, and settings hold every suggestion until it stops.
+    Held,
+    /// The screen is shared and the user chose to keep suggestions.
+    Suggesting,
+}
+
+/// An editor's report that it holds, or no longer holds, the focus of the
+/// terminal it runs in. Content-free and bound to the reporting connection.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditorFocusPayload {
+    pub focused: bool,
+}
+
+/// Whether any connected editor holds a terminal's focus, which withholds
+/// the input method's native path until it reports otherwise or disconnects.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditorStatusPayload {
+    pub native_withheld: bool,
+}
+
+/// The broker's combined view after a report: every reporting connection's
+/// session hold, low-power state and screen share, and what results.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopStatusPayload {
+    /// At least one desktop helper is connected and reporting.
+    pub observed: bool,
+    pub session: DesktopSession,
+    pub low_power: bool,
+    pub automatic: AutomaticScheduling,
+    pub screen_share: ScreenShare,
+}
+
+impl DesktopStatusPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        // A share stays held for a grace after its helper left, so an
+        // unobserved status may still name one.
+        let unobserved_default = !self.session.holds()
+            && !self.low_power
+            && self.automatic == AutomaticScheduling::Normal;
+        if (!self.observed && !unobserved_default)
+            || (!self.low_power && self.automatic != AutomaticScheduling::Normal)
+        {
+            Err(ProtocolError::InvalidPayload)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// The keyring's style key: a random 16-byte id and 32-byte key, lowercase hex.
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StyleKeyPayload {
+    pub key_id: String,
+    pub key: String,
+}
+
+impl std::fmt::Debug for StyleKeyPayload {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StyleKeyPayload")
+            .field("key_id", &self.key_id)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Content-free style-learning state.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StyleStatusPayload {
+    /// The `style_learning` setting.
+    pub enabled: bool,
+    /// The sealed store is readable; false until `style.forget` repairs it.
+    pub available: bool,
+    pub key: crate::style::StyleKeyState,
+    pub samples: u64,
+    pub subjects: u64,
+}
+
+/// Content-free state of opt-in context (ADR 0010).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextStatusPayload {
+    /// The `context_words` setting is true.
+    pub enabled: bool,
+    /// The user has chosen either way; false until then.
+    pub chosen: bool,
+    /// The learned-word file is readable; false until `context.forget`.
+    pub available: bool,
+    /// The keyring key learned words are sealed with (shared with style).
+    pub key: crate::style::StyleKeyState,
+    pub subjects: u64,
+    /// Learned words; absent without a usable key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<u64>,
+}
+
+/// Content-free usage statistics: counts per local day and per app or site.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatsStatusPayload {
+    /// The statistics file is readable; false until `stats.forget` repairs it.
+    pub available: bool,
+    pub summary: crate::stats::StatsSummary,
+}
+
+/// An explicit export, bounded by the store to fit one frame.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StyleSamplesPayload {
+    pub samples: Vec<crate::style::StyleSample>,
+}
+
+/// Private same-UID diagnostic request (protocol v2 CLI only). It opens no
+/// session and grants no commit authority; the broker neither logs nor keeps
+/// its text.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProbeRequestPayload {
+    pub before: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub after: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Grants the exact-replacement capability editor integrations negotiate.
+    pub allow_replacement: bool,
+    /// Uses the longer writing budget of an explicit (Tab) request.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub explicit: bool,
+}
+
+impl ProbeRequestPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.before.chars().count() > MAX_BEFORE_CHARS
+            || self.after.chars().count() > MAX_AFTER_CHARS
+            || self
+                .language
+                .as_ref()
+                .is_some_and(|language| !valid_language_tag(language))
+        {
+            Err(ProtocolError::InvalidPayload)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeOutcome {
+    Suggested,
+    NoSuggestion,
+    Paused,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProbeResultPayload {
+    pub outcome: ProbeOutcome,
+    pub provider: ProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace_before: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<NoSuggestionReason>,
+    /// Broker-local provider and validation time, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+}
+
+impl ProbeResultPayload {
+    #[must_use]
+    pub const fn paused(provider: ProviderKind) -> Self {
+        Self {
+            outcome: ProbeOutcome::Paused,
+            provider,
+            text: None,
+            replace_before: None,
+            reason: None,
+            latency_ms: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn suggested(
+        provider: ProviderKind,
+        text: String,
+        replace_before: Option<String>,
+        latency_ms: u64,
+    ) -> Self {
+        Self {
+            outcome: ProbeOutcome::Suggested,
+            provider,
+            text: Some(text),
+            replace_before,
+            reason: None,
+            latency_ms: Some(latency_ms),
+        }
+    }
+
+    #[must_use]
+    pub const fn no_suggestion(
+        provider: ProviderKind,
+        reason: NoSuggestionReason,
+        latency_ms: u64,
+    ) -> Self {
+        Self {
+            outcome: ProbeOutcome::NoSuggestion,
+            provider,
+            text: None,
+            replace_before: None,
+            reason: Some(reason),
+            latency_ms: Some(latency_ms),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let latency = self
+            .latency_ms
+            .is_some_and(|latency| latency <= MAX_SAFE_COUNTER);
+        let valid = match self.outcome {
+            ProbeOutcome::Suggested => {
+                latency
+                    && self.reason.is_none()
+                    && self.text.as_deref().is_some_and(|text| {
+                        match self.replace_before.as_deref() {
+                            Some(original) => valid_spelling_replacement(original, text),
+                            None => crate::segment::sanitize_suggestion(text)
+                                .is_ok_and(|sanitized| sanitized == text),
+                        }
+                    })
+            }
+            ProbeOutcome::NoSuggestion => {
+                latency
+                    && self.reason.is_some()
+                    && self.text.is_none()
+                    && self.replace_before.is_none()
+            }
+            ProbeOutcome::Paused => {
+                self.latency_ms.is_none()
+                    && self.reason.is_none()
+                    && self.text.is_none()
+                    && self.replace_before.is_none()
+            }
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(ProtocolError::InvalidPayload)
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActiveLocator {
+    pub session_id: SessionId,
+    pub focus_epoch: u64,
+    pub revision: u64,
+    pub fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErrorPayload {
+    pub code: ReasonCode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub committed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control_plane_degraded: Option<bool>,
+}
+
+impl ErrorPayload {
+    #[must_use]
+    pub const fn simple(code: ReasonCode) -> Self {
+        Self {
+            code,
+            committed: None,
+            settings_revision: None,
+            control_plane_degraded: None,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let has_settings_context = self.committed.is_some()
+            || self.settings_revision.is_some()
+            || self.control_plane_degraded.is_some();
+        if has_settings_context
+            && (self.settings_revision.is_none() || self.control_plane_degraded.is_none())
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        if self
+            .settings_revision
+            .is_some_and(|revision| revision > MAX_SAFE_COUNTER)
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ProtocolError {
+    #[error("counter_out_of_range:{0}")]
+    CounterOutOfRange(&'static str),
+    #[error("invalid_id")]
+    InvalidId,
+    #[error("invalid_payload")]
+    InvalidPayload,
+    #[error("missing_coordinates")]
+    MissingCoordinates,
+    #[error("payload_not_object")]
+    PayloadNotObject,
+    #[error("serde")]
+    Serde(#[from] serde_json::Error),
+    #[error("unexpected_coordinates")]
+    UnexpectedCoordinates,
+    #[error("unexpected_id")]
+    UnexpectedId,
+    #[error("unsupported_version:{0}")]
+    UnsupportedVersion(u8),
+    #[error("version_negotiation_failed")]
+    VersionNegotiationFailed,
+}
+
+#[must_use]
+pub fn valid_opaque_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= MAX_ID_CHARS
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+}
+
+/// Canonical Fcitx program identity used for both the session target and its
+/// settings subject. Restricting this to a stable, comparison-safe ASCII form
+/// avoids accidentally granting policy to display names or window titles.
+#[must_use]
+pub fn valid_linux_app_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_ID_CHARS
+        && value.split('.').all(|segment| {
+            let mut bytes = segment.bytes();
+            bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+                && bytes.all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'_' | b'-')
+                })
+        })
+}
+
+pub(crate) fn valid_language_tag(value: &str) -> bool {
+    (2..=35).contains(&value.chars().count())
+        && value.split('-').all(|subtag| {
+            !subtag.is_empty() && subtag.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+}
+
+pub fn validate_fingerprint(value: &str) -> Result<(), ProtocolError> {
+    if (16..=128).contains(&value.chars().count())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        Ok(())
+    } else {
+        Err(ProtocolError::InvalidPayload)
+    }
+}
+
+pub fn validate_coordinate_bounds(focus_epoch: u64, revision: u64) -> Result<(), ProtocolError> {
+    if focus_epoch > MAX_SAFE_COUNTER {
+        Err(ProtocolError::CounterOutOfRange("focus_epoch"))
+    } else if revision > MAX_SAFE_COUNTER {
+        Err(ProtocolError::CounterOutOfRange("revision"))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{
+        AdapterDescriptor, AdapterKind, AutomaticScheduling, CURRENT_PROTOCOL_VERSION, Capability,
+        DesktopSession, DesktopStatePayload, DesktopStatusPayload, HelloPayload,
+        LIBREOFFICE_WRITER_APP_ID, MAX_SAFE_COUNTER, MessageType, Origin, OriginScheme,
+        PolicyQueryPayload, ProtocolError, ScreenShare, SessionId, TargetDescriptor, TargetKind,
+        WireEnvelope, valid_language_tag,
+    };
+
+    #[test]
+    fn hello_accepts_each_base_capability() {
+        let hello = HelloPayload {
+            min_v: CURRENT_PROTOCOL_VERSION,
+            max_v: CURRENT_PROTOCOL_VERSION,
+            adapter: AdapterDescriptor {
+                kind: AdapterKind::Test,
+                name: "all-capabilities".to_owned(),
+                version: "1".to_owned(),
+            },
+            capabilities: vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::CommitApplied,
+                Capability::CommitDispatchedUnverified,
+                Capability::Control,
+                Capability::Health,
+                Capability::Policy,
+                Capability::Settings,
+            ],
+        };
+        hello.validate().expect("all schema capabilities");
+    }
+
+    #[test]
+    fn window_text_is_bounded_and_only_for_an_observed_unrestricted_field() {
+        let context = |window_text: &str| super::ContextChangedPayload {
+            fingerprint: "fingerprint_window_01".to_owned(),
+            before: "Hi Marin".to_owned(),
+            after: String::new(),
+            selection: super::Selection {
+                anchor: 8,
+                head: 8,
+                unit: super::OffsetUnit::UnicodeScalarValues,
+            },
+            field: super::FieldDescriptor {
+                purpose: super::FieldPurpose::Normal,
+                editable: true,
+                multiline: true,
+                composing: false,
+                sensitive: false,
+                identity_known: true,
+                focused: true,
+                lock_screen: false,
+            },
+            activation: super::Activation::Always,
+            explicit: false,
+            language: Some("en".to_owned()),
+            window_text: Some(window_text.to_owned()),
+        };
+        context("To: Marinella Costa")
+            .validate()
+            .expect("observed field");
+        context(&"é".repeat(super::MAX_WINDOW_TEXT_CHARS))
+            .validate()
+            .expect("at the bound");
+        assert!(
+            context(&"é".repeat(super::MAX_WINDOW_TEXT_CHARS + 1))
+                .validate()
+                .is_err()
+        );
+        let mut unobserved = context("To: Marinella Costa");
+        unobserved.field.identity_known = false;
+        assert!(unobserved.validate().is_err());
+        let mut sensitive = context("To: Marinella Costa");
+        sensitive.field.sensitive = true;
+        sensitive.before.clear();
+        assert!(sensitive.validate().is_err());
+    }
+
+    #[test]
+    fn a_hello_names_exactly_the_current_version() {
+        let hello = |kind, min_v, max_v| HelloPayload {
+            min_v,
+            max_v,
+            adapter: AdapterDescriptor {
+                kind,
+                name: "adapter".to_owned(),
+                version: "1".to_owned(),
+            },
+            capabilities: vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::CommitApplied,
+                Capability::LongReadingWindow,
+            ],
+        };
+        for kind in [
+            AdapterKind::Fcitx,
+            AdapterKind::Terminal,
+            AdapterKind::Neovim,
+            AdapterKind::Libreoffice,
+        ] {
+            hello(kind, 2, 2).validate().expect("the current version");
+            for (min_v, max_v) in [(1, 1), (1, 2), (2, 3), (3, 3)] {
+                assert!(
+                    matches!(
+                        hello(kind, min_v, max_v).validate(),
+                        Err(ProtocolError::VersionNegotiationFailed)
+                    ),
+                    "{kind:?} {min_v}..{max_v}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_fcitx_addon_negotiates_selection_revision() {
+        let hello = |kind| HelloPayload {
+            min_v: CURRENT_PROTOCOL_VERSION,
+            max_v: CURRENT_PROTOCOL_VERSION,
+            adapter: AdapterDescriptor {
+                kind,
+                name: "adapter".to_owned(),
+                version: "1".to_owned(),
+            },
+            capabilities: vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::SelectionRevision,
+            ],
+        };
+        hello(AdapterKind::Fcitx)
+            .validate()
+            .expect("the Fcitx addon");
+        for kind in [AdapterKind::Obsidian, AdapterKind::Terminal] {
+            assert!(hello(kind).validate().is_err(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_writer_target_names_its_exact_app_id_and_no_origin() {
+        let mut target = TargetDescriptor {
+            kind: TargetKind::Libreoffice,
+            app_id: LIBREOFFICE_WRITER_APP_ID.to_owned(),
+            target_id: "document".to_owned(),
+            origin: None,
+        };
+        target.validate_wire().expect("exact Writer target");
+        target.app_id = "libreoffice".to_owned();
+        assert!(target.validate().is_err());
+        target.app_id = LIBREOFFICE_WRITER_APP_ID.to_owned();
+        target.origin = Some(Origin {
+            scheme: OriginScheme::File,
+            host: "localhost".to_owned(),
+            port: None,
+        });
+        assert!(target.validate().is_err());
+    }
+
+    #[test]
+    fn a_browser_target_on_the_wire_names_its_origin() {
+        let mut query = PolicyQueryPayload {
+            target: TargetDescriptor {
+                kind: TargetKind::Browser,
+                app_id: "chromium".to_owned(),
+                target_id: "field-1".to_owned(),
+                origin: None,
+            },
+        };
+        assert!(query.validate().is_err());
+        query.target.origin = Some(Origin {
+            scheme: OriginScheme::Https,
+            host: "example.com".to_owned(),
+            port: None,
+        });
+        query.validate().expect("a browser target with its origin");
+        for (kind, app_id) in [
+            (TargetKind::Neovim, "nvim"),
+            (TargetKind::DesktopApplication, "omawrite"),
+        ] {
+            PolicyQueryPayload {
+                target: TargetDescriptor {
+                    kind,
+                    app_id: app_id.to_owned(),
+                    target_id: "ic:42".to_owned(),
+                    origin: None,
+                },
+            }
+            .validate()
+            .expect("an editor or desktop target");
+        }
+    }
+
+    #[test]
+    fn an_envelope_of_any_other_version_is_unsupported() {
+        for version in [0, 1, 3] {
+            let envelope: WireEnvelope = serde_json::from_value(json!({
+                "v": version,
+                "type": "health.request",
+                "mono_ms": 4,
+                "payload": {}
+            }))
+            .expect("wire decoding should succeed before shape validation");
+            assert!(matches!(
+                envelope.validate_shape(),
+                Err(ProtocolError::UnsupportedVersion(v)) if v == version
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_coordinates_on_global_message() {
+        let envelope: WireEnvelope = serde_json::from_value(json!({
+            "v": 2,
+            "type": "health.request",
+            "session_id": SessionId::new(),
+            "focus_epoch": 0,
+            "revision": 0,
+            "mono_ms": 4,
+            "payload": {}
+        }))
+        .expect("wire decoding should succeed before shape validation");
+
+        assert!(matches!(
+            envelope.validate_shape(),
+            Err(ProtocolError::UnexpectedCoordinates)
+        ));
+        assert_eq!(envelope.message_type, MessageType::HealthRequest);
+    }
+
+    #[test]
+    fn authority_messages_reject_correlation_ids_for_schema_parity() {
+        for message_type in ["authority.changed", "authority.ack"] {
+            let envelope: WireEnvelope = serde_json::from_value(json!({
+                "v": 2,
+                "id": "unexpected",
+                "type": message_type,
+                "mono_ms": 4,
+                "payload": if message_type == "authority.changed" {
+                    json!({"authority_epoch": 1, "settings_revision": 1, "paused": true})
+                } else {
+                    json!({"authority_epoch": 1})
+                }
+            }))
+            .expect("wire decoding should succeed before shape validation");
+            assert!(matches!(
+                envelope.validate_shape(),
+                Err(ProtocolError::UnexpectedId)
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_noncanonical_session_id() {
+        let result = serde_json::from_value::<WireEnvelope>(json!({
+            "v": 2,
+            "type": "session.open",
+            "session_id": "550E8400-E29B-41D4-A716-446655440000",
+            "focus_epoch": 0,
+            "revision": 0,
+            "mono_ms": 4,
+            "payload": {}
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_canonical_non_rfc_session_id_variant() {
+        let result = serde_json::from_value::<WireEnvelope>(json!({
+            "v": 2,
+            "type": "session.open",
+            "session_id": "550e8400-e29b-41d4-7716-446655440000",
+            "focus_epoch": 0,
+            "revision": 0,
+            "mono_ms": 4,
+            "payload": {}
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn addressed_control_rejects_unsafe_javascript_counter() {
+        let base = json!({
+            "v": 2,
+            "type": "control.request",
+            "session_id": SessionId::new(),
+            "focus_epoch": 0,
+            "revision": 0,
+            "mono_ms": 4,
+            "payload": {
+                "action": "request",
+                "fingerprint": "fingerprint_000000000001"
+            }
+        });
+        let mut unsafe_focus = base.clone();
+        unsafe_focus["focus_epoch"] = json!(MAX_SAFE_COUNTER + 1);
+        let envelope: WireEnvelope = serde_json::from_value(unsafe_focus)
+            .expect("wire decoding should succeed before shape validation");
+        assert!(matches!(
+            envelope.validate_shape(),
+            Err(ProtocolError::CounterOutOfRange("focus_epoch"))
+        ));
+
+        let mut unsafe_revision = base;
+        unsafe_revision["revision"] = json!(MAX_SAFE_COUNTER + 1);
+        let envelope: WireEnvelope = serde_json::from_value(unsafe_revision)
+            .expect("wire decoding should succeed before shape validation");
+        assert!(matches!(
+            envelope.validate_shape(),
+            Err(ProtocolError::CounterOutOfRange("revision"))
+        ));
+    }
+
+    #[test]
+    fn language_tags_require_nonempty_ascii_alphanumeric_subtags() {
+        for valid in ["en", "en-US", "zh-Hant-TW", "x-private"] {
+            assert!(valid_language_tag(valid), "{valid}");
+        }
+        for invalid in ["en-", "-en", "en--x", "en_US", "e", "fr-ça"] {
+            assert!(!valid_language_tag(invalid), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn spelling_suffixes_preserve_one_optional_ascii_space() {
+        for (original, corrected) in [
+            ("teh", "the"),
+            ("teh ", "the "),
+            ("adress ", "address "),
+            ("Hauss ", "Haus "),
+            ("grasias ", "gracias "),
+            ("één ", "een "),
+        ] {
+            assert!(super::valid_spelling_replacement(original, corrected));
+        }
+        for (original, corrected) in [
+            ("teh ", "the"),
+            ("teh", "the "),
+            ("teh  ", "the  "),
+            ("teh\t", "the\t"),
+            ("teh\n", "the\n"),
+            ("teh\u{00a0}", "the\u{00a0}"),
+            ("teh.", "the."),
+            ("teh x", "the x"),
+            ("teh ", "teh "),
+            ("t ", "to "),
+            ("mot-clef ", "motclef "),
+            ("x2 ", "xz "),
+            ("سلام ", "سلم "),
+        ] {
+            assert!(
+                !super::valid_spelling_replacement(original, corrected),
+                "{original:?} -> {corrected:?}"
+            );
+        }
+        assert!(super::valid_spelling_replacement(
+            &format!("{} ", "ä".repeat(32)),
+            &format!("{} ", "b".repeat(32))
+        ));
+        assert!(!super::valid_spelling_replacement(
+            &format!("{} ", "a".repeat(33)),
+            &format!("{} ", "b".repeat(33))
+        ));
+    }
+
+    #[test]
+    fn a_desktop_report_names_the_screen_share_and_only_a_share_outlives_its_helper() {
+        let shared: DesktopStatePayload = serde_json::from_value(serde_json::json!({
+            "session": "active", "on_battery": false, "power_saver": false, "screen_shared": true,
+        }))
+        .expect("a complete report");
+        assert!(shared.screen_shared);
+        assert!(
+            serde_json::from_value::<DesktopStatePayload>(serde_json::json!({
+                "session": "active", "on_battery": false, "power_saver": false,
+            }))
+            .is_err(),
+            "every report says whether the screen is shared"
+        );
+        let held = DesktopStatusPayload {
+            observed: true,
+            session: DesktopSession::Active,
+            low_power: false,
+            automatic: AutomaticScheduling::Normal,
+            screen_share: ScreenShare::Held,
+        };
+        held.validate().expect("a reported share may hold");
+        DesktopStatusPayload {
+            observed: false,
+            ..held
+        }
+        .validate()
+        .expect("a share stays held for a grace after its helper left");
+        assert!(
+            DesktopStatusPayload {
+                observed: false,
+                session: DesktopSession::Sleeping,
+                ..held
+            }
+            .validate()
+            .is_err(),
+            "no helper, no session hold"
+        );
+    }
+}

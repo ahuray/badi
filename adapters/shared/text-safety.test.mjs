@@ -1,0 +1,43 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { hasIsolatedSpaces, hasUnsafeText, validCorrection } from './text-safety.mjs';
+import { validSuggestion } from './broker-client.mjs';
+
+test('all editor text guards share the exact Persian orthographic joiner contract', async () => {
+  const corpus = JSON.parse(await readFile(new URL('../../protocol/orthographic-joiner-fixtures.json', import.meta.url), 'utf8'));
+  for (const fixture of corpus.fixtures) {
+    assert.equal(!hasUnsafeText(fixture.text), fixture.valid, fixture.name);
+    assert.equal(validSuggestion(fixture.text), fixture.valid, fixture.name);
+  }
+  assert.equal(hasUnsafeText('normal\ncontext\ttext', true), false);
+  assert.equal(hasUnsafeText('normal\ncontext\ttext'), true);
+  assert.equal(hasUnsafeText('unsafe\u202econtext', true), true);
+  assert.equal(hasIsolatedSpaces('final '), true);
+  assert.equal(validSuggestion('final '), true);
+  assert.equal(hasIsolatedSpaces('final  '), false);
+  assert.equal(validSuggestion('final  '), false);
+  assert.equal(validSuggestion('final\u00a0'), false);
+});
+
+test('corrections follow the shared spelling replacement fixture', async () => {
+  const corpus = JSON.parse(await readFile(new URL('../../protocol/spelling-replacement-fixtures.json', import.meta.url), 'utf8'));
+  for (const { name, original, replacement, valid } of corpus.fixtures) {
+    assert.equal(validCorrection(`Fix ${original}`, original, replacement), valid, name);
+  }
+});
+
+test('corrections preserve one exact whole-word suffix and its optional space', () => {
+  for (const [before, original, replacement] of [
+    ['Use this adress', 'adress', 'address'], ['Use this adress ', 'adress ', 'address '],
+    ['adress ', 'adress ', 'address '], ['Ins Hauss ', 'Hauss ', 'Haus '], ['muchas grasias ', 'grasias ', 'gracias '],
+  ]) assert.equal(validCorrection(before, original, replacement), true);
+  for (const [before, original, replacement] of [
+    ['badadress ', 'adress ', 'address '], ['adress ', 'adress ', 'address'],
+    ['adress', 'adress', 'address '], ['adress ', 'adress ', 'adress '],
+    ['adress  ', 'adress  ', 'address  '], ['adress\n', 'adress\n', 'address\n'],
+    ['adress ', 'adress ', 'address\n'], ['adress\t', 'adress\t', 'address\t'],
+    ['adress ', 'other ', 'address '], ['x2 ', 'x2 ', 'xz '], ['mot-clef ', 'mot-clef ', 'motclef '],
+    ['adress ', 'adress ', 'address; '],
+  ]) assert.equal(validCorrection(before, original, replacement), false, JSON.stringify([before, original, replacement]));
+});

@@ -1,0 +1,16 @@
+{
+  "v": 2,
+  "type": "session.open",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 4,
+  "revision": 7,
+  "mono_ms": 2,
+  "payload": {
+    "target": {
+      "kind": "desktop_application",
+      "app_id": "com.github.xournalpp.xournalpp",
+      "target_id": "ic:42"
+    },
+    "activation": "manual"
+  }
+}

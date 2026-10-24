@@ -1,0 +1,230 @@
+# Badi Omarchy panel
+
+The Omarchy plugin `io.github.ahuray.badi`:
+
+| File | Role |
+| --- | --- |
+| `BarWidget.qml` | The bar mark and its popout: an Omarchy `Panel` with a `KeyboardPanel` |
+| `BadiMark.qml` | The **b** speech-bubble mark |
+| `DesktopPanel.qml` | State and actions without visuals: the client, helper processes, every settings change and the typed rows |
+| `SettingsView.qml` | The popout's content |
+| `KeyModel.js` | The keyboard model (j/k, h/l, Enter, x, search, the cursor following its row) without QML, tested by `tests/key-model.test.mjs` |
+| `StatsModel.js` | The history's numbers (the week's bars, the leading apps) without QML, tested by `tests/stats-model.test.mjs` |
+| `BadiClient.qml` | The shared `badictl` client |
+
+It uses only the host's `qs.Ui` and `qs.Commons` modules, `badictl` and the
+installed `badi-desktop` helper.
+
+Left-click the mark to open or close the popout; right-click pauses or
+resumes (a paused mark is dimmed). The popout hangs under the mark like
+Omarchy's own panels, takes the keyboard and polls the broker every three
+seconds only while open. Until you choose your languages it asks one
+question, "Which languages do you write in?": a chip for each of English,
+Deutsch, Français, Español, Português, Italiano, Nederlands and Polski
+(Portuguese suggests only; the last three correct typos only), then Start,
+which saves suggestions and spelling for them and `languages_chosen` in one
+write, as `badi languages` does. Persian is never offered here. Afterwards the
+popout opens compact: the hero, the activity line, the week's words, search
+and only Languages (the same chips; toggling one turns its suggestions and
+typo fixes on or off together and leaves every other language as it is),
+Suggestion length and context. **All
+settings** (or `a`) adds the usage
+details and every row below, and Fewer settings (or `a` again) returns.
+Every open starts compact, and search always covers every setting. From the
+top:
+
+- **Hero:** the mark, the model as a pill, Badi's mode as a glyph and word
+  (`⏵⏵ SUGGESTING`, `⏸ PAUSED`, `⏸ HELD · SCREEN SHARED`, `◌ LOADING`,
+  `○ MODEL OFFLINE`, `◇ NO APP ALLOWED`) and a switch that pauses or
+  resumes. While the screen-share hold is on (the session helper's report in
+  `badictl overview`, [runbook](../../adapters/session/README.md#screen-sharing)),
+  the status reads "Held while the screen is shared"; the switch stays on,
+  since the hold is not your pause, and still pauses for good.
+- **Activity:** while something runs, a spinner, a verb and the elapsed
+  seconds (`Saving…`, `Loading the model… 3s`); otherwise a status dot and
+  the counts since model start.
+- **Usage** (All settings only): a ten-cell acceptance meter, words saved
+  and the last no-suggestion reason (`⎿ last miss: …`).
+- **History:** seven bars of words saved per day, today's in the accent,
+  today's and the week's words saved and, with All settings, the apps and
+  sites that saved the most this week (`⎿ most this week: …`), from
+  `badi stats`; hidden while the broker reports none.
+- **Search:** `/` filters every row by name, description or section.
+- **Snoozed:** while a snooze keeps an app or site quiet (`badi snooze` or
+  the session helper's shortcut, [broker runbook](../../broker/README.md#snooze)),
+  the first row names it with the minutes left, and Enter ends every snooze
+  (`badi snooze end`). The mark's tooltip adds the same name, and the
+  `badi-writing` IPC `state()` reports it as `snoozed`. Resuming from the
+  switch, `p` or a right-click runs `badi resume`, which ends it too.
+- **Rows** with All settings, in sections: Languages (the chips), Model (the writing model: a chip for each model
+  that fits this device, ★ on the recommendation; picking an Apache-2.0
+  model runs `badi model use`, which downloads it and restarts the model,
+  while a Gemma or Llama model first adds a row naming its terms and their
+  address, and only Enter or a click on that row accepts them and downloads
+  it), Context ([ADR 0010](../../docs/decisions/0010-context-finishes-words.md):
+  until you choose, one question, "Finish words from what you see?", with
+  Turn on and Not now; afterwards a switch, and while it is on a row per
+  allowed app and Forget learned words, each running `badi context`, which
+  also hands the keyring key over; Forget asks first in Omarchy's own
+  confirm dialog, with Cancel selected), Writing (suggestion length: Short or Normal, as `badi length` sets it; mid-sentence, Escape quiet, battery; while sharing the screen: Hold or Suggest, as `badi screen-share` sets it), Suggestions (each
+  European language: Off, Auto (heal as the running model's review decided), Heal or
+  Keep space, as `badi suggest` sets them; French, Spanish and Portuguese are
+  marked experimental), Spelling (each language and its dictionary, naming the package when one is
+  missing), Apps (the list mode and each supported app), Websites (the list
+  mode, each rule, an add field: Enter allows, Shift+Enter blocks),
+  Statistics (Forget usage statistics, which runs `badi stats forget` after
+  the same confirm dialog) and
+  System (start at login, debug trace, restart, start or stop).
+
+Keys: j/k or arrows move one cursor through the rows, space or Enter toggles
+or runs, h/l changes a choice or walks a chip row's chips (space toggles the
+one under the cursor), a shows all or fewer settings, x removes a site rule,
+p pauses, r refreshes,
+Tab moves to the neighbouring bar panel and Escape closes. While the confirm
+dialog asks, h/l, arrows or Tab choose, Enter decides and Escape cancels. The
+footer shows the last result (`✓ Spelling on`, `✗ …`) or these keys.
+
+Settings writes use the broker's compare-and-swap API and fail visibly on a
+conflict instead of retrying over another change. The panel writes only a
+settings document it fully understands: a key it does not know (from a newer
+broker) turns every change and the pause switch off, and the footer says to
+update the panel. A poll that changes nothing on screen keeps the rows as
+they are, so a site being typed survives it, and the cursor stays on its row
+while others appear or vanish. `badi settings` toggles the
+popout through the `badi-writing` IPC target, an Omarchy `ShellIpc` handler
+that `omarchy-shell` reaches over the shell's own socket (8 ms against about
+45 ms for a `qs ipc` client). The mark reads the broker only while the popout
+is open, so every `badi` settings write, snooze and snooze end calls its
+`refresh()` (`omarchy-shell -q badi-writing refresh`, quiet where Omarchy is
+not running): a pause from a shortcut or a terminal dims the mark at once. The terminal equivalents are in
+the [README](../../README.md#choose-where-badi-writes).
+Per-app language overrides are currently set from the terminal. Panel writes
+validate and preserve them.
+
+## Install and update
+
+`scripts/install-desktop.py` installs `badi`, `badi-desktop`, `badictl` and the
+launcher entry. The panel itself updates with:
+
+```sh
+python3 scripts/install-omarchy-ui.py
+python3 scripts/install-omarchy-ui.py --wait-for-unlock 3600   # stage and wait for unlock
+```
+
+The updater runs the source checks, waits for an explicitly unlocked desktop
+(it never unlocks it), backs up replaced files under
+`~/.local/state/badi/ui-backups/<UTC time>/` (newest three kept, plus the
+original backup), removes files the manifest no longer loads, restarts the
+Omarchy shell the supported way and checks that the new popout answers IPC.
+A missing plugin directory is created and enabled with `omarchy plugin enable
+io.github.ahuray.badi`; `XDG_CONFIG_HOME` selects that directory. `omarchy
+plugin disable io.github.ahuray.badi` hides the mark.
+
+## Suggestion panel theme
+
+Terminals, and any field without the grey overlay, show Badi's suggestion
+in Fcitx's panel. [`fcitx-theme.py`](fcitx-theme.py) dresses it in the
+current Omarchy theme: the theme background with Omarchy's soft control
+border (the foreground at 40%), square corners, the Omarchy font at Ghostty's
+`font-size`, the word Tab takes in bold accent, and the rest softened to the
+dimmest shade that still reads at 4.5:1 (the accent falls back to the
+foreground below that). It writes `fcitx5/themes/badi-omarchy/theme.conf`
+under `XDG_DATA_HOME` and, only when absent or written by Badi,
+`fcitx5/conf/classicui.conf`; a classicui.conf you wrote is left alone and
+named on the console. The updater installs the generator as
+`~/.local/lib/badi/omarchy/fcitx-theme.py`, adds `badi-fcitx-theme` to
+Omarchy's `theme-set.d` and `font-set.d` hooks, writes the theme for the
+current one and reloads Fcitx's classic UI. All of it is in the backup map,
+so a restore removes it. Badi cannot draw grey text inline in a terminal:
+over Wayland's input-method-v2 the compositor places this panel at the
+cursor, and Fcitx never learns where the caret is.
+
+## Client contract
+
+`BadiClient.qml` never reads document text, model state or settings files
+directly. Every command is a fixed argv array through Quickshell `Process`;
+settings JSON goes through the child's stdin, closed after writing. It runs at
+most one overview read and one settings write, and a write invalidates any older read.
+A failed read's message stays until the next good read, even on the open
+popout's polls, which otherwise keep the last result. Deactivation terminates
+every child (SIGTERM, then SIGKILL), stale exit handlers change nothing, and a
+reactivation during teardown queues exactly one fresh read.
+
+## Statistics
+
+The popout reports counters since model start, without storing prose:
+- **Shown:** broker suggestions, excluding growth and type-through remainders.
+- **Accepted:** explicit acceptance requests dispatched to the adapter, not a
+  claim that every edit applied.
+- **Words saved ≈:** word parts in successful results, including native
+  `dispatched-unverified` results. Partial words count; punctuation-only parts,
+  spelling replacements and failed results do not. Native insertions and later
+  undo cannot be verified, so this is an estimate rather than retained words.
+
+An older broker without word counters shows `—`, never a fabricated zero.
+Restarting the model resets these counters. The broker retains verified and
+unverified word counts separately in `word_savings`.
+
+The history keeps its counts across restarts, per local day and per app or
+site, for 90 days ([broker runbook](../../broker/README.md#usage-statistics)).
+Shown and words saved mean the same as above; **accepted** there counts
+acceptances the adapter reported landed (each word Tab took), not requests.
+
+## Pinned host
+
+`compatibility.json` records the Omarchy host files the plugin depends on,
+byte-compared with Omarchy `v4.5.0-rc1` (`03ff1eff3812933f7088484533784d2f63eaf19a`),
+which the installed 4.5.0rc1-1 package matches file for file, under
+Quickshell 0.3.2 and Qt declarative 6.12.0. Sixteen of the 21 changed since
+`v4.0.6`; the only API change the popout meets is `PanelKeyCatcher`'s
+`textKey`, which now also passes the held modifiers. It includes every `qs.Ui`
+component the popout uses. The strict check fails when the installed host
+drifts. The manifest declares only the `bar-widget` kind.
+
+Qt 6.12 added a QtQuick `Color` singleton that shadows the host palette, so
+under stock Quickshell a bare `Color.accent` reads `undefined`. Omarchy's own
+Quickshell build pins bare `import QtQuick` imports, plugins included, to 6.11
+while its shell carries the `OmarchyLoadPatch` pragma, but that patch is
+temporary. The plugin imports `qs.Commons as Commons` and writes
+`Commons.Color`, as Omarchy 4.0.5 and later do; the source gate rejects a bare
+`Color`, and CI runs Arch's stock Quickshell 0.3.2-1.
+
+## Checks
+
+```sh
+npm run omarchy:check                                     # portable gate
+BADI_OMARCHY_REQUIRE_HOST_CHECKS=1 bash ui/omarchy-plugin/tests/check-source.sh
+bash ui/omarchy-plugin/tests/run-client-lifecycle.sh      # needs qs
+```
+
+- **`omarchy:check`** runs ShellCheck, the JSON and source contracts, the
+  keyboard and statistics models under Node, and process-group escalation
+  against a fake `badictl` that ignores TERM. When `qs` is present it also
+  runs the headless client lifecycle.
+- **`run-client-lifecycle.sh`** loads the real `BadiClient.qml` offscreen with
+  a fake `badictl`. It covers settings validation (every optional key the
+  settings schema defines, kept equal to the schema's list), a
+  compare-and-swap write that keeps every subject and both list flags,
+  teardown during a write, invalidation of an in-flight read, a failed read
+  cleared by the next good one, and an unknown settings key explained. It
+  then loads the real `DesktopPanel.qml` through a fake `badi-desktop` and
+  checks the written documents for the language chips and the screen-share
+  choice.
+- **`tests/check-host.sh`** is CI's strict lane. It runs against an exact
+  Omarchy checkout (`BADI_OMARCHY_ROOT`) with the official validator, host-file
+  hashes, `qmllint` and the lifecycle.
+
+These checks prove source and process contracts, not the popout's look, focus,
+scaling or multi-monitor behavior, which need a real Omarchy session.
+
+## Tested with
+
+| Omarchy | Quickshell, Qt declarative | Lane | Result |
+| --- | --- | --- | --- |
+| 4.5.0rc1-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | `omarchy:check` and the strict `check-source.sh` (qmllint, validator, host hashes, lifecycle) | pass; `check-host.sh` not run, it pins quickshell 0.3.2-1 and qt6-declarative 6.12.0-1 |
+| 4.0.5-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-1 | live, Tokyo Night | accent mark, `badi settings`, j/k and arrows one row each, `/ghost` search, Escape twice |
+| not recorded | not recorded | live, Tokyo Night | `l`/`h` on On battery wrote `battery_mode`, a restart showed `◌ LOADING` with `Loading the model… 3s` |
+
+Not yet live: the unknown-settings message, the language chip that changes
+only its own language, and rows that survive a poll with the cursor on its
+row.

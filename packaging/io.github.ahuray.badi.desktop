@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Badi
+Comment=Local writing predictions and settings
+Exec=badi settings
+Icon=io.github.ahuray.badi
+Terminal=false
+Categories=Utility;
+Keywords=writing;prediction;completion;local;settings;
+StartupNotify=false

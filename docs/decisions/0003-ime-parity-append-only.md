@@ -1,0 +1,68 @@
+# ADR 0003: extension-free editing accepts one append-only IME commit
+
+- Status: accepted; corrections amended by [ADR 0011](0011-checked-corrections-in-append-only-apps.md) (2026-10-23)
+- Date: 2026-09-26, extended 2026-10-06, 2026-10-07, 2026-10-12 and 2026-10-20
+- Scope: Fcitx IME-parity apps: Chromium, Brave Origin and its `--app` windows
+  (Omarchy web apps), Zen (exact `zen` identity only), Codex desktop, Claude
+  desktop, VS Code, Cursor, Discord, Grok Bot and LibreOffice Writer
+
+## Context
+
+Without an editor-owned channel, Badi reaches these apps only through the
+accessibility observer and Fcitx. Physical Chromium 151 tests on 2026-09-08
+showed that this route cannot carry an editor transaction:
+
+- Blink merges an IME commit into the preceding typing group, so one undo
+  removes the typed prefix together with the accepted text.
+- A commit fires `beforeinput` and then edits whatever target is current: page
+  script that moves focus or the caret redirects it, like a keystroke. External
+  field and caret snapshots cannot pin the original field across that handler.
+- Correction needs a deletion and a commit, which are not atomic: an `input`
+  handler moved focus between them, so one field lost `adress ` and another
+  received `address `.
+- Chromium's Linux accessibility exposes no EditableText, and a real navigation
+  key may be cancelled by the page, so neither can close a typing group.
+
+## Decision
+
+These apps accept a suggestion through exactly one append-only
+`commitString`, which behaves like typed text and reports
+`dispatched-unverified`. Append-only means insertion at the caret without
+deletion: since 2026-10-07 (user request) the caret may also sit mid-text, where
+the observer and Fcitx must still agree on the text after it and the broker
+offers only what fits before that text. Badi documents that undo may coalesce
+with earlier typing and that `beforeinput` script may redirect the text; it
+never claims exact undo or verified field authority there.
+
+Every other guard stays: sensitive and purpose denial, foreign composition
+yield, exact observer identity with snapshot and caret agreement before display
+and dispatch, revision, fingerprint and expiry binding, one-shot acceptance,
+and no retries or synthetic keys. These apps stay append-only. The Fcitx connection also serves native exact
+fields, so it advertises `text_replacement`. Since 2026-10-23 a spelling
+correction is the one exception to append-only for every app here but
+LibreOffice: the observer confirms the field first, and the result is read
+back ([ADR 0011](0011-checked-corrections-in-append-only-apps.md)). Obsidian, Bash and the
+[LibreOffice Writer extension](../../adapters/libreoffice/README.md) (its own
+`libreoffice-writer` grant, never the Fcitx `libreoffice` one) keep their own
+replacement channels. A native exact field may delete the exact typed suffix and then
+`commitString` the correction, still reported as `dispatched-unverified`.
+
+Brave web-app windows take their page origin's policy, as a tab does.
+LibreOffice is native, but every module reports one Fcitx program id, so a
+manual path would claim Tab in Calc cells; Writer therefore takes this observed,
+append-only contract, limited by the observer to document paragraphs. Zen's
+urlbar shares the page's input context without a URL purpose, so only the
+observer can deny it.
+
+Agreement between the observer and Fcitx stays exact, with two narrow
+equivalences for rich editors:
+- an empty Fcitx `after` and an observed block end both mean end of field;
+- when a list, quote or table lies in the window, the observer corroborates only
+  the caret's own block, which Fcitx's text must end with from a line start.
+
+## Consequences
+
+Chromium-based apps and Zen get continuations without a browser extension.
+Exact undo and replacement need a cooperating editor, or an upstream protocol
+that carries field generation and edit revision through Wayland and the
+renderer and rejects a stale target.

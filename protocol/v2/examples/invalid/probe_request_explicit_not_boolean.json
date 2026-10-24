@@ -1,0 +1,11 @@
+{
+  "v": 2,
+  "id": "ctl:probe",
+  "type": "probe.request",
+  "mono_ms": 0,
+  "payload": {
+    "before": "Please find attached the",
+    "allow_replacement": false,
+    "explicit": "yes"
+  }
+}

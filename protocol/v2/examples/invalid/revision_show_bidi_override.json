@@ -1,0 +1,18 @@
+{
+  "v": 2,
+  "id": "revise-1",
+  "type": "revision.show",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 4,
+  "revision": 9,
+  "mono_ms": 2400,
+  "payload": {
+    "fingerprint": "revision_context_0001",
+    "revision_id": "r:2f0c6b1e-6f3a-4c55-9a51-1a2b3c4d5e6f",
+    "mode": "grammar",
+    "original": "i has went to the shop",
+    "text": "i went to the ‮shop",
+    "ttl_ms": 60000,
+    "provider": "local_model"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.ahuray.badi",
+  "name": "Badi controls",
+  "version": "0.1.0",
+  "author": "Badi contributors",
+  "description": "Privacy and runtime controls for the local Badi broker",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Badi",
+    "description": "Local writing predictions and settings",
+    "category": "Utilities",
+    "allowMultiple": false
+  }
+}

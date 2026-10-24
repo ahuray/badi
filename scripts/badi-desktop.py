@@ -1,0 +1,2182 @@
+#!/usr/bin/env python3
+"""Control the persistent desktop broker, its settings and its diagnostics."""
+
+import datetime
+import importlib.util
+import json
+import os
+import re
+from pathlib import Path
+import shutil
+import stat
+import subprocess
+import sys
+import time
+import uuid
+from urllib.parse import urlsplit
+
+# Installed beside this CLI; in the checkout, beside it in scripts/.
+import badi_install
+
+LIBRARY = Path(__file__).resolve().parent
+ROOT = LIBRARY.parent
+APPS = ("xournalpp", "omawrite")
+APP_IDS = {"omawrite": "omawrite", "xournalpp": "com.github.xournalpp.xournalpp"}
+APP_ADAPTERS = {"obsidian": "obsidian", "bash": "shell", "nvim": "neovim", "libreoffice-writer": "libreoffice"}
+SERVICE = "badi-broker.service"
+ACCESSIBILITY_SERVICE = "badi-accessibility.service"
+SESSION_SERVICE = "badi-session.service"
+BATTERY_TEXT = {
+    "normal": "On battery, automatic suggestions behave as on mains power.",
+    "quiet": ("On battery or in the power-saver profile, the model starts only after a typing pause. "
+              "Explicit requests are unchanged."),
+    "explicit": ("On battery or in the power-saver profile, suggestions appear only when you ask "
+                 "(Ctrl+Shift+Space, Tab in manual fields). Explicit requests are unchanged."),
+}
+# Up to eight words doubled harmful additions in the Prediction Lab
+# (broker/README.md#suggestion-limits), so these are the lengths.
+LENGTH_TEXT = {
+    "short": "Suggestions show one or two words.",
+    "normal": "Suggestions show up to four words.",
+}
+LENGTH_STATUS = {"short": "one or two words", "normal": "up to four words"}
+SNOOZE_MINUTES = 10
+SNOOZE_REFUSALS = {
+    "no_context": "Nothing to snooze: type in a field where Badi suggests, then snooze from there.",
+    "ambiguous_session": "Nothing snoozed: fields of more than one app or site have focus.",
+    "paused": "Predictions are paused already. Run badi resume when you want suggestions again.",
+}
+DESKTOP_AUTOMATIC = {"normal": "as on mains", "deferred": "after the typing pause",
+                     "explicit_only": "only when asked"}
+SCREEN_SHARE_TEXT = {
+    "hold": "While the screen is shared, Badi shows no suggestions until sharing stops (the default).",
+    "suggest": ("Badi keeps suggesting while the screen is shared, so its grey text, with words from the "
+                "window or learned ones, can appear on the shared screen. badi screen-share hold undoes it."),
+}
+SHARE_HELD_NOTE = ("The screen is being shared, so Badi holds every suggestion until sharing stops "
+                   "(badi screen-share suggest keeps suggesting).")
+SHARE_SUGGESTING_NOTE = ("The screen is being shared and Badi keeps suggesting, so its grey text can appear on the "
+                         "shared screen (badi screen-share hold).")
+HELP = """Badi — local writing controls
+
+  badi status [--json]          Model health and counters
+  badi stats [--json]          Suggestions shown, accepted and words saved
+                               today, in the last 7 days and per app or site
+                               (counts only, kept 90 days on this device)
+  badi stats forget            Delete every usage count
+  badi settings                Open the Omarchy settings panel
+  badi settings --json          Read the current settings document
+  badi pause | resume          Persistently pause or resume predictions
+  badi pause toggle            Pause if running, resume if paused (the
+                               badi-session shortcut runs this)
+  badi snooze [MINUTES]        Turn Badi off in the focused field's app or
+                               site for MINUTES (1-1440, default 10); until
+                               the broker restarts, badi resume ends it sooner
+  badi snooze end              End every snooze now
+  badi battery quiet|normal|explicit
+                               Automatic suggestions on battery or in the
+                               power-saver profile: start the model only
+                               after a typing pause (default), as on mains,
+                               or only when asked. Needs badi-session
+  badi screen-share hold|suggest
+                               While the screen is shared (a desktop portal
+                               screencast): hold every suggestion until it
+                               stops (default), or keep suggesting. Needs
+                               badi-session
+  badi length short|normal      How many words a suggestion shows: one or
+                               two, or up to four (default)
+  badi mid-line on|off         Suggestions with a word after the caret (off
+                               by default). Punctuation can still finish a word
+  badi escape-quiet SECONDS|off How long a dismissal keeps its field quiet
+                               (1-3600 seconds, across edits; off keeps quiet
+                               only until the text changes, the default)
+  badi context on|off|status    Opt-in context: finish the word you are typing
+                               (five letters in) with a word from the same
+                               window or one you wrote before in that app,
+                               kept sealed with a key in your keyring
+  badi context app ID on|off   Context for one app (on by default once on)
+  badi context site ORIGIN on|off
+                               Context for one site
+  badi context forget          Delete every learned word
+  badi style on|off|status      Opt-in style learning: keep the sentences you
+                               write before accepting a suggestion, sealed
+                               with a key in your keyring; no prompt uses
+                               them yet
+  badi style site ORIGIN on [DAYS]|off
+                               Learn on one allowed site, kept DAYS (1-90,
+                               default 30)
+  badi style export | forget   Print the samples as JSON, or delete them and
+                               the keyring key
+  badi model [--json]          Writing models: the one this device runs, the
+                               recommendation for it, and every choice
+  badi model use ID            Download (pinned, hash-checked) and switch to
+                               a model, for example gemma-3-1b
+  badi model auto              Return to the device recommendation
+  badi revise [--json]         Fix or refine selected text: select one line
+                               and press Ctrl+Shift+Space for grammar, again
+                               for a refined wording, Tab to apply; shows
+                               whether its model is installed
+  badi revise install          Download that model (Qwen3 1.7B, 1.3 GB,
+                               Apache-2.0, pinned and hash-checked)
+  badi languages [LANG...]     The languages you write in (en de fr es pt it
+                               nl pl): suggestions and typo fixes in each that
+                               has them; the panel asks this once
+  badi spelling [LANG on|off] [--json]
+                               Spelling languages (en de fr es it nl pl) and
+                               their dictionaries; English is built in
+  badi suggest [--json]        Suggestion languages and their healing
+  badi suggest LANG on|off     Suggest words in a language (en de; fr es pt
+                               are experimental; fa only from here)
+  badi suggest LANG healing on|off|auto
+                               Heal a trailing space in that language, keep
+                               it, or follow the model's reviewed default
+  badi language APP en|de|fa|fr|es|pt|reset
+                               Override one app's writing language; reset
+                               restores automatic language selection
+  badi apps allowlist|blocklist  Apps: only allowed apps (default), or every
+                               supported app except blocked ones
+  badi sites allowlist|blocklist Sites: only allowed sites (default), or every
+                               http(s) site except blocked ones; covers
+                               Chromium/Brave/Zen fields
+  badi app APP_ID on|off|reset  Allow or block one app; reset follows the mode
+  badi site ORIGIN on|off|reset Allow or block one exact browser origin
+  badi app list | site list     Show the mode and every app or site rule
+  badi app all on|off           Same as badi apps blocklist|allowlist
+  badi site all on|off          Same as badi sites blocklist|allowlist
+  badi service start|stop|restart|status
+                               Manage the local model process
+  badi autostart on|off         Start with the graphical session (next login)
+  badi doctor [--json]         Inspect service, model, install identity and
+                               no-suggestion reasons; --json is for tools
+  badi repair                  Restore Badi's lines that an Omarchy refresh
+                               dropped: the hyprland.lua require and the
+                               apps' accessibility flags
+  badi debug on [--text] | off  Trace every suggestion, key decision and ghost
+                               display for 15 minutes; --text also records
+                               context and suggestion text (RAM only)
+  badi debug watch | log [--json] | status
+                               Follow the trace live, print it, or summarize
+  badi logs                    Print the last 60 service log entries
+  badi launch omawrite|xournalpp
+                               Open a supported editor
+
+Keys: Tab accepts the next word of a visible suggestion and otherwise stays
+Tab; Ctrl+Right accepts all of it; typing its next letters keeps the rest;
+Escape dismisses; Ctrl+Shift+Space requests. Suggestions appear on their own in
+Omawrite, Telegram and the IME-parity apps ({IME_APPS}),
+each with an app or site grant; one site grant covers all three browsers.
+IME-parity accepts once, append-only, like typing: undo may merge it with
+earlier typing.
+Xournal++ text cells: Tab requests, Tab again accepts a word.
+Obsidian: Tab accepts a word, Ctrl/Command+Right all.
+Bash: Ctrl-X then Tab requests/accepts, Ctrl-X then Escape dismisses.
+Neovim (badi app nvim on): prose buffers suggest after a typing pause; Tab
+accepts a word, Ctrl+Right accepts all, leaving Insert mode dismisses.
+LibreOffice Writer spelling extension (badi app libreoffice-writer on): Alt+F7
+shows a correction for the word before the caret, Alt+F7 again replaces it in
+one undo step, Escape dismisses. badi app libreoffice covers the grey preview.
+For protocol commands: badictl --help
+"""
+# Apps whose fields work today. Discord still needs a private composer trial
+# with desktop-wide accessibility; README "Not yet" is the same list.
+WORKING_IME_APPS = (
+    "Chromium", "Brave and its web apps", "Zen", "Codex", "VS Code", "Cursor",
+    "Grok Bot", "LibreOffice Writer",
+)
+IME_APPS = ", ".join(WORKING_IME_APPS)
+HELP = HELP.format(IME_APPS=IME_APPS)
+VSCODE_SETTINGS = Path(".config/Code/User/settings.json")
+CLOSING = re.compile(r"\s*[}\]]")
+ALL_SITES_NOTE = ("Every http(s) site is allowed for predictions unless its exact site rule blocks it "
+                  "(badi site all off to return to listed sites). This includes "
+                  "Chromium/Brave/Zen fields, which have no second site gate and cannot exclude private "
+                  "windows. Sensitive fields stay denied.")
+ALL_APPS_NOTE = ("Apps use the blocklist: every app Badi supports is allowed unless its rule blocks it "
+                 "(badi apps allowlist to return to allowed apps only). The default opens only fields the "
+                 "accessibility observer corroborates; a manual Tab-request app still needs badi app APP on.")
+OBSERVER_SKIPPED_NOTE = ("The field observer is installed, but systemd skipped it: it runs only in a Hyprland session "
+                         "so far. Browser and other observed fields (Chromium-based apps, Zen, VS Code, Writer's "
+                         "grey preview) get no suggestions here; Fcitx's manual fields, Obsidian, Neovim, Bash and "
+                         "the Writer spelling extension work without it.")
+SESSION_FCITX_ACTION = (f"Log out and back in: Fcitx reads Badi's addon at login, from ~/{badi_install.FCITX_ENVIRONMENT}"
+                        " after scripts/install-desktop.py, or from the system addon directory after the badi "
+                        "package. ")
+INSTALLED_BROKER = ".local/lib/badi/badi-broker"
+# Broker no-suggestion classes; counters never include typed text.
+NO_SUGGESTION = {
+    "request_abstained": "the field language is missing or unsupported, the caret splits a word, a word follows the caret while mid-sentence suggestions are off, nothing but spaces (or one unfinished English word) precedes it, or a Persian joiner is not yet between two letters",
+    "budget_prefill": "the writing budget (550 ms while typing, 1.2 s after an explicit request) ended before the model started answering (prompt prefill)",
+    "budget_stream": "the writing budget (550 ms while typing, 1.2 s after an explicit request) ended before a complete word arrived",
+    "model_abstained": "the model finished without a complete word",
+    "output_rejected": "the output failed language, dictionary, number, shape or safety checks",
+    "stale": "the text, focus or pause state changed before display",
+    "timeout": "the broker deadline (600 ms while typing, 1.25 s after an explicit request) expired",
+    "provider_error": "the local model runtime failed or answered malformed",
+    "low_confidence": "a word of the suggestion was too unlikely for the model to be sure, so it was withheld",
+}
+
+
+def cli_path():
+    companion = LIBRARY / "badictl"
+    if companion.is_file():
+        return companion
+    installed = Path.home() / ".local/lib/badi/badictl"
+    return installed if installed.is_file() else ROOT / "target/release/badictl"
+
+
+def control(arguments, endpoint=None, *, input_text=None):
+    endpoint = endpoint or runtime_directory() / "broker.sock"
+    result = subprocess.run([str(cli_path()), "--socket", str(endpoint), *arguments],
+                            input=input_text, capture_output=True, text=True, timeout=8)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or "Badi is offline. Run: badi service start")
+    return result.stdout
+
+
+def service_state():
+    fields = badi_install.unit_properties(SERVICE, "LoadState", "ActiveState", "SubState", "UnitFileState", timeout=4)
+    return {"loaded": fields.get("LoadState") == "loaded",
+            "active": fields.get("ActiveState", "unknown"),
+            "state": fields.get("SubState", "unknown"),
+            "autostart": fields.get("UnitFileState") == "enabled"}
+
+
+FCITX_UNIT = "omarchy-fcitx5.service"
+
+
+def native_state():
+    """The running Fcitx and whether it maps Badi's addon. Omarchy runs Fcitx
+    as omarchy-fcitx5.service; where that unit does not exist, the desktop
+    started it (im-config's autostart, or the compositor), and the process
+    that owns Fcitx's session bus name is the one to inspect."""
+    fields = badi_install.unit_properties(FCITX_UNIT, "LoadState", "ActiveState", "MainPID", timeout=4)
+    launcher = FCITX_UNIT
+    if fields.get("LoadState") == "not-found":
+        launcher = "session"
+        pid = badi_install.fcitx_bus_process()
+        if pid is None:
+            return {"active": "unknown", "addon_loaded": None, "addon_update_pending": None,
+                    "inspection_error": "native_process_uninspectable", "launcher": launcher}
+        fields = {"ActiveState": "active" if pid else "inactive", "MainPID": str(pid)}
+    pid = fields.get("MainPID", "0")
+    loaded = False
+    update_pending = False
+    if pid.isdigit() and int(pid) > 0:
+        # Confirm the running process maps the addon; an installed file alone
+        # does not mean Fcitx loaded it. Never include process maps in output.
+        try:
+            mappings = Path(f"/proc/{pid}/maps").read_text().splitlines()
+            update_pending = any(line.rstrip().endswith("/libbadi-fcitx5.so (deleted)") for line in mappings)
+            loaded = update_pending or any(line.rstrip().endswith("/libbadi-fcitx5.so") for line in mappings)
+        except OSError:
+            return {"active": fields.get("ActiveState", "unknown"), "addon_loaded": None,
+                    "addon_update_pending": None, "inspection_error": "native_process_uninspectable",
+                    "launcher": launcher}
+    return {"active": fields.get("ActiveState", "unknown"), "addon_loaded": loaded,
+            "addon_update_pending": update_pending, "launcher": launcher}
+
+
+def startup_problem():
+    """Classify this service invocation's startup error without returning logs."""
+    try:
+        identifier = badi_install.unit_value(SERVICE, "InvocationID")
+        if not re.fullmatch(r"[a-f0-9]{32}", identifier):
+            return None
+        journal = subprocess.run([
+            "journalctl", "--user", f"_SYSTEMD_INVOCATION_ID={identifier}",
+            "--no-pager", "--output=cat", "--lines=40",
+        ], capture_output=True, text=True, timeout=3)
+        if journal.returncode:
+            return None
+        # Only translate known metadata errors. Never pass arbitrary journal
+        # lines (or a historical invocation's failure) into the health report.
+        for line in reversed(journal.stdout.splitlines()):
+            if line.startswith("error_code=control_plane:"):
+                name = line.removeprefix("error_code=control_plane:").strip()
+                if name in {"unsafe_file", "unsafe_directory", "json", "validation", "missing_home"}:
+                    return {"code": "settings_" + name,
+                            "message": "Badi's private settings cannot be used, so the service has stopped instead of retrying.",
+                            "action": "Repair or replace ~/.config/badi/settings.json and its directory permissions, then badi service restart."}
+                return {"code": "control_plane",
+                        "message": "The broker could not open its private settings.",
+                        "action": "Run badi logs, then badi service restart if the settings directory is intact."}
+            if not line.startswith("error_code=local_model:"):
+                continue
+            if line.removeprefix("error_code=local_model:").strip() == "runtime_process_exited":
+                return {"code": "runtime_process_exited", "message": "The local inference process stopped unexpectedly.",
+                        "action": "The desktop service restarts it automatically with backoff. If it keeps stopping, inspect badi logs and available memory."}
+            missing = re.search(r"not installed \(([A-Za-z0-9_.-]{1,100}\.gguf)\)", line)
+            if missing:
+                return {"code": "model_not_installed",
+                        "message": f"The broker selected {missing[1]}, but its model/runtime files are missing.",
+                        "action": "Run badictl models writing for the pinned model download plan; then badi service restart."}
+            if "no installed writing model" in line or "no writing model fits" in line:
+                return {"code": "no_usable_model", "message": "No installed writing model fits the current resources.",
+                        "action": "Run badictl hardware and badictl models writing; check available memory and installed model files."}
+            if "verification failed" in line:
+                return {"code": "model_verification_failed", "message": "The installed model or runtime failed integrity verification.",
+                        "action": "Restore the pinned model/runtime artifacts before restarting Badi."}
+            if "requires Linux" in line:
+                return {"code": "runtime_unsupported", "message": "This machine cannot execute the installed inference runtime.",
+                        "action": "Run badictl hardware and check the runtime requirements in the Badi runbook."}
+            return {"code": "model_startup_failed", "message": "The local inference runtime failed to start.",
+                    "action": "Run badi logs to inspect the local startup error, then badi service restart."}
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def observer_service_state():
+    fields = badi_install.unit_properties(ACCESSIBILITY_SERVICE, "LoadState", "ActiveState", "MainPID",
+                                          "ConditionResult", "ConditionTimestampMonotonic")
+    pid = fields.get("MainPID", "0")
+    state = {"loaded": fields.get("LoadState") == "loaded",
+             "active": fields.get("ActiveState", "unknown"),
+             "process_id": int(pid) if pid.isdigit() else 0}
+    # systemd checked the unit's start condition (a Hyprland session, so far)
+    # and skipped the start: expected on other desktops, not a failure.
+    if (state["active"] == "inactive" and fields.get("ConditionResult") == "no"
+            and fields.get("ConditionTimestampMonotonic", "0") not in ("", "0")):
+        state["condition_unmet"] = True
+    return state
+
+
+def observer_probe(endpoint, expected_pid):
+    path = next((candidate for candidate in (
+        LIBRARY / "accessibility/health.py", ROOT / "adapters/accessibility/health.py",
+        Path.home() / ".local/lib/badi/accessibility/health.py",
+    ) if candidate.is_file()), None)
+    if path is None:
+        return {"ready": False, "error": "health_module_missing"}
+    spec = importlib.util.spec_from_file_location("badi_accessibility_health", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        return module.probe(endpoint, expected_pid)
+    except module.ProbeError as error:
+        return {"ready": False, "error": str(error)}
+
+
+def accessibility_state():
+    result = {"loaded": None, "active": "unknown", "ready": False, "bus_enabled": None}
+    try:
+        service = observer_service_state()
+        result.update(service)
+        if service["active"] == "active" and service["process_id"] > 0:
+            endpoint = runtime_directory() / "accessibility.sock"
+            result.update(observer_probe(endpoint, service["process_id"]))
+            if observer_service_state() != service:
+                result.update(ready=False, error="service_changed")
+        bridge = subprocess.run([
+            "busctl", "--user", "--timeout=1s", "get-property", "org.a11y.Bus",
+            "/org/a11y/bus", "org.a11y.Status", "IsEnabled",
+        ], capture_output=True, text=True, timeout=2)
+        if bridge.returncode == 0 and bridge.stdout.strip() in ("b true", "b false"):
+            result["bus_enabled"] = bridge.stdout.strip() == "b true"
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        result.update(ready=False, error="observer_uninspectable")
+    return result
+
+
+def session_helper_state():
+    """The desktop session helper's unit; it reports to the broker itself."""
+    try:
+        fields = badi_install.unit_properties(SESSION_SERVICE, "LoadState", "ActiveState", timeout=4)
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        return {"loaded": None, "active": "unknown"}
+    return {"loaded": fields.get("LoadState") == "loaded", "active": fields.get("ActiveState", "unknown")}
+
+
+def desktop_text(desktop, settings=None):
+    """One content-free line about the session helper's report, or None."""
+    if not isinstance(desktop, dict):
+        return None
+    if not desktop.get("observed"):
+        return "Desktop: no session helper (suspend, battery modes and the screen-share hold need badi-session)"
+    mode = (settings or {}).get("battery_mode", "quiet")
+    power = "on battery or power saver" if desktop.get("low_power") else "on mains power"
+    automatic = DESKTOP_AUTOMATIC.get(desktop.get("automatic"), "unknown")
+    return f"Desktop: session {desktop.get('session', 'unknown')} · {power} · battery mode {mode} · automatic {automatic}"
+
+
+def screen_share_text(desktop, settings=None):
+    """Whether the screen is shared and what that does to suggestions, or None
+    without a session helper."""
+    if not isinstance(desktop, dict):
+        return None
+    state = desktop.get("screen_share")
+    if not desktop.get("observed"):
+        # The broker keeps a share held for a few seconds after its helper left.
+        return ("Screen sharing: the session helper stopped during a share; suggestions stay held "
+                "for up to 10 s or until it reports again") if state == "held" else None
+    suggest = (settings or {}).get("screen_share") == "suggest"
+    if state == "held":
+        return "Screen sharing: shared, every suggestion held until it stops (badi screen-share suggest keeps them)"
+    if state == "suggesting":
+        return "Screen sharing: shared, still suggesting (badi screen-share hold holds them)"
+    return ("Screen sharing: not shared · " + ("still suggests" if suggest else "holds suggestions")
+            + " while shared (badi screen-share hold|suggest)")
+
+
+def snooze_text(snoozes):
+    """One line naming each snoozed app or site, or None when none is."""
+    if not isinstance(snoozes, list) or not snoozes:
+        return None
+    items = [f"{identity_text(item['subject'])} ({max(1, round(item['remaining_ms'] / 60000))} min left)"
+             for item in snoozes]
+    return "Snoozed: " + ", ".join(items) + " · badi resume ends it"
+
+
+def snooze(minutes):
+    """Snoozes the focused field's app or site; returns the broker's status."""
+    try:
+        reply = json.loads(control(["snooze", str(minutes)]))
+    except RuntimeError as error:
+        refusal = SNOOZE_REFUSALS.get(str(error).removeprefix("error_code=rejected:"))
+        if refusal:
+            raise RuntimeError(refusal) from None
+        raise
+    refresh_bar()
+    return reply["payload"]["snooze"]
+
+
+def end_snoozes():
+    control(["snooze", "end"])
+    refresh_bar()
+
+
+def no_suggestion_summary(metrics):
+    """Summarize content-free no-suggestion classes; None for older brokers."""
+    breakdown = metrics.get("no_suggestion") if isinstance(metrics, dict) else None
+    if not isinstance(breakdown, dict):
+        return None
+    counts = {reason: breakdown[reason] for reason in NO_SUGGESTION
+              if isinstance(breakdown.get(reason), int) and breakdown[reason] > 0}
+    last = breakdown.get("last") if breakdown.get("last") in NO_SUGGESTION else None
+    return {"total": sum(counts.values()), "counts": counts, "last": last}
+
+
+def usage_stats(endpoint):
+    """The broker's usage statistics, or None when it cannot report them."""
+    try:
+        status = json.loads(control(["stats", "status"], endpoint))
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return status if isinstance(status, dict) else None
+
+
+def receipt(name):
+    """Read one private install receipt; None when that installer never ran."""
+    try:
+        document = private_json(badi_install.receipt_path(Path.home(), name), 1 << 20)
+    except FileNotFoundError:
+        return None
+    except (RuntimeError, ValueError, OSError):
+        return {"error": "receipt_unreadable"}
+    if not isinstance(document, dict) or document.get("schema") != badi_install.SCHEMA \
+            or not isinstance(document.get("source"), dict) or not isinstance(document.get("files"), dict):
+        return {"error": "receipt_invalid"}
+    return document
+
+
+def running_broker_identity():
+    """Hash and version the exact executable image of the running service."""
+    def main_pid():
+        try:
+            value = badi_install.unit_value(SERVICE, "MainPID")
+        except RuntimeError:
+            return 0
+        return int(value) if value.isdigit() else 0
+
+    pid = main_pid()
+    if pid <= 0:
+        return None
+    process = Path(f"/proc/{pid}")
+    try:
+        if process.stat().st_uid != os.getuid():
+            return {"error": "running_broker_uninspectable"}
+        digest = badi_install.file_sha256(process / "exe")
+        # /proc/PID/exe runs the image in memory even after an update replaced
+        # the installed file, so this is the running build, not the file on disk.
+        version = subprocess.run([str(process / "exe"), "--version"], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return {"error": "running_broker_uninspectable"}
+    if main_pid() != pid:
+        return {"error": "service_changed"}
+    line = version.stdout.strip() if version.returncode == 0 else ""
+    return {"version": line if badi_install.VERSION_LINE.fullmatch(line) else None, "sha256": digest}
+
+
+def install_state():
+    state = {}
+    expected = None
+    for name in ("desktop", "editors"):
+        document = receipt(name)
+        if document is None or "error" in document:
+            state[name] = document
+            continue
+        state[name] = {"installed_at": document.get("installed_at"), **document["source"]}
+        if name == "desktop":
+            expected = document["files"].get(INSTALLED_BROKER)
+            state[name]["broker_version"] = expected.get("version") if isinstance(expected, dict) else None
+    try:
+        running = running_broker_identity()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        running = {"error": "running_broker_uninspectable"}
+    if running and "error" not in running and isinstance(expected, dict):
+        running["version_matches_receipt"] = running["version"] is not None and running["version"] == expected.get("version")
+        running["sha256_matches_receipt"] = running["sha256"] == expected.get("sha256")
+    state["running_broker"] = running
+    # Lines an Omarchy refresh dropped from files the desktop install changed.
+    state["dropped_lines"] = [name for name, _, _ in badi_install.dropped_lines(Path.home())]
+    return state
+
+
+def jsonc_object(text):
+    """Decode JSON with comments and trailing commas, as VS Code settings allow."""
+    def scan(source, skipped):
+        kept, index, quoted = [], 0, False
+        while index < len(source):
+            character = source[index]
+            if quoted or character == '"':
+                kept.append(character)
+                if quoted and character == "\\":
+                    kept.append(source[index + 1:index + 2])
+                    index += 2
+                    continue
+                quoted = character != '"' if quoted else True
+                index += 1
+                continue
+            length = skipped(source, index)
+            kept.append(" " if length else character)
+            index += length or 1
+        return "".join(kept)
+
+    def comment(source, index):
+        if source.startswith("//", index):
+            end = source.find("\n", index)
+            return (len(source) if end < 0 else end) - index
+        if source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            if end < 0:
+                raise ValueError("unterminated comment")
+            return end + 2 - index
+        return 0
+
+    def trailing_comma(source, index):
+        return int(source[index] == "," and CLOSING.match(source, index + 1) is not None)
+
+    return json.loads(scan(scan(text, comment), trailing_comma))
+
+
+def vscode_edit_context_note():
+    """Read-only check of VS Code's EditContext switch; never returns file text."""
+    path = Path.home() / VSCODE_SETTINGS
+    if not (shutil.which("code") or path.parents[1].is_dir()):
+        return None
+    fix = 'add "editor.editContext": false to ~/.config/Code/User/settings.json and reload VS Code'
+    try:
+        with open(path, "rb") as stream:
+            raw = stream.read((1 << 20) + 1)
+        if len(raw) > 1 << 20:
+            raise ValueError("settings too large")
+        # Like VS Code: an optional BOM, and blank means {}.
+        text = raw.decode("utf-8-sig")
+        settings = jsonc_object(text) if text.strip() else {}
+        if not isinstance(settings, dict):
+            raise ValueError("settings are not an object")
+    except FileNotFoundError:
+        settings = {}
+    except (OSError, ValueError, UnicodeDecodeError):
+        return ("VS Code is installed, but Badi could not read its user settings to check EditContext. "
+                f"If Badi misreads text in VS Code, {fix}.")
+    if settings.get("editor.editContext") is False:
+        return None
+    return ("VS Code is installed with EditContext on (its default). EditContext sends Fcitx corrupted "
+            f"surrounding text, so Badi cannot read the text before the caret there; {fix}.")
+
+
+def health_report():
+    report = {"schema": "badi.desktop-health.v1", "service": service_state(),
+              "native_apps": list(APPS), "problems": [], "notes": []}
+    report["notes"].append(f"{IME_APPS} fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it. Discord still needs a private composer trial with desktop-wide accessibility.")
+    problems = report["problems"]
+    observer = report["accessibility"] = accessibility_state()
+    if observer.get("loaded"):
+        if observer.get("condition_unmet"):
+            report["notes"].append(OBSERVER_SKIPPED_NOTE)
+        elif not observer["ready"]:
+            problems.append({"code": "accessibility_unavailable",
+                             "message": "The accessibility field observer is unavailable.",
+                             "action": "Inspect systemctl --user status badi-accessibility.service and the accessibility runbook."})
+        elif observer.get("bus_enabled") is False:
+            problems.append({"code": "accessibility_disabled",
+                             "message": "Desktop accessibility is disabled, so applications may expose no fields.",
+                             "action": "Complete the accessibility setup and relaunch the target application with its supported accessibility/input-method flags."})
+    else:
+        report["notes"].append("The accessibility field observer is not installed or could not be inspected, so IME-parity apps and observed fields get no suggestions. Model readiness alone does not establish those integrations.")
+    try:
+        report["native"] = native_state()
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        report["native"] = {"active": "unknown", "addon_loaded": None,
+                            "addon_update_pending": None, "inspection_error": "native_service_uninspectable"}
+    try:
+        report["broker"] = json.loads(control(["status"]))
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        report["error"] = "The desktop prediction broker is unreachable."
+        startup = startup_problem() if report["service"]["active"] == "failed" else None
+        if startup:
+            problems.append(startup)
+        problems.append({"code": "broker_unreachable", "message": report["error"],
+                         "action": "Run badi service start, then badi doctor. Model startup takes a few seconds."})
+    if report["service"]["active"] == "failed":
+        problems.append({"code": "service_failed", "message": "The Badi service stopped on a startup error that retrying cannot fix.",
+                         "action": "Resolve the startup problem, then run badi service restart."})
+    if report.get("broker", {}).get("control_plane_degraded"):
+        problems.append({"code": "settings_degraded", "message": "The broker cannot use its persistent settings safely.",
+                         "action": "Inspect badi logs and restore valid private settings before enabling predictions."})
+    if report["native"].get("inspection_error"):
+        problems.append({"code": "native_status_unknown", "message": "Native input integration could not be inspected.",
+                         "action": "Inspect the Fcitx user service from the graphical session. Browser and editor broker health is reported separately."})
+    elif report["native"]["addon_loaded"] is False and report["native"].get("launcher") == "session":
+        running = report["native"].get("active") == "active"
+        problems.append({"code": "native_addon_unavailable",
+                         "message": "The running Fcitx has not loaded Badi." if running
+                         else "Fcitx is not running in this session.",
+                         "action": (SESSION_FCITX_ACTION if running else "Choose Fcitx 5 as the input method "
+                                    "(Debian, Ubuntu: im-config -n fcitx5; KDE Plasma: Fcitx 5 as the Virtual "
+                                    "Keyboard), then log out and back in. ") + "Native manual, observed and "
+                                   "IME-parity fields all need the loaded addon."})
+    elif report["native"]["addon_loaded"] is False:
+        problems.append({"code": "native_addon_unavailable", "message": "The running Fcitx service has not loaded Badi.",
+                         "action": "Check the native installation in the Badi runbook. Native manual, observed and IME-parity fields all need the loaded addon."})
+    install = report["install"] = install_state()
+    running = install.get("running_broker") or {}
+    if install.get("desktop") is None:
+        report["notes"].append("No desktop install receipt exists, so the installed files cannot be matched to a source commit. The next scripts/install-desktop.py run records one.")
+    elif "error" in install["desktop"]:
+        report["notes"].append("The desktop install receipt is unreadable or not private; installed files cannot be matched to a source commit.")
+    elif running.get("sha256_matches_receipt") is False or running.get("version_matches_receipt") is False:
+        problems.append({"code": "broker_build_mismatch", "message": "The running broker is not the build recorded by the last desktop installation.",
+                         "action": "Run badi service restart after an installation; otherwise reinstall with scripts/install-desktop.py."})
+    dropped = install.get("dropped_lines") or []
+    if dropped:
+        problems.append({"code": "install_lines_dropped",
+                         "message": "Files the desktop install changed lost Badi's lines: " + ", ".join(dropped) + ".",
+                         "action": "Run badi repair. Omarchy's refresh commands replace these files; its hooks run the repair at login and after omarchy-update."})
+    broker = report.get("broker", {})
+    helper = report["session_helper"] = session_helper_state()
+    desktop = broker.get("desktop") if broker else None
+    if broker and helper.get("loaded") is False:
+        report["notes"].append("The desktop session helper (badi-session) is not installed, so suspend, session switches, "
+                               "battery modes and screen sharing are not reported to the broker. Adapters keep their own focus, "
+                               "lock and expiry checks.")
+    elif isinstance(desktop, dict) and desktop.get("session") in ("inactive", "sleeping"):
+        report["notes"].append("The session helper reports this login session as not in the foreground, so every grant is held "
+                               "until it returns.")
+    elif isinstance(desktop, dict) and desktop.get("automatic") in ("deferred", "explicit_only"):
+        report["notes"].append("On battery or in the power-saver profile, automatic suggestions start "
+                               + DESKTOP_AUTOMATIC[desktop["automatic"]] + " (badi battery normal restores mains behavior).")
+    if broker and helper.get("loaded") and shutil.which("pw-dump") is None:
+        report["notes"].append("pw-dump (PipeWire) is not installed, so the session helper cannot see a screen share "
+                               "and suggestions are not held while one runs.")
+    sharing = desktop.get("screen_share") if isinstance(desktop, dict) else None
+    if report["native"].get("addon_update_pending"):
+        report["notes"].append("Fcitx is still using the previous addon build. Apply the native update after normal desktop unlock.")
+    if sharing == "held":
+        report["notes"].append(SHARE_HELD_NOTE)
+    elif broker.get("paused"):
+        report["notes"].append("Predictions are paused. Run badi resume when you want suggestions again.")
+    elif snooze_text(broker.get("snoozes")):
+        report["notes"].append(snooze_text(broker["snoozes"]) + " sooner; it withholds only that app or site.")
+    elif broker and broker.get("metrics", {}).get("provider_calls") == 0:
+        report["notes"].append("The model is ready but has received no prediction requests since startup. Run badi debug on and badi debug watch, then type in a supported field. Native manual fields require Tab; observed fields need matching accessibility and Fcitx context.")
+    if sharing == "suggesting":
+        report["notes"].append(SHARE_SUGGESTING_NOTE)
+    settings = web_settings() if broker else {}
+    if settings.get("all_web_origins") is True:
+        report["notes"].append(ALL_SITES_NOTE)
+    if settings.get("style_learning") is True:
+        try:
+            style = json.loads(control(["style", "status"]))
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+            style = {}
+        if style.get("key") != "ready" or style.get("available") is not True:
+            report["notes"].append("Style learning is on, but the broker cannot seal samples (its keyring key is "
+                                   "missing, locked or different, or the store is unreadable), so nothing is kept. "
+                                   "Unlock the keyring or run badi style on; badi style status explains which.")
+    if settings.get("context_words") is True:
+        try:
+            context = json.loads(control(["context", "status"]))
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+            context = {}
+        if context.get("key") != "ready" or context.get("available") is not True:
+            report["notes"].append("Context is on and window words work, but no words are learned: the keyring key is "
+                                   "missing, locked or different, or the learned words are unreadable. Unlock the "
+                                   "keyring or run badi context on; badi context status explains which.")
+    if settings.get("all_linux_apps") is True:
+        report["notes"].append(ALL_APPS_NOTE)
+    editor = vscode_edit_context_note()
+    if editor:
+        report["notes"].append(editor)
+    if broker:
+        summary = no_suggestion_summary(broker.get("metrics", {}))
+        if summary is None:
+            report["notes"].append("The running broker predates no-suggestion reason counters. Install and restart the current build to see why suggestions are missing.")
+        elif summary["total"]:
+            detail = "; ".join(f"{reason}={count}: {NO_SUGGESTION[reason]}"
+                               for reason, count in sorted(summary["counts"].items(), key=lambda item: -item[1]))
+            report["notes"].append(f"{summary['total']} model request(s) since broker start showed no suggestion. {detail}. Last: {summary['last']}.")
+    return report
+
+
+def doctor_text(report):
+    """Render the same diagnosis as JSON without dumping internal identifiers."""
+    service = report.get("service", {})
+    broker = report.get("broker", {})
+    native = report.get("native", {})
+    observer = report.get("accessibility", {})
+    problems = report["problems"]
+    model = ("paused" if broker.get("paused") else "ready") if broker else "unreachable"
+    addon = {True: "loaded", False: "not loaded"}.get(native.get("addon_loaded"), "unknown")
+    lines = ["Badi doctor: " + (f"{len(problems)} problem(s)" if problems else "no problems found"),
+             f"  Service: {service.get('active', 'unknown')} ({service.get('state', 'unknown')})",
+             f"  Model: {model}" + (f" · {broker['provider']}" if broker.get("provider") else ""),
+             f"  Fcitx addon: {addon}",
+             "  Field observer: " + ("ready" if observer.get("ready") else
+                                     "not for this session" if observer.get("condition_unmet") else "unavailable"),
+             "  Session helper: " + {True: report.get("session_helper", {}).get("active", "unknown"),
+                                      False: "not installed"}.get(report.get("session_helper", {}).get("loaded"), "unknown")]
+    installed = report.get("install", {}).get("desktop") or {}
+    if installed.get("commit"):
+        lines.append(f"  Installed source: {installed['commit']}" + (" (modified)" if installed.get("dirty") else ""))
+    for problem in problems:
+        lines.extend(["", f"{problem['code']}: {problem['message']}", f"  Next: {problem['action']}"])
+    for note in report["notes"]:
+        lines.extend(["", note])
+    return "\n".join(lines)
+
+
+def web_settings():
+    """The current settings document, or {} when it cannot be read."""
+    try:
+        document = json.loads(control(["settings", "show", "--json"]))
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        return {}
+    return document if isinstance(document, dict) else {}
+
+
+def context_text(chosen):
+    if chosen is True:
+        return "on: finishes words from the window and words you wrote before (badi context status)"
+    return "off" if chosen is False else "not chosen: badi context on lets Badi finish words from the window"
+
+
+def length_text(length):
+    length = length if length in LENGTH_STATUS else "normal"
+    return f"{length}, {LENGTH_STATUS[length]} (badi length short|normal)"
+
+
+def status_text(health, settings=None):
+    held = isinstance(health.get("desktop"), dict) and health["desktop"].get("screen_share") == "held"
+    state = ("Held while the screen is shared" if held and not (settings or {}).get("paused")
+             else "Paused" if health["paused"] else "Model ready")
+    counters = health["metrics"]
+    summary = no_suggestion_summary(counters)
+    if summary is None:
+        misses = "No-suggestion reasons: not reported by this broker"
+    elif summary["total"]:
+        misses = f"No suggestion: {summary['total']} (last: {summary['last']})"
+    else:
+        misses = "No suggestion: 0"
+    quiet = (settings or {}).get("escape_quiet_seconds")
+    quiet_text = f"{quiet}s" if type(quiet) is int and quiet > 0 else "until edit"
+    return (f"Badi: {state} · {health['provider']}\n"
+            f"Requests: {counters['provider_calls']} · Suggestions: {counters['suggestions_shown']} · Errors: {counters['provider_errors']} · {misses}\n"
+            "Native Fcitx: automatic in Omawrite; Tab request/accept in the Xournal++ Text tool\n"
+            "Editors: Obsidian automatic/Tab · Bash Ctrl-X then Tab\n"
+            f"Observed fields: automatic for Omawrite, Telegram and IME-parity apps ({IME_APPS}); Tab accepts a visible suggestion's next word, otherwise stays Tab; Ctrl+Right accepts all of it; Ctrl+Shift+Space requests\n"
+            + f"Apps: {mode_text((settings or {}).get('all_linux_apps'), 'app')}\n"
+            + f"Web sites: {mode_text((settings or {}).get('all_web_origins'), 'site')}\n"
+            + f"Context: {context_text((settings or {}).get('context_words'))}\n"
+            + f"Length: {length_text((settings or {}).get('suggestion_length'))}\n"
+            + f"Escape: dismiss (quiet: {quiet_text}) · Why nothing appeared: badi doctor; badi debug on; badi debug watch"
+            + "".join(f"\n{line}" for line in [desktop_text(health.get("desktop"), settings),
+                                                 screen_share_text(health.get("desktop"), settings),
+                                                 snooze_text(health.get("snoozes"))] if line))
+
+
+MODEL_DIRECTORY = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "badi/models"
+
+
+def model_advice():
+    """The broker's pinned writing catalog for this device (badi.model-advice.v3)."""
+    result = subprocess.run([str(cli_path()), "models", "writing", "--json"],
+                            capture_output=True, text=True, timeout=15)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or "badictl models failed")
+    return json.loads(result.stdout)
+
+
+def active_model_file():
+    """The model file the running broker loaded, from its content-free startup line."""
+    try:
+        identifier = badi_install.unit_value(SERVICE, "InvocationID")
+        if not re.fullmatch(r"[a-f0-9]{32}", identifier):
+            return None
+        journal = subprocess.run(["journalctl", "--user", f"_SYSTEMD_INVOCATION_ID={identifier}",
+                                  "--no-pager", "--output=cat", "--lines=200"],
+                                 capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError, RuntimeError):
+        return None
+    for line in reversed(journal.stdout.splitlines()):
+        found = re.match(r"provider=local_model model=([A-Za-z0-9_.-]{1,120}\.gguf) ", line)
+        if found:
+            return found[1]
+    return None
+
+
+def model_report(settings):
+    advice = model_advice()
+    active = active_model_file()
+    recommended = (advice.get("recommended") or {}).get("id")
+    models = [{"id": model["id"], "name": model["name"], "bytes": model["download_bytes"],
+               "license": model["license"], "languages": model["languages"],
+               "screen_useful": model["screen_useful"], "fits": model["fits"],
+               "installed": (MODEL_DIRECTORY / model["filename"]).is_file(),
+               "active": model["filename"] == active, "recommended": model["id"] == recommended,
+               "chosen": model["id"] == settings.get("writing_model")}
+              for model in advice["catalog"]]
+    return {"schema": "badi.models.v1", "recommended": recommended,
+            "chosen": settings.get("writing_model"), "memory_mib": advice["hardware"]["memory"],
+            "rationale": advice["rationale"], "models": models}
+
+
+def print_models(report):
+    active = next((model for model in report["models"] if model["active"]), None)
+    print("Badi writes with " + (active["name"] if active else "no model yet (is the service running?)") + ".")
+    best = next((model for model in report["models"] if model["recommended"]), None)
+    if best:
+        print(f"Recommended for this device: {best['name']}.")
+    for model in report["models"]:
+        mark = "●" if model["active"] else "★" if model["recommended"] else "·"
+        state = ("in use" if model["active"] else "installed" if model["installed"]
+                 else "too large for this device" if not model["fits"] else "not installed")
+        score = f"{model['screen_useful']}/135 useful" if model["screen_useful"] is not None else "unscreened"
+        print(f"  {mark} {model['id']:13} {model['name']:13} {model['bytes'] / 1e9:4.2f} GB  "
+              f"{score:15} {model['license']:20} {state}")
+    print("Scores are blind-reviewed useful suggestions in Badi's 2026-10-17 development screen, "
+          "not a qualification. Switch with: badi model use ID")
+
+
+# The instruction model explicit revisions use (broker ADR 0012).
+REVISION_MODEL = "qwen3-1.7b"
+
+
+def revision_report():
+    """Whether the revision model is installed, from the broker's catalog."""
+    model = next((entry for entry in model_advice()["catalog"] if entry["id"] == REVISION_MODEL), None)
+    if model is None:
+        raise RuntimeError("This Badi build has no revision model in its catalog.")
+    return {"schema": "badi.revision.v1", "model": model["id"], "name": model["name"],
+            "bytes": model["download_bytes"], "license": model["license"], "fits": model["fits"],
+            "installed": (MODEL_DIRECTORY / model["filename"]).is_file()}, model
+
+
+def print_revision(report):
+    print("Select one line of text and press Ctrl+Shift+Space: Badi checks its grammar. Press it again "
+          "for a refined wording; Tab applies what it shows, Esc keeps your text.")
+    if report["installed"]:
+        print(f"{report['name']} is installed; it starts on first use and stops after ten idle minutes.")
+    elif not report["fits"]:
+        print(f"{report['name']} does not fit this device's memory, so revisions are unavailable.")
+    else:
+        print(f"{report['name']} ({report['bytes'] / 1e9:.1f} GB, {report['license']}) is not installed. "
+              "Install it with: badi revise install")
+
+
+def install_revision_model():
+    report, model = revision_report()
+    if report["installed"]:
+        return report, False
+    if not report["fits"]:
+        raise RuntimeError(f"{report['name']} does not fit this device's memory with Badi's safety reserve.")
+    badi_install.download_model(model, MODEL_DIRECTORY)
+    return {**report, "installed": True}, True
+
+
+def use_model(model_id, accept_license):
+    advice = model_advice()
+    model = next((entry for entry in advice["catalog"] if entry["id"] == model_id), None)
+    if model is None:
+        raise RuntimeError("Unknown model. Choose one of: " + " ".join(entry["id"] for entry in advice["catalog"]))
+    if not model["fits"]:
+        raise RuntimeError(f"{model['name']} does not fit this device's memory with Badi's safety reserve.")
+    terms = badi_install.model_terms(model)
+    if terms and not accept_license:
+        if not sys.stdin.isatty():
+            raise RuntimeError(f"{model['name']} is provided under {terms}. Add --accept-license to agree.")
+        if input(f"{model['name']} is provided under {terms}. Do you accept it? [y/N] ").strip().lower() not in ("y", "yes"):
+            raise RuntimeError("Nothing changed.")
+    if terms:
+        badi_install.record_model_terms(Path.home(), model)
+    if not (MODEL_DIRECTORY / model["filename"]).is_file():
+        badi_install.download_model(model, MODEL_DIRECTORY)
+    update_settings(lambda document: document.update(writing_model=model["id"]))
+    if not restart_service():
+        raise RuntimeError("The model service did not answer after the restart. Run badi doctor.")
+    return model
+
+
+def restart_service(wait=60):
+    """Restart the broker and wait until it answers, up to `wait` seconds."""
+    if service_state()["active"] == "failed":
+        subprocess.run(["systemctl", "--user", "reset-failed", SERVICE], check=True, timeout=4)
+    subprocess.run(["systemctl", "--user", "restart", SERVICE], check=True, timeout=30)
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        try:
+            control(["status"])
+            return True
+        except (RuntimeError, subprocess.SubprocessError):
+            time.sleep(0.5)
+    return False
+
+
+def update_settings(change):
+    document = json.loads(control(["settings", "show", "--json"]))
+    revision = document["revision"]
+    change(document)
+    document["revision"] = revision + 1
+    # Let the broker reject concurrent changes; never overwrite newer settings.
+    reply = control(["settings", "replace", "--if-revision", str(revision),
+                     "--json", "-"], input_text=json.dumps(document))
+    refresh_bar()
+    return reply
+
+
+def refresh_bar():
+    """Asks the Omarchy bar mark to read the broker now: it otherwise does so
+    only while its popout is open, so a pause from a shortcut or a terminal
+    left it undimmed. Best effort, and quiet where Omarchy is not running."""
+    if shutil.which("omarchy-shell") is None:
+        return
+    try:
+        subprocess.run(["omarchy-shell", "-q", "badi-writing", "refresh"], timeout=3, check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def set_app(document, app, enabled):
+    identity = app_identity(app)
+    subject = next((item for item in document["subjects"] if item["identity"] == identity), None)
+    if subject is None:
+        subject = {"identity": identity}
+        document["subjects"].append(subject)
+    subject["permissions"] = badi_install.grant("allow" if enabled else "block")
+    document["subjects"].sort(key=lambda item: identity_key(item["identity"]))
+
+
+def set_mode(document, key, blocklist):
+    # Absent is the canonical allowlist state; exact rules are left untouched.
+    if blocklist:
+        document[key] = True
+    else:
+        document.pop(key, None)
+
+
+def set_escape_quiet(document, seconds):
+    # Absent is the canonical until-edit state; exact rules are left untouched.
+    if seconds:
+        document["escape_quiet_seconds"] = seconds
+    else:
+        document.pop("escape_quiet_seconds", None)
+
+
+STYLE_ON = ("Style learning is on. Badi keeps the sentence you wrote before each accepted suggestion, "
+            "only on sites you allow with: badi style site ORIGIN on. Samples are sealed with a key in your "
+            "keyring and no prompt uses them yet; badi style export shows them, badi style forget deletes them.")
+
+
+def style_keyring():
+    """The session helper's keyring module, installed beside it or in the checkout."""
+    path = next((candidate for candidate in (LIBRARY / "session/style_key.py",
+                                              ROOT / "adapters/session/style_key.py") if candidate.is_file()), None)
+    if path is None:
+        raise RuntimeError("The keyring module is not installed. Run scripts/install-desktop.py.")
+    spec = importlib.util.spec_from_file_location("badi_style_key", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def set_style_learning(document, enabled):
+    # Absent is the canonical off state.
+    if enabled:
+        document["style_learning"] = True
+    else:
+        document.pop("style_learning", None)
+
+
+def set_site_learning(document, value, days):
+    """Learning for one site that is already allowed; `days` None turns it off."""
+    identity = site_identity(value)
+    subject = next((item for item in document["subjects"] if item["identity"] == identity), None)
+    if days is not None and (subject is None or subject["permissions"]["suggest"] != "allow"):
+        raise RuntimeError(f"Allow the site first: badi site {value} on")
+    if subject is None:
+        return
+    permissions = subject["permissions"]
+    if days is None:
+        permissions.update(learn="block", retention={"mode": "none"})
+    else:
+        permissions.update(learn="allow", retention={"mode": "bounded", "days": days})
+
+
+def style_command(arguments):
+    if arguments == ["on"]:
+        try:
+            key_id, key = style_keyring().ensure()
+        except Exception as error:  # the module's KeyringError, or no Secret Service
+            raise RuntimeError(f"The keyring could not provide a style key ({error}); style learning stays off.") from None
+        control(["style", "key", "-"], input_text=f"{key_id} {key}\n")
+        update_settings(lambda document: set_style_learning(document, True))
+        print(STYLE_ON)
+    elif arguments == ["off"]:
+        update_settings(lambda document: set_style_learning(document, False))
+        print("Style learning is off; nothing new is kept. Kept samples expire with each site's retention, "
+              "or delete them now with badi style forget.")
+    elif arguments == ["status"]:
+        status = json.loads(control(["style", "status"]))
+        document = json.loads(control(["settings", "show", "--json"]))
+        sites = [origin_text(item["identity"]) + f" ({item['permissions']['retention']['days']} days)"
+                 for item in document["subjects"] if item["permissions"].get("learn") == "allow"]
+        key = {"ready": "ready", "absent": "not delivered (badi style on)",
+               "mismatch": "different from the one that sealed the samples (badi style forget)"}[status["key"]]
+        print(f"Style learning: {'on' if status['enabled'] else 'off'} · samples: {status['samples']} "
+              f"from {status['subjects']} site(s) · key: {key}"
+              + ("" if status["available"] else " · store unreadable (badi style forget)")
+              + f"\nLearning sites: {', '.join(sites) if sites else 'none'}")
+    elif len(arguments) in (3, 4) and arguments[0] == "site" and arguments[2] in ("on", "off"):
+        origin = arguments[1]
+        if arguments[2] == "off" and len(arguments) == 3:
+            days = None
+        elif arguments[2] == "on" and (len(arguments) == 3 or (arguments[3].isascii() and arguments[3].isdigit()
+                                                                and 1 <= int(arguments[3]) <= 90)):
+            days = int(arguments[3]) if len(arguments) == 4 else 30
+        else:
+            raise RuntimeError("Usage: badi style site ORIGIN on [DAYS]|off (DAYS is 1-90)")
+        update_settings(lambda document: set_site_learning(document, origin, days))
+        print(f"{origin}: style samples kept for {days} days." if days else
+              f"{origin}: no style samples; any kept from it are deleted.")
+    elif arguments == ["export"]:
+        if json.loads(control(["style", "status"]))["key"] != "ready":
+            raise RuntimeError("The style key is not available to the broker. Run badi style on, or badi style status.")
+        print(control(["style", "export"]), end="")
+    elif arguments == ["forget"]:
+        control(["style", "forget"])
+        try:
+            removed = style_keyring().delete()
+        except Exception as error:
+            raise RuntimeError(f"Samples were deleted, but the keyring key was not ({error}).") from None
+        print("All style samples were deleted" + (" and the keyring key removed." if removed else "."))
+    else:
+        raise RuntimeError("Usage: badi style on|off|status|export|forget, or badi style site ORIGIN on [DAYS]|off")
+
+
+CONTEXT_ON = ("Context is on. Once you have typed five letters of a word, Badi can finish it with a word "
+              "from the same window, read when you type and never kept, or one you wrote in that app in "
+              "two separate fields before, kept sealed with a key in your keyring until it goes 90 days "
+              "unused. Turn it off for one app or site with badi context app ID off or badi context site "
+              "ORIGIN off; badi context forget deletes the learned words.")
+
+
+def set_context(document, enabled):
+    # Present once chosen: the settings panel asks only while it is absent.
+    document["context_words"] = bool(enabled)
+
+
+def set_context_off(document, identity, off):
+    """Context off (True) or back on (False) for one app or site."""
+    listed = [item for item in document.get("context_words_off", []) if item != identity]
+    if off:
+        listed.append(identity)
+    listed.sort(key=identity_key)
+    if listed:
+        document["context_words_off"] = listed
+    else:
+        document.pop("context_words_off", None)
+
+
+def identity_text(identity):
+    return identity["app_id"] if identity["kind"] == "linux_app" else origin_text(identity)
+
+
+def context_command(arguments):
+    if arguments == ["on"]:
+        try:
+            key_id, key = style_keyring().ensure()
+        except Exception as error:  # the module's KeyringError, or no Secret Service
+            key_id = None
+            note = (f"\nThe keyring could not provide a key ({error}), so nothing is learned yet; "
+                    "window words still work. Unlock the keyring and run badi context on again.")
+        if key_id is not None:
+            control(["style", "key", "-"], input_text=f"{key_id} {key}\n")
+            note = ""
+        update_settings(lambda document: set_context(document, True))
+        print(CONTEXT_ON + note)
+    elif arguments == ["off"]:
+        update_settings(lambda document: set_context(document, False))
+        print("Context is off: no window words are read and nothing new is learned. Learned words expire "
+              "90 days after last use, or delete them now with badi context forget.")
+    elif arguments == ["status"]:
+        status = json.loads(control(["context", "status"]))
+        document = json.loads(control(["settings", "show", "--json"]))
+        state = "on" if status["enabled"] else "off" if status["chosen"] else "not chosen (badi context on)"
+        words = "unknown until the key arrives" if status.get("words") is None else str(status["words"])
+        key = {"ready": "ready", "absent": "not delivered (badi context on)",
+               "mismatch": "different from the one that sealed them (badi context forget)"}[status["key"]]
+        off = [identity_text(item) for item in document.get("context_words_off", [])]
+        print(f"Context: {state} · learned words: {words} from {status['subjects']} app(s) and site(s) · key: {key}"
+              + ("" if status["available"] else " · learned words unreadable (badi context forget)")
+              + f"\nOff for: {', '.join(off) if off else 'nothing'}")
+    elif len(arguments) == 3 and arguments[0] in ("app", "site") and arguments[2] in ("on", "off"):
+        identity = app_identity(arguments[1]) if arguments[0] == "app" else site_identity(arguments[1])
+        off = arguments[2] == "off"
+        update_settings(lambda document: set_context_off(document, identity, off))
+        print(f"{identity_text(identity)}: context off; its learned words are deleted." if off
+              else f"{identity_text(identity)}: context follows badi context on|off again.")
+    elif arguments == ["forget"]:
+        control(["context", "forget"])
+        print("Every learned word was deleted. The keyring key stays for style learning; badi style forget removes it.")
+    else:
+        raise RuntimeError("Usage: badi context on|off|status|forget, or badi context app ID|site ORIGIN on|off")
+
+
+def set_screen_share(document, mode):
+    # Absent is the canonical hold, the default.
+    if mode == "hold":
+        document.pop("screen_share", None)
+    else:
+        document["screen_share"] = mode
+
+
+def set_suggestion_length(document, length):
+    # Absent is the canonical normal length, the default.
+    if length == "normal":
+        document.pop("suggestion_length", None)
+    else:
+        document["suggestion_length"] = length
+
+
+def stats_text(status):
+    """Content-free usage counts: the windows, the last seven days and the leading apps and sites."""
+    if not status.get("available"):
+        return ("Usage statistics are unreadable and kept as they are; "
+                "badi stats forget deletes them and counting starts again.")
+    summary = status["summary"]
+    totals = summary["totals"]
+    def row(label, counts):
+        return f"{label:16}{counts['shown']:>8}{counts['accepted']:>10}{counts['words']:>13}"
+    lines = [f"Usage on this device (counts only, kept {summary['retention_days']} days; badi stats forget deletes them)",
+             f"{'':16}{'Shown':>8}{'Accepted':>10}{'Words saved':>13}"]
+    for label, key in (("Today", "today"), ("Last 7 days", "last_7_days"),
+                       (f"{summary['retention_days']} days", "retained")):
+        lines.append(row(label, totals[key]))
+    if not summary["days"]:
+        lines.extend(["", "Nothing counted yet: suggestions shown and accepted in allowed apps and sites appear here."])
+        return "\n".join(lines)
+    today = datetime.date.fromisoformat(summary["today"])
+    by_day = {day["day"]: day for day in summary["days"]}
+    lines.extend(["", "Per day:"])
+    for offset in range(6, -1, -1):
+        day = today - datetime.timedelta(days=offset)
+        counts = by_day.get(day.isoformat(), {"shown": 0, "accepted": 0, "words": 0})
+        lines.append(row(f"  {day.isoformat()} {day.strftime('%a')}", counts))
+    leaders = sorted((subject for subject in summary["subjects"] if subject["last_7_days"]["shown"]
+                      or subject["last_7_days"]["accepted"]),
+                     key=lambda subject: (-subject["last_7_days"]["words"], -subject["last_7_days"]["shown"]))[:8]
+    if leaders:
+        lines.extend(["", "Apps and sites, last 7 days:"])
+        width = max(len(identity_text(subject["identity"])) for subject in leaders)
+        for subject in leaders:
+            counts = subject["last_7_days"]
+            lines.append(f"  {identity_text(subject['identity']):{width}}  ≈ {counts['words']} words · "
+                         f"{counts['shown']} shown · {counts['accepted']} accepted")
+    lines.extend(["", "Words saved counts the word parts Badi inserted; a later undo is not known."])
+    return "\n".join(lines)
+
+
+def stats_command(arguments):
+    if arguments in ([], ["--json"]):
+        status = json.loads(control(["stats", "status"]))
+        print(json.dumps(status, indent=2) if arguments else stats_text(status))
+    elif arguments == ["forget"]:
+        control(["stats", "forget"])
+        print("Every usage count was deleted. Counting continues from now.")
+    else:
+        raise RuntimeError("Usage: badi stats [--json] | badi stats forget")
+
+
+def set_battery_mode(document, mode):
+    # Absent is the canonical quiet state, the default.
+    if mode == "quiet":
+        document.pop("battery_mode", None)
+    else:
+        document["battery_mode"] = mode
+
+
+def set_language(document, app, language):
+    app_id = app_identity(app)["app_id"]
+    if app_id == "chromium-browser":
+        app_id = "chromium"
+    if language not in (*WRITING, "reset"):
+        raise RuntimeError("Use " + ", ".join(WRITING) + " or reset.")
+    overrides = document.setdefault("language_overrides", {})
+    if language == "reset":
+        overrides.pop(app_id, None)
+    else:
+        overrides[app_id] = language
+    if not overrides:
+        document.pop("language_overrides", None)
+
+
+# The broker's PredictionLanguage order (broker/src/settings/document.rs).
+WRITING = {"en": "English", "de": "German", "fa": "Persian", "fr": "French", "es": "Spanish",
+           "pt": "Portuguese"}
+DEFAULT_WRITING = ["en", "de"]
+EXPERIMENTAL_WRITING = ("fr", "es", "pt")
+# What `badi languages` and the panel's first-run question offer, European
+# only: the name, whether the model suggests in it, whether typos are fixed.
+LANGUAGES = {"en": ("English", True, True), "de": ("Deutsch", True, True), "fr": ("Français", True, True),
+             "es": ("Español", True, True), "pt": ("Português", True, False), "it": ("Italiano", False, True),
+             "nl": ("Nederlands", False, True), "pl": ("Polski", False, True)}
+
+
+def model_healing():
+    """The running model's name and the languages it heals by default (its
+    catalog `healed_languages`), from the broker's advice."""
+    advice = model_advice()
+    active = active_model_file()
+    catalog = advice.get("catalog") or []
+    model = next((entry for entry in catalog if entry.get("filename") == active), None) \
+        or advice.get("recommended") or {}
+    return model.get("name"), model.get("healed_languages", ["en", "fa"])
+
+
+def writing_report(settings, model_default):
+    enabled = settings.get("writing_languages", DEFAULT_WRITING)
+    choices = settings.get("trailing_space_healing", {})
+    report = []
+    for code, name in WRITING.items():
+        # Persian is listed only while it is on, so it can be turned off.
+        if code == "fa" and code not in enabled:
+            continue
+        choice = {True: "on", False: "off"}.get(choices.get(code), "auto")
+        report.append({"language": code, "name": name, "enabled": code in enabled,
+                       "experimental": code in EXPERIMENTAL_WRITING, "healing": choice,
+                       "healed": choices.get(code, code in model_default)})
+    return report
+
+
+def set_writing(document, language, enabled):
+    if language not in WRITING:
+        raise RuntimeError("Use one of: " + " ".join(WRITING))
+    current = set(document.get("writing_languages", DEFAULT_WRITING))
+    current = current | {language} if enabled else current - {language}
+    ordered = [code for code in WRITING if code in current]
+    if ordered == DEFAULT_WRITING:
+        document.pop("writing_languages", None)
+    else:
+        document["writing_languages"] = ordered
+
+
+def set_healing(document, language, choice):
+    if language not in WRITING or choice not in ("on", "off", "auto"):
+        raise RuntimeError("Usage: badi suggest LANG healing on|off|auto (LANG: " + " ".join(WRITING) + ")")
+    choices = document.setdefault("trailing_space_healing", {})
+    if choice == "auto":
+        choices.pop(language, None)
+    else:
+        choices[language] = choice == "on"
+    if not choices:
+        document.pop("trailing_space_healing", None)
+
+
+def print_writing(report, model_name):
+    on = [entry["name"] for entry in report if entry["enabled"]]
+    print("Suggestions: " + (", ".join(on) if on else "none (every language is off)"))
+    for entry in report:
+        mark = "✓" if entry["enabled"] else "·"
+        heal = "heals a trailing space" if entry["healed"] else "keeps a trailing space (shows nothing after one)"
+        source = f"auto, as {model_name} was reviewed" if entry["healing"] == "auto" and model_name else entry["healing"]
+        note = "experimental · " if entry["experimental"] else ""
+        print(f"  {mark} {entry['name']:<8} {'on ' if entry['enabled'] else 'off'}  {note}{heal} ({source})")
+    print("Turn one on or off: badi suggest LANG on|off  (" + " ".join(code for code in WRITING if code != "fa") + ")")
+    print("Healing lets the model write the space after your last word itself, so the next word")
+    print("starts naturally: badi suggest LANG healing on|off|auto")
+
+
+# The broker's SpellingLanguage order (broker/src/spelling.rs): its dictionary
+# names, most common first, and the Arch package that installs them.
+SPELLING = {
+    "en": ("English", (), None),
+    "de": ("German", ("de_DE", "de_AT", "de_CH"), "hunspell-de"),
+    "fr": ("French", ("fr_FR", "fr"), "hunspell-fr-comprehensive"),
+    "es": ("Spanish", ("es_ES", "es_ANY", "es_MX"), "hunspell-es_es"),
+    "it": ("Italian", ("it_IT",), "hunspell-it"),
+    "nl": ("Dutch", ("nl_NL",), "hunspell-nl"),
+    "pl": ("Polish", ("pl_PL",), "hunspell-pl"),
+}
+# The Debian 13 and Ubuntu 24.04 packages that install those dictionaries in
+# /usr/share/hunspell (fr_FR and nl_NL are links to fr and nl there).
+DEBIAN_DICTIONARIES = {"de": "hunspell-de-de", "fr": "hunspell-fr", "es": "hunspell-es", "it": "hunspell-it",
+                       "nl": "hunspell-nl", "pl": "hunspell-pl"}
+PACKAGE_INSTALL = {"arch": "sudo pacman -S", "debian": "sudo apt install"}
+
+
+def dictionary_package(language, family):
+    """This distribution's package for a language's dictionary; Arch's name
+    where the distribution is not known."""
+    if family == "debian":
+        return DEBIAN_DICTIONARIES.get(language)
+    return SPELLING[language][2]
+# The broker's dictionary_directories(): the user's own, then the system's.
+DICTIONARY_DIRECTORIES = (
+    Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "hunspell",
+    Path("/usr/share/hunspell"), Path("/usr/share/myspell/dicts"))
+
+
+def installed_dictionary(language):
+    """The installed dictionary name for `language`, "built in" for English, or None."""
+    _name, names, _package = SPELLING[language]
+    if not names:
+        return "built in"
+    return next((name for name in names for directory in DICTIONARY_DIRECTORIES
+                 if (directory / f"{name}.aff").is_file() and (directory / f"{name}.dic").is_file()), None)
+
+
+def spelling_report(settings):
+    enabled = settings.get("spelling_languages", ["en"])
+    family = badi_install.distribution_family()
+    install = PACKAGE_INSTALL.get(family, PACKAGE_INSTALL["arch"])
+    report = []
+    for code, (name, _names, _package) in SPELLING.items():
+        package = dictionary_package(code, family)
+        report.append({"language": code, "name": name, "enabled": code in enabled,
+                       "dictionary": installed_dictionary(code), "package": package,
+                       "install": f"{install} {package}" if package else None})
+    return report
+
+
+def set_spelling(document, language, enabled):
+    if language not in SPELLING:
+        raise RuntimeError("Use one of: " + " ".join(SPELLING))
+    current = set(document.get("spelling_languages", ["en"]))
+    current = current | {language} if enabled else current - {language}
+    ordered = [code for code in SPELLING if code in current]
+    if ordered == ["en"]:
+        document.pop("spelling_languages", None)
+    else:
+        document["spelling_languages"] = ordered
+
+
+def set_languages(document, codes):
+    """Suggestions and typo fixes in every listed language that has them, in
+    one write; a Persian choice made with badi suggest stays as it is."""
+    if not codes or len(set(codes)) != len(codes) or any(code not in LANGUAGES for code in codes):
+        raise RuntimeError("Usage: badi languages LANG... (" + " ".join(LANGUAGES) + ")")
+    keeps_persian = "fa" in document.get("writing_languages", DEFAULT_WRITING)
+    writing = [code for code in WRITING
+               if (code == "fa" and keeps_persian) or (code in codes and LANGUAGES[code][1])]
+    if writing == DEFAULT_WRITING:
+        document.pop("writing_languages", None)
+    else:
+        document["writing_languages"] = writing
+    spelling = [code for code in SPELLING if code in codes and LANGUAGES[code][2]]
+    if spelling == ["en"]:
+        document.pop("spelling_languages", None)
+    else:
+        document["spelling_languages"] = spelling
+    document["languages_chosen"] = True
+
+
+def languages_text(settings):
+    writing = settings.get("writing_languages", DEFAULT_WRITING)
+    spelling = settings.get("spelling_languages", ["en"])
+    lines = []
+    for code, (name, suggests, spells) in LANGUAGES.items():
+        if code not in writing and code not in spelling:
+            continue
+        what = [part for part, on in (("suggestions", code in writing), ("typo fixes", code in spelling)) if on]
+        missing = [part for part, offered, on in (("suggestions", suggests, code in writing),
+                                                  ("typo fixes", spells, code in spelling)) if not offered]
+        lines.append(f"  ✓ {name:<11} " + " and ".join(what) + (f" ({missing[0]} not offered)" if missing else ""))
+    head = "Languages: " + (", ".join(LANGUAGES[code][0] for code in LANGUAGES
+                                     if code in writing or code in spelling) or "none")
+    if not settings.get("languages_chosen"):
+        head += " · not chosen yet: the panel asks, or run badi languages LANG..."
+    return "\n".join([head, *lines, "Choose them: badi languages LANG...  (" + " ".join(LANGUAGES) + ")"])
+
+
+def print_spelling(report):
+    on = [entry["name"] for entry in report if entry["enabled"]]
+    print("Spelling: corrects " + (", ".join(on) if on else "nothing (every language is off)"))
+    for entry in report:
+        ready = entry["dictionary"] is not None
+        mark = "✓" if entry["enabled"] and ready else "!" if entry["enabled"] else "·"
+        detail = (entry["dictionary"] if entry["dictionary"] == "built in"
+                  else f"dictionary {entry['dictionary']}" if ready
+                  else f"needs: {entry['install']} (or its .aff/.dic in ~/.local/share/hunspell)")
+        print(f"  {mark} {entry['name']:<8} {'on ' if entry['enabled'] else 'off'}  {detail}")
+    print("Turn one on or off: badi spelling LANG on|off  (" + " ".join(SPELLING) + ")")
+
+
+def mode_text(blocklist, kind):
+    if blocklist is True:
+        return ("blocklist: every supported app except blocked ones" if kind == "app"
+                else "blocklist: every http(s) site except blocked ones")
+    return "allowlist: only allowed apps" if kind == "app" else "allowlist: only allowed sites"
+
+
+def remove_rule(document, identity):
+    document["subjects"] = [item for item in document["subjects"] if item["identity"] != identity]
+
+
+def app_identity(app):
+    app_id = APP_IDS.get(app, app)
+    if len(app_id) > 128 or not re.fullmatch(r"[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*", app_id):
+        raise RuntimeError("Use the exact canonical app_id from badi debug status")
+    return {"kind": "linux_app", "adapter": APP_ADAPTERS.get(app_id, "fcitx"), "app_id": app_id}
+
+
+def rule_state(permissions):
+    decisions = {permissions.get(key) for key in ("context_read", "display", "suggest")}
+    return "allowed" if decisions == {"allow"} else "blocked" if decisions == {"block"} else "limited"
+
+
+def origin_text(identity):
+    default = 443 if identity["scheme"] == "https" else 80
+    return f"{identity['scheme']}://{identity['host']}" + ("" if identity["port"] == default else f":{identity['port']}")
+
+
+def rule_list(document, kind):
+    key, label = ("all_linux_apps", "app") if kind == "app" else ("all_web_origins", "site")
+    lines = [("Apps" if kind == "app" else "Sites") + ": " + mode_text(document.get(key), label)]
+    for item in document.get("subjects", []):
+        identity = item["identity"]
+        if kind == "app" and identity["kind"] == "linux_app":
+            lines.append(f"  {rule_state(item['permissions']):8} {identity['app_id']}")
+        elif kind == "site" and identity["kind"] == "browser_origin":
+            lines.append(f"  {rule_state(item['permissions']):8} {origin_text(identity)}")
+    if len(lines) == 1:
+        lines.append("  (no rules)")
+    return "\n".join(lines)
+
+
+def site_identity(value):
+    parsed = urlsplit(value)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
+        raise RuntimeError("Use an exact http(s) origin without a path or credentials")
+    identity = {"kind": "browser_origin", "adapter": "chromium", "scheme": parsed.scheme,
+                "host": parsed.hostname.encode("idna").decode("ascii"),
+                "port": parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)}
+    if not 1 <= identity["port"] <= 65535:
+        raise RuntimeError("Invalid origin port")
+    return identity
+
+
+def set_site(document, value, enabled):
+    identity = site_identity(value)
+    subject = next((item for item in document["subjects"] if item["identity"] == identity), None)
+    if subject is None:
+        subject = {"identity": identity}
+        document["subjects"].append(subject)
+    subject["permissions"] = badi_install.grant("allow" if enabled else "block")
+    document["subjects"].sort(key=lambda item: identity_key(item["identity"]))
+
+
+def identity_key(identity):
+    if identity["kind"] == "browser_origin":
+        return (0, identity["adapter"], identity["scheme"], identity["host"], identity["port"])
+    return (1, identity["adapter"], identity["app_id"])
+
+
+def runtime_directory():
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime or not Path(runtime).is_absolute():
+        raise RuntimeError("Open Badi from your graphical desktop session")
+    return Path(runtime) / "badi"
+
+
+def private_json(path, limit=8192):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(descriptor) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > limit:
+            raise RuntimeError("Debug data must be a private, owned, bounded regular file")
+        return json.load(stream)
+
+
+def debug_activity():
+    directory = runtime_directory()
+    report = {"enabled": False, "reason": "debug_off", "counts": {}}
+    try:
+        control = private_json(directory / "debug-control.json", 512)
+        if not time.time() < control["expires_at"] <= time.time() + 900:
+            return report
+        report.update(enabled=True, expires_at=control["expires_at"], reason="no_input_events")
+        report["editors"] = {}
+        for adapter in ("obsidian", "terminal", "neovim"):
+            try:
+                editor = private_json(directory / f"debug-{adapter}.json")
+                if editor.get("id") == control["id"] and editor.get("schema") == "badi.editor-activity.v1":
+                    report["editors"][adapter] = editor
+                    report["reason"] = editor["reason"]
+            except FileNotFoundError:
+                pass
+        snapshot = private_json(directory / "debug-native.json")
+        if snapshot.get("id") == control["id"] and snapshot.get("schema") == "badi.native-activity.v1":
+            report["native"] = snapshot
+            report["reason"] = snapshot["reason"]
+            report["counts"] = snapshot["counts"]
+            report["age_seconds"] = max(0, int(time.time() - snapshot["at"]))
+    except FileNotFoundError:
+        pass
+    except (ValueError, TypeError, KeyError, RuntimeError, OSError):
+        report["reason"] = "invalid_debug_data"
+    return report
+
+
+def debug_line(report):
+    model = report.get("model", {})
+    metrics = model.get("metrics", {})
+    native = report.get("native", {})
+    adapters = ["native=" + native.get("reason", "no_events")]
+    for name, activity in report.get("editors", {}).items():
+        reads = activity.get("reason_counts", {}).get("sent context.changed", 0)
+        adapters.append(f"{name}={activity.get('reason', 'unknown')}({reads} contexts)")
+    summary = no_suggestion_summary(metrics)
+    if summary and summary["total"]:
+        adapters.insert(0, f"no_show={summary['total']}(last={summary['last']})")
+    return (f"{time.strftime('%H:%M:%S')}  {'debug' if report['enabled'] else 'debug off'}  "
+            f"model={model.get('provider', 'offline')}  "
+            f"input={native.get('counts', {}).get('input', 0)}  "
+            f"requests={metrics.get('provider_calls', 0)}  displayed={metrics.get('suggestions_shown', 0)}  "
+            f"errors={metrics.get('provider_errors', 0)}  " + "  ".join(adapters))
+
+
+TRACE_FILE = "debug-trace.jsonl"
+# Trace fields that hold typed or suggested text; present only in a --text run.
+TRACE_TEXT_FIELDS = ("before", "after", "typed", "text", "accept_word", "replace_before")
+PREVIEW_LAYER = "badi-writing-preview"
+
+
+def private_directory():
+    directory = runtime_directory()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise RuntimeError("Badi runtime directory must be private and owned by this user")
+    return directory
+
+
+DEBUG_FILES = ("debug-control.json", "debug-native.json", TRACE_FILE,
+               *(f"debug-{adapter}.json" for adapter in ("obsidian", "terminal", "neovim")))
+DEBUG_SECONDS = 900
+
+
+def schedule_debug_expiry(run_id):
+    """Asks the user manager to delete this run's files once it has ended, so
+    a text trace does not stay in memory until logout. Returns whether a timer
+    was set; without systemd-run the trace waits for badi debug off."""
+    if shutil.which("systemd-run") is None:
+        return False
+    command = ["systemd-run", "--user", "--quiet", "--collect", f"--unit=badi-debug-expiry-{run_id[:8]}",
+               f"--on-active={DEBUG_SECONDS + 1}", "--timer-property=AccuracySec=5s",
+               sys.executable, "-B", str(Path(__file__).resolve()), "debug", "expire", run_id]
+    try:
+        return subprocess.run(command, timeout=5, check=False, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def expire_debug(run_id):
+    """Deletes the debug files if `run_id` is still the current run."""
+    directory = private_directory()
+    try:
+        current = json.loads((directory / "debug-control.json").read_text()).get("id")
+    except (OSError, ValueError, AttributeError):
+        current = None
+    if current == run_id:
+        for name in DEBUG_FILES:
+            (directory / name).unlink(missing_ok=True)
+
+
+def debug_mode(mode, text=False):
+    if mode in ("on", "off"):
+        directory = private_directory()
+        for name in DEBUG_FILES:
+            (directory / name).unlink(missing_ok=True)
+        if mode == "on":
+            # The trace exists before the control names the run, so no writer
+            # sees a run without its file; writers never create it.
+            descriptor = os.open(directory / TRACE_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            os.close(descriptor)
+            marker = {"id": str(uuid.uuid4()), "expires_at": int(time.time()) + DEBUG_SECONDS, "text": text}
+            badi_install.atomic_write(directory / "debug-control.json", json.dumps(marker).encode())
+            deleted = ("deleted when the run ends, by badi debug off or at logout"
+                       if schedule_debug_expiry(marker["id"]) else "deleted by badi debug off or at logout")
+            print("Debug trace on for 15 minutes"
+                  + (", including context and suggestion text (never a password field's). It stays in memory"
+                     f" ($XDG_RUNTIME_DIR) and is {deleted}."
+                     if text else "; no typed text is stored (add --text for it).")
+                  + " Follow it with badi debug watch.")
+        else:
+            print("Debug disabled and its trace and snapshots removed.")
+        return
+    if mode == "watch":
+        return debug_watch()
+    report = {"schema": "badi.debug.v1", **debug_activity()}
+    try:
+        health = json.loads(control(["status"]))
+        report["model"] = {key: health[key] for key in ("provider", "paused", "sessions", "metrics")}
+        summary = no_suggestion_summary(health["metrics"])
+        if summary and summary["last"]:
+            summary["last_meaning"] = NO_SUGGESTION[summary["last"]]
+        report["model"]["no_suggestion"] = summary
+    except RuntimeError as error:
+        report["model_error"] = str(error)
+    if mode == "status":
+        print(json.dumps(report, indent=2), flush=True)
+    else:
+        print(debug_line(report), flush=True)
+
+
+def trace_entries(lines):
+    """Trace entries from complete lines; a partial or malformed line is skipped."""
+    for line in lines:
+        if not line.endswith("\n"):
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            yield entry
+
+
+def trace_fact(value):
+    """A trace value as the terminal may show it: a string with any control,
+    escape or format character is quoted and escaped, so no writer's value can
+    move the cursor, recolour or retitle the terminal."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+    text = str(value)
+    return text if text.isprintable() else json.dumps(text)
+
+
+def format_trace(entry):
+    """One readable line: time, source, event, facts, then any text quoted."""
+    at = entry.get("t")
+    stamp = (time.strftime("%H:%M:%S", time.localtime(at / 1000)) + f".{int(at) % 1000:03d}"
+             if isinstance(at, (int, float)) else "--:--:--.---")
+    facts = []
+    for key, value in entry.items():
+        if key in ("t", "src", "ev") or key in TRACE_TEXT_FIELDS:
+            continue
+        facts.append(f"{trace_fact(key)}={trace_fact(value)}")
+    for key in TRACE_TEXT_FIELDS:
+        if isinstance(entry.get(key), str):
+            facts.append(f"{key}={json.dumps(entry[key], ensure_ascii=False)}")
+    source, event = trace_fact(entry.get("src", "?")), trace_fact(entry.get("ev", "?"))
+    return f"{stamp}  {source:<10} {event:<24} {' '.join(facts)}".rstrip()
+
+
+def open_trace(directory):
+    descriptor = os.open(directory / TRACE_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    info = os.fstat(descriptor)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        os.close(descriptor)
+        raise RuntimeError("The debug trace must be a private, owned regular file")
+    return os.fdopen(descriptor, encoding="utf-8", errors="replace")
+
+
+def append_trace(directory, entry):
+    """The controller's own lines, under the same rules as every writer."""
+    try:
+        descriptor = os.open(directory / TRACE_FILE, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return
+    try:
+        info = os.fstat(descriptor)
+        if stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077:
+            os.write(descriptor, (json.dumps(entry, ensure_ascii=False) + "\n").encode())
+    finally:
+        os.close(descriptor)
+
+
+def preview_layers(run=subprocess.run):
+    """The grey preview's layer surfaces as Hyprland maps them now, or None if unknown."""
+    try:
+        result = run(["hyprctl", "-j", "layers"], capture_output=True, text=True, timeout=2, check=False)
+        monitors = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if result.returncode != 0 or not isinstance(monitors, dict):
+        return None
+    return sorted((name, layer.get("x"), layer.get("y"), layer.get("w"), layer.get("h"))
+                  for name, monitor in monitors.items() if isinstance(monitor, dict)
+                  for level in (monitor.get("levels") or {}).values() if isinstance(level, list)
+                  for layer in level if isinstance(layer, dict) and layer.get("namespace") == PREVIEW_LAYER)
+
+
+def compositor_entry(layers):
+    entry = {"t": int(time.time() * 1000), "src": "compositor"}
+    if not layers:
+        return {**entry, "ev": "preview not on screen"}
+    name, x, y, width, height = layers[0]
+    return {**entry, "ev": "preview on screen", "monitor": name, "x": x, "y": y, "width": width,
+            "height": height, "surfaces": len(layers)}
+
+
+def print_trace(as_json=False):
+    with open_trace(private_directory()) as stream:
+        for entry in trace_entries(stream):
+            print(json.dumps(entry, ensure_ascii=False) if as_json else format_trace(entry), flush=True)
+
+
+def debug_watch(poll=0.15):
+    """Follows the trace and records what Hyprland shows, until the run ends."""
+    directory = private_directory()
+    report = debug_activity()
+    if not report["enabled"]:
+        raise RuntimeError("Debug is off; run badi debug on (or on --text) first")
+    print(f"Following {directory / TRACE_FILE}; Ctrl+C stops. The compositor lines say whether"
+          " the grey preview is really on screen.", flush=True)
+    layers = None
+    pending = ""
+    checked = time.monotonic()
+    with open_trace(directory) as stream:
+        while True:
+            lines = (pending + stream.read()).splitlines(keepends=True)
+            # A writer's line may arrive in two reads; keep its start.
+            pending = lines.pop() if lines and not lines[-1].endswith("\n") else ""
+            for entry in trace_entries(lines):
+                print(format_trace(entry), flush=True)
+            now = preview_layers()
+            if now is not None and now != layers:
+                if layers is not None or now:
+                    append_trace(directory, compositor_entry(now))
+                layers = now
+            if time.monotonic() - checked >= 2:
+                checked = time.monotonic()
+                if not debug_activity()["enabled"]:
+                    print("Debug run ended.", flush=True)
+                    return
+            time.sleep(poll)
+
+
+def desktop_socket():
+    """The persistent broker's private socket, or None while it is offline."""
+    endpoint = runtime_directory() / "broker.sock"
+    try:
+        metadata = endpoint.lstat()
+    except OSError:
+        return None
+    if stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid == os.getuid() and not metadata.st_mode & 0o077:
+        return endpoint
+    return None
+
+
+def unknown_command():
+    return RuntimeError("Unknown command. Run: badi --help")
+
+
+def settings_command(arguments):
+    if arguments == []:
+        if badi_install.desktop_platform() != badi_install.OMARCHY:
+            raise RuntimeError("The settings panel is part of Omarchy's bar. On this desktop the badi commands "
+                               "set the same things: badi --help lists them, badi doctor checks the setup.")
+        subprocess.run(["omarchy-shell", "badi-writing", "toggle"], check=True, timeout=4)
+    elif arguments == ["--json"]:
+        print(control(["settings", "show", "--json"]), end="")
+    else:
+        raise unknown_command()
+
+
+def debug_command(arguments):
+    if (arguments[:1] == ["expire"] and len(arguments) == 2
+            and re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", arguments[1])):
+        expire_debug(arguments[1])
+    elif arguments in (["on"], ["on", "--text"], ["off"], ["status"], ["watch"]):
+        try:
+            debug_mode(arguments[0], text=arguments[1:] == ["--text"])
+        except KeyboardInterrupt:
+            pass
+    elif arguments[:1] == ["log"] and arguments[1:] in ([], ["--json"]):
+        print_trace(as_json=arguments[1:] == ["--json"])
+    else:
+        raise unknown_command()
+
+
+def status_command(arguments):
+    if arguments not in ([], ["--json"]):
+        raise unknown_command()
+    health = json.loads(control(["status"]))
+    print(json.dumps(health) if arguments else status_text(health, web_settings()))
+
+
+def pause_command(arguments, paused):
+    if paused and arguments == ["toggle"]:
+        outcome = {}
+
+        def toggle(document):
+            document["paused"] = outcome["paused"] = not document["paused"]
+        update_settings(toggle)
+        paused = outcome["paused"]
+    elif arguments:
+        raise unknown_command()
+    else:
+        update_settings(lambda document: document.update(paused=paused))
+    if not paused:
+        # Resuming also ends every snooze early.
+        end_snoozes()
+    print("Predictions paused." if paused else "Predictions resumed.")
+
+
+def choice_command(name, arguments):
+    """`badi battery|screen-share|length CHOICE`: set one choice and say what it means."""
+    texts, setter = CHOICES[name]
+    if len(arguments) != 1 or arguments[0] not in texts:
+        raise unknown_command()
+    update_settings(lambda document: setter(document, arguments[0]))
+    print(texts[arguments[0]])
+
+
+def snooze_command(arguments):
+    if arguments == ["end"]:
+        end_snoozes()
+        print("Every snooze ended. Badi suggests again wherever your settings allow it.")
+        return
+    if len(arguments) > 1:
+        raise unknown_command()
+    value = arguments[0] if arguments else str(SNOOZE_MINUTES)
+    if not (value.isascii() and value.isdigit() and 1 <= int(value) <= 1440):
+        raise RuntimeError("Usage: badi snooze [MINUTES]|end (MINUTES is 1-1440, default 10)")
+    status = snooze(int(value))
+    minutes = int(value)
+    print(f"Badi is snoozed in {identity_text(status['subject'])} for {minutes} minute"
+          f"{'' if minutes == 1 else 's'}. badi resume ends it sooner.")
+
+
+def mid_line_command(arguments):
+    if arguments not in (["on"], ["off"]):
+        raise unknown_command()
+    enabled = arguments == ["on"]
+    update_settings(lambda document: set_mode(document, "mid_line", enabled))
+    print("Mid-sentence suggestions are on." if enabled
+          else "Mid-sentence suggestions are off. A word after the caret asks for nothing.")
+
+
+def model_command(arguments):
+    if arguments in ([], ["--json"]):
+        report = model_report(json.loads(control(["settings", "show", "--json"])))
+        if arguments:
+            print(json.dumps(report, indent=2), end="")
+        else:
+            print_models(report)
+    elif arguments[:1] == ["use"] and len(arguments) in (2, 3) and arguments[2:] in ([], ["--accept-license"]):
+        model = use_model(arguments[1], arguments[2:] == ["--accept-license"])
+        loaded = active_model_file()
+        print(f"Badi now writes with {model['name']}." if loaded == model["filename"]
+              else f"{model['name']} is chosen, but the broker loaded {loaded or 'no model'}; badi model explains why.")
+    elif arguments == ["auto"]:
+        update_settings(lambda document: document.pop("writing_model", None))
+        if not restart_service():
+            raise RuntimeError("The model service did not answer after the restart. Run badi doctor.")
+        print("Badi follows the device recommendation again.")
+    else:
+        raise unknown_command()
+
+
+def models_command(arguments):
+    if arguments:
+        raise unknown_command()
+    model_command([])
+
+
+def revise_command(arguments):
+    if arguments in ([], ["--json"]):
+        report, _model = revision_report()
+        if arguments:
+            print(json.dumps(report, indent=2), end="")
+        else:
+            print_revision(report)
+    elif arguments == ["install"]:
+        report, downloaded = install_revision_model()
+        print(f"{report['name']} is " + ("installed. Select text and press Ctrl+Shift+Space." if downloaded
+                                         else "already installed."))
+    else:
+        raise unknown_command()
+
+
+def spelling_command(arguments):
+    if arguments in ([], ["--json"]):
+        report = spelling_report(json.loads(control(["settings", "show", "--json"])))
+        if arguments:
+            print(json.dumps({"schema": "badi.spelling.v1", "languages": report}, indent=2))
+        else:
+            print_spelling(report)
+    elif len(arguments) == 2 and arguments[1] in ("on", "off"):
+        language = arguments[0]
+        update_settings(lambda document: set_spelling(document, language, arguments[1] == "on"))
+        print_spelling(spelling_report(json.loads(control(["settings", "show", "--json"]))))
+    else:
+        raise unknown_command()
+
+
+def languages_command(arguments):
+    if arguments:
+        update_settings(lambda document: set_languages(document, arguments))
+    print(languages_text(json.loads(control(["settings", "show", "--json"]))))
+
+
+def suggest_command(arguments):
+    if arguments in ([], ["--json"]):
+        name, model_default = model_healing()
+        report = writing_report(json.loads(control(["settings", "show", "--json"])), model_default)
+        if arguments:
+            print(json.dumps({"schema": "badi.writing-languages.v1", "model": name, "languages": report}, indent=2))
+        else:
+            print_writing(report, name)
+        return
+    if len(arguments) == 2 and arguments[1] in ("on", "off"):
+        language = arguments[0]
+        update_settings(lambda document: set_writing(document, language, arguments[1] == "on"))
+    elif len(arguments) == 3 and arguments[1] == "healing":
+        language, choice = arguments[0], arguments[2]
+        update_settings(lambda document: set_healing(document, language, choice))
+    else:
+        raise unknown_command()
+    name, model_default = model_healing()
+    print_writing(writing_report(json.loads(control(["settings", "show", "--json"])), model_default), name)
+
+
+def language_command(arguments):
+    if len(arguments) != 2:
+        raise unknown_command()
+    app, language = arguments
+    update_settings(lambda document: set_language(document, app, language))
+    print(f"{app}: " + ("automatic language selection restored." if language == "reset"
+                        else f"writing language is {language}. App and site permissions still apply."))
+
+
+def escape_quiet_command(arguments):
+    if len(arguments) != 1:
+        raise unknown_command()
+    value = arguments[0]
+    if value == "off":
+        seconds = 0
+    elif value.isascii() and value.isdigit() and 1 <= int(value) <= 3600:
+        seconds = int(value)
+    else:
+        raise RuntimeError("Usage: badi escape-quiet SECONDS|off (SECONDS is 1-3600)")
+    update_settings(lambda document: set_escape_quiet(document, seconds))
+    print(f"Escape keeps a field quiet for {seconds} seconds after a dismissal. "
+          "Asking explicitly ends it sooner." if seconds
+          else "Escape quiet is off. A dismissal lasts only until the text changes.")
+
+
+# List modes: `badi apps|sites allowlist|blocklist`, or `badi app|site all on|off`.
+LIST_MODES = {("apps", "allowlist"): ("all_linux_apps", False), ("apps", "blocklist"): ("all_linux_apps", True),
+              ("sites", "allowlist"): ("all_web_origins", False), ("sites", "blocklist"): ("all_web_origins", True),
+              ("app", "all", "off"): ("all_linux_apps", False), ("app", "all", "on"): ("all_linux_apps", True),
+              ("site", "all", "off"): ("all_web_origins", False), ("site", "all", "on"): ("all_web_origins", True)}
+
+
+def rules_command(kind, arguments):
+    """`badi apps|sites MODE` and `badi app|site …`: list modes and per-subject rules."""
+    if (kind, *arguments) in LIST_MODES:
+        key, blocklist = LIST_MODES[(kind, *arguments)]
+        update_settings(lambda document: set_mode(document, key, blocklist))
+        if key == "all_web_origins":
+            print(ALL_SITES_NOTE if blocklist else "Sites use the allowlist: only sites with their own allow rule.")
+        else:
+            print(ALL_APPS_NOTE if blocklist else "Apps use the allowlist: only apps with their own allow rule.")
+    elif kind in ("app", "site") and arguments == ["list"]:
+        print(rule_list(json.loads(control(["settings", "show", "--json"])), kind))
+    elif kind == "app" and len(arguments) == 2 and arguments[1] in ("on", "off"):
+        update_settings(lambda document: set_app(document, arguments[0], arguments[1] == "on"))
+        print(f"{arguments[0]} predictions {arguments[1]}.")
+    elif kind == "site" and len(arguments) == 2 and arguments[1] in ("on", "off"):
+        update_settings(lambda document: set_site(document, arguments[0], arguments[1] == "on"))
+        print(f"{arguments[0]} predictions {arguments[1]}. The exact-origin rule applies to Badi's browser integrations.")
+    elif kind in ("app", "site") and len(arguments) == 2 and arguments[1] == "reset":
+        identity = app_identity(arguments[0]) if kind == "app" else site_identity(arguments[0])
+        update_settings(lambda document: remove_rule(document, identity))
+        print(f"{arguments[0]} has no rule now and follows the {kind} list mode.")
+    else:
+        raise unknown_command()
+
+
+def service_command(arguments):
+    if arguments == ["status"]:
+        state = service_state()
+        if state["active"] == "failed":
+            state["startup_problem"] = startup_problem()
+        print(json.dumps(state))
+    elif arguments in (["start"], ["stop"], ["restart"]):
+        if arguments[0] != "stop" and service_state()["active"] == "failed":
+            subprocess.run(["systemctl", "--user", "reset-failed", SERVICE], check=True, timeout=4)
+        subprocess.run(["systemctl", "--user", arguments[0], SERVICE], check=True, timeout=15)
+        print(json.dumps(service_state()))
+    else:
+        raise unknown_command()
+
+
+def autostart_command(arguments):
+    if arguments not in (["on"], ["off"]):
+        raise unknown_command()
+    subprocess.run(["systemctl", "--user", "enable" if arguments == ["on"] else "disable", SERVICE],
+                   check=True, capture_output=True, text=True, timeout=8)
+    print(json.dumps(service_state()))
+
+
+def logs_command(arguments):
+    if arguments:
+        raise unknown_command()
+    subprocess.run(["journalctl", "--user", "-u", SERVICE, "-n", "60", "--no-pager"], check=True, timeout=5)
+
+
+def repair_command(arguments):
+    if arguments not in ([], ["--omarchy"]):
+        raise unknown_command()
+    # --omarchy is what Omarchy's post-boot and post-update hooks run:
+    # only the files Omarchy itself replaces, quietly unless it restored one.
+    omarchy = arguments == ["--omarchy"]
+    restored = badi_install.repair(Path.home(), omarchy_only=omarchy)
+    if restored:
+        print("Restored Badi's lines in " + ", ".join(restored) + ". A browser picks up its flag at its next start.")
+    elif not omarchy:
+        print("Nothing to repair: every file the desktop install changed still has Badi's lines.")
+
+
+def doctor_command(arguments):
+    if arguments not in ([], ["--json"]):
+        raise unknown_command()
+    report = health_report()
+    print(json.dumps(report, indent=2) if arguments else doctor_text(report))
+    if report["problems"]:
+        raise SystemExit(1)
+
+
+def launch_command(arguments):
+    if len(arguments) != 1 or arguments[0] not in APPS:
+        raise unknown_command()
+    subprocess.run(["systemctl", "--user", "start", "badi-broker.service"], check=True, timeout=10)
+    subprocess.run([
+        "systemd-run", "--user", "--collect", "--quiet",
+        f"--unit=badi-editor-{uuid.uuid4().hex}", "--property=Type=exec",
+        f"--setenv=WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '')}",
+        f"--setenv=XDG_RUNTIME_DIR={os.environ.get('XDG_RUNTIME_DIR', '')}",
+        "--setenv=GTK_IM_MODULE=fcitx", "--setenv=QT_IM_MODULE=fcitx",
+        arguments[0],
+    ], check=True, timeout=10)
+
+
+def ctl_command(arguments):
+    """Pass a control command to the persistent broker; the panel's overview
+    adds the desktop's counters, model file and statistics."""
+    endpoint = desktop_socket()
+    if endpoint is None:
+        raise RuntimeError("Badi is offline. Run: badi service start")
+    output = control(arguments, endpoint)
+    if arguments != ["overview", "--json"]:
+        print(output, end="")
+        return
+    overview = json.loads(output)
+    counters = json.loads(control(["status"], endpoint))["metrics"]
+    misses = no_suggestion_summary(counters)
+    if misses and misses["last"]:
+        misses["last_meaning"] = NO_SUGGESTION[misses["last"]]
+    overview["desktop"] = {
+        "requests": counters["provider_calls"], "suggestions": counters["suggestions_shown"],
+        "errors": counters["provider_errors"],
+        "accepted": counters.get("commits_prepared"),
+        "word_savings": counters.get("word_savings"),
+        "no_suggestion": misses,
+        "spelling": spelling_report(overview.get("settings") or {}),
+        "activity": debug_activity(),
+        # The file the running broker loaded; the advice's catalog names it.
+        "model_file": active_model_file(),
+        # Counts per day and app or site; None from a broker without them.
+        "stats": usage_stats(endpoint),
+    }
+    print(json.dumps(overview))
+
+
+CHOICES = {
+    "battery": (BATTERY_TEXT, set_battery_mode),
+    "screen-share": (SCREEN_SHARE_TEXT, set_screen_share),
+    "length": (LENGTH_TEXT, set_suggestion_length),
+}
+
+# `badi WORD …`: each handler takes the remaining arguments and raises
+# unknown_command() for a form it does not know.
+COMMANDS = {
+    "settings": settings_command,
+    "debug": debug_command,
+    "status": status_command,
+    "pause": lambda arguments: pause_command(arguments, True),
+    "resume": lambda arguments: pause_command(arguments, False),
+    "style": style_command,
+    "context": context_command,
+    "stats": stats_command,
+    "battery": lambda arguments: choice_command("battery", arguments),
+    "screen-share": lambda arguments: choice_command("screen-share", arguments),
+    "length": lambda arguments: choice_command("length", arguments),
+    "snooze": snooze_command,
+    "mid-line": mid_line_command,
+    "model": model_command,
+    "models": models_command,
+    "revise": revise_command,
+    "spelling": spelling_command,
+    "languages": languages_command,
+    "suggest": suggest_command,
+    "language": language_command,
+    "escape-quiet": escape_quiet_command,
+    "apps": lambda arguments: rules_command("apps", arguments),
+    "sites": lambda arguments: rules_command("sites", arguments),
+    "app": lambda arguments: rules_command("app", arguments),
+    "site": lambda arguments: rules_command("site", arguments),
+    "service": service_command,
+    "autostart": autostart_command,
+    "logs": logs_command,
+    "repair": repair_command,
+    "doctor": doctor_command,
+    "launch": launch_command,
+    "ctl": ctl_command,
+}
+
+
+def main(arguments):
+    if arguments in ([], ["--help"], ["-h"]):
+        print(HELP, end="")
+        return
+    command = COMMANDS.get(arguments[0])
+    if command is None:
+        raise unknown_command()
+    command(arguments[1:])
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)

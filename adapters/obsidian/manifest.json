@@ -1,0 +1,9 @@
+{
+  "id": "badi",
+  "name": "Badi",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Local word prediction with Tab acceptance and native undo.",
+  "author": "Badi contributors",
+  "isDesktopOnly": true
+}

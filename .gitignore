@@ -1,0 +1,24 @@
+# Editors and local agent state. The verification skill is project source.
+.claude/
+.cursor/*
+!.cursor/skills/
+.idea/
+.vscode/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Build outputs and local run artifacts
+build/
+dist/
+target/
+node_modules/
+output/
+__pycache__/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

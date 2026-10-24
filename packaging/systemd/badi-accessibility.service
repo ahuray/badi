@@ -1,0 +1,35 @@
+[Unit]
+Description=Badi focused field observer and native prediction preview
+After=graphical-session.target badi-broker.service
+PartOf=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_RUNTIME_DIR
+ConditionEnvironment=HYPRLAND_INSTANCE_SIGNATURE
+# Keep retrying a transient AT-SPI or session failure. RestartSteps bounds
+# the delay; the unit does not stop after three failures.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -B %h/.local/lib/badi/accessibility/daemon.py
+Restart=on-failure
+RestartSec=3
+RestartSteps=5
+RestartMaxDelaySec=60
+UMask=0077
+NoNewPrivileges=yes
+LockPersonality=yes
+# AT-SPI, the session bus, Wayland and the broker are local Unix sockets;
+# GLib's network monitor uses netlink.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+# A core dump would keep the displayed text of the observed field on disk.
+LimitCORE=0
+KillMode=control-group
+TimeoutStopSec=5
+
+[Install]
+WantedBy=graphical-session.target

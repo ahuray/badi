@@ -1,0 +1,42 @@
+//! Local, content-minimizing broker for Badi adapters.
+
+#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
+
+pub mod build_info;
+pub mod control_plane;
+pub mod debug_trace;
+pub mod engine;
+pub mod ipc;
+pub mod language;
+pub mod metrics;
+pub mod model_selection;
+pub mod personalization;
+pub mod policy;
+pub mod protocol;
+pub mod provider;
+pub mod revision;
+pub mod segment;
+pub mod semantic;
+pub mod server;
+pub mod settings;
+pub mod spelling;
+pub mod stats;
+pub mod style;
+pub mod vocabulary;
+pub mod writing;
+
+pub use control_plane::{ControlPlane, ControlPlaneError, ControlPlaneSnapshot};
+pub use engine::{Broker, BrokerConfig, BrokerError, BrokerEvent, BrokerEventSink, ContextOutcome};
+pub use metrics::{
+    CarryMiss, Metrics, MetricsSnapshot, NoSuggestionReason, NoSuggestionSnapshot,
+    TypeThroughSnapshot,
+};
+pub use model_selection::{
+    HardwareProfile, MODEL_DOWNLOAD_DIRECTORY, ModelAdvice, ModelArtifact, ModelTier, ModelUseCase,
+    detect_hardware, recommend_model,
+};
+pub use policy::{PolicyDecision, PolicyReason};
+pub use provider::{
+    CompletionProvider, DeterministicPhraseProvider, ProviderError, ProviderOutcome,
+    ProviderRequest, RequestTrigger,
+};

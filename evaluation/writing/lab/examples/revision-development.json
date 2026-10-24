@@ -1,0 +1,1365 @@
+{
+  "schema": "badi.revision-suite.v1",
+  "name": "Selection revision development cases: grammar errors, correct controls and fact-bearing refinements in five languages",
+  "cases": [
+    {
+      "id": "en-g-01",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "He don't want to come with us tonight.",
+      "expected": [
+        "He doesn't want to come with us tonight."
+      ]
+    },
+    {
+      "id": "en-g-02",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "We was waiting for the bus for twenty minutes.",
+      "expected": [
+        "We were waiting for the bus for twenty minutes."
+      ]
+    },
+    {
+      "id": "en-g-03",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "I have saw that movie three times already.",
+      "expected": [
+        "I have seen that movie three times already."
+      ]
+    },
+    {
+      "id": "en-g-04",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "She is more taller than her brother.",
+      "expected": [
+        "She is taller than her brother."
+      ]
+    },
+    {
+      "id": "en-g-05",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Can you borrow me your pen for a minute?",
+      "expected": [
+        "Can you lend me your pen for a minute?"
+      ]
+    },
+    {
+      "id": "en-g-06",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "I am agree with you about the new schedule.",
+      "expected": [
+        "I agree with you about the new schedule."
+      ]
+    },
+    {
+      "id": "en-g-07",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "There is many reasons to leave early today.",
+      "expected": [
+        "There are many reasons to leave early today."
+      ]
+    },
+    {
+      "id": "en-g-08",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "He arrived to the airport at noon.",
+      "expected": [
+        "He arrived at the airport at noon."
+      ]
+    },
+    {
+      "id": "en-g-09",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "I recieved your message and I will answer it tomorow.",
+      "expected": [
+        "I received your message and I will answer it tomorrow."
+      ]
+    },
+    {
+      "id": "en-g-10",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Its been a long week and the team is tired.",
+      "expected": [
+        "It's been a long week and the team is tired.",
+        "It's been a long week, and the team is tired."
+      ]
+    },
+    {
+      "id": "en-g-11",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "i think we should meet on friday instead",
+      "expected": [
+        "I think we should meet on Friday instead.",
+        "I think we should meet on Friday instead"
+      ]
+    },
+    {
+      "id": "en-g-12",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Please send me teh final version adn the invoice.",
+      "expected": [
+        "Please send me the final version and the invoice."
+      ]
+    },
+    {
+      "id": "en-g-13",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "Thanks for the update. I told the client that ",
+      "selected": "the documents was sent on monday",
+      "after": " and asked for a reply.",
+      "expected": [
+        "the documents were sent on Monday"
+      ]
+    },
+    {
+      "id": "en-g-14",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "When you get home, ",
+      "selected": "please call me so we can discussed the plan",
+      "after": ", if you have time.",
+      "expected": [
+        "please call me so we can discuss the plan"
+      ]
+    },
+    {
+      "id": "en-g-15",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "We need to talk. ",
+      "selected": "Me and him will finish the slides",
+      "after": " before lunch.",
+      "expected": [
+        "He and I will finish the slides"
+      ]
+    },
+    {
+      "id": "en-c-01",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "The meeting has been moved to Thursday afternoon."
+    },
+    {
+      "id": "en-c-02",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "Could you send me the slides before the call?"
+    },
+    {
+      "id": "en-c-03",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "We will need two more chairs for the guests."
+    },
+    {
+      "id": "en-c-04",
+      "language": "en",
+      "mode": "grammar",
+      "kind": "correct",
+      "before": "As I said yesterday, ",
+      "selected": "the train leaves at seven",
+      "after": " and we should not be late."
+    },
+    {
+      "id": "en-r-01",
+      "language": "en",
+      "mode": "refine",
+      "selected": "hey Tom, i wanted to tell you that the delivery is going to come on 12 March maybe around noon",
+      "facts": [
+        "Tom",
+        "12 March"
+      ]
+    },
+    {
+      "id": "en-r-02",
+      "language": "en",
+      "mode": "refine",
+      "selected": "The invoice number is 4471 and you need to pay it until the end of the month, please.",
+      "facts": [
+        "4471"
+      ]
+    },
+    {
+      "id": "en-r-03",
+      "language": "en",
+      "mode": "refine",
+      "selected": "Can you send the files to lena.fischer@example.org because my other email is not working anymore?",
+      "facts": [
+        "lena.fischer@example.org"
+      ]
+    },
+    {
+      "id": "en-r-04",
+      "language": "en",
+      "mode": "refine",
+      "selected": "We are meeting at Rosewood Cafe on 18 Harbor Road, so dont be late like last time.",
+      "facts": [
+        "Rosewood Cafe",
+        "18 Harbor Road"
+      ]
+    },
+    {
+      "id": "en-r-05",
+      "language": "en",
+      "mode": "refine",
+      "selected": "The train from Leeds was delayed by 45 minutes so I will be late for the meeting with Priya.",
+      "facts": [
+        "Leeds",
+        "45",
+        "Priya"
+      ]
+    },
+    {
+      "id": "en-r-06",
+      "language": "en",
+      "mode": "refine",
+      "selected": "I think that maybe the budget of 2,500 euros is not enough for what Daniel wants to do.",
+      "facts": [
+        "2,500",
+        "Daniel"
+      ]
+    },
+    {
+      "id": "en-r-07",
+      "language": "en",
+      "mode": "refine",
+      "before": "Just so you know, ",
+      "selected": "the room 204 is booked by Omar for our workshop from 9:00 to 11:00",
+      "after": " so please plan around it.",
+      "facts": [
+        "204",
+        "Omar",
+        "9:00",
+        "11:00"
+      ]
+    },
+    {
+      "id": "en-r-08",
+      "language": "en",
+      "mode": "refine",
+      "selected": "Please call the office at +44 20 7946 0958 if the parcel for Mr. Okafor does not arrive.",
+      "facts": [
+        "+44 20 7946 0958",
+        "Okafor"
+      ]
+    },
+    {
+      "id": "de-g-01",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Ich habe gestern nach der Arbeit in den Supermarkt gegangen.",
+      "expected": [
+        "Ich bin gestern nach der Arbeit in den Supermarkt gegangen."
+      ]
+    },
+    {
+      "id": "de-g-02",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Wir hat keine Zeit für das Treffen am Montag.",
+      "expected": [
+        "Wir haben keine Zeit für das Treffen am Montag."
+      ]
+    },
+    {
+      "id": "de-g-03",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Der Kinder spielen im Garten hinter dem Haus.",
+      "expected": [
+        "Die Kinder spielen im Garten hinter dem Haus."
+      ]
+    },
+    {
+      "id": "de-g-04",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Er wohnt in der Nähe von den Bahnhof.",
+      "expected": [
+        "Er wohnt in der Nähe vom Bahnhof.",
+        "Er wohnt in der Nähe von dem Bahnhof.",
+        "Er wohnt in der Nähe des Bahnhofs."
+      ]
+    },
+    {
+      "id": "de-g-05",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Kannst du mir helfen, weil ich verstehe die Aufgabe nicht?",
+      "expected": [
+        "Kannst du mir helfen, weil ich die Aufgabe nicht verstehe?"
+      ]
+    },
+    {
+      "id": "de-g-06",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Morgen ich fahre mit dem Zug nach Hamburg.",
+      "expected": [
+        "Morgen fahre ich mit dem Zug nach Hamburg."
+      ]
+    },
+    {
+      "id": "de-g-07",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Wir haben das Problem gestern zusammen diskutiert und ein Lösung gefunden.",
+      "expected": [
+        "Wir haben das Problem gestern zusammen diskutiert und eine Lösung gefunden."
+      ]
+    },
+    {
+      "id": "de-g-08",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Sie hat mir gesagt, dass sie morgen kommt nicht.",
+      "expected": [
+        "Sie hat mir gesagt, dass sie morgen nicht kommt."
+      ]
+    },
+    {
+      "id": "de-g-09",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Vielen dank für deine schnelle antwort.",
+      "expected": [
+        "Vielen Dank für deine schnelle Antwort."
+      ]
+    },
+    {
+      "id": "de-g-10",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Ich schicke dir die Unterlagen morgen frügh per E-Mail.",
+      "expected": [
+        "Ich schicke dir die Unterlagen morgen früh per E-Mail."
+      ]
+    },
+    {
+      "id": "de-g-11",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Gestern habe ich meinem Freund ein Geschenk gekauft, aber er hat es nicht gefallen.",
+      "expected": [
+        "Gestern habe ich meinem Freund ein Geschenk gekauft, aber es hat ihm nicht gefallen."
+      ]
+    },
+    {
+      "id": "de-g-12",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Ich weiß nicht ob er heute noch kommt.",
+      "expected": [
+        "Ich weiß nicht, ob er heute noch kommt."
+      ]
+    },
+    {
+      "id": "de-g-13",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "Kurz zur Info: Ich habe gesehen, dass ",
+      "selected": "die Rechnung schon gestern bezahlen wurde",
+      "after": " und alles erledigt ist.",
+      "expected": [
+        "die Rechnung schon gestern bezahlt wurde"
+      ]
+    },
+    {
+      "id": "de-g-14",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "Ich glaube, ",
+      "selected": "das wir den Termin verschieben müssen",
+      "after": ", weil Anna krank ist.",
+      "expected": [
+        "dass wir den Termin verschieben müssen"
+      ]
+    },
+    {
+      "id": "de-g-15",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "Danke für die Nachricht. ",
+      "selected": "Ich habe das Paket gestern abgeholen",
+      "after": " und bringe es morgen mit.",
+      "expected": [
+        "Ich habe das Paket gestern abgeholt"
+      ]
+    },
+    {
+      "id": "de-c-01",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "Der Zug nach München fährt um acht Uhr ab."
+    },
+    {
+      "id": "de-c-02",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "Kannst du mir bitte die Unterlagen bis Freitag schicken?"
+    },
+    {
+      "id": "de-c-03",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "Wir treffen uns morgen vor dem Rathaus."
+    },
+    {
+      "id": "de-c-04",
+      "language": "de",
+      "mode": "grammar",
+      "kind": "correct",
+      "before": "Ich habe gehört, dass ",
+      "selected": "die Besprechung um zehn Uhr beginnt",
+      "after": " und eine Stunde dauert."
+    },
+    {
+      "id": "de-r-01",
+      "language": "de",
+      "mode": "refine",
+      "selected": "Hallo Jonas, das Paket kommt wahrscheinlich am 14. März so gegen Mittag bei dir an.",
+      "facts": [
+        "Jonas",
+        "14. März"
+      ]
+    },
+    {
+      "id": "de-r-02",
+      "language": "de",
+      "mode": "refine",
+      "selected": "Die Rechnung mit der Nummer 8812 muss bis Ende des Monats bezahlt werden, bitte.",
+      "facts": [
+        "8812"
+      ]
+    },
+    {
+      "id": "de-r-03",
+      "language": "de",
+      "mode": "refine",
+      "selected": "Schick die Dateien bitte an lena.weber@example.de, weil meine andere Adresse nicht mehr geht.",
+      "facts": [
+        "lena.weber@example.de"
+      ]
+    },
+    {
+      "id": "de-r-04",
+      "language": "de",
+      "mode": "refine",
+      "selected": "Wir treffen uns im Café Morgenrot in der Lindenstraße 17, also sei bitte diesmal pünktlich.",
+      "facts": [
+        "Café Morgenrot",
+        "Lindenstraße 17"
+      ]
+    },
+    {
+      "id": "de-r-05",
+      "language": "de",
+      "mode": "refine",
+      "selected": "Der Zug aus Leipzig hatte 35 Minuten Verspätung, darum komme ich zu spät zum Termin mit Frau Keller.",
+      "facts": [
+        "Leipzig",
+        "35",
+        "Keller"
+      ]
+    },
+    {
+      "id": "de-r-06",
+      "language": "de",
+      "mode": "refine",
+      "selected": "Ich glaube das Budget von 3.000 Euro reicht nicht für das was Tobias machen will.",
+      "facts": [
+        "3.000",
+        "Tobias"
+      ]
+    },
+    {
+      "id": "de-r-07",
+      "language": "de",
+      "mode": "refine",
+      "before": "Ich wollte dir nur sagen, dass ",
+      "selected": "der Raum 112 von Herrn Brandt für den Workshop von 9 bis 12 Uhr reserviert ist",
+      "after": " und nicht getauscht werden kann.",
+      "facts": [
+        "112",
+        "Brandt",
+        "9",
+        "12 Uhr"
+      ]
+    },
+    {
+      "id": "de-r-08",
+      "language": "de",
+      "mode": "refine",
+      "selected": "Bitte ruf im Büro unter 030 1234567 an, falls das Paket für Herrn Yilmaz nicht ankommt.",
+      "facts": [
+        "030 1234567",
+        "Yilmaz"
+      ]
+    },
+    {
+      "id": "fr-g-01",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Hier, je suis allé au magasin et j'ai acheter du pain.",
+      "expected": [
+        "Hier, je suis allé au magasin et j'ai acheté du pain."
+      ]
+    },
+    {
+      "id": "fr-g-02",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Nous avons allé à la plage le week-end dernier.",
+      "expected": [
+        "Nous sommes allés à la plage le week-end dernier."
+      ]
+    },
+    {
+      "id": "fr-g-03",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Elle a mangé les pommes que tu as acheté.",
+      "expected": [
+        "Elle a mangé les pommes que tu as achetées."
+      ]
+    },
+    {
+      "id": "fr-g-04",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Je ne sais pas qu'est-ce que tu veux dire.",
+      "expected": [
+        "Je ne sais pas ce que tu veux dire."
+      ]
+    },
+    {
+      "id": "fr-g-05",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Il faut que tu viens demain à la réunion.",
+      "expected": [
+        "Il faut que tu viennes demain à la réunion."
+      ]
+    },
+    {
+      "id": "fr-g-06",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Les enfants joue dans le jardin depuis ce matin.",
+      "expected": [
+        "Les enfants jouent dans le jardin depuis ce matin."
+      ]
+    },
+    {
+      "id": "fr-g-07",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "J'habite en Paris depuis trois ans.",
+      "expected": [
+        "J'habite à Paris depuis trois ans."
+      ]
+    },
+    {
+      "id": "fr-g-08",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "C'est un problème très important pour le équipe.",
+      "expected": [
+        "C'est un problème très important pour l'équipe."
+      ]
+    },
+    {
+      "id": "fr-g-09",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Si j'aurais le temps, je t'appellerais ce soir.",
+      "expected": [
+        "Si j'avais le temps, je t'appellerais ce soir."
+      ]
+    },
+    {
+      "id": "fr-g-10",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Merci pour ta reponse, je te repondrai demain matin.",
+      "expected": [
+        "Merci pour ta réponse, je te répondrai demain matin."
+      ]
+    },
+    {
+      "id": "fr-g-11",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Je me suis rendu compte que j'ai oublié mon clés au bureau.",
+      "expected": [
+        "Je me suis rendu compte que j'ai oublié mes clés au bureau.",
+        "Je me suis rendu compte que j'avais oublié mes clés au bureau."
+      ]
+    },
+    {
+      "id": "fr-g-12",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Est ce que tu peux m'envoyer le document avant midi ?",
+      "expected": [
+        "Est-ce que tu peux m'envoyer le document avant midi ?",
+        "Est-ce que tu peux m'envoyer le document avant midi?"
+      ]
+    },
+    {
+      "id": "fr-g-13",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "Comme je te l'ai dit, ",
+      "selected": "les documents a été envoyés lundi",
+      "after": " et le client attend ta réponse.",
+      "expected": [
+        "les documents ont été envoyés lundi"
+      ]
+    },
+    {
+      "id": "fr-g-14",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "Quand tu arrives, ",
+      "selected": "appelle-moi pour qu'on peut parler du projet",
+      "after": ", si tu as le temps.",
+      "expected": [
+        "appelle-moi pour qu'on puisse parler du projet"
+      ]
+    },
+    {
+      "id": "fr-g-15",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "Merci pour ton message. ",
+      "selected": "Je vais envoyé le rapport demain",
+      "after": " avant midi.",
+      "expected": [
+        "Je vais envoyer le rapport demain"
+      ]
+    },
+    {
+      "id": "fr-c-01",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "La réunion a été déplacée à jeudi après-midi."
+    },
+    {
+      "id": "fr-c-02",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "Peux-tu m'envoyer les diapositives avant l'appel ?"
+    },
+    {
+      "id": "fr-c-03",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "Nous aurons besoin de deux chaises de plus pour les invités."
+    },
+    {
+      "id": "fr-c-04",
+      "language": "fr",
+      "mode": "grammar",
+      "kind": "correct",
+      "before": "Comme prévu, ",
+      "selected": "le train part à sept heures",
+      "after": " et nous serons à Lyon vers midi."
+    },
+    {
+      "id": "fr-r-01",
+      "language": "fr",
+      "mode": "refine",
+      "selected": "Salut Claire, le colis va arriver le 12 mars normalement vers midi chez toi.",
+      "facts": [
+        "Claire",
+        "12 mars"
+      ]
+    },
+    {
+      "id": "fr-r-02",
+      "language": "fr",
+      "mode": "refine",
+      "selected": "Le numéro de la facture est 5523 et il faut la payer avant la fin du mois s'il te plaît.",
+      "facts": [
+        "5523"
+      ]
+    },
+    {
+      "id": "fr-r-03",
+      "language": "fr",
+      "mode": "refine",
+      "selected": "Envoie les fichiers à julie.martin@example.fr parce que mon autre adresse ne marche plus.",
+      "facts": [
+        "julie.martin@example.fr"
+      ]
+    },
+    {
+      "id": "fr-r-04",
+      "language": "fr",
+      "mode": "refine",
+      "selected": "On se retrouve au Café des Arts, 8 rue des Tilleuls, donc sois à l'heure cette fois.",
+      "facts": [
+        "Café des Arts",
+        "8 rue des Tilleuls"
+      ]
+    },
+    {
+      "id": "fr-r-05",
+      "language": "fr",
+      "mode": "refine",
+      "selected": "Le train de Lille avait 40 minutes de retard donc je serai en retard pour le rendez-vous avec Karim.",
+      "facts": [
+        "Lille",
+        "40",
+        "Karim"
+      ]
+    },
+    {
+      "id": "fr-r-06",
+      "language": "fr",
+      "mode": "refine",
+      "selected": "Je pense que le budget de 1 500 euros ne suffit pas pour ce que Hugo veut faire.",
+      "facts": [
+        "1 500",
+        "Hugo"
+      ]
+    },
+    {
+      "id": "fr-r-07",
+      "language": "fr",
+      "mode": "refine",
+      "before": "Je voulais te dire que ",
+      "selected": "la salle 305 est réservée par Inès pour l'atelier de 9 h à 11 h",
+      "after": " donc prévoyez autre chose.",
+      "facts": [
+        "305",
+        "Inès",
+        "9 h",
+        "11 h"
+      ]
+    },
+    {
+      "id": "fr-r-08",
+      "language": "fr",
+      "mode": "refine",
+      "selected": "Merci d'appeler le bureau au 01 23 45 67 89 si le colis pour M. Lefèvre n'arrive pas.",
+      "facts": [
+        "01 23 45 67 89",
+        "Lefèvre"
+      ]
+    },
+    {
+      "id": "es-g-01",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Ayer yo fue al supermercado y compré pan.",
+      "expected": [
+        "Ayer yo fui al supermercado y compré pan.",
+        "Ayer fui al supermercado y compré pan."
+      ]
+    },
+    {
+      "id": "es-g-02",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "La problema es que no tenemos tiempo.",
+      "expected": [
+        "El problema es que no tenemos tiempo."
+      ]
+    },
+    {
+      "id": "es-g-03",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Mis amigos y yo vamos a la playa cada domingos.",
+      "expected": [
+        "Mis amigos y yo vamos a la playa cada domingo.",
+        "Mis amigos y yo vamos a la playa todos los domingos."
+      ]
+    },
+    {
+      "id": "es-g-04",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Si tendría dinero, viajaría a México.",
+      "expected": [
+        "Si tuviera dinero, viajaría a México.",
+        "Si tuviese dinero, viajaría a México."
+      ]
+    },
+    {
+      "id": "es-g-05",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Espero que tú vienes a la fiesta el sábado.",
+      "expected": [
+        "Espero que tú vengas a la fiesta el sábado.",
+        "Espero que vengas a la fiesta el sábado."
+      ]
+    },
+    {
+      "id": "es-g-06",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Ella está muy cansado después del viaje.",
+      "expected": [
+        "Ella está muy cansada después del viaje."
+      ]
+    },
+    {
+      "id": "es-g-07",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Pienso de ti cada vez que escucho esta canción.",
+      "expected": [
+        "Pienso en ti cada vez que escucho esta canción."
+      ]
+    },
+    {
+      "id": "es-g-08",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "¿Sabes cuando empieza la reunion?",
+      "expected": [
+        "¿Sabes cuándo empieza la reunión?"
+      ]
+    },
+    {
+      "id": "es-g-09",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Los niños juega en el parque desde la mañana.",
+      "expected": [
+        "Los niños juegan en el parque desde la mañana."
+      ]
+    },
+    {
+      "id": "es-g-10",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Gracias por tu respuesta, te escribo mañana con mas detalles.",
+      "expected": [
+        "Gracias por tu respuesta, te escribo mañana con más detalles."
+      ]
+    },
+    {
+      "id": "es-g-11",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Te mando los documentos mañana por la mañana y la factura tambien.",
+      "expected": [
+        "Te mando los documentos mañana por la mañana y la factura también."
+      ]
+    },
+    {
+      "id": "es-g-12",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Me gusta mucho los libros de historia.",
+      "expected": [
+        "Me gustan mucho los libros de historia."
+      ]
+    },
+    {
+      "id": "es-g-13",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "Como te dije, ",
+      "selected": "los documentos fue enviados el lunes",
+      "after": " y el cliente espera tu respuesta.",
+      "expected": [
+        "los documentos fueron enviados el lunes"
+      ]
+    },
+    {
+      "id": "es-g-14",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "Cuando llegues, ",
+      "selected": "llámame para que podemos hablar del proyecto",
+      "after": ", si tienes tiempo.",
+      "expected": [
+        "llámame para que podamos hablar del proyecto"
+      ]
+    },
+    {
+      "id": "es-g-15",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "Gracias por avisar. ",
+      "selected": "Mañana voy a enviado el informe",
+      "after": " antes del mediodía.",
+      "expected": [
+        "Mañana voy a enviar el informe"
+      ]
+    },
+    {
+      "id": "es-c-01",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "La reunión se ha cambiado al jueves por la tarde."
+    },
+    {
+      "id": "es-c-02",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "¿Puedes enviarme las diapositivas antes de la llamada?"
+    },
+    {
+      "id": "es-c-03",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "Necesitaremos dos sillas más para los invitados."
+    },
+    {
+      "id": "es-c-04",
+      "language": "es",
+      "mode": "grammar",
+      "kind": "correct",
+      "before": "Como acordamos, ",
+      "selected": "el tren sale a las siete",
+      "after": " y llegaremos a Sevilla al mediodía."
+    },
+    {
+      "id": "es-r-01",
+      "language": "es",
+      "mode": "refine",
+      "selected": "Hola Lucía, el paquete va a llegar el 12 de marzo más o menos al mediodía a tu casa.",
+      "facts": [
+        "Lucía",
+        "12 de marzo"
+      ]
+    },
+    {
+      "id": "es-r-02",
+      "language": "es",
+      "mode": "refine",
+      "selected": "El número de la factura es 6634 y hay que pagarla antes de fin de mes, por favor.",
+      "facts": [
+        "6634"
+      ]
+    },
+    {
+      "id": "es-r-03",
+      "language": "es",
+      "mode": "refine",
+      "selected": "Manda los archivos a pablo.ruiz@example.es porque mi otro correo ya no funciona.",
+      "facts": [
+        "pablo.ruiz@example.es"
+      ]
+    },
+    {
+      "id": "es-r-04",
+      "language": "es",
+      "mode": "refine",
+      "selected": "Nos vemos en el Café Central, calle del Olmo 21, así que esta vez llega puntual.",
+      "facts": [
+        "Café Central",
+        "calle del Olmo 21"
+      ]
+    },
+    {
+      "id": "es-r-05",
+      "language": "es",
+      "mode": "refine",
+      "selected": "El tren de Valencia tuvo 25 minutos de retraso así que llegaré tarde a la reunión con Andrés.",
+      "facts": [
+        "Valencia",
+        "25",
+        "Andrés"
+      ]
+    },
+    {
+      "id": "es-r-06",
+      "language": "es",
+      "mode": "refine",
+      "selected": "Creo que el presupuesto de 4.000 euros no alcanza para lo que quiere hacer Marta.",
+      "facts": [
+        "4.000",
+        "Marta"
+      ]
+    },
+    {
+      "id": "es-r-07",
+      "language": "es",
+      "mode": "refine",
+      "before": "Te quería decir que ",
+      "selected": "la sala 210 está reservada por Diego para el taller de 9 a 11",
+      "after": " así que planead otra cosa.",
+      "facts": [
+        "210",
+        "Diego",
+        "9",
+        "11"
+      ]
+    },
+    {
+      "id": "es-r-08",
+      "language": "es",
+      "mode": "refine",
+      "selected": "Por favor llama a la oficina al 912 345 678 si el paquete para la señora Navarro no llega.",
+      "facts": [
+        "912 345 678",
+        "Navarro"
+      ]
+    },
+    {
+      "id": "pt-g-01",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Ontem eu vai ao mercado e comprei pão.",
+      "expected": [
+        "Ontem eu fui ao mercado e comprei pão.",
+        "Ontem fui ao mercado e comprei pão."
+      ]
+    },
+    {
+      "id": "pt-g-02",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Nós vai viajar para o Porto no próximo mês.",
+      "expected": [
+        "Nós vamos viajar para o Porto no próximo mês."
+      ]
+    },
+    {
+      "id": "pt-g-03",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "As criança estão brincando no jardim.",
+      "expected": [
+        "As crianças estão brincando no jardim."
+      ]
+    },
+    {
+      "id": "pt-g-04",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Se eu teria tempo, eu ajudaria você.",
+      "expected": [
+        "Se eu tivesse tempo, eu ajudaria você.",
+        "Se eu tivesse tempo, ajudaria você."
+      ]
+    },
+    {
+      "id": "pt-g-05",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Espero que você vem à festa no sábado.",
+      "expected": [
+        "Espero que você venha à festa no sábado."
+      ]
+    },
+    {
+      "id": "pt-g-06",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Ela está muito cansado depois da viagem.",
+      "expected": [
+        "Ela está muito cansada depois da viagem."
+      ]
+    },
+    {
+      "id": "pt-g-07",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Eu gosto muito de os livros de história.",
+      "expected": [
+        "Eu gosto muito dos livros de história."
+      ]
+    },
+    {
+      "id": "pt-g-08",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Obrigado pela sua resposta, vou te escrever amanha com mais detalhes.",
+      "expected": [
+        "Obrigado pela sua resposta, vou te escrever amanhã com mais detalhes."
+      ]
+    },
+    {
+      "id": "pt-g-09",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Você sabe onde fica a estacão de trem?",
+      "expected": [
+        "Você sabe onde fica a estação de trem?"
+      ]
+    },
+    {
+      "id": "pt-g-10",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Fazem dois anos que eu moro aqui.",
+      "expected": [
+        "Faz dois anos que eu moro aqui."
+      ]
+    },
+    {
+      "id": "pt-g-11",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Os meninos joga futebol todos os dias depois da escola.",
+      "expected": [
+        "Os meninos jogam futebol todos os dias depois da escola."
+      ]
+    },
+    {
+      "id": "pt-g-12",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "selected": "Eu tenho que ir no médico amanhã de manhã.",
+      "expected": [
+        "Eu tenho que ir ao médico amanhã de manhã.",
+        "Tenho que ir ao médico amanhã de manhã."
+      ]
+    },
+    {
+      "id": "pt-g-13",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "Como eu te disse, ",
+      "selected": "os documentos foi enviados na segunda-feira",
+      "after": " e o cliente está esperando sua resposta.",
+      "expected": [
+        "os documentos foram enviados na segunda-feira"
+      ]
+    },
+    {
+      "id": "pt-g-14",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "Quando você chegar, ",
+      "selected": "me avise para que nós podemos falar do projeto",
+      "after": ", se tiver tempo.",
+      "expected": [
+        "me avise para que nós possamos falar do projeto",
+        "me avise para que possamos falar do projeto"
+      ]
+    },
+    {
+      "id": "pt-g-15",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "error",
+      "before": "Obrigado pelo aviso. ",
+      "selected": "Amanhã eu vou enviado o relatório",
+      "after": " antes do almoço.",
+      "expected": [
+        "Amanhã eu vou enviar o relatório"
+      ]
+    },
+    {
+      "id": "pt-c-01",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "A reunião foi transferida para quinta-feira à tarde."
+    },
+    {
+      "id": "pt-c-02",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "Pode enviar os slides antes da reunião?"
+    },
+    {
+      "id": "pt-c-03",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "correct",
+      "selected": "Vamos precisar de mais duas cadeiras para os convidados."
+    },
+    {
+      "id": "pt-c-04",
+      "language": "pt",
+      "mode": "grammar",
+      "kind": "correct",
+      "before": "Como combinamos, ",
+      "selected": "o ônibus sai às sete horas",
+      "after": " e chegaremos a Campinas ao meio-dia."
+    },
+    {
+      "id": "pt-r-01",
+      "language": "pt",
+      "mode": "refine",
+      "selected": "Oi Beatriz, o pacote vai chegar dia 12 de março mais ou menos na hora do almoço na sua casa.",
+      "facts": [
+        "Beatriz",
+        "12 de março"
+      ]
+    },
+    {
+      "id": "pt-r-02",
+      "language": "pt",
+      "mode": "refine",
+      "selected": "O número da fatura é 7745 e precisa ser paga até o fim do mês, por favor.",
+      "facts": [
+        "7745"
+      ]
+    },
+    {
+      "id": "pt-r-03",
+      "language": "pt",
+      "mode": "refine",
+      "selected": "Manda os arquivos para joao.costa@example.com.br porque meu outro email não está funcionando.",
+      "facts": [
+        "joao.costa@example.com.br"
+      ]
+    },
+    {
+      "id": "pt-r-04",
+      "language": "pt",
+      "mode": "refine",
+      "selected": "A gente se encontra no Café Aurora, Rua das Flores 12, então chega no horário dessa vez.",
+      "facts": [
+        "Café Aurora",
+        "Rua das Flores 12"
+      ]
+    },
+    {
+      "id": "pt-r-05",
+      "language": "pt",
+      "mode": "refine",
+      "selected": "O trem de Curitiba atrasou 30 minutos então vou chegar atrasado na reunião com o Rafael.",
+      "facts": [
+        "Curitiba",
+        "30",
+        "Rafael"
+      ]
+    },
+    {
+      "id": "pt-r-06",
+      "language": "pt",
+      "mode": "refine",
+      "selected": "Acho que o orçamento de 5.000 reais não dá para o que a Camila quer fazer.",
+      "facts": [
+        "5.000",
+        "Camila"
+      ]
+    },
+    {
+      "id": "pt-r-07",
+      "language": "pt",
+      "mode": "refine",
+      "before": "Só queria avisar que ",
+      "selected": "a sala 108 está reservada pelo Thiago para o workshop das 9h às 11h",
+      "after": " então planejem outra coisa.",
+      "facts": [
+        "108",
+        "Thiago",
+        "9h",
+        "11h"
+      ]
+    },
+    {
+      "id": "pt-r-08",
+      "language": "pt",
+      "mode": "refine",
+      "selected": "Por favor liga para o escritório no (11) 3456-7890 se o pacote para a dona Helena não chegar.",
+      "facts": [
+        "(11) 3456-7890",
+        "Helena"
+      ]
+    }
+  ]
+}

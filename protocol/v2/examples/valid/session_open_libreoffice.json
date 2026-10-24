@@ -1,0 +1,16 @@
+{
+  "v": 2,
+  "type": "session.open",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 1,
+  "revision": 0,
+  "mono_ms": 2,
+  "payload": {
+    "target": {
+      "kind": "libreoffice",
+      "app_id": "libreoffice-writer",
+      "target_id": "0f1d2c3b-4a59-4687-9a0b-1c2d3e4f5a6b"
+    },
+    "activation": "always"
+  }
+}

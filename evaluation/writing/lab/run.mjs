@@ -1,0 +1,481 @@
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { open, readFile, readdir, mkdir, lstat, realpath } from 'node:fs/promises';
+import { resolve, relative, join, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
+import { createLabServer, validateConfigs, FIXED_MODES, LENGTHS } from './server.mjs';
+import { LabWorker } from './worker.mjs';
+import { validateSuite, planComparison, warmSchedule, summarizeResults } from './cases.mjs';
+import { REVISION_MODES, validateRevisionSuite, planRevision, revisionRequest, validateRevisionResult, scoreRevision,
+  summarizeRevision } from './revision.mjs';
+import { modelArtifactPath, readModelArtifact, modelArtifactProvenance, modelArtifactArgs,
+  assertModelArtifactUnchanged, assertModelArtifactIdentity } from './model-artifact.mjs';
+
+export const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+export const OUTPUT_ROOT = resolve(ROOT, 'output/writing');
+export const WORKER_BINARY = resolve(ROOT, 'target/release/badi-writing-lab');
+// Run provenance: every file of the Lab, of the Lab worker crate and of the
+// broker's `src` (expanded and sorted, so a new module cannot escape the
+// record), and the manifests and data the worker builds with.
+export const LAB_DIRECTORY = 'evaluation/writing/lab';
+export const LAB_CRATE = 'evaluation/writing/lab-worker';
+const BUILD_INPUTS = ['broker/Cargo.toml', 'Cargo.toml', 'Cargo.lock', 'broker/data/writing-lexicon/en.txt'];
+export const WORKER_BUILD = ['build', '--release', '--locked', '-p', 'badi-writing-lab'];
+const hash = value => createHash('sha256').update(value).digest('hex');
+const jsonBytes = value => JSON.stringify(value, null, 2) + '\n';
+
+export function parseOptions(args, cwd = process.cwd()) {
+  const { values } = parseArgs({ args, strict: true, options: {
+    suite: { type: 'string' }, output: { type: 'string' },
+    modes: { type: 'string', default: 'production_boundary,context' },
+    'budget-ms': { type: 'string' }, 'max-tokens': { type: 'string' },
+    seed: { type: 'string', default: '42' }, 'cache-prompt': { type: 'string' },
+    'warm-prefix': { type: 'string' },
+    'model-artifact': { type: 'string' }, 'prefill-batch': { type: 'string' },
+    'memory-map': { type: 'string' }, lengths: { type: 'string' },
+  } });
+  if (!values.suite || !values.output) throw new Error('Supply --suite PATH and --output NEWDIR under output/writing.');
+  const integer = (name, min, max) => {
+    const value = values[name];
+    if (!/^(0|[1-9][0-9]*)$/u.test(value) || Number(value) < min || Number(value) > max) throw new Error(`--${name} must be an integer from ${min} to ${max}.`);
+    return Number(value);
+  };
+  const modes = values.modes.split(',');
+  if (modes.some(mode => Object.hasOwn(REVISION_MODES, mode))) {
+    // The revision lane runs the broker's own request on its own runtime:
+    // nothing about the launch or the request is selectable.
+    if (!modes.every(mode => Object.hasOwn(REVISION_MODES, mode)) || new Set(modes).size !== modes.length) {
+      throw new Error(`Run the revision modes (${Object.keys(REVISION_MODES).join(', ')}) apart from prediction modes, each once.`);
+    }
+    const fixed = ['budget-ms', 'max-tokens', 'cache-prompt', 'warm-prefix', 'model-artifact', 'prefill-batch', 'memory-map', 'lengths'];
+    if (fixed.some(name => values[name] !== undefined)) throw new Error('The revision modes use the broker revision settings; drop the prediction options.');
+    return { revision: true, suitePath: resolve(cwd, values.suite), outputPath: resolve(cwd, values.output),
+      modes: modes.map(mode => REVISION_MODES[mode]), seed: integer('seed', 0, 2147483647) };
+  }
+  values['budget-ms'] ??= '550'; values['max-tokens'] ??= '8'; values['cache-prompt'] ??= 'true';
+  const budget = integer('budget-ms', 550, 10000);
+  const tokens = integer('max-tokens', 8, 64);
+  const seed = integer('seed', 0, 2147483647);
+  if (!['true', 'false'].includes(values['cache-prompt'])) throw new Error('--cache-prompt must be true or false.');
+  if (values['prefill-batch'] !== undefined && !['16', '64'].includes(values['prefill-batch'])) throw new Error('Use --prefill-batch 16 or 64.');
+  if (values['memory-map'] !== undefined && !['true', 'false'].includes(values['memory-map'])) throw new Error('Use --memory-map true or false.');
+  if (values['warm-prefix'] !== undefined && values['warm-prefix'] !== 'true') throw new Error('--warm-prefix must be true when present.');
+  const warmPrefix = values['warm-prefix'] === 'true';
+  // Each suggestion length is its own production_boundary configuration;
+  // normal keeps the plain id and request, so earlier runs stay comparable.
+  const lengths = (values.lengths ?? 'normal').split(',');
+  if (!lengths.length || new Set(lengths).size !== lengths.length || lengths.some(length => !LENGTHS.includes(length))) {
+    throw new Error('Use --lengths with distinct values from short and normal.');
+  }
+  const configs = validateConfigs(modes.flatMap(mode => {
+    const fixed = FIXED_MODES.includes(mode);
+    const config = { id: mode, mode, budget_ms: fixed ? 550 : budget, max_tokens: fixed ? 8 : tokens,
+      cache_prompt: fixed || values['cache-prompt'] === 'true', temperature: 0, seed: 42 };
+    if (mode !== 'production_boundary') return [config];
+    return lengths.map(length => length === 'normal' ? config : { ...config, id: `${mode}-${length}`, length });
+  }));
+  if (values.lengths !== undefined && !configs.some(config => config.mode === 'production_boundary')) {
+    throw new Error('--lengths applies to production_boundary.');
+  }
+  return { suitePath: resolve(cwd, values.suite), outputPath: resolve(cwd, values.output), configs, seed, warmPrefix,
+    ...(values['prefill-batch'] !== undefined ? { prefillBatch: Number(values['prefill-batch']) } : {}),
+    ...(values['memory-map'] !== undefined ? { memoryMap: values['memory-map'] === 'true' } : {}),
+    ...(values['model-artifact'] !== undefined ? { modelArtifactPath: modelArtifactPath(values['model-artifact']) } : {}) };
+}
+
+export function validateOutputPath(path, outputRoot = OUTPUT_ROOT) {
+  const root = resolve(outputRoot);
+  const destination = resolve(path);
+  if (!destination.startsWith(root + sep)) throw new Error('Write the new run directory under ignored output/writing/.');
+  return destination;
+}
+
+export async function prepareOutput(path, outputRoot = OUTPUT_ROOT) {
+  const destination = validateOutputPath(path, outputRoot);
+  const root = resolve(outputRoot);
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  if (await realpath(root) !== root) throw new Error('The writing output root must not redirect through a symlink.');
+  const parts = relative(root, destination).split(sep);
+  let parent = root;
+  for (const part of parts.slice(0, -1)) {
+    parent = join(parent, part);
+    try { await mkdir(parent, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    const metadata = await lstat(parent);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error('Run directories cannot redirect through symlinks.');
+  }
+  await mkdir(destination, { mode: 0o700 }); // Exclusive: never replace an earlier run.
+  return destination;
+}
+
+export async function fileIdentity(path, cache = new Map()) {
+  const handle = await open(path, 'r');
+  try {
+    const before = await handle.stat({ bigint: true });
+    if (!before.isFile()) throw new Error('Provenance requires a regular file.');
+    const key = [before.dev, before.ino, before.size, before.mtimeNs, before.ctimeNs].join(':');
+    let digest = cache.get(key);
+    if (!digest) {
+      const hasher = createHash('sha256');
+      for await (const chunk of handle.createReadStream({ autoClose: false })) hasher.update(chunk);
+      digest = hasher.digest('hex');
+    }
+    const after = await handle.stat({ bigint: true });
+    if ([after.dev, after.ino, after.size, after.mtimeNs, after.ctimeNs].join(':') !== key) throw new Error('A provenance file changed while it was being hashed.');
+    cache.set(key, digest);
+    return { path: await realpath(path), sha256: digest, bytes: Number(before.size) };
+  } finally { await handle.close(); }
+}
+
+/** Every regular file under `directory`, sorted; anything else is an error. */
+async function treeFiles(directory, root) {
+  const files = [];
+  const visit = async folder => {
+    for (const entry of await readdir(resolve(root, folder), { withFileTypes: true })) {
+      const path = `${folder}/${entry.name}`;
+      if (entry.isDirectory()) await visit(path);
+      else if (entry.isFile()) files.push(path);
+      else throw new Error(`Lab sources must be regular files: ${path}`);
+    }
+  };
+  await visit(directory);
+  return files.sort();
+}
+
+/** Every file of the Lab's scripts, page, tests and example suites, sorted. */
+export async function labFiles(root = ROOT) {
+  return treeFiles(LAB_DIRECTORY, root);
+}
+
+/** The Lab worker crate's manifest and every file under its `src`, sorted. */
+export async function labCrateSources(root = ROOT) {
+  return [`${LAB_CRATE}/Cargo.toml`, ...await treeFiles(`${LAB_CRATE}/src`, root)];
+}
+
+/** Every broker source the worker links, and its build inputs. */
+export async function brokerSources(root = ROOT) {
+  return [...await treeFiles('broker/src', root), ...BUILD_INPUTS];
+}
+
+/**
+ * Builds the worker the run will execute, as `npm run writing:lab` does, so a
+ * run never uses a binary older than its sources; cargo does nothing when it
+ * is current. `run` is injectable for tests.
+ */
+export function buildWorker(run = (command, args) => new Promise((done, failed) => {
+  const child = spawn(command, args, { cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'] });
+  child.once('error', failed);
+  child.once('exit', code => done(code));
+})) {
+  return Promise.resolve(run('cargo', WORKER_BUILD)).then(code => {
+    if (code !== 0) throw new Error(`Building the Lab worker failed (cargo ${WORKER_BUILD.join(' ')}).`);
+  });
+}
+
+export async function sourceHashes(paths, root = ROOT) {
+  paths ??= [...await labFiles(root), ...await labCrateSources(root), ...await brokerSources(root)];
+  return Object.fromEntries(await Promise.all(paths.map(async path => [path, hash(await readFile(resolve(root, path)))])));
+}
+
+export function validateCleanup(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || !Number.isInteger(value.process_id) || value.process_id <= 1 || value.process_id > 0xffffffff
+    || typeof value.runtime_identity_sha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(value.runtime_identity_sha256)
+    || typeof value.challenge_completed !== 'boolean' || typeof value.reaped !== 'boolean'
+    || (value.exit_code !== null && !Number.isInteger(value.exit_code))) throw new Error('Invalid runtime cleanup receipt.');
+  return value;
+}
+
+export class ObservedWorker extends LabWorker {
+  constructor({ artifact = null, ...options } = {}) {
+    super({ ...options, args: options.args ?? [] });
+    this.args = [...this.originalArgs, ...modelArtifactArgs(artifact)];
+    this.artifact = artifact; this.executions = []; this.cleanups = []; this.fileCache = new Map();
+  }
+  async start() {
+    try {
+      await assertModelArtifactUnchanged(this.artifact);
+      const identity = await super.start();
+      const pid = this.session?.child.pid;
+      if (pid && !this.executions.some(value => value.pid === pid)) {
+        const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
+        const start = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+        this.executions.push({ pid, start_ticks: start, executable: await fileIdentity(`/proc/${pid}/exe`, this.fileCache), runtime_identity: identity });
+      }
+      // super.start has already captured runtime ownership for awaited cleanup.
+      assertModelArtifactIdentity(identity, this.artifact);
+      return identity;
+    } catch (error) {
+      await this.stop();
+      throw error;
+    }
+  }
+  async stop() {
+    const pid = this.session?.child.pid;
+    try {
+      const receipt = await super.stop();
+      if (pid) this.cleanups.push({ worker_pid: pid, completed: true, runtime_receipt: receipt ?? null });
+      return receipt;
+    } catch (error) {
+      if (pid) this.cleanups.push({ worker_pid: pid, completed: false, error: error.message });
+      throw error;
+    }
+  }
+}
+
+export async function* decodeEvents(body) {
+  if (!body) throw new Error('The lab returned no event stream.');
+  const reader = body.pipeThrough(new TextDecoderStream()).getReader();
+  let pending = '';
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      pending += value;
+      if (Buffer.byteLength(pending) > 2 * 1024 * 1024) throw new Error('The lab event exceeded its bound.');
+      for (;;) {
+        const index = pending.indexOf('\n');
+        if (index < 0) break;
+        const line = pending.slice(0, index); pending = pending.slice(index + 1);
+        if (!line) continue;
+        const event = JSON.parse(line);
+        if (!event || typeof event !== 'object' || Array.isArray(event)) throw new Error('Invalid lab event.');
+        yield event;
+      }
+    }
+    if (pending.trim()) throw new Error('The lab stream ended with an incomplete event.');
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+}
+
+export async function runSuite(options, { worker: suppliedWorker, outputRoot = OUTPUT_ROOT, signal,
+  onProgress = () => {}, serverFactory = createLabServer } = {}) {
+  signal?.throwIfAborted();
+  const suiteBytes = await readFile(options.suitePath);
+  if (suiteBytes.length > 512 * 1024) throw new Error('Suite input exceeds 512 KiB.');
+  let document;
+  try { document = JSON.parse(suiteBytes.toString('utf8')); }
+  catch { throw new Error('Suite input must contain valid JSON.'); }
+  if (!document || typeof document !== 'object' || Array.isArray(document)) throw new Error('Suite input must be an object.');
+  const suite = validateSuite(document.schema === 'badi.prediction-lab.session.v1' ? document.suite : document);
+  if (suite.cases.length > 300) throw new Error('Run at most 300 cases at a time.');
+  const configs = validateConfigs(options.configs);
+  const compared = planComparison(suite.cases, configs, options.seed);
+  const plan = options.warmPrefix ? warmSchedule(compared) : compared;
+  const body = JSON.stringify({ suite, configs, seed: options.seed, ...(options.warmPrefix ? { warm_prefix: true } : {}) });
+  if (Buffer.byteLength(body) > 512 * 1024) throw new Error('The normalized lab request exceeds 512 KiB.');
+  const artifact = options.modelArtifactPath ? await readModelArtifact(options.modelArtifactPath) : null;
+  const output = await prepareOutput(options.outputPath, outputRoot);
+  const save = (name, value) => open(resolve(output, name), 'wx', 0o600).then(async file => {
+    try { await file.writeFile(typeof value === 'string' || Buffer.isBuffer(value) ? value : jsonBytes(value)); }
+    finally { await file.close(); }
+  });
+  const beforeSources = await sourceHashes();
+  const worker = suppliedWorker ?? new ObservedWorker({ artifact, prefillBatch: options.prefillBatch ?? 16, memoryMap: options.memoryMap ?? true });
+  const declaredWorker = suppliedWorker ? null : await fileIdentity(WORKER_BINARY);
+  const started = new Date().toISOString();
+  const initial = { schema: 'badi.prediction-lab.cli-run.v1', started_at: started,
+    input: { path: await realpath(options.suitePath), sha256: hash(suiteBytes), bytes: suiteBytes.length },
+    normalized_suite_sha256: hash(jsonBytes(suite)), configs, order_seed: options.seed, plan,
+    provenance: { execution_kind: suppliedWorker ? 'injected_fixture' : 'local_model_worker', node: process.version,
+      ...(options.prefillBatch !== undefined ? { requested_prefill_batch: options.prefillBatch } : {}),
+      ...(options.memoryMap !== undefined ? { requested_memory_map: options.memoryMap } : {}),
+      declared_worker: declaredWorker, source_sha256: beforeSources, model_artifact: modelArtifactProvenance(artifact) },
+    evidence: 'Explicit development inputs; expected outputs are scoring-only append strings. This run does not qualify applications, human usefulness or Cotypist parity.' };
+  await save('suite-input.json', suiteBytes);
+  if (artifact) await save('model-artifact-input.json', artifact.source);
+  await save('run.json', initial);
+  const eventFile = await open(resolve(output, 'events.ndjson'), 'wx', 0o600);
+  const session = { schema: 'badi.prediction-lab.session.v1', suite, configs, seed: options.seed, records: [], complete: false };
+  let lab; let failure = null; let cleanupError = null; let ended = null; let receivedPlan = false;
+  try {
+    lab = await serverFactory({ worker });
+    const page = await fetch(lab.origin, { signal });
+    if (!page.ok) throw new Error('Cannot open the owned lab page.');
+    const token = (await page.text()).match(/name="badi-lab-token" content="([a-f0-9]{64})"/u)?.[1];
+    if (!token) throw new Error('The owned lab page did not supply a session capability.');
+    const response = await fetch(`${lab.origin}/api/run`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Badi-Lab-Token': token }, body, signal });
+    if (!response.ok) throw new Error(`The lab rejected the run (HTTP ${response.status}).`);
+    for await (const event of decodeEvents(response.body)) {
+      await eventFile.write(JSON.stringify(event) + '\n');
+      if (ended) throw new Error('The lab emitted another event after its terminal outcome.');
+      if (event.type === 'plan') {
+        if (receivedPlan || JSON.stringify(event.plan) !== JSON.stringify(plan) || JSON.stringify(event.suite) !== JSON.stringify(suite)
+          || JSON.stringify(event.configs) !== JSON.stringify(configs)) throw new Error('The lab plan differs from the frozen run inputs.');
+        receivedPlan = true; session.plan = event;
+      } else if (event.type === 'progress') {
+        if (!receivedPlan) throw new Error('The lab emitted progress before its plan.');
+      } else if (event.type === 'record') {
+        const item = plan[session.records.length];
+        const record = event.record;
+        if (!receivedPlan || !item || JSON.stringify(record.case) !== JSON.stringify(suite.cases.find(value => value.id === item.case_id))
+          || JSON.stringify(record.config) !== JSON.stringify(configs.find(value => value.id === item.config_id))) throw new Error('The lab result differs from its scheduled case or configuration.');
+        await assertModelArtifactUnchanged(artifact);
+        assertModelArtifactIdentity(record.result?.identity, artifact);
+        session.records.push(record);
+        onProgress({ completed: session.records.length, total: plan.length, case_id: item.case_id, config_id: item.config_id });
+      } else if (event.type === 'cleanup') {
+        if (!receivedPlan || session.cleanup) throw new Error('Cleanup must occur after the plan and before final cleanup.');
+        const receipt = validateCleanup(event.cleanup);
+        if (event.group !== undefined) (session.group_cleanups ??= []).push({ group: event.group, cleanup: receipt });
+        else session.cleanup = receipt;
+        if (!receipt.reaped) cleanupError = 'The owned runtime was not confirmed reaped.';
+      } else if (event.type === 'qualification_plan') {
+        session.qualification_plan = event;
+      } else if (event.type === 'qualification') {
+        session.qualification = event;
+      } else if (['complete', 'error', 'cancelled'].includes(event.type)) {
+        ended = event.type;
+        if (event.type === 'complete') {
+          if (!receivedPlan || session.records.length !== plan.length) throw new Error('The lab completed without all scheduled results.');
+          session.summaries = event.summaries;
+        } else failure = event.error ?? `The lab ended with ${event.type}.`;
+      } else throw new Error('Unknown lab event.');
+    }
+    if (!ended) throw new Error('The lab stream ended without a terminal outcome.');
+  } catch (error) { failure = signal?.aborted ? 'Run cancelled.' : error.message; }
+  finally {
+    try { if (lab) await lab.close(); else await worker.stop(); } catch (error) { cleanupError = error.message; }
+    await eventFile.close();
+  }
+  let afterSources = null;
+  try { afterSources = await sourceHashes(); } catch { failure ??= 'Could not capture final source provenance.'; }
+  let afterArtifact = null;
+  try { if (artifact) afterArtifact = await readModelArtifact(artifact.path); }
+  catch { failure ??= 'Could not capture final model artifact provenance.'; }
+  const artifactStable = !artifact || afterArtifact?.sha256 === artifact.sha256;
+  if (!artifactStable) failure ??= 'The frozen Lab model artifact descriptor changed.';
+  const executions = worker.executions ?? [];
+  const sourceStable = JSON.stringify(beforeSources) === JSON.stringify(afterSources);
+  const executedHashes = [...new Set(executions.map(value => value.executable.sha256))];
+  session.complete = ended === 'complete' && !failure && !cleanupError;
+  const modelIdentityMatches = executions.every(value => {
+    try { assertModelArtifactIdentity(value.runtime_identity, artifact); return true; } catch { return false; }
+  });
+  const report = { schema: 'badi.prediction-lab.cli-report.v1', started_at: started, finished_at: new Date().toISOString(),
+    input: initial.input, normalized_suite_sha256: initial.normalized_suite_sha256,
+    complete: session.complete, cancelled: Boolean(signal?.aborted || ended === 'cancelled'), error: failure,
+    cleanup: { completed: !cleanupError, error: cleanupError, server_receipt: session.cleanup ?? null, group_receipts: session.group_cleanups ?? [], worker_receipts: worker.cleanups ?? [] },
+    completed_requests: session.records.length, scheduled_requests: plan.length,
+    provenance: { ...initial.provenance, executed_workers: executions, source_sha256_after: afterSources, source_stable: sourceStable,
+      model_artifact_after: modelArtifactProvenance(afterArtifact), model_artifact_stable: artifactStable,
+      valid_executed_identity: !suppliedWorker && executions.length > 0 && executedHashes.length === 1
+        && executedHashes[0] === declaredWorker?.sha256 && sourceStable && artifactStable && modelIdentityMatches },
+    measurements: summarizeResults(session.records), limitation: initial.evidence };
+  await save('session.json', session);
+  await save('report.json', report);
+  return { output, session, report };
+}
+
+/**
+ * The revision lane: every planned case through one revision worker and its
+ * one runtime, with the run directory, provenance and cleanup records of
+ * `runSuite`. `worker` is injectable for tests.
+ */
+export async function runRevisionSuite(options, { worker: suppliedWorker, outputRoot = OUTPUT_ROOT, signal, onProgress = () => {} } = {}) {
+  signal?.throwIfAborted();
+  const suiteBytes = await readFile(options.suitePath);
+  if (suiteBytes.length > 512 * 1024) throw new Error('Suite input exceeds 512 KiB.');
+  let document;
+  try { document = JSON.parse(suiteBytes.toString('utf8')); }
+  catch { throw new Error('Suite input must contain valid JSON.'); }
+  const suite = validateRevisionSuite(document);
+  const plan = planRevision(suite.cases, options.modes, options.seed);
+  if (!plan.length) throw new Error('The suite has no case for the selected revision modes.');
+  if (plan.length > 300) throw new Error('Run at most 300 cases at a time.');
+  const output = await prepareOutput(options.outputPath, outputRoot);
+  const save = (name, value) => open(resolve(output, name), 'wx', 0o600).then(async file => {
+    try { await file.writeFile(typeof value === 'string' || Buffer.isBuffer(value) ? value : jsonBytes(value)); }
+    finally { await file.close(); }
+  });
+  const beforeSources = await sourceHashes();
+  const worker = suppliedWorker ?? new ObservedWorker({ revision: true });
+  const declaredWorker = suppliedWorker ? null : await fileIdentity(WORKER_BINARY);
+  const started = new Date().toISOString();
+  const initial = { schema: 'badi.prediction-lab.revision-run.v1', started_at: started,
+    input: { path: await realpath(options.suitePath), sha256: hash(suiteBytes), bytes: suiteBytes.length },
+    normalized_suite_sha256: hash(jsonBytes(suite)), modes: options.modes, order_seed: options.seed, plan,
+    provenance: { execution_kind: suppliedWorker ? 'injected_fixture' : 'local_model_worker', node: process.version,
+      declared_worker: declaredWorker, source_sha256: beforeSources },
+    evidence: 'Explicit development cases; expected corrections and facts are scoring-only. One revision runtime serves the run, as the broker keeps one, and its startup is excluded from latency. No display, acceptance or application edit is measured.' };
+  await save('suite-input.json', suiteBytes);
+  await save('run.json', initial);
+  const eventFile = await open(resolve(output, 'events.ndjson'), 'wx', 0o600);
+  const event = value => eventFile.write(JSON.stringify(value) + '\n');
+  const records = [];
+  let failure = null; let cleanupError = null; let receipt = null; let summary = null;
+  try {
+    await event({ type: 'plan', plan });
+    for (const item of plan) {
+      signal?.throwIfAborted();
+      const testCase = suite.cases.find(value => value.id === item.case_id);
+      await event({ type: 'progress', case_id: item.case_id, mode: item.mode, completed: records.length, total: plan.length });
+      const request = revisionRequest(testCase);
+      const requested = performance.now();
+      let result = await worker.predict(request, signal);
+      if (result.type === 'error') result = { ...result, type: 'revision_result', outcome: 'error', text: null, output: null,
+        latency_ms: performance.now() - requested, timing_includes_worker_startup: true };
+      try {
+        validateRevisionResult(result);
+        if (result.id !== request.id) throw new Error('mismatched id');
+      } catch {
+        result = { type: 'revision_result', id: request.id, outcome: 'error', error: 'invalid_model_output', text: null, output: null,
+          latency_ms: performance.now() - requested, timing_includes_worker_startup: true };
+      }
+      const record = { case: testCase, mode: item.mode, result, score: scoreRevision(testCase, result) };
+      records.push(record);
+      await event({ type: 'record', record });
+      onProgress({ completed: records.length, total: plan.length, case_id: item.case_id, mode: item.mode });
+    }
+    summary = summarizeRevision(records);
+  } catch (error) { failure = signal?.aborted ? 'Run cancelled.' : error.message; }
+  finally {
+    // No selection remains in the runtime after the run.
+    try {
+      receipt = await worker.stop();
+      if (receipt) {
+        validateCleanup(receipt);
+        await event({ type: 'cleanup', cleanup: receipt });
+        if (!receipt.reaped) cleanupError = 'The owned runtime was not confirmed reaped.';
+      }
+    } catch (error) { cleanupError = error.message; }
+    await event(failure ? { type: signal?.aborted ? 'cancelled' : 'error', error: failure } : { type: 'complete', summary });
+    await eventFile.close();
+  }
+  let afterSources = null;
+  try { afterSources = await sourceHashes(); } catch { failure ??= 'Could not capture final source provenance.'; }
+  const executions = worker.executions ?? [];
+  const sourceStable = JSON.stringify(beforeSources) === JSON.stringify(afterSources);
+  const executedHashes = [...new Set(executions.map(value => value.executable.sha256))];
+  const complete = !failure && !cleanupError && records.length === plan.length;
+  const session = { schema: 'badi.prediction-lab.revision-session.v1', suite, modes: options.modes, seed: options.seed, plan, records, complete };
+  const report = { schema: 'badi.prediction-lab.revision-report.v1', started_at: started, finished_at: new Date().toISOString(),
+    input: initial.input, normalized_suite_sha256: initial.normalized_suite_sha256,
+    complete, cancelled: Boolean(signal?.aborted), error: failure,
+    cleanup: { completed: !cleanupError, error: cleanupError, runtime_receipt: receipt, worker_receipts: worker.cleanups ?? [] },
+    completed_requests: records.length, scheduled_requests: plan.length,
+    provenance: { ...initial.provenance, executed_workers: executions, source_sha256_after: afterSources, source_stable: sourceStable,
+      valid_executed_identity: !suppliedWorker && executions.length > 0 && executedHashes.length === 1
+        && executedHashes[0] === declaredWorker?.sha256 && sourceStable },
+    measurements: summary, limitation: initial.evidence };
+  await save('session.json', session);
+  await save('report.json', report);
+  return { output, session, report };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const cancellation = new AbortController();
+  const cancel = () => cancellation.abort();
+  process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
+  try {
+    const options = parseOptions(process.argv.slice(2));
+    await buildWorker();
+    const run = options.revision ? runRevisionSuite : runSuite;
+    const result = await run(options, { signal: cancellation.signal,
+      onProgress: progress => process.stdout.write(`${progress.completed}/${progress.total} ${progress.case_id} ${progress.config_id ?? progress.mode}\n`) });
+    process.stdout.write(JSON.stringify({ output: result.output, complete: result.report.complete,
+      requests: result.report.completed_requests, valid_executed_identity: result.report.provenance.valid_executed_identity }) + '\n');
+    if (!result.report.complete || !result.report.provenance.valid_executed_identity) process.exitCode = 1;
+  } catch (error) { process.stderr.write(`Prediction Lab could not run: ${error.message}\n`); process.exitCode = 1; }
+  finally { process.off('SIGINT', cancel); process.off('SIGTERM', cancel); }
+}

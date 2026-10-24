@@ -1,0 +1,39 @@
+{
+  "schema": "badi.omarchy-plugin-compatibility.v1",
+  "artifact": "io.github.ahuray.badi@0.1.0",
+  "omarchy": {
+    "package": "4.5.0rc1-1",
+    "source_repository": "https://github.com/omacom/omarchy.git",
+    "source_tag": "v4.5.0-rc1",
+    "source_commit": "03ff1eff3812933f7088484533784d2f63eaf19a",
+    "contract_files": {
+      "shell/shell.qml": "sha256:ccc66288461971fc35e226c9d2a271887b37e8145edc931a06a51f82d5af30f2",
+      "shell/services/PluginRegistry.qml": "sha256:277a4a8db6769f1a71ae893a78da9d903de456fc759bb8eb57062099787b39a7",
+      "shell/Ui/qmldir": "sha256:182255446c5774d5a8f4772ec50ba317e6ceb0d36f3f3e81d6e68da08ee11be3",
+      "shell/Commons/qmldir": "sha256:3c29f0e3ca8984a8dd2cb9227f9458147242d06873cff5c189ed5616234ed13e",
+      "bin/omarchy-plugin-validate": "sha256:b6f6aba33a329a5ccd339050fbb2ce82272b791dd1f0d6a28c1837caa035b8c4",
+      "shell/services/PluginShellApi.qml": "sha256:640f250d49a20e69548e93a589e6f11840e1551e5a1af1d968fe11d6ade22558",
+      "shell/Ui/PluginBarApi.qml": "sha256:18b9da5035c3803161295a23386a23b93338cc7712d2933cbb1e24a2b8599e24",
+      "shell/Ui/Panel.qml": "sha256:aa268bb8597d1fe2acc775bab8e10e79f66dcfb71a3f051a6facd79c76ecd060",
+      "shell/Ui/KeyboardPanel.qml": "sha256:7a5dc2284b1990b2bf53a806221458c6a64ea538cb92b4787dca846c7cc33a54",
+      "shell/Ui/PanelKeyCatcher.qml": "sha256:f39fe259bd811ef3be00834a888dfe4ba003b4148738e495708c2070a914c27f",
+      "shell/Ui/PanelHero.qml": "sha256:ce9b264b071448d37a71dbda3a60627be18b679098ea7f5326ea59a65df2d3cf",
+      "shell/Ui/Toggle.qml": "sha256:d3f16d42d64249363e4b80c1d7c6f3513344a8fd98d645fbe41e74dc5bf12b5f",
+      "shell/Ui/ToggleSwitch.qml": "sha256:ee2419357a064767d4b6de3b3c341f92ebfce7c8cd9b4b294eb9a6de48f6e167",
+      "shell/Ui/ButtonGroup.qml": "sha256:ab228e5f8d1089b7f3076a00087830970e97d9342e3f8a9ec62476c8d7ae7585",
+      "shell/Ui/CursorSurface.qml": "sha256:f16939e750ae68c20afdeded78b074da4d8cdbea0a4e02c5cd99bf91c06e3458",
+      "shell/Ui/PanelActionButton.qml": "sha256:299a6b758450b04047db9d119f3d3b508b4a692fa34779d10cfde519c7cb5275",
+      "shell/Ui/TextField.qml": "sha256:08c8141e74b7791060461939626f08453a28fe97eed4f4339dabde9d6a6edb3b",
+      "shell/Ui/PanelToolTip.qml": "sha256:fa62fbdbe132bb90d9fca95b97b3ed7c5f0f7ca345fa9bac643ab15fce03f2ca",
+      "shell/Ui/PanelSeparator.qml": "sha256:54b970d6a6e5683583906517c808f271227f5b47a3a1ac3a58faa3f41d822316",
+      "shell/Ui/PanelSectionHeader.qml": "sha256:7747685a102cb8a5f8f239acb72ce43c7c3a0326eb884db71e8427ab9c62e597",
+      "shell/Ui/BarIconButton.qml": "sha256:687e79d601419d9ac66a071dded6869d5aea7d9df05b6a37d14ccf58c15a9c8c",
+      "shell/Commons/ShellIpc.qml": "sha256:53bcdaf6125f750029088a36c4565b7a163070f6a6cfb58067f9621e99b53809",
+      "shell/Commons/IpcRegistry.qml": "sha256:e3da03778f65eed0b47a5249abc9c22afe936dd0ce49077d3cd0b3d710b0eda2",
+      "shell/Ui/ConfirmDialog.qml": "sha256:6ee99c757e443af24f3d1db366665654436c488018091018580014c889ac25ac",
+      "shell/Ui/BorderSurface.qml": "sha256:e17d8150d0b0e60f431bd6df5e661f5d9fe1f5eec9c2e2420f6eff2179a45baf"
+    }
+  },
+  "quickshell": "0.3.2-1",
+  "qt6_declarative": "6.12.0-1"
+}

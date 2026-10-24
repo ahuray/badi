@@ -1,0 +1,83 @@
+[Unit]
+Description=Badi local writing model
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+# Never give up on a transient failure such as an exited runtime; the backoff
+# below bounds the retry rate. The broker waits out short available memory.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=%h/.local/lib/badi/badi-broker
+Restart=on-failure
+RestartSec=2
+RestartSteps=5
+RestartMaxDelaySec=60
+# 78: the model or runtime is missing, unsupported, or larger than this host,
+# or private settings are corrupt or unsafe. Retrying cannot help, so the
+# unit stays failed for badi doctor to report.
+RestartPreventExitStatus=78
+UMask=0077
+RuntimeDirectory=badi
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+# The model runtime listens on a Unix socket in this directory. Nothing in
+# this service, including llama-server, gets an IP address.
+PrivateNetwork=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+# The model directory is read at startup and never written.
+# A missing model directory must reach the broker's exit 78, not a namespace failure.
+ReadOnlyPaths=-%h/.local/share/badi/models
+# The broker writes only its settings and data. The rest of home stays
+# read-only, and of the runtime directory only badi/ exists here: no session
+# bus, user manager or other socket. A runtime compromised through prompt
+# text can then neither edit a shell profile or the Fcitx addon nor start an
+# unconfined unit. The installer creates both directories before a start.
+ProtectHome=read-only
+ReadWritePaths=-%E/badi -%h/.local/share/badi
+TemporaryFileSystem=%t:mode=0700
+BindPaths=%t/badi
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+MemoryDenyWriteExecute=yes
+# A core dump would keep field text, prompts and the style key on disk
+# (ADR 0008); the model runtime inherits the limit.
+LimitCORE=0
+# Balanced Qwen3-1.7B Q4 is about 2298 MiB in the fit. Quality Qwen3-4B Q4 is
+# about 3746 MiB (artifact plus headroom). Max is that larger fit so the
+# service can start either tier; High throttles a 1.7B runaway earlier.
+# Swap stays off.
+MemoryHigh=3G
+MemoryMax=3746M
+# The broker owns graceful runtime shutdown. Sending TERM to both processes
+# makes the runtime receive a second TERM from the broker during cleanup.
+# Keep the final forced-kill fallback scoped to the entire service cgroup.
+KillMode=mixed
+TimeoutStopSec=10
+# Keep the idle model resident. Swapping the CPU runtime's owned weights made
+# the first suggestion miss its budget. Weights are copied rather than mapped
+# so repacking can release the original allocation. MemoryLow protects only
+# when the parent slices reserve memory too.
+MemorySwapMax=0
+MemoryLow=1200M
+# A short inference burst outranks ordinary applications (weight 100) when the
+# CPU is oversubscribed; measured 3.5 s instead of 6.3 s per request there.
+CPUWeight=1000
+
+[Install]
+WantedBy=graphical-session.target

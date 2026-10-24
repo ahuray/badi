@@ -1,0 +1,312 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # A newer push supersedes a pull request's run; every run on main finishes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  rust:
+    name: Rust 1.99
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          components: clippy, rustfmt
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Lint default features
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Lint all features
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --all-features --locked
+      - name: Check third-party notices against Cargo.lock
+        run: python3 scripts/third-party-notices.py --check
+      - name: Install Node for editor protocol and Readline checks
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.20.0
+      - name: Exercise editor clients against the real broker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash-builtins libreadline-dev
+          python3 adapters/shell/build-preview.py
+          cargo build -p badi-broker --bins --locked
+          node --test adapters/shared/broker-client.test.mjs
+
+  rust-msrv:
+    name: Rust MSRV 1.85
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Rust MSRV
+        uses: dtolnay/rust-toolchain@1.85.0
+      - name: Check declared minimum version
+        # rust-toolchain.toml overrides the toolchain this action installs.
+        run: cargo +1.85.0 check --workspace --all-targets --all-features --locked
+
+  omarchy-plugin:
+    name: Omarchy plugin / pinned Arch host
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure the dated Arch package snapshot
+        run: |
+          # Pacman expands these repository placeholders.
+          # shellcheck disable=SC2016
+          printf '%s\n' \
+            'Server = https://archive.archlinux.org/repos/2026/10/18/$repo/os/$arch' \
+            > /etc/pacman.d/mirrorlist
+          pacman -Syyu --noconfirm
+          pacman -S --needed --noconfirm ca-certificates git
+      - name: Check out Badi
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check out the reviewed Omarchy host
+        uses: actions/checkout@v7
+        with:
+          repository: omacom/omarchy
+          ref: 03ff1eff3812933f7088484533784d2f63eaf19a
+          path: .ci/omarchy
+          persist-credentials: false
+      - name: Install the reviewed QML runtime and test tools
+        run: |
+          pacman -S --needed --noconfirm \
+            jq procps-ng 'qt6-declarative=6.12.0-1' \
+            'quickshell=0.3.2-1' shellcheck util-linux
+          pacman -Q quickshell qt6-declarative
+      - name: Validate pinned host, QML, manifest, and lifecycle contracts
+        env:
+          BADI_OMARCHY_ROOT: ${{ github.workspace }}/.ci/omarchy
+        run: bash ui/omarchy-plugin/tests/check-host.sh
+
+  aur-package:
+    name: AUR package / pinned Arch
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    container:
+      image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure the dated Arch package snapshot
+        run: |
+          # Pacman expands these repository placeholders.
+          # shellcheck disable=SC2016
+          printf '%s\n' \
+            'Server = https://archive.archlinux.org/repos/2026/10/19/$repo/os/$arch' \
+            > /etc/pacman.d/mirrorlist
+          pacman -Syyu --noconfirm
+          pacman -S --needed --noconfirm base-devel ca-certificates git namcap sudo
+      - name: Check out source with history for pkgver
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the package's dependencies
+        run: |
+          # makepkg refuses root; its dependencies come from the PKGBUILD itself.
+          source packaging/aur/PKGBUILD
+          pacman -S --needed --noconfirm "${makedepends[@]}" "${depends[@]}"
+          useradd --create-home builder
+          git config --system --add safe.directory '*'
+      - name: Check .SRCINFO matches the PKGBUILD
+        run: |
+          cp -r packaging/aur /home/builder/aur
+          chown -R builder: /home/builder/aur
+          sudo -u builder bash -c 'cd /home/builder/aur && makepkg --printsrcinfo' | diff -u packaging/aur/.SRCINFO -
+      - name: Build, test and package this commit
+        run: |
+          # The candidate follows main; here it builds the commit under test.
+          sed -i "s|^source=.*|source=('badi::git+file://$GITHUB_WORKSPACE#commit=$GITHUB_SHA')|" /home/builder/aur/PKGBUILD
+          sudo -u builder bash -c 'cd /home/builder/aur && makepkg --noconfirm'
+      - name: Lint the PKGBUILD and the package
+        run: |
+          cd /home/builder/aur
+          package=$(ls badi-git-*.pkg.tar.zst)
+          namcap PKGBUILD | tee namcap.txt
+          namcap "$package" | tee -a namcap.txt
+          # namcap marks errors with ' E: '; warnings are reviewed in the package README.
+          # A negated command never fails a step under bash -e (SC2251), so test it.
+          if grep -F ' E: ' namcap.txt; then
+            echo 'namcap reported errors' >&2
+            exit 1
+          fi
+          bsdtar -tf "$package" | grep -Fx 'usr/share/licenses/badi-git/THIRD-PARTY-NOTICES.txt'
+
+  debian-package:
+    name: Package / ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian 13
+            image: debian:trixie@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308
+          - name: Ubuntu 24.04
+            image: ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
+    env:
+      IMAGE: ${{ matrix.image }}
+    steps:
+      - name: Check out source with history for the package version
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Docker on the runner, not a job container: the last step needs a
+      # second, fresh container of the same release.
+      - name: Start the pinned build container
+        run: docker run --detach --name build --volume "$GITHUB_WORKSPACE:/src" --workdir /src "$IMAGE" sleep infinity
+      - name: Install the release's build dependencies
+        run: docker exec build packaging/debian/ci.sh deps
+      - name: Build and test the Fcitx addon against the release's Fcitx
+        run: docker exec build packaging/debian/ci.sh addon
+      - name: Test the broker with the release's Rust 1.85
+        run: docker exec build packaging/debian/ci.sh broker
+      - name: Run the desktop, observer and session unit tests
+        run: docker exec build packaging/debian/ci.sh python
+      - name: Build and lint the package
+        run: docker exec build packaging/debian/ci.sh package
+      - name: Install it into a fresh container and smoke-test it
+        run: |
+          docker run --rm --volume "$GITHUB_WORKSPACE:/src:ro" --workdir /src "$IMAGE" \
+            packaging/debian/ci.sh smoke target/debian/badi_*_amd64.deb
+
+  # The 2026-08-31 snapshot has Fcitx 5.1.21, below the 5.1.23 runtime floor:
+  # this job proves the addon still builds and passes there, and the AUR job
+  # builds and tests it against the current snapshot.
+  fcitx5:
+    name: Fcitx5 addon / pinned Arch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure the dated Arch package snapshot
+        run: |
+          # Pacman expands these repository placeholders.
+          # shellcheck disable=SC2016
+          printf '%s\n' \
+            'Server = https://archive.archlinux.org/repos/2026/08/31/$repo/os/$arch' \
+            > /etc/pacman.d/mirrorlist
+          pacman -Syyu --noconfirm
+          pacman -S --needed --noconfirm \
+            at-spi2-core ca-certificates cmake dbus fcitx5 gcc git ninja nlohmann-json python python-gobject
+          pacman -Q at-spi2-core cmake dbus fcitx5 gcc ninja nlohmann-json python python-gobject
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build and test the cooperative addon
+        run: |
+          cmake -S adapters/fcitx5 -B adapters/fcitx5/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build adapters/fcitx5/build
+          ctest --test-dir adapters/fcitx5/build --output-on-failure
+      - name: Install Rust for the native transport integration
+        uses: dtolnay/rust-toolchain@1.99.0
+      - name: Exercise the C++ transport against the real Rust broker
+        run: |
+          cargo build -p badi-broker --bins --locked
+          python adapters/fcitx5/tests/broker-smoke.py
+      - name: Exercise the session helper on a private bus against the real broker
+        run: PYTHONDONTWRITEBYTECODE=1 python adapters/session/tests/integration.py
+      - name: Exercise isolated accessibility buses and actual addon event flow
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python adapters/accessibility/tests/run-isolated.py
+          PYTHONDONTWRITEBYTECODE=1 python adapters/fcitx5/tests/observed-desktop.py
+
+  neovim:
+    name: Neovim plugin / pinned Arch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure the dated Arch package snapshot
+        run: |
+          # Pacman expands these repository placeholders.
+          # shellcheck disable=SC2016
+          printf '%s\n' \
+            'Server = https://archive.archlinux.org/repos/2026/08/31/$repo/os/$arch' \
+            > /etc/pacman.d/mirrorlist
+          pacman -Syyu --noconfirm
+          pacman -S --needed --noconfirm ca-certificates gcc git neovim nodejs
+          pacman -Q neovim nodejs
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Rust for the real broker lane
+        uses: dtolnay/rust-toolchain@1.99.0
+      - name: Exercise the plugin, its bridge and the real broker
+        # Ubuntu's Neovim predates inline virtual text, so the Repository
+        # checks job reports these tests as skipped; here they must run.
+        env:
+          BADI_REQUIRE_NEOVIM: "1"
+        run: |
+          cargo build -p badi-broker --bins --locked
+          node --test adapters/neovim/plugin.test.mjs adapters/neovim/broker.test.mjs
+
+  checks:
+    name: Repository checks / Node 24
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.20.0
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Install Bash display builtin build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash-builtins libreadline-dev
+      - name: Run docs, editor, desktop, accessibility, Omarchy and writing checks
+        run: npm run check
+      - name: Check whitespace
+        # The whole tree against the empty tree: a clean checkout has no
+        # working-tree diff. Vendored license texts stay verbatim.
+        run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD -- . ':!packaging/licenses'
+      - name: Check shell scripts
+        run: git ls-files -z '*.sh' '*.bash' | xargs -0 shellcheck -S warning

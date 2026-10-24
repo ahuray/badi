@@ -1,0 +1,23 @@
+{
+  "schema": "badi.orthographic-joiner-fixtures.v1",
+  "fixtures": [
+    { "name": "ordinary-latin", "text": " writing", "valid": true },
+    { "name": "persian-verb", "text": " می‌شود", "valid": true },
+    { "name": "persian-plural", "text": " نوشته‌های جدید", "valid": true },
+    { "name": "two-valid-joiners", "text": " می‌توانند بازمی‌گردند", "valid": true },
+    { "name": "leading", "text": "‌نوشته", "valid": false },
+    { "name": "trailing", "text": "نوشته‌", "valid": false },
+    { "name": "repeated", "text": "می‌‌شود", "valid": false },
+    { "name": "before-space", "text": "می‌ شود", "valid": false },
+    { "name": "after-space", "text": "می ‌شود", "valid": false },
+    { "name": "latin-left", "text": "a‌شود", "valid": false },
+    { "name": "latin-right", "text": "می‌a", "valid": false },
+    { "name": "digit-left", "text": "۱‌شود", "valid": false },
+    { "name": "digit-right", "text": "می‌۱", "valid": false },
+    { "name": "tatweel-left", "text": "ـ‌شود", "valid": false },
+    { "name": "mark-left", "text": "یَ‌شود", "valid": false },
+    { "name": "zwj-is-not-zwnj", "text": "می‍شود", "valid": false },
+    { "name": "zero-width-space", "text": "می​شود", "valid": false },
+    { "name": "bidi-override", "text": "می‮شود", "valid": false }
+  ]
+}

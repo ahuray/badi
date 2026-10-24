@@ -1,0 +1,24 @@
+{
+  "v": 2,
+  "id": "neovim-hello",
+  "type": "hello",
+  "mono_ms": 0,
+  "payload": {
+    "min_v": 2,
+    "max_v": 2,
+    "adapter": {
+      "kind": "neovim",
+      "name": "badi-neovim",
+      "version": "0.1.0"
+    },
+    "capabilities": [
+      "context",
+      "suggestion",
+      "commit.applied",
+      "control",
+      "policy",
+      "long_reading_window",
+      "editor_focus"
+    ]
+  }
+}

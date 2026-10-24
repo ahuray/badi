@@ -1,0 +1,80 @@
+[
+ {
+  "label": "gemma3-1b-pt",
+  "path": "~/.local/share/badi/models/gemma-3-1b-pt-q4_k_m.gguf",
+  "quant": "Q4_K_M",
+  "arch": "dense, SWA",
+  "role": "production baseline (installed)"
+ },
+ {
+  "label": "qwen3-1.7b-installed",
+  "path": "~/.local/share/badi/models/Qwen3-1.7B-Q4_K_M.gguf",
+  "quant": "Q4_K_M",
+  "arch": "dense",
+  "role": "previous production (installed)"
+ },
+ {
+  "label": "gemma4-e2b-base",
+  "repo": "mradermacher/gemma-4-E2B-i1-GGUF",
+  "file": "gemma-4-E2B.i1-Q4_K_M.gguf",
+  "quant": "i1-Q4_K_M",
+  "arch": "dense+PLE, SWA",
+  "role": "top 3"
+ },
+ {
+  "label": "qwen3.5-2b-base",
+  "repo": "mradermacher/Qwen3.5-2B-Base-GGUF",
+  "file": "Qwen3.5-2B-Base.Q4_K_M.gguf",
+  "quant": "Q4_K_M",
+  "arch": "hybrid",
+  "role": "earlier Lab screen file"
+ },
+ {
+  "label": "qwen3.5-4b-base",
+  "repo": "mradermacher/Qwen3.5-4B-Base-i1-GGUF",
+  "file": "Qwen3.5-4B-Base.i1-Q4_K_M.gguf",
+  "quant": "i1-Q4_K_M",
+  "arch": "hybrid",
+  "role": "top 3"
+ },
+ {
+  "label": "granite4-micro-base",
+  "repo": "ibm-granite/granite-4.0-micro-base-GGUF",
+  "file": "granite-4.0-micro-base-Q4_K_M.gguf",
+  "quant": "Q4_K_M",
+  "arch": "dense",
+  "role": "top 3"
+ },
+ {
+  "label": "granite4-h-micro-base",
+  "repo": "ibm-granite/granite-4.0-h-micro-base-GGUF",
+  "file": "granite-4.0-h-micro-base-Q4_K_M.gguf",
+  "quant": "Q4_K_M",
+  "arch": "hybrid",
+  "role": "screened, not kept"
+ },
+ {
+  "label": "smollm3-3b-base",
+  "repo": "mradermacher/SmolLM3-3B-Base-i1-GGUF",
+  "file": "SmolLM3-3B-Base.i1-Q4_K_M.gguf",
+  "quant": "i1-Q4_K_M",
+  "arch": "dense",
+  "role": "screened, not kept"
+ },
+ {
+  "label": "lfm2.5-2.6b-base",
+  "repo": "mradermacher/LFM2.5-2.6B-Base-i1-GGUF",
+  "file": "LFM2.5-2.6B-Base.i1-Q4_0.gguf",
+  "quant": "i1-Q4_0",
+  "arch": "hybrid",
+  "role": "screened, not kept"
+ },
+ {
+  "label": "minicpm5-2b-base",
+  "repo": "mradermacher/MiniCPM5-2B-Base-i1-GGUF",
+  "file": "MiniCPM5-2B-Base.i1-Q4_K_M.gguf",
+  "quant": "i1-Q4_K_M",
+  "arch": "dense",
+  "role": "screened, not kept"
+ }
+]

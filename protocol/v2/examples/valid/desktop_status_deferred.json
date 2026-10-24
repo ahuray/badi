@@ -1,0 +1,13 @@
+{
+  "v": 2,
+  "id": "session.state.4",
+  "type": "desktop.status",
+  "mono_ms": 41,
+  "payload": {
+    "observed": true,
+    "session": "active",
+    "low_power": true,
+    "automatic": "deferred",
+    "screen_share": "none"
+  }
+}
