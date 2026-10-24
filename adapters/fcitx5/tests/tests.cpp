@@ -1514,6 +1514,17 @@ void appendOnlyAppsCorrectAfterChecks() {
     check(parts.lead == "adress \u2192 " && parts.strong == "address", "the panel names the typo before its fix");
     check(previewText(correction) == "\u2192 address", "the grey preview draws the fix after an arrow");
     check(previewText(suggestionFor(*update)) == suggestionFor(*update).text, "a continuation previews itself");
+    check(previewStrong(correction) == 0, "a correction is drawn whole");
+    auto continuation = suggestionFor(*update);
+    continuation.acceptWord = " for";
+    check(previewStrong(continuation) == 4, "the preview brightens the word Tab takes, with its space");
+    continuation.text = " f\u00fcr Sie";
+    continuation.acceptWord = " f\u00fcr";
+    check(previewStrong(continuation) == 4, "counted in characters, not bytes");
+    continuation.acceptWord = continuation.text;
+    check(previewStrong(continuation) == 0, "nothing to brighten when Tab takes it all");
+    continuation.acceptWord = " other";
+    check(previewStrong(continuation) == 0, "a word the text does not start with is ignored");
 
     SessionState writer;
     check(writer.focusIn(kSession, "observed-target", "libreoffice", kSalt, NativeEditTarget::DesktopApplication,
@@ -1900,6 +1911,9 @@ void observerRequestsNameTheBoundField() {
     check(previewRequest(field, " for", 900, CaretRect{.x = 1496, .y = 1636, .width = 2, .height = 36, .scale = 2})
               ["caret_rect"] == nlohmann::json{{"x", 1496}, {"y", 1636}, {"width", 2}, {"height", 36}, {"scale", 2.0}},
           "a preview may carry the app's window-relative caret rectangle");
+    check(previewRequest(field, " for your time", 900, std::nullopt, 4)["strong"] == 4 &&
+              !previewRequest(field, " for your time", 900).contains("strong"),
+          "a preview names how many characters Tab takes only when more follows");
 
     const auto context = captureContextWindow("thank you", 9, 9, true, "en");
     auto observed = field;

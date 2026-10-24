@@ -40,6 +40,8 @@ test('a pause shows inline grey text; Ctrl+Right inserts it all as one undo step
   const editor = await fakeEditor(t);
   await markdown(editor, 'iDear team,<CR>thank you');
   let state = await editor.until(current => current.preview === ' for your time', 'preview');
+  assert.deepEqual(state.chunks, [[' for', 'BadiSuggestionWord'], [' your time', 'BadiSuggestion']],
+    'What Tab takes is drawn a step brighter');
   assert.deepEqual(state.lines, ['Dear team,', 'thank you'], 'The preview is not buffer text');
   assert.equal(state.screen, 'thank you for your time', 'Inline virtual text follows the caret');
   assert.equal(state.mode, 'i');

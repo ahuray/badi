@@ -489,6 +489,10 @@ CandidateParts candidateParts(const Suggestion &suggestion);
 // correction as `→ the`, since the typo it replaces is already in view.
 // The Fcitx panel, its fallback, names the typo as well.
 std::string previewText(const Suggestion &suggestion);
+// How many characters of the preview text Tab takes, when more follows: the
+// grey preview draws them a step brighter. Zero for a correction or a
+// suggestion Tab takes whole.
+std::size_t previewStrong(const Suggestion &suggestion);
 // The field text includes the characters typed through a suggestion whose
 // context was `base`. A shorter window may keep only the last 128 bytes of
 // `base`, matching the broker's type-through slide rule.

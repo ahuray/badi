@@ -80,6 +80,8 @@ export class BrokerClient extends EventEmitter {
   get connected() { return this.#hello && this.#epoch !== null && !this.#closed; }
   get automaticAllowed() { return this.allowed && this.#policy.activation === 'always'; }
   get replacementBefore() { return this.#candidate?.replaceBefore; }
+  // What Tab takes of the shown candidate, which previews draw brighter.
+  get acceptWord() { return this.#candidate?.acceptWord; }
 
   async checkPolicy() {
     if (!this.connected) return false;

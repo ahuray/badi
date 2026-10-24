@@ -78,6 +78,7 @@ test('a streamed continuation grows the shown suggestion and acceptance binds to
     const updates = [];
     client.on('update', text => updates.push(text));
     assert.equal(await client.suggest('Thank you for', { language: 'en' }), ' the opportunity');
+    assert.equal(client.acceptWord, ' the', 'Previews read what Tab takes of the shown candidate');
     socket.write(Buffer.concat([show(3, ' the opportunity to help'), show(4, ' a different start')]));
     await new Promise(resolve => setTimeout(resolve, 50));
     assert.deepEqual(updates, [' the opportunity to help'], 'only a continuation of the shown text');

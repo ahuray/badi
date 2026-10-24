@@ -284,7 +284,7 @@ Requests carry `schema: "badi.accessibility.v1"`, an ASCII `id` and an `op`:
 | --- | --- | --- |
 | `inspect` | `app_id`, optional `selection: true` | `binding` `{epoch,bus,path,process_id,app_id,uri}`, `target` (browser targets keep the exact app id and origin; `target_id` hashes bus, path and epoch), `purpose`, `caret`, `selection_count`, `geometry: null`, optional `quiet` |
 | `snapshot` | `binding`, `policy_target`, optional `window: true` or `selection: true` (never both) | `before`, `after`, `total_chars`, optional `scope: "block"`, optional `quiet`, with `window` an optional `window_text`, with `selection` the `selected` text ([selection](#selection-for-a-revision)) |
-| `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–66 characters: a suggestion of at most 64, or `→ ` and a correction), `ttl_ms` (1–15000), optional `caret_rect` `{x,y,width,height,scale}` | `total_chars`, `rendered`, optional `quiet` |
+| `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–66 characters: a suggestion of at most 64, or `→ ` and a correction), `ttl_ms` (1–15000), optional `caret_rect` `{x,y,width,height,scale}`, optional `strong` (how many leading characters Tab takes, less than the whole text; drawn opaque and the rest at 60%) | `total_chars`, `rendered`, optional `quiet` |
 
 `preview` compares the current caret and length with the expected ones before
 drawing. `hide` returns `hidden:true`; `status` returns readiness without

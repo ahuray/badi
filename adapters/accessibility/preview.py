@@ -19,6 +19,9 @@ def _number(value, minimum=-100000, maximum=100000):
 
 # Space between a chip's edge and its text: (horizontal, vertical).
 CHIP_PADDING = (6, 2)
+# The word Tab takes is drawn opaque and the rest lighter (Pango alpha).
+STRONG_ALPHA = 65535
+REST_ALPHA = 39321
 # The chip's text starts at the caret: its padding plus one pixel.
 CHIP_INSET = CHIP_PADDING[0] + 1
 # Space between the caret's line and a chip above or below it.
@@ -436,10 +439,11 @@ class Preview:
         compositor's own box is the `badi debug watch` line."""
         self.GLib.idle_add(lambda: trace.emit("preview mapped", {"mapped": self.window.get_mapped()}) and False)
 
-    def render(self, focus, text, ttl_ms):
-        """Draws `text` at the caret; false when the field's geometry declines it."""
+    def render(self, focus, text, ttl_ms, strong=None):
+        """Draws `text` at the caret, its first `strong` characters (what Tab
+        takes) a step brighter; false when the field's geometry declines it."""
         self.hide("replaced")
-        details = self._render(focus, text, ttl_ms)
+        details = self._render(focus, text, ttl_ms, strong)
         if "reason" in details:
             trace.emit("preview declined", details)
             return False
@@ -447,7 +451,7 @@ class Preview:
         trace.emit("preview drawn", details, {"text": text})
         return True
 
-    def _render(self, focus, text, ttl_ms):
+    def _render(self, focus, text, ttl_ms, strong=None):
         """The drawn placement and box, or the `reason` it was declined."""
         # The observer checked the request already; the overlay keeps its own
         # bound on what it draws and for how long, with the same rule.
@@ -465,10 +469,14 @@ class Preview:
         font = focus.get("font") if isinstance(focus, dict) else None
         self.label.set_attributes(self._font_attributes(caret, font))
         self._refresh_layer_rule()
-        position, placement, width, height = self._place(caret, text, font)
+        position, placement, width, height, drawn = self._place(caret, text, font)
         if position is None:
             self.label.set_text("")
             return {"reason": "no_room"}
+        if strong:
+            # A chip drops the leading space, so what Tab takes is shorter.
+            self.label.set_attributes(self._strong_attributes(
+                self._font_attributes(caret, font), drawn, strong - (len(text) - len(drawn))))
         self.Layer.set_margin(self.window, self.Layer.Edge.LEFT, position[0])
         self.Layer.set_margin(self.window, self.Layer.Edge.TOP, position[1])
         self.window.set_visible(True)
@@ -502,8 +510,21 @@ class Preview:
                 attributes.insert(self.Pango.attr_weight_new(weight))
         return attributes
 
+    def _strong_attributes(self, attributes, drawn, strong):
+        """`attributes` with the first `strong` characters of `drawn` opaque
+        and the rest lighter, so the word Tab takes stands out."""
+        if not 0 < strong < len(drawn):
+            return attributes
+        split = len(drawn[:strong].encode())
+        for start, end, alpha in ((0, split, STRONG_ALPHA), (split, len(drawn.encode()), REST_ALPHA)):
+            attribute = self.Pango.attr_foreground_alpha_new(alpha)
+            attribute.start_index, attribute.end_index = start, end
+            attributes.insert(attribute)
+        return attributes
+
     def _place(self, caret, text, font):
-        """(position, placement, width, height); position is None without room."""
+        """(position, placement, width, height, drawn text); position is None
+        without room."""
         position = None
         if not caret.text_follows or caret.following_x is not None:
             width, height, baseline = self._layout(text, chip=False)
@@ -523,4 +544,4 @@ class Preview:
         if position is None:
             width, height, _baseline = self._layout(text.lstrip(" "), chip=True)
             position, placement = place_edge_panel(caret, width, height), "edge_panel"
-        return position, placement, width, height
+        return position, placement, width, height, text if placement in ("inline", "caret_line") else text.lstrip(" ")

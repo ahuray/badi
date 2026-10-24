@@ -6,6 +6,9 @@
   white-space: pre;
   pointer-events: none;
 }
+.badi-inline-word {
+  color: var(--text-normal);
+}
 @media (prefers-contrast: more) {
   .badi-inline { color: var(--text-normal); border-bottom-style: solid; }
 }

@@ -33,7 +33,7 @@ struct CaretRect {
 // Asks the observer to draw `text` at the caret it last verified for `focus`.
 // `caret` is the observer's fallback where the field reports no glyph extents.
 nlohmann::json previewRequest(const nlohmann::json &focus, std::string_view text, std::uint64_t ttlMs,
-                              const std::optional<CaretRect> &caret = std::nullopt);
+                              const std::optional<CaretRect> &caret = std::nullopt, std::size_t strong = 0);
 
 bool observerAnswered(const nlohmann::json &reply);
 

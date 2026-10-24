@@ -355,6 +355,14 @@ std::string previewText(const Suggestion &suggestion) {
     return "\u2192 " + candidateParts(suggestion).strong;
 }
 
+std::size_t previewStrong(const Suggestion &suggestion) {
+    if (suggestion.replaceBefore || suggestion.acceptWord.empty() ||
+        suggestion.acceptWord.size() >= suggestion.text.size() ||
+        !std::string_view(suggestion.text).starts_with(suggestion.acceptWord)) return 0;
+    const auto scalars = decodeUtf8(suggestion.acceptWord);
+    return scalars ? scalars->size() : 0;
+}
+
 bool typeThroughContextReady(std::string_view base, std::string_view typed, std::string_view before) {
     constexpr std::size_t kSlideBytes = 128;
     if (typed.empty() || typed.size() > before.size()) return false;

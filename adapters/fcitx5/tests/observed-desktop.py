@@ -201,7 +201,7 @@ def session(root, report):
     # candidate signal remains observable without a window or synthetic keys.
     render_calls = []
     render_result = {'value': False}
-    daemon.observer.render = lambda focus, _text, _ttl: render_calls.append(focus) or render_result['value']
+    daemon.observer.render = lambda focus, _text, _ttl, **_strong: render_calls.append(focus) or render_result['value']
     original_request = daemon.observer.request
     observer_calls = {'snapshot': 0, 'preview': 0, 'hide': 0}
     silent_change = {'op': None, 'call': 0, 'mode': 'repeat', 'triggered': False}

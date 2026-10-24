@@ -20,6 +20,7 @@ async function harness(context) {
     connected = true;
     allowed = true;
     automaticAllowed = true;
+    acceptWord = ' for';
     requests = [];
     modes = [];
     reports = [];
@@ -102,6 +103,7 @@ test('Obsidian automatically requests, accepts one word or all, and isolates eac
   await tick(250);
   assert.deepEqual(client.requests, [{ before: 'thank you', language: 'en', explicit: false, after: '' }]);
   assert.equal(controller.text, ' for your time');
+  assert.equal(controller.decorations[0].widget.word, ' for', 'The preview brightens what Tab takes');
   assert.equal(controller.key({ isTrusted: true, key: 'Tab' }), true);
   await settle();
   assert.equal(view.state.doc.toString(), 'thank you for');
@@ -126,6 +128,7 @@ test('Obsidian replaces exactly the misspelled suffix including a typed space in
   await controller.request();
   assert.equal(controller.text, 'address ');
   assert.equal(controller.decorations[0].widget.text, ' adress → address');
+  assert.equal(controller.decorations[0].widget.word, '', 'A correction is drawn whole');
   await controller.accept('word');
   assert.equal(view.state.doc.toString(), 'Please check the address ');
   assert.equal(view.transactions.length, 1);

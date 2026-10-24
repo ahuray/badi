@@ -10,7 +10,7 @@ machine. Badi is pre-release software.
 
 | Key | Action |
 | --- | --- |
-| **Tab** | Accept only the next word; the rest returns. Without a suggestion, Tab stays Tab. |
+| **Tab** | Accept only the next word, which the grey text draws a step brighter; the rest returns. Without a suggestion, Tab stays Tab. |
 | **Ctrl+→** | Accept all of it. |
 | Keep typing | Typing the suggestion's next letters keeps the rest. |
 | **Escape** | Dismiss. |

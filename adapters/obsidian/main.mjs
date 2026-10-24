@@ -10,12 +10,20 @@ import { writingLanguage } from '../shared/writing-language.mjs';
 import { validCorrection } from '../shared/text-safety.mjs';
 
 class SuggestionWidget extends WidgetType {
-  constructor(text) { super(); this.text = text; }
-  eq(other) { return other.text === this.text; }
+  // `word` is what Tab takes, drawn a step brighter when more follows it.
+  constructor(text, word = '') { super(); this.text = text; this.word = word; }
+  eq(other) { return other.text === this.text && other.word === this.word; }
   toDOM() {
     const element = document.createElement('span');
     element.className = 'badi-inline';
-    element.textContent = this.text;
+    if (this.word && this.word.length < this.text.length && this.text.startsWith(this.word)) {
+      const word = document.createElement('span');
+      word.className = 'badi-inline-word';
+      word.textContent = this.word;
+      element.append(word, this.text.slice(this.word.length));
+    } else {
+      element.textContent = this.text;
+    }
     element.setAttribute('role', 'status');
     element.setAttribute('aria-label', `Badi suggestion: ${this.text}. Tab accepts a word; Control Right accepts all; Escape dismisses.`);
     element.title = 'Badi · Tab next word · Ctrl/⌘ Right all · Escape dismiss';
@@ -148,7 +156,8 @@ class WritingView {
       this.snapshot = snapshot;
       this.text = text;
       this.replaceBefore = replaceBefore;
-      this.showPreview(replaceBefore === undefined ? text : ` ${replaceBefore.trim()} → ${text.trim()}`);
+      this.showPreview(replaceBefore === undefined ? text : ` ${replaceBefore.trim()} → ${text.trim()}`,
+        replaceBefore === undefined ? this.client.acceptWord : '');
     } catch {
       if (generation === this.generation && this.view.hasFocus) this.owner.status.setText('Badi · no suggestion · Ctrl+Shift+Space retries');
     } finally {
@@ -156,9 +165,9 @@ class WritingView {
     }
   }
 
-  showPreview(preview) {
+  showPreview(preview, word = '') {
     const end = this.snapshot.selection.main.head;
-    this.decorations = Decoration.set([Decoration.widget({ widget: new SuggestionWidget(preview), side: 1 }).range(end)]);
+    this.decorations = Decoration.set([Decoration.widget({ widget: new SuggestionWidget(preview, word), side: 1 }).range(end)]);
     this.render();
     recordActivity('obsidian', 'ghost', 'shown');
   }
@@ -168,7 +177,7 @@ class WritingView {
     if (!this.text || this.replaceBefore !== undefined || this.pending || !this.matches(this.snapshot) ||
         !text.startsWith(this.text)) return;
     this.text = text;
-    this.showPreview(text);
+    this.showPreview(text, this.client.acceptWord);
   }
 
   async accept(acceptance = 'word') {

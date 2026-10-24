@@ -150,15 +150,23 @@ local function clear_preview()
   end
 end
 
+--- The preview's chunks: what Tab takes a step brighter than the rest.
+local function chunks(text, word)
+  if type(word) == 'string' and #word > 0 and #word < #text and text:sub(1, #word) == word then
+    return { { word, 'BadiSuggestionWord' }, { text:sub(#word + 1), 'BadiSuggestion' } }
+  end
+  return { { text, 'BadiSuggestion' } }
+end
+
 --- The broker streamed a longer version of the shown continuation: redraw
 --- the same extmark with it.
-local function extend(text)
+local function extend(text, word)
   local visible = state.visible
   if not visible or state.accepting or type(text) ~= 'string' or not matches(visible.snapshot)
       or not context.insertable(text) or text:sub(1, #visible.text) ~= visible.text then return end
   local s = visible.snapshot
   local ok = pcall(api.nvim_buf_set_extmark, s.buf, namespace, s.row, s.col, {
-    id = visible.mark, virt_text = { { text, 'BadiSuggestion' } }, virt_text_pos = 'inline', hl_mode = 'combine',
+    id = visible.mark, virt_text = chunks(text, word), virt_text_pos = 'inline', hl_mode = 'combine',
   })
   if not ok then return end
   visible.text = text
@@ -188,7 +196,7 @@ local function ensure_bridge()
         -- preview is gone, so the preview goes too.
         if state.visible and not state.accepting then invalidate(nil) end
       elseif message.event == 'update' then
-        extend(message.text)
+        extend(message.text, message.word)
       elseif message.event == 'state' then
         set_status(message.state)
         set_policy(message)
@@ -238,9 +246,9 @@ local function on_key(kind, lhs)
   api.nvim_feedkeys(api.nvim_replace_termcodes(lhs, true, false, true), 'mt', false)
 end
 
-local function show(s, text)
+local function show(s, text, word)
   local ok, mark = pcall(api.nvim_buf_set_extmark, s.buf, namespace, s.row, s.col, {
-    virt_text = { { text, 'BadiSuggestion' } },
+    virt_text = chunks(text, word),
     virt_text_pos = 'inline',
     hl_mode = 'combine',
   })
@@ -322,7 +330,7 @@ function M.request(explicit)
       if reply.text ~= nil then state.bridge:notify({ op = 'cancel' }) end
       return
     end
-    if not matches(s) or not show(s, reply.text) then
+    if not matches(s) or not show(s, reply.text, reply.word) then
       set_status('stale')
       state.bridge:notify({ op = 'cancel' })
     end
@@ -428,6 +436,9 @@ function M.setup(options)
     state.bridge = nil
   end
   api.nvim_set_hl(0, 'BadiSuggestion', { link = 'Comment', default = true })
+  -- The word Tab takes: the comment colour, bold, unless the user set it.
+  local ok, comment = pcall(api.nvim_get_hl, 0, { name = 'Comment', link = false })
+  api.nvim_set_hl(0, 'BadiSuggestionWord', { fg = ok and comment.fg or nil, bold = true, default = true })
   local group = api.nvim_create_augroup('Badi', { clear = true })
   local autocmd = function(events, callback) api.nvim_create_autocmd(events, { group = group, callback = callback }) end
   autocmd('InsertEnter', function()
@@ -495,6 +506,15 @@ end
 --- For tests only: the preview text currently shown, if any.
 function M._preview()
   return state.visible and state.visible.text or nil
+end
+
+--- The shown preview's virtual text chunks, for tests.
+function M._preview_chunks()
+  local visible = state.visible
+  if not visible then return nil end
+  local ok, mark = pcall(api.nvim_buf_get_extmark_by_id, visible.snapshot.buf, namespace, visible.mark,
+    { details = true })
+  return ok and mark[3] and mark[3].virt_text or nil
 end
 
 return M

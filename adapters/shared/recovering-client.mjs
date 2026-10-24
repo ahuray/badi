@@ -21,6 +21,7 @@ export class RecoveringBrokerClient extends EventEmitter {
   get allowed() { return !this.#closed && this.#client?.allowed === true; }
   get automaticAllowed() { return !this.#closed && this.#client?.automaticAllowed === true; }
   get replacementBefore() { return this.#client?.replacementBefore; }
+  get acceptWord() { return this.#client?.acceptWord; }
 
   connect(socketPath = this.#socketPath) {
     if (this.#closed) return Promise.reject(new Error('Adapter closed'));
