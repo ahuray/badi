@@ -192,17 +192,28 @@ pub trait CompletionProvider: Send + Sync + 'static {
     }
 
     /// For an explicit request for alternatives: the best continuation
-    /// whose first word is none of `excluded` (lowercased). A provider
-    /// without one abstains.
+    /// that `ask` allows. A provider without one abstains.
     async fn alternative(
         &self,
         _request: ProviderRequest,
         _cancellation: CancellationToken,
         _trigger: RequestTrigger,
-        _excluded: Vec<String>,
+        _ask: AlternativeAsk,
     ) -> Result<ProviderReply, ProviderError> {
         Ok(ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained).into())
     }
+}
+
+/// What an alternative must differ from.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AlternativeAsk {
+    /// First words already shown, lowercased; the alternative starts with
+    /// none of them.
+    pub excluded: Vec<String>,
+    /// The shown suggestion started a new word after the caret (`the`
+    /// showed ` latest`), so the alternative starts one too instead of
+    /// finishing the word at the caret another way.
+    pub new_word: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -326,7 +337,7 @@ impl CompletionProvider for DeterministicPhraseProvider {
         request: ProviderRequest,
         cancellation: CancellationToken,
         _trigger: RequestTrigger,
-        excluded: Vec<String>,
+        ask: AlternativeAsk,
     ) -> Result<ProviderReply, ProviderError> {
         if cancellation.is_cancelled() {
             return Err(ProviderError::Cancelled);
@@ -338,7 +349,7 @@ impl CompletionProvider for DeterministicPhraseProvider {
                 .find(|text| {
                     text.split_whitespace()
                         .next()
-                        .is_some_and(|word| !excluded.contains(&word.to_lowercase()))
+                        .is_some_and(|word| !ask.excluded.contains(&word.to_lowercase()))
                 })
                 .map_or(
                     ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained),

@@ -10,8 +10,8 @@ use crate::protocol::{
     valid_language_tag,
 };
 use crate::provider::{
-    CompletionProvider, ProviderError, ProviderOutcome, ProviderReply, ProviderRequest,
-    ProviderStats, RequestTrigger, WritingProposal,
+    AlternativeAsk, CompletionProvider, ProviderError, ProviderOutcome, ProviderReply,
+    ProviderRequest, ProviderStats, RequestTrigger, WritingProposal,
 };
 use crate::spelling::Located;
 use async_trait::async_trait;
@@ -678,13 +678,14 @@ impl SemanticClient {
     }
 
     /// An alternative continuation: the model's most likely first tokens
-    /// after the same prompt a suggestion gets, the best whose word is not in
-    /// `excluded`, continued greedily within the length setting. `None` when
-    /// none fits. Explicit, so no confidence floor applies.
+    /// after the same prompt a suggestion gets (after a finished word, the
+    /// unhealed one), the best whose word `ask` does not exclude, continued
+    /// greedily within the length setting. `None` when none fits. Explicit,
+    /// so no confidence floor applies.
     async fn alternative_text(
         &self,
         request: &ProviderRequest,
-        excluded: &[String],
+        ask: &AlternativeAsk,
         cancellation: &CancellationToken,
         started: Instant,
         budget: Duration,
@@ -704,11 +705,17 @@ impl SemanticClient {
         {
             return Ok(None);
         }
-        let healed = preferences.healed(&self.healing);
-        let plan = crate::writing::completion_plan(request, &healed);
+        // After a finished word (`the` showed ` latest`), alternatives start
+        // the next word; otherwise they finish the word at the caret.
+        let plan = if ask.new_word {
+            crate::writing::next_word_plan(request)
+        } else {
+            crate::writing::completion_plan(request, &preferences.healed(&self.healing))
+        };
         if plan.sends_nothing() {
             return Ok(None);
         }
+        let excluded = &ask.excluded;
         let echo = plan.echo.unwrap_or_default();
         let length = self.suggestion_length();
         let candidates = self
@@ -1238,7 +1245,7 @@ impl CompletionProvider for SemanticClient {
         request: ProviderRequest,
         cancellation: CancellationToken,
         trigger: RequestTrigger,
-        excluded: Vec<String>,
+        ask: AlternativeAsk,
     ) -> Result<ProviderReply, ProviderError> {
         let started = Instant::now();
         let budget = trigger.writing_budget();
@@ -1246,7 +1253,7 @@ impl CompletionProvider for SemanticClient {
             return Err(ProviderError::Cancelled);
         }
         let text = self
-            .alternative_text(&request, &excluded, &cancellation, started, budget)
+            .alternative_text(&request, &ask, &cancellation, started, budget)
             .await
             .map_err(|error| match error {
                 ClientError::Cancelled => ProviderError::Cancelled,

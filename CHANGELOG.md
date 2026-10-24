@@ -49,6 +49,9 @@ Unreleased in the same commit.
   after three, presses cycle through them.
 - Obsidian and Neovim show alternatives the same way: Ctrl+Shift+Space on a
   shown suggestion replaces it with one that starts with another word.
+- Alternatives right after a finished word (`attached the`) start the next
+  word; before, they could only end that word another way, so presses
+  showed the same suggestion again.
 
 ## 0.2.0 (2026-10-24)
 

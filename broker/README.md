@@ -666,16 +666,21 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   hashes are kept, in memory, for 256 spots; a restart forgets them
   (`engine/rejections.rs`).
 - **Alternatives.** `control.request` `alternatives` on a shown
-  continuation (Fcitx's Ctrl+Shift+Space) is an explicit request for the
-  same context. The runtime returns its eight most likely first tokens
-  (one generated token, `n_probs`, before sampling); the best that starts
-  with the healed echo, adds letters, passes the generation class and is no
-  word shown yet is continued greedily within the length setting, with up
-  to three tries. Each context (fingerprint) gets up to three alternatives;
-  after that, or once the model has none, presses cycle through those shown
-  with no model call, and the one shown again is not counted twice.
-  Corrections and mid-line continuations have none, and the editor
-  integrations do not ask yet (`engine/alternatives.rs`).
+  continuation (Ctrl+Shift+Space in Fcitx apps, Obsidian and Neovim) is an
+  explicit request for the same context. The runtime returns its eight most
+  likely first tokens (one generated token, `n_probs`, before sampling).
+  When the first suggestion shown started a new word after a finished one
+  (`the` showed ` latest`), they come from the unhealed prompt, as the
+  finished-word fallback asks it; otherwise from the healed one, and they
+  must start with its echo and add letters. The best that passes the
+  generation class and is no word shown yet is continued greedily within
+  the length setting, with up to three tries. Each context (fingerprint)
+  gets up to three alternatives; after that, or once the model has none,
+  presses cycle through those shown with no model call, and the one shown
+  again is not counted twice. Corrections and mid-line continuations have
+  none (`engine/alternatives.rs`). The suggestion an alternative replaces is
+  cleared first; the shared editor client expects that clear and keeps its
+  preview until the answer arrives.
 - **Quiet apps.** Each app or site's last seven days of usage counts set
   its quiet level, read again at most every ten minutes: with at least 50
   suggestions shown and fewer than 8% accepted, an automatic suggestion
@@ -685,7 +690,10 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   completions the model did not score keep their own gates, and `badi stats
   forget` resets it. A withheld suggestion counts as `low_confidence`, and
   the trace's `suggestion withheld` names `quiet_app` and its floor
-  (`engine/quietness.rs`).
+  (`engine/quietness.rs`). Tested live in Chromium 155: on a page origin
+  with over 50 shown that week and none taken, 4 of 12 prompts showed, word
+  for word as on an origin at 14% taken, which showed all 12; the other 8
+  were withheld at −1.75.
 - **Spelling** needs negotiated exact replacement of the word before the caret
   at the end of the field, in a language of `spelling_languages` (default
   `["en"]`). `spelling.rs` picks the language: a confident detection decides,

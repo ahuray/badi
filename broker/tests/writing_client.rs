@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use badi_broker::NoSuggestionReason;
 use badi_broker::provider::{
-    CompletionProvider, ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger,
+    AlternativeAsk, CompletionProvider, ProviderError, ProviderOutcome, ProviderRequest,
+    RequestTrigger,
 };
 use badi_broker::semantic::client::{
     ClientError, CompletionDisposition, RequestObserver, SemanticClient, SemanticClientConfig,
@@ -1803,6 +1804,7 @@ async fn alternative_exchange(
     candidates: &[(&str, f64)],
     pieces: &[&str],
     excluded: &[&str],
+    new_word: bool,
 ) -> Result<(Vec<serde_json::Value>, ProviderOutcome), Box<dyn Error>> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let endpoint = listener.local_addr()?;
@@ -1855,7 +1857,10 @@ async fn alternative_exchange(
             request(before, Some("en")),
             CancellationToken::new(),
             RequestTrigger::Explicit,
-            excluded.iter().map(|word| (*word).to_owned()).collect(),
+            AlternativeAsk {
+                excluded: excluded.iter().map(|word| (*word).to_owned()).collect(),
+                new_word,
+            },
         )
         .await?
         .outcome;
@@ -1877,6 +1882,7 @@ async fn an_alternative_continues_the_best_first_token_not_shown_yet() -> Result
         ],
         &[" it", " tonight"],
         &["read"],
+        false,
     )
     .await?;
     assert_eq!(payloads.len(), 2, "the candidates, then one continuation");
@@ -1908,12 +1914,35 @@ async fn an_alternative_continues_the_best_first_token_not_shown_yet() -> Result
         &[(" read", -0.3), (" send", -1.2)],
         &[],
         &["read", "send"],
+        false,
     )
     .await?;
     assert_eq!(payloads.len(), 1);
     assert_eq!(
         outcome,
         ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained)
+    );
+
+    // After a finished word the shown one started the next word: so does the
+    // alternative, from the unhealed prompt, not another ending of `the`.
+    let before = "Thanks for sharing the draft. I will send the";
+    let (payloads, outcome) = alternative_exchange(
+        before,
+        &[(" draft", -0.3), (" file", -0.9)],
+        &[" tonight"],
+        &["draft"],
+        true,
+    )
+    .await?;
+    assert_eq!(payloads.len(), 2);
+    assert_eq!(payloads[0]["prompt"], "I will send the", "no healed echo");
+    assert_eq!(payloads[1]["prompt"], "I will send the file");
+    assert_eq!(
+        outcome
+            .into_proposal()
+            .map(|proposal| proposal.text)
+            .as_deref(),
+        Some(" file tonight")
     );
     Ok(())
 }
