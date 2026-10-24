@@ -108,6 +108,26 @@ test('editor identities, native reading lease, revocation and one-shot commits a
       assert.equal(await client.suggest('thank you f'), 'or your time', 'a session close still carries the remainder');
       client.close();
     }
+    {
+      // The request key on a shown continuation: another first word each
+      // press, then the shown ones again. The broker's clear of the replaced
+      // suggestion leaves the preview, and acceptance binds to the answer.
+      const client = new BrokerClient('obsidian');
+      clients.push(client);
+      assert.equal(await client.connect(endpoint), true);
+      assert.equal(await client.suggest('thank you'), ' for your time');
+      let clears = 0;
+      client.on('clear', () => { clears++; });
+      const shown = [];
+      for (let press = 0; press < 4; press++) shown.push([await client.alternative(), client.acceptWord]);
+      assert.deepEqual(shown, [[' so much', ' so'], [' again', ' again'], [' for your time', ' for'], [' so much', ' so']]);
+      assert.equal(clears, 0, 'each answer replaces the preview without withdrawing it first');
+      const grant = await client.authorize('word');
+      assert.equal(grant.text, ' so');
+      client.report(grant, 'stale');
+      await assert.rejects(client.alternative(), /No suggestion/);
+      client.close();
+    }
     const readline = await promisify(execFile)('python3', [join(ROOT, 'adapters/shell/test.py')], {
       env: environment, timeout: 15000,
     });

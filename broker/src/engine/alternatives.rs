@@ -8,6 +8,7 @@ use super::rejections::next_word;
 use super::{Broker, BrokerError};
 use crate::policy::PolicyReason;
 use crate::protocol::{Coordinates, SessionControlRequestPayload, SuggestRequestPayload};
+use crate::provider::AlternativeAsk;
 
 /// New continuations asked for one context before presses only cycle.
 pub(super) const MAX_ALTERNATIVES: usize = 3;
@@ -23,10 +24,10 @@ pub(super) struct Alternatives {
 /// What a press shows next.
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum Plan {
-    /// Ask the model for a continuation that starts with none of `excluded`
-    /// (lowercased first words); without one, show `fallback` instead.
+    /// Ask the model for a continuation that `ask` allows; without one,
+    /// show `fallback` instead.
     Generate {
-        excluded: Vec<String>,
+        ask: AlternativeAsk,
         fallback: String,
     },
     /// Show this continuation again, with no model call.
@@ -55,11 +56,16 @@ impl Alternatives {
             return Plan::Show(following);
         }
         Plan::Generate {
-            excluded: self
-                .shown
-                .iter()
-                .filter_map(|shown| next_word(shown))
-                .collect(),
+            ask: AlternativeAsk {
+                excluded: self
+                    .shown
+                    .iter()
+                    .filter_map(|shown| next_word(shown))
+                    .collect(),
+                // The first suggestion shows where the caret is: after a
+                // finished word, it started the next one.
+                new_word: self.shown[0].starts_with(char::is_whitespace),
+            },
             fallback: following,
         }
     }

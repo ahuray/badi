@@ -19,7 +19,7 @@ use badi_broker::protocol::{
     Activation, AdapterKind, Capability, Coordinates, ProviderKind, SessionId, SessionOpenPayload,
     TargetDescriptor, TargetKind,
 };
-use badi_broker::provider::{CompletionProvider, ProviderRequest, RequestTrigger};
+use badi_broker::provider::{AlternativeAsk, CompletionProvider, ProviderRequest, RequestTrigger};
 use badi_broker::semantic::client::CompletionDisposition;
 use badi_broker::semantic::provenance::{
     FileExpectation, ProvenanceError, VerifiedFile, verify_file,
@@ -177,7 +177,10 @@ async fn owned_runtime_serves_alternatives() -> TestResult {
         },
         CancellationToken::new(),
         RequestTrigger::Explicit,
-        vec!["for".to_owned()],
+        AlternativeAsk {
+            excluded: vec!["for".to_owned()],
+            new_word: false,
+        },
     )
     .await?;
     let text = reply.outcome.into_proposal().map(|proposal| proposal.text);

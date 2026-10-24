@@ -12,7 +12,7 @@ virtual text and makes the edit itself, so native undo applies. Needs Neovim
 | **Ctrl+Right** | Accept it all |
 | Keep typing | Typing its next letters keeps the rest |
 | **Escape** | Leaving Insert mode dismisses it |
-| **Ctrl+Shift+Space** | Ask for one (`:BadiRequest` from any mapping) |
+| **Ctrl+Shift+Space** | Ask for one (`:BadiRequest` from any mapping). On a shown one, show one that starts with another word; after three, presses cycle through them |
 
 `badi app nvim on` allows Neovim; `badi app nvim off` blocks it. The grant is
 Neovim's own (`{kind: linux_app, adapter: neovim, app_id: nvim}`), separate
@@ -171,3 +171,4 @@ so they must run there.
 | 0.12.5 | foot, this workstation's LazyVim through the installer's lazy.nvim spec | real model | as above, plus Ctrl+Shift+Space as an explicit request; no `output_rejected` in the trace |
 | 0.12.6 | Ghostty, the same LazyVim setup | real model | Tab, Ctrl+→ and Ctrl+Shift+Space |
 | 0.12.6 | Ghostty, LazyVim (2026-10-24) | real model | a markdown buffer suggested and Tab took a word; while `badi pause` held, typing sent no request and no text to the broker, and suggestions came back after `badi resume` |
+| 0.12.6 | foot, `nvim --clean` with this plugin and its bridge | real model | the word Tab takes drawn bold and brighter; Ctrl+Shift+Space on a shown suggestion gave three alternatives with new first words, then the first again; Tab took the shown word |

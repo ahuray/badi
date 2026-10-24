@@ -136,6 +136,14 @@ try {
   await ghost.waitFor({ state: 'visible' });
   const suggestion = await ghost.textContent();
   assert.ok(suggestion?.trim());
+  // What Tab takes is drawn a step brighter than the rest.
+  if (suggestion.trim().includes(' ')) {
+    const word = page.locator('.badi-inline-word');
+    report.tab_word = { word: await word.textContent(), color: await word.evaluate(element => getComputedStyle(element).color),
+      rest: await ghost.evaluate(element => getComputedStyle(element).color) };
+    assert.ok(suggestion.startsWith(report.tab_word.word) && report.tab_word.word.length < suggestion.length);
+    assert.notEqual(report.tab_word.color, report.tab_word.rest, 'The word Tab takes has its own colour');
+  }
   await capture('english');
   await delay(800);
   assert.equal(await ghost.isVisible(), true, 'The preview survives a reading pause');
@@ -172,6 +180,18 @@ try {
   assert.equal(await text(), prefix);
   await page.keyboard.press('Control+Shift+Space');
   await ghost.waitFor({ state: 'visible' });
+  // The key again on the shown suggestion: one that starts with another word.
+  const asked = await ghost.textContent();
+  await page.keyboard.press('Control+Shift+Space');
+  await page.waitForFunction(previous => {
+    const shown = document.querySelector('.badi-inline');
+    return shown && shown.textContent !== previous;
+  }, asked);
+  const alternative = await ghost.textContent();
+  const firstWordOf = value => /^\s*\S+/u.exec(value)?.[0].trim().toLowerCase();
+  assert.notEqual(firstWordOf(alternative), firstWordOf(asked), 'An alternative starts with another word');
+  report.alternative = { asked, alternative };
+  await capture('alternative');
   await page.keyboard.press('ArrowLeft');
   await ghost.waitFor({ state: 'hidden', timeout: 500 });
   await setPrefix(prefix); await ghost.waitFor({ state: 'visible' });
@@ -185,7 +205,8 @@ try {
   await page.keyboard.press('Control+z');
   assert.equal(await text(), prefix, 'The open note recovers after broker restart');
   if (local) {
-    for (const [language, before] of [['de', 'Vielen Dank für Ihre'], ['fa', 'از همکاری شما بسیار']]) {
+    // Persian is off by default outside terminals since 2026-10-23.
+    for (const [language, before] of [['de', 'Vielen Dank für Ihre']]) {
       await page.evaluate(language => app.commands.executeCommandById(`badi:language-${language}`), language);
       await setPrefix(before); await ghost.waitFor({ state: 'visible' });
       const continuation = await ghost.textContent();

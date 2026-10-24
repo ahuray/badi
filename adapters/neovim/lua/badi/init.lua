@@ -272,10 +272,40 @@ local function show(s, text, word)
   return true
 end
 
---- Requests a suggestion for the caret now. `explicit` is a user request.
+--- Replaces the shown suggestion with one that starts with another word. It
+--- stays drawn until the answer arrives; no answer withdraws it.
+local function alternative()
+  local visible = state.visible
+  local s = visible.snapshot
+  local generation = state.generation
+  state.pending = { generation = generation, snapshot = s }
+  set_status('thinking')
+  state.bridge:request({ op = 'alternative' }, function(reply)
+    if state.generation ~= generation then return end
+    state.pending = nil
+    if not reply.ok or not context.insertable(reply.text) or not matches(s) then
+      set_status(reply.ok and (reply.text == nil and 'no_suggestion' or 'stale') or reply.reason)
+      invalidate('cancel')
+      return
+    end
+    clear_preview()
+    if not show(s, reply.text, reply.word) then
+      set_status('stale')
+      state.bridge:notify({ op = 'cancel' })
+    end
+  end)
+end
+
+--- Requests a suggestion for the caret now. `explicit` is a user request;
+--- on a shown suggestion it asks for another one instead.
 function M.request(explicit)
   explicit = explicit == true
   if not state.config then return end
+  local visible = state.visible
+  if explicit and visible and not state.accepting and not state.pending and state.bridge
+      and matches(visible.snapshot) then
+    return alternative()
+  end
   local reason = blocked_reason()
   if reason then
     set_status(reason)

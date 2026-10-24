@@ -158,8 +158,7 @@ publish need the user's go-ahead first; the rest can start at once.
    - a numbered list of alternative words for the next word, and synonyms
      for a selected word (added mid-2026; Badi's candidate panel and its
      selection revision could carry both). Badi shows alternatives one at a
-     time on Ctrl+Shift+Space, in Fcitx apps only: Obsidian and Neovim send
-     no `alternatives` request yet;
+     time on Ctrl+Shift+Space;
    - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
      4B–30B): a llama.cpp Vulkan or CUDA runtime for machines with a GPU,
      measured with the [bench](evaluation/llm-bench/README.md) and the Lab.

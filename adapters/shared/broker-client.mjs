@@ -52,6 +52,8 @@ export class BrokerClient extends EventEmitter {
   // A later frame of the current session's growing continuation that arrived
   // before suggest() resumed (frames can share one socket read).
   #streamed = null;
+  // The suggestion id an alternative() request replaces, until it resolves.
+  #superseded = null;
   #expiry;
   #epoch = null;
   #closed = false;
@@ -194,6 +196,43 @@ export class BrokerClient extends EventEmitter {
     const value = streamed && continues(response.payload, streamed.payload) ? streamed.payload : response.payload;
     if (!this.#validShow(value, session, before)) {
       this.cancel(); throw new Error(`Invalid model suggestion (text=${validSuggestion(value.text)}, words=${typeof value.text === 'string' ? value.text.trim().split(/\s+/u).length : 0}, ttl=${value.ttl_ms}, binding=${value.fingerprint === session.fingerprint})`);
+    }
+    this.#setCandidate(session, value);
+    this.emit('state', 'suggestion');
+    return value.text;
+  }
+
+  // Another continuation in place of the shown one, starting with a different
+  // word (the request key on a shown suggestion). The broker retires the shown
+  // suggestion first; that clear is expected and keeps the session for the
+  // answer, so the editor keeps its preview until this resolves. Null means
+  // nothing replaced it: the editor withdraws its preview.
+  async alternative() {
+    const candidate = this.#candidate;
+    const session = this.#session;
+    if (!candidate || !session || candidate.replaceBefore !== undefined || !this.allowed ||
+        performance.now() >= candidate.expires) {
+      throw new Error('No suggestion to replace');
+    }
+    const generation = this.#generation;
+    clearTimeout(this.#expiry);
+    this.#candidate = null;
+    this.#streamed = null;
+    this.#superseded = candidate.suggestion_id;
+    let response;
+    try {
+      response = await this.#rpc('control.request', { action: 'alternatives', fingerprint: candidate.fingerprint,
+        suggestion_id: candidate.suggestion_id }, 'suggestion.show', session);
+    } finally {
+      this.#superseded = null;
+    }
+    if (generation !== this.#generation || this.#session !== session || !this.allowed) throw new Error('Context changed');
+    if (response.type === 'suggestion.clear') { this.emit('state', response.payload.reason); return null; }
+    const streamed = this.#streamed;
+    this.#streamed = null;
+    const value = streamed && continues(response.payload, streamed.payload) ? streamed.payload : response.payload;
+    if (value.replace_before !== undefined || !this.#validShow(value, session, '')) {
+      this.cancel(); throw new Error('Invalid model suggestion');
     }
     this.#setCandidate(session, value);
     this.emit('state', 'suggestion');
@@ -360,6 +399,9 @@ export class BrokerClient extends EventEmitter {
         else pending.resolve(message);
       } else if (message.type === 'suggestion.show') {
         this.#extend(message);
+      } else if (message.type === 'suggestion.clear' && this.#superseded !== null &&
+          message.session_id === this.#session?.session_id && message.payload.suggestion_id === this.#superseded) {
+        // The shown suggestion an alternative replaces; the answer follows.
       } else if (message.type === 'suggestion.clear' || message.type === 'commit.revoke') {
         // A clear can precede the authority notice that retires this session.
         // Do not echo a close for coordinates the broker may already have revoked.

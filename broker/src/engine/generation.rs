@@ -111,9 +111,9 @@ struct GenerationBinding {
     /// The app's stricter confidence floor while its suggestions are seldom
     /// taken; `None` keeps the provider's own.
     quiet_floor: Option<f64>,
-    /// An alternative on request: first words already shown, which this
-    /// continuation must not start with, and what to show without one.
-    alternative: Option<(Vec<String>, String)>,
+    /// An alternative on request: what it must differ from, and what to
+    /// show without one.
+    alternative: Option<(crate::provider::AlternativeAsk, String)>,
 }
 
 /// A type-through remainder keeps its original suggestion's deadline and
@@ -258,8 +258,8 @@ impl Broker {
                 self.show_carried(state, binding, (text, expires_at, None), generation_timeout)?;
                 return Ok(None);
             }
-            Some(Plan::Generate { excluded, fallback }) => {
-                binding.alternative = Some((excluded, fallback));
+            Some(Plan::Generate { ask, fallback }) => {
+                binding.alternative = Some((ask, fallback));
             }
             None => {}
         }
@@ -417,12 +417,11 @@ impl Broker {
         let provider_deadline = Instant::now() + self.inner.config.provider_timeout_for(trigger);
         let deadline = binding.deadline.min(provider_deadline);
         let call = match &binding.alternative {
-            Some((excluded, _)) => self.inner.provider.alternative(
-                request,
-                cancellation.clone(),
-                trigger,
-                excluded.clone(),
-            ),
+            Some((ask, _)) => {
+                self.inner
+                    .provider
+                    .alternative(request, cancellation.clone(), trigger, ask.clone())
+            }
             None => self.inner.provider.propose_outcome(
                 request,
                 cancellation.clone(),
@@ -546,8 +545,10 @@ impl Broker {
             }
         }
         // An alternative must start with a word not shown yet.
-        if let Some((excluded, _)) = &binding.alternative {
-            if super::rejections::next_word(&raw.text).is_none_or(|word| excluded.contains(&word)) {
+        if let Some((ask, _)) = &binding.alternative {
+            if super::rejections::next_word(&raw.text)
+                .is_none_or(|word| ask.excluded.contains(&word))
+            {
                 metrics.record_no_suggestion(NoSuggestionReason::ModelAbstained);
                 return Err(Withheld::Clear(ReasonCode::NoSuggestion));
             }

@@ -760,6 +760,19 @@ pub(crate) fn completion_plan<'a>(
     }
 }
 
+/// The plan for a continuation that starts the next word after the caret's
+/// finished word: the unhealed prompt, as [`CompletionPlan::finished_word`]
+/// sends it, whether or not that word is a lexicon word.
+pub(crate) fn next_word_plan(request: &ProviderRequest) -> CompletionPlan<'_> {
+    CompletionPlan {
+        prompt: inference_context(&request.before),
+        echo: None,
+        max_tokens: CONTINUATION_TOKENS,
+        digits: request.before.chars().any(|c| ascii_digit(c).is_some()),
+        finished_word_prompt: None,
+    }
+}
+
 /// The production echo of `before` when `healed_languages` are healed, as
 /// production computes them for the loaded model ([`trailing_space_healing`]
 /// with [`LanguagePreferences::healed`]): separating spaces plus, for

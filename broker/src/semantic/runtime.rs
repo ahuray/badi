@@ -21,8 +21,8 @@ use uuid::Uuid;
 
 use crate::protocol::ProviderKind;
 use crate::provider::{
-    CompletionProvider, ProviderError, ProviderReply, ProviderRequest, RequestTrigger,
-    WritingProposal,
+    AlternativeAsk, CompletionProvider, ProviderError, ProviderReply, ProviderRequest,
+    RequestTrigger, WritingProposal,
 };
 
 use super::client::{
@@ -734,10 +734,10 @@ impl CompletionProvider for OwnedRuntime {
         request: ProviderRequest,
         cancellation: CancellationToken,
         trigger: RequestTrigger,
-        excluded: Vec<String>,
+        ask: AlternativeAsk,
     ) -> Result<ProviderReply, ProviderError> {
         self.client
-            .alternative(request, cancellation, trigger, excluded)
+            .alternative(request, cancellation, trigger, ask)
             .await
     }
 }
