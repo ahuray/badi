@@ -77,6 +77,10 @@ export class RecoveringBrokerClient extends EventEmitter {
     if (!this.allowed) return Promise.reject(new Error('App disabled or model paused'));
     return this.#client.suggest(...args);
   }
+  alternative() {
+    if (!this.allowed) return Promise.reject(new Error('App disabled or model paused'));
+    return this.#client.alternative();
+  }
   authorize(...args) {
     if (!this.allowed) return Promise.reject(new Error('Suggestion expired'));
     return this.#client.authorize(...args);

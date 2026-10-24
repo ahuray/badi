@@ -88,6 +88,32 @@ test('Tab takes one word and typing through keeps the rest', { skip }, async t =
   assert.deepEqual(operations.filter(entry => entry.op === 'result').map(entry => entry.status), ['applied']);
 });
 
+test('the request key on a shown suggestion shows one that starts with another word', { skip }, async t => {
+  const editor = await fakeEditor(t);
+  await markdown(editor, 'ithank you');
+  await editor.until(current => current.preview === ' for your time', 'preview');
+  await editor.send('<C-S-Space>');
+  let state = await editor.until(current => current.preview === ' so much', 'an alternative');
+  assert.deepEqual(state.chunks, [[' so', 'BadiSuggestionWord'], [' much', 'BadiSuggestion']]);
+  assert.equal(state.screen, 'thank you so much');
+  await editor.send('<C-S-Space>');
+  await editor.until(current => current.preview === ' again', 'another alternative');
+  await editor.send('<Tab>');
+  state = await editor.until(current => current.lines[0] === 'thank you again', 'acceptance');
+  const operations = await editor.operations();
+  assert.deepEqual(operations.filter(entry => ['alternative', 'accept'].includes(entry.op)).map(entry => entry.op),
+    ['alternative', 'alternative', 'accept']);
+  assert.ok(!operations.some(entry => entry.op === 'suggest' && entry.explicit), 'The key replaced the shown one');
+
+  // Without another one, the shown suggestion is withdrawn.
+  await editor.send(' thank you for');
+  await editor.until(current => current.preview === ' your time', 'a suggestion without alternatives');
+  await editor.send('<C-S-Space>');
+  state = await editor.until(current => current.preview === null && current.status.status === 'no_suggestion',
+    'withdrawn');
+  assert.deepEqual(state.lines, ['thank you again thank you for']);
+});
+
 test('multibyte text before the caret keeps byte-exact placement and undo', { skip }, async t => {
   const editor = await fakeEditor(t);
   await markdown(editor, 'iمتن اول<CR>Grüße und سلام ');

@@ -73,6 +73,11 @@ async function handle(command) {
   switch (command.op) {
     case 'suggest':
       return suggest(command);
+    case 'alternative': {
+      grant = null;
+      const text = await client.alternative();
+      return text ? { ok: true, text, word: client.acceptWord } : { ok: true, text: null };
+    }
     case 'accept': {
       if (!ACCEPTANCE.has(command.acceptance)) return { ok: false, reason: 'invalid_request' };
       grant = null;

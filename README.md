@@ -14,7 +14,7 @@ machine. Badi is pre-release software.
 | **Ctrl+→** | Accept all of it. |
 | Keep typing | Typing the suggestion's next letters keeps the rest. |
 | **Escape** | Dismiss. |
-| **Ctrl+Shift+Space** | Ask for a suggestion. On a shown one in a Fcitx app, show another that starts with a different word; after three, presses cycle through them. On selected text, check its grammar; press it again for a refined wording. **Tab** applies what it shows, **Escape** keeps your text. |
+| **Ctrl+Shift+Space** | Ask for a suggestion. On a shown one, show another that starts with a different word; after three, presses cycle through them. On selected text, check its grammar; press it again for a refined wording. **Tab** applies what it shows, **Escape** keeps your text. |
 | **Ctrl+Shift+Tab** | Type a real Tab instead of accepting: the suggestion goes away and the app gets Tab. Where Badi would not take Tab, it stays the app's key (a browser's previous tab). |
 
 Every surface uses that order: Obsidian with Ctrl/Command+→ for all of it,

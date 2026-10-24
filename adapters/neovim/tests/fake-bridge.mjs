@@ -17,6 +17,8 @@ const RULES = [
   ['grant later', ' arrives late'],
   ['crash', ' never'],
 ];
+// What the request key on a shown suggestion offers next, in turn.
+const ALTERNATIVES = new Map([[' for your time', ' so much'], [' so much', ' again'], [' again', ' for your time']]);
 let candidate = null;
 let generation = 0;
 // The broker's policy as bridge.mjs reports it. FAKE_BRIDGE_POLICY 'refused'
@@ -42,6 +44,10 @@ for await (const line of createInterface({ input: process.stdin })) {
     if (rule?.[0] === 'slow') await delay(400);
     if (mine !== generation) { send({ id: command.id, ok: false, reason: 'expired_or_unavailable' }); continue; }
     candidate = rule ? rule[1] : null;
+    send({ id: command.id, ok: true, text: candidate, word: candidate?.match(/^ ?\S+/u)?.[0] });
+  } else if (command.op === 'alternative') {
+    if (candidate === null) { send({ id: command.id, ok: false, reason: 'expired_or_unavailable' }); continue; }
+    candidate = ALTERNATIVES.get(candidate) ?? null;
     send({ id: command.id, ok: true, text: candidate, word: candidate?.match(/^ ?\S+/u)?.[0] });
   } else if (command.op === 'accept') {
     const text = candidate === null ? null

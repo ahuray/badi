@@ -172,6 +172,30 @@ class WritingView {
     recordActivity('obsidian', 'ghost', 'shown');
   }
 
+  // Ctrl+Shift+Space on a shown continuation: one that starts with another
+  // word replaces it. The shown one stays until the answer arrives; no
+  // answer withdraws it.
+  async alternative() {
+    const snapshot = this.snapshot;
+    if (!this.text || this.replaceBefore !== undefined || !snapshot || !this.matches(snapshot) || this.pending) return;
+    this.pending = true;
+    const generation = this.generation;
+    try {
+      const text = await this.client.alternative();
+      if (generation !== this.generation || !this.matches(snapshot)) return;
+      if (!text) { this.invalidate(); return; }
+      this.text = text;
+      this.showPreview(text, this.client.acceptWord);
+    } catch {
+      if (generation === this.generation) {
+        this.invalidate();
+        if (this.view.hasFocus) this.owner.status.setText('Badi · no other suggestion');
+      }
+    } finally {
+      if (generation === this.generation) this.pending = false;
+    }
+  }
+
   // The broker streamed a longer version of the shown continuation.
   extend(text) {
     if (!this.text || this.replaceBefore !== undefined || this.pending || !this.matches(this.snapshot) ||
@@ -239,8 +263,8 @@ class WritingView {
   key(event) {
     if (!event.isTrusted || event.isComposing || event.altKey) return false;
     if (event.ctrlKey && event.shiftKey && !event.metaKey && event.key === ' ') {
-      if (event.repeat || this.pending || this.text) return true;
-      void this.request();
+      if (event.repeat || this.pending) return true;
+      if (this.text) void this.alternative(); else void this.request();
       return true;
     }
     if (event.shiftKey) return false;

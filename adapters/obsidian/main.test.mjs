@@ -119,6 +119,37 @@ test('Obsidian automatically requests, accepts one word or all, and isolates eac
   assert.equal(controller.key({ isTrusted: true, key: 'Tab', shiftKey: true }), false);
 });
 
+test('Obsidian Ctrl+Shift+Space on a shown suggestion replaces it with one that starts with another word', async context => {
+  const { controller, view, client, tick } = await harness(context);
+  await tick(250);
+  assert.equal(controller.text, ' for your time');
+  const answers = [' so much', null];
+  client.alternative = async () => {
+    const text = answers.shift();
+    client.acceptWord = text?.match(/^ ?\S+/u)?.[0];
+    return text;
+  };
+  const chord = { isTrusted: true, key: ' ', ctrlKey: true, shiftKey: true };
+  assert.equal(controller.key(chord), true);
+  await settle();
+  assert.equal(controller.text, ' so much');
+  assert.equal(controller.decorations[0].widget.text, ' so much');
+  assert.equal(controller.decorations[0].widget.word, ' so');
+  assert.equal(client.requests.length, 1, 'The chord asked for an alternative, not a new request');
+  client.authorize = mode => Promise.resolve({ text: mode === 'word' ? ' so' : ' so much' });
+  assert.equal(controller.key({ isTrusted: true, key: 'Tab' }), true);
+  await settle();
+  assert.equal(view.state.doc.toString(), 'thank you so');
+
+  // Without another one, the shown suggestion is withdrawn.
+  await tick(250);
+  assert.equal(controller.text, ' for your time');
+  assert.equal(controller.key(chord), true);
+  await settle();
+  assert.equal(controller.text, null);
+  assert.equal(controller.decorations.length, 0);
+});
+
 test('Obsidian replaces exactly the misspelled suffix including a typed space in one undo transaction', async context => {
   const { controller, view, client, state } = await harness(context);
   controller.invalidate();
