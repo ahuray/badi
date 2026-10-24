@@ -81,19 +81,19 @@ around the caret.
 | VS Code, Cursor | Needs `"editor.editContext": false` in VS Code | VS Code 1.140 and 1.142, Cursor 3.21 |
 | Codex desktop | Composer | 26.930 |
 | LibreOffice Writer | Document paragraphs; Calc gets nothing. Spelling: the [Badi extension](adapters/libreoffice/README.md) shows a correction after a finished word, Alt+F7 shows one for the word at the caret, Alt+F7 again replaces it in one undo step | 26.8, 26.8.1 |
-| Telegram | Qt Widgets; not retried since fcitx5-qt 5.1.16 | Telegram desktop (Qt) |
+| Telegram | Composer (Qt Widgets): grey preview and Tab; as in Omawrite, no typo replacement with fcitx5-qt 5.1.16 | 7.3.2 |
 | Omawrite | With fcitx5-qt 5.1.16 (here from 2026-10-18), Qt's input module withdraws the text around the caret after every key; Badi keeps suggesting in Qt fields it observes, but cannot replace a typo there ([details](adapters/fcitx5/README.md#tested-with)) | 0.5.0, 0.7.0 |
-| Xournal++ text tool | Tab requests, exact native undo | 1.3.7 |
+| Xournal++ text tool | Tab requests, exact native undo | 1.3.7, 1.3.8 |
 | Obsidian | Badi plugin; inline preview, Tab, Ctrl+→, one-step undo and recovery after a broker restart (live runner, real model) | 1.13.7, 1.14.4 |
 | Bash | Grey Readline preview and narrow English spelling fixes | Bash 5.3.15 in Ghostty 1.3.1 |
 | Ghostty (any TUI, such as a coding agent's prompt) | `badi app com.mitchellh.ghostty on`; suggestions follow the line you type and show in a panel at the cursor; Tab types a word, Ctrl+→ all of it, a correction shows as `teh → the` and Tab fixes the typo, and an automatic miss stays quiet ([how](docs/decisions/0009-terminals-use-the-typed-line.md)) | Ghostty 1.3.1 |
 | foot (Omarchy's default terminal) | `badi app foot on`; the line you type, as in Ghostty, including `teh → the` corrections | foot 1.28.0 |
 | Neovim | Badi plugin; prose buffers, inline preview, one-step undo; no spelling fixes yet. Live with the real model under LazyVim in foot and Ghostty, including Ctrl+Shift+Space; in Ghostty it takes over from the typed line while focused | 0.12.5, 0.12.6 |
+| Discord | Composer; install with `--observed-app discord`, then relaunch Discord | 1.0.166 |
 | Grok Bot | Ready, but its composer is untested | 0.35 |
 | Claude desktop | Ready, but its composer is untested; `badi app com.anthropic.claude on`, then relaunch it with the flag below | 2.42304 (Electron 44) |
 
 **Not yet:**
-- Discord: desktop-wide accessibility can be enabled, but its composer is unverified.
 - Firefox and Gecko builds other than Zen and Zen Twilight.
 - Editors built on Chromium's EditContext (VS Code's default, CodeMirror on
   recent Chromium).
@@ -138,11 +138,10 @@ deletion, so Omawrite 0.7.0 gets no spelling replacement. Telegram and
 Xournal++ have not been retried.
 
 Chromium-based apps must start with `--force-renderer-accessibility=complete`.
-`install-desktop.py --observed-app chromium|brave-origin|chatgpt|code|com.anthropic.claude|cursor|grok-bot`
-adds it to that app's flags file; Zen needs nothing.
-For Discord, `install-desktop.py --screen-reader-accessibility` opts into
-desktop-wide accessibility with recorded rollback values
-([scope and rollback](adapters/accessibility/README.md#installation-and-the-renderer-flag)).
+`install-desktop.py --observed-app chromium|brave-origin|chatgpt|code|com.anthropic.claude|cursor|discord|grok-bot`
+adds it to that app's flags file, or for Discord to a user copy of its
+launcher ([details](adapters/accessibility/README.md#installation-and-the-renderer-flag));
+Zen needs nothing.
 
 ## Install
 

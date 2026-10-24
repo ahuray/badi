@@ -23,8 +23,8 @@ import sys
 
 import badi_install
 from badi_install import (ACCESSIBILITY_SWITCH, COMPLETE_ACCESSIBILITY, HYPR_REQUIRE,  # noqa: F401
-                          OBSERVED_APP_FLAGS, OBSERVED_FLAG, chromium_line_tokens, hyprland_with_badi,
-                          observed_flags, observed_tokens)
+                          OBSERVED_APP_FLAGS, OBSERVED_FLAG, OBSERVED_LAUNCHERS, chromium_line_tokens,
+                          hyprland_with_badi, observed_flags, observed_launcher, observed_tokens)
 
 ROOT = Path(__file__).resolve().parents[1]
 # Every module the installed observer imports, beside its daemon.
@@ -33,6 +33,8 @@ OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geome
 SESSION_MODULES = ("daemon.py", "link.py", "style_key.py")
 SESSION_SERVICE = "badi-session.service"
 OMARCHY_REPAIR_HOOKS = ("post-boot.d", "post-update.d")
+# Packaged launchers; a user's copy of the same name shadows one.
+SYSTEM_APPLICATIONS = Path("/usr/share/applications")
 
 
 def run(command, **kwargs):
@@ -55,6 +57,21 @@ def observed_config_target(home, config_home, filename):
     if target.is_symlink():
         raise RuntimeError("Inspect the app startup configuration symlink before changing it.")
     return target
+
+
+def observed_launcher_update(home, app):
+    """(target, original, text) for the user's copy of `app`'s launcher; text
+    is None when every Exec line has the renderer switch already."""
+    name = OBSERVED_LAUNCHERS[app]
+    applications = home / ".local/share/applications"
+    target = applications / name
+    if applications.is_symlink() or target.is_symlink():
+        raise RuntimeError(f"Inspect the {name} launcher symlink before changing it.")
+    original = target.read_text() if target.exists() else None
+    packaged = SYSTEM_APPLICATIONS / name
+    if original is None and not packaged.is_file():
+        raise RuntimeError(f"No {name} launcher was found in {SYSTEM_APPLICATIONS}; nothing was changed.")
+    return target, original, observed_launcher(original if original is not None else packaged.read_text(), app)
 
 
 def enable_accessibility(installation):
@@ -81,31 +98,6 @@ def enable_accessibility(installation):
              "org.a11y.Status", "IsEnabled", "b", "true"], capture_output=True, timeout=3)
     if not status():
         raise RuntimeError("Desktop accessibility did not enable; Fcitx was not restarted.")
-
-
-def enable_screen_reader_accessibility(installation):
-    """Opt into desktop-wide AT-SPI activation, recording its persistent state."""
-    bus = ["busctl", "--user", "--timeout=2s"]
-    address = ["org.a11y.Bus", "/org/a11y/bus", "org.a11y.Status", "ScreenReaderEnabled"]
-    setting = ["org.gnome.desktop.a11y.applications", "screen-reader-enabled"]
-
-    def state():
-        active = run([*bus, "get-property", *address], capture_output=True, text=True, timeout=3).stdout.strip()
-        persistent = run(["gsettings", "get", *setting], capture_output=True, text=True, timeout=3).stdout.strip()
-        if active not in ("b true", "b false") or persistent not in ("true", "false"):
-            raise RuntimeError("Cannot determine the prior screen-reader accessibility state; it was not changed.")
-        return {"screen_reader_enabled": active == "b true", "screen_reader_setting": persistent == "true"}
-
-    previous = state()
-    if all(previous.values()):
-        return  # An unchanged install must not overwrite the original rollback values.
-    require_unlocked()
-    receipt = installation.note("accessibility-screen-reader.json", previous)
-    print(f"Prior desktop-wide accessibility settings recorded in {receipt}", flush=True)
-    run(["gsettings", "set", *setting, "true"], capture_output=True, timeout=3)
-    run([*bus, "set-property", *address, "b", "true"], capture_output=True, timeout=3)
-    if not all(state().values()):
-        raise RuntimeError("Desktop-wide accessibility did not enable; inspect the recorded prior settings before retrying.")
 
 
 def require_unlocked():
@@ -450,17 +442,16 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--broker-only", action="store_true",
                         help="Update only the broker, commands and service; leave the native input method running")
-    parser.add_argument("--observed-app", action="append", choices=tuple(OBSERVED_APP_FLAGS), default=[],
-                        help=f"Add {OBSERVED_FLAG} to this app's user flags file for its next launch (backed up)")
-    parser.add_argument("--screen-reader-accessibility", action="store_true",
-                        help="Enable desktop-wide AT-SPI ScreenReaderEnabled, including Discord; record prior settings for rollback")
+    parser.add_argument("--observed-app", action="append", choices=(*OBSERVED_APP_FLAGS, *OBSERVED_LAUNCHERS),
+                        default=[], help=f"Add {OBSERVED_FLAG} to this app's user flags file, or to Discord's "
+                                         "launcher, for its next launch (backed up)")
     parser.add_argument("--model", metavar="ID",
                         help="When no writing model is installed, download this catalog model (pinned, hash-checked) "
                              "instead of the one recommended for this device")
     parser.add_argument("--accept-model-license", action="store_true",
                         help="Accept the terms that come with the downloaded model (Gemma, Llama) without asking")
     args = parser.parse_args()
-    if args.broker_only and (args.observed_app or args.screen_reader_accessibility):
+    if args.broker_only and args.observed_app:
         parser.error("Accessibility options require the complete unlocked native installation")
     return args
 
@@ -478,10 +469,9 @@ def preflight(args):
         require_accessibility_runtime()
         require_fcitx_version()
     elif not args.broker_only:
-        if args.observed_app or args.screen_reader_accessibility:
-            raise RuntimeError("--observed-app and --screen-reader-accessibility change desktop-wide accessibility "
-                               "for the field observer and need Omarchy's lock status; on this desktop they are "
-                               "not available. Nothing was changed.")
+        if args.observed_app:
+            raise RuntimeError("--observed-app changes desktop-wide accessibility for the field observer and needs "
+                               "Omarchy's lock status; on this desktop it is not available. Nothing was changed.")
         system_addons = badi_install.fcitx_addon_directory()
         if system_addons is None:
             raise RuntimeError("Could not find the system Fcitx's addon directory (fcitx5/ beside libFcitx5Core). "
@@ -497,9 +487,12 @@ def preflight(args):
     config_home = badi_install.config_home(home)
     flag_updates, flags_present = {}, []
     for app in dict.fromkeys(args.observed_app):
-        target = observed_config_target(home, config_home, OBSERVED_APP_FLAGS[app][0])
-        original = target.read_text() if target.exists() else None
-        text = observed_flags(original or "", app)
+        if app in OBSERVED_LAUNCHERS:
+            target, original, text = observed_launcher_update(home, app)
+        else:
+            target = observed_config_target(home, config_home, OBSERVED_APP_FLAGS[app][0])
+            original = target.read_text() if target.exists() else None
+            text = observed_flags(original or "", app)
         if text is None:
             flags_present.append(app)
         else:
@@ -648,7 +641,7 @@ def xournal_launcher(home):
     Only Xournal++ needs its GTK toolkit path selected explicitly on Wayland;
     the upstream launcher's MIME types and action entries are preserved.
     """
-    desktop = Path("/usr/share/applications/com.github.xournalpp.xournalpp.desktop")
+    desktop = SYSTEM_APPLICATIONS / "com.github.xournalpp.xournalpp.desktop"
     if not desktop.exists():
         return None
     target = home / ".local/share/applications" / desktop.name
@@ -807,10 +800,8 @@ def restart(plan, installation):
     run(["systemctl", "--user", "reset-failed", "badi-accessibility.service"])
     run(["systemctl", "--user", "restart", "badi-accessibility.service"])
     wait_accessibility(home / ".local/lib/badi/accessibility/daemon.py", runtime / "badi/accessibility.sock")
-    if plan.args.observed_app or plan.args.screen_reader_accessibility:
+    if plan.args.observed_app:
         enable_accessibility(installation)
-    if plan.args.screen_reader_accessibility:
-        enable_screen_reader_accessibility(installation)
     require_unlocked()
     # A fresh Fcitx may not have written its profile yet; then only an
     # existing profile that changed counts as a rewrite.
@@ -893,7 +884,8 @@ def report(plan, probe):
                   ". Relaunch the app to apply it; existing windows were not closed and app/site policy is unchanged."
                   " Complete renderer accessibility costs some browser CPU and memory on every page.")
         if plan.flags_present:
-            print("Renderer accessibility was already enabled for " + ", ".join(plan.flags_present) + "; its flags file was not changed.")
+            print("Renderer accessibility was already enabled for " + ", ".join(plan.flags_present) +
+                  "; its flags file or launcher was not changed.")
 
 
 def main():

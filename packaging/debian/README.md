@@ -122,8 +122,8 @@ with the build dependencies above and no Node.js. It finds no
   registry offers `zwp_input_method_manager_v2`, where Fcitx's `wayland_v2`
   frontend serves apps (Hyprland, Sway); GNOME and KDE Plasma do not;
 - installs and enables the observer, starting and verifying it only in a
-  Hyprland session, and refuses `--observed-app` and
-  `--screen-reader-accessibility`, which need Omarchy's lock status;
+  Hyprland session, and refuses `--observed-app`, which needs Omarchy's lock
+  status;
 - leaves out the launcher, the Omarchy hooks and `hyprland.lua`.
 
 Backups and rollback are those of the

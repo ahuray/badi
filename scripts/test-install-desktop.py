@@ -282,7 +282,7 @@ class DesktopInstallTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, '', '')
 
             plan = installer.Plan(
-                args=SimpleNamespace(broker_only=False, observed_app=[], screen_reader_accessibility=False),
+                args=SimpleNamespace(broker_only=False, observed_app=[]),
                 home=home, config_home=home / '.config', runtime=runtime,
                 flag_updates={}, flags_present=[], broker_updating=True,
                 accessibility_enabled=False)
@@ -311,7 +311,7 @@ class DesktopInstallTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, '', '')
 
             plan = installer.Plan(
-                args=SimpleNamespace(broker_only=False, observed_app=[], screen_reader_accessibility=False),
+                args=SimpleNamespace(broker_only=False, observed_app=[]),
                 home=home, config_home=home / '.config', runtime=home / 'runtime',
                 flag_updates={}, flags_present=[], broker_updating=True,
                 accessibility_enabled=True)
@@ -367,6 +367,24 @@ class DesktopInstallTests(unittest.TestCase):
                           'chatgpt': 'codex-flags.conf', 'code': 'code-flags.conf', 'cursor': 'cursor-flags.conf',
                           'grok-bot': 'grok-bot-flags.conf', 'com.anthropic.claude': 'claude-desktop-flags.conf'})
         self.assertNotIn('discord', installer.OBSERVED_APP_FLAGS, 'Discord has no supported flags file')
+        self.assertEqual(installer.OBSERVED_LAUNCHERS, {'discord': 'discord.desktop'})
+
+    def test_observed_launcher_puts_the_switch_after_each_program(self):
+        packaged = ('[Desktop Entry]\nName=Discord\nExec=/usr/bin/discord --url -- %u\nPath=/usr/bin\n'
+                    '[Desktop Action New]\nExec=env A=1 B=2 /usr/bin/discord --new\n')
+        updated = installer.observed_launcher(packaged)
+        self.assertEqual(updated, packaged.replace(
+            'Exec=/usr/bin/discord --url', f'Exec=/usr/bin/discord {installer.OBSERVED_FLAG} --url').replace(
+            'B=2 /usr/bin/discord --new', f'B=2 /usr/bin/discord {installer.OBSERVED_FLAG} --new'))
+        self.assertIsNone(installer.observed_launcher(updated), 'a second run changes nothing')
+        self.assertIsNone(installer.observed_launcher('Exec=discord --force-renderer-accessibility\n'))
+        self.assertEqual(installer.observed_launcher('Exec=discord'), f'Exec=discord {installer.OBSERVED_FLAG}')
+        for line in ('Exec=discord --force-renderer-accessibility=basic', 'Exec=discord --disable-renderer-accessibility'):
+            with self.subTest(line=line), self.assertRaisesRegex(RuntimeError, 'conflicts'):
+                installer.observed_launcher(line)
+        for line in ('Exec="/opt/Discord App/Discord" --url', 'Exec=env A=1', 'Exec='):
+            with self.subTest(line=line), self.assertRaisesRegex(RuntimeError, 'missing or quoted'):
+                installer.observed_launcher(line)
 
     def test_observed_flags_follow_each_installed_wrappers_quoting(self):
         quoted = "'--force-renderer-accessibility=basic'\n"
@@ -448,30 +466,6 @@ class DesktopInstallTests(unittest.TestCase):
             self.assertEqual(json.loads(receipt.read_text()), {'bus_enabled': False, 'toolkit_accessibility': False})
             self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
         self.assertIn('set-property', command.call_args_list[2].args[0])
-
-    def test_screen_reader_opt_in_preserves_rollback_and_rejects_unknown_state(self):
-        with tempfile.TemporaryDirectory() as temporary, patch.object(installer, 'require_unlocked'):
-            installation = receipts.Installation(Path(temporary), 'desktop')
-            receipt = Path(temporary) / '.local/state/badi/install-backups/notes/accessibility-screen-reader.json'
-
-            def replies(values):
-                return [subprocess.CompletedProcess([], 0, value + '\n', '') for value in values]
-
-            with patch.object(installer, 'run', side_effect=replies(
-                    ['b false', 'false', '', '', 'b true', 'true'])), contextlib.redirect_stdout(io.StringIO()):
-                installer.enable_screen_reader_accessibility(installation)
-            original = receipt.read_bytes()
-            self.assertEqual(json.loads(original), {'screen_reader_enabled': False, 'screen_reader_setting': False})
-            self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
-            with patch.object(installer, 'run', side_effect=replies(['b true', 'true'])) as command:
-                installer.enable_screen_reader_accessibility(installation)
-                self.assertEqual(command.call_count, 2)
-            self.assertEqual(receipt.read_bytes(), original)
-            with patch.object(installer, 'run', side_effect=replies(['unknown', 'false'])) as command:
-                with self.assertRaisesRegex(RuntimeError, 'prior screen-reader'):
-                    installer.enable_screen_reader_accessibility(installation)
-                self.assertEqual(command.call_count, 2)
-            self.assertEqual(receipt.read_bytes(), original)
 
     def test_trial_runtime_is_rejected_before_installation(self):
         with patch.object(installer.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '/run/user/1000\n', '')) as command, \
@@ -1007,7 +1001,7 @@ class FullInstallTests(FullInstall, unittest.TestCase):
                     self.assertFalse((home / '.config/omarchy').exists(), 'no Omarchy, no hook folder')
 
     def test_rejected_arguments_change_nothing(self):
-        for argv in (['--broker-only', '--screen-reader-accessibility'], ['--no-such-option']):
+        for argv in (['--broker-only', '--observed-app', 'discord'], ['--no-such-option']):
             with self.subTest(argv=argv), patch('sys.argv', ['install-desktop.py', *argv]), \
                  patch.object(installer.subprocess, 'run') as command, contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as stopped:
@@ -1087,13 +1081,44 @@ class ObservedAppInstallTests(FullInstall, unittest.TestCase):
             self.assertEqual(brave.read_text(), '--force-renderer-accessibility=basic\n')
             self.assertFalse((root / 'home/.local/state/badi/install-backups').exists())
 
-    def test_discord_is_not_an_observed_app_choice(self):
-        with patch('sys.argv', ['install-desktop.py', '--observed-app', 'discord']), \
-             patch.object(installer.subprocess, 'run') as command, contextlib.redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit) as stopped:
-                installer.main()
-        self.assertEqual(stopped.exception.code, 2)
-        command.assert_not_called()
+    def test_discord_gets_a_backed_up_user_launcher_with_the_switch(self):
+        packaged_text = '[Desktop Entry]\nName=Discord\nExec=/usr/bin/discord --url -- %u\n'
+        for mine in (None, '[Desktop Entry]\nName=My Discord\nExec=/usr/bin/discord --url -- %u\n'):
+            with self.subTest(mine=mine is not None), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                system = root / 'system'
+                system.mkdir()
+                (system / 'discord.desktop').write_text(packaged_text)
+                launcher = root / 'home/.local/share/applications/discord.desktop'
+                if mine is not None:
+                    launcher.parent.mkdir(parents=True)
+                    launcher.write_text(mine)
+                with patch.object(installer, 'SYSTEM_APPLICATIONS', system):
+                    home, _calls, enabled = self.install_observed(root, ['discord'])
+                base = mine if mine is not None else packaged_text
+                self.assertEqual(launcher.read_text(), base.replace('--url', installer.OBSERVED_FLAG + ' --url'))
+                self.assertEqual((system / 'discord.desktop').read_text(), packaged_text, 'the package is unchanged')
+                backup, document, _changed = only_backup(home)
+                entry, = (e for e in document['changes'] if e['path'] == '.local/share/applications/discord.desktop')
+                if mine is None:
+                    self.assertEqual(entry['action'], 'create')
+                else:
+                    self.assertEqual(saved(backup, document, '.local/share/applications/discord.desktop').read_text(),
+                                     mine)
+                enabled.assert_called_once()
+                self.assertIn(installer.OBSERVED_FLAG + ' added for discord.', self.output)
+                with patch.object(installer, 'SYSTEM_APPLICATIONS', system):
+                    self.install_observed(root, ['discord'])
+                self.assertIn('already enabled for discord', self.output)
+
+    def test_discord_without_a_launcher_stops_before_changing_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(installer, 'SYSTEM_APPLICATIONS', root / 'system'), \
+                    self.assertRaisesRegex(RuntimeError, 'No discord.desktop launcher'):
+                self.install_observed(root, ['discord'])
+            self.assertFalse((root / 'home/.local/share/applications').exists())
+            self.assertFalse((root / 'home/.local/state/badi/install-backups').exists())
 
 
 SYSTEM_ADDONS = Path('/usr/lib/x86_64-linux-gnu/fcitx5')
@@ -1198,7 +1223,7 @@ class GenericInstallTests(unittest.TestCase):
             self.assertNotIn('runs only in a Hyprland session', self.output)
 
     def test_desktop_wide_accessibility_options_are_refused_before_any_change(self):
-        for argv in (['--observed-app', 'chromium'], ['--screen-reader-accessibility']):
+        for argv in (['--observed-app', 'chromium'], ['--observed-app', 'discord']):
             with self.subTest(argv=argv), tempfile.TemporaryDirectory() as temporary:
                 with self.assertRaisesRegex(RuntimeError, 'not available'):
                     self.generic_install(Path(temporary), argv)

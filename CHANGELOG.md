@@ -22,6 +22,10 @@ Unreleased in the same commit.
 - Suggestions in observed apps appear sooner after you stop typing: a field
   is inspected on the keystroke itself, and again at once when your own
   typing changes it, so the model runs during the typing pause.
+- Discord gets suggestions: `install-desktop.py --observed-app discord` adds
+  the renderer accessibility flag to a user copy of its launcher. The
+  `--screen-reader-accessibility` option is gone: it never exposed Discord's
+  composer, and at-spi2-core 2.62 no longer has that setting.
 
 ## 0.2.0 (2026-10-24)
 
