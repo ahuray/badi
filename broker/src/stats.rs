@@ -37,8 +37,8 @@ pub const MAX_STATS_BYTES: usize = 4 * 1024 * 1024;
 /// One counted moment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatsEvent {
-    /// A suggestion the broker showed. Growing versions and type-through
-    /// remainders of it are the same suggestion.
+    /// A suggestion the broker showed. Type-through remainders of it are
+    /// the same suggestion.
     Shown,
     /// An acceptance the adapter reported `applied` or
     /// `dispatched_unverified`, with the word parts it inserted (zero for a

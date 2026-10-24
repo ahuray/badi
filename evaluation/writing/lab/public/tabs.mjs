@@ -1,4 +1,4 @@
-export function attachLabTabs(document, names = ['prediction', 'spelling', 'lookup']) {
+export function attachLabTabs(document, names = ['prediction', 'lookup']) {
   const tabs = names.filter(name => document.getElementById(`${name}-tab`));
   const select = name => {
     for (const id of tabs) {

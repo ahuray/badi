@@ -53,12 +53,12 @@ vim.g.badi = {
 ```
 
 A terminal can send Ctrl+Shift+Space only through an extended keyboard
-protocol. In foot on 2026-10-17 it arrived under this workstation's own
-LazyVim configuration and the broker trace recorded an explicit Neovim
-request. Where the key does not arrive, map `:BadiRequest` to one that
-does. `:BadiStatus` prints a
-content-free state, and `:BadiReconnect` restarts the bridge with fresh
-policy. The preview uses the `BadiSuggestion` highlight, linked to `Comment`.
+protocol (foot and Ghostty do, [below](#tested-with)). Where the key does not
+arrive, map `:BadiRequest` to one that does. `:BadiStatus` prints a
+content-free state, including the policy the bridge last reported
+(`automatic`, `manual`, `refused` or `unknown`), and `:BadiReconnect`
+restarts the bridge with fresh policy. The preview uses the `BadiSuggestion`
+highlight, linked to `Comment`.
 
 ## How it works
 
@@ -71,6 +71,12 @@ policy. The preview uses the `BadiSuggestion` highlight, linked to `Comment`.
   the same code Obsidian and Bash use. It exits after ten idle minutes; the
   next eligible keystroke starts a new one. A reconnect only refreshes policy
   and never replays text.
+- **Policy first.** Every state the bridge reports carries the broker's
+  policy for Neovim. The plugin reads no buffer text for a request that
+  policy refuses (paused, `badi app nvim off`, or an automatic request under
+  a manual grant); until the bridge has reported one, it asks with a
+  content-free `status` first. The bridge checks the policy again before it
+  sends anything to the broker.
 - **Context.** At most 512 Unicode scalars before the caret (up to 64 earlier
   lines, joined with `\n`) and the rest of the caret's line after it, cut on
   UTF-8 boundaries. Text with bytes that are not UTF-8 is refused.
@@ -146,7 +152,8 @@ Ctrl+Right (all of it),
 one-step undo with typing before and after, multibyte (German and Persian)
 byte offsets, a result or a grant arriving after an edit, fall-through to
 global, buffer-local and completion-menu Tab mappings, a second window on the
-same buffer, denied buffers, Escape, expiry and a bridge crash. The real-broker
+same buffer, denied buffers, a refused, manual or unreported policy sending no
+text, Escape, expiry and a bridge crash. The real-broker
 lane covers the missing grant (no provider call), a compare-and-swap grant,
 acceptance counted by the broker, the type-through carry without a model call,
 pause, an explicit request, a broker restart without replay, and content-free
@@ -154,20 +161,14 @@ debug activity, broker logs and messages. The tests skip where Neovim 0.10 is
 missing; the CI job `Neovim plugin / pinned Arch` sets `BADI_REQUIRE_NEOVIM=1`
 so they must run there.
 
-Tested headless with Neovim 0.12.5 and the deterministic phrase provider.
-Live on 2026-10-17 with the real model (installed `78ff8ca`): interactive
-Neovim in foot, run as `nvim -u NONE` with the installed start package on
-`runtimepath` and disposable text in a scratch Markdown buffer, showed the
-grey `help.` after a typing pause, Tab took `help`, a second Tab the `.`
-remainder, Ctrl+→ took the whole next suggestion, and leaving Insert mode
-dismissed the following one. Streamed growth was visible in the broker
-trace (`I'm` → `I'm trying to understand`).
+## Tested with
 
-Live later on 2026-10-17 under this workstation's own LazyVim
-configuration (Neovim 0.12.5 in foot, the installed lazy.nvim spec and
-disposable Markdown): the grey `version of the paper` appeared after a
-typing pause, Tab inserted ` version` and left the rest, Ctrl+→ inserted
-the remainder, and on a second line Ctrl+Shift+Space produced an explicit
-broker request whose grey `next meeting will be` then yielded ` next` to
-Tab. `badi debug watch` was open throughout; this Neovim trace contained
-no `output_rejected` outcome.
+| Neovim | Where | Provider | Result |
+| --- | --- | --- | --- |
+| 0.12.5, 0.12.6 | headless, both lanes above | phrase fixture | pass |
+| 0.12.5 | foot, `nvim -u NONE` with the installed start package | real model | pause preview, Tab word by word, Ctrl+→, Insert-mode exit dismisses, streamed growth in the trace |
+| 0.12.5 | foot, this workstation's LazyVim through the installer's lazy.nvim spec | real model | as above, plus Ctrl+Shift+Space as an explicit request; no `output_rejected` in the trace |
+| 0.12.6 | Ghostty, the same LazyVim setup | real model | Tab, Ctrl+→ and Ctrl+Shift+Space |
+
+The policy gate (no text before the bridge reports an allowing policy) is
+covered by the scripted lane only; it has no live trial yet.

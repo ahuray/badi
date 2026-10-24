@@ -1,9 +1,10 @@
 # Editor integrations
 
 Obsidian, Bash and Neovim own their text: Badi reads and edits through the
-editor itself, with native undo. Both check exact app policy before reading anything,
-bind each acceptance to the document, caret, revision, fingerprint and an
-expiring one-shot broker grant, and retain no typed text. Password and
+editor itself, with native undo. Each checks exact app policy before reading
+anything, inserts a grant only when it is the text on screen, binds each
+acceptance to the document, caret, revision, fingerprint and an expiring
+one-shot broker grant, and retains no typed text. Password and
 sensitive fields, foreign composition, selections and stale context are
 excluded.
 
@@ -14,9 +15,9 @@ four-second local display timer. Update the broker before the editor plugin.
 
 | Integration | Keys | Tested with |
 | --- | --- | --- |
-| Obsidian | Automatic, or Ctrl+Shift+Space to request. Tab accepts one word only while a suggestion is visible; otherwise it stays Tab. Ctrl/Command+Right accepts all, Escape dismisses. Mid-note, only what fits before the next word. | Obsidian 1.14.4 / Electron 43, real app and model (2026-10-20, all eight live-runner checks): English, German and Persian display, Tab, Ctrl+Right, undo, Escape, broker restart |
+| Obsidian | Automatic, or Ctrl+Shift+Space to request. Tab accepts one word only while a suggestion is visible; otherwise it stays Tab. Ctrl/Command+Right accepts all, Escape dismisses. Mid-note, only what fits before the next word. | Obsidian 1.14.4 / Electron 43, real app and model, all eight live-runner checks: English, German and Persian display, Tab, Ctrl+Right, undo, Escape, broker restart |
 | Bash | Ctrl-X then Tab requests and accepts, Ctrl-X then Escape dismisses; never submits ([details](../shell/README.md)) | Bash 5.3.15, Readline 8.3, Ghostty 1.3.1 |
-| Neovim | Prose buffers, automatic after a 120 ms pause, or Ctrl+Shift+Space. Tab accepts one word and Ctrl+Right all of it, only while a suggestion is visible; leaving Insert mode dismisses ([details](../neovim/README.md)) | Neovim 0.12.5 headless, scripted bridge and real phrase broker; live with the real model under this workstation's LazyVim through the installer's lazy.nvim spec, in foot (0.12.5, 2026-10-17) and Ghostty (0.12.6, 2026-10-20), including Tab, Ctrl+Right and Ctrl+Shift+Space |
+| Neovim | Prose buffers, automatic after a 120 ms pause, or Ctrl+Shift+Space. Tab accepts one word and Ctrl+Right all of it, only while a suggestion is visible; leaving Insert mode dismisses ([details](../neovim/README.md)) | Neovim 0.12.5 headless, scripted bridge and real phrase broker; live with the real model in foot (0.12.5) and Ghostty (0.12.6) ([matrix](../neovim/README.md#tested-with)) |
 | LibreOffice Writer (spelling) | A finished misspelled word shows its correction; Alt+F7 shows one for the word at the caret; Alt+F7 again replaces it in one undo step, Escape dismisses ([details](../libreoffice/README.md)) | LibreOffice 26.8 headless, phrase fixture; the interactive Wayland window live (Alt+F7, replace, one Ctrl+Z) |
 
 Browser fields use the [IME-parity path](../../README.md#how-badi-edits-chromium-based-apps-and-zen)
@@ -76,8 +77,8 @@ node adapters/obsidian/live.mjs --headless --local   # real Obsidian, temporary 
 The live runner uses the installed Obsidian with its own temporary vault,
 profile, plugin and broker; headless Ozone exercises the real editor without
 the desktop. It ends Obsidian by signalling only the app process, never its
-process group, so Electron's crash helper does not fire; on 2026-10-20 it
-passed all eight checks on Obsidian 1.14.4-2. It never presses Tab
+process group, so Electron's crash helper does not fire; it passes all eight
+checks on Obsidian 1.14.4-2. It never presses Tab
 without a suggestion, because Tab then indents the line. Results stay under
 the ignored `output/` directory. These checks prove editing behavior, not the
 usefulness of German or Persian prose.

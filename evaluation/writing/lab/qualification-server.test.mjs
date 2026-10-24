@@ -110,7 +110,9 @@ test('full HTTP run/review/save/load path binds owned results and never stores d
 test('HTTP review rejects client measurements, wrong full-output hashes, foreign origins and missing tokens', async t => {
   const lab = await setup(t); const result = await run(lab);
   const body = { run_id: result.id, config_id: config.id, reviews: reviews(result.state) };
-  assert.equal((await fetch(lab.origin + '/api/qualification/status')).status, 403);
+  const tokenless = await fetch(lab.origin + '/api/qualification/status');
+  assert.equal(tokenless.status, 403);
+  assert.match(tokenless.headers.get('content-security-policy'), /frame-ancestors 'none'/u);
   assert.equal((await lab.post('/api/qualification/review', body, { headers: { ...lab.headers, Origin: 'https://foreign.example' } })).status, 403);
   for (const spoof of [{ ...body, evidence: {} }, { ...body, peak_rss_bytes: 1 }, { ...body, reviews: [{ ...body.reviews[0], latency_ms: 1 }] },
     { ...body, reviews: [{ ...body.reviews[0], result_sha256: 'f'.repeat(64) }] }, { ...body, reviews: [{ ...body.reviews[0], full_addition_reviewed: false }] }]) {

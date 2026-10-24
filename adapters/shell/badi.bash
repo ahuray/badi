@@ -45,7 +45,7 @@ _badi_exchange() {
   local badi_pipe_trap badi_sent
   badi_pipe_trap=$(trap -p PIPE)
   trap '' PIPE
-  printf '%s\n' "$1" >&"${BADI_WRITER_FD}" 2>/dev/null
+  printf '%s\n' "$1" 1>&"${BADI_WRITER_FD}" 2>/dev/null
   badi_sent=$?
   if [[ -n $badi_pipe_trap ]]; then eval "$badi_pipe_trap"; else trap - PIPE; fi
   if (( badi_sent )) ||
@@ -133,7 +133,8 @@ _badi_words() {
       badi_display=$BADI_PREVIEW
       if [[ -n $BADI_REPLACE ]]; then badi_display="  ${BADI_REPLACE% } → ${BADI_PREVIEW% }"; fi
       if ! badi_preview show "$badi_display" "$BADI_PREFIX"; then
-        _badi_dismiss
+        # Never shown, so never declined: no dismissal or Escape quiet.
+        _badi_release cancel
         printf '\nBadi: the inline preview needs an unwrapped line with room after the caret.\n'
       fi
       return
@@ -143,10 +144,14 @@ _badi_words() {
   printf '\nBadi: %s. Press Ctrl-X Tab to retry; badi debug watch shows activity.\n' "${BADI_REPLY_VALUE:-no_suggestion}"
 }
 
-_badi_dismiss() {
-  if _badi_alive; then _badi_exchange '{"operation":"cancel"}' || true; fi
+# Withdraws the preview and its broker session: `dismiss` is the user's
+# Escape, which ends the type-through carry (ADR 0004); `cancel` keeps it.
+_badi_release() {
+  if _badi_alive; then _badi_exchange "{\"operation\":\"$1\"}" || true; fi
   _badi_clear_preview
 }
+
+_badi_dismiss() { _badi_release dismiss; }
 
 bind -x '"\C-x\C-i":_badi_words'
 bind -x '"\C-x\e":_badi_dismiss'

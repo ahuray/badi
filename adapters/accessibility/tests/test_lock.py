@@ -1,4 +1,5 @@
 """Fresh lock replies and discovery invalidation, without a running desktop."""
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -13,7 +14,7 @@ from desktop import LOCK_FLAGS, LockEndpoint, SocketLockQuery
 
 
 class SocketLockTests(unittest.TestCase):
-    def query(self, raw, *, changed=False, peer=None):
+    def query(self, raw, *, changed=False, peer=None, cache=None):
         connection = Mock()
         connection.getsockopt.return_value = struct.pack("3i", *(peer or (123, os.getuid(), 0)))
         pending = bytearray(raw)
@@ -24,7 +25,7 @@ class SocketLockTests(unittest.TestCase):
             del pending[:count]
             return result
         connection.recv.side_effect = receive
-        cache = Mock(stamp="old")
+        cache = cache or Mock(stamp="old")
         cache.current_stamp.return_value = "new" if changed else "old"
         with patch("desktop.socket.socket", return_value=connection):
             try:
@@ -52,6 +53,22 @@ class SocketLockTests(unittest.TestCase):
             self.query(raw, changed=True)
         with self.assertRaises(Denied):
             self.query(raw, peer=(999, os.getuid(), 0))
+
+    def test_a_failed_endpoint_is_discovered_again_but_a_locked_answer_keeps_it(self):
+        unlocked = {flag: False for flag in LOCK_FLAGS}
+        for raw, peer, forgotten in ((self.response(unlocked), (999, os.getuid(), 0), True),
+                                     (b"\x02\x00", None, True),
+                                     (self.response({**unlocked, "locked": True}), None, False),
+                                     (self.response(unlocked), None, False)):
+            with self.subTest(raw=raw[:6], peer=peer):
+                cache = Mock(stamp="old")
+                with contextlib.suppress(Denied):
+                    self.query(raw, peer=peer, cache=cache)
+                self.assertEqual(cache.forget.called, forgotten)
+        cache = LockEndpoint()
+        cache.stamp, cache.endpoint = "old", ("/private/ipc.sock", 123)
+        cache.forget()
+        self.assertEqual((cache.stamp, cache.endpoint), (None, None))
 
     def test_discovery_is_cached_only_until_the_instance_or_executable_changes(self):
         for version in (b"Quickshell 0.3.1 (test)", b"Quickshell 0.3.2 (revision test, distributed by Omarchy)"):

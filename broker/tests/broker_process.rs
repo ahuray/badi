@@ -1,4 +1,4 @@
-#![cfg(all(feature = "local-model", target_os = "linux"))]
+#![cfg(target_os = "linux")]
 
 use std::error::Error;
 use std::os::unix::process::CommandExt;

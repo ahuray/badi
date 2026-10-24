@@ -4,7 +4,7 @@ import { confidenceCoverage } from './confidence.mjs';
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="badi-lab-token"]').content;
 const headers = { 'Content-Type': 'application/json', 'X-Badi-Lab-Token': token };
-const names = { production_boundary: 'Current Badi logic', context: 'Full context', context_confidence: 'Full context + token confidence', instructed: 'Context + style', healed: 'Word-boundary experiment', instructed_healed: 'Instructions + word boundary', native_instructed: 'Selected model instructions', framed: 'Framed prompt', field_context: 'Earlier field text', probability_rejoin: 'Probability rejoin', following_text: 'Text after the caret', context_bias: 'Context word bias', vocabulary: 'Finish words from context' };
+const names = { production_boundary: 'Current Badi logic', context: 'Full context', context_confidence: 'Full context + token confidence', instructed: 'Context + style', healed: 'Word-boundary experiment', instructed_healed: 'Instructions + word boundary', native_instructed: 'Selected model instructions', vocabulary: 'Finish words from context' };
 const fixedProductionMode = mode => mode === 'production_boundary';
 const reasonLabels = {
   production_abstention_or_budget: 'The current provider returned no usable continuation. Its response does not distinguish an abstention from an exhausted time budget.',
@@ -12,7 +12,8 @@ const reasonLabels = {
   token_preflight_deadline: 'The time budget expired while checking the prompt.',
   context_overflow: 'The supplied text exceeds the model context. Shorten the draft or examples.',
   runtime_unavailable: 'The local model could not complete this request.',
-  unsupported_language: 'This experiment currently supports English, German, French, Spanish and Persian.',
+  unsupported_language: 'This experiment currently supports English, German, French, Spanish, Portuguese and Persian.',
+  instructed_template_model_mismatch: 'These instructions use the pinned Qwen3 1.7B template; this model cannot run them. Choose Selected model instructions.',
   invalid_request: 'The input exceeds the supported limits or contains unsupported formatting.',
   invalid_model_output: 'The model returned an invalid response.',
 };

@@ -185,25 +185,34 @@ impl Broker {
 }
 
 impl BrokerState {
-    /// Every settings document the engine uses goes through here.
+    /// Every settings document the engine uses goes through here. The
+    /// document is in force before any side effect runs, so a failing one
+    /// cannot leave the broker enforcing the previous settings.
     pub(super) fn install_settings(
         &mut self,
         settings: SettingsV2,
         provider: &dyn crate::provider::CompletionProvider,
     ) {
         self.settings_revision = settings.revision;
-        provider.set_language_preferences(&settings.language_preferences());
-        provider.set_suggestion_length(settings.suggestion_length);
-        let spelling = crate::spelling::global();
-        let generation = spelling.enable(&settings.spelling_languages);
-        // Dictionaries load off the runtime; a newer setting supersedes it.
-        std::thread::spawn(move || spelling.load(generation));
         // The words already counted per field visit are kept only while
         // context is on (ADR 0010).
         if settings.context_words != Some(true) {
             self.learned_visits.clear();
         }
-        self.settings = Some(settings);
+        let settings = self.settings.insert(settings);
+        provider.set_language_preferences(&settings.language_preferences());
+        provider.set_suggestion_length(settings.suggestion_length);
+        let spelling = crate::spelling::global();
+        let generation = spelling.enable(&settings.spelling_languages);
+        // Dictionaries load off the runtime; a newer setting supersedes it.
+        // Without a thread, those languages go uncorrected until the next
+        // settings change.
+        if let Err(error) = std::thread::Builder::new()
+            .name("badi-spelling".to_owned())
+            .spawn(move || spelling.load(generation))
+        {
+            eprintln!("badi-broker: spelling dictionaries not loaded: {error}");
+        }
     }
 }
 

@@ -27,6 +27,15 @@ bool strictBoundedJsonObject(std::string_view body);
 bool strictSessionControlResult(std::string_view body);
 bool strictSuggestionClear(std::string_view body);
 bool strictPolicyStatus(std::string_view body);
+// The broker's `error` frame refusing one request: the id that request was
+// sent with and the reason code. The connection stays open.
+struct RequestRefusal {
+    std::string requestId;
+    std::string reason;
+};
+// Exactly v, id, type "error", mono_ms and a payload of only a known `code`;
+// any other shape closes the connection.
+std::optional<RequestRefusal> strictRequestRefusal(std::string_view body);
 // The broker target of a manual field: the canonical app id and the opaque
 // Fcitx context id. An observed field uses the observer's inspect target.
 std::optional<nlohmann::json> desktopApplicationTarget(std::string_view appId,
@@ -89,15 +98,17 @@ struct WireCallbacks {
     std::function<void(const ClearNotice &)> onClear;
     std::function<void(const CommitPrepare &)> onCommitPrepare;
     std::function<void()> onDisconnected;
-    // (session, allowed, byDefault): byDefault marks an allowance from the app
-    // list mode (matched_default), not from an exact rule.
-    // Session, allowed, the broker's resolution reason, language override,
-    // and whether context is on there (context_words).
+    // Session, allowed, the broker's resolution reason (matched_default marks
+    // an allowance from the app list mode, not an exact rule), language
+    // override, and whether context is on there (context_words).
     std::function<void(std::string_view, bool, std::string, std::string, bool)> onPolicy;
     // Explicit revision of one selection (ADR 0012); adapters that leave
     // these empty never ask for one.
     std::function<void(Revision)> onRevision = {};
     std::function<void(const RevisionClear &)> onRevisionClear = {};
+    // A request the broker refused (an `error` frame), by the id it was sent
+    // with. Ids are unique per session, not across sessions.
+    std::function<void(const RequestRefusal &)> onRefusal = {};
 };
 
 class Transport {

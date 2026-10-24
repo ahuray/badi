@@ -1,6 +1,6 @@
 //! Device-specific fit and empirical qualification. Metadata cannot confer quality.
 //!
-//! The legacy pinned catalog remains unchanged. This engine consumes discovery
+//! It never changes the broker's pinned catalog. This engine consumes discovery
 //! metadata and locally collected evidence; callers must refresh the device before
 //! every load. Reports are development qualification, not adapter qualification.
 

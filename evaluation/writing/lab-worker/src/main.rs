@@ -111,29 +111,15 @@ fn main() {
     // Dispatch before creating any threads: this process will replace itself
     // with the runtime, retaining the armed Linux parent-death signal.
     #[cfg(target_os = "linux")]
+    if args
+        .first()
+        .is_some_and(|arg| arg == badi_broker::writing::EXEC_HELPER_FLAG)
     {
-        if args
-            .first()
-            .is_some_and(|arg| arg == badi_writing_lab::spelling::engine::HELPER_FLAG)
-        {
-            match badi_writing_lab::spelling::engine::exec_helper(&args[1..]) {
-                Ok(never) => match never {},
-                Err(code) => {
-                    eprintln!("{code}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        if args
-            .first()
-            .is_some_and(|arg| arg == badi_broker::writing::EXEC_HELPER_FLAG)
-        {
-            match badi_broker::writing::exec_runtime_helper(&args[1..]) {
-                Ok(never) => match never {},
-                Err(code) => {
-                    eprintln!("{code}");
-                    std::process::exit(1);
-                }
+        match badi_broker::writing::exec_runtime_helper(&args[1..]) {
+            Ok(never) => match never {},
+            Err(code) => {
+                eprintln!("{code}");
+                std::process::exit(1);
             }
         }
     }
@@ -241,35 +227,6 @@ fn qualification(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
 #[tokio::main]
 async fn run_worker() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.first().is_some_and(|arg| arg == "--spelling-lab") {
-        if let Err(code) = badi_writing_lab::spelling::run(&args[1..]).await {
-            let _ = error(None, code);
-            std::process::exit(1);
-        }
-        return;
-    }
-    if args.first().is_some_and(|arg| arg == "--stop-token-probe") {
-        match stop_token_probe(&args[1..]).await {
-            Ok(true) => {}
-            Ok(false) => std::process::exit(1),
-            Err(code) => {
-                let _ = error(None, code);
-                std::process::exit(1);
-            }
-        }
-        return;
-    }
-    if args.first().is_some_and(|arg| arg == "--prefill-probe") {
-        match prefill_probe(&args[1..]).await {
-            Ok(true) => {}
-            Ok(false) => std::process::exit(1),
-            Err(code) => {
-                let _ = error(None, code);
-                std::process::exit(1);
-            }
-        }
-        return;
-    }
     if args.first().is_some_and(|arg| arg == "--revision-lab") {
         if let Err(code) = revision_worker(&args[1..]).await {
             let _ = error(None, code);
@@ -277,140 +234,10 @@ async fn run_worker() {
         }
         return;
     }
-    if args.first().is_some_and(|arg| arg == "--paced-probe") {
-        match paced_probe(&args[1..]).await {
-            Ok(true) => {}
-            Ok(false) => std::process::exit(1),
-            Err(code) => {
-                let _ = error(None, code);
-                std::process::exit(1);
-            }
-        }
-        return;
-    }
     if let Err(code) = worker(&args).await {
         let _ = error(None, code);
         std::process::exit(1);
     }
-}
-
-async fn paced_probe(args: &[std::ffi::OsString]) -> Result<bool, &'static str> {
-    use badi_writing_lab::paced_probe::{Control, MAX_INPUT_BYTES, ProbeCancellation, ProbeInput};
-    let LabOptions {
-        directory,
-        artifact,
-        prefill_batch,
-        memory_map,
-    } = lab_options_from(args)?;
-    let cancellation = ProbeCancellation::default();
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|_| "signal_unavailable")?;
-    let signal_cancel = cancellation.clone();
-    tokio::spawn(async move {
-        tokio::select! { _ = terminate.recv() => {}, _ = tokio::signal::ctrl_c() => {} }
-        signal_cancel.cancel(Control::Cancel);
-    });
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    let input_cancel = cancellation.clone();
-    std::thread::spawn(move || {
-        let mut input = std::io::BufReader::new(std::io::stdin());
-        let read_frame = |input: &mut std::io::BufReader<std::io::Stdin>, limit: usize| {
-            let mut frame = Vec::new();
-            let count = input
-                .by_ref()
-                .take((limit + 1) as u64)
-                .read_until(b'\n', &mut frame)
-                .map_err(|_| "invalid_frame")?;
-            if count == 0 {
-                return Ok(None);
-            }
-            if frame.len() > limit || frame.last() != Some(&b'\n') {
-                return Err("invalid_frame");
-            }
-            Ok(Some(frame))
-        };
-        let frame =
-            read_frame(&mut input, MAX_INPUT_BYTES).and_then(|frame| frame.ok_or("invalid_frame"));
-        let valid_frame = frame.is_ok();
-        if sender.send(frame).is_err() || !valid_frame {
-            return;
-        }
-        // EOF after the single trace is normal. A later control invalidates
-        // the whole trace; it can never introduce new writing or model options.
-        match read_frame(&mut input, 128) {
-            Ok(None) => {}
-            Ok(Some(frame)) => match serde_json::from_slice::<Control>(&frame) {
-                Ok(control) => input_cancel.cancel(control),
-                Err(_) => input_cancel.cancel(Control::Cancel),
-            },
-            Err(_) => input_cancel.cancel(Control::Cancel),
-        }
-    });
-    let frame = tokio::select! {
-        biased;
-        () = cancellation.cancelled() => return Err("cancelled"),
-        result = tokio::time::timeout(std::time::Duration::from_secs(10), receiver) =>
-            result.map_err(|_| "input_deadline")?.map_err(|_| "input_closed")??,
-    };
-    let input: ProbeInput = serde_json::from_slice(&frame).map_err(|_| "invalid_paced_request")?;
-    input.validate()?;
-    // Direct await keeps owned runtime creation on main's block_on thread.
-    let report = badi_writing_lab::paced_probe::run_with_options(
-        directory,
-        artifact,
-        prefill_batch,
-        memory_map,
-        input,
-        cancellation,
-        |ready| emit(&serde_json::to_value(ready).map_err(|_| ())?).map_err(|_| ()),
-    )
-    .await?;
-    let complete = report.complete;
-    emit(&json!({"type":"paced_report","report":report})).map_err(|_| "output_closed")?;
-    Ok(complete)
-}
-
-async fn stop_token_probe(args: &[std::ffi::OsString]) -> Result<bool, &'static str> {
-    let artifact = badi_writing_lab::stop_token_probe::artifact_from(args)?;
-    let directory = directory_from(&[])?;
-    let cancellation = CancellationToken::new();
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|_| "signal_unavailable")?;
-    let signal_cancel = cancellation.clone();
-    tokio::spawn(async move {
-        tokio::select! { _ = terminate.recv() => {}, _ = tokio::signal::ctrl_c() => {} }
-        signal_cancel.cancel();
-    });
-    // Fixed diagnostic: stdin is never read and this future owns startup on
-    // main's block_on thread, exactly like the other owned runtime probes.
-    let report =
-        badi_writing_lab::stop_token_probe::run(directory, artifact, cancellation, |event| {
-            emit(event).map_err(|_| ())
-        })
-        .await;
-    let complete = report.complete;
-    emit(&serde_json::to_value(report).map_err(|_| "serialization_failed")?)
-        .map_err(|_| "output_closed")?;
-    Ok(complete)
-}
-
-async fn prefill_probe(args: &[std::ffi::OsString]) -> Result<bool, &'static str> {
-    let directory = directory_from(args)?;
-    let cancellation = CancellationToken::new();
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|_| "signal_unavailable")?;
-    let signal_cancel = cancellation.clone();
-    tokio::spawn(async move {
-        tokio::select! { _ = terminate.recv() => {}, _ = tokio::signal::ctrl_c() => {} }
-        signal_cancel.cancel();
-    });
-    // Direct await retains the same main-thread parent-death invariant as the
-    // interactive Lab worker. Stdin never supplies diagnostic prompts.
-    let report = badi_writing_lab::prefill_probe::run(directory, cancellation).await;
-    let complete = report.complete;
-    emit(&serde_json::to_value(report).map_err(|_| "serialization_failed")?)
-        .map_err(|_| "output_closed")?;
-    Ok(complete)
 }
 
 async fn worker(args: &[std::ffi::OsString]) -> Result<(), &'static str> {

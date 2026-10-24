@@ -55,7 +55,6 @@ test('editor identities, native reading lease, revocation and one-shot commits a
       const client = new BrokerClient(profile);
       const states = [];
       client.on('state', state => states.push(state));
-      client.on('diagnostic', reason => states.push(reason));
       client.on('activity', event => states.push(event));
       clients.push(client);
       assert.equal(await client.connect(endpoint), true);
@@ -137,9 +136,19 @@ test('editor identities, native reading lease, revocation and one-shot commits a
       finally { clearTimeout(timer); }
     };
     const exchange = command => { bridge.stdin.write(JSON.stringify(command) + '\n'); return reply(); };
+    const base64 = text => Buffer.from(text).toString('base64');
     assert.equal(await reply(), 'READY 1');
     assert.equal(await exchange({ operation: 'status' }), 'READY 1');
-    assert.match(await exchange({ operation: 'suggest', before: Buffer.from('thank you').toString('base64') }), /^SUGGEST /);
+    assert.match(await exchange({ operation: 'suggest', before: base64('thank you') }), /^SUGGEST /);
+    // A preview Bash could not draw is cancelled and keeps the carried rest;
+    // only Ctrl-X Escape dismisses, which ends it.
+    assert.equal(await exchange({ operation: 'cancel' }), 'DONE ');
+    await delay(20);
+    assert.equal(await exchange({ operation: 'suggest', before: base64('thank you f') }), `SUGGEST ${base64('or your time')}`);
+    assert.equal(await exchange({ operation: 'dismiss' }), 'DONE ');
+    await delay(40);
+    assert.equal(await exchange({ operation: 'suggest', before: base64('thank you fo') }), 'EMPTY ');
+    assert.match(await exchange({ operation: 'suggest', before: base64('thank you') }), /^SUGGEST /);
     const exited = once(broker, 'exit'); broker.kill('SIGTERM'); await exited;
     await until(() => !recovering.connected && !recovering.allowed);
     await assert.rejects(recovering.authorize(), /expired/);

@@ -1,5 +1,3 @@
-#![cfg(feature = "local-model")]
-
 use std::error::Error;
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
@@ -156,7 +154,8 @@ async fn exhausted_spelling_header_budget_does_not_submit_a_continuation()
                 true,
                 RequestTrigger::Automatic
             )
-            .await?,
+            .await
+            .map(|reply| reply.outcome)?,
         ProviderOutcome::NoSuggestion(NoSuggestionReason::BudgetPrefill)
     );
     server.await?;
@@ -397,7 +396,8 @@ async fn explicit_spelling_and_continuation_share_the_explicit_budget() -> Resul
             true,
             RequestTrigger::Explicit,
         )
-        .await?;
+        .await
+        .map(|reply| reply.outcome)?;
     assert!(started.elapsed() > automatic_budget);
     assert!(started.elapsed() < RequestTrigger::Explicit.writing_budget());
     assert_eq!(

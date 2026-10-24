@@ -638,14 +638,12 @@ pub(crate) struct CompletionPlan<'a> {
     pub(crate) finished_word_prompt: Option<&'a str>,
 }
 
-/// Languages whose trailing ASCII space is healed in production. A language is
-/// listed only while blinded per-language review finds no increase in harmful
-/// suggestions over the unhealed prompt; an unlisted language keeps that
-/// prompt, trailing space included. Removing a language is its rollback.
-/// German is unlisted: the sealed 2026-09-10 set rose from 1 to 9 harmful.
-/// With Gemma 3 1B (2026-10-18, 67 German development and boundary requests)
-/// healing German gave 15 useful against 7 and 3 harmful against 2.
-/// English was kept by user decision at +1 harmful for +19 useful in 40.
+/// Languages whose trailing ASCII space is healed for a model outside the
+/// catalog; a catalog model heals its own reviewed `healed_languages`. A
+/// language is listed only while blinded per-language review finds no
+/// increase in harmful suggestions over the unhealed prompt (English by user
+/// decision); an unlisted language keeps that prompt, trailing space
+/// included. Removing a language is its rollback.
 pub(crate) const TRAILING_SPACE_HEALING: &[WritingLanguage] =
     &[WritingLanguage::English, WritingLanguage::Persian];
 
@@ -730,15 +728,19 @@ impl LanguagePreferences {
     }
 }
 
-/// Whether production heals a trailing ASCII space for this language tag.
+/// Whether [`TRAILING_SPACE_HEALING`], the set of a client that has no
+/// catalog model (`SemanticClient::new` without `for_model`), heals a
+/// trailing ASCII space for this language tag. A loaded model heals its own
+/// set ([`trailing_space_healing`]).
 #[must_use]
 pub fn heals_trailing_space(language: &str) -> bool {
     WritingLanguage::from_tag(language)
         .is_some_and(|language| TRAILING_SPACE_HEALING.contains(&language))
 }
 
-/// Production passes [`TRAILING_SPACE_HEALING`]; tests pass other sets to
-/// check each language's promotion and rollback on its own.
+/// Production passes the loaded model's [`trailing_space_healing`] set with
+/// the person's choices applied ([`LanguagePreferences::healed`]); tests pass
+/// other sets to check each language's promotion and rollback on its own.
 pub(crate) fn completion_plan<'a>(
     request: &'a ProviderRequest,
     healed_languages: &[WritingLanguage],
@@ -758,14 +760,20 @@ pub(crate) fn completion_plan<'a>(
     }
 }
 
-/// The production echo of `before`: separating spaces plus, for English, the
-/// last healable word. `None` when this language is not healed, the prompt
-/// would be empty, or the word is a lexicon word that production heals only
-/// after checking the answer.
+/// The production echo of `before` when `healed_languages` are healed, as
+/// production computes them for the loaded model ([`trailing_space_healing`]
+/// with [`LanguagePreferences::healed`]): separating spaces plus, for
+/// English, the last healable word. `None` when this language is not healed,
+/// the prompt would be empty, or the word is a lexicon word that production
+/// heals only after checking the answer.
 #[must_use]
-pub fn production_healed_echo<'a>(before: &'a str, language_tag: &str) -> Option<&'a str> {
+pub fn production_healed_echo<'a>(
+    before: &'a str,
+    language_tag: &str,
+    healed_languages: &[WritingLanguage],
+) -> Option<&'a str> {
     let language = WritingLanguage::from_tag(language_tag);
-    let (_, echo, _, checked) = healed_boundary(before, language, TRAILING_SPACE_HEALING);
+    let (_, echo, _, checked) = healed_boundary(before, language, healed_languages);
     echo.filter(|_| !checked)
 }
 
@@ -790,7 +798,7 @@ fn healed_boundary<'a>(
                 return (
                     &context[..start],
                     Some(&context[start..end]),
-                    token_budget(language, 12),
+                    HEALED_WORD_TOKENS,
                     false,
                 );
             }
@@ -798,7 +806,7 @@ fn healed_boundary<'a>(
             // is healed with the word kept. With nothing else, an empty prompt
             // abstains instead of sending the bare stem.
             if context.len() == trimmed.len() {
-                return ("", None, token_budget(language, 8), false);
+                return ("", None, CONTINUATION_TOKENS, false);
             }
         }
         // A lexicon word at the caret may still be half typed: unhealed, the
@@ -812,7 +820,7 @@ fn healed_boundary<'a>(
                     return (
                         &context[..start],
                         Some(&context[start..end]),
-                        token_budget(language, 12),
+                        HEALED_WORD_TOKENS,
                         true,
                     );
                 }
@@ -825,11 +833,11 @@ fn healed_boundary<'a>(
         return (
             trimmed,
             Some(&context[trimmed.len()..]),
-            token_budget(language, 8),
+            CONTINUATION_TOKENS,
             false,
         );
     }
-    (context, None, token_budget(language, 8), false)
+    (context, None, CONTINUATION_TOKENS, false)
 }
 
 /// The echo of `word` inside `context`, including the ASCII spaces that
@@ -843,27 +851,18 @@ fn healed_echo_span(context: &str, word: &str) -> (usize, usize) {
     (start, context.len())
 }
 
-/// Tokens requested for one automatic continuation.
-///
-/// Persian was measured at 2.6× (8 → 21) on 2026-10-12, Lab
-/// `production_boundary`, the 13 Persian development cases, pinned 1.7B.
-/// All 13 missed 550 ms at 21 tokens and four returned no word. Eight tokens
-/// missed twice and still returned a word for every case 21 had answered.
-/// One of those words was shorter (`نظر من` became `نظر`). Neither arm
-/// matched a reference first word. This is that development comparison, not
-/// a held-out score.
-fn token_budget(_language: Option<WritingLanguage>, english_tokens: u16) -> u16 {
-    english_tokens
-}
+/// Tokens requested for one continuation, in every language: a larger
+/// Persian budget missed the writing budget (broker README).
+const CONTINUATION_TOKENS: u16 = 8;
+/// Tokens when the answer first writes a healed English word again.
+const HEALED_WORD_TOKENS: u16 = 12;
 
 impl CompletionPlan<'_> {
     /// Whether this plan abstains before any model call: an empty prompt, or
     /// an unhealed one that ends in an ASCII space. Healed languages never
     /// leave that space in the prompt. After one, a model must start a word
-    /// without its usual leading-space token: German showed 0 useful of 20
-    /// such cases with Qwen3 1.7B (2026-09-09 boundary set) and 0 of 26 with
-    /// Gemma 3 1B, which wrote markup (`<strong>Bezug`) or, with markup
-    /// excluded, fragments such as `uralt.` (2026-10-18).
+    /// without its usual leading-space token, and no reviewed model continued
+    /// one usefully (broker README, languages and healing).
     pub(crate) fn sends_nothing(&self) -> bool {
         self.prompt.trim().is_empty() || self.prompt.ends_with(' ')
     }
@@ -882,7 +881,7 @@ impl CompletionPlan<'_> {
         Some(Self {
             prompt,
             echo: None,
-            max_tokens: token_budget(Some(WritingLanguage::English), 8),
+            max_tokens: CONTINUATION_TOKENS,
             digits: self.digits,
             finished_word_prompt: None,
         })
@@ -914,8 +913,7 @@ impl CompletionPlan<'_> {
         payload["grammar"] = Value::String(format!("root ::= {echo}{class}*"));
         // Before a typed lexicon word, a lone space token let the model meet
         // the echo without writing the word (` ` then `finger` for ` fin`).
-        // Forbidden, the first token writes it (` final`): on the 134 stem
-        // cases of 2026-10-23, 124 first tokens stood against 91.
+        // Forbidden, the first token writes it (` final`).
         if self.finished_word_prompt.is_some() {
             payload["logit_bias"] = json!([[" ", false]]);
         }
@@ -946,15 +944,9 @@ const CONTEXT_WINDOW_SCALARS: usize = 160;
 /// The cut advances in steps of this many scalars, never per keystroke:
 /// while a sentence grows within one step, the window start stays fixed and
 /// each request's prompt extends the previous one, so the runtime reuses
-/// its prefix cache. A per-request sliding start instead changed the
-/// prompt's first bytes every time and forced a full re-prefill (measured
-/// 2026-10-17: cache reuse 0 of ~30 prompt tokens, 380–510 ms to the first
-/// token, once a single sentence passed 160 scalars).
+/// its prefix cache. A per-request sliding start changed the prompt's first
+/// bytes every time and forced a full re-prefill.
 const CONTEXT_CUT_STEP_SCALARS: usize = 64;
-
-/// Logit bias for the first token of each context word: enough to tip a
-/// near tie toward a word already in the text, not to force it.
-pub(crate) const CONTEXT_BIAS: f64 = 2.0;
 
 /// A continuation is shown only when every token of the shown text has at
 /// least this pre-sampling log-probability, so the whole suggestion must be
@@ -963,49 +955,6 @@ pub(crate) const CONTEXT_BIAS: f64 = 2.0;
 /// and 8 of 18 unhelpful suggestions at the cost of 7 of 51 useful ones
 /// (2026-10-20, user decision).
 pub(crate) const CONFIDENCE_FLOOR: f64 = -2.75;
-const BIAS_MIN_SCALARS: usize = 5;
-const BIAS_MAX_WORDS: usize = 24;
-/// The words just typed are left out, so the bias never invites a repeat.
-const BIAS_RECENT_WORDS: usize = 6;
-/// Common English function words long enough to pass the length floor.
-const BIAS_STOP_WORDS: &[&str] = &[
-    "about", "after", "again", "always", "another", "because", "before", "being", "could", "every",
-    "first", "maybe", "never", "other", "really", "should", "since", "still", "their", "there",
-    "these", "thing", "things", "think", "those", "through", "under", "until", "where", "which",
-    "while", "would",
-];
-
-/// Distinctive words of `window`, the bounded text around the field, that a
-/// continuation may reuse. Words are letters only and at least five scalars,
-/// so names and topic words count and function words do not; words among
-/// the last few typed are left out. English only: Persian words often begin
-/// with a one-letter token, and biasing those wrote `ب ب ب` in the Lab
-/// (2026-10-17). The field's own earlier text measured neutral as a source.
-pub(crate) fn bias_words<'a>(
-    before: &str,
-    window: &'a str,
-    language: Option<&str>,
-) -> Vec<&'a str> {
-    if language.and_then(WritingLanguage::from_tag) != Some(WritingLanguage::English) {
-        return Vec::new();
-    }
-    let earlier: Vec<&str> = before.split_whitespace().collect();
-    let recent_tail = &earlier[earlier.len().saturating_sub(BIAS_RECENT_WORDS)..];
-    let words = window
-        .split(|character: char| !character.is_alphabetic())
-        .filter(|word| word.chars().count() >= BIAS_MIN_SCALARS)
-        .filter(|word| !BIAS_STOP_WORDS.contains(&word.to_lowercase().as_str()));
-    let mut chosen: Vec<&str> = Vec::new();
-    for word in words {
-        if chosen.len() == BIAS_MAX_WORDS {
-            break;
-        }
-        if !chosen.contains(&word) && !recent_tail.iter().any(|tail| tail.contains(word)) {
-            chosen.push(word);
-        }
-    }
-    chosen
-}
 
 /// Limit cold prefill cost without changing the context used for edit authority.
 pub(crate) fn inference_context(before: &str) -> &str {

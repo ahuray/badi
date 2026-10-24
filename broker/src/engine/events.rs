@@ -141,12 +141,7 @@ impl VisibleSuggestion {
             coordinates,
             payload: SuggestionClearPayload {
                 fingerprint: self.payload.fingerprint,
-                // A clear retires the entire growing continuation, including
-                // a shorter version the adapter may still be displaying.
-                suggestion_id: self
-                    .earlier
-                    .is_empty()
-                    .then_some(self.payload.suggestion_id),
+                suggestion_id: Some(self.payload.suggestion_id),
                 reason,
             },
             request_id: self.request_id,

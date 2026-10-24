@@ -1,8 +1,8 @@
-import { timingSafeEqual } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createEvidence, reviewTargets, registerConfirmation, evidenceDigest, EvidenceStore } from './qualification-evidence.mjs';
 import { runDiagnostics } from './qualification-diagnostics.mjs';
+import { fromLabPage, readJSON, sendJSON, setSecurityHeaders } from './http.mjs';
 
 const PREFIX = '/api/qualification/';
 const OPERATIONS = new Set(['status', 'review', 'diagnose', 'load']);
@@ -15,15 +15,8 @@ const languagesOf = suite => [...new Set(suite.cases.map(row => row.language.toL
 const sameIdentity = (left, right) => evidenceDigest(left) === evidenceDigest(right);
 
 async function inputJSON(request, operation) {
-  const chunks = []; let size = 0;
-  for await (const chunk of request) {
-    size += chunk.length;
-    if (size > 256 * 1024) throw failure('Qualification input exceeds 256 KiB.');
-    chunks.push(chunk);
-  }
-  let value;
-  try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); }
-  catch { throw failure('Use a JSON qualification object.'); }
+  const value = await readJSON(request, 256 * 1024, {
+    tooLarge: () => failure('Qualification input exceeds 256 KiB.'), malformed: () => failure('Use a JSON qualification object.') });
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !INPUTS[operation].includes(key))
     || typeof value.run_id !== 'string' || typeof value.config_id !== 'string') throw failure('Use only server-issued run/configuration IDs and explicit review fields; measurements are server-owned.');
   if (operation === 'review' && (!Array.isArray(value.reviews) || value.reviews.length > 300 || value.save !== undefined && typeof value.save !== 'boolean')) throw failure('Supply up to 300 explicit reviews and an optional save boolean.');
@@ -162,13 +155,10 @@ export function createQualificationHandler({ origin, capability, qualification, 
     },
     async handle(request, response) {
       if (!isQualificationRoute(request.url)) return false;
-      response.setHeader('Cache-Control', 'no-store'); response.setHeader('X-Content-Type-Options', 'nosniff');
-      response.setHeader('Cross-Origin-Resource-Policy', 'same-origin'); response.setHeader('Referrer-Policy', 'no-referrer');
-      const send = (status, value) => { if (!response.destroyed && !response.writableEnded) { response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(value)); } };
+      setSecurityHeaders(response);
+      const send = (status, value) => sendJSON(response, status, value);
       try {
-        const expected = origin(); const token = Buffer.from(String(request.headers['x-badi-lab-token'] ?? ''));
-        if (request.headers.host !== new URL(expected).host || request.headers.origin && request.headers.origin !== expected
-          || token.length !== capability.length || !timingSafeEqual(token, Buffer.from(capability))) throw failure('Refresh the local Lab page to reconnect.', 403);
+        if (!fromLabPage(request, origin(), capability)) throw failure('Refresh the local Lab page to reconnect.', 403);
         const operation = request.url.slice(PREFIX.length);
         if (operation === 'status' && request.method === 'GET') {
           if (recommendation.status !== 'recommended' || !latest?.finished || closed || active || isOtherBusy()) {

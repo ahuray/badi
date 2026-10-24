@@ -198,9 +198,7 @@ fn hello_acknowledgment(request_id: &str) -> WireEnvelope {
             paused: true,
         },
     )
-    .expect("hello acknowledgment")
-    .at_version(CURRENT_PROTOCOL_VERSION)
-    .expect("v2 hello acknowledgment");
+    .expect("hello acknowledgment");
     acknowledgment.id = Some(request_id.to_owned());
     acknowledgment
 }
@@ -271,9 +269,7 @@ fn v2_settings_response_rejects_a_legacy_document() {
             personalization_dropped_signals: 0,
         },
     )
-    .expect("settings response")
-    .at_version(CURRENT_PROTOCOL_VERSION)
-    .expect("v2 settings response");
+    .expect("settings response");
     response.id = Some("ctl:settings".to_owned());
 
     assert!(matches!(
@@ -294,9 +290,7 @@ fn control_response(request_id: &str, action: ControlAction) -> WireEnvelope {
             snooze: None,
         },
     )
-    .expect("control response")
-    .at_version(CURRENT_PROTOCOL_VERSION)
-    .expect("v2 control response");
+    .expect("control response");
     response.id = Some(request_id.to_owned());
     response
 }
@@ -369,9 +363,7 @@ fn health_response_requires_correlated_type_and_fixed_transport_limits() {
             snoozes: Vec::new(),
         },
     )
-    .expect("health response")
-    .at_version(CURRENT_PROTOCOL_VERSION)
-    .expect("v2 health response");
+    .expect("health response");
     response.id = Some("ctl:health".to_owned());
     assert!(validate_health_response(&response, "ctl:health").is_ok());
 
@@ -804,10 +796,8 @@ async fn probe_text_from_stdin_is_bounded_utf8_without_its_final_newline() {
 #[test]
 fn probe_response_requires_a_consistent_result() {
     let response = |payload: serde_json::Value| {
-        let mut envelope = WireEnvelope::global(MessageType::ProbeResult, 1, &payload)
-            .expect("probe response")
-            .at_version(CURRENT_PROTOCOL_VERSION)
-            .expect("v2 probe response");
+        let mut envelope =
+            WireEnvelope::global(MessageType::ProbeResult, 1, &payload).expect("probe response");
         envelope.id = Some("ctl:probe".to_owned());
         envelope
     };

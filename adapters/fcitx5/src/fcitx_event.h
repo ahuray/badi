@@ -8,3 +8,14 @@
 #if __has_include(<fcitx-utils/eventloopinterface.h>)
 #include <fcitx-utils/eventloopinterface.h>
 #endif
+
+#include <cstdint>
+
+namespace badi::fcitx5 {
+
+// Fcitx's sd-event loop treats a timer accuracy of 0 as its 250 ms default
+// slack, which delayed the 120 ms typing pause by up to 250 ms and would
+// stretch the observer's 500 ms reply deadline to 750 ms.
+inline constexpr std::uint64_t kTimerAccuracyUs = 1'000;
+
+} // namespace badi::fcitx5

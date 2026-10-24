@@ -34,8 +34,10 @@ constexpr std::size_t kMaxPendingPolicies = 64;
 constexpr std::size_t kMaxTargetBytes = 4096;
 constexpr std::uint64_t kPolicyReplyMs = 2'000;
 constexpr std::uint64_t kMaxSafeCounter = (std::uint64_t{1} << 53U) - 1U;
-constexpr std::array<std::string_view, 6> kRequiredCapabilities{
-    "context", "suggestion", "commit.dispatched_unverified", "control", "policy", "long_reading_window"};
+// The hello's capabilities, each of which hello.ack must enable exactly once.
+constexpr std::array<std::string_view, 8> kCapabilities{
+    "context", "suggestion", "commit.dispatched_unverified", "text_replacement", "control", "policy",
+    "long_reading_window", "selection_revision"};
 
 bool exactKeys(const Json &value,
                std::initializer_list<std::string_view> keys) {
@@ -56,21 +58,12 @@ bool validFingerprint(const Json &value) {
 }
 
 bool exactCapabilities(const Json &value) {
-    if (!value.is_array() || value.size() != kRequiredCapabilities.size() + 2) return false;
-    for (const auto capability : kRequiredCapabilities) {
-        const auto matches = std::count_if(
-            value.begin(), value.end(), [capability](const Json &candidate) {
-                return candidate.is_string() && candidate == capability;
-            });
-        if (matches != 1) return false;
-    }
-    for (const auto optional : {"text_replacement", "selection_revision"}) {
-        const auto matches = std::count_if(value.begin(), value.end(), [optional](const Json &candidate) {
-            return candidate.is_string() && candidate == optional;
-        });
-        if (matches != 1) return false;
-    }
-    return true;
+    if (!value.is_array() || value.size() != kCapabilities.size()) return false;
+    return std::all_of(kCapabilities.begin(), kCapabilities.end(), [&value](std::string_view capability) {
+        return std::count_if(value.begin(), value.end(), [capability](const Json &candidate) {
+                   return candidate.is_string() && candidate == capability;
+               }) == 1;
+    });
 }
 
 bool allowsReplacementKey(const Json &value, std::initializer_list<std::string_view> keys) {
@@ -328,11 +321,7 @@ std::optional<Json> contextEnvelope(const ContextUpdate &update,
         {"language", context.language},
     };
     if (!update.windowText.empty()) payload["window_text"] = update.windowText;
-    return envelope(
-        "context.changed",
-        "fcitx.suggest." + std::to_string(coordinates.focusEpoch) + "." +
-            std::to_string(coordinates.revision) + ".context",
-        monoMs, payload, &coordinates);
+    return envelope("context.changed", suggestRequestId(coordinates) + ".context", monoMs, payload, &coordinates);
 }
 
 std::optional<Json> revisionEnvelope(const RevisionUpdate &update, std::uint64_t monoMs) {
@@ -375,6 +364,19 @@ std::optional<Json> revisionEnvelope(const RevisionUpdate &update, std::uint64_t
     return envelope("revision.request", update.requestId, monoMs, payload, &coordinates);
 }
 
+// The broker's refusal of one request: exactly the request's id and a known
+// reason code. The settings-only payload fields never reach this adapter.
+std::optional<RequestRefusal> parseRefusal(const Json &value) {
+    if (!exactKeys(value, {"v", "id", "type", "mono_ms", "payload"}) || value["v"] != 2 ||
+        value["type"] != "error" || !counter(value["mono_ms"]) || !value["id"].is_string() ||
+        !validOpaqueId(value["id"].get_ref<const std::string &>()) || !exactKeys(value["payload"], {"code"}) ||
+        !validReason(value["payload"]["code"])) {
+        return std::nullopt;
+    }
+    return RequestRefusal{.requestId = value["id"].get<std::string>(),
+                          .reason = value["payload"]["code"].get<std::string>()};
+}
+
 // A revision's anchor and head as the broker repeats them in its grant.
 std::optional<SelectionRange> parseSelectionRange(const Json &value) {
     if (!exactKeys(value, {"anchor", "head", "unit"}) || !counter(value["anchor"]) || !counter(value["head"]) ||
@@ -409,6 +411,11 @@ bool strictSuggestionClear(std::string_view body) {
 bool strictPolicyStatus(std::string_view body) {
     const auto value = parseStrictObject(body);
     return value && value->contains("payload") && policyStatus(*value, (*value)["payload"]);
+}
+
+std::optional<RequestRefusal> strictRequestRefusal(std::string_view body) {
+    const auto value = parseStrictObject(body);
+    return value ? parseRefusal(*value) : std::nullopt;
 }
 
 bool AuthorityContinuity::observe(const AuthoritySnapshot &snapshot) {
@@ -510,7 +517,10 @@ public:
         : eventLoop_(eventLoop), callbacks_(std::move(callbacks)),
           socketPath_(std::move(socketPath)), started_(Clock::now()) {}
 
-    ~Impl() { disconnect(); }
+    ~Impl() {
+        disconnect();
+        releaseRetired();
+    }
 
     bool connect() {
         wantConnection_ = true;
@@ -531,7 +541,7 @@ public:
     void scheduleReconnect() {
         if (!wantConnection_ || reconnectScheduled_ || reconnectAttempts_ >= 10) return;
         reconnectScheduled_ = true;
-        if (!reconnectTimer_) reconnectTimer_ = eventLoop_.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
+        if (!reconnectTimer_) reconnectTimer_ = eventLoop_.addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
             [this](::fcitx::EventSourceTime *, std::uint64_t) {
                 reconnectScheduled_ = false;
                 ++reconnectAttempts_;
@@ -543,8 +553,18 @@ public:
         reconnectTimer_->setOneShot();
     }
 
+    // Sources and descriptors that close() kept alive inside their callback.
+    void releaseRetired() {
+        for (auto &[source, fd] : retired_) {
+            source.reset();
+            if (fd >= 0) ::close(fd);
+        }
+        retired_.clear();
+    }
+
     bool connectSocket() {
         if (fd_ >= 0) return true;
+        if (!dispatching_) releaseRetired();
         if (socketPath_.empty()) {
             const auto path = defaultSocketPath();
             if (!path) return false;
@@ -576,9 +596,18 @@ public:
 
     void close(bool notify) {
         const bool active = fd_ >= 0;
+        ++connection_;
         if (io_) io_->setEnabled(false);
-        io_.reset();
-        if (fd_ >= 0) ::close(std::exchange(fd_, -1));
+        if (dispatching_) {
+            // Inside io_'s own callback the source must outlive the call, and
+            // its descriptor the source: the peer sees the end now, and both
+            // are released at the next safe point (releaseRetired).
+            if (fd_ >= 0) ::shutdown(fd_, SHUT_RDWR);
+            retired_.emplace_back(std::move(io_), std::exchange(fd_, -1));
+        } else {
+            io_.reset();
+            if (fd_ >= 0) ::close(std::exchange(fd_, -1));
+        }
         connecting_ = false;
         helloAcknowledged_ = false;
         authoritySeen_ = false;
@@ -659,15 +688,12 @@ public:
         if (!ready()) return false;
         const auto &coordinates = update.coordinates;
         const auto &context = update.context;
-        const auto requestId = "fcitx.suggest." +
-                               std::to_string(coordinates.focusEpoch) + "." +
-                               std::to_string(coordinates.revision);
         const auto serialized = serializeContextEnvelope(update, nowMs());
         if (!serialized || !queueBody(*serialized)) {
             return false;
         }
         return queue(envelope(
-            "suggest.request", requestId, nowMs(),
+            "suggest.request", suggestRequestId(coordinates), nowMs(),
             Json{{"fingerprint", coordinates.fingerprint}, {"explicit", context.explicitRequest}},
             &coordinates));
     }
@@ -741,7 +767,7 @@ private:
             if (policyTimer_) policyTimer_->setEnabled(false);
             return;
         }
-        if (!policyTimer_) policyTimer_ = eventLoop_.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
+        if (!policyTimer_) policyTimer_ = eventLoop_.addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
             [this](::fcitx::EventSourceTime *, std::uint64_t) {
                 const auto now = nowMs();
                 for (auto &[_, pending] : pendingPolicies_) {
@@ -791,21 +817,20 @@ private:
         return false;
 #endif
         connecting_ = false;
+        auto capabilities = Json::array();
+        for (const auto capability : kCapabilities) capabilities.push_back(std::string(capability));
         const Json helloPayload{
             {"min_v", 2},
             {"max_v", 2},
             {"adapter", Json{{"kind", "fcitx"},
                               {"name", "badi-fcitx5"},
                               {"version", "0.1.0"}}},
-            {"capabilities", Json::array({"context", "suggestion",
-                                           "commit.dispatched_unverified",
-                                           "text_replacement", "control", "policy", "long_reading_window",
-                                           "selection_revision"})},
+            {"capabilities", std::move(capabilities)},
         };
         if (!queue(envelope("hello", "fcitx.hello", nowMs(), helloPayload))) {
             return false;
         }
-        if (!handshakeTimeout_) handshakeTimeout_ = eventLoop_.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
+        if (!handshakeTimeout_) handshakeTimeout_ = eventLoop_.addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
             [this](::fcitx::EventSourceTime *, std::uint64_t) { close(true); return true; });
         handshakeTimeout_->setNextInterval(2'000'000);
         handshakeTimeout_->setOneShot();
@@ -814,21 +839,29 @@ private:
     }
 
     bool onIo(::fcitx::IOEventFlags flags) {
+        // Another source's callback: what an earlier one retired may go.
+        releaseRetired();
+        dispatching_ = true;
+        dispatch(flags);
+        dispatching_ = false;
+        return true;
+    }
+
+    void dispatch(::fcitx::IOEventFlags flags) {
         if (connecting_ &&
             (!!(flags & ::fcitx::IOEventFlag::Out) ||
              !!(flags & ::fcitx::IOEventFlag::Err) ||
              !!(flags & ::fcitx::IOEventFlag::Hup)) &&
             !finishConnect()) {
-            return true;
+            return;
         }
-        if (fd_ < 0) return true;
-        if (!!(flags & ::fcitx::IOEventFlag::Out) && !flushWrites()) return true;
-        if (fd_ >= 0 && !!(flags & ::fcitx::IOEventFlag::In) && !readFrames()) return true;
+        if (fd_ < 0) return;
+        if (!!(flags & ::fcitx::IOEventFlag::Out) && !flushWrites()) return;
+        if (fd_ >= 0 && !!(flags & ::fcitx::IOEventFlag::In) && !readFrames()) return;
         if (fd_ >= 0 && (!!(flags & ::fcitx::IOEventFlag::Err) ||
                          !!(flags & ::fcitx::IOEventFlag::Hup))) {
             close(true);
         }
-        return true;
     }
 
     bool flushWrites() {
@@ -858,6 +891,7 @@ private:
 
     bool readFrames() {
         std::array<std::uint8_t, 8192> buffer{};
+        const auto connection = connection_;
         for (;;) {
             const auto count = ::recv(fd_, buffer.data(), buffer.size(), 0);
             if (count < 0) {
@@ -878,6 +912,9 @@ private:
                     close(true);
                     return false;
                 }
+                // A callback closed the connection, and may have opened the
+                // next: the remaining frames belong to the closed one.
+                if (connection_ != connection) return false;
             }
         }
         return true;
@@ -914,11 +951,13 @@ private:
             if (type == "commit.prepare") return handleCommit(value, payload);
             if (type == "revision.show") return handleRevision(value, payload);
             if (type == "revision.clear") return handleRevisionClear(value, payload);
+            if (type == "error") return handleRefusal(value);
             return false;
         }();
         if (accepted) return true;
-        // Errors are terminal for this deliberately small transport; silently
-        // accepting an evolving shape would weaken the protocol boundary.
+        // An unknown or non-exact shape closes this deliberately small
+        // transport; silently accepting an evolving shape would weaken the
+        // protocol boundary.
         FCITX_ERROR() << "Badi broker rejected response type: " << type;
         return false;
     }
@@ -1086,6 +1125,18 @@ private:
         return true;
     }
 
+    // The broker refused one request and keeps the connection; only that
+    // request ends.
+    bool handleRefusal(const Json &value) {
+        const auto refusal = parseRefusal(value);
+        if (!refusal) return false;
+        // A refused policy query is owed nothing more: its session may ask again.
+        if (pendingPolicies_.erase(refusal->requestId) != 0) schedulePolicyDeadline();
+        FCITX_DEBUG() << "Badi broker refused " << refusal->requestId << ": " << refusal->reason;
+        if (callbacks_.onRefusal) callbacks_.onRefusal(*refusal);
+        return true;
+    }
+
     bool handleRevisionClear(const Json &value, const Json &payload) {
         const bool exactPayload = exactKeys(payload, {"fingerprint", "reason"}) ||
                                   exactKeys(payload, {"fingerprint", "revision_id", "reason"});
@@ -1190,7 +1241,12 @@ private:
     bool wantConnection_ = false;
     bool reconnectScheduled_ = false;
     unsigned int reconnectAttempts_ = 0;
+    // Each close() ends one connection.
+    std::uint64_t connection_ = 0;
+    // io_'s callback is running.
+    bool dispatching_ = false;
     std::unique_ptr<::fcitx::EventSourceIO> io_;
+    std::vector<std::pair<std::unique_ptr<::fcitx::EventSourceIO>, int>> retired_;
     FrameDecoder decoder_;
     std::deque<std::vector<std::uint8_t>> writes_;
     std::size_t writeOffset_ = 0;

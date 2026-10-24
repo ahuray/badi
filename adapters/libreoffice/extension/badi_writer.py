@@ -4,15 +4,16 @@
 to correct the word at or before the caret, and a document job checks each
 finished word on its own; either shows the proposal in an infobar without
 editing. Invoking it again, or the infobar's Replace button, accepts:
-the extension revalidates the exact document, view, caret and revision, takes
-the broker's one-shot grant, revalidates again and replaces exactly the bound
-word inside one undo context, then reads the paragraph back before reporting
-`applied`. Escape, any edit, a caret move, the close button, expiry or a broker
+the extension revalidates the exact document, view, caret and paragraph
+text, takes the broker's one-shot grant, revalidates again and replaces
+exactly the bound word inside one undo context, then reads the paragraph
+back before reporting `applied`. Escape, any edit, a caret move, the close button, expiry or a broker
 authority change dismisses. All document access runs on the office main
 thread; only broker I/O runs on a worker thread. Nothing logs or keeps text
 after the attempt ends.
 """
 
+import contextlib
 import os
 import threading
 import time
@@ -355,17 +356,27 @@ class Controller:
         def revoked(code):
             self.post(lambda: self.invalidate(token, code))
 
+        try:
+            attempt = broker.Attempt(on_revoked=revoked)
+        except broker.BrokerError as error:
+            self._finish(error.code)
+            return
+        # Held while it is requested too: a superseding request, or any
+        # other end of this one, closes its broker session at once.
+        self._attempt = attempt
+
         def work():
-            attempt = None
             try:
-                attempt = broker.Attempt(on_revoked=revoked)
                 proposal = attempt.request(binding.before, "", binding.language, explicit)
-                self.post(lambda: self._show(token, attempt, proposal))
             except broker.BrokerError as error:
                 code = error.code
-                if attempt is not None:
-                    attempt.close()
-                self.post(lambda: self.invalidate(token, code))
+            except Exception:
+                code = "protocol"
+            else:
+                self.post(lambda: self._show(token, attempt, proposal))
+                return
+            attempt.close()
+            self.post(lambda: self.invalidate(token, code))
 
         threading.Thread(target=work, name="badi-correction", daemon=True).start()
 
@@ -374,14 +385,11 @@ class Controller:
             attempt.close()
             return
         if proposal is None:
-            attempt.finish()
             self._finish("no_correction")
             return
         if not self._binding.current():
-            attempt.finish()
             self._finish("stale")
             return
-        self._attempt = attempt
         self._proposal = proposal
         word = proposal.replace_before.rstrip(" ")
         corrected = proposal.text.rstrip(" ")
@@ -414,17 +422,25 @@ class Controller:
                 delay = _grant_delay()
                 if delay:
                     time.sleep(delay)
-                self.post(lambda: self._apply(token, attempt, proposal))
             except broker.BrokerError as error:
                 code = error.code
-                attempt.close()
-                self.post(lambda: self.invalidate(token, code))
+            except Exception:
+                code = "protocol"
+            else:
+                self.post(lambda: self._apply(token, attempt, proposal))
+                return
+            attempt.close()
+            self.post(lambda: self.invalidate(token, code))
 
         threading.Thread(target=work, name="badi-acceptance", daemon=True).start()
 
     def _apply(self, token, attempt, proposal):
         if token != self._token or self._phase != "accepting":
-            attempt.report("stale", proposal)
+            # Ended while the grant was in flight (a revoke, expiry or a
+            # closed window): the attempt may already be closed.
+            with contextlib.suppress(broker.BrokerError):
+                attempt.report("stale", proposal)
+            attempt.close()
             return
         status = self._replace(proposal)
         try:

@@ -11,7 +11,7 @@ The package installs:
   `badi`, `badi-desktop` and `badictl` in `/usr/bin`;
 - the Fcitx addon in `/usr/lib/fcitx5` (built without `-Werror`, so a newer
   compiler's warning cannot fail it) and user units in `/usr/lib/systemd/user`;
-- in `/usr/share/badi`: the seven panel files and the Fcitx theme script in
+- in `/usr/share/badi`: the panel files and the Fcitx theme script in
   `omarchy/`, the Omarchy repair hook `omarchy/badi-repair.hook`, and the
   Hyprland preview rule `hypr/badi.lua`;
 - the launcher and its icon;
@@ -133,13 +133,11 @@ fails on any namcap error and checks that the notices are packaged. Verify the
 real install/update/removal flow on a fresh Omarchy system. Local build evidence does not establish that fresh-system
 flow. Naming, maintainer identity and publication require a final review.
 
-On 2026-10-13, an isolated Arch container using the 2026-10-12 repository
-snapshot (Rust 1.99, Fcitx 5.1.23) passed the candidate's build and checks.
-The installed package passed CLI and private phrase-broker control, stdin
-settings compare-and-swap, observer typelib and addon library resolution,
-file integrity, reinstall and removal checks. Removal preserved private
-settings and left no package-owned files. This container had no graphical
-session or running user service manager.
+Tested with: an isolated Arch container on the 2026-10-12 snapshot (Rust
+1.99, Fcitx 5.1.23): build, checks, CLI and phrase-broker control, settings
+compare-and-swap, typelib and library resolution, file integrity, reinstall
+and removal (private settings kept, no package files left). Not tested: a
+graphical session or a running user service manager.
 
 Namcap reported no errors after dependency review. Remaining warnings cover
 the unassigned maintainer, bundled Python imports, Omarchy-owned QML modules,

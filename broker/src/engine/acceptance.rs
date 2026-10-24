@@ -72,9 +72,6 @@ impl Broker {
             .as_deref()
             .ok_or(BrokerError::InvalidPayload)?;
         let visible = session.take_live_suggestion(suggestion_id, &self.inner.metrics)?;
-        // A growing continuation must not replace the suggestion after it was
-        // accepted or dismissed.
-        let _ = session.cancel_provider_work();
         let signal = match acceptance {
             None => self.dismiss(session, visible),
             Some(acceptance) => self.prepare_commit(session, visible, acceptance, request_id)?,
@@ -138,10 +135,9 @@ impl Broker {
             aggregate_day,
             ..
         } = visible;
-        let coordinates = session.coordinates;
         let commit = CommitPreparePayload {
-            fingerprint: shown.fingerprint.clone(),
-            suggestion_id: shown.suggestion_id.clone(),
+            fingerprint: shown.fingerprint,
+            suggestion_id: shown.suggestion_id,
             text: match acceptance {
                 Acceptance::Word => shown.accept_word,
                 Acceptance::All => shown.text,
@@ -150,15 +146,39 @@ impl Broker {
             replace_selection: None,
             acceptance,
         };
-        let expires_at = Instant::now() + self.inner.config.commit_result_lease;
+        let saved_words = saved_words(&commit);
+        self.grant_commit(session, commit, request_id, saved_words, false)?;
+        self.renew_context_authority_lease(session, self.inner.config.generation_timeout);
+        let signal = match acceptance {
+            Acceptance::Word => PersonalizationSignal::AcceptedWord,
+            Acceptance::All => PersonalizationSignal::AcceptedAll,
+        };
+        Ok(aggregate_day.map(|day| (day, signal)))
+    }
+
+    /// Sends `commit` as the session's one pending grant, which the adapter
+    /// must report within the commit-result lease or lose. A revision's
+    /// grant (`revision`) saves no words, statistics or style sample.
+    pub(super) fn grant_commit(
+        &self,
+        session: &mut SessionState,
+        commit: CommitPreparePayload,
+        request_id: Option<String>,
+        saved_words: u64,
+        revision: bool,
+    ) -> Result<(), BrokerError> {
+        let coordinates = session.coordinates;
+        let lease = self.inner.config.commit_result_lease;
+        let expires_at = Instant::now() + lease;
+        let suggestion_id = commit.suggestion_id.clone();
         let pending = PendingCommit {
             coordinates,
-            fingerprint: shown.fingerprint,
-            suggestion_id: shown.suggestion_id.clone(),
+            fingerprint: commit.fingerprint.clone(),
+            suggestion_id: suggestion_id.clone(),
             request_id: request_id.clone(),
             expires_at,
-            saved_words: saved_words(&commit),
-            revision: false,
+            saved_words,
+            revision,
         };
         let prepare = BrokerEvent::CommitPrepare {
             coordinates,
@@ -170,22 +190,15 @@ impl Broker {
             return Err(BrokerError::EventSinkClosed);
         }
         session.pending = Some(pending);
-        self.renew_context_authority_lease(session, self.inner.config.generation_timeout);
         self.inner.metrics.record_commit_prepared();
-
         let broker = self.clone();
-        let suggestion_id = shown.suggestion_id;
         tokio::spawn(async move {
-            time::sleep(broker.inner.config.commit_result_lease).await;
+            time::sleep(lease).await;
             broker
                 .expire_pending_commit(coordinates, suggestion_id, expires_at)
                 .await;
         });
-        let signal = match acceptance {
-            Acceptance::Word => PersonalizationSignal::AcceptedWord,
-            Acceptance::All => PersonalizationSignal::AcceptedAll,
-        };
-        Ok(aggregate_day.map(|day| (day, signal)))
+        Ok(())
     }
 
     // Commit lease validation and state retirement are one atomic audit path.
@@ -306,27 +319,17 @@ impl SessionState {
         metrics: &Metrics,
     ) -> Result<VisibleSuggestion, BrokerError> {
         let visible = self.visible.as_ref().ok_or(BrokerError::NoSuggestion)?;
-        let earlier = visible
-            .earlier
-            .iter()
-            .position(|payload| payload.suggestion_id == suggestion_id);
-        if visible.payload.suggestion_id != suggestion_id && earlier.is_none() {
+        if visible.payload.suggestion_id != suggestion_id {
             return Err(BrokerError::Stale);
         }
         let expired = visible.expires_at <= Instant::now();
-        let mut visible = self.visible.take().expect("visible suggestion checked");
+        let visible = self.visible.take().expect("visible suggestion checked");
         if expired {
             let _ = self
                 .sink
                 .send(visible.into_clear(self.coordinates, ReasonCode::Expired));
             metrics.record_suggestion_expired();
             return Err(BrokerError::NoSuggestion);
-        }
-        if let Some(index) = earlier {
-            // Accept exactly what the adapter displayed, even if a longer
-            // version crossed its acceptance on the socket. Consuming the
-            // group retires every sibling's authority in the same operation.
-            std::mem::swap(&mut visible.payload, &mut visible.earlier[index]);
         }
         Ok(visible)
     }
@@ -379,9 +382,10 @@ fn validate_commit_authority(
 ) -> Result<(), BrokerError> {
     let allowed = match status {
         CommitStatus::Applied => {
+            // The test kind stands in for an editor in fixtures.
             matches!(
                 authority.adapter_kind,
-                AdapterKind::Browser
+                AdapterKind::Test
                     | AdapterKind::Obsidian
                     | AdapterKind::Terminal
                     | AdapterKind::Neovim
@@ -408,37 +412,33 @@ mod tests {
 
     #[test]
     fn commit_status_requires_matching_adapter_kind_and_declared_capability() {
-        let browser_dispatch = SessionAuthority {
-            protocol_version: 1,
-            adapter_kind: AdapterKind::Browser,
+        let test_dispatch = SessionAuthority {
+            adapter_kind: AdapterKind::Test,
             capabilities: vec![Capability::CommitDispatchedUnverified],
         };
         for status in [CommitStatus::DispatchedUnverified, CommitStatus::Applied] {
             assert!(matches!(
-                validate_commit_authority(&browser_dispatch, status),
+                validate_commit_authority(&test_dispatch, status),
                 Err(BrokerError::InvalidCapability)
             ));
         }
 
-        let browser_applied = SessionAuthority {
-            protocol_version: 1,
-            adapter_kind: AdapterKind::Browser,
+        let test_applied = SessionAuthority {
+            adapter_kind: AdapterKind::Test,
             capabilities: vec![Capability::CommitApplied],
         };
-        assert!(validate_commit_authority(&browser_applied, CommitStatus::Applied).is_ok());
+        assert!(validate_commit_authority(&test_applied, CommitStatus::Applied).is_ok());
 
-        let browser_undeclared = SessionAuthority {
-            protocol_version: 1,
-            adapter_kind: AdapterKind::Browser,
+        let test_undeclared = SessionAuthority {
+            adapter_kind: AdapterKind::Test,
             capabilities: Vec::new(),
         };
         assert!(matches!(
-            validate_commit_authority(&browser_undeclared, CommitStatus::DispatchedUnverified),
+            validate_commit_authority(&test_undeclared, CommitStatus::DispatchedUnverified),
             Err(BrokerError::InvalidCapability)
         ));
 
         let obsidian_wrong_status = SessionAuthority {
-            protocol_version: 1,
             adapter_kind: AdapterKind::Obsidian,
             capabilities: vec![Capability::CommitDispatchedUnverified],
         };
@@ -448,7 +448,6 @@ mod tests {
         ));
 
         let neovim_applied = SessionAuthority {
-            protocol_version: 2,
             adapter_kind: AdapterKind::Neovim,
             capabilities: vec![Capability::CommitApplied],
         };
@@ -459,7 +458,6 @@ mod tests {
         ));
 
         let fcitx_dispatch = SessionAuthority {
-            protocol_version: 2,
             adapter_kind: AdapterKind::Fcitx,
             capabilities: vec![Capability::CommitDispatchedUnverified],
         };

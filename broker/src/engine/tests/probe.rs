@@ -42,7 +42,7 @@ async fn probe_uses_the_provider_and_display_checks_without_session_or_counters(
     assert_eq!(broker.session_count().await, 0);
     assert!(broker.active_locator().await.is_none());
 
-    broker.set_paused(true).await.expect("pause");
+    broker.set_paused(true).await;
     let paused = broker
         .probe(probe_request("Thank you", "en", false))
         .await
@@ -167,13 +167,13 @@ async fn probe_withholds_its_result_when_a_pause_arrives_during_inference() {
     // Runtime pause (`badictl pause`) acknowledged while the provider runs.
     let pending = start();
     provider.entered.notified().await;
-    assert!(broker.set_paused(true).await.expect("pause"));
+    assert!(broker.set_paused(true).await);
     provider.release.notify_one();
     let paused = pending.await.expect("probe task").expect("probe");
     assert_eq!(paused.outcome, ProbeOutcome::Paused);
     assert_eq!((paused.text.as_deref(), paused.reason), (None, None));
     paused.validate().expect("valid paused result");
-    assert!(!broker.set_paused(false).await.expect("resume"));
+    assert!(!broker.set_paused(false).await);
 
     // Persisted pause (`badi pause`) committed while the provider runs.
     let pending = start();

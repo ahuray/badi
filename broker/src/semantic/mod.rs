@@ -1,6 +1,6 @@
-//! Owned local-model runtime primitives, compiled with the `local-model`
-//! feature: the pinned runtime release, artifact provenance, the contained
-//! llama.cpp process, and its loopback client with that client's wire framing.
+//! Owned local-model runtime primitives: the pinned runtime release, artifact
+//! provenance, the contained llama.cpp process, and its loopback client with
+//! that client's wire framing.
 //! The writing provider activates them.
 
 pub mod client;

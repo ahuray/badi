@@ -1,7 +1,6 @@
 # Prediction Lab
 
-A local workbench for comparing models, prompts and spelling on your own test
-drafts. You supply a draft, optional context and writing examples, and the
+A local workbench for comparing models and prompts on your own test drafts. You supply a draft, optional context and writing examples, and the
 **text you expect to be appended**. Expected answers stay out of the model
 request and serve only scoring. The Lab never captures your screen, harvests
 writing history, edits another app or changes the installed broker.
@@ -18,10 +17,9 @@ The worker verifies the installed model and runtime and starts its own model
 process; missing files are an error, never mock output. The server binds only
 to `127.0.0.1`, and Ctrl+C stops it with its model.
 
-The page has three tabs that keep each other's drafts:
+The page has two tabs that keep each other's drafts:
 - **Prediction:** model continuations and model qualification;
-- **Word completion:** model-free reuse of a word from your context;
-- **Spelling:** German and Persian dictionary corrections, when configured.
+- **Word completion:** model-free reuse of a word from your context.
 
 ## Choose and qualify a model
 
@@ -83,33 +81,32 @@ Drafts and results live in page and server memory only: no localStorage, logs
 or automatic files.
 
 Prediction experiments and qualification accept English, German, French,
-Spanish, Persian and Portuguese. `production_boundary` measures all six, each healed as
-the model's catalog review decided (`healed_languages`), whatever the
-person's settings say; `BADI_LAB_HEALING=all node evaluation/writing/lab/run.mjs …`
-heals every language instead, so that models outside the catalog are screened
-on equal terms. French, Spanish and Portuguese are opt-in in production and unqualified;
-their output uses the Latin script and seam checks, which do not prove correct
-language or quality.
-Full-addition review remains necessary. The style-fact fence covers weekday
-names in all five languages. Spelling and word lookup retain their own coverage.
+Spanish, Persian and Portuguese. `production_boundary` and the healed modes
+measure all six, each healed as production heals the loaded model
+(`healed_languages` in its catalog entry, the fallback English and Persian for
+weights outside the catalog), whatever the person's settings say;
+`BADI_LAB_HEALING=all node evaluation/writing/lab/run.mjs …` heals every
+language instead, so that models outside the catalog are screened on equal
+terms. French, Spanish and Portuguese are opt-in in production and
+unqualified; their output uses the Latin script and seam checks, which do not
+prove correct language or quality. Full-addition review remains necessary.
+The style-fact fence knows English, German, French, Spanish and Persian
+weekday names; Portuguese shares only `sábado` and `domingo`. Word completion
+keeps its own coverage.
 
 | Mode | Tests |
 | --- | --- |
 | `production_boundary` | The installed provider exactly as production runs it (550 ms, eight tokens, its guards); context and style ignored |
 | `context` | Full context and draft in the prompt |
 | `context_confidence` | `context` plus an uncalibrated per-token confidence score |
-| `instructed` | ChatML instructions with context and style |
+| `instructed` | Qwen3 ChatML instructions with context and style. Only on the pinned Qwen3 1.7B weights the template is written for; the worker refuses any other model (`instructed_template_model_mismatch`) |
 | `healed` | Word-boundary healing: the boundary is removed from the prompt, echoed by the model and stripped |
-| `instructed_healed` | `instructed` with `healed` boundaries |
+| `instructed_healed` | `instructed` with `healed` boundaries, on the same model only |
 | `native_instructed` | The model's own chat template with exact word boundaries |
-| `framed` | Lab only: version `everyday-english-2026-10-12.v1`, production healing, and the constant everyday-English frame |
-| `field_context` | Lab only: earlier text of the same field, kept to about 200 tokens and moved only in jumps of about 64 so the prefix cache can hold |
-| `probability_rejoin` | Lab only: force the next words and keep a prefix only when they are not unlikely. The cut is uncalibrated and is not installed |
-| `following_text` | Lab only: name the line after the caret, then continue from the text before it. Production prompts do not include that line |
-| `context_bias` | The production provider, with the case's context as window text: its distinctive English words raise the first token of each by a logit bias of 2.0 (`CONTEXT_BIAS`); the prompt is unchanged. Production has no window text yet, so it behaves as `production_boundary` there |
 | `vocabulary` | The production provider with context on: the case's context gives the window's words and its style examples the writer's earlier words. When the caret ends a partial word that exactly one longer word there, or earlier in the draft, starts with, its rest is the suggestion and no model runs ([rule](../../broker/README.md#vocabulary-completion)); otherwise it behaves as `production_boundary` |
 
-`instructed_word` and `healed_attested` are not selectable. The 2026-09-09 next-word study had no useful `instructed_word` result in 30 opportunities and one harmful result. `healed_attested` added harmful suggestions on top of `healed`.
+Modes that failed their gate are deleted; [Retired experiments](#retired-experiments)
+keeps one result line each.
 
 - **Runtime.** The Lab uses a 2,048-token runtime, installed Badi 512; budgets
   from 550 ms to ten seconds are diagnostic only.
@@ -123,7 +120,7 @@ names in all five languages. Spelling and word lookup retain their own coverage.
   denominators.
 - **Status.** Every Lab case is development data, not a held-out benchmark.
 
-## Word completion and spelling
+## Word completion
 
 **Word completion** runs the broker's vocabulary rule
 ([broker runbook](../../broker/README.md#vocabulary-completion)), the one
@@ -135,21 +132,6 @@ returns one only if that word begins all the others. Otherwise it gives the
 broker's reason: `no_stem`, `known_word`, `no_match`, `ambiguous` or
 `unsafe_suffix`. Exact reuse is not intent: a unique match can still turn
 `Marin` into `Marinella`.
-
-**Spelling** checks the last completed German or Persian word with a native
-Hunspell worker and needs a local artifact manifest:
-
-```sh
-node evaluation/writing/lab/server.mjs \
-  --spelling-de /absolute/path/spelling-manifest.json \
-  --spelling-fa /absolute/path/spelling-manifest.json
-```
-
-[The manifest validator](lab-worker/src/spelling/artifact.rs) defines
-`badi.spelling-artifact.v1`: the pinned executable, library and dictionaries
-with paths, sizes and SHA-256. A correction needs one Unicode edit, keeps the
-first letter, case and Persian joiners, and passes a second native check within
-550 ms. Spelling never starts the language model.
 
 ## Terminal runs
 
@@ -170,8 +152,8 @@ each [suggestion length](../../broker/README.md#suggestion-limits) becomes
 its own `production_boundary` configuration, `production_boundary-short`,
 while normal keeps the plain id and request). The command first builds the worker as
 `npm run writing:lab` does, so a run never executes a binary older than its
-sources (`paced.mjs` does the same). The report hashes the Lab scripts, the
-worker crate and every broker source before and after. The memory-loading experiment changes only how
+sources. The report hashes every file of the Lab and of the worker crate and
+every broker source before and after. The memory-loading experiment changes only how
 the runtime loads weights, and records that choice in its verified identity
 and qualification identity. It does not change installed broker settings.
 The installed broker now uses copied weights; the Lab retains an explicit
@@ -195,82 +177,6 @@ observer would read (16 where it names the next words, 8 controls).
 context for a disposable page's focused field
 ([observer rules](../../adapters/accessibility/README.md#same-window-context-lab-only)).
 
-Same-window context so far (development cases written for it, so not
-independent). As prompt text (2026-10-13, `healed`, 8 tokens, pinned 1.7B on
-battery with power-saver, 3 s diagnostic budget) the expected next words came
-in 15 of 16 informative cases with the context and 4 of 16 without, but 3 of
-the 8 controls drifted onto the page's topic ("I have attached the chapter
-three"), several additions answered for the user ("November? Yes, it's
-available"), and at 550 ms both arms missed the deadline on 23 or 24 cold
-prompts. As a logit bias instead (`context_bias`, 2026-10-17, English only;
-no prompt grows, so 550 ms holds) first-word matches rose from 8 to 11 and
-matching characters from 43 to 64 of 24 cases at bias 2.0 with every
-suggestion still shown, one control drifting; across four suites (65 cases)
-12 became 15. Bias 4.0 reached 13 of 24 but wrote loops ("Thursday,
-Thursday"), and Persian degraded at both, so it is excluded. The field's own
-earlier text as the source measured neutral. For terminals, which expose no
-accessibility text, reading the screen with OCR (a 2026-10-17 trial tool,
-since removed) cost about 0.8 s and five replies gained nothing from its
-words; screen reading stays out (the [context firewall](../../VISION.md#context-firewall)). No live check of the
-observer's context has run: the desktop was locked, and a headless Chromium
-on a private bus exposed no field.
-
-Independent cases (2026-10-19). An agent with no access to the development
-set or its results wrote 40 English cases. In 22, the window names what
-comes next; in 6, copying the window's fact would be wrong (a declined day,
-a corrected total); 12 are controls. The suite was frozen by hash before
-inference and run on the installed Gemma 3 1B at the 28 W limit. One blind
-reviewer saw the window text and judged each whole addition:
-
-| Arm | Useful full additions (all / informative / controls / no-copy) | Harmful | Wrong context fact | Over 550 ms |
-| --- | --- | --- | --- | --- |
-| `production_boundary`, no window text | 9 / 1 / 8 / 0 | 15 | 0 | 1 |
-| `context_bias` | 11 / 2 / 8 / 1 | 14 | 0 | 1 |
-| `context`, window text in the prompt, 1.2 s diagnostic budget | 10 / 7 / 3 / 0 | 16 | 4 | 28 |
-
-The word bias changed the shown text in only 4 of 40 cases, far below its
-development gain. Prompt text found the informative words (an earbud, a
-permission slip, the oat milk), but 9 of 12 controls drifted into invented
-numbers ("60th birthday!", "1000 USD?"). It also copied a fact the writer
-was changing (the postponed event's original "3 February"), and it missed
-550 ms cold. Neither arm justifies production use; a context-fact fence and a
-prompt that keeps controls quiet come first, and these 40 cases now count as
-development data. Runs: `output/writing/2026-10-19-window-context-independent/`.
-
-Vocabulary completion (`vocabulary`, 2026-10-20) finishes the word at the
-caret with an exact word in view instead of putting context in the prompt.
-Two independent sets of 60 mid-word cases (40 English, 8 German, 4 each
-Spanish, French and Portuguese) were each written by a separate agent with no
-access to earlier cases or the code and frozen by hash before inference: 20
-where the window names the word, 11 where only the writer's earlier writing
-does, 6 where the draft does, 13 traps where a different word in view starts
-with the same letters, and 10 controls. Installed Gemma 3 1B, 15 W PL1 on
-battery with the performance profile; two blind reviewers judged each whole
-addition and a third settled disagreements.
-
-| Set (rule) | Arm | Shown | Useful full additions | Harmful |
-| --- | --- | --- | --- | --- |
-| First (three letters) | `production_boundary` | 8 | 5 | 3 |
-| | `vocabulary` | 52 | 39 | 13 |
-| Second (five letters) | `production_boundary` | 7 | 1 | 4 |
-| | `vocabulary` | 31 | 23 | 7 |
-
-On the first set every word in view was finished correctly (37 of 37), and
-every trap was finished into the other word ("user stor" became "storage").
-The five-letter minimum was chosen on that seen set, where three or four
-letters gave 12 right and 13 wrong finishes and five or more gave 25 right.
-On the second set 23 of 26 finishes were right. The three wrong ones were
-traps with five or more letters ("migra" to "migration" for "migrate",
-"Verla" to "Verlag" for "Verlauf", "Domini" to "Dominic" for "Dominican");
-the other four harmful additions are the model's own, the same in both arms.
-A finish takes 0.1–0.3 ms at the median, the model 320–430 ms. Both runs
-fail the registered gates: harmful additions rise (on the second set English
-4 to 6, German 0 to 1). The model cannot referee a trap without the window:
-under the healed echo, "on Fri" became "Friends" at log-probability −19 once
-the grammar ruled out the digits it preferred, and a window's names are as
-unlikely to it as wrong words. Runs:
-`output/writing/2026-10-20-vocabulary-independent/` and `-2/`.
-
 A model artifact descriptor selects weights for the Lab only (bounded to 16 KiB
 and 8 GiB; it cannot supply an executable or flags):
 
@@ -283,16 +189,6 @@ and 8 GiB; it cannot supply an executable or flags):
   "alias": "my-lab-model"
 }
 ```
-
-Fixed runtime probes take no prompt or settings:
-- **`--prefill-probe`** measures cold, repeated and appended prompts.
-- **`--stop-token-probe`** takes `--model-artifact` and checks a termination
-  mechanism on the pinned 1.7B model.
-
-`node evaluation/writing/lab/paced.mjs --suite PATH --decision PATH --output NEWDIR`
-runs the fixed paced-typing diagnostic. It compares `cold` and `primed` arms
-over append-only snapshots at 0/100/250/500 ms with a 550 ms deadline, and
-reports eligibility times, not visible UI delivery.
 
 The field-language diagnostic starts no model:
 
@@ -390,6 +286,122 @@ profile (busy cores 1.4–1.7 GHz), 2026-10-23, from the paired run with no
 other build running. Runs: `output/writing/2026-10-23-revision/`
 (`shipped-3` before, `after-lead` after, `generic/`).
 
+## Results
+
+Every result here is development data unless it says independent; the runs
+stay under the ignored `output/writing/`.
+
+### Window context
+
+Cases written for it: as prompt text (`healed`, 8 tokens, pinned Qwen3 1.7B,
+3 s diagnostic budget) the window's heading and paragraph gave the expected
+next words in 15 of 16 informative cases against 4 of 16 without, but 3 of 8
+controls drifted onto the page's topic, several additions answered for the
+user, and at 550 ms both arms missed the deadline on 23 or 24 cold prompts.
+For terminals, which expose no accessibility text, reading the screen with OCR
+cost about 0.8 s and gained nothing; screen reading stays out (the
+[context firewall](../../VISION.md#context-firewall)). No live check of the
+observer's Lab context has run.
+
+Independent cases: an agent with no access to the development set or its
+results wrote 40 English cases. In 22 the window names what comes next, in 6
+copying the window's fact would be wrong (a declined day, a corrected total),
+and 12 are controls. Frozen by hash before inference; installed Gemma 3 1B at
+28 W; one blind reviewer saw the window text and judged each whole addition:
+
+| Arm | Useful full additions (all / informative / controls / no-copy) | Harmful | Wrong context fact | Over 550 ms |
+| --- | --- | --- | --- | --- |
+| `production_boundary`, no window text | 9 / 1 / 8 / 0 | 15 | 0 | 1 |
+| Logit bias toward the window's words | 11 / 2 / 8 / 1 | 14 | 0 | 1 |
+| `context`, window text in the prompt, 1.2 s diagnostic budget | 10 / 7 / 3 / 0 | 16 | 4 | 28 |
+
+Neither form justifies production use. The bias changed the shown text in
+only 4 of 40 cases. Prompt text found the informative words (an earbud, a
+permission slip, the oat milk), but 9 of 12 controls drifted into invented
+numbers ("60th birthday!"), it copied a fact the writer was changing (the
+postponed event's original "3 February"), and it missed 550 ms cold. A
+context-fact fence and a prompt that keeps controls quiet would come first.
+Runs: `output/writing/2026-10-19-window-context-independent/`.
+
+### Vocabulary completion
+
+`vocabulary` finishes the word at the caret with an exact word in view
+instead of putting context in the prompt. Two independent sets of 60 mid-word
+cases (40 English, 8 German, 4 each Spanish, French and Portuguese) were each
+written by a separate agent with no access to earlier cases or the code and
+frozen by hash before inference: 20 where the window names the word, 11 where
+only the writer's earlier writing does, 6 where the draft does, 13 traps
+where a different word in view starts with the same letters, and 10 controls.
+Installed Gemma 3 1B, 15 W PL1 on battery with the performance profile; two
+blind reviewers judged each whole addition and a third settled disagreements.
+
+| Set (rule) | Arm | Shown | Useful full additions | Harmful |
+| --- | --- | --- | --- | --- |
+| First (three letters) | `production_boundary` | 8 | 5 | 3 |
+| | `vocabulary` | 52 | 39 | 13 |
+| Second (five letters) | `production_boundary` | 7 | 1 | 4 |
+| | `vocabulary` | 31 | 23 | 7 |
+
+- On the first set every word in view was finished correctly (37 of 37), and
+  every trap was finished into the other word ("user stor" became
+  "storage"). The five-letter minimum was chosen on that seen set, where
+  three or four letters gave 12 right and 13 wrong finishes and five or more
+  gave 25 right.
+- On the second set 23 of 26 finishes were right. The three wrong ones were
+  traps with five or more letters ("migra" to "migration" for "migrate",
+  "Verla" to "Verlag" for "Verlauf", "Domini" to "Dominic" for "Dominican");
+  the other four harmful additions are the model's own, the same in both arms.
+- A finish takes 0.1–0.3 ms at the median, the model 320–430 ms.
+- Both runs fail the registered gates: harmful additions rise (on the second
+  set English 4 to 6, German 0 to 1). The model cannot referee a trap without
+  the window: under the healed echo, "on Fri" became "Friends" at
+  log-probability −19 once the grammar ruled out the digits it preferred, and
+  a window's names are as unlikely to it as wrong words.
+
+Runs: `output/writing/2026-10-20-vocabulary-independent/` and `-2/`.
+
+### Retired experiments
+
+Each of these failed its gate, and its code is deleted.
+
+- **`instructed_word`** (next-word study, 2026-09-09): no useful result in 30
+  opportunities and one harmful one.
+- **`healed_attested`**: added harmful suggestions on top of `healed`.
+- **`framed`, `probability_rejoin`, `following_text`** (41 English mid-line
+  development cases, Qwen3 1.7B, 2026-10-12): none improved production's
+  rejoin, which showed two suggestions, one matching the reference. The
+  everyday-English frame missed 550 ms on every cold case; forcing the next
+  words and keeping a likely prefix showed only the punctuation completion;
+  naming the line after the caret showed one suggestion and missed 550 ms on
+  34 of 41, since that line changes per case and defeats the prompt cache.
+- **`field_context`** (2026-10-17): the field's own earlier text as context,
+  cut on a stable grid for the prefix cache, measured neutral.
+- **`context_bias`** (logit bias 2.0 on the first token of the window's
+  distinctive English words, 2026-10-17): first-word matches rose from 12 to
+  15 across four development suites (65 cases), but the independent set above
+  barely changed. Bias 4.0 wrote loops ("Thursday, Thursday"), and Persian
+  degraded at both.
+- **Paced typing diagnostic** (12 traces of four snapshots at 0, 100, 250 and
+  500 ms, Qwen3 1.7B, 2026-09-09): no final snapshot of the cold arm became
+  eligible within 550 ms. Priming the runtime with the supplied context made
+  3 of 12 eligible, and a blind review found 1 useful and 2 that contradicted
+  the context.
+- **Prefill probe** (Qwen3 1.7B, 2026-09-09): a 14-token prompt took 168–176
+  ms cold and 35 ms when repeated or appended, with 13 or 14 tokens from the
+  prefix cache that production's `cache_prompt` relies on.
+- **Stop-token probe** (three fixed words in one AB/BA/AB screen, Qwen3 1.7B,
+  2026-09-09): ending a word on the newline token instead of a space and end
+  of sequence saved one generated token and 49–179 ms per word; the Persian
+  word still missed 550 ms, and production keeps its stop strings.
+- **Spelling tab**: it checked German and Persian with its own Hunspell
+  helper, while production corrects English with its lexicon and other
+  languages with installed dictionaries and a model choice among candidates,
+  without Persian ([broker runbook](../../broker/README.md#suggestion-limits)).
+  The broker offers that path only through its provider, so the Lab measures
+  production spelling with `production_boundary`, where English corrections
+  appear as `production_correction`; dictionary languages stay off there, as
+  they are by default.
+
 ## Local API
 
 Every route needs the served page's `X-Badi-Lab-Token` and a matching local
@@ -402,7 +414,7 @@ Host and Origin. Bodies are `application/json`.
 | `POST /api/model/baseline` | Return to the installed baseline |
 | `POST /api/run` | `{suite, configs, seed, confirmation?}`, up to 300 cases |
 | `GET /api/qualification/status`; `POST …/review`, `…/diagnose`, `…/load` | Qualification stages, reviews, runtime measurements and saved evidence |
-| `POST /api/spelling`, `/api/context-lookup` (each with `GET …/status`, `POST …/reset`) | One spelling check or word-completion lookup |
+| `POST /api/context-lookup` (with `GET …/status`, `POST …/reset`) | One word-completion lookup |
 | `POST /api/reset` | Clear the active run and await cleanup |
 
 ## Checks

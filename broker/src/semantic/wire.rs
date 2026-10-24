@@ -39,11 +39,6 @@ impl StatusCode {
     pub const OK: Self = Self(200);
     pub const UNAUTHORIZED: Self = Self(401);
     pub const SERVICE_UNAVAILABLE: Self = Self(503);
-
-    #[must_use]
-    pub const fn as_u16(self) -> u16 {
-        self.0
-    }
 }
 
 impl fmt::Display for StatusCode {

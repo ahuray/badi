@@ -2,7 +2,7 @@
 """Real llama-server latency for Badi-style autocomplete.
 
 Starts one llama-server, measures load time and peak RSS, then runs the
-scenarios from the brief at each prompt size and writes one JSON line per
+README's latency scenarios at each prompt size and writes one JSON line per
 request. Every cache claim comes from the server's own counters (timings.cache_n,
 timings.prompt_n), never from speed. Hybrid/recurrent correctness is checked by
 re-running the final prompt of each scenario with cache_prompt=false and
@@ -62,6 +62,8 @@ class Server:
         cmd = [binary, "-m", model, "--host", "127.0.0.1", "--port", str(self.port), *args]
         self.cmd = cmd
         self.t_spawn = time.monotonic()
+        # Its own session keeps the terminal's Ctrl+C from reaching it, so
+        # every exit path below must stop it, or it keeps the model in memory.
         self.proc = subprocess.Popen(cmd, stdout=self.log, stderr=subprocess.STDOUT,
                                      start_new_session=True)
         self.peak_rss = 0
@@ -70,7 +72,13 @@ class Server:
         self._stop = threading.Event()
         self._watch = threading.Thread(target=self._watch_memory, daemon=True)
         self._watch.start()
-        self.load_s = self._wait_ready()
+        try:
+            self.load_s = self._wait_ready()
+        except BaseException:
+            # A failed or interrupted start (SystemExit, KeyboardInterrupt)
+            # never returns a Server to stop.
+            self.stop()
+            raise
 
     def _watch_memory(self) -> None:
         status = f"/proc/{self.proc.pid}/status"
@@ -276,6 +284,7 @@ def run(args) -> None:
                    "-ngl", str(args.ngl), "--no-webui", *shlex.split(args.extra)]
     log_path = Path(args.out).with_suffix(".server.log")
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    out = open(args.out, "w")
     server = Server(args.server, args.model, server_args, log_path)
     base = {"label": args.label, "model": os.path.basename(args.model),
             "threads": args.threads, "threads_batch": args.threads_batch or args.threads,
@@ -283,7 +292,7 @@ def run(args) -> None:
             "extra": args.extra}
     meta = {**base, "scenario": "server", "cmd": server.cmd, "load_s": round(server.load_s, 3),
             "mem_available_before": mem_available()}
-    with open(args.out, "w") as out:
+    with out:
         try:
             # First use after load: includes any lazy init (e.g. Vulkan pipelines).
             first = complete(server, "Hello", cache=False, n_predict=4)

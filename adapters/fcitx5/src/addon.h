@@ -3,7 +3,8 @@
 // The Fcitx addon instance: one binding per input context, the broker
 // transport and the accessibility observer. Method bodies live in
 // addon.cpp (lifecycle), addon_keys.cpp, addon_observer.cpp,
-// addon_broker.cpp (broker events and display) and addon_session.cpp.
+// addon_broker.cpp (broker events and display), addon_session.cpp and
+// addon_revision.cpp (selection revision).
 
 #include "accessibility.h"
 #include "debug.h"
@@ -124,7 +125,10 @@ private:
         // An explicit revision on its way (ADR 0012): the selection and mode
         // waiting for the observer's field, its policy or its session.
         std::optional<std::pair<SelectionWindow, std::string>> revisionWaiting;
+        // Retries of that request's observer steps while the observer is
+        // busy, the step to retry, and the timer that runs it.
         unsigned int revisionRetries = 0;
+        void (BadiAddon::*revisionStep)(Binding &) = nullptr;
         std::unique_ptr<::fcitx::EventSourceTime> revisionTimer;
         std::unique_ptr<::fcitx::EventSourceTime> revisionNoticeTimer;
         // An applied revision's selection and text, until the field reads so.
@@ -181,8 +185,8 @@ private:
     void retireObservedField(Binding &binding);
     void stopObserving(Binding &binding);
     void requestObservedContext(Binding &binding, bool rediscover = false);
-    void publishObservedContext(Binding &binding, const Json &focus, const Json &reply,
-                                bool caretMayMove = false);
+    void publishObservedContext(Binding &binding, const Json &focus, const Json &reply, bool caretMayMove,
+                                bool windowAsked);
 
     // Broker events.
     void queryFocusedPolicies();
@@ -203,6 +207,7 @@ private:
     void applyCommitPrepare(const CommitPrepare &prepare);
     void refuseCommit(const CommitPrepare &prepare, Binding *binding);
     void reportStale(const CommitPrepare &prepare);
+    void onRefusal(const RequestRefusal &refusal);
     void onDisconnected();
 
     // Explicit revision of one selection (addon_revision.cpp).
@@ -210,6 +215,7 @@ private:
     std::optional<SelectionWindow> currentSelection(const Binding &binding) const;
     bool revisionChord(Binding &binding);
     void startRevision(Binding &binding, SelectionWindow selection, std::string mode);
+    bool retryRevision(Binding &binding, void (BadiAddon::*step)(Binding &));
     void inspectForRevision(Binding &binding);
     void revisionInspected(Binding &binding, const Json &reply);
     void revisionByManualContract(Binding &binding);
@@ -224,6 +230,7 @@ private:
     void cancelRevision(Binding &binding);
     bool revisionKey(::fcitx::KeyEvent &event, Binding &binding);
     bool revisionCommit(const CommitPrepare &prepare);
+    void corroborateRevisionCommit(Binding &binding, const CommitPrepare &prepare, std::uint64_t deadline);
     void applyRevision(Binding &binding, const CommitPrepare &prepare);
     void readBackRevision(Binding &binding);
     bool revisionSurvives(Binding &binding);
@@ -240,12 +247,14 @@ private:
     bool contextReadable(const Binding &binding) const;
     bool safeToObserve(const Binding &binding) const;
     std::optional<ContextWindow> currentContext(const Binding &binding) const;
+    std::optional<ContextWindow> currentContext(const Binding &binding, const Json &observed) const;
     std::string_view unavailableContextReason(const Binding &binding) const;
     void invalidateChangedContext(Binding &binding);
     void showNotice(Binding &binding, std::string_view message);
     void expectCorrection(Binding &binding, std::string expected);
     void readBackCorrection(Binding &binding);
     void clearOwnedPanel(Binding &binding);
+    void removeOwnedPanel(Binding &binding);
     static std::optional<CaretRect> caretRect(const ::fcitx::InputContext &input);
     void hidePreview();
     void cancelForInput(Binding &binding);

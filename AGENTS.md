@@ -26,7 +26,7 @@ Each fact has one home:
 | [README.md](README.md) | What users can do: keys, coverage, install, commands |
 | [VISION.md](VISION.md) | The durable product contract |
 | [future plans.md](<future plans.md>) | The only backlog: where Badi stands, open decisions, the ordered next steps and later work |
-| [CHANGELOG.md](CHANGELOG.md) | What shipped, by merged pull request |
+| [CHANGELOG.md](CHANGELOG.md) | What shipped, by release |
 | [docs/decisions](docs/decisions/) | Durable architecture decisions (ADRs) |
 | Component `README.md` files | That component's contract, tests and boundaries |
 
@@ -77,7 +77,7 @@ should serve current work.
 
 | Rule | Enforcer | How it fails |
 | --- | --- | --- |
-| A commit that changes broker, adapter, protocol, panel, packaging or installer behavior also adds a line under the newest [CHANGELOG.md](CHANGELOG.md) heading | [`scripts/check-agent-rules.mjs`](scripts/check-agent-rules.mjs) via `npm run agent-rules:check` | Exit 1, naming that commit and the product files. A later commit that only edits the changelog still fails |
+| A commit that changes broker, adapter, protocol, panel, packaging or installer behavior also adds a [CHANGELOG.md](CHANGELOG.md) line under `## Unreleased` | [`scripts/check-agent-rules.mjs`](scripts/check-agent-rules.mjs) via `npm run agent-rules:check` | Exit 1, naming that commit and the product files. A later commit that only edits the changelog still fails |
 | [future plans.md](<future plans.md>) is the only backlog; no parallel planning, handoff or report document | the same check | Exit 1, naming the file to delete |
 | The Lab finishes a word by calling `badi_broker::vocabulary::complete` | the same check | Exit 1 when `evaluation/writing/lab-worker/src` scans words with `unicode_word_indices`, or no file there calls that function |
 
@@ -212,7 +212,7 @@ cargo +1.85.0 check --workspace --all-targets --all-features --locked
 ```
 
 `npm run check` ([run-checks.mjs](scripts/run-checks.mjs)) runs the agent-rule,
-docs, editor, LibreOffice, desktop, accessibility, Omarchy and writing checks and summarizes;
+docs, accessibility, session, LibreOffice, desktop, Omarchy, editor and writing checks and summarizes;
 `node scripts/run-checks.mjs NAME...` runs a subset. No source check proves
 native app behavior: claims about a real app need a live trial in the graphical
 session, and missing prerequisites must be reported with the exact unverified
@@ -257,4 +257,4 @@ boundary.
   universal Linux support.
 - Before finishing, inspect the final diff and status, including untracked
   files, and state what changed, which checks ran and what remains unverified.
-- A pull request is ready only with a proof artifact from [verify-badi](.cursor/skills/verify-badi/SKILL.md), as the [pull request template](.github/pull_request_template.md) requires.
+- A pull request is ready only with the proof artifact its [template](.github/pull_request_template.md) requires: a command with its exit code, test output, or a [verify-badi](.cursor/skills/verify-badi/SKILL.md) capture, which a desktop input-flow change needs.

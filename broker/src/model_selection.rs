@@ -256,12 +256,8 @@ const WRITING_MODELS: [ModelArtifact; 4] = [
         runtime_caveat: WRITING_RUNTIME_CAVEAT,
         languages: WRITING_LANGUAGES,
         screen_useful: Some(46),
-        // German: 15 useful against 7 of 67, 3 harmful against 2 (user
-        // decision, 2026-10-18). French and Spanish: 12 and 14 useful of 20
-        // boundary requests ending in a space, none harmful, where the
-        // unhealed prompt shows nothing (2026-10-18 small-model screen).
-        // Portuguese: 11 useful of 20 such requests, none harmful
-        // (2026-10-19 European-focus screen).
+        // Each by blind review against the unhealed prompt (broker README,
+        // languages and healing); German by user decision.
         healed_languages: &["en", "de", "fa", "fr", "es", "pt"],
     },
 ];
@@ -336,7 +332,6 @@ pub fn detect_hardware() -> HardwareProfile {
 
 /// Like [`detect_hardware`] without running `nvidia-smi`. CPU inference never
 /// uses GPU capacity; DRM vendor detection alone still marks hybrid systems.
-#[cfg(feature = "local-model")]
 #[must_use]
 pub(crate) fn detect_cpu_inference_hardware() -> HardwareProfile {
     detect_hardware_with(&NoNvidiaMemoryProbe)
@@ -427,7 +422,6 @@ pub fn recommend_model(hardware: HardwareProfile, use_case: ModelUseCase) -> Mod
 /// incompatible. Selection uses total memory, so a transient dip in available
 /// memory never changes or refuses the installed model; total memory minus the
 /// host reserve is the hard floor. [`fits_available_memory`] gates the start.
-#[cfg(feature = "local-model")]
 pub(crate) fn select_installed_writing_model(
     hardware: &HardwareProfile,
     installed_filenames: &[&str],
@@ -470,7 +464,6 @@ pub fn required_memory_mib(model: ModelArtifact) -> u64 {
 
 /// Whether `model` can start now, with its runtime headroom, without eating
 /// into the host reserve.
-#[cfg(feature = "local-model")]
 #[must_use]
 pub(crate) fn fits_available_memory(model: ModelArtifact, available_mib: u64) -> bool {
     let usable = available_mib.saturating_sub(HOST_RESERVE_MIB);
@@ -727,10 +720,8 @@ impl NvidiaMemoryProbe for SystemNvidiaMemoryProbe {
     }
 }
 
-#[cfg(feature = "local-model")]
 struct NoNvidiaMemoryProbe;
 
-#[cfg(feature = "local-model")]
 impl NvidiaMemoryProbe for NoNvidiaMemoryProbe {
     fn detected_total_memory_mib(&self) -> Option<u64> {
         None

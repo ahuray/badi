@@ -19,11 +19,22 @@ const READING_WINDOW = new Set(['obsidian', 'neovim']);
 const EDITOR_FOCUS = new Set(['neovim']);
 const CAPABILITIES = ['context', 'suggestion', 'commit.applied', 'control', 'policy'];
 const FRAME_LIMIT = 65536;
+// The broker reads at most this many Unicode scalars before and after the caret.
+const BEFORE_SCALARS = 512;
+const AFTER_SCALARS = 128;
 const counter = value => Number.isSafeInteger(value) && value >= 0;
 const words = new Intl.Segmenter('en', { granularity: 'word' });
 export const validSuggestion = value => typeof value === 'string' && [...value].length <= 64 &&
   hasIsolatedSpaces(value) && !hasUnsafeText(value) &&
   [...words.segment(value)].filter(part => part.isWordLike).length <= 4;
+
+// The end of `before` and the start of `after` that the broker reads.
+export const boundedContext = (before, after = '') =>
+  ({ before: [...before].slice(-BEFORE_SCALARS).join(''), after: [...after].slice(0, AFTER_SCALARS).join('') });
+
+// Why `client` cannot serve a request now, as the editors report it.
+export const refusalReason = client => !client.connected ? 'model_offline'
+  : client.allowed ? 'expired_or_unavailable' : 'app_disabled_or_model_paused';
 
 const sameCoordinates = (message, session) =>
   ['session_id', 'focus_epoch', 'revision'].every(key => message[key] === session[key]);
@@ -153,8 +164,8 @@ export class BrokerClient extends EventEmitter {
         !/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/u.test(language)) {
       throw new Error('Invalid writing language');
     }
-    if (typeof before !== 'string' || !before.trim() || [...before].length > 512 ||
-        hasUnsafeText(before, true) || typeof after !== 'string' || [...after].length > 128 ||
+    if (typeof before !== 'string' || !before.trim() || [...before].length > BEFORE_SCALARS ||
+        hasUnsafeText(before, true) || typeof after !== 'string' || [...after].length > AFTER_SCALARS ||
         hasUnsafeText(after, true)) {
       throw new Error('Invalid writing context');
     }
@@ -235,6 +246,9 @@ export class BrokerClient extends EventEmitter {
         response.payload.suggestion_id !== candidate.suggestion_id || response.payload.replace_before !== candidate.replaceBefore) {
       throw new Error('Acceptance was revoked');
     }
+    // The grant now binds the edit; the preview's expiry must not close the
+    // session before the editor reports the result.
+    clearTimeout(this.#expiry);
     return Object.freeze({ ...candidate, text, control_id: response.id });
   }
 
@@ -271,7 +285,11 @@ export class BrokerClient extends EventEmitter {
     for (const [id, pending] of this.#pending) {
       if (pending.session) { clearTimeout(pending.timer); this.#pending.delete(id); pending.reject(new Error('Context changed')); }
     }
-    if (closeSession && session && !this.#closed) this.#send('session.close', { reason: 'session_closed' }, randomUUID(), session);
+    if (closeSession && session && !this.#closed) {
+      // Runs from the expiry timer too, where a throw would be uncaught.
+      try { this.#send('session.close', { reason: 'session_closed' }, randomUUID(), session); }
+      catch { /* The broker closes it with the connection or its own expiry. */ }
+    }
     this.emit('clear');
   }
 
@@ -284,7 +302,6 @@ export class BrokerClient extends EventEmitter {
     for (const pending of this.#pending.values()) { clearTimeout(pending.timer); pending.reject(new Error(reason)); }
     this.#pending.clear();
     this.#socket?.destroy();
-    this.emit('diagnostic', reason);
     this.emit('state', 'offline');
   }
 

@@ -38,7 +38,7 @@ async fn authority_ack_gate_tracks_the_current_epoch() {
 
     // Advancing the epoch re-blocks until the new epoch is acknowledged;
     // re-acking the stale epoch does not admit.
-    broker.set_paused(true).await.expect("pause");
+    broker.set_paused(true).await;
     assert!(matches!(
         broker.require_current_authority_ack("conn").await,
         Err(BrokerError::Stale)
@@ -124,8 +124,7 @@ async fn restrictive_session_activation_is_applied_before_context_validation() {
                 activation: Activation::Never,
             },
             SessionAuthority {
-                protocol_version: 1,
-                adapter_kind: AdapterKind::Browser,
+                adapter_kind: AdapterKind::Test,
                 capabilities: vec![Capability::Context, Capability::Suggestion],
             },
             event_sink(sink),
@@ -158,7 +157,6 @@ async fn manual_session_cannot_be_escalated_by_context_claim() {
     let broker = Broker::new(
         provider,
         BrokerConfig {
-            debounce: Duration::ZERO,
             provider_timeout: Duration::from_secs(1),
             suggestion_ttl: Duration::from_millis(100),
             ..BrokerConfig::default()
@@ -179,8 +177,7 @@ async fn manual_session_cannot_be_escalated_by_context_claim() {
                 activation: Activation::Manual,
             },
             SessionAuthority {
-                protocol_version: 1,
-                adapter_kind: AdapterKind::Browser,
+                adapter_kind: AdapterKind::Test,
                 capabilities: vec![Capability::Context, Capability::Suggestion],
             },
             event_sink(sink),
@@ -263,8 +260,7 @@ async fn active_locator_fails_closed_when_two_sessions_claim_focus() {
                 activation: Activation::Always,
             },
             SessionAuthority {
-                protocol_version: 1,
-                adapter_kind: AdapterKind::Browser,
+                adapter_kind: AdapterKind::Test,
                 capabilities: vec![Capability::Context, Capability::Suggestion],
             },
             event_sink(second_sink),
@@ -303,7 +299,6 @@ async fn pause_and_dismiss_cancel_eligibility() {
     let (broker, session_id, mut events) = setup(
         provider,
         BrokerConfig {
-            debounce: Duration::ZERO,
             provider_timeout: Duration::from_secs(1),
             suggestion_ttl: Duration::from_secs(1),
             ..BrokerConfig::default()
@@ -326,12 +321,12 @@ async fn pause_and_dismiss_cancel_eligibility() {
         )
         .await
         .expect("request");
-    assert!(broker.set_paused(true).await.expect("pause"));
+    assert!(broker.set_paused(true).await);
     sleep(Duration::from_millis(20)).await;
     assert!(events.try_recv().is_err());
     assert!(broker.active_locator().await.is_none());
 
-    assert!(!broker.set_paused(false).await.expect("resume"));
+    assert!(!broker.set_paused(false).await);
     let second = context(2, FieldPurpose::Normal);
     broker
         .update_context(coordinates(session_id, 2), second.clone())
@@ -404,8 +399,8 @@ async fn concurrent_pair_of_pause_toggles_is_linearizable() {
 
     barrier.wait().await;
     let (first, second) = tokio::join!(first, second);
-    let first = first.expect("first toggle task").expect("pause");
-    let second = second.expect("second toggle task").expect("pause");
+    let first = first.expect("first toggle task");
+    let second = second.expect("second toggle task");
 
     assert_ne!(first, second, "each toggle must observe one transition");
     assert_eq!(broker.is_paused().await, initial);
@@ -455,10 +450,7 @@ async fn durable_corrupt_store_deny_ack_advances_epoch_and_revokes_all_live_auth
     let provider = std::sync::Arc::new(ReadyThenPendingProvider::new());
     let broker = Broker::with_control_plane(
         provider.clone(),
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
+        BrokerConfig::default(),
         std::sync::Arc::clone(&control_plane),
     )
     .expect("controlled broker");
@@ -795,8 +787,8 @@ async fn all_linux_apps_reports_its_default_so_adapters_can_tell_it_from_a_rule(
         .await;
     assert_eq!(
         site.reason,
-        PolicyResolutionReason::MatchedRule,
-        "website defaults keep the protocol v1 reason"
+        PolicyResolutionReason::MatchedDefault,
+        "a website default reports its default like an app's"
     );
 }
 
@@ -1038,4 +1030,36 @@ fn the_policy_reply_says_context_words_only_where_context_is_on_and_suggestions_
     assert!(!words(&settings, "other.example"), "no suggestions there");
     settings.context_words_off = vec![site("mail.example")];
     assert!(!words(&settings, "mail.example"), "off for this site");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_transitions_announce_their_epochs_in_order() {
+    const TOGGLES: usize = 24;
+    let broker = Broker::new(
+        std::sync::Arc::new(crate::provider::DeterministicPhraseProvider::default()),
+        BrokerConfig::default(),
+    );
+    let mut changes = broker.subscribe_authority_changes();
+    let toggles: Vec<_> = (0..TOGGLES)
+        .map(|_| {
+            let broker = broker.clone();
+            tokio::spawn(async move { broker.toggle_paused().await })
+        })
+        .collect();
+    for toggle in toggles {
+        toggle.await.expect("toggle task");
+    }
+    let mut last: Option<crate::protocol::AuthorityChangedPayload> = None;
+    for _ in 0..TOGGLES {
+        let event = changes.recv().await.expect("authority event");
+        if let Some(previous) = &last {
+            assert!(event.authority_epoch > previous.authority_epoch);
+        }
+        last = Some(event);
+    }
+    // The last announcement is the state an adapter is left with.
+    let last = last.expect("events");
+    let authority = broker.authority_snapshot().await;
+    assert_eq!(last.authority_epoch, authority.authority_epoch);
+    assert_eq!(last.paused, authority.paused);
 }

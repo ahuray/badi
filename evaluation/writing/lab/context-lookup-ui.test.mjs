@@ -37,9 +37,11 @@ function harness() {
     addEventListener(name, listener) { this.listeners[name] = listener; }
     querySelectorAll(tag) { return this.children.flatMap(child => [...(child.tag === tag ? [child] : []), ...child.querySelectorAll(tag)]); }
     click() { this.clicked = true; }
+    focus() { document.activeElement = this; }
   }
   const elements = new Map(); const created = [];
   const document = {
+    activeElement: null,
     getElementById(id) { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); },
     createElement(tag) { const element = new Element(tag); created.push(element); return element; },
     querySelector() { return { content: 'test-token' }; },
@@ -52,7 +54,7 @@ function harness() {
     requests.push({ url, options, respond: (body = {}, status = 200) => resolve({ ok: status < 400, status, json: async () => body }) });
   });
   attachLookupUI(document, fetch);
-  return { $, requests, created, submit: () => $('lookup-form').onsubmit({ preventDefault() {} }) };
+  return { $, document, requests, created, submit: () => $('lookup-form').onsubmit({ preventDefault() {} }) };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const responseFor = request => ({ schema: 'badi.context-lookup.response.v1', cleanup: { reaped: true },
@@ -105,4 +107,24 @@ test('explicit export preserves draft, expected suffix and user judgment without
   const data = JSON.parse(await resolveObjectURL(link.href).text());
   assert.equal(link.clicked, true); assert.equal(data.draft.expected_text, 'ule');
   assert.equal(data.records[0].review.judgment, 'Useful'); assert.equal(ui.requests.length, 1);
+});
+
+test('tab navigation keeps a finished lookup and the prediction draft', async () => {
+  const ui = harness();
+  ui.$('prefix').value = 'My prediction draft ';
+  const running = ui.submit(); ui.requests[0].respond(responseFor(ui.requests[0])); await running;
+  assert.equal(ui.$('lookup-count').textContent, '1');
+  ui.$('prediction-tab').onkeydown({ key: 'End', preventDefault() {} });
+  assert.equal(ui.$('prediction-panel').hidden, true);
+  assert.equal(ui.$('lookup-panel').hidden, false);
+  assert.equal(ui.document.activeElement, ui.$('lookup-tab'));
+  assert.equal(ui.$('lookup-tab').attributes['aria-selected'], 'true');
+  ui.$('lookup-tab').onkeydown({ key: 'ArrowRight', preventDefault() {} });
+  assert.equal(ui.document.activeElement, ui.$('prediction-tab'));
+  ui.$('lookup-tab').onclick();
+  ui.$('prediction-tab').onclick();
+  assert.equal(ui.$('lookup-panel').hidden, true);
+  assert.equal(ui.$('prefix').value, 'My prediction draft ');
+  assert.equal(ui.$('lookup-before').value, 'The sched');
+  assert.equal(ui.$('lookup-count').textContent, '1');
 });

@@ -15,23 +15,46 @@ use super::{
 };
 use crate::control_plane::ControlPlane;
 use crate::engine::{Broker, BrokerConfig};
-use crate::ipc::{read_envelope, write_envelope};
+use crate::ipc::{read_envelope, write_envelope, write_frame};
 use crate::protocol::{
     Activation, AdapterDescriptor, AdapterKind, AuthorityAckPayload, AuthorityChangedPayload,
     CURRENT_PROTOCOL_VERSION, Capability, ContextChangedPayload, ControlAction,
     ControlResultPayload, Coordinates, DesktopSession, DesktopStatePayload, DesktopStatusPayload,
-    EditorFocusPayload, EditorStatusPayload, EmptyPayload, FieldDescriptor, FieldPurpose,
-    GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload, MessageType,
-    OffsetUnit, PROTOCOL_VERSION, ProbeOutcome, ProbeRequestPayload, ProbeResultPayload,
-    ReasonCode, Selection, SessionId, SessionOpenPayload, SettingsReplacePayload,
-    SettingsStatusPayload, StyleKeyPayload, SuggestRequestPayload, TargetDescriptor, TargetKind,
-    WireEnvelope,
+    EditorFocusPayload, EditorStatusPayload, EmptyPayload, ErrorPayload, FieldDescriptor,
+    FieldPurpose, GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
+    MessageType, OffsetUnit, ProbeOutcome, ProbeRequestPayload, ProbeResultPayload, ProviderKind,
+    ReasonCode, Selection, SessionControlRequestPayload, SessionId, SessionOpenPayload,
+    SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload, SuggestRequestPayload,
+    TargetDescriptor, TargetKind, WireEnvelope,
 };
-use crate::provider::DeterministicPhraseProvider;
+use crate::provider::{
+    CompletionProvider, DeterministicPhraseProvider, ProviderError, ProviderRequest,
+};
 use crate::settings::{
-    BrowserAdapter, LinuxAdapter, SETTINGS_SCHEMA, SettingsV2, StableIdentity, StoragePaths,
-    SubjectPermissions, SubjectRule, WebScheme,
+    LinuxAdapter, SETTINGS_SCHEMA, SettingsV2, StableIdentity, StoragePaths, SubjectPermissions,
+    SubjectRule,
 };
+
+/// The phrase fixture, answering after a delay so a test can act first.
+struct DelayedPhrase(Duration);
+
+#[async_trait::async_trait]
+impl CompletionProvider for DelayedPhrase {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::PhraseV1
+    }
+
+    async fn complete(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+    ) -> Result<Option<String>, ProviderError> {
+        sleep(self.0).await;
+        DeterministicPhraseProvider::default()
+            .complete(request, cancellation)
+            .await
+    }
+}
 
 fn broker() -> Broker {
     Broker::new(
@@ -45,8 +68,8 @@ async fn open_test_session(client: &mut UnixStream, session_id: SessionId) {
         MessageType::Hello,
         0,
         &HelloPayload {
-            min_v: PROTOCOL_VERSION,
-            max_v: PROTOCOL_VERSION,
+            min_v: CURRENT_PROTOCOL_VERSION,
+            max_v: CURRENT_PROTOCOL_VERSION,
             adapter: AdapterDescriptor {
                 kind: AdapterKind::Test,
                 name: "server-test".to_owned(),
@@ -153,7 +176,7 @@ async fn authority_changes_retire_sessions_and_release_connection_capacity() {
 
     for _ in 0..=MAX_SESSIONS_PER_CONNECTION {
         for paused in [true, false] {
-            assert_eq!(broker.set_paused(paused).await.expect("pause"), paused);
+            assert_eq!(broker.set_paused(paused).await, paused);
             let event = timeout(Duration::from_secs(1), read_envelope(&mut client))
                 .await
                 .expect("authority deadline")
@@ -189,6 +212,15 @@ async fn authority_changes_retire_sessions_and_release_connection_capacity() {
     assert_eq!(broker.session_count().await, 0);
 }
 
+/// The next frame, which must arrive within a second.
+async fn read_denial(client: &mut UnixStream) -> WireEnvelope {
+    timeout(Duration::from_secs(1), read_envelope(client))
+        .await
+        .expect("denial deadline")
+        .expect("read denial")
+        .expect("denial event")
+}
+
 #[tokio::test]
 async fn unacknowledged_authority_cannot_open_a_session() {
     let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
@@ -210,8 +242,8 @@ async fn unacknowledged_authority_cannot_open_a_session() {
         MessageType::Hello,
         0,
         &HelloPayload {
-            min_v: PROTOCOL_VERSION,
-            max_v: PROTOCOL_VERSION,
+            min_v: CURRENT_PROTOCOL_VERSION,
+            max_v: CURRENT_PROTOCOL_VERSION,
             adapter: AdapterDescriptor {
                 kind: AdapterKind::Test,
                 name: "server-test".to_owned(),
@@ -222,6 +254,7 @@ async fn unacknowledged_authority_cannot_open_a_session() {
                 Capability::Suggestion,
                 Capability::Health,
                 Capability::Policy,
+                Capability::Control,
             ],
         },
     )
@@ -247,13 +280,31 @@ async fn unacknowledged_authority_cannot_open_a_session() {
     // connection itself survives so the client can still ack.
     let session_id = SessionId::new();
     reopen_test_session(&mut client, session_id).await;
-    let denied = timeout(Duration::from_secs(1), read_envelope(&mut client))
-        .await
-        .expect("denial deadline")
-        .expect("read denial")
-        .expect("denial event");
+    let denied = read_denial(&mut client).await;
     assert_eq!(denied.message_type, MessageType::Error);
     assert_eq!(broker.session_count().await, 0);
+    // A session action, which could request a suggestion, waits too.
+    let control = WireEnvelope::session(
+        MessageType::ControlRequest,
+        Coordinates {
+            session_id,
+            focus_epoch: 1,
+            revision: 0,
+        },
+        1,
+        &SessionControlRequestPayload {
+            action: ControlAction::Request,
+            fingerprint: "fingerprint_server_01".to_owned(),
+            suggestion_id: None,
+        },
+    )
+    .expect("session control");
+    write_envelope(&mut client, &control)
+        .await
+        .expect("write session control");
+    let denied = read_denial(&mut client).await;
+    let reason: ErrorPayload = denied.decode_payload().expect("denial payload");
+    assert_eq!(reason.code, ReasonCode::Stale);
 
     let ack = WireEnvelope::global(
         MessageType::AuthorityAck,
@@ -316,7 +367,7 @@ async fn hello_deadline_rejects_an_idle_new_connection() {
 }
 
 #[tokio::test]
-async fn v2_negotiation_versions_every_frame_and_rejects_a_v1_rebind() {
+async fn every_frame_is_current_and_a_v1_frame_ends_the_connection() {
     let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
     let connection = tokio::spawn(async move {
         serve_connection_with_timeouts(
@@ -346,9 +397,7 @@ async fn v2_negotiation_versions_every_frame_and_rejects_a_v1_rebind() {
             ],
         },
     )
-    .expect("v2 hello")
-    .at_version(CURRENT_PROTOCOL_VERSION)
-    .expect("versioned v2 hello");
+    .expect("v2 hello");
     write_envelope(&mut client, &hello)
         .await
         .expect("write v2 hello");
@@ -371,15 +420,15 @@ async fn v2_negotiation_versions_every_frame_and_rejects_a_v1_rebind() {
     assert_eq!(authority.v, CURRENT_PROTOCOL_VERSION);
     assert_eq!(authority.message_type, MessageType::AuthorityChanged);
 
-    let wrong_version = WireEnvelope::global(
-        MessageType::AuthorityAck,
-        1,
-        &AuthorityAckPayload { authority_epoch: 0 },
+    let wrong_version = serde_json::json!({
+        "v": 1, "type": "authority.ack", "mono_ms": 1, "payload": {"authority_epoch": 0},
+    });
+    write_frame(
+        &mut client,
+        &serde_json::to_vec(&wrong_version).expect("v1 frame"),
     )
-    .expect("legacy authority acknowledgment");
-    write_envelope(&mut client, &wrong_version)
-        .await
-        .expect("write wrong-version frame");
+    .await
+    .expect("write wrong-version frame");
     let error = read_envelope(&mut client)
         .await
         .expect("read version error")
@@ -394,7 +443,70 @@ async fn v2_negotiation_versions_every_frame_and_rejects_a_v1_rebind() {
 }
 
 #[tokio::test]
-async fn handshake_rejects_a_mixed_range_that_matches_no_versioned_schema() {
+async fn a_v1_hello_is_refused_and_opens_nothing() {
+    let hello = |frame_version: u8, version: u8| {
+        serde_json::json!({
+            "v": frame_version, "id": "legacy:hello", "type": "hello", "mono_ms": 0,
+            "payload": {
+                "min_v": version, "max_v": version,
+                "adapter": {"kind": "fcitx", "name": "legacy", "version": "1"},
+                "capabilities": ["context", "suggestion", "policy"],
+            },
+        })
+    };
+    // A v1 frame, and a v2 frame asking for v1.
+    for (frame, frame_refusal) in [(hello(1, 1), true), (hello(2, 1), false)] {
+        let broker = broker();
+        let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
+        let task_broker = broker.clone();
+        let connection = tokio::spawn(async move {
+            serve_connection_with_timeouts(
+                server,
+                task_broker,
+                CancellationToken::new(),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+        });
+        write_frame(&mut client, &serde_json::to_vec(&frame).expect("frame"))
+            .await
+            .expect("write hello");
+        let refusal = read_envelope(&mut client)
+            .await
+            .expect("read refusal")
+            .expect("refusal");
+        assert_eq!(refusal.message_type, MessageType::Error);
+        assert_eq!(refusal.v, CURRENT_PROTOCOL_VERSION);
+        let reason: ErrorPayload = refusal.decode_payload().expect("refusal payload");
+        assert_eq!(reason.code, ReasonCode::UnsupportedVersion);
+        assert!(read_envelope(&mut client).await.expect("closed").is_none());
+        let ended = connection.await.expect("connection task");
+        if frame_refusal {
+            assert!(matches!(
+                ended,
+                Err(ServerError::Frame(crate::ipc::FrameError::Protocol(
+                    crate::protocol::ProtocolError::UnsupportedVersion(1)
+                )))
+            ));
+        } else {
+            assert!(matches!(
+                ended,
+                Err(ServerError::Protocol(
+                    crate::protocol::ProtocolError::VersionNegotiationFailed
+                ))
+            ));
+        }
+        assert_eq!(broker.session_count().await, 0);
+        assert_eq!(
+            broker.authority_snapshot().await.pending_acknowledgements,
+            0
+        );
+    }
+}
+
+#[tokio::test]
+async fn handshake_refuses_a_mixed_range_that_matches_no_versioned_schema() {
     let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
     let connection = tokio::spawn(async move {
         serve_connection_with_timeouts(
@@ -410,7 +522,7 @@ async fn handshake_rejects_a_mixed_range_that_matches_no_versioned_schema() {
         MessageType::Hello,
         0,
         &HelloPayload {
-            min_v: PROTOCOL_VERSION,
+            min_v: 1,
             max_v: CURRENT_PROTOCOL_VERSION,
             adapter: AdapterDescriptor {
                 kind: AdapterKind::Test,
@@ -421,10 +533,22 @@ async fn handshake_rejects_a_mixed_range_that_matches_no_versioned_schema() {
         },
     )
     .expect("structurally supported hello");
+    let mut hello = hello;
+    hello.id = Some("test:hello".to_owned());
     write_envelope(&mut client, &hello)
         .await
         .expect("write mixed-range hello");
-    drop(client);
+    // The refusal names its reason, in the current version, then closes.
+    let refusal = read_envelope(&mut client)
+        .await
+        .expect("read refusal")
+        .expect("refusal");
+    assert_eq!(refusal.message_type, MessageType::Error);
+    assert_eq!(refusal.v, CURRENT_PROTOCOL_VERSION);
+    assert_eq!(refusal.id, hello.id);
+    let reason: ErrorPayload = refusal.decode_payload().expect("refusal payload");
+    assert_eq!(reason.code, ReasonCode::UnsupportedVersion);
+    assert!(read_envelope(&mut client).await.expect("closed").is_none());
 
     assert!(matches!(
         connection.await.expect("connection task"),
@@ -435,8 +559,7 @@ async fn handshake_rejects_a_mixed_range_that_matches_no_versioned_schema() {
 }
 
 #[tokio::test]
-#[allow(clippy::too_many_lines)]
-async fn v1_settings_roundtrip_projects_browser_rules_and_preserves_native_rules() {
+async fn the_wire_speaks_only_settings_v2() {
     let temporary = tempdir().expect("temporary directory");
     let paths = StoragePaths::new(
         temporary.path().join("config/badi"),
@@ -448,45 +571,17 @@ async fn v1_settings_roundtrip_projects_browser_rules_and_preserves_native_rules
         .replace_settings(
             0,
             SettingsV2 {
-                schema: SETTINGS_SCHEMA.to_owned(),
                 revision: 1,
                 paused: false,
-                all_web_origins: false,
-                all_linux_apps: false,
-                mid_line: false,
-                escape_quiet_seconds: 0,
-                battery_mode: crate::settings::BatteryMode::Normal,
-                screen_share: crate::settings::ScreenShareMode::Hold,
-                suggestion_length: crate::settings::SuggestionLength::Normal,
-                languages_chosen: false,
-                style_learning: false,
-                context_words: None,
-                context_words_off: Vec::new(),
-                language_overrides: std::collections::BTreeMap::new(),
-                spelling_languages: vec![crate::spelling::SpellingLanguage::English],
-                writing_model: None,
-                writing_languages: crate::settings::DEFAULT_WRITING_LANGUAGES.to_vec(),
-                trailing_space_healing: std::collections::BTreeMap::new(),
-                subjects: vec![
-                    SubjectRule {
-                        identity: StableIdentity::browser_origin(
-                            BrowserAdapter::Chromium,
-                            WebScheme::Https,
-                            "example.com",
-                            None,
-                        )
-                        .expect("browser identity"),
-                        permissions: SubjectPermissions::deny_all(),
-                    },
-                    SubjectRule {
-                        identity: StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite")
-                            .expect("Linux identity"),
-                        permissions: SubjectPermissions::deny_all(),
-                    },
-                ],
+                subjects: vec![SubjectRule {
+                    identity: StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite")
+                        .expect("Linux identity"),
+                    permissions: SubjectPermissions::deny_all(),
+                }],
+                ..SettingsV2::deny_by_default()
             },
         )
-        .expect("seed mixed settings");
+        .expect("seed settings");
     let broker = Broker::with_control_plane(
         Arc::new(DeterministicPhraseProvider::default()),
         BrokerConfig::default(),
@@ -508,37 +603,28 @@ async fn v1_settings_roundtrip_projects_browser_rules_and_preserves_native_rules
         MessageType::Hello,
         0,
         &HelloPayload {
-            min_v: PROTOCOL_VERSION,
-            max_v: PROTOCOL_VERSION,
+            min_v: CURRENT_PROTOCOL_VERSION,
+            max_v: CURRENT_PROTOCOL_VERSION,
             adapter: AdapterDescriptor {
                 kind: AdapterKind::Cli,
-                name: "legacy-cli".to_owned(),
+                name: "settings-cli".to_owned(),
                 version: "1".to_owned(),
             },
             capabilities: vec![Capability::Settings],
         },
     )
-    .expect("legacy hello");
+    .expect("hello");
     write_envelope(&mut client, &hello)
         .await
-        .expect("write legacy hello");
+        .expect("write hello");
     let _ = read_envelope(&mut client)
         .await
         .expect("read hello acknowledgment")
         .expect("hello acknowledgment");
 
-    let mut get =
-        WireEnvelope::global(MessageType::SettingsGet, 1, &EmptyPayload {}).expect("settings get");
-    get.id = Some("settings:get".to_owned());
-    write_envelope(&mut client, &get)
-        .await
-        .expect("write settings get");
-    let response = read_envelope(&mut client)
-        .await
-        .expect("read settings status")
-        .expect("settings status");
-    let status: SettingsStatusPayload = response.decode_payload().expect("settings payload");
-    assert_eq!(status.document["schema"], "badi.settings.v1");
+    let status = exchange(&mut client, MessageType::SettingsGet, &EmptyPayload {}).await;
+    let status: SettingsStatusPayload = status.decode_payload().expect("settings payload");
+    assert_eq!(status.document["schema"], SETTINGS_SCHEMA);
     assert_eq!(
         status.document["subjects"]
             .as_array()
@@ -547,9 +633,10 @@ async fn v1_settings_roundtrip_projects_browser_rules_and_preserves_native_rules
         1
     );
 
-    let mut replace = WireEnvelope::global(
+    // A v1 document is refused before any merge or write.
+    let refused = exchange(
+        &mut client,
         MessageType::SettingsReplace,
-        2,
         &SettingsReplacePayload {
             expected_revision: 1,
             document: serde_json::json!({
@@ -560,34 +647,17 @@ async fn v1_settings_roundtrip_projects_browser_rules_and_preserves_native_rules
             }),
         },
     )
-    .expect("legacy replace");
-    replace.id = Some("settings:replace".to_owned());
-    write_envelope(&mut client, &replace)
-        .await
-        .expect("write legacy replacement");
-    let response = read_envelope(&mut client)
-        .await
-        .expect("read replacement status")
-        .expect("replacement status");
-    assert_eq!(response.message_type, MessageType::SettingsStatus);
+    .await;
+    assert_eq!(refused.message_type, MessageType::Error);
     drop(client);
-    connection
-        .await
-        .expect("connection task")
-        .expect("legacy connection shutdown");
-
+    let _ = connection.await;
     let snapshot = control_plane.snapshot().expect("final settings");
-    assert_eq!(snapshot.settings.revision, 2);
+    assert_eq!(snapshot.settings.revision, 1);
     assert_eq!(snapshot.settings.subjects.len(), 1);
-    assert!(matches!(
-        snapshot.settings.subjects[0].identity,
-        StableIdentity::LinuxApp { .. }
-    ));
 }
 
 async fn connect_test_client(
     kind: AdapterKind,
-    version: u8,
     capabilities: Vec<Capability>,
 ) -> (UnixStream, tokio::task::JoinHandle<Result<(), ServerError>>) {
     let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
@@ -605,8 +675,8 @@ async fn connect_test_client(
         MessageType::Hello,
         0,
         &HelloPayload {
-            min_v: version,
-            max_v: version,
+            min_v: CURRENT_PROTOCOL_VERSION,
+            max_v: CURRENT_PROTOCOL_VERSION,
             adapter: AdapterDescriptor {
                 kind,
                 name: "diagnostic-test".to_owned(),
@@ -615,9 +685,7 @@ async fn connect_test_client(
             capabilities,
         },
     )
-    .expect("hello")
-    .at_version(version)
-    .expect("versioned hello");
+    .expect("hello");
     write_envelope(&mut client, &hello)
         .await
         .expect("write hello");
@@ -632,13 +700,9 @@ async fn connect_test_client(
 async fn exchange(
     client: &mut UnixStream,
     message_type: MessageType,
-    version: u8,
     payload: &impl serde::Serialize,
 ) -> WireEnvelope {
-    let mut request = WireEnvelope::global(message_type, 1, payload)
-        .expect("request")
-        .at_version(version)
-        .expect("versioned request");
+    let mut request = WireEnvelope::global(message_type, 1, payload).expect("request");
     request.id = Some("ctl:diagnostic".to_owned());
     write_envelope(client, &request)
         .await
@@ -650,7 +714,7 @@ async fn exchange(
 }
 
 #[tokio::test]
-async fn probe_is_a_private_v2_cli_request_and_v1_health_keeps_its_counters() {
+async fn probe_is_a_private_cli_request() {
     let probe = ProbeRequestPayload {
         before: "Thank you".to_owned(),
         after: String::new(),
@@ -660,7 +724,6 @@ async fn probe_is_a_private_v2_cli_request_and_v1_health_keeps_its_counters() {
     };
     let (mut cli, connection) = connect_test_client(
         AdapterKind::Cli,
-        CURRENT_PROTOCOL_VERSION,
         vec![
             Capability::Control,
             Capability::Health,
@@ -668,26 +731,14 @@ async fn probe_is_a_private_v2_cli_request_and_v1_health_keeps_its_counters() {
         ],
     )
     .await;
-    let response = exchange(
-        &mut cli,
-        MessageType::ProbeRequest,
-        CURRENT_PROTOCOL_VERSION,
-        &probe,
-    )
-    .await;
+    let response = exchange(&mut cli, MessageType::ProbeRequest, &probe).await;
     assert_eq!(response.message_type, MessageType::ProbeResult);
     assert_eq!(response.id.as_deref(), Some("ctl:diagnostic"));
     let result: ProbeResultPayload = response.decode_payload().expect("probe result");
     result.validate().expect("valid probe result");
     assert_eq!(result.outcome, ProbeOutcome::Suggested);
     assert_eq!(result.text.as_deref(), Some(" for your time"));
-    let health = exchange(
-        &mut cli,
-        MessageType::HealthRequest,
-        CURRENT_PROTOCOL_VERSION,
-        &EmptyPayload {},
-    )
-    .await;
+    let health = exchange(&mut cli, MessageType::HealthRequest, &EmptyPayload {}).await;
     let health: HealthStatusPayload = health.decode_payload().expect("health");
     assert_eq!(
         health.metrics.provider_calls, 0,
@@ -697,72 +748,38 @@ async fn probe_is_a_private_v2_cli_request_and_v1_health_keeps_its_counters() {
     drop(cli);
     connection.await.expect("CLI task").expect("CLI shutdown");
 
-    for (kind, version, capabilities) in [
+    for (kind, capabilities) in [
         (
             AdapterKind::Fcitx,
-            CURRENT_PROTOCOL_VERSION,
             vec![Capability::Health, Capability::Settings],
         ),
         (
             AdapterKind::Cli,
-            CURRENT_PROTOCOL_VERSION,
             vec![Capability::Control, Capability::Health],
         ),
-        (
-            AdapterKind::Cli,
-            PROTOCOL_VERSION,
-            vec![Capability::Health, Capability::Settings],
-        ),
     ] {
-        let (mut client, connection) = connect_test_client(kind, version, capabilities).await;
-        let rejected = exchange(&mut client, MessageType::ProbeRequest, version, &probe).await;
-        assert_eq!(
-            rejected.message_type,
-            MessageType::Error,
-            "{kind:?} v{version}"
-        );
+        let (mut client, connection) = connect_test_client(kind, capabilities).await;
+        let rejected = exchange(&mut client, MessageType::ProbeRequest, &probe).await;
+        assert_eq!(rejected.message_type, MessageType::Error, "{kind:?}");
         connection
             .await
             .expect("connection task")
             .expect("rejected probe closes cleanly");
     }
-
-    let (mut legacy, connection) =
-        connect_test_client(AdapterKind::Cli, PROTOCOL_VERSION, vec![Capability::Health]).await;
-    let health = exchange(
-        &mut legacy,
-        MessageType::HealthRequest,
-        PROTOCOL_VERSION,
-        &EmptyPayload {},
-    )
-    .await;
-    assert!(health.payload["metrics"].get("no_suggestion").is_none());
-    drop(legacy);
-    connection
-        .await
-        .expect("legacy task")
-        .expect("legacy shutdown");
 }
 
 #[tokio::test]
-async fn snooze_is_a_v2_control_that_names_why_nothing_was_snoozed() {
+async fn snooze_names_why_nothing_was_snoozed() {
     let snooze = GlobalControlRequestPayload {
         action: ControlAction::Snooze,
         minutes: Some(10),
     };
     let (mut cli, connection) = connect_test_client(
         AdapterKind::Cli,
-        CURRENT_PROTOCOL_VERSION,
         vec![Capability::Control, Capability::Health],
     )
     .await;
-    let response = exchange(
-        &mut cli,
-        MessageType::ControlRequest,
-        CURRENT_PROTOCOL_VERSION,
-        &snooze,
-    )
-    .await;
+    let response = exchange(&mut cli, MessageType::ControlRequest, &snooze).await;
     assert_eq!(response.message_type, MessageType::ControlResult);
     let result: ControlResultPayload = response.decode_payload().expect("control result");
     assert!(!result.accepted && result.snooze.is_none());
@@ -770,7 +787,6 @@ async fn snooze_is_a_v2_control_that_names_why_nothing_was_snoozed() {
     let ended = exchange(
         &mut cli,
         MessageType::ControlRequest,
-        CURRENT_PROTOCOL_VERSION,
         &GlobalControlRequestPayload {
             action: ControlAction::SnoozeEnd,
             minutes: None,
@@ -781,29 +797,6 @@ async fn snooze_is_a_v2_control_that_names_why_nothing_was_snoozed() {
     assert!(ended.accepted);
     drop(cli);
     connection.await.expect("CLI task").expect("CLI shutdown");
-
-    let (mut legacy, connection) = connect_test_client(
-        AdapterKind::Cli,
-        PROTOCOL_VERSION,
-        vec![Capability::Control],
-    )
-    .await;
-    let rejected = exchange(
-        &mut legacy,
-        MessageType::ControlRequest,
-        PROTOCOL_VERSION,
-        &snooze,
-    )
-    .await;
-    assert_eq!(
-        rejected.message_type,
-        MessageType::Error,
-        "v1 has no snooze"
-    );
-    connection
-        .await
-        .expect("legacy task")
-        .expect("rejected snooze closes cleanly");
 }
 
 #[tokio::test]
@@ -856,8 +849,8 @@ async fn final_protocol_error_is_drained_before_connection_closes() {
         MessageType::Hello,
         2,
         &HelloPayload {
-            min_v: PROTOCOL_VERSION,
-            max_v: PROTOCOL_VERSION,
+            min_v: CURRENT_PROTOCOL_VERSION,
+            max_v: CURRENT_PROTOCOL_VERSION,
             adapter: AdapterDescriptor {
                 kind: AdapterKind::Test,
                 name: "server-test".to_owned(),
@@ -889,11 +882,8 @@ async fn final_protocol_error_is_drained_before_connection_closes() {
 async fn outbound_event_does_not_cancel_a_partially_read_inbound_frame() {
     let (server, mut client) = UnixStream::pair().expect("Unix stream pair");
     let broker = Broker::new(
-        Arc::new(DeterministicPhraseProvider::default()),
-        BrokerConfig {
-            debounce: Duration::from_millis(40),
-            ..BrokerConfig::default()
-        },
+        Arc::new(DelayedPhrase(Duration::from_millis(40))),
+        BrokerConfig::default(),
     );
     let task_broker = broker.clone();
     let connection = tokio::spawn(async move {
@@ -922,7 +912,7 @@ async fn outbound_event_does_not_cancel_a_partially_read_inbound_frame() {
         selection: Selection {
             anchor: 9,
             head: 9,
-            unit: OffsetUnit::Utf16CodeUnits,
+            unit: OffsetUnit::UnicodeScalarValues,
         },
         field: FieldDescriptor {
             purpose: FieldPurpose::Normal,
@@ -1032,9 +1022,7 @@ async fn desktop_helper_hold_lasts_until_it_reports_active_or_disconnects() {
             capabilities: vec![Capability::DesktopSignals],
         },
     )
-    .expect("hello")
-    .at_version(CURRENT_PROTOCOL_VERSION)
-    .expect("v2 hello");
+    .expect("hello");
     write_envelope(&mut helper, &hello)
         .await
         .expect("write hello");
@@ -1054,7 +1042,6 @@ async fn desktop_helper_hold_lasts_until_it_reports_active_or_disconnects() {
     let reply = exchange(
         &mut helper,
         MessageType::DesktopState,
-        CURRENT_PROTOCOL_VERSION,
         &DesktopStatePayload {
             session: DesktopSession::Sleeping,
             on_battery: true,
@@ -1084,17 +1071,12 @@ async fn desktop_helper_hold_lasts_until_it_reports_active_or_disconnects() {
 }
 
 #[tokio::test]
-async fn desktop_reports_need_the_negotiated_capability_and_protocol_v2() {
-    let (mut client, connection) = connect_test_client(
-        AdapterKind::Cli,
-        CURRENT_PROTOCOL_VERSION,
-        vec![Capability::Health],
-    )
-    .await;
+async fn desktop_reports_need_the_negotiated_capability() {
+    let (mut client, connection) =
+        connect_test_client(AdapterKind::Cli, vec![Capability::Health]).await;
     let reply = exchange(
         &mut client,
         MessageType::DesktopState,
-        CURRENT_PROTOCOL_VERSION,
         &DesktopStatePayload {
             session: DesktopSession::Inactive,
             on_battery: false,
@@ -1107,49 +1089,12 @@ async fn desktop_reports_need_the_negotiated_capability_and_protocol_v2() {
     drop(client);
     let _ = connection.await;
 
-    let v1 = HelloPayload {
-        min_v: PROTOCOL_VERSION,
-        max_v: PROTOCOL_VERSION,
-        adapter: AdapterDescriptor {
-            kind: AdapterKind::Test,
-            name: "legacy".to_owned(),
-            version: "1".to_owned(),
-        },
-        capabilities: vec![Capability::DesktopSignals],
-    };
-    assert!(v1.validate_for_frame(PROTOCOL_VERSION).is_err());
-
-    let (mut client, connection) = connect_test_client(
-        AdapterKind::Cli,
-        CURRENT_PROTOCOL_VERSION,
-        vec![Capability::Health],
-    )
-    .await;
-    let health = exchange(
-        &mut client,
-        MessageType::HealthRequest,
-        CURRENT_PROTOCOL_VERSION,
-        &EmptyPayload {},
-    )
-    .await;
-    let health: HealthStatusPayload = health.decode_payload().expect("health");
-    let desktop = health.desktop.expect("v2 health reports the desktop state");
-    assert!(!desktop.observed);
-    drop(client);
-    let _ = connection.await;
     let (mut client, connection) =
-        connect_test_client(AdapterKind::Cli, PROTOCOL_VERSION, vec![Capability::Health]).await;
-    let health = exchange(
-        &mut client,
-        MessageType::HealthRequest,
-        PROTOCOL_VERSION,
-        &EmptyPayload {},
-    )
-    .await;
-    assert!(
-        health.payload.get("desktop").is_none(),
-        "the frozen v1 health omits it"
-    );
+        connect_test_client(AdapterKind::Cli, vec![Capability::Health]).await;
+    let health = exchange(&mut client, MessageType::HealthRequest, &EmptyPayload {}).await;
+    let health: HealthStatusPayload = health.decode_payload().expect("health");
+    let desktop = health.desktop.expect("health reports the desktop state");
+    assert!(!desktop.observed);
     drop(client);
     let _ = connection.await;
 }
@@ -1163,15 +1108,8 @@ async fn only_a_settings_client_reads_or_forgets_usage_statistics() {
         (AdapterKind::Session, vec![Capability::DesktopSignals]),
     ] {
         for message_type in [MessageType::StatsQuery, MessageType::StatsForget] {
-            let (mut client, connection) =
-                connect_test_client(kind, CURRENT_PROTOCOL_VERSION, capabilities.clone()).await;
-            let reply = exchange(
-                &mut client,
-                message_type,
-                CURRENT_PROTOCOL_VERSION,
-                &EmptyPayload {},
-            )
-            .await;
+            let (mut client, connection) = connect_test_client(kind, capabilities.clone()).await;
+            let reply = exchange(&mut client, message_type, &EmptyPayload {}).await;
             assert_eq!(reply.message_type, MessageType::Error, "{message_type:?}");
             assert_eq!(reply.payload["code"], "invalid_capability");
             drop(client);
@@ -1195,36 +1133,19 @@ async fn only_the_cli_reads_style_samples_and_only_style_key_delivers_a_key() {
     ] {
         let (mut helper, connection) = connect_test_client(
             AdapterKind::Session,
-            CURRENT_PROTOCOL_VERSION,
             vec![Capability::DesktopSignals, Capability::StyleKey],
         )
         .await;
-        let reply = exchange(
-            &mut helper,
-            message_type,
-            CURRENT_PROTOCOL_VERSION,
-            &EmptyPayload {},
-        )
-        .await;
+        let reply = exchange(&mut helper, message_type, &EmptyPayload {}).await;
         assert_eq!(reply.message_type, MessageType::Error, "{message_type:?}");
         assert_eq!(reply.payload["code"], "invalid_capability");
         drop(helper);
         let _ = connection.await;
     }
     // A health client cannot hand over a key.
-    let (mut client, connection) = connect_test_client(
-        AdapterKind::Cli,
-        CURRENT_PROTOCOL_VERSION,
-        vec![Capability::Health],
-    )
-    .await;
-    let reply = exchange(
-        &mut client,
-        MessageType::StyleKey,
-        CURRENT_PROTOCOL_VERSION,
-        &key,
-    )
-    .await;
+    let (mut client, connection) =
+        connect_test_client(AdapterKind::Cli, vec![Capability::Health]).await;
+    let reply = exchange(&mut client, MessageType::StyleKey, &key).await;
     assert_eq!(reply.message_type, MessageType::Error);
     assert_eq!(reply.payload["code"], "invalid_capability");
     drop(client);
@@ -1254,8 +1175,8 @@ async fn idle_deadline_spares_policy_subscribers_and_closes_other_clients() {
         MessageType::Hello,
         0,
         &HelloPayload {
-            min_v: PROTOCOL_VERSION,
-            max_v: PROTOCOL_VERSION,
+            min_v: CURRENT_PROTOCOL_VERSION,
+            max_v: CURRENT_PROTOCOL_VERSION,
             adapter: AdapterDescriptor {
                 kind: AdapterKind::Test,
                 name: "quiet-client".to_owned(),
@@ -1431,9 +1352,7 @@ async fn an_editor_focus_report_holds_the_native_path_until_its_connection_close
             capabilities: vec![Capability::EditorFocus],
         },
     )
-    .expect("hello")
-    .at_version(CURRENT_PROTOCOL_VERSION)
-    .expect("v2 hello");
+    .expect("hello");
     write_envelope(&mut editor, &hello)
         .await
         .expect("write hello");
@@ -1446,7 +1365,6 @@ async fn an_editor_focus_report_holds_the_native_path_until_its_connection_close
     let reply = exchange(
         &mut editor,
         MessageType::EditorFocus,
-        CURRENT_PROTOCOL_VERSION,
         &EditorFocusPayload { focused: true },
     )
     .await;
@@ -1475,20 +1393,12 @@ fn only_neovim_may_negotiate_editor_focus() {
         },
         capabilities: vec![Capability::EditorFocus],
     };
-    assert!(
-        hello(AdapterKind::Neovim)
-            .validate_for_frame(CURRENT_PROTOCOL_VERSION)
-            .is_ok()
-    );
+    assert!(hello(AdapterKind::Neovim).validate().is_ok());
     for kind in [
         AdapterKind::Fcitx,
         AdapterKind::Obsidian,
         AdapterKind::Terminal,
     ] {
-        assert!(
-            hello(kind)
-                .validate_for_frame(CURRENT_PROTOCOL_VERSION)
-                .is_err()
-        );
+        assert!(hello(kind).validate().is_err());
     }
 }

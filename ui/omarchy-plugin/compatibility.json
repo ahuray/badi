@@ -1,7 +1,6 @@
 {
   "schema": "badi.omarchy-plugin-compatibility.v1",
   "artifact": "io.github.ahuray.badi@0.1.0",
-  "status": "disabled_repo_local_feasibility",
   "omarchy": {
     "package": "4.5.0rc1-1",
     "source_repository": "https://github.com/omacom/omarchy.git",

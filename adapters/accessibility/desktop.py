@@ -39,7 +39,9 @@ class App:
     per_user: bool = False  # Self-updating build under $XDG_CONFIG_HOME/discord.
     web_apps: str | None = None  # Class prefix of this browser's --app windows: <prefix><host>_<path>-<profile>.
     roles: frozenset | None = None  # Only these field roles, when set.
-    observed_only: bool = False  # A native app on the addon's IME-parity contract (web rules always are).
+    # A native app on the addon's IME-parity contract (web rules always are);
+    # fcitx5/tests/observer-identities.py checks it against the addon's list.
+    observed_only: bool = False
     sentence_bounded: bool = False  # Its Fcitx surrounding text is only the caret's sentence.
 
 
@@ -133,6 +135,11 @@ class LockEndpoint:
         self.stamp = None
         self.endpoint = None
 
+    def forget(self):
+        """Drop the discovered endpoint after it failed, so the next query
+        discovers it again instead of failing until the shell restarts."""
+        self.stamp, self.endpoint = None, None
+
     @staticmethod
     def current_stamp():
         runtime = os.environ.get("XDG_RUNTIME_DIR", "")
@@ -151,7 +158,7 @@ class LockEndpoint:
             stamp = self.current_stamp()
             if stamp == self.stamp:
                 return self.endpoint
-            self.stamp, self.endpoint = None, None
+            self.forget()
             runtime, shell, executable, *_ = stamp
             def run(*args):
                 return subprocess.run((executable, *args), stdin=subprocess.DEVNULL,
@@ -182,7 +189,9 @@ class SocketLockQuery:
 
     Only StringCall(lock, status, []) is sent, and only Completed(non-void,
     bounded QString) is accepted. The socket overlaps field inspection just
-    like the CLI query, but does not spawn a process on the warm path.
+    like the CLI query, but does not spawn a process on the warm path. A
+    failed endpoint is forgotten; a locked answer or the operation's own
+    timeout says nothing against it.
     """
     REQUEST = b"\x03\x00\x00\x00\x08\x00l\x00o\x00c\x00k\x00\x00\x00\x0c\x00s\x00t\x00a\x00t\x00u\x00s\x00\x00\x00\x00"
 
@@ -201,8 +210,10 @@ class SocketLockQuery:
                 raise Denied("desktop_unavailable")
             self.connection.sendall(self.REQUEST)
             return self
-        except (OSError, Denied):
+        except (OSError, Denied) as error:
             self.close()
+            if not (isinstance(error, Denied) and error.timed_out):
+                self.cache.forget()
             raise Denied("desktop_unavailable") from None
 
     def __exit__(self, *_exception):
@@ -215,11 +226,16 @@ class SocketLockQuery:
             state = json.loads(self.read(size).decode("utf-16-be"))
             if self.cache.current_stamp() != self.cache.stamp:
                 raise Denied("desktop_unavailable")
-            require_unlocked(state)
         except (OSError, ValueError):
+            self.cache.forget()
             raise Denied("desktop_unavailable") from None
+        except Denied as error:
+            if not error.timed_out:
+                self.cache.forget()
+            raise
         finally:
             self.close()
+        require_unlocked(state)
 
     def read(self, count):
         raw = bytearray()
@@ -326,9 +342,12 @@ class WindowEvents:
         """Whether the newly received events change focus, windows or monitors.
 
         OSError means the stream ended or flooded; the observer cannot follow
-        the desktop any longer.
+        the desktop any longer. A wake-up with nothing to read changes nothing.
         """
-        data = self.stream.recv(4096)
+        try:
+            data = self.stream.recv(4096)
+        except BlockingIOError:
+            return False
         if not data:
             raise OSError("hyprland_events_closed")
         self.buffer += data

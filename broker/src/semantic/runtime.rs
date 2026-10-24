@@ -21,8 +21,8 @@ use uuid::Uuid;
 
 use crate::protocol::ProviderKind;
 use crate::provider::{
-    CompletionProvider, ProviderError, ProviderOutcome, ProviderReply, ProviderRequest,
-    RequestTrigger, WritingProposal,
+    CompletionProvider, ProviderError, ProviderReply, ProviderRequest, RequestTrigger,
+    WritingProposal,
 };
 
 use super::client::{
@@ -131,9 +131,8 @@ impl WritingProfile {
         // Copy once: CPU repacking otherwise retains both mapped and owned
         // weights. The independent loading comparison preserved every output.
         memory_map: false,
-        // 2026-10-19, pinned b10726, Gemma 3 1B at this profile: after a
-        // 10–30-token backspace the default re-read the whole prompt; the
-        // full cache reused it (broker README, writing model runtime).
+        // Without it a sliding-window model re-reads the whole prompt after
+        // a backspace (broker README, writing model runtime).
         full_swa_cache: true,
         model_origin: None,
     };
@@ -724,28 +723,9 @@ impl CompletionProvider for OwnedRuntime {
         cancellation: CancellationToken,
         allow_replacement: bool,
         trigger: RequestTrigger,
-    ) -> Result<ProviderOutcome, ProviderError> {
-        self.client
-            .propose_outcome(request, cancellation, allow_replacement, trigger)
-            .await
-    }
-
-    async fn propose_outcome_with_partials(
-        &self,
-        request: ProviderRequest,
-        cancellation: CancellationToken,
-        allow_replacement: bool,
-        trigger: RequestTrigger,
-        partials: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> Result<ProviderReply, ProviderError> {
         self.client
-            .propose_outcome_with_partials(
-                request,
-                cancellation,
-                allow_replacement,
-                trigger,
-                partials,
-            )
+            .propose_outcome(request, cancellation, allow_replacement, trigger)
             .await
     }
 }

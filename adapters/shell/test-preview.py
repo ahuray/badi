@@ -240,6 +240,9 @@ class PreviewTests(unittest.TestCase):
         shell.send('\x18\x1b')
         self.assertNotIn(GREY, shell.read_for())
         shell.buffer('hello')
+        operations = [x['operation'] for x in shell.operations()]
+        self.assertIn('dismiss', operations, 'Ctrl-X Escape tells the broker the user declined it')
+        self.assertNotIn('cancel', operations)
         shell.request('hello')
         shell.send('!')
         output = shell.read_for()
@@ -303,6 +306,9 @@ class PreviewTests(unittest.TestCase):
         output = shell.read_until(b'inline preview needs')
         self.assertNotIn(b'\x1b[31m', output)
         shell.buffer('controls')
+        operations = [x['operation'] for x in shell.operations()]
+        self.assertIn('cancel', operations, 'A preview that could not be drawn releases its session')
+        self.assertNotIn('dismiss', operations, 'and is never reported as the user declining it')
         shell.request('hello')
         fcntl.ioctl(shell.fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 18, 0, 0))
         output = shell.read_for()

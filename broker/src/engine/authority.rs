@@ -6,7 +6,7 @@ use super::{Broker, BrokerError, BrokerState};
 use crate::metrics::Metrics;
 use crate::protocol::{
     Activation, AuthorityChangedPayload, PolicyResolutionReason, PolicyStatusPayload, ReasonCode,
-    TargetDescriptor, TargetKind,
+    TargetDescriptor,
 };
 use crate::settings::{PolicyResolution, SettingsV2, StableIdentity};
 
@@ -20,13 +20,13 @@ pub struct AuthoritySnapshot {
 }
 
 impl Broker {
-    pub async fn set_paused(&self, paused: bool) -> Result<bool, BrokerError> {
+    pub async fn set_paused(&self, paused: bool) -> bool {
         let mut state = self.inner.state.lock().await;
         let changed = state.set_runtime_pause(paused, &self.inner.metrics);
         self.finish_pause_transition(state, changed).await
     }
 
-    pub async fn toggle_paused(&self) -> Result<bool, BrokerError> {
+    pub async fn toggle_paused(&self) -> bool {
         let mut state = self.inner.state.lock().await;
         let paused = !state.paused;
         let changed = state.set_runtime_pause(paused, &self.inner.metrics);
@@ -36,12 +36,14 @@ impl Broker {
     /// Publishes a changed epoch and, while paused, fences queued outcome
     /// writes before the pause is acknowledged. Returns the pause state this
     /// transition established under the lock; a fresh read after the fence
-    /// could report a concurrent toggle's state instead.
+    /// could report a concurrent toggle's state instead. A failed fence is
+    /// logged, not reported: the pause is already in force, and a client
+    /// retrying a "failed" toggle would undo it.
     async fn finish_pause_transition(
         &self,
         state: MutexGuard<'_, BrokerState>,
         changed: bool,
-    ) -> Result<bool, BrokerError> {
+    ) -> bool {
         let effective_paused = state.effective_paused();
         if changed {
             self.publish_authority_change(state);
@@ -49,9 +51,9 @@ impl Broker {
             drop(state);
         }
         if effective_paused {
-            self.flush_outcomes_before_pause_ack().await?;
+            let _ = self.flush_outcomes_before_pause_ack().await;
         }
-        Ok(effective_paused)
+        effective_paused
     }
 
     pub async fn is_paused(&self) -> bool {
@@ -213,8 +215,7 @@ pub(super) fn policy_status(
         language_override: settings.language_override(target),
         context_words: StableIdentity::from_target(target)
             .is_ok_and(|identity| settings.context_words_for(&identity)),
-        // Browser defaults keep matched_rule, which protocol v1 clients know.
-        reason: if resolution.by_default() && target.kind != TargetKind::Browser {
+        reason: if resolution.by_default() {
             PolicyResolutionReason::MatchedDefault
         } else {
             PolicyResolutionReason::MatchedRule

@@ -18,13 +18,6 @@ use badi_broker::{Metrics, NoSuggestionReason};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-fn protocol_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("broker has workspace parent")
-        .join("protocol/v1")
-}
-
 fn protocol_v2_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -58,19 +51,6 @@ fn rust_scalar_schema(mut schema: Value) -> Value {
             .expect("shared surrogate-safe pattern") = Value::String(scalar_pattern);
     }
     schema
-}
-
-fn fixture_files(kind: &str) -> Vec<PathBuf> {
-    let mut files = fs::read_dir(protocol_root().join("examples").join(kind))
-        .expect("fixture directory")
-        .map(|entry| entry.expect("fixture entry").path())
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "json")
-        })
-        .collect::<Vec<_>>();
-    files.sort();
-    files
 }
 
 fn decode<T: DeserializeOwned>(envelope: &WireEnvelope) -> T {
@@ -119,15 +99,15 @@ fn spelling_replacements_match_the_shared_fixture_in_rust_and_the_schema() {
 }
 
 #[test]
-fn contextual_persian_joiners_match_both_wire_schemas_and_rust() {
+fn contextual_persian_joiners_match_the_wire_schema_and_rust() {
     let fixtures: Value = serde_json::from_str(include_str!(
         "../../protocol/orthographic-joiner-fixtures.json"
     ))
     .expect("orthographic fixtures");
-    for root in [protocol_root(), protocol_v2_root()] {
+    {
         let schema = rust_scalar_schema(
             serde_json::from_str(
-                &fs::read_to_string(root.join("schema.json")).expect("wire schema"),
+                &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("wire schema"),
             )
             .expect("wire schema JSON"),
         );
@@ -167,13 +147,13 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
         }
         MessageType::SessionOpen => decode::<SessionOpenPayload>(envelope)
             .target
-            .validate_for_version(envelope.v)
+            .validate_wire()
             .expect("valid target"),
         MessageType::SessionClose => {
             let _: SessionClosePayload = decode(envelope);
         }
         MessageType::ContextChanged => decode::<ContextChangedPayload>(envelope)
-            .validate_for_version(envelope.v)
+            .validate()
             .expect("valid context"),
         MessageType::SuggestRequest => {
             let payload: SuggestRequestPayload = decode(envelope);
@@ -272,7 +252,7 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
             let _: HealthStatusPayload = decode(envelope);
         }
         MessageType::PolicyQuery => decode::<PolicyQueryPayload>(envelope)
-            .validate_for_version(envelope.v)
+            .validate()
             .expect("valid policy query"),
         MessageType::PolicyStatus => decode::<PolicyStatusPayload>(envelope)
             .validate()
@@ -336,61 +316,7 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
 }
 
 #[test]
-fn every_positive_fixture_passes_schema_and_rust_types() {
-    let schema = rust_scalar_schema(
-        serde_json::from_str(
-            &fs::read_to_string(protocol_root().join("schema.json")).expect("schema file"),
-        )
-        .expect("schema JSON"),
-    );
-    let validator = jsonschema::validator_for(&schema).expect("schema compiles");
-    let fixtures = fixture_files("valid");
-    assert!(fixtures.len() >= 18, "all message families need fixtures");
-
-    for path in fixtures {
-        let instance: Value = serde_json::from_str(
-            &fs::read_to_string(&path).unwrap_or_else(|_| panic!("read {}", path.display())),
-        )
-        .unwrap_or_else(|_| panic!("parse {}", path.display()));
-        if let Err(error) = validator.validate(&instance) {
-            panic!("{} failed schema: {error}", path.display());
-        }
-        let envelope: WireEnvelope = serde_json::from_value(instance)
-            .unwrap_or_else(|_| panic!("decode {}", path.display()));
-        envelope
-            .validate_shape()
-            .unwrap_or_else(|_| panic!("shape {}", path.display()));
-        validate_rust_payload(&envelope);
-    }
-}
-
-#[test]
-fn every_negative_scalar_fixture_is_rejected_by_normative_schema() {
-    let schema = rust_scalar_schema(
-        serde_json::from_str(
-            &fs::read_to_string(protocol_root().join("schema.json")).expect("schema file"),
-        )
-        .expect("schema JSON"),
-    );
-    let validator = jsonschema::validator_for(&schema).expect("schema compiles");
-    let fixtures = fixture_files("invalid");
-    assert!(fixtures.len() >= 9, "negative boundary fixtures required");
-
-    for path in fixtures {
-        let instance: Value = serde_json::from_str(
-            &fs::read_to_string(&path).unwrap_or_else(|_| panic!("read {}", path.display())),
-        )
-        .unwrap_or_else(|_| panic!("parse {}", path.display()));
-        assert!(
-            !validator.is_valid(&instance),
-            "{} unexpectedly passed schema",
-            path.display()
-        );
-    }
-}
-
-#[test]
-fn every_v2_fixture_matches_schema_and_versioned_rust_contracts() {
+fn every_fixture_matches_the_schema_and_rust_contracts() {
     let root = protocol_v2_root();
     let schema = rust_scalar_schema(
         serde_json::from_str(
@@ -492,62 +418,16 @@ fn only_negotiated_spelling_payloads_may_preserve_a_trailing_space() {
 }
 
 #[test]
-fn protocol_versions_keep_offset_and_target_semantics_disjoint() {
-    let v1_schema = rust_scalar_schema(
-        serde_json::from_str(
-            &fs::read_to_string(protocol_root().join("schema.json")).expect("v1 schema file"),
-        )
-        .expect("v1 schema JSON"),
-    );
-    let v2_schema = rust_scalar_schema(
-        serde_json::from_str(
-            &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("v2 schema file"),
-        )
-        .expect("v2 schema JSON"),
-    );
-    let v1 = jsonschema::validator_for(&v1_schema).expect("v1 schema compiles");
-    let v2 = jsonschema::validator_for(&v2_schema).expect("v2 schema compiles");
-
-    let desktop: Value = serde_json::from_str(
-        &fs::read_to_string(protocol_v2_root().join("examples/valid/session_open_desktop.json"))
-            .expect("desktop fixture"),
-    )
-    .expect("desktop JSON");
-    assert!(v2.is_valid(&desktop));
-    assert!(!v1.is_valid(&desktop));
-
-    for fixture in ["session_open_neovim.json", "hello_neovim.json"] {
-        let neovim: Value = serde_json::from_str(
-            &fs::read_to_string(protocol_v2_root().join("examples/valid").join(fixture))
-                .expect("Neovim fixture"),
-        )
-        .expect("Neovim JSON");
-        assert!(v2.is_valid(&neovim), "{fixture}");
-        let mut legacy = neovim;
-        legacy["v"] = 1.into();
-        assert!(!v1.is_valid(&legacy), "{fixture} is a v2-only identity");
-    }
-
-    let scalar: Value = serde_json::from_str(
-        &fs::read_to_string(protocol_v2_root().join("examples/valid/context_changed_scalar.json"))
-            .expect("scalar fixture"),
-    )
-    .expect("scalar JSON");
-    assert!(v2.is_valid(&scalar));
-    assert!(!v1.is_valid(&scalar));
-}
-
-#[test]
-fn schema_enforces_browser_first_character_bounds() {
+fn schema_enforces_context_and_suggestion_bounds() {
     let schema = rust_scalar_schema(
         serde_json::from_str(
-            &fs::read_to_string(protocol_root().join("schema.json")).expect("schema file"),
+            &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("schema file"),
         )
         .expect("schema JSON"),
     );
     let validator = jsonschema::validator_for(&schema).expect("schema compiles");
     let mut context: Value = serde_json::from_str(
-        &fs::read_to_string(protocol_root().join("examples/valid/context_changed.json"))
+        &fs::read_to_string(protocol_v2_root().join("examples/valid/context_changed.json"))
             .expect("context fixture"),
     )
     .expect("context JSON");
@@ -561,7 +441,7 @@ fn schema_enforces_browser_first_character_bounds() {
     assert!(validator.is_valid(&context));
 
     let mut suggestion: Value = serde_json::from_str(
-        &fs::read_to_string(protocol_root().join("examples/valid/suggestion_show.json"))
+        &fs::read_to_string(protocol_v2_root().join("examples/valid/suggestion_show.json"))
             .expect("suggestion fixture"),
     )
     .expect("suggestion JSON");
@@ -570,7 +450,8 @@ fn schema_enforces_browser_first_character_bounds() {
     assert!(validator.is_valid(&suggestion));
     suggestion["payload"]["text"] = Value::String("é".repeat(65));
     assert!(!validator.is_valid(&suggestion));
-    for invalid_spacing in ["\u{00a0}world", " world  again", "valid "] {
+    // One trailing ASCII space is ordinary text; other spacing is not.
+    for invalid_spacing in ["\u{00a0}world", " world  again", "valid  "] {
         suggestion["payload"]["text"] = Value::String(invalid_spacing.to_owned());
         suggestion["payload"]["accept_word"] = Value::String(invalid_spacing.to_owned());
         assert!(!validator.is_valid(&suggestion), "{invalid_spacing:?}");
@@ -580,7 +461,7 @@ fn schema_enforces_browser_first_character_bounds() {
 #[test]
 fn normative_ecma_schema_declares_lone_surrogates_forbidden() {
     let schema: Value = serde_json::from_str(
-        &fs::read_to_string(protocol_root().join("schema.json")).expect("schema file"),
+        &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("schema file"),
     )
     .expect("schema JSON");
     assert!(
@@ -596,20 +477,13 @@ fn normative_ecma_schema_declares_lone_surrogates_forbidden() {
 }
 
 #[test]
-fn diagnostics_are_v2_only_and_match_broker_payloads() {
-    let v1_schema = rust_scalar_schema(
-        serde_json::from_str(
-            &fs::read_to_string(protocol_root().join("schema.json")).expect("v1 schema file"),
-        )
-        .expect("v1 schema JSON"),
-    );
+fn diagnostics_match_broker_payloads() {
     let v2_schema = rust_scalar_schema(
         serde_json::from_str(
             &fs::read_to_string(protocol_v2_root().join("schema.json")).expect("v2 schema file"),
         )
         .expect("v2 schema JSON"),
     );
-    let v1 = jsonschema::validator_for(&v1_schema).expect("v1 schema compiles");
     let v2 = jsonschema::validator_for(&v2_schema).expect("v2 schema compiles");
 
     for name in [
@@ -617,14 +491,12 @@ fn diagnostics_are_v2_only_and_match_broker_payloads() {
         "probe_request.json",
         "probe_request_explicit.json",
     ] {
-        let mut fixture: Value = serde_json::from_str(
+        let fixture: Value = serde_json::from_str(
             &fs::read_to_string(protocol_v2_root().join("examples/valid").join(name))
                 .expect("fixture"),
         )
         .expect("fixture JSON");
         assert!(v2.is_valid(&fixture), "{name}");
-        fixture["v"] = 1.into();
-        assert!(!v1.is_valid(&fixture), "{name} must stay outside v1");
     }
 
     let metrics = Metrics::default();
@@ -645,15 +517,6 @@ fn diagnostics_are_v2_only_and_match_broker_payloads() {
         }))
         .expect("v2 metrics schema");
         assert!(v2_metrics.is_valid(&serde_json::to_value(snapshot).expect("v2 metrics")));
-        let v1_metrics = jsonschema::validator_for(&serde_json::json!({
-            "$ref": "#/$defs/metrics", "$defs": v1_schema["$defs"].clone()
-        }))
-        .expect("v1 metrics schema");
-        assert!(!v1_metrics.is_valid(&serde_json::to_value(snapshot).expect("full metrics")));
-        assert!(
-            v1_metrics
-                .is_valid(&serde_json::to_value(snapshot.for_protocol_v1()).expect("v1 metrics"))
-        );
     }
 
     for result in [
@@ -677,10 +540,8 @@ fn diagnostics_are_v2_only_and_match_broker_payloads() {
         ProbeResultPayload::paused(ProviderKind::LocalModel),
     ] {
         result.validate().expect("broker probe result");
-        let mut envelope = WireEnvelope::global(MessageType::ProbeResult, 1, &result)
-            .expect("probe envelope")
-            .at_version(2)
-            .expect("v2 envelope");
+        let mut envelope =
+            WireEnvelope::global(MessageType::ProbeResult, 1, &result).expect("probe envelope");
         envelope.id = Some("ctl:probe".to_owned());
         let value = serde_json::to_value(&envelope).expect("probe JSON");
         assert!(v2.is_valid(&value), "{value}");
@@ -716,10 +577,8 @@ fn only_an_explicit_probe_names_its_budget() {
             allow_replacement: false,
             explicit,
         };
-        let mut envelope = WireEnvelope::global(MessageType::ProbeRequest, 0, &probe)
-            .expect("probe request")
-            .at_version(2)
-            .expect("v2 probe request");
+        let mut envelope =
+            WireEnvelope::global(MessageType::ProbeRequest, 0, &probe).expect("probe request");
         envelope.id = Some("ctl:probe".to_owned());
         let value = serde_json::to_value(&envelope).expect("probe request JSON");
         assert!(v2.is_valid(&value), "{value}");

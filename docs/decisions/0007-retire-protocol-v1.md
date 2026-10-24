@@ -1,6 +1,7 @@
 # ADR 0007: retire protocol v1
 
-- Status: accepted
+- Status: accepted; steps 1–3 and 5 done (2026-10-24), step 4 waits one
+  release
 - Date: 2026-10-13
 - Scope: the broker's wire protocol, the settings document schema, and every
   client that negotiates with the broker
@@ -84,9 +85,10 @@ expiry checks.
    fails the settings load closed for `badi doctor` to report, as corrupt
    settings already do.
 5. **Remove the artifacts.** Delete `protocol/v1/schema.json` and its
-   examples, move `accept-word-fixtures.json` beside the segment tests that
-   consume it, and update the broker runbook's protocol section and the
-   Fcitx [wire document](../../adapters/fcitx5/WIRE_PROTOCOL.md).
+   examples (their message families now have v2 examples), move
+   `accept-word-fixtures.json` beside the segment tests that consume it
+   (`broker/src/segment/`), and update the broker runbook's protocol section
+   and the Fcitx [wire document](../../adapters/fcitx5/WIRE_PROTOCOL.md).
 
 ## Consequences
 

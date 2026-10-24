@@ -23,7 +23,8 @@
  },
  {
   "label": "qwen3.5-2b-base",
-  "path": "output/writing/model-research/qwen35-2b-base-q4km/Qwen3.5-2B-Base.Q4_K_M.gguf",
+  "repo": "mradermacher/Qwen3.5-2B-Base-GGUF",
+  "file": "Qwen3.5-2B-Base.Q4_K_M.gguf",
   "quant": "Q4_K_M",
   "arch": "hybrid",
   "role": "earlier Lab screen file"

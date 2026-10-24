@@ -18,20 +18,19 @@ use crate::engine::{
     Broker, BrokerError, BrokerEvent, BrokerEventSink, OutcomeRecorderHealth, SessionAuthority,
 };
 use crate::ipc::{FrameError, read_envelope, verify_peer_uid, write_envelope};
-use crate::policy::PolicyReason;
 use crate::protocol::{
     AdapterKind, AuthorityAckPayload, AuthorityChangedPayload, CURRENT_PROTOCOL_VERSION,
     Capability, CommitResultPayload, ContextChangedPayload, ContextStatusPayload, ControlAction,
     ControlResultPayload, DesktopStatePayload, EditorFocusPayload, EmptyPayload, ErrorPayload,
     GlobalControlRequestPayload, HealthStatusPayload, HelloAckPayload, HelloPayload,
     MAX_AFTER_CHARS, MAX_BEFORE_CHARS, MAX_FRAME_BYTES, MAX_SAFE_COUNTER, MAX_SUGGESTION_CHARS,
-    MAX_SUGGESTION_WORDS, MemoryStatusPayload, MessageType, PROTOCOL_VERSION, PolicyQueryPayload,
-    PolicyResolutionReason, ProbeRequestPayload, ProtocolError, ReasonCode, RevisionRequestPayload,
-    SessionClosePayload, SessionControlRequestPayload, SessionId, SessionOpenPayload,
-    SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload, StyleSamplesPayload,
-    StyleStatusPayload, SuggestCancelPayload, SuggestRequestPayload, WireEnvelope,
+    MAX_SUGGESTION_WORDS, MemoryStatusPayload, MessageType, PolicyQueryPayload,
+    ProbeRequestPayload, ProtocolError, ReasonCode, RevisionRequestPayload, SessionClosePayload,
+    SessionControlRequestPayload, SessionId, SessionOpenPayload, SettingsReplacePayload,
+    SettingsStatusPayload, StyleKeyPayload, StyleSamplesPayload, StyleStatusPayload,
+    SuggestCancelPayload, SuggestRequestPayload, WireEnvelope,
 };
-use crate::settings::{SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1, SettingsStoreError, SettingsV2};
+use crate::settings::{SETTINGS_SCHEMA, SettingsStoreError, SettingsV2};
 use crate::style::{StyleKey, StyleKeyState};
 
 const MAX_CONNECTIONS: usize = 32;
@@ -243,33 +242,43 @@ struct Negotiated {
 }
 
 /// Completes the hello exchange and, for a policy client, delivers the
-/// current authority epoch. `None` means the server began shutting down.
+/// current authority epoch. `None` means the peer closed before its hello
+/// or the server began shutting down.
 async fn negotiate(
     stream: &mut UnixStream,
     broker: &Broker,
     shutdown: &CancellationToken,
     hello_timeout: Duration,
 ) -> Result<Option<Negotiated>, ServerError> {
-    verify_peer_uid(stream)?;
-    let first = tokio::select! {
+    if let Err(error) = verify_peer_uid(stream) {
+        // A peer of another user gets no reply at all.
+        let error = ServerError::from(error);
+        log_refused_hello(&error);
+        return Err(error);
+    }
+    let incoming = tokio::select! {
         () = shutdown.cancelled() => return Ok(None),
-        incoming = time::timeout(hello_timeout, read_envelope(stream)) => {
-            incoming
-                .map_err(|_| ServerError::HandshakeTimeout)??
-                .ok_or(ServerError::HelloRequired)?
+        incoming = time::timeout(hello_timeout, read_envelope(stream)) => incoming,
+    };
+    let first = match incoming {
+        Ok(Ok(Some(first))) => first,
+        Ok(Ok(None)) => return Ok(None),
+        Ok(Err(error)) => {
+            return Err(refuse_hello(stream, broker, None, error.into(), hello_timeout).await);
+        }
+        Err(_) => {
+            let error = ServerError::HandshakeTimeout;
+            return Err(refuse_hello(stream, broker, None, error, hello_timeout).await);
         }
     };
-    if first.message_type != MessageType::Hello {
-        return Err(ServerError::HelloRequired);
-    }
-    let hello: HelloPayload = first.decode_payload()?;
-    hello.validate_for_frame(first.v)?;
-    let selected_version = hello
-        .select_version()
-        .ok_or(ProtocolError::VersionNegotiationFailed)?;
+    let hello = match hello_terms(&first) {
+        Ok(hello) => hello,
+        Err(error) => {
+            return Err(refuse_hello(stream, broker, first.id, error, hello_timeout).await);
+        }
+    };
     let negotiated = Negotiated {
         authority: SessionAuthority {
-            protocol_version: selected_version,
             adapter_kind: hello.adapter.kind,
             capabilities: hello.capabilities.clone(),
         },
@@ -281,7 +290,7 @@ async fn negotiate(
         MessageType::HelloAck,
         broker.mono_ms(),
         &HelloAckPayload {
-            selected_v: selected_version,
+            selected_v: CURRENT_PROTOCOL_VERSION,
             connection_id: negotiated.connection_id.clone(),
             enabled_capabilities: hello.capabilities,
             max_frame_bytes: MAX_FRAME_BYTES,
@@ -291,8 +300,7 @@ async fn negotiate(
             max_suggestion_words: MAX_SUGGESTION_WORDS,
             paused: broker.is_paused().await,
         },
-    )?
-    .at_version(selected_version)?;
+    )?;
     acknowledgment.id = first.id;
     if !write_handshake_frame(stream, &acknowledgment, shutdown, hello_timeout).await? {
         return Ok(None);
@@ -310,13 +318,58 @@ async fn negotiate(
                 settings_revision: authority.settings_revision,
                 paused: authority.paused,
             },
-        )?
-        .at_version(selected_version)?;
+        )?;
         if !write_handshake_frame(stream, &initial, shutdown, hello_timeout).await? {
             return Ok(None);
         }
     }
     Ok(Some(negotiated))
+}
+
+/// The hello, or why it is refused. Only the current version is spoken
+/// (ADR 0007); its frame was already checked for that version.
+fn hello_terms(first: &WireEnvelope) -> Result<HelloPayload, ServerError> {
+    if first.message_type != MessageType::Hello {
+        return Err(ServerError::HelloRequired);
+    }
+    let hello: HelloPayload = first.decode_payload()?;
+    hello.validate()?;
+    Ok(hello)
+}
+
+/// Tells the peer why its hello was refused, within the hello deadline, and
+/// returns `error` for the connection to end with.
+async fn refuse_hello(
+    stream: &mut UnixStream,
+    broker: &Broker,
+    request_id: Option<String>,
+    error: ServerError,
+    hello_timeout: Duration,
+) -> ServerError {
+    log_refused_hello(&error);
+    let refusal = WireEnvelope::global(
+        MessageType::Error,
+        broker.mono_ms(),
+        &ErrorPayload::simple(reason_for_server(&error)),
+    );
+    if let Ok(mut refusal) = refusal {
+        refusal.id = request_id;
+        // A peer that left or stopped reading only loses the reason.
+        let _ = time::timeout(hello_timeout, write_envelope(stream, &refusal)).await;
+    }
+    error
+}
+
+/// One content-free journal line per refused hello: the failure's class.
+fn log_refused_hello(error: &ServerError) {
+    let class = match error {
+        ServerError::Protocol(error) | ServerError::Frame(FrameError::Protocol(error)) => {
+            error.to_string()
+        }
+        ServerError::Frame(error) => error.to_string(),
+        error => error.to_string(),
+    };
+    eprintln!("badi-broker: hello refused: {class}");
 }
 
 /// Returns `false` when shutdown interrupted the write.
@@ -354,7 +407,6 @@ async fn serve_connection_with_timeouts(
     else {
         return Ok(());
     };
-    let selected_version = authority.protocol_version;
     // A desktop helper reports only on change, so it stays connected while
     // idle like a policy subscriber; its report lasts as long as it does.
     let desktop_enabled = authority.capabilities.contains(&Capability::DesktopSignals);
@@ -378,8 +430,7 @@ async fn serve_connection_with_timeouts(
     let (wire_tx, mut wire_rx) = mpsc::channel::<WireEnvelope>(WIRE_QUEUE_CAPACITY);
     let adapter_kind = authority.adapter_kind;
     let mut writer_task = tokio::spawn(async move {
-        while let Some(mut envelope) = wire_rx.recv().await {
-            envelope.v = selected_version;
+        while let Some(envelope) = wire_rx.recv().await {
             debug_trace::wire("out", adapter_kind, &envelope);
             write_envelope(&mut writer, &envelope).await?;
         }
@@ -437,15 +488,6 @@ async fn serve_connection_with_timeouts(
                         break Ok(());
                     }
                 };
-                if envelope.v != selected_version {
-                    let _ = send_error(
-                        &wire_tx,
-                        &broker,
-                        envelope.id,
-                        ReasonCode::UnsupportedVersion,
-                    );
-                    break Ok(());
-                }
                 idle_deadline
                     .as_mut()
                     .reset(time::Instant::now() + idle_timeout);
@@ -577,10 +619,6 @@ impl MessageHandler<'_> {
         }
     }
 
-    fn protocol_version(&self) -> u8 {
-        self.authority.protocol_version
-    }
-
     fn reply<P: Serialize>(
         &self,
         message_type: MessageType,
@@ -600,9 +638,7 @@ impl MessageHandler<'_> {
         ensure_session_capacity(self.owned_sessions)?;
         let coordinates = envelope.coordinates()?;
         let payload: SessionOpenPayload = envelope.decode_payload()?;
-        payload
-            .target
-            .validate_for_version(self.protocol_version())?;
+        payload.target.validate_wire()?;
         self.broker
             .open_session(
                 coordinates,
@@ -633,7 +669,7 @@ impl MessageHandler<'_> {
         let coordinates = envelope.coordinates()?;
         ensure_owned(self.owned_sessions, coordinates.session_id)?;
         let payload: ContextChangedPayload = envelope.decode_payload()?;
-        payload.validate_for_version(self.protocol_version())?;
+        payload.validate()?;
         let _ = self.broker.update_context(coordinates, payload).await?;
         Ok(())
     }
@@ -687,13 +723,13 @@ impl MessageHandler<'_> {
         .map_err(|_| ServerError::InvalidMessage)?;
         if action.is_global() {
             let payload: GlobalControlRequestPayload = envelope.decode_payload()?;
-            payload.validate_for_version(self.protocol_version())?;
+            payload.validate()?;
             let mut snooze = None;
             let mut reason = ReasonCode::Accepted;
             let paused = match action {
-                ControlAction::Pause => self.broker.set_paused(true).await?,
-                ControlAction::Resume => self.broker.set_paused(false).await?,
-                ControlAction::PauseToggle => self.broker.toggle_paused().await?,
+                ControlAction::Pause => self.broker.set_paused(true).await,
+                ControlAction::Resume => self.broker.set_paused(false).await,
+                ControlAction::PauseToggle => self.broker.toggle_paused().await,
                 ControlAction::Snooze => {
                     let minutes = payload.minutes.ok_or(ServerError::InvalidMessage)?;
                     let duration = Duration::from_secs(u64::from(minutes) * 60);
@@ -721,6 +757,12 @@ impl MessageHandler<'_> {
             };
             return self.reply(MessageType::ControlResult, envelope.id, &result);
         }
+        // A session action may request a suggestion or grant a commit, so
+        // it waits for the current epoch like the data plane. A connection
+        // without policy (`badictl`) is not gated.
+        self.broker
+            .require_current_authority_ack(self.connection_id)
+            .await?;
         let coordinates = envelope.coordinates()?;
         let payload: SessionControlRequestPayload = envelope.decode_payload()?;
         self.broker
@@ -757,20 +799,10 @@ impl MessageHandler<'_> {
             sessions: health.sessions,
             socket_mode: self.broker.measured_socket_mode(),
             max_frame_bytes: health.max_frame_bytes,
-            // The legacy v1 wire keeps its frozen counter set.
-            metrics: if self.protocol_version() == CURRENT_PROTOCOL_VERSION {
-                health.metrics
-            } else {
-                health.metrics.for_protocol_v1()
-            },
+            metrics: health.metrics,
             active: health.active,
-            desktop: (self.protocol_version() == CURRENT_PROTOCOL_VERSION)
-                .then_some(health.desktop),
-            snoozes: if self.protocol_version() == CURRENT_PROTOCOL_VERSION {
-                health.snoozes
-            } else {
-                Vec::new()
-            },
+            desktop: Some(health.desktop),
+            snoozes: health.snoozes,
         };
         self.reply(MessageType::HealthStatus, envelope.id, &status)
     }
@@ -895,15 +927,8 @@ impl MessageHandler<'_> {
     async fn resolve_policy(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
         require_capability(self.authority, Capability::Policy)?;
         let payload: PolicyQueryPayload = envelope.decode_payload()?;
-        payload.validate_for_version(self.protocol_version())?;
-        let mut status = self.broker.resolve_policy(&payload.target).await;
-        if self.protocol_version() == 1 {
-            status.language_override = None;
-            // Protocol v1 has no snooze reason; the denial is the same.
-            if status.reason == PolicyResolutionReason::Snoozed {
-                status.reason = PolicyResolutionReason::SuggestionsDisabled;
-            }
-        }
+        payload.validate()?;
+        let status = self.broker.resolve_policy(&payload.target).await;
         self.reply(MessageType::PolicyStatus, envelope.id, &status)
     }
 
@@ -933,21 +958,12 @@ impl MessageHandler<'_> {
             .get("schema")
             .and_then(serde_json::Value::as_str)
             .ok_or(ServerError::InvalidMessage)?;
-        let speaks_v1 = self.protocol_version() == PROTOCOL_VERSION;
-        let expected_schema = if speaks_v1 {
-            SETTINGS_SCHEMA_V1
-        } else {
-            SETTINGS_SCHEMA
-        };
-        if source_schema != expected_schema {
+        // Only `badi.settings.v2` crosses the wire; a v1 file migrates on disk.
+        if source_schema != SETTINGS_SCHEMA {
             return Err(ServerError::InvalidMessage);
         }
-        let mut next: SettingsV2 =
+        let next: SettingsV2 =
             serde_json::from_value(payload.document).map_err(|_| ServerError::InvalidMessage)?;
-        if speaks_v1 {
-            let current = self.broker.control_plane_snapshot().await?;
-            next = next.preserving_v2_policy_from(&current.settings);
-        }
         next.validate().map_err(|_| ServerError::InvalidMessage)?;
         let snapshot = self
             .broker
@@ -961,11 +977,7 @@ impl MessageHandler<'_> {
         request_id: Option<String>,
         snapshot: &ControlPlaneSnapshot,
     ) -> Result<(), ServerError> {
-        let status = settings_status_payload(
-            snapshot,
-            self.broker.outcome_recorder_health(),
-            self.protocol_version(),
-        )?;
+        let status = settings_status_payload(snapshot, self.broker.outcome_recorder_health())?;
         self.reply(MessageType::SettingsStatus, request_id, &status)
     }
 
@@ -984,9 +996,6 @@ impl MessageHandler<'_> {
 
     async fn probe(&self, envelope: WireEnvelope) -> Result<(), ServerError> {
         require_settings_authority(self.authority)?;
-        if self.protocol_version() != CURRENT_PROTOCOL_VERSION {
-            return Err(ServerError::InvalidMessage);
-        }
         let payload: ProbeRequestPayload = envelope.decode_payload()?;
         let result = self.broker.probe(payload).await?;
         result.validate()?;
@@ -1006,13 +1015,9 @@ fn require_settings_authority(authority: &SessionAuthority) -> Result<(), Server
 fn settings_status_payload(
     snapshot: &ControlPlaneSnapshot,
     recorder: OutcomeRecorderHealth,
-    protocol_version: u8,
 ) -> Result<SettingsStatusPayload, ServerError> {
     let payload = SettingsStatusPayload {
-        document: snapshot
-            .settings
-            .wire_document(protocol_version)
-            .map_err(ProtocolError::from)?,
+        document: serde_json::to_value(&snapshot.settings).map_err(ProtocolError::from)?,
         personalization_revision: snapshot.personalization.revision,
         personalization_records: saturating_counter(snapshot.personalization.records.len()),
         personalization_bytes: saturating_counter(snapshot.persisted_personalization_bytes),
@@ -1130,20 +1135,11 @@ fn settings_replace_failure(error: &BrokerError) -> Option<(ReasonCode, Option<b
 
 const fn reason_for_broker(error: &BrokerError) -> ReasonCode {
     match error {
-        BrokerError::Denied(PolicyReason::Paused) => ReasonCode::Paused,
-        BrokerError::Denied(PolicyReason::FieldSensitive) => ReasonCode::FieldSensitive,
-        BrokerError::Denied(PolicyReason::FieldNotEditable) => ReasonCode::FieldNotEditable,
-        BrokerError::Denied(PolicyReason::FieldAmbiguous) => ReasonCode::FieldAmbiguous,
-        BrokerError::Denied(PolicyReason::PolicyNever) => ReasonCode::PolicyNever,
+        BrokerError::Denied(reason) => reason.refusal_code(),
         BrokerError::InvalidCapability => ReasonCode::InvalidCapability,
         BrokerError::CommitLeaseExpired => ReasonCode::Expired,
         BrokerError::EventSinkClosed | BrokerError::ShuttingDown => ReasonCode::SessionClosed,
-        BrokerError::Denied(
-            PolicyReason::AllowedAlways
-            | PolicyReason::AllowedExplicit
-            | PolicyReason::ManualRequired,
-        )
-        | BrokerError::InvalidPayload
+        BrokerError::InvalidPayload
         | BrokerError::Protocol(_)
         | BrokerError::ControlPlane(_)
         | BrokerError::ControlPlaneTask
@@ -1186,9 +1182,10 @@ const fn reason_for_server(error: &ServerError) -> ReasonCode {
         ServerError::InvalidCapability => ReasonCode::InvalidCapability,
         ServerError::ProviderExited => ReasonCode::ProviderError,
         ServerError::Broker(error) => reason_for_broker(error),
-        ServerError::Frame(FrameError::Protocol(ProtocolError::UnsupportedVersion(_))) => {
-            ReasonCode::UnsupportedVersion
-        }
+        ServerError::Frame(FrameError::Protocol(ProtocolError::UnsupportedVersion(_)))
+        | ServerError::Protocol(
+            ProtocolError::UnsupportedVersion(_) | ProtocolError::VersionNegotiationFailed,
+        ) => ReasonCode::UnsupportedVersion,
         ServerError::Frame(_) => ReasonCode::InvalidFrame,
         ServerError::ConnectionClosed
         | ServerError::HandshakeTimeout

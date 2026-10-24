@@ -28,7 +28,6 @@ async fn open_browser_session(
                 activation: Activation::Always,
             },
             SessionAuthority {
-                protocol_version: 2,
                 adapter_kind: AdapterKind::Fcitx,
                 capabilities: vec![
                     Capability::Context,
@@ -138,8 +137,8 @@ async fn escape_whole_acceptance_and_pause_end_type_through() {
                 .await
                 .expect("control");
         } else {
-            assert!(broker.set_paused(true).await.expect("pause"));
-            assert!(!broker.set_paused(false).await.expect("resume"));
+            assert!(broker.set_paused(true).await);
+            assert!(!broker.set_paused(false).await);
         }
         let (second, mut second_events) = open_observed_session(&broker, "field-epoch-2").await;
         let next = shown_after(&broker, second, &mut second_events, "Hello rev")
@@ -375,7 +374,6 @@ async fn open_telegram_session(
                 activation: Activation::Always,
             },
             SessionAuthority {
-                protocol_version: 2,
                 adapter_kind: AdapterKind::Fcitx,
                 capabilities: vec![
                     Capability::Context,

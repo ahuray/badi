@@ -4,7 +4,7 @@ import { open, readFile, readdir, mkdir, lstat, realpath } from 'node:fs/promise
 import { resolve, relative, join, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { createLabServer, validateConfigs, LENGTHS } from './server.mjs';
+import { createLabServer, validateConfigs, FIXED_MODES, LENGTHS } from './server.mjs';
 import { LabWorker } from './worker.mjs';
 import { validateSuite, planComparison, warmSchedule, summarizeResults } from './cases.mjs';
 import { REVISION_MODES, validateRevisionSuite, planRevision, revisionRequest, validateRevisionResult, scoreRevision,
@@ -15,16 +15,10 @@ import { modelArtifactPath, readModelArtifact, modelArtifactProvenance, modelArt
 export const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 export const OUTPUT_ROOT = resolve(ROOT, 'output/writing');
 export const WORKER_BINARY = resolve(ROOT, 'target/release/badi-writing-lab');
-// Run provenance: the Lab's own scripts, every file of the Lab worker crate
-// and of the broker's `src` (expanded and sorted, so a new module cannot
-// escape the record), and the manifests and data the worker builds with.
-const LAB_SCRIPTS = ['evaluation/writing/lab/run.mjs', 'evaluation/writing/lab/paced.mjs', 'evaluation/writing/lab/server.mjs',
-  'evaluation/writing/lab/worker.mjs', 'evaluation/writing/lab/cases.mjs', 'evaluation/writing/lab/model-artifact.mjs',
-  'evaluation/writing/lab/device-qualification.mjs', 'evaluation/writing/lab/gguf.mjs',
-  'evaluation/writing/lab/discovery.mjs', 'evaluation/writing/lab/discovery-server.mjs',
-  'evaluation/writing/lab/qualification-evidence.mjs', 'evaluation/writing/lab/qualification-diagnostics.mjs',
-  'evaluation/writing/lab/qualification-server.mjs',
-  'evaluation/writing/lab/revision.mjs', 'evaluation/writing/lab/public/confidence.mjs'];
+// Run provenance: every file of the Lab, of the Lab worker crate and of the
+// broker's `src` (expanded and sorted, so a new module cannot escape the
+// record), and the manifests and data the worker builds with.
+export const LAB_DIRECTORY = 'evaluation/writing/lab';
 export const LAB_CRATE = 'evaluation/writing/lab-worker';
 const BUILD_INPUTS = ['broker/Cargo.toml', 'Cargo.toml', 'Cargo.lock', 'broker/data/writing-lexicon/en.txt'];
 export const WORKER_BUILD = ['build', '--release', '--locked', '-p', 'badi-writing-lab'];
@@ -75,8 +69,7 @@ export function parseOptions(args, cwd = process.cwd()) {
     throw new Error('Use --lengths with distinct values from short and normal.');
   }
   const configs = validateConfigs(modes.flatMap(mode => {
-    const fixed = mode === 'production_boundary' || mode === 'framed' || mode === 'field_context' || mode === 'following_text' ||
-      mode === 'context_bias' || mode === 'vocabulary';
+    const fixed = FIXED_MODES.includes(mode);
     const config = { id: mode, mode, budget_ms: fixed ? 550 : budget, max_tokens: fixed ? 8 : tokens,
       cache_prompt: fixed || values['cache-prompt'] === 'true', temperature: 0, seed: 42 };
     if (mode !== 'production_boundary') return [config];
@@ -142,11 +135,16 @@ async function treeFiles(directory, root) {
       const path = `${folder}/${entry.name}`;
       if (entry.isDirectory()) await visit(path);
       else if (entry.isFile()) files.push(path);
-      else throw new Error(`Lab worker sources must be regular files: ${path}`);
+      else throw new Error(`Lab sources must be regular files: ${path}`);
     }
   };
   await visit(directory);
   return files.sort();
+}
+
+/** Every file of the Lab's scripts, page, tests and example suites, sorted. */
+export async function labFiles(root = ROOT) {
+  return treeFiles(LAB_DIRECTORY, root);
 }
 
 /** The Lab worker crate's manifest and every file under its `src`, sorted. */
@@ -175,7 +173,7 @@ export function buildWorker(run = (command, args) => new Promise((done, failed) 
 }
 
 export async function sourceHashes(paths, root = ROOT) {
-  paths ??= [...LAB_SCRIPTS, ...await labCrateSources(root), ...await brokerSources(root)];
+  paths ??= [...await labFiles(root), ...await labCrateSources(root), ...await brokerSources(root)];
   return Object.fromEntries(await Promise.all(paths.map(async path => [path, hash(await readFile(resolve(root, path)))])));
 }
 

@@ -486,5 +486,61 @@ class ModelTermsTests(unittest.TestCase):
             self.assertEqual(len(json.loads(path.read_text())['accepted']), 1, 'an unreadable record starts again')
 
 
+class DownloadModelTests(unittest.TestCase):
+    MODEL = {'name': 'Test', 'repository': 'example/test', 'revision': 'r', 'filename': 'test.gguf'}
+
+    class Response(io.BytesIO):
+        def __init__(self, data, fail_after=None):
+            super().__init__(data)
+            self.fail_after = fail_after
+
+        def read(self, size=-1):
+            if self.fail_after is not None and self.tell() >= self.fail_after:
+                raise OSError('connection reset')
+            return super().read(min(size, 4))
+
+    def download(self, directory, data, response):
+        model = {**self.MODEL, 'download_bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+        with patch('urllib.request.urlopen', return_value=response):
+            return badi_install.download_model(model, directory)
+
+    def test_a_checked_download_becomes_visible_whole(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data = b'weights-0123456789'
+            target = self.download(temporary, data, self.Response(data))
+            self.assertEqual(target.read_bytes(), data)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(os.listdir(temporary), ['test.gguf'])
+
+    def test_a_wrong_hash_or_a_broken_connection_leaves_nothing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            data = b'weights-0123456789'
+            with self.assertRaisesRegex(RuntimeError, 'pinned size and hash'):
+                self.download(temporary, data, self.Response(b'tampered-012345678'))
+            self.assertEqual(os.listdir(temporary), [])
+            with self.assertRaises(OSError):
+                self.download(temporary, data, self.Response(data, fail_after=8))
+            self.assertEqual(os.listdir(temporary), [], 'no .part file after an interrupted download')
+
+
+class RunInstallerTests(unittest.TestCase):
+    def run_failing(self, error):
+        def main():
+            raise error
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as stopped:
+            badi_install.run_installer(main)
+        return stopped.exception.code, stderr.getvalue()
+
+    def test_known_failures_end_with_one_line_and_others_propagate(self):
+        self.assertEqual(self.run_failing(RuntimeError('No writing model was downloaded.')),
+                         (1, 'No writing model was downloaded.\n'))
+        code, message = self.run_failing(subprocess.CalledProcessError(101, ['cargo', 'build']))
+        self.assertEqual((code, message), (1, 'cargo build failed with exit status 101; see its output above.\n'))
+        self.assertEqual(self.run_failing(KeyboardInterrupt())[0], 130)
+        with self.assertRaises(ValueError):
+            badi_install.run_installer(lambda: (_ for _ in ()).throw(ValueError('a bug')))
+
+
 if __name__ == '__main__':
     unittest.main()

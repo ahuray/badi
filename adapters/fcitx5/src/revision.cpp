@@ -9,28 +9,14 @@ namespace badi::fcitx5 {
 
 namespace {
 
-bool continuation(char byte) { return (static_cast<unsigned char>(byte) & 0xC0U) == 0x80U; }
-
 // The byte offset of each scalar of valid UTF-8 `text`, and of its end.
 std::vector<std::size_t> scalarOffsets(std::string_view text) {
     std::vector<std::size_t> offsets;
     for (std::size_t index = 0; index < text.size(); ++index) {
-        if (!continuation(text[index])) offsets.push_back(index);
+        if (!utf8Continuation(text[index])) offsets.push_back(index);
     }
     offsets.push_back(text.size());
     return offsets;
-}
-
-// Unicode general category Cf, which can reorder or hide text.
-bool formatCharacter(std::uint32_t scalar) {
-    return scalar == 0xAD || (scalar >= 0x600 && scalar <= 0x605) || scalar == 0x61C || scalar == 0x6DD ||
-           scalar == 0x70F || scalar == 0x890 || scalar == 0x891 || scalar == 0x8E2 || scalar == 0x180E ||
-           (scalar >= 0x200B && scalar <= 0x200F) || (scalar >= 0x202A && scalar <= 0x202E) ||
-           (scalar >= 0x2060 && scalar <= 0x2064) || (scalar >= 0x2066 && scalar <= 0x206F) ||
-           scalar == 0xFEFF || (scalar >= 0xFFF9 && scalar <= 0xFFFB) || scalar == 0x110BD ||
-           scalar == 0x110CD || (scalar >= 0x13430 && scalar <= 0x1343F) ||
-           (scalar >= 0x1BCA0 && scalar <= 0x1BCA3) || (scalar >= 0x1D173 && scalar <= 0x1D17A) ||
-           scalar == 0xE0001 || (scalar >= 0xE0020 && scalar <= 0xE007F);
 }
 
 // Unicode White_Space other than the spaces a revision may keep.
@@ -57,7 +43,7 @@ std::vector<std::string_view> words(std::string_view text) {
 
 std::size_t scalarCount(std::string_view text) {
     return static_cast<std::size_t>(std::count_if(text.begin(), text.end(), [](char byte) {
-        return !continuation(byte);
+        return !utf8Continuation(byte);
     }));
 }
 
@@ -93,6 +79,12 @@ std::optional<SelectionWindow> captureSelectionWindow(std::string_view text, std
         .language = std::move(language),
         .multiline = multiline,
     };
+}
+
+bool sameSelection(const SelectionWindow &current, const SelectionWindow &requested, bool withAfter) {
+    return current.selected == requested.selected && current.before == requested.before &&
+           current.anchor == requested.anchor && current.head == requested.head &&
+           (!withAfter || current.after == requested.after);
 }
 
 bool safeRevisionText(std::string_view text, std::size_t maxScalars) {
@@ -188,6 +180,7 @@ bool revisionLanded(std::string_view before, std::string_view after, const Selec
 std::optional<std::string_view> revisionClearNotice(std::string_view reason) {
     if (reason == "no_change") return "Badi found nothing to change";
     if (reason == "invalid_output") return "Badi could not revise this — try a shorter selection";
+    // The broker's revision languages (broker/src/revision.rs).
     if (reason == "unsupported_language") return "Badi revises English, German, French, Spanish and Portuguese";
     if (reason == "revision_unavailable") return "Badi's revision model is not available — check badi doctor";
     if (reason == "provider_timeout") return "Badi took too long to revise this — try a shorter selection";

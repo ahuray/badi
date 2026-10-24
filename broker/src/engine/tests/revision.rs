@@ -89,7 +89,6 @@ async fn revising(
                 activation: Activation::Always,
             },
             SessionAuthority {
-                protocol_version: 2,
                 adapter_kind: AdapterKind::Fcitx,
                 capabilities: revision_capabilities(),
             },
@@ -426,7 +425,7 @@ async fn revisions_are_refused_where_suggestions_are_and_in_terminals() {
         };
         assert_eq!(cleared.reason, reason);
     }
-    broker.set_paused(true).await.expect("paused");
+    broker.set_paused(true).await;
     broker
         .request_revision(coordinates(id, 6), request(6, "", "I has went.", ""), None)
         .await
@@ -469,9 +468,7 @@ async fn a_request_must_span_exactly_its_one_line_selection() {
     two_lines.selection.head = two_lines.selection.anchor + 11;
     let mut empty = request(4, "", " ", "");
     empty.selection.head = empty.selection.anchor + 1;
-    let mut utf16 = request(5, "", "I has went.", "");
-    utf16.selection.unit = OffsetUnit::Utf16CodeUnits;
-    for (revision, payload) in [(2, short), (3, two_lines), (4, empty), (5, utf16)] {
+    for (revision, payload) in [(2, short), (3, two_lines), (4, empty)] {
         assert!(
             broker
                 .request_revision(coordinates(id, revision), payload, None)

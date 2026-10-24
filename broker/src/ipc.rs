@@ -1,7 +1,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -126,16 +125,6 @@ pub fn verify_socket_metadata(_path: &Path) -> Result<(), FrameError> {
     Err(FrameError::PeerCredentialsUnavailable)
 }
 
-pub fn validate_json_frame(frame: &[u8]) -> Result<Value, FrameError> {
-    if frame.is_empty() {
-        return Err(FrameError::Empty);
-    }
-    if frame.len() > MAX_FRAME_BYTES {
-        return Err(FrameError::Oversized(frame.len()));
-    }
-    Ok(serde_json::from_slice(frame)?)
-}
-
 #[derive(Debug, Error)]
 pub enum FrameError {
     #[error("empty_frame")]
@@ -166,7 +155,7 @@ pub enum FrameError {
 mod tests {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _, duplex};
 
-    use super::{FrameError, read_frame, validate_json_frame, write_frame};
+    use super::{FrameError, read_envelope, read_frame, write_frame};
     use crate::protocol::MAX_FRAME_BYTES;
 
     #[tokio::test]
@@ -219,15 +208,15 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn rejects_malformed_and_invalid_utf8_json() {
-        assert!(matches!(
-            validate_json_frame(b"{"),
-            Err(FrameError::Serde(_))
-        ));
-        assert!(matches!(
-            validate_json_frame(&[0xff, 0xfe]),
-            Err(FrameError::Serde(_))
-        ));
+    #[tokio::test]
+    async fn rejects_malformed_and_invalid_utf8_json() {
+        for body in [b"{".as_slice(), &[0xff, 0xfe]] {
+            let (mut client, mut server) = duplex(64);
+            write_frame(&mut client, body).await.expect("frame");
+            assert!(matches!(
+                read_envelope(&mut server).await,
+                Err(FrameError::Serde(_))
+            ));
+        }
     }
 }

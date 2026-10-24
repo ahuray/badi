@@ -8,7 +8,7 @@ import vm from 'node:vm';
 const source = readFileSync(new URL('../KeyModel.js', import.meta.url), 'utf8');
 assert.match(source, /^\.pragma library\n/u);
 const KeyModel = vm.runInNewContext(`${source.replace(/^\.pragma library\n/u, '')}
-({ step, choice, chip, action, removable, filter })`);
+({ step, choice, chip, action, removable, filter, follow, sameRows })`);
 
 const toggle = { kind: 'toggle', label: 'Mid-sentence suggestions', detail: 'Also suggest', section: 'Writing',
   enabled: true, activate() {} };
@@ -74,4 +74,26 @@ test('search keeps rows whose label, detail or section contains the query, ignor
   assert.deepEqual(KeyModel.filter(rows, 'websites'), [site, field]);
   assert.deepEqual(KeyModel.filter(rows, 'recommended'), [model]);
   assert.deepEqual(KeyModel.filter(rows, 'nothing like this'), []);
+});
+
+test('the cursor stays on its row when rows appear or vanish above it, else keeps its place', () => {
+  const rows = keys => keys.map(key => ({ key, kind: 'action', label: key, detail: '', section: '', enabled: true }));
+  const shown = rows(['languages', 'suggestion_length', 'context', 'all_settings']);
+  const snoozed = rows(['snooze', 'languages', 'suggestion_length', 'context', 'all_settings']);
+  assert.equal(KeyModel.follow(snoozed, 'context', 2), 3, 'a snooze row above moves the cursor with its row');
+  assert.equal(KeyModel.follow(shown, 'context', 3), 2, 'and back when it ends');
+  assert.equal(KeyModel.follow(rows(['languages', 'all_settings']), 'context', 2), 1, 'a vanished row clamps');
+  assert.equal(KeyModel.follow(shown, 'context', -1), -1, 'no cursor stays none');
+  assert.equal(KeyModel.follow([], 'context', 0), -1);
+  assert.equal(KeyModel.follow(shown, '', 1), 1);
+});
+
+test('rows that show the same compare equal whatever their actions, and any shown change differs', () => {
+  const row = (checked, activate) => [{ key: 'mid_line', kind: 'toggle', label: 'Mid-sentence suggestions',
+    detail: 'Also suggest', section: 'Writing', checked, enabled: true, activate }];
+  assert.equal(KeyModel.sameRows(row(true, () => 1), row(true, () => 2)), true, 'a new poll with the same state');
+  assert.equal(KeyModel.sameRows(row(true, () => 1), row(false, () => 1)), false);
+  const chips = values => [{ ...languages, values }];
+  assert.equal(KeyModel.sameRows(chips(['en']), chips(['en', 'de'])), false, 'nested values count');
+  assert.equal(KeyModel.sameRows([], [toggle]), false);
 });

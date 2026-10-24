@@ -25,6 +25,16 @@ def frame(message):
     return struct.pack("<I", len(body)) + body
 
 
+def run_pending():
+    """Runs what the helper left for the main loop, such as the style key."""
+    context = daemon.GLib.MainContext.default()
+    # PyGObject's asyncio policy warns on every iteration under Python 3.14.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        while context.pending():
+            context.iteration(False)
+
+
 def read_frame(connection):
     header = b""
     while len(header) < 4:
@@ -190,10 +200,14 @@ class FakeLink:
         self.connected = False
         self.reports = []
         self.keys = []
+        self.sent = []
         self.failures = failures
+        # A connection the broker never writes to: its watch stays quiet.
+        self._quiet, self._writer = os.pipe()
 
     def send_style_key(self, key_id, key):
         self.keys.append((key_id, key))
+        self.sent.append("style.key")
         return "ready"
 
     def connect(self):
@@ -203,10 +217,11 @@ class FakeLink:
         self.connected = True
 
     def fileno(self):
-        return os.open(os.devnull, os.O_RDONLY)
+        return self._quiet
 
     def send_report(self, session, on_battery, power_saver, screen_shared):
         self.reports.append((session, on_battery, power_saver, screen_shared))
+        self.sent.append("desktop.state")
         low = on_battery or power_saver
         return {"observed": True, "session": session, "low_power": low, "automatic": "normal",
                 "screen_share": "held" if screen_shared else "none"}
@@ -214,11 +229,15 @@ class FakeLink:
     def close(self):
         self.connected = False
 
+    def release(self):
+        for descriptor in (self._quiet, self._writer):
+            os.close(descriptor)
+
 
 class ReporterTests(unittest.TestCase):
     def reporter(self, fake):
         reporter = daemon.Reporter(fake)
-        reporter._watch_link = lambda: None
+        self.addCleanup(fake.release)
         self.addCleanup(reporter.close)
         return reporter
 
@@ -254,7 +273,7 @@ class StyleKeyTests(unittest.TestCase):
     def reporter(self, lookup):
         fake = FakeLink()
         reporter = daemon.Reporter(fake, lookup)
-        reporter._watch_link = lambda: None
+        self.addCleanup(fake.release)
         self.addCleanup(reporter.close)
         return fake, reporter
 
@@ -262,11 +281,26 @@ class StyleKeyTests(unittest.TestCase):
         key = ("ab" * 16, "cd" * 32)
         fake, reporter = self.reporter(lambda: key)
         reporter.publish()
+        run_pending()
         reporter.publish()
+        run_pending()
         self.assertEqual(fake.keys, [key], "once per connection")
         fake.connected = False
         reporter.publish()
+        run_pending()
         self.assertEqual(fake.keys, [key, key], "again after a reconnect")
+
+    def test_the_report_never_waits_for_the_keyring(self):
+        # libsecret's lookup is synchronous and may wait for the Secret
+        # Service; a sleep report on a new connection must not wait with it.
+        lookups = []
+        fake, reporter = self.reporter(lambda: lookups.append(list(fake.sent)) or ("ab" * 16, "cd" * 32))
+        reporter.sleeping = True
+        self.assertTrue(reporter.publish())
+        self.assertEqual((fake.sent, lookups), (["desktop.state"], []), "no lookup inside the report")
+        run_pending()
+        self.assertEqual(lookups, [["desktop.state"]])
+        self.assertEqual(fake.sent, ["desktop.state", "style.key"])
 
     def test_a_locked_keyring_is_retried_later_and_never_prompts(self):
         attempts = []
@@ -276,6 +310,7 @@ class StyleKeyTests(unittest.TestCase):
             raise RuntimeError("keyring_locked")
         fake, reporter = self.reporter(locked)
         self.assertTrue(reporter.publish(), "the session report still goes through")
+        run_pending()
         self.assertEqual(fake.keys, [])
         self.assertIsNotNone(reporter._key_retry)
         self.assertEqual(len(attempts), 1)
@@ -283,8 +318,16 @@ class StyleKeyTests(unittest.TestCase):
     def test_no_stored_key_sends_nothing(self):
         fake, reporter = self.reporter(lambda: None)
         reporter.publish()
+        run_pending()
         self.assertEqual(fake.keys, [])
         self.assertIsNone(reporter._key_retry)
+
+    def test_a_key_due_after_the_link_dropped_is_not_sent(self):
+        fake, reporter = self.reporter(lambda: ("ab" * 16, "cd" * 32))
+        reporter.publish()
+        fake.connected = False
+        run_pending()
+        self.assertEqual(fake.keys, [])
 
     def test_stored_values_are_exact_hex_pairs(self):
         try:
@@ -374,19 +417,15 @@ class ScreenCastTests(unittest.TestCase):
         os.environ["BADI_TEST_PW_DUMP_DIR"] = str(self.controls)
         self.addCleanup(os.environ.pop, "BADI_TEST_PW_DUMP_DIR", None)
         self.fake = FakeLink()
-        self.reporter = daemon.Reporter(self.fake)
-        self.reporter._watch_link = lambda: None
+        self.reporter = daemon.Reporter(self.fake, backoff=(0, 0, 0))
+        self.addCleanup(self.fake.release)
         self.addCleanup(self.reporter.close)
-        self.backoff = daemon.BACKOFF_SECONDS
-        daemon.BACKOFF_SECONDS = (0, 0, 0)
-        self.addCleanup(setattr, daemon, "BACKOFF_SECONDS", self.backoff)
-        self.addCleanup(setattr, daemon, "RELEASE_SECONDS", daemon.RELEASE_SECONDS)
-        daemon.RELEASE_SECONDS = 0.1
 
-    def watch(self):
+    def watch(self, release_seconds=0.1):
         self.refreshes = []
         screencast = daemon.ScreenCast(self.reporter, [sys.executable, "-B", str(Path(__file__).parent / "fake_pw_dump.py")],
-                                       refresh=lambda: self.refreshes.append(self.reporter.screen_shared))
+                                       refresh=lambda: self.refreshes.append(self.reporter.screen_shared),
+                                       backoff=(0, 0, 0), release_seconds=release_seconds)
         self.addCleanup(screencast.close)
         return screencast
 
@@ -425,8 +464,7 @@ class ScreenCastTests(unittest.TestCase):
         self.assertEqual(self.refreshes, [False, True, False], "the bar mark reads each change once the broker has it")
 
     def test_a_share_that_changes_streams_is_never_released_in_between(self):
-        daemon.RELEASE_SECONDS = 1.0
-        screencast = self.watch()
+        screencast = self.watch(release_seconds=1.0)
         self.until(lambda: screencast.streams.synced, "the first dump")
         preview = node(124, "Video/Source", "xdg-desktop-portal-hyprland", "xdph-streaming-1")
         self.change(preview)
@@ -468,7 +506,8 @@ class ScreenCastTests(unittest.TestCase):
         (self.controls / "exit").touch()
         self.until(lambda: not self.reporter.screen_shared, "PipeWire gone")
         self.assertGreaterEqual(self.starts(), 2)
-        missing = daemon.ScreenCast(self.reporter, [str(self.controls / "no-such-pw-dump")], refresh=lambda: None)
+        missing = daemon.ScreenCast(self.reporter, [str(self.controls / "no-such-pw-dump")], refresh=lambda: None,
+                                    backoff=(0, 0, 0))
         self.addCleanup(missing.close)
         self.assertIsNone(missing.process)
         self.assertEqual(missing.problem, "pw-dump unavailable")

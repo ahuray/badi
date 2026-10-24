@@ -116,6 +116,15 @@ function event() {
   return JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
 }
 
+// The commits a push brought: from the old tip, or only the pushed commit when
+// the push replaced history (forced, or the old tip is not an ancestor).
+// A new branch (zero old tip) falls back to its merge base with main.
+export function pushRange(payload, head, isAncestor) {
+  if (!/^[0-9a-f]{40}$/u.test(payload.before ?? "") || /^0+$/u.test(payload.before)) return null;
+  if (payload.forced || !isAncestor(payload.before, head)) return { only: head };
+  return { base: payload.before, head };
+}
+
 function rangeEnds() {
   const payload = event();
   if (payload && process.env.GITHUB_EVENT_NAME === "pull_request") {
@@ -137,9 +146,11 @@ function rangeEnds() {
       head: "refs/review/pr-head",
     };
   }
-  if (payload && process.env.GITHUB_EVENT_NAME === "push" && /^[0-9a-f]{40}$/u.test(payload.before) && !/^0+$/u.test(payload.before)) {
+  if (payload && process.env.GITHUB_EVENT_NAME === "push") {
     const head = /^[0-9a-f]{40}$/u.test(payload.after) ? payload.after : git(["rev-parse", "HEAD"]).stdout.trim();
-    return { base: payload.before, head };
+    const range = pushRange(payload, head, (older, newer) =>
+      git(["merge-base", "--is-ancestor", older, newer], true).status === 0);
+    if (range) return range;
   }
   if (git(["rev-parse", "--verify", "--quiet", "origin/main"], true).status !== 0) {
     git(["fetch", "origin", "main"]);
@@ -153,7 +164,11 @@ function commitPaths(rev) {
 }
 
 function commitSet(rev) {
-  return { label: rev, paths: commitPaths(rev), changelog: changelogAdded([`${rev}^`, rev]) };
+  // A root commit is compared with the empty tree.
+  const parent = git(["rev-parse", "--verify", "--quiet", `${rev}^`], true).status === 0
+    ? `${rev}^`
+    : git(["hash-object", "-t", "tree", "/dev/null"]).stdout.trim();
+  return { label: rev, paths: commitPaths(rev), changelog: changelogAdded([parent, rev]) };
 }
 
 function setsForRev(rev) {
@@ -168,8 +183,10 @@ function setsForRev(rev) {
 
 function rangeSets() {
   ensureHistory();
-  const { base, head } = rangeEnds();
-  const commits = git(["rev-list", "--no-merges", `${base}..${head}`]).stdout.split("\n").filter(Boolean).map(commitSet);
+  const { base, head, only } = rangeEnds();
+  const commits = only
+    ? setsForRev(only)
+    : git(["rev-list", "--no-merges", `${base}..${head}`]).stdout.split("\n").filter(Boolean).map(commitSet);
   const staged = lines(["diff", "--cached", "--name-only"]);
   if (staged.length > 0) {
     commits.push({ label: "staged changes", paths: staged, changelog: changelogAdded(["--cached"]) });

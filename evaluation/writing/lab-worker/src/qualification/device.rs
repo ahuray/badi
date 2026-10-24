@@ -322,33 +322,45 @@ mod tests {
     fn bounded_command_kills_and_reaps_a_blocking_direct_child() {
         let root = tempfile::tempdir().expect("temporary probe root");
         let pid_path = root.path().join("probe.pid");
-        let mut command = Command::new("sh");
-        command.args([
-            "-c",
-            "printf '%s\\n' \"$$\" > \"$1\"; while :; do :; done",
-            "badi-probe",
-            pid_path.to_str().expect("UTF-8 temporary path"),
-        ]);
-
-        let started = Instant::now();
-        assert!(
-            run_bounded_command(&mut command, Duration::from_millis(250), 64).is_none(),
-            "a timed-out probe must not produce output"
-        );
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "direct-child timeout must remain bounded"
-        );
-
-        let pid = fs::read_to_string(&pid_path)
-            .expect("probe PID")
-            .trim()
-            .parse::<u32>()
-            .expect("numeric probe PID");
-        assert!(
-            !Path::new("/proc").join(pid.to_string()).exists(),
-            "wait must reap the killed direct child"
-        );
+        // Under heavy load the timeout can kill `sh` before it records its
+        // PID, which leaves nothing to check the reap against. Such a run
+        // still proves the bound; it is repeated with a longer timeout until
+        // the child records its PID, so the reap is always checked.
+        let mut timeout = Duration::from_millis(250);
+        for _ in 0..4 {
+            let _ = fs::remove_file(&pid_path);
+            let mut command = Command::new("sh");
+            command.args([
+                "-c",
+                "printf '%s\\n' \"$$\" > \"$1\"; while :; do :; done",
+                "badi-probe",
+                pid_path.to_str().expect("UTF-8 temporary path"),
+            ]);
+            let started = Instant::now();
+            assert!(
+                run_bounded_command(&mut command, timeout, 64).is_none(),
+                "a timed-out probe must not produce output"
+            );
+            assert!(
+                started.elapsed() < timeout + Duration::from_secs(2),
+                "direct-child timeout must remain bounded"
+            );
+            // The line is complete only once its newline is written.
+            let Some(recorded) = fs::read_to_string(&pid_path)
+                .ok()
+                .filter(|text| text.ends_with('\n'))
+            else {
+                timeout *= 4;
+                continue;
+            };
+            let pid = recorded.trim().parse::<u32>().expect("numeric probe PID");
+            assert!(
+                !Path::new("/proc").join(pid.to_string()).exists(),
+                "wait must reap the killed direct child"
+            );
+            return;
+        }
+        panic!("the probe child never recorded its PID, even with a 16 s timeout");
     }
 
     #[test]

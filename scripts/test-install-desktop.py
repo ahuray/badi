@@ -1280,5 +1280,40 @@ class WaylandRegistryTests(unittest.TestCase):
         self.assertIsNone(installer.wayland_globals({'WAYLAND_DISPLAY': '/nonexistent/wayland-0'}))
 
 
+class PayloadListTests(unittest.TestCase):
+    """The installers and the Arch package list the same files, and the lists
+    name every module the tree has; a new module fails here, not on a user's
+    desktop."""
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def pkgbuild_loop(self, folder):
+        import re
+        text = (self.ROOT / 'packaging/aur/PKGBUILD').read_text().replace('\\\n', ' ')
+        for match in re.finditer(r'for file in ([^;]+); do\s+install -Dm644 "([^"$]+)\$file', text):
+            if match.group(2).rstrip('/') == folder:
+                return sorted(match.group(1).split())
+        self.fail(f'no PKGBUILD loop installs {folder}')
+
+    def modules(self, folder):
+        return sorted(path.name for path in (self.ROOT / folder).glob('*.py'))
+
+    def test_observer_and_session_modules(self):
+        self.assertEqual(sorted(installer.OBSERVER_MODULES), self.modules('adapters/accessibility'))
+        self.assertEqual(sorted(installer.SESSION_MODULES), self.modules('adapters/session'))
+        self.assertEqual([f'{name}.py' for name in self.pkgbuild_loop('adapters/accessibility')],
+                         self.modules('adapters/accessibility'))
+        self.assertEqual([f'{name}.py' for name in self.pkgbuild_loop('adapters/session')],
+                         self.modules('adapters/session'))
+
+    def test_panel_files(self):
+        spec = importlib.util.spec_from_file_location('install_omarchy_ui', self.ROOT / 'scripts/install-omarchy-ui.py')
+        panel = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(panel)
+        shipped = sorted(path.name for path in (self.ROOT / 'ui/omarchy-plugin').iterdir()
+                         if path.suffix in ('.qml', '.js') or path.name == 'manifest.json')
+        self.assertEqual(sorted(panel.FILES), shipped)
+        self.assertEqual(self.pkgbuild_loop('ui/omarchy-plugin'), shipped)
+
+
 if __name__ == '__main__':
     unittest.main()

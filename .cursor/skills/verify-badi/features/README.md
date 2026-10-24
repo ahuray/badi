@@ -52,6 +52,7 @@ Each feature file starts with an H1 and one paragraph of user-visible behavior, 
 - [Word suggestion](./word-suggestion.md) covers grey text, the next word, the whole suggestion, dismissal, an explicit request, and a literal Tab.
 - [Suggestion length](./suggestion-length.md) covers one or two words versus up to four.
 - [Spelling](./spelling.md) covers an unambiguous English correction on the Bash path, and the real-model and Writer paths that a VM cannot stand in for.
+- [Selection revision](./selection-revision.md) covers the grammar fix and refined wording of one selected line, applying and dismissing them, and the refusals.
 - [Snooze](./snooze.md) covers turning Badi off in the focused app or site, and the refusal when nothing is focused.
 - [Pause and access](./pause-and-access.md) covers pause, app grants, status, and doctor.
 - [Screen-share hold](./screen-share-hold.md) covers holding every suggestion while the screen is shared, and keeping them on request.

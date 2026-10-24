@@ -104,8 +104,6 @@ class Link:
             _private(self.endpoint.parent, stat.S_ISDIR, 0o700)
             _private(self.endpoint, stat.S_ISSOCK, 0o600)
             connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
-        except FileNotFoundError:
-            raise LinkError("broker_offline") from None
         except OSError:
             raise LinkError("broker_offline") from None
         try:

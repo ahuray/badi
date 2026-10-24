@@ -258,6 +258,66 @@ void sessionControlResultIsExact() {
           "control results with extra keys must fail closed");
 }
 
+void brokerRefusalRetiresOnlyWhatItNames() {
+    constexpr auto expired = R"({"v":2,"id":"fcitx.accept.1.1","type":"error","mono_ms":7,"payload":{"code":"expired"}})";
+    const auto refusal = strictRequestRefusal(expired);
+    check(refusal && refusal->requestId == "fcitx.accept.1.1" && refusal->reason == "expired",
+          "an error frame names the refused request and its reason");
+    for (const auto *malformed : {
+             R"({"v":2,"type":"error","mono_ms":7,"payload":{"code":"expired"}})",
+             R"({"v":2,"id":7,"type":"error","mono_ms":7,"payload":{"code":"expired"}})",
+             R"({"v":2,"id":"fcitx accept","type":"error","mono_ms":7,"payload":{"code":"expired"}})",
+             R"({"v":2,"id":"fcitx.accept.1.1","type":"error","mono_ms":7,"payload":{"code":"melted"}})",
+             R"({"v":2,"id":"fcitx.accept.1.1","type":"error","mono_ms":7,"payload":{"code":"stale","committed":false}})",
+             R"({"v":2,"id":"fcitx.accept.1.1","type":"error","mono_ms":7,"payload":{}})",
+             R"({"v":2,"id":"fcitx.accept.1.1","type":"error","session_id":"550e8400-e29b-41d4-a716-446655440000","mono_ms":7,"payload":{"code":"stale"}})",
+             R"({"v":2,"id":"fcitx.accept.1.1","type":"error","mono_ms":7,"payload":{"code":"stale"},"payload":{"code":"stale"}})",
+             R"({"v":2,"id":"fcitx.accept.1.1","type":"control.result","mono_ms":7,"payload":{"code":"stale"}})",
+         }) {
+        check(!strictRequestRefusal(malformed), "any other error shape closes the connection");
+    }
+
+    auto state = focusedState();
+    const auto update = explicitContext(state);
+    check(serializeContextEnvelope(update, 0).value().find("\"id\":\"" + suggestRequestId(update.coordinates) +
+                                                           ".context\"") != std::string::npos,
+          "the context frame's id is the suggest request's");
+    check(state.refuseRequest("fcitx.accept.9.9") == RefusedRequest::None &&
+              state.refuseRequest("") == RefusedRequest::None && state.lastContext(),
+          "a refusal of a request this binding does not hold retires nothing");
+    check(state.refuseRequest(suggestRequestId(update.coordinates)) == RefusedRequest::Suggestion &&
+              state.lastContext(),
+          "a refused suggest request leaves the context for the next edit or request");
+    check(state.showSuggestion(suggestionFor(update), 100), "a suggestion shows");
+    const auto accept = state.requestAcceptance(100, kOwnedPanel);
+    check(accept.has_value(), "its acceptance is in flight");
+    check(state.refuseRequest(accept->controlId) == RefusedRequest::Acceptance && !state.suggestionVisible() &&
+              !state.acceptancePending(),
+          "a refused acceptance retires its suggestion");
+    const CommitPrepare late{accept->coordinates, accept->controlId, accept->suggestionId, accept->expectedText,
+                             "all"};
+    check(!state.authorizeCommit(late, 101, kOwnedPanel), "a grant arriving after the refusal dispatches nothing");
+
+    const auto revision = state.requestRevision(*captureSelectionWindow("she dont know", 13, 0, false, "en"),
+                                                "grammar");
+    check(revision && state.refuseRequest(revision->requestId) == RefusedRequest::Revision &&
+              !state.revisionRequest(),
+          "a refused revision request ends the revision");
+    const auto shown = state.requestRevision(*captureSelectionWindow("she dont know", 13, 0, false, "en"), "grammar");
+    check(shown && state.showRevision(Revision{.coordinates = shown->coordinates, .requestId = shown->requestId,
+                                               .revisionId = "r:1", .mode = "grammar", .original = "she dont know",
+                                               .text = "she does not know", .expiresAtMs = 1'000},
+                                      100),
+          "a revision shows");
+    const auto applying = state.requestRevisionAcceptance(100, kOwnedPanel);
+    check(applying && state.refuseRequest(applying->controlId) == RefusedRequest::Revision &&
+              !state.visibleRevision() && !state.revisionAcceptancePending(),
+          "a refused revision acceptance ends the revision");
+    state.focusOut();
+    check(state.refuseRequest(suggestRequestId(update.coordinates)) == RefusedRequest::None,
+          "an unfocused binding holds no request");
+}
+
 void suggestionClearMatchesOptionalWireField() {
     constexpr auto withoutSuggestion = R"({"v":2,"id":"fcitx.suggest.1.1","type":"suggestion.clear","session_id":"550e8400-e29b-41d4-a716-446655440000","focus_epoch":1,"revision":1,"mono_ms":7,"payload":{"fingerprint":"0123456789abcdef0123456789abcdef","reason":"provider_error"}})";
     check(strictSuggestionClear(withoutSuggestion),
@@ -454,7 +514,7 @@ void transportReconnectKeepsFcitxTextButNoBrokerGrant() {
     check(!authority.observe(connected), "an unchanged reconnect keeps Fcitx freshness");
     const auto context = capture(freshness);
     check(decideTabAction(tabEligibleContext(context), state.suggestionVisible(), {},
-                          NativeEditPath::Manual) == LocalAction::Invoke,
+                          NativeEditPath::Manual) == TabAction::Invoke,
           "Tab is claimed after a transport-only reconnect without new input");
     const auto republished = state.updateContext(*context);
     check(republished && republished->coordinates.sessionId == before->coordinates.sessionId &&
@@ -489,7 +549,7 @@ void transportReconnectKeepsFcitxTextButNoBrokerGrant() {
               "an epoch, settings or pause change must retire Fcitx freshness");
         freshness.capabilityChanged();
         check(decideTabAction(tabEligibleContext(capture(freshness)), false, {},
-                              NativeEditPath::Manual) == LocalAction::PassThrough,
+                              NativeEditPath::Manual) == TabAction::PassThrough,
               "changed authority requires new surrounding text before Tab reads");
         freshness.surroundingTextUpdated();
     }
@@ -634,46 +694,42 @@ void foreignImeAndManualKeysYieldCooperatively() {
     check(hasForeignImeUi(foreignPreedit) && hasForeignImeUi(foreignCandidates),
           "foreign UI must be detected");
     check(!hasForeignImeUi(ownedCandidates), "owned panel must not self-yield");
-    check(decideLocalAction(true, false, false, false, {}) == LocalAction::Invoke,
+    check(decideLocalAction(true, false, false, {}) == LocalAction::Invoke,
           "sole invoke chord should request explicitly");
     check(claimInvokeChord(true, true, false),
           "a granted field Badi can edit still takes Ctrl+Shift+Space");
     check(!claimInvokeChord(false, true, false) && !claimInvokeChord(true, false, false) &&
               !claimInvokeChord(false, false, false) && !claimInvokeChord(true, true, true),
           "without a grant, without an edit path, or under a foreign IME the chord reaches the app");
-    check(decideLocalAction(false, true, false, true, ownedCandidates) ==
-              LocalAction::AcceptAll,
+    check(decideLocalAction(false, true, true, ownedCandidates) == LocalAction::AcceptAll,
           "accept chord should act only on owned live candidate");
-    check(decideLocalAction(false, false, true, true, ownedCandidates) ==
-              LocalAction::Dismiss,
-          "escape should dismiss owned live candidate");
-    check(decideLocalAction(false, false, true, true, {}) ==
-              LocalAction::PassThrough,
-          "stale local state must not consume escape without a current panel");
-    check(decideLocalAction(false, false, true, true, foreignCandidates) ==
-              LocalAction::PassThrough,
-          "a foreign candidate panel must retain escape ownership");
-    check(decideLocalAction(false, false, false, true, ownedCandidates) ==
-              LocalAction::PassThrough,
+    check(decideLocalAction(false, true, true, {}) == LocalAction::PassThrough &&
+              decideLocalAction(false, true, false, ownedCandidates) == LocalAction::PassThrough,
+          "stale local state or no live candidate must not consume the accept chord");
+    check(decideLocalAction(false, true, true, foreignCandidates) == LocalAction::PassThrough,
+          "a foreign candidate panel keeps the accept chord");
+    check(decideLocalAction(false, false, true, ownedCandidates) == LocalAction::PassThrough,
           "all unrelated keys must pass through");
-    check(decideLocalAction(true, false, false, false, foreignPreedit) ==
-              LocalAction::PassThrough,
+    check(decideLocalAction(true, false, false, foreignPreedit) == LocalAction::PassThrough,
           "foreign IME must win even over invoke chord");
+    check(decidePreKey({.escape = true}, true, false, true, {}) == PreKeyAction::CancelDeclining &&
+              decidePreKey({.escape = true}, true, false, true, foreignCandidates) == PreKeyAction::CancelDeclining,
+          "stale local state or a foreign panel never lets Escape dismiss");
     constexpr auto manual = NativeEditPath::Manual;
     constexpr auto observed = NativeEditPath::Observed;
-    check(decideTabAction(true, false, {}, manual) == LocalAction::Invoke,
+    check(decideTabAction(true, false, {}, manual) == TabAction::Invoke,
           "manual Tab requests at an eligible end-of-text caret");
-    check(decideTabAction(true, true, ownedCandidates, manual) == LocalAction::AcceptWord,
+    check(decideTabAction(true, true, ownedCandidates, manual) == TabAction::AcceptWord,
           "Tab accepts one word of the owned live candidate before generic IME navigation");
-    check(decideTabAction(false, false, {}, manual) == LocalAction::PassThrough,
+    check(decideTabAction(false, false, {}, manual) == TabAction::PassThrough,
           "Tab preserves navigation and indentation without eligible context");
-    check(decideTabAction(true, true, foreignCandidates, manual) == LocalAction::PassThrough,
+    check(decideTabAction(true, true, foreignCandidates, manual) == TabAction::PassThrough,
           "Tab leaves foreign candidate navigation intact");
-    check(decideTabAction(true, false, {.foreignAuxiliary = true}, manual) == LocalAction::PassThrough,
+    check(decideTabAction(true, false, {.foreignAuxiliary = true}, manual) == TabAction::PassThrough,
           "Tab yields to foreign auxiliary UI");
-    check(decideTabAction(true, false, {}, observed) == LocalAction::PassThrough,
+    check(decideTabAction(true, false, {}, observed) == TabAction::PassThrough,
           "observed Tab without a suggestion stays the application's Tab (next field, indent)");
-    check(decideTabAction(true, true, ownedCandidates, observed) == LocalAction::AcceptWord,
+    check(decideTabAction(true, true, ownedCandidates, observed) == TabAction::AcceptWord,
           "observed Tab accepts one word of a visible suggestion");
 
     auto state = focusedState();
@@ -789,6 +845,28 @@ void literalTabIsARealTabWhereBadiWouldTakeTab() {
               decidePreKey(taken, true, false, false, foreign) == PreKeyAction::Cancel,
           "a foreign input method keeps the chord");
     check(preKeyActionName(PreKeyAction::LiteralTab) == "literal_tab", "the trace names the chord");
+
+    // Where the manual path would request: the same field, policy and
+    // context that make plain Tab request (decideTabAction).
+    const auto eligible = captureContextWindow("thank you", 9, 9, false, "en");
+    constexpr auto manual = NativeEditPath::Manual;
+    check(manualTabRequests(manual, true, true, eligible) &&
+              decideTabAction(tabEligibleContext(eligible), false, {}, manual) == TabAction::Invoke,
+          "a granted manual field at an eligible caret takes the chord exactly where Tab requests");
+    check(!manualTabRequests(manual, true, false, eligible),
+          "a native exact app without a grant keeps its Ctrl+Shift+Tab (previous tab or field)");
+    check(decidePreKey({.literalTab = true, .tabTaken = manualTabRequests(manual, true, false, eligible)}, true,
+                       false, false, {}) == PreKeyAction::Cancel,
+          "so the chord reaches the app there");
+    check(!manualTabRequests(manual, false, true, eligible) &&
+              !manualTabRequests(NativeEditPath::Observed, true, true, eligible) &&
+              !manualTabRequests(NativeEditPath::TypedLine, true, true, eligible),
+          "no edit path, an observed field or a typed line never requests on Tab");
+    check(!manualTabRequests(manual, true, true, std::nullopt) &&
+              !manualTabRequests(manual, true, true, captureContextWindow("thank you", 5, 5, false, "en")) &&
+              !manualTabRequests(manual, true, true, captureContextWindow("   ", 3, 3, false, "en")) &&
+              !manualTabRequests(manual, true, true, captureContextWindow("thank you", 9, 9, false, "fr")),
+          "an unreadable, mid-text, blank or unsupported-language context keeps the chord the app's");
 
     const auto sent = [](const char *name) { return ::fcitx::Key(name); };
     check(isLiteralTabChord(sent("Control+Shift+ISO_Left_Tab")) && isLiteralTabChord(sent("Control+Shift+Tab")),
@@ -1473,7 +1551,9 @@ void imeParityRequiresObservedAppendOnlyField() {
         check(pending.has_value(), "acceptance pending before observer loss");
         const CommitPrepare lost{pending->coordinates, pending->controlId, pending->suggestionId,
                                  pending->expectedText, "all"};
-        state.retireObservation();
+        check(state.retireObservation("6ba7b810-9dad-41d1-80b4-00c04fd430c8", "input-context-1", kSalt) &&
+                  state.coordinates().sessionId != kSession,
+              "observer loss continues under a fresh session");
         check(!state.editingAvailable() && !state.suggestionVisible() && !state.lastContext() &&
                   !state.authorizeCommit(lost, 7, kOwnedPanel),
               "observer loss retires IME-parity context, candidate and commit grant");
@@ -1485,9 +1565,17 @@ void imeParityRequiresObservedAppendOnlyField() {
     check(native.focusIn(kSession, "observed-target", "omawrite", kSalt, NativeEditTarget::DesktopApplication,
                          NativeEditPath::Observed) && native.editingAvailable(),
           "native exact apps keep observed desktop fields");
-    native.retireObservation();
-    check(native.editingAvailable() && native.updateContext(manual).has_value(),
-          "native exact apps keep their manual contract after observer loss");
+    check(native.retireObservation("6ba7b810-9dad-41d1-80b4-00c04fd430c8", "input-context-1", kSalt) &&
+              native.editPath() == NativeEditPath::Manual && native.targetId() == "input-context-1",
+          "observer loss returns to the manual target under a fresh session");
+    const auto retired = native.updateContext(manual);
+    check(native.editingAvailable() && retired && retired->coordinates.sessionId != kSession,
+          "native exact apps keep their manual contract after observer loss, with a new session");
+    SessionState invalid;
+    check(invalid.focusIn(kSession, "observed-target", "omawrite", kSalt, NativeEditTarget::DesktopApplication,
+                          NativeEditPath::Observed) &&
+              !invalid.retireObservation("not-a-session", "input-context-1", kSalt) && !invalid.focused(),
+          "an invalid fresh session stops the binding instead of keeping the old one");
     for (const auto app : kUnavailableApps) {
         for (const auto target : {NativeEditTarget::DesktopApplication, NativeEditTarget::BrowserOrigin}) {
             SessionState state;
@@ -1959,6 +2047,7 @@ int main(int argc, char **argv) {
         {"framing", framingIsBoundedAndIncremental},
         {"coalesced maximum frame", coalescedFramesRespectIndividualLimits},
         {"exact session control result", sessionControlResultIsExact},
+        {"broker refusal retires only what it names", brokerRefusalRetiresOnlyWhatItNames},
         {"optional suggestion clear field",
          suggestionClearMatchesOptionalWireField},
         {"sensitive zero context", sensitiveCompositionAndSelectionAreZeroContext},

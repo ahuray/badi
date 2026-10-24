@@ -1,4 +1,4 @@
-//! Admission, abstention, growing continuations, deadlines and provider capacity.
+//! Admission, abstention, cancellation, deadlines and provider capacity.
 
 use super::*;
 
@@ -195,57 +195,14 @@ async fn superseded_provider_work_is_counted_as_stale_once() {
     assert_eq!(breakdown.total(), 1);
 }
 
-struct GrowingProvider;
-
-#[async_trait]
-impl CompletionProvider for GrowingProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::PhraseV1
-    }
-
-    async fn complete(
-        &self,
-        _request: ProviderRequest,
-        _cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
-        Ok(None)
-    }
-
-    async fn propose_outcome_with_partials(
-        &self,
-        _request: ProviderRequest,
-        cancellation: CancellationToken,
-        _allow_replacement: bool,
-        _trigger: RequestTrigger,
-        partials: Option<mpsc::UnboundedSender<String>>,
-    ) -> Result<crate::provider::ProviderReply, ProviderError> {
-        if let Some(partials) = partials {
-            let _ = partials.send(" for".to_owned());
-        }
-        tokio::select! {
-            biased;
-            () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
-            () = sleep(Duration::from_millis(150)) => {}
-        }
-        Ok(crate::provider::ProviderOutcome::Proposal(WritingProposal {
-            text: " for the opportunity".to_owned(),
-            replace_before: None,
-        })
-        .into())
-    }
-}
-
 #[tokio::test]
-async fn a_growing_continuation_counts_as_one_shown_suggestion() {
+async fn cancelling_a_shown_suggestion_revokes_its_acceptance() {
     let (broker, id, mut events) = setup(
-        std::sync::Arc::new(GrowingProvider),
+        std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
         BrokerConfig::default(),
     )
     .await;
-    let mut update = context(1, FieldPurpose::Normal);
-    update.before = "Thank you".to_owned();
-    update.selection.anchor = u64::try_from(update.before.len()).expect("small fixture");
-    update.selection.head = update.selection.anchor;
+    let update = context(1, FieldPurpose::Normal);
     broker
         .update_context(coordinates(id, 1), update.clone())
         .await
@@ -261,104 +218,15 @@ async fn a_growing_continuation_counts_as_one_shown_suggestion() {
         )
         .await
         .expect("request");
-    let BrokerEvent::SuggestionShow { payload: first, .. } =
+    let BrokerEvent::SuggestionShow { payload: shown, .. } =
         timeout(Duration::from_millis(200), events.recv())
             .await
             .expect("deadline")
             .expect("event")
     else {
-        panic!("expected the first word")
+        panic!("expected a suggestion")
     };
-    assert_eq!(first.text, " for");
-    let BrokerEvent::SuggestionShow { payload: full, .. } =
-        timeout(Duration::from_millis(400), events.recv())
-            .await
-            .expect("deadline")
-            .expect("event")
-    else {
-        panic!("expected the extended suggestion")
-    };
-    assert_eq!(full.text, " for the opportunity");
-    assert_ne!(first.suggestion_id, full.suggestion_id);
     assert_eq!(broker.metrics().snapshot().suggestions_shown, 1);
-    broker
-        .session_control(
-            coordinates(id, 1),
-            SessionControlRequestPayload {
-                action: ControlAction::AcceptAll,
-                fingerprint: update.fingerprint.clone(),
-                suggestion_id: Some(first.suggestion_id),
-            },
-            None,
-        )
-        .await
-        .expect("accept the shorter version still displayed by the adapter");
-    let BrokerEvent::CommitPrepare { payload, .. } = events.recv().await.expect("commit") else {
-        panic!("expected the exact accepted version")
-    };
-    assert_eq!(payload.text, " for");
-    assert!(
-        broker
-            .session_control(
-                coordinates(id, 1),
-                SessionControlRequestPayload {
-                    action: ControlAction::AcceptAll,
-                    fingerprint: update.fingerprint,
-                    suggestion_id: Some(full.suggestion_id),
-                },
-                None,
-            )
-            .await
-            .is_err(),
-        "accepting any version retires every sibling"
-    );
-}
-
-#[tokio::test]
-async fn cancelling_a_growing_continuation_revokes_every_version() {
-    let (broker, id, mut events) = setup(
-        std::sync::Arc::new(GrowingProvider),
-        BrokerConfig::default(),
-    )
-    .await;
-    let mut update = context(1, FieldPurpose::Normal);
-    update.before = "Thank you".to_owned();
-    update.selection.anchor = u64::try_from(update.before.len()).expect("small fixture");
-    update.selection.head = update.selection.anchor;
-    broker
-        .update_context(coordinates(id, 1), update.clone())
-        .await
-        .expect("context");
-    broker
-        .request_suggestion(
-            coordinates(id, 1),
-            SuggestRequestPayload {
-                fingerprint: update.fingerprint.clone(),
-                explicit: false,
-            },
-            None,
-        )
-        .await
-        .expect("request");
-    let BrokerEvent::SuggestionShow { payload: first, .. } =
-        timeout(Duration::from_millis(200), events.recv())
-            .await
-            .expect("deadline")
-            .expect("event")
-    else {
-        panic!("expected the first word")
-    };
-    assert_eq!(first.text, " for");
-    let BrokerEvent::SuggestionShow { payload: full, .. } =
-        timeout(Duration::from_millis(400), events.recv())
-            .await
-            .expect("deadline")
-            .expect("event")
-    else {
-        panic!("expected the extended suggestion")
-    };
-    assert_eq!(full.text, " for the opportunity");
-    assert_ne!(first.suggestion_id, full.suggestion_id);
     broker
         .cancel_suggestion(
             coordinates(id, 1),
@@ -370,415 +238,23 @@ async fn cancelling_a_growing_continuation_revokes_every_version() {
         .await
         .expect("cancel");
     let BrokerEvent::SuggestionClear { payload, .. } = events.recv().await.expect("clear") else {
-        panic!("expected group revocation")
+        panic!("expected the suggestion withdrawn")
     };
+    assert_eq!(payload.suggestion_id, Some(shown.suggestion_id.clone()));
     assert!(
-        payload.suggestion_id.is_none(),
-        "revoke even a shorter displayed version"
-    );
-    for suggestion in [first, full] {
-        assert!(
-            broker
-                .session_control(
-                    coordinates(id, 1),
-                    SessionControlRequestPayload {
-                        action: ControlAction::AcceptAll,
-                        fingerprint: update.fingerprint.clone(),
-                        suggestion_id: Some(suggestion.suggestion_id),
-                    },
-                    None
-                )
-                .await
-                .is_err(),
-            "no revoked version can grant an edit"
-        );
-    }
-}
-
-/// Streams one complete word, then settles on a final text the display
-/// checks reject (here: more than the protocol's eight words).
-struct RejectedExtensionProvider;
-
-#[async_trait]
-impl CompletionProvider for RejectedExtensionProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::PhraseV1
-    }
-
-    async fn complete(
-        &self,
-        _request: ProviderRequest,
-        _cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
-        Ok(None)
-    }
-
-    async fn propose_outcome_with_partials(
-        &self,
-        _request: ProviderRequest,
-        cancellation: CancellationToken,
-        _allow_replacement: bool,
-        _trigger: RequestTrigger,
-        partials: Option<mpsc::UnboundedSender<String>>,
-    ) -> Result<crate::provider::ProviderReply, ProviderError> {
-        if let Some(partials) = partials {
-            let _ = partials.send(" for".to_owned());
-        }
-        tokio::select! {
-            biased;
-            () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
-            () = sleep(Duration::from_millis(50)) => {}
-        }
-        Ok(crate::provider::ProviderOutcome::Proposal(WritingProposal {
-            text: " for the opportunity to discuss this further with you soon".to_owned(),
-            replace_before: None,
-        })
-        .into())
-    }
-}
-
-#[tokio::test]
-async fn a_rejected_final_keeps_the_shown_partial() {
-    let (broker, id, mut events) = setup(
-        std::sync::Arc::new(RejectedExtensionProvider),
-        BrokerConfig::default(),
-    )
-    .await;
-    let mut update = context(1, FieldPurpose::Normal);
-    update.before = "Thank you".to_owned();
-    update.selection.anchor = u64::try_from(update.before.len()).expect("small fixture");
-    update.selection.head = update.selection.anchor;
-    broker
-        .update_context(coordinates(id, 1), update.clone())
-        .await
-        .expect("context");
-    broker
-        .request_suggestion(
-            coordinates(id, 1),
-            SuggestRequestPayload {
-                fingerprint: update.fingerprint.clone(),
-                explicit: false,
-            },
-            None,
-        )
-        .await
-        .expect("request");
-    let BrokerEvent::SuggestionShow { payload: first, .. } =
-        timeout(Duration::from_millis(200), events.recv())
-            .await
-            .expect("deadline")
-            .expect("event")
-    else {
-        panic!("expected the first word")
-    };
-    assert_eq!(first.text, " for");
-    // The rejected final must not withdraw the word already on screen.
-    assert!(
-        timeout(Duration::from_millis(150), events.recv())
+        broker
+            .session_control(
+                coordinates(id, 1),
+                SessionControlRequestPayload {
+                    action: ControlAction::AcceptAll,
+                    fingerprint: update.fingerprint,
+                    suggestion_id: Some(shown.suggestion_id),
+                },
+                None
+            )
             .await
             .is_err(),
-        "a rejected extension clears nothing"
-    );
-    let metrics = broker.metrics().snapshot();
-    assert_eq!(metrics.suggestions_shown, 1);
-    assert!(
-        metrics.no_suggestion.is_none_or(|b| b.total() == 0),
-        "a kept partial counts as shown, not as a miss"
-    );
-    broker
-        .session_control(
-            coordinates(id, 1),
-            SessionControlRequestPayload {
-                action: ControlAction::AcceptAll,
-                fingerprint: update.fingerprint,
-                suggestion_id: Some(first.suggestion_id),
-            },
-            None,
-        )
-        .await
-        .expect("the kept partial stays acceptable");
-    let BrokerEvent::CommitPrepare { payload, .. } = events.recv().await.expect("commit") else {
-        panic!("expected the kept word")
-    };
-    assert_eq!(payload.text, " for");
-}
-
-/// Streams one complete word, then finishes only after the provider budget.
-struct LateExtensionProvider;
-
-#[async_trait]
-impl CompletionProvider for LateExtensionProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::PhraseV1
-    }
-
-    async fn complete(
-        &self,
-        _request: ProviderRequest,
-        _cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
-        Ok(None)
-    }
-
-    async fn propose_outcome_with_partials(
-        &self,
-        _request: ProviderRequest,
-        cancellation: CancellationToken,
-        _allow_replacement: bool,
-        _trigger: RequestTrigger,
-        partials: Option<mpsc::UnboundedSender<String>>,
-    ) -> Result<crate::provider::ProviderReply, ProviderError> {
-        if let Some(partials) = partials {
-            let _ = partials.send(" for".to_owned());
-        }
-        tokio::select! {
-            biased;
-            () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
-            () = sleep(Duration::from_millis(300)) => {}
-        }
-        Ok(crate::provider::ProviderOutcome::Proposal(WritingProposal {
-            text: " for the opportunity".to_owned(),
-            replace_before: None,
-        })
-        .into())
-    }
-}
-
-#[tokio::test]
-async fn a_late_final_keeps_the_shown_partial() {
-    let (broker, id, mut events) = setup(
-        std::sync::Arc::new(LateExtensionProvider),
-        BrokerConfig {
-            provider_timeout: Duration::from_millis(80),
-            generation_timeout: Duration::from_millis(80),
-            ..BrokerConfig::default()
-        },
-    )
-    .await;
-    let mut update = context(1, FieldPurpose::Normal);
-    update.before = "Thank you".to_owned();
-    update.selection.anchor = u64::try_from(update.before.len()).expect("small fixture");
-    update.selection.head = update.selection.anchor;
-    broker
-        .update_context(coordinates(id, 1), update.clone())
-        .await
-        .expect("context");
-    broker
-        .request_suggestion(
-            coordinates(id, 1),
-            SuggestRequestPayload {
-                fingerprint: update.fingerprint.clone(),
-                explicit: false,
-            },
-            None,
-        )
-        .await
-        .expect("request");
-    let BrokerEvent::SuggestionShow { payload: first, .. } =
-        timeout(Duration::from_millis(200), events.recv())
-            .await
-            .expect("deadline")
-            .expect("event")
-    else {
-        panic!("expected the first word")
-    };
-    assert_eq!(first.text, " for");
-    assert!(
-        timeout(Duration::from_millis(250), events.recv())
-            .await
-            .is_err(),
-        "a late extension clears nothing"
-    );
-    let metrics = broker.metrics().snapshot();
-    assert_eq!(metrics.suggestions_shown, 1);
-    assert!(
-        metrics.no_suggestion.is_none_or(|b| b.total() == 0),
-        "a kept partial counts as shown, not as a miss"
-    );
-    broker
-        .session_control(
-            coordinates(id, 1),
-            SessionControlRequestPayload {
-                action: ControlAction::AcceptAll,
-                fingerprint: update.fingerprint,
-                suggestion_id: Some(first.suggestion_id),
-            },
-            None,
-        )
-        .await
-        .expect("the kept partial stays acceptable");
-    let BrokerEvent::CommitPrepare { payload, .. } = events.recv().await.expect("commit") else {
-        panic!("expected the kept word")
-    };
-    assert_eq!(payload.text, " for");
-}
-
-/// Streams one complete word, then rejects its own whole output the way
-/// the local model does: `validate_proposal` failure is returned as a
-/// no-suggestion outcome, not as a proposal for the broker to reject.
-struct ProviderRejectedExtensionProvider;
-
-#[async_trait]
-impl CompletionProvider for ProviderRejectedExtensionProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::PhraseV1
-    }
-
-    async fn complete(
-        &self,
-        _request: ProviderRequest,
-        _cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
-        Ok(None)
-    }
-
-    async fn propose_outcome_with_partials(
-        &self,
-        _request: ProviderRequest,
-        cancellation: CancellationToken,
-        _allow_replacement: bool,
-        _trigger: RequestTrigger,
-        partials: Option<mpsc::UnboundedSender<String>>,
-    ) -> Result<crate::provider::ProviderReply, ProviderError> {
-        if let Some(partials) = partials {
-            let _ = partials.send(" for".to_owned());
-        }
-        tokio::select! {
-            biased;
-            () = cancellation.cancelled() => return Err(ProviderError::Cancelled),
-            () = sleep(Duration::from_millis(50)) => {}
-        }
-        Ok(
-            crate::provider::ProviderOutcome::NoSuggestion(NoSuggestionReason::OutputRejected)
-                .into(),
-        )
-    }
-}
-
-#[tokio::test]
-async fn a_provider_rejected_final_keeps_the_shown_partial() {
-    let (broker, id, mut events) = setup(
-        std::sync::Arc::new(ProviderRejectedExtensionProvider),
-        BrokerConfig::default(),
-    )
-    .await;
-    let mut update = context(1, FieldPurpose::Normal);
-    update.before = "Thank you".to_owned();
-    update.selection.anchor = u64::try_from(update.before.len()).expect("small fixture");
-    update.selection.head = update.selection.anchor;
-    broker
-        .update_context(coordinates(id, 1), update.clone())
-        .await
-        .expect("context");
-    broker
-        .request_suggestion(
-            coordinates(id, 1),
-            SuggestRequestPayload {
-                fingerprint: update.fingerprint.clone(),
-                explicit: false,
-            },
-            None,
-        )
-        .await
-        .expect("request");
-    let BrokerEvent::SuggestionShow { payload: first, .. } =
-        timeout(Duration::from_millis(200), events.recv())
-            .await
-            .expect("deadline")
-            .expect("event")
-    else {
-        panic!("expected the first word")
-    };
-    assert_eq!(first.text, " for");
-    assert!(
-        timeout(Duration::from_millis(150), events.recv())
-            .await
-            .is_err(),
-        "a provider-rejected extension clears nothing"
-    );
-    let metrics = broker.metrics().snapshot();
-    assert_eq!(metrics.suggestions_shown, 1);
-    assert!(
-        metrics.no_suggestion.is_none_or(|b| b.total() == 0),
-        "a kept partial counts as shown, not as a miss"
-    );
-    broker
-        .session_control(
-            coordinates(id, 1),
-            SessionControlRequestPayload {
-                action: ControlAction::AcceptAll,
-                fingerprint: update.fingerprint,
-                suggestion_id: Some(first.suggestion_id),
-            },
-            None,
-        )
-        .await
-        .expect("the kept partial stays acceptable");
-    let BrokerEvent::CommitPrepare { payload, .. } = events.recv().await.expect("commit") else {
-        panic!("expected the kept word")
-    };
-    assert_eq!(payload.text, " for");
-}
-
-#[tokio::test]
-async fn accepting_the_first_word_stops_the_growing_continuation() {
-    let (broker, id, mut events) = setup(
-        std::sync::Arc::new(GrowingProvider),
-        BrokerConfig::default(),
-    )
-    .await;
-    let mut update = context(1, FieldPurpose::Normal);
-    update.before = "Thank you".to_owned();
-    update.selection.anchor = u64::try_from(update.before.len()).expect("small fixture");
-    update.selection.head = update.selection.anchor;
-    broker
-        .update_context(coordinates(id, 1), update.clone())
-        .await
-        .expect("context");
-    broker
-        .request_suggestion(
-            coordinates(id, 1),
-            SuggestRequestPayload {
-                fingerprint: update.fingerprint.clone(),
-                explicit: false,
-            },
-            None,
-        )
-        .await
-        .expect("request");
-    let BrokerEvent::SuggestionShow { payload, .. } =
-        timeout(Duration::from_millis(200), events.recv())
-            .await
-            .expect("deadline")
-            .expect("event")
-    else {
-        panic!("expected the first word")
-    };
-    broker
-        .session_control(
-            coordinates(id, 1),
-            SessionControlRequestPayload {
-                action: ControlAction::AcceptAll,
-                fingerprint: update.fingerprint,
-                suggestion_id: Some(payload.suggestion_id),
-            },
-            None,
-        )
-        .await
-        .expect("accept");
-    let BrokerEvent::CommitPrepare { payload, .. } =
-        timeout(Duration::from_millis(200), events.recv())
-            .await
-            .expect("deadline")
-            .expect("commit")
-    else {
-        panic!("expected commit of the first word")
-    };
-    assert_eq!(payload.text, " for");
-    sleep(Duration::from_millis(200)).await;
-    assert!(
-        matches!(events.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
-        "the rest of the continuation must not replace an accepted word"
+        "a withdrawn suggestion grants no edit"
     );
 }
 
@@ -788,7 +264,6 @@ async fn one_hundred_supersessions_never_show_or_commit_stale_text() {
     let (broker, session_id, mut events) = setup(
         provider,
         BrokerConfig {
-            debounce: Duration::ZERO,
             provider_timeout: Duration::from_secs(1),
             suggestion_ttl: Duration::from_secs(1),
             ..BrokerConfig::default()
@@ -872,7 +347,6 @@ async fn provider_timeout_explicitly_cancels_its_token() {
     let (broker, session_id, mut events) = setup(
         provider,
         BrokerConfig {
-            debounce: Duration::ZERO,
             provider_timeout: Duration::from_millis(5),
             ..BrokerConfig::default()
         },
@@ -911,13 +385,12 @@ async fn provider_timeout_explicitly_cancels_its_token() {
 }
 
 #[tokio::test]
-async fn generation_deadline_includes_debounce_and_cancels_late_work() {
+async fn generation_deadline_cancels_late_work() {
     let provider = std::sync::Arc::new(PendingProvider::new());
     let provider_view = std::sync::Arc::clone(&provider);
     let (broker, session_id, mut events) = setup(
         provider,
         BrokerConfig {
-            debounce: Duration::from_millis(2),
             provider_timeout: Duration::from_secs(1),
             generation_timeout: Duration::from_millis(8),
             ..BrokerConfig::default()
@@ -958,7 +431,6 @@ async fn shutdown_cancels_provider_work_and_removes_sessions() {
     let (broker, session_id, _events) = setup(
         provider,
         BrokerConfig {
-            debounce: Duration::ZERO,
             provider_timeout: Duration::from_secs(1),
             ..BrokerConfig::default()
         },
@@ -995,7 +467,6 @@ async fn provider_admission_is_global_nonblocking_and_released_on_shutdown() {
     let (broker, first_id, _first_events) = setup(
         provider,
         BrokerConfig {
-            debounce: Duration::ZERO,
             provider_timeout: Duration::from_secs(1),
             provider_concurrency: 1,
             ..BrokerConfig::default()
@@ -1035,8 +506,7 @@ async fn provider_admission_is_global_nonblocking_and_released_on_shutdown() {
                 activation: Activation::Always,
             },
             SessionAuthority {
-                protocol_version: 1,
-                adapter_kind: AdapterKind::Browser,
+                adapter_kind: AdapterKind::Test,
                 capabilities: vec![Capability::Context, Capability::Suggestion],
             },
             event_sink(second_sink),
@@ -1096,13 +566,7 @@ fn provider_admission_configuration_is_clamped_to_hard_bounds() {
 #[tokio::test]
 async fn full_event_queue_fails_connection_closed_without_phantom_suggestion() {
     let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
-    let broker = Broker::new(
-        provider,
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
-    );
+    let broker = Broker::new(provider, BrokerConfig::default());
     let session_id = SessionId::new();
     let initial_coordinates = coordinates(session_id, 0);
     let connection_lifetime = CancellationToken::new();
@@ -1130,8 +594,7 @@ async fn full_event_queue_fails_connection_closed_without_phantom_suggestion() {
                 activation: Activation::Always,
             },
             SessionAuthority {
-                protocol_version: 1,
-                adapter_kind: AdapterKind::Browser,
+                adapter_kind: AdapterKind::Test,
                 capabilities: vec![Capability::Context, Capability::Suggestion],
             },
             BrokerEventSink::new(sink, connection_lifetime.clone()),
@@ -1201,10 +664,7 @@ async fn escape_quiet_abstains_automatically_across_edits_until_asked() {
     let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
     let broker = Broker::with_control_plane(
         provider.clone(),
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
+        BrokerConfig::default(),
         std::sync::Arc::clone(&control_plane),
     )
     .expect("controlled broker");
@@ -1378,15 +838,16 @@ impl CompletionProvider for TriggerProvider {
         _cancellation: CancellationToken,
         _allow_replacement: bool,
         trigger: crate::provider::RequestTrigger,
-    ) -> Result<crate::provider::ProviderOutcome, ProviderError> {
+    ) -> Result<crate::provider::ProviderReply, ProviderError> {
         self.triggers.lock().expect("trigger log").push(trigger);
         sleep(self.delay).await;
-        Ok(crate::provider::ProviderOutcome::Proposal(
-            crate::provider::WritingProposal {
+        Ok(
+            crate::provider::ProviderOutcome::Proposal(crate::provider::WritingProposal {
                 text: format!(" revision {}", request.before),
                 replace_before: None,
-            },
-        ))
+            })
+            .into(),
+        )
     }
 }
 
@@ -1399,7 +860,6 @@ fn long_reading_window_is_opt_in_and_keeps_context_until_the_original_expiry() {
         AdapterKind::Terminal,
     ] {
         let mut authority = SessionAuthority {
-            protocol_version: 2,
             adapter_kind,
             capabilities: vec![Capability::Context, Capability::Suggestion],
         };
@@ -1416,19 +876,14 @@ fn long_reading_window_is_opt_in_and_keeps_context_until_the_original_expiry() {
             config.context_authority_lease_for(&authority, config.explicit_generation_timeout),
             Duration::from_millis(16_250)
         );
-        authority.protocol_version = 1;
-        assert_eq!(
-            config.suggestion_ttl_for(&authority),
-            Duration::from_millis(600)
-        );
     }
-    let browser = SessionAuthority {
-        protocol_version: 2,
-        adapter_kind: AdapterKind::Browser,
+    // A client without a reading window keeps the configured lease.
+    let other = SessionAuthority {
+        adapter_kind: AdapterKind::Test,
         capabilities: vec![Capability::LongReadingWindow],
     };
     assert_eq!(
-        config.suggestion_ttl_for(&browser),
+        config.suggestion_ttl_for(&other),
         Duration::from_millis(600)
     );
 }
@@ -1572,7 +1027,6 @@ async fn control_requests_and_explicit_probes_are_explicit() {
     );
 }
 
-#[cfg(feature = "local-model")]
 #[test]
 fn mid_sentence_space_before_a_word_survives_checked_proposal() {
     let before = "Please find the ";

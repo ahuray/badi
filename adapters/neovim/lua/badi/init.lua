@@ -46,11 +46,32 @@ local state = {
   -- it does, the broker keeps the input method's typed line out of the
   -- terminal, so these keys get one suggester (ADR 0009).
   holds_terminal = false,
+  -- The broker's policy for Neovim as the bridge last reported it while
+  -- connected: { allowed, automatic }, or nil until then. No buffer text is
+  -- read for a request it does not allow.
+  policy = nil,
   status = 'idle',
 }
 
 local function set_status(reason)
   if type(reason) == 'string' and reason:match('^[a-z_]+$') then state.status = reason end
+end
+
+--- Keeps the policy from a bridge report. Only a connected bridge's report
+--- decides; while offline the next request asks again, which reconnects.
+local function set_policy(report)
+  if report.connected == true and type(report.allowed) == 'boolean' then
+    state.policy = { allowed = report.allowed, automatic = report.allowed and report.automatic == true }
+  else
+    state.policy = nil
+  end
+end
+
+--- Why the known policy refuses a request, or nil when it allows it.
+local function policy_reason(explicit)
+  if not state.policy.allowed then return 'app_disabled_or_model_paused' end
+  if not explicit and not state.policy.automatic then return 'manual_required' end
+  return nil
 end
 
 local function bridge_command()
@@ -170,11 +191,13 @@ local function ensure_bridge()
         extend(message.text)
       elseif message.event == 'state' then
         set_status(message.state)
+        set_policy(message)
         if message.state == 'offline' or message.state == 'offline_retry' then invalidate(nil) end
       end
     end,
     on_exit = function()
       invalidate(nil)
+      state.policy = nil
       set_status('bridge_exited')
     end,
   })
@@ -252,15 +275,35 @@ function M.request(explicit)
     return
   end
   if not explicit and not state.config.automatic then return end
-  local s = snapshot()
-  local before, after = context.extract(s.buf, s.row, s.col)
-  if not before:find('%S') then return end
-  invalidate(nil)
   if not ensure_bridge() then
     set_status('bridge_unavailable')
     if explicit then api.nvim_echo({ { 'Badi: the Node bridge could not start; run badi doctor' } }, true, {}) end
     return
   end
+  -- Policy before acquisition: until the bridge has reported the policy,
+  -- ask it (a content-free status), then decide as if just requested.
+  if not state.policy then
+    local asked = state.generation
+    state.bridge:request({ op = 'status' }, function(reply)
+      if reply.ok then set_policy(reply) end
+      if state.generation ~= asked then return end
+      if state.policy then return M.request(explicit) end
+      local why = reply.ok and 'model_offline' or reply.reason
+      set_status(why)
+      if explicit then api.nvim_echo({ { 'Badi: ' .. tostring(why):gsub('_', ' ') } }, true, {}) end
+    end)
+    return
+  end
+  reason = policy_reason(explicit)
+  if reason then
+    set_status(reason)
+    if explicit then api.nvim_echo({ { 'Badi: ' .. reason:gsub('_', ' ') } }, true, {}) end
+    return
+  end
+  local s = snapshot()
+  local before, after = context.extract(s.buf, s.row, s.col)
+  if not before:find('%S') then return end
+  invalidate(nil)
   local generation = state.generation
   state.pending = { generation = generation, snapshot = s }
   set_status('thinking')
@@ -443,6 +486,8 @@ function M.status()
     visible = state.visible ~= nil,
     accepting = state.accepting,
     holds_terminal = state.holds_terminal,
+    policy = not state.policy and 'unknown' or not state.policy.allowed and 'refused'
+      or state.policy.automatic and 'automatic' or 'manual',
     blocked = not state.config and 'not_set_up' or blocked_reason(),
   }
 end

@@ -187,9 +187,11 @@ selection, editable, showing, defunct, role) are subscribed on a separate
 D-Bus connection, matched to that exact sender and path, so other fields'
 events never arrive. Their payloads, including typed text, are never unpacked.
 A bounds or visible-data event is a scroll that moves the preview. A text
-attributes event changes neither text nor caret and is ignored. Chromium's
-spellchecker sends one about 150 ms after a misspelled word, which used to end
-the suggestion for it, a correction above all.
+attributes event changes neither text nor caret and is ignored: Chromium's
+spellchecker sends one about 150 ms after a misspelled word, and it must not
+end the suggestion for that word, a correction above all. Each event the
+observer acts on is an operation with its own 350 ms budget, like a request;
+an unexpected failure ends the suggestion and logs only its class.
 
 ## Same-window context (Lab only)
 
@@ -209,7 +211,8 @@ prompts use no window context until the Lab shows it helps without harm
   node, a node that is not showing, or a nested `document web` (another
   frame, possibly another origin).
 - **Bounds.** A heading of at most 120 and a paragraph tail of at most 240
-  characters, cut at a word, embedded objects dropped and spacing collapsed.
+  characters, cut at a word, with embedded objects, format and control
+  characters handled as for window words and spacing collapsed.
 
 `python3 evaluation/writing/window-context.py APP_ID --delay 3` prints, for
 the focused field of an allowed web app, the window context and the text
@@ -234,43 +237,20 @@ a word in view, such as a name from the thread or a term from a coding session.
   embedded objects dropped, then its children's.
 - **Never read:** anything editable (another field, such as a subject line),
   a password, a node that is not showing, or a nested `document web`.
+- **Characters.** The addon refuses window text that holds a format or
+  control character, so format characters (Unicode Cf: a soft hyphen, the
+  zero-width joiner inside an emoji sequence, a byte-order mark, bidi
+  controls) are deleted, except a zero-width non-joiner between two Arabic
+  letters, and control characters become spaces.
 - **Bounds.** 2,000 characters, 400 nodes and 120 ms, always leaving 50 ms of
-  the operation's deadline, so a slow page shortens the text instead of
-  failing the snapshot. The text is spacing-collapsed and cut at a word.
+  the operation's deadline for the climb back to the document (two calls per
+  level, no more siblings), so a slow page shortens the text. A snapshot
+  that still overruns its 350 ms fails as `operation_timeout`. The text is
+  spacing-collapsed and cut at a word.
 
-The debug trace records only `window_text_chars`.
-
-Tested live on 2026-10-20 with installed `26f4366` in Chromium 154, on a
-disposable mail-style page (a thread, a To input, a reply field and three
-note fields):
-
-- **Window words.** The reply field's first snapshot read 385 characters of
-  the thread. "Hi Marin" showed "ella" from the thread, and Tab made
-  "Hi Marinella"; "Okonk" showed "wo".
-- **Never another field.** A name only in the To input was never offered.
-- **Learned words.** "Brightwater", written in two note fields, finished
-  "Brigh" in the reply as "twater", whose own text never had it.
-- **Per-site off.** `badi context site … off` stopped the window text,
-  stopped finishing words, and deleted the site's learned words.
-- **Panel.** It asked "Finish words from what you see?" while context was
-  unchosen; Turn on replaced the question with the switch and per-app rows.
-
-Retried on 2026-10-20 with installed `f180653` on the same page. Before
-that commit, Zen and Chromium-based apps never got window words: the walk
-looked for Chromium's `URI`, which Gecko leaves empty, and required a page
-address, which a Chromium-based app does not have.
-
-- **Zen 1.23.3b** (isolated profile): 197 characters of the thread; "Marin"
-  and "Okonk" finished as in Chromium (3 of 3).
-- **Brave Origin 1.97** (isolated profile, as a tab and as an `--app` web
-  app): names from the thread finished and Tab took them.
-- **VS Code 1.142** (isolated profile, a scratch Markdown file): 175
-  characters of window text, the explorer and tab labels. The names finished
-  from the draft, which VS Code's screen-reader textarea exposes several
-  lines of: "Okonk" showed "wo", "Koope" showed "rationsvereinbarung".
-
-A real mail client and the Claude desktop app are not yet tested
-([backlog](<../../future plans.md>)).
+The debug trace records only `window_text_chars`. Live results are in
+[Tested with](#tested-with); a real mail client and the Claude desktop app are
+not yet tested ([backlog](<../../future plans.md>)).
 
 ## Socket contract
 
@@ -279,8 +259,9 @@ A real mail client and the Claude desktop app are not yet tested
 same-user peers, one instance under an exclusive lock.
 
 - Frames are newline-terminated JSON lines of at most 16 KiB (64 KiB buffered).
-- Each operation has a 350 ms budget; AT-SPI calls time out after 50 ms and
-  Hyprland calls after 150 ms.
+- Each operation (a request, or a field event that moves the preview) has a
+  350 ms budget; AT-SPI calls time out after 50 ms and Hyprland calls after
+  150 ms.
 - One connection owns acquisition and preview; another gets `observer_busy`.
 - No typed text reaches logs or disk.
 
@@ -292,9 +273,9 @@ Requests carry `schema: "badi.accessibility.v1"`, an ASCII `id` and an `op`:
 
 | Op | Request adds | Reply `focus` adds |
 | --- | --- | --- |
-| `inspect` | `app_id` | `binding` `{epoch,bus,path,process_id,app_id,uri}`, `target` (browser targets keep the exact app id and origin; `target_id` hashes bus, path and epoch), `purpose`, `caret`, `selection_count`, `geometry: null`, optional `quiet` |
-| `snapshot` | `binding`, `policy_target`, optional `window: true` | `before`, `after`, `total_chars`, optional `scope: "block"`, optional `quiet`, with `window` an optional `window_text` |
-| `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–160 characters), `ttl_ms` (1–15000), optional `caret_rect` `{x,y,width,height,scale}` | `total_chars`, `rendered`, optional `quiet` |
+| `inspect` | `app_id`, optional `selection: true` | `binding` `{epoch,bus,path,process_id,app_id,uri}`, `target` (browser targets keep the exact app id and origin; `target_id` hashes bus, path and epoch), `purpose`, `caret`, `selection_count`, `geometry: null`, optional `quiet` |
+| `snapshot` | `binding`, `policy_target`, optional `window: true` or `selection: true` (never both) | `before`, `after`, `total_chars`, optional `scope: "block"`, optional `quiet`, with `window` an optional `window_text`, with `selection` the `selected` text ([selection](#selection-for-a-revision)) |
+| `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–66 characters: a suggestion of at most 64, or `→ ` and a correction), `ttl_ms` (1–15000), optional `caret_rect` `{x,y,width,height,scale}` | `total_chars`, `rendered`, optional `quiet` |
 
 `preview` compares the current caret and length with the expected ones before
 drawing. `hide` returns `hidden:true`; `status` returns readiness without
@@ -306,13 +287,14 @@ every failure except a malformed request or `observer_busy` hides the preview:
 
 | Error | Cause |
 | --- | --- |
-| `invalid_request`, `invalid_preview` | Malformed envelope, binding or preview |
+| `invalid_request`, `invalid_preview` | Malformed envelope (a duplicate key too), binding or preview |
 | `unsupported_app`, `app_mismatch` | No rule for the app id, or the active window is not that app |
 | `desktop_unavailable`, `desktop_locked` | Hyprland or the lock query failed, or a lock flag is set |
 | `focus_unavailable` | Not exactly one focused editable page field |
 | `origin_unavailable`, `unsupported_origin` | No readable address, or not HTTP(S) |
 | `sensitive_field`, `ineligible_field` | A password role or type; not focused, editable, showing, visible and enabled |
 | `unsupported_field`, `selection_present`, `invalid_caret` | Another role or HTML purpose, browser UI or an unresolvable rich editor; a selection; a bad caret |
+| `selection_absent`, `unsupported_selection` | With `selection`: not exactly one selection; a rich editor, a sentence-bounded app, or a selection across lines, blank or over 600 characters |
 | `tree_limit`, `invalid_text` | A search passed 192 nodes; control characters in the text |
 | `stale_binding`, `target_mismatch` | The field, epoch, position or text changed, or another policy target |
 | `operation_timeout`, `observer_busy`, `accessibility_unavailable` | Budget exceeded; another owner; AT-SPI failed |
@@ -398,11 +380,13 @@ line draws as that chip under the caret's line, never above it. Any other
 overflow uses the same chip wholly below or above the field, bounded by the
 window and monitor, so it does not cover controls beside the field. The
 chip's padding is a label margin, not CSS: GTK restyles a class toggled just
-before measuring only on the next frame, and on 2026-10-13 a chip measured
-12 px narrow crossed a Chromium textarea's edge. There is no title, key
+before measuring only on the next frame, so a CSS padding measured the chip
+12 px narrow and let it cross the field's edge. There is no title, key
 banner or selection highlight.
-Suggestions are at most 64 characters; one that fits nowhere returns
-`rendered: false` for the native single-candidate fallback. The surface takes
+One rule (`contract.suggestion_text`) checks the preview text when the
+request arrives, and the overlay checks it and the 15-second lease bound
+again before drawing; text that fits nowhere returns `rendered: false` for
+the native single-candidate fallback. The surface takes
 no input or focus, and any invalidation, new render or expiry hides it. The
 preview accepts the broker's remaining lease up to 15 seconds; scrolling
 repositions it with only the remaining time and never renews it. The
@@ -477,14 +461,21 @@ npm run accessibility:integration   # private D-Bus and XDG environments
 ```
 
 The source tests cover privacy gates, quiet facts, malformed frames, identity rules, epochs,
-stale snapshots, bounded Unicode reads, rich-editor flattening, calibration
-against recorded live extents, the preview lifecycle and the lock query. The
-integration lane proves that other senders and fields cannot deliver events and
-that invalidation unsubscribes the authorized field.
+stale snapshots, bounded Unicode reads and window-text characters,
+rich-editor flattening, calibration against recorded live extents, the
+preview lifecycle, field events under the real operation deadline and the
+lock query. The integration lane proves that other senders and fields cannot
+deliver events and that invalidation unsubscribes the authorized field.
 
-On 2026-10-13 a disposable GTK layer-shell fixture on this workstation at
-scale 2 rendered both inline and field-edge overflow previews. Captures showed
-the grey overflow wholly below the field without covering its neighboring
-button; it stayed visible beyond six seconds and hid after its 15-second
-lease without renewal. This checks the real renderer, not application editing
-or fractional-scale behavior.
+### Tested with
+
+Live on the development workstation (Arch Linux, Hyprland 0.56) with
+disposable text in isolated profiles; the
+[Fcitx matrix](../fcitx5/README.md#tested-with) has suggestion and
+acceptance results per app.
+
+| What (installed commit, date) | Result | Boundary |
+| --- | --- | --- |
+| Window words, Chromium 154 (`26f4366`, 2026-10-20), a disposable mail-style page | The reply field read 385 characters of the thread; "Marin" finished as "Marinella" and "Okonk" as "Okonkwo"; a name only in the To input was never offered; a word learned in two note fields finished in the reply; `badi context site … off` stopped window text and learned words; the panel asked before context was chosen | Not a real mail client or the Claude desktop app |
+| Window words, Zen 1.23.3b, Brave Origin 1.97 (tab and `--app`), VS Code 1.142 (`f180653`, 2026-10-20) | Zen read 197 characters and finished 3 of 3; Brave finished names from the thread; VS Code read 175 characters (explorer and tab labels) and finished names from its screen-reader textarea | Isolated profiles, one page or scratch file each |
+| Preview renderer, GTK layer-shell fixture at scale 2 (2026-10-13) | Inline and field-edge overflow drawn; the overflow stayed wholly below the field, clear of its neighbouring button, and hid after its 15 s lease without renewal | The real renderer, not app editing or fractional scales |

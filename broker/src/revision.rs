@@ -6,7 +6,6 @@
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
-#[cfg(feature = "local-model")]
 pub mod runtime;
 pub mod service;
 
@@ -46,7 +45,7 @@ impl RevisionMode {
 
 /// A language a revision is offered in, with the one worked example the
 /// model sees. An example in another language made the model answer in that
-/// language (2026-10-23: Spanish and English input came back in German).
+/// language.
 #[derive(Debug)]
 pub struct RevisionLanguage {
     pub tag: &'static str,

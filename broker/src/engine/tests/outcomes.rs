@@ -16,10 +16,7 @@ async fn broker_records_only_content_free_shown_and_dismissed_aggregates() {
         .expect("allow aggregate recording");
     let broker = Broker::with_control_plane(
         std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
+        BrokerConfig::default(),
         std::sync::Arc::clone(&control_plane),
     )
     .expect("controlled broker");
@@ -109,10 +106,7 @@ async fn memory_clear_detaches_live_suggestions_from_deleted_aggregates() {
         .expect("allow aggregate recording");
     let broker = Broker::with_control_plane(
         std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
+        BrokerConfig::default(),
         control_plane,
     )
     .expect("controlled broker");
@@ -198,10 +192,7 @@ async fn runtime_pause_ack_fences_pre_pause_outcome_writes() {
         .expect("allow aggregate recording");
     let broker = Broker::with_control_plane(
         std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
+        BrokerConfig::default(),
         std::sync::Arc::clone(&control_plane),
     )
     .expect("controlled broker");
@@ -240,7 +231,7 @@ async fn runtime_pause_ack_fences_pre_pause_outcome_writes() {
         Ok(Some(BrokerEvent::SuggestionShow { .. }))
     ));
 
-    assert!(broker.set_paused(true).await.expect("pause"));
+    assert!(broker.set_paused(true).await);
     let fenced = control_plane.snapshot().expect("direct aggregate snapshot");
     assert_eq!(fenced.personalization.records[0].shown, 1);
     assert_eq!(broker.outcome_recorder_health().write_failures, 0);
@@ -367,6 +358,14 @@ async fn stalled_memory_clear_is_bounded_and_never_blocks_suggestion_state() {
         timeout(Duration::from_millis(10), full.clear_personalization()).await,
         Ok(Err(BrokerError::ControlPlaneUnavailable))
     ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pause_whose_outcome_fence_times_out_still_reports_the_pause() {
+    let (broker, _commands) = broker_with_stalled_recorder(4);
+    // Reporting a failure here would invite a retried toggle to resume.
+    assert!(broker.toggle_paused().await);
+    assert!(broker.is_paused().await);
 }
 
 #[tokio::test]

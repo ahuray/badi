@@ -17,6 +17,7 @@ static double now(void) {
 int main(int argc, char **argv) {
     size_t mib = argc > 1 ? strtoul(argv[1], 0, 10) : 1024;
     int reps = argc > 2 ? atoi(argv[2]) : 7;
+    if (reps < 1 || reps > 64) reps = reps < 1 ? 1 : 64;  // samples[] holds 64
     size_t bytes = mib << 20, n = bytes / 32;
     __m256i *buf = aligned_alloc(64, bytes);
     if (!buf) return 1;
@@ -25,7 +26,7 @@ int main(int argc, char **argv) {
     for (int a = 3; a < argc; a++) {
         int threads = atoi(argv[a]);
         double best = 0, samples[64];
-        for (int r = 0; r < reps && r < 64; r++) {
+        for (int r = 0; r < reps; r++) {
             __m256i total = _mm256_setzero_si256();
             double t0 = now();
 #pragma omp parallel num_threads(threads)

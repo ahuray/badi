@@ -27,9 +27,7 @@ use crate::provider::{
     ProviderError, ProviderOutcome, ProviderReply, ProviderRequest, ProviderStats, RequestTrigger,
     WritingProposal,
 };
-use crate::segment::{
-    accept_word, ends_at_word_boundary, sanitize_suggestion, validate_suggestion_shape,
-};
+use crate::segment::{accept_word, sanitize_suggestion, validate_suggestion_shape};
 use crate::settings::{SettingsV2, StableIdentity};
 use crate::stats::StatsEvent;
 
@@ -82,10 +80,6 @@ enum Withheld {
     Clear(ReasonCode),
     /// The provider honored a cancellation; whatever superseded it owns the display.
     Silently,
-    /// A rejected or late final leaves the streamed partial already shown:
-    /// it was checked before display and counts as shown, not as a miss.
-    /// Only an edit, focus change, Escape or expiry withdraws it.
-    KeepPartial,
 }
 
 impl Broker {
@@ -269,7 +263,7 @@ impl Broker {
             aggregate_day,
         };
         let cancellation = CancellationToken::new();
-        self.show_if_current(state, binding, &cancellation, proposal, Some(carried), true);
+        self.show_if_current(state, binding, &cancellation, proposal, Some(carried));
         Ok(())
     }
 
@@ -315,7 +309,7 @@ impl Broker {
         // return path, including cancellation and timeout.
         let _provider_permit = provider_permit;
         let shutdown = &self.inner.shutdown;
-        let delay = self.inner.config.debounce + start_delay;
+        let delay = start_delay;
         if delay != Duration::ZERO {
             tokio::select! {
                 () = time::sleep(delay) => {}
@@ -345,166 +339,79 @@ impl Broker {
         });
         let provider_deadline = Instant::now() + self.inner.config.provider_timeout_for(trigger);
         let deadline = binding.deadline.min(provider_deadline);
-        let stream_partials = request.after.is_empty();
-        let (partial_tx, mut partial_rx) = tokio::sync::mpsc::unbounded_channel();
         let provider = time::timeout_at(
             deadline.into(),
-            self.inner.provider.propose_outcome_with_partials(
+            self.inner.provider.propose_outcome(
                 request,
                 cancellation.clone(),
                 allow_replacement,
                 trigger,
-                stream_partials.then_some(partial_tx),
             ),
         );
-        tokio::pin!(provider);
-        let mut shown_partial = None;
-        let mut carried = None;
-        let mut partials_open = stream_partials;
-        loop {
-            tokio::select! {
-                biased;
-                () = cancellation.cancelled() => {
-                    if shown_partial.is_none() {
-                        self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
-                    }
-                    // The provider future is dropped here, so its counts are
-                    // gone; a shown partial proves a first token arrived.
-                    trace_model_done(&binding, started, "cancelled", None, None,
-                        shown_partial.is_none());
-                    return;
-                }
-                () = shutdown.cancelled() => {
-                    if shown_partial.is_none() {
-                        self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
-                    }
-                    trace_model_done(&binding, started, "shutdown", None, None,
-                        shown_partial.is_none());
-                    return;
-                }
-                partial = partial_rx.recv(), if partials_open => {
-                    match partial {
-                        Some(text) => {
-                            let extends = shown_partial.as_deref().is_none_or(|previous: &str| {
-                                text != previous && text.starts_with(previous)
-                            });
-                            if !extends {
-                                continue;
-                            }
-                            let Some(proposal) = checked_proposal(
-                                self.inner.provider_kind,
-                                &binding.before,
-                                &binding.after,
-                                WritingProposal { text: text.clone(), replace_before: None },
-                            ) else {
-                                continue;
-                            };
-                            let state = self.inner.state.lock().await;
-                            if let Some(updated) = self.show_if_current(
-                                state,
-                                binding.clone(),
-                                &cancellation,
-                                proposal,
-                                carried,
-                                false,
-                            ) {
-                                carried = Some(updated);
-                                shown_partial = Some(text);
-                            }
-                        }
-                        None => partials_open = false,
-                    }
-                }
-                result = &mut provider => {
-                    let (outcome, text, stats) = match &result {
-                        Ok(Ok(ProviderReply {
-                            outcome: ProviderOutcome::Proposal(raw),
-                            stats,
-                        })) => ("proposal".to_owned(), Some(raw.text.as_str()), *stats),
-                        Ok(Ok(ProviderReply {
-                            outcome: ProviderOutcome::NoSuggestion(reason),
-                            stats,
-                        })) => (trace_name(reason), None, *stats),
-                        Ok(Err(ProviderError::Cancelled)) => {
-                            ("cancelled".to_owned(), None, None)
-                        }
-                        Ok(Err(ProviderError::Unavailable)) => {
-                            ("unavailable".to_owned(), None, None)
-                        }
-                        Err(_) => ("timeout".to_owned(), None, None),
-                    };
-                    let cancelled_before_first_token = matches!(
-                        outcome.as_str(), "cancelled" | "timeout")
-                        && stats.is_none_or(|stats| stats.ttft.is_none())
-                        && shown_partial.is_none();
-                    trace_model_done(&binding, started, &outcome, text, stats.as_ref(),
-                        cancelled_before_first_token);
-                    self.finish_generation(binding, &cancellation, result, shown_partial, carried)
-                        .await;
-                    return;
-                }
+        let result = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {
+                self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
+                // The provider future is dropped here, and its counts with it.
+                trace_model_done(&binding, started, "cancelled", None, None, true);
+                return;
             }
-        }
+            () = shutdown.cancelled() => {
+                self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
+                trace_model_done(&binding, started, "shutdown", None, None, true);
+                return;
+            }
+            result = provider => result,
+        };
+        let (outcome, text, stats) = match &result {
+            Ok(Ok(ProviderReply {
+                outcome: ProviderOutcome::Proposal(raw),
+                stats,
+            })) => ("proposal".to_owned(), Some(raw.text.as_str()), *stats),
+            Ok(Ok(ProviderReply {
+                outcome: ProviderOutcome::NoSuggestion(reason),
+                stats,
+            })) => (trace_name(reason), None, *stats),
+            Ok(Err(ProviderError::Cancelled)) => ("cancelled".to_owned(), None, None),
+            Ok(Err(ProviderError::Unavailable)) => ("unavailable".to_owned(), None, None),
+            Err(_) => ("timeout".to_owned(), None, None),
+        };
+        let cancelled_before_first_token = matches!(outcome.as_str(), "cancelled" | "timeout")
+            && stats.is_none_or(|stats| stats.ttft.is_none());
+        trace_model_done(
+            &binding,
+            started,
+            &outcome,
+            text,
+            stats.as_ref(),
+            cancelled_before_first_token,
+        );
+        self.finish_generation(binding, &cancellation, result).await;
     }
 
-    /// Every path records exactly one no-suggestion class or one shown
-    /// result, except a finished generation whose streamed partial stays:
-    /// that partial already recorded the shown result.
+    /// Every path records exactly one no-suggestion class or one shown result.
     async fn finish_generation(
         &self,
         binding: GenerationBinding,
         cancellation: &CancellationToken,
         result: ProviderResult,
-        shown_partial: Option<String>,
-        carried: Option<Carried>,
     ) {
-        let keep_partial = shown_partial.as_deref().is_some_and(ends_at_word_boundary);
-        let proposal =
-            match self.check_provider_result(&binding, cancellation, result, keep_partial) {
-                Ok(proposal) => proposal,
-                Err(Withheld::Clear(reason)) => {
-                    return self.clear_failed_generation(binding, reason).await;
-                }
-                Err(Withheld::Silently) => return,
-                Err(Withheld::KeepPartial) => {
-                    self.release_finished_generation(&binding).await;
-                    return;
-                }
-            };
-        if shown_partial
-            .as_ref()
-            .is_some_and(|shown| shown == &proposal.text)
-        {
-            self.release_finished_generation(&binding).await;
-            return;
-        }
+        let proposal = match self.check_provider_result(&binding, cancellation, result) {
+            Ok(proposal) => proposal,
+            Err(Withheld::Clear(reason)) => {
+                return self.clear_failed_generation(binding, reason).await;
+            }
+            Err(Withheld::Silently) => return,
+        };
         let state = self.inner.state.lock().await;
         if Instant::now() >= binding.deadline {
             drop(state);
-            // The extension is late, but the partial is already the shown
-            // suggestion; dropping the extension must not withdraw it.
-            if keep_partial {
-                self.release_finished_generation(&binding).await;
-                return;
-            }
             self.record_generation_timeout(cancellation);
             return self
                 .clear_failed_generation(binding, ReasonCode::ProviderTimeout)
                 .await;
         }
-        self.show_if_current(state, binding, cancellation, proposal, carried, true);
-    }
-
-    /// The stream finished on text already shown. Drop its cancel token without
-    /// withdrawing that suggestion or counting it again.
-    async fn release_finished_generation(&self, binding: &GenerationBinding) {
-        let mut state = self.inner.state.lock().await;
-        let Some(session) = state.sessions.get_mut(&binding.coordinates.session_id) else {
-            return;
-        };
-        if session.generation == binding.generation && session.coordinates == binding.coordinates {
-            session.cancellation = None;
-        }
+        self.show_if_current(state, binding, cancellation, proposal, None);
     }
 
     fn check_provider_result(
@@ -512,14 +419,9 @@ impl Broker {
         binding: &GenerationBinding,
         cancellation: &CancellationToken,
         result: ProviderResult,
-        keep_partial: bool,
     ) -> Result<WritingProposal, Withheld> {
         let metrics = &self.inner.metrics;
         if Instant::now() >= binding.deadline {
-            if keep_partial {
-                cancellation.cancel();
-                return Err(Withheld::KeepPartial);
-            }
             self.record_generation_timeout(cancellation);
             return Err(Withheld::Clear(ReasonCode::ProviderTimeout));
         }
@@ -532,13 +434,6 @@ impl Broker {
                 outcome: ProviderOutcome::NoSuggestion(reason),
                 ..
             })) => {
-                // The provider's own rejection of its whole output (the
-                // local model's `validate_proposal`, reported here rather
-                // than as a proposal) must not withdraw a partial it had
-                // already streamed and the broker had checked and shown.
-                if keep_partial {
-                    return Err(Withheld::KeepPartial);
-                }
                 metrics.record_no_suggestion(reason);
                 return Err(Withheld::Clear(ReasonCode::NoSuggestion));
             }
@@ -552,10 +447,6 @@ impl Broker {
                 return Err(Withheld::Clear(ReasonCode::ProviderError));
             }
             Err(_elapsed) => {
-                if keep_partial {
-                    cancellation.cancel();
-                    return Err(Withheld::KeepPartial);
-                }
                 self.record_generation_timeout(cancellation);
                 return Err(Withheld::Clear(ReasonCode::ProviderTimeout));
             }
@@ -572,9 +463,6 @@ impl Broker {
             )
         };
         checked.ok_or_else(|| {
-            if keep_partial {
-                return Withheld::KeepPartial;
-            }
             metrics.record_provider_error();
             metrics.record_no_suggestion(NoSuggestionReason::OutputRejected);
             Withheld::Clear(ReasonCode::InvalidOutput)
@@ -589,6 +477,9 @@ impl Broker {
             .record_no_suggestion(NoSuggestionReason::Timeout);
     }
 
+    /// Shows `proposal` if the session still awaits exactly this generation
+    /// and still lets it display; `carried` is the type-through remainder's
+    /// original expiry and aggregate.
     #[allow(clippy::too_many_lines)]
     fn show_if_current(
         &self,
@@ -597,25 +488,15 @@ impl Broker {
         cancellation: &CancellationToken,
         proposal: WritingProposal,
         carried: Option<Carried>,
-        settle: bool,
-    ) -> Option<Carried> {
+    ) {
         let metrics = &self.inner.metrics;
         let settings_revision = state.settings_revision;
         let Some(session) = session_awaiting(&mut state, &binding, cancellation) else {
-            if settle {
-                metrics.record_stale_result();
-                metrics.record_no_suggestion(NoSuggestionReason::Stale);
-            }
-            return None;
+            metrics.record_stale_result();
+            metrics.record_no_suggestion(NoSuggestionReason::Stale);
+            return;
         };
-        // A commit or dismissal already took the suggestion. A later word must
-        // not replace it.
-        if !settle && session.pending.is_some() {
-            return None;
-        }
-        if settle {
-            session.cancellation = None;
-        }
+        session.cancellation = None;
         let GenerationBinding {
             coordinates,
             fingerprint,
@@ -635,7 +516,7 @@ impl Broker {
                 ReasonCode::NoSuggestion,
                 request_id,
             ));
-            return None;
+            return;
         }
         if proposal.replace_before.is_some() && !session.allows_text_replacement() {
             metrics.record_provider_error();
@@ -646,7 +527,7 @@ impl Broker {
                 ReasonCode::InvalidCapability,
                 request_id,
             ));
-            return None;
+            return;
         }
         let now = Instant::now();
         let full_ttl = self.inner.config.suggestion_ttl_for(&session.authority);
@@ -663,7 +544,7 @@ impl Broker {
                 ReasonCode::ProviderTimeout,
                 request_id,
             ));
-            return None;
+            return;
         }
         let show = BrokerEvent::SuggestionShow {
             coordinates,
@@ -672,7 +553,7 @@ impl Broker {
         };
         if session.sink.send(show).is_err() {
             metrics.record_no_suggestion(NoSuggestionReason::Stale);
-            return None;
+            return;
         }
         // A carried remainder is the same suggestion, not another show.
         if carried.is_none() {
@@ -701,26 +582,8 @@ impl Broker {
             expires_at,
             aggregate_day,
         });
-        let earlier = session.visible.take().map_or_else(Vec::new, |previous| {
-            if previous.expires_at == expires_at
-                && previous.payload.fingerprint == payload.fingerprint
-                && previous.payload.replace_before.is_none()
-                && payload.replace_before.is_none()
-                && payload.text.len() > previous.payload.text.len()
-                && payload.text.starts_with(&previous.payload.text)
-            {
-                // Each version adds at least one character, so the protocol's
-                // 64-character suggestion limit also bounds this collection.
-                let mut earlier = previous.earlier;
-                earlier.push(previous.payload);
-                earlier
-            } else {
-                Vec::new()
-            }
-        });
         session.visible = Some(VisibleSuggestion {
             payload,
-            earlier,
             expires_at,
             request_id,
             aggregate_day,
@@ -735,10 +598,6 @@ impl Broker {
                 .expire_suggestion(coordinates, generation, suggestion_id)
                 .await;
         });
-        Some(Carried {
-            expires_at,
-            aggregate_day,
-        })
     }
 
     fn suggestion_payload(
@@ -813,8 +672,6 @@ impl Broker {
     }
 }
 
-/// The carried remainder for this admitted request (ADR 0004), or the gate
-/// that declined the carry. Both are `None` when no carry exists.
 /// A metrics class as the trace names it: its `snake_case` wire name.
 fn trace_name(class: impl serde::Serialize) -> String {
     serde_json::to_value(class)
@@ -878,6 +735,8 @@ fn trace_model_done(
     });
 }
 
+/// The carried remainder for this admitted request (ADR 0004), or the gate
+/// that declined the carry. Both are `None` when no carry exists.
 fn consult_carry(
     carry: Option<&TypeThrough>,
     scope: &CarryScope,
@@ -919,8 +778,6 @@ fn session_awaiting<'state>(
     is_current.then_some(session)
 }
 
-/// Display-side safety and shape checks shared by generation and diagnostic
-/// probes. A replacement must own the exact typed suffix at a word boundary.
 /// The text after the caret as the provider is asked about it: after letters
 /// typed at a word start, as if a space already followed them;
 /// [`separated_proposal`] ends the suggestion with that space.
@@ -952,6 +809,8 @@ fn separated_proposal(
         })
 }
 
+/// Display-side safety and shape checks shared by generation and diagnostic
+/// probes. A replacement must own the exact typed suffix at a word boundary.
 pub(super) fn checked_proposal(
     provider_kind: ProviderKind,
     before: &str,
@@ -985,7 +844,6 @@ pub(super) fn checked_proposal(
     })
 }
 
-#[cfg(feature = "local-model")]
 fn continuation_shape_valid(
     provider_kind: ProviderKind,
     before: &str,
@@ -997,16 +855,6 @@ fn continuation_shape_valid(
     } else {
         validate_suggestion_shape(before, after, text).is_ok()
     }
-}
-
-#[cfg(not(feature = "local-model"))]
-fn continuation_shape_valid(
-    _provider_kind: ProviderKind,
-    before: &str,
-    after: &str,
-    text: &str,
-) -> bool {
-    validate_suggestion_shape(before, after, text).is_ok()
 }
 
 /// Counts and maps a request's policy decision; only `Allow` admits it.

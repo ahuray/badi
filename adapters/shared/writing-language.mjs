@@ -12,3 +12,8 @@ export function writingLanguage(before, preferred) {
       lastLetter && /\p{Script=Arabic}/u.test(lastLetter)) return 'fa';
   return language;
 }
+
+// A bridge's language hint: the editor's own choice, else $BADI_LANGUAGE,
+// else the process locale.
+export const bridgeLanguage = (before, preferred) => writingLanguage(before,
+  preferred ?? process.env.BADI_LANGUAGE ?? Intl.DateTimeFormat().resolvedOptions().locale);

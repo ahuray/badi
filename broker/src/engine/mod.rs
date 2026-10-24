@@ -76,9 +76,9 @@ const MAX_CONFIGURED_SUGGESTION_TTL_MS: u64 = 600;
 
 #[derive(Clone, Copy, Debug)]
 pub struct BrokerConfig {
-    pub debounce: Duration,
     pub provider_timeout: Duration,
-    /// Includes broker debounce; late output is never displayed with a fresh TTL.
+    /// From admission to display; late output is never displayed with a
+    /// fresh TTL.
     pub generation_timeout: Duration,
     /// `generation_timeout` for explicit requests; never shorter than it.
     pub explicit_generation_timeout: Duration,
@@ -168,10 +168,9 @@ impl BrokerConfig {
 
 impl Default for BrokerConfig {
     fn default() -> Self {
+        // Adapters own user-idle timing; the broker adds no debounce of its
+        // own, which would only consume the input-to-visible budget.
         Self {
-            // Adapters own user-idle acquisition timing. A second production
-            // debounce here only consumes the single input-to-visible budget.
-            debounce: Duration::ZERO,
             provider_timeout: Duration::from_millis(1_300),
             generation_timeout: Duration::from_millis(MAX_GENERATION_TIMEOUT_MS),
             explicit_generation_timeout: Duration::from_millis(MAX_EXPLICIT_GENERATION_TIMEOUT_MS),
@@ -186,7 +185,6 @@ impl Default for BrokerConfig {
 
 #[derive(Clone, Debug)]
 pub struct SessionAuthority {
-    pub protocol_version: u8,
     pub adapter_kind: AdapterKind,
     pub capabilities: Vec<Capability>,
 }
@@ -196,19 +194,18 @@ impl SessionAuthority {
         self.capabilities.contains(&capability)
     }
 
-    /// Protocol v2 native panels and editors give the user a human reading
-    /// window; protocol v1 keeps its configured lease. Revision and focus
-    /// guards still revoke both.
+    /// Native panels and editors give the user a human reading window;
+    /// other clients keep the configured lease. Revision and focus guards
+    /// still revoke both.
     fn has_reading_window(&self) -> bool {
-        self.protocol_version == 2
-            && matches!(
-                self.adapter_kind,
-                AdapterKind::Fcitx
-                    | AdapterKind::Obsidian
-                    | AdapterKind::Terminal
-                    | AdapterKind::Neovim
-                    | AdapterKind::Libreoffice
-            )
+        matches!(
+            self.adapter_kind,
+            AdapterKind::Fcitx
+                | AdapterKind::Obsidian
+                | AdapterKind::Terminal
+                | AdapterKind::Neovim
+                | AdapterKind::Libreoffice
+        )
     }
 }
 
@@ -404,9 +401,6 @@ impl EscapeQuiet {
 
 struct VisibleSuggestion {
     payload: SuggestionShowPayload,
-    /// Immutable shorter versions of this growing continuation. They share
-    /// this generation and its original expiry, never another field/revision.
-    earlier: Vec<SuggestionShowPayload>,
     expires_at: Instant,
     request_id: Option<String>,
     /// The day of the recorded `Shown` aggregate this suggestion belongs to.
@@ -521,15 +515,14 @@ impl Broker {
             .min(MAX_SAFE_COUNTER)
     }
 
-    /// Releases the state lock, then announces its authority epoch to every
-    /// policy connection.
+    /// Announces the state's authority epoch to every policy connection,
+    /// then releases the state lock. Sending under the lock (it never
+    /// blocks) keeps the announcements in epoch order.
     fn publish_authority_change(&self, mut state: MutexGuard<'_, BrokerState>) {
         // Derived text never outlives the authority it was shown under.
         state.type_through = None;
         state.word_start = None;
-        let event = state.authority_changed();
-        drop(state);
-        let _ = self.inner.authority_events.send(event);
+        let _ = self.inner.authority_events.send(state.authority_changed());
     }
 }
 

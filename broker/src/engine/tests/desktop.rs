@@ -174,8 +174,7 @@ async fn open(broker: &Broker) -> Result<(SessionId, mpsc::Receiver<BrokerEvent>
                 activation: Activation::Always,
             },
             SessionAuthority {
-                protocol_version: 2,
-                adapter_kind: AdapterKind::Browser,
+                adapter_kind: AdapterKind::Test,
                 capabilities: vec![
                     Capability::Context,
                     Capability::Suggestion,

@@ -158,47 +158,6 @@ fn all_web_origins_allows_unlisted_web_origins_but_exact_rules_win() {
 }
 
 #[test]
-fn legacy_browser_clients_neither_see_nor_erase_the_all_web_default() {
-    let mut current = settings_with(SubjectRule {
-        identity: StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite").expect("app"),
-        permissions: super::ALL_WEB_ORIGINS_PERMISSIONS,
-    });
-    current.all_web_origins = true;
-    current.mid_line = true;
-    current.escape_quiet_seconds = 60;
-    current
-        .language_overrides
-        .insert("omawrite".to_owned(), super::PredictionLanguage::German);
-    // Suggestions turned off for every language must stay off.
-    current.writing_languages = Vec::new();
-    current.writing_model = Some("gemma-3-1b-pt-q4_k_m.gguf".to_owned());
-    current
-        .trailing_space_healing
-        .insert(super::PredictionLanguage::German, false);
-    let legacy = current.wire_document(1).expect("v1 wire document");
-    assert!(legacy.get("all_web_origins").is_none());
-    assert_eq!(legacy["subjects"], serde_json::json!([]));
-    let next: SettingsV2 = serde_json::from_value(legacy).expect("legacy replacement");
-    assert!(!next.all_web_origins);
-    let merged = next.preserving_v2_policy_from(&current);
-    assert!(merged.all_web_origins);
-    assert_eq!(merged.subjects, current.subjects);
-    assert_eq!(merged.language_overrides, current.language_overrides);
-    assert_eq!(merged.mid_line, current.mid_line);
-    assert_eq!(merged.escape_quiet_seconds, current.escape_quiet_seconds);
-    assert_eq!(merged.writing_languages, current.writing_languages);
-    assert_eq!(merged.writing_model, current.writing_model);
-    assert_eq!(
-        merged.trailing_space_healing,
-        current.trailing_space_healing
-    );
-    assert_eq!(
-        current.wire_document(2).expect("v2 wire document")["all_web_origins"],
-        true
-    );
-}
-
-#[test]
 fn escape_quiet_seconds_round_trips_bounds_and_rejects_v1() {
     let mut settings = settings_with(SubjectRule {
         identity: identity("mail.example"),
@@ -315,7 +274,7 @@ fn battery_mode_round_trips_omits_quiet_and_rejects_v1() {
 }
 
 #[test]
-fn screen_share_round_trips_omits_hold_and_survives_a_v1_write() {
+fn screen_share_round_trips_and_omits_hold() {
     let mut settings = settings_with(SubjectRule {
         identity: identity("mail.example"),
         permissions: allowed(None),
@@ -337,10 +296,6 @@ fn screen_share_round_trips_omits_hold_and_survives_a_v1_write() {
         ScreenShareMode::Hold
     );
 
-    // A protocol v1 client manages browser origins only and keeps the choice.
-    let v1_write = SettingsV2::deny_by_default().preserving_v2_policy_from(&settings);
-    assert_eq!(v1_write.screen_share, ScreenShareMode::Suggest);
-
     let legacy = serde_json::json!({
         "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
         "screen_share": "hold", "subjects": [],
@@ -359,7 +314,7 @@ fn screen_share_round_trips_omits_hold_and_survives_a_v1_write() {
 }
 
 #[test]
-fn suggestion_length_round_trips_omits_normal_and_survives_a_v1_write() {
+fn suggestion_length_round_trips_and_omits_normal() {
     let mut settings = settings_with(SubjectRule {
         identity: identity("mail.example"),
         permissions: allowed(None),
@@ -384,10 +339,6 @@ fn suggestion_length_round_trips_omits_normal_and_survives_a_v1_write() {
     assert_eq!(decoded.suggestion_length, SuggestionLength::Normal);
     assert_eq!(SuggestionLength::Normal.max_words(), 4);
 
-    // A protocol v1 client manages browser origins only and keeps the length.
-    let v1_write = SettingsV2::deny_by_default().preserving_v2_policy_from(&settings);
-    assert_eq!(v1_write.suggestion_length, SuggestionLength::Short);
-
     let legacy = serde_json::json!({
         "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
         "suggestion_length": "short", "subjects": [],
@@ -411,7 +362,7 @@ fn suggestion_length_round_trips_omits_normal_and_survives_a_v1_write() {
 }
 
 #[test]
-fn the_language_answer_round_trips_omits_false_and_survives_a_v1_write() {
+fn the_language_answer_round_trips_and_omits_false() {
     let mut settings = settings_with(SubjectRule {
         identity: identity("mail.example"),
         permissions: allowed(None),
@@ -427,11 +378,6 @@ fn the_language_answer_round_trips_omits_false_and_survives_a_v1_write() {
     assert_eq!(encoded["languages_chosen"], true);
     let decoded: SettingsV2 = serde_json::from_value(encoded).expect("decode settings");
     assert_eq!(decoded, settings);
-    let v1_write = SettingsV2::deny_by_default().preserving_v2_policy_from(&settings);
-    assert!(
-        v1_write.languages_chosen,
-        "a protocol v1 client keeps the answer"
-    );
     let legacy = serde_json::json!({
         "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
         "languages_chosen": true, "subjects": [],
@@ -802,7 +748,7 @@ fn maximum_shape_settings_fit_storage_and_wire_limits() {
     assert!(stored.len() <= MAX_SETTINGS_BYTES);
 
     let wire_value = serde_json::json!({
-        "v": 1,
+        "v": 2,
         "id": "x".repeat(128),
         "type": "settings.replace",
         "mono_ms": crate::protocol::MAX_SAFE_COUNTER,

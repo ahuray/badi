@@ -7,8 +7,11 @@ tests_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$tests_dir/process-group.sh"
 artifact_dir=$(cd -- "$tests_dir/.." && pwd)
 harness_source="$tests_dir/client-harness/shell.qml"
+schema="$artifact_dir/../../broker/schemas/badi.settings.v2.schema.json"
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/badi-client-lifecycle.XXXXXX")
 harness_dir="$test_root/harness"
+panel_dir="$test_root/panel"
+settings_extra="$test_root/settings-extra.json"
 runtime_dir="$test_root/runtime"
 call_log="$test_root/badictl.calls"
 pid_log="$test_root/badictl.pids"
@@ -39,11 +42,14 @@ command -v qs >/dev/null 2>&1 || {
   exit 1
 }
 
-mkdir -p "$harness_dir" "$runtime_dir" "$test_root/config" "$test_root/cache" \
+mkdir -p "$harness_dir" "$panel_dir" "$runtime_dir" "$test_root/config" "$test_root/cache" \
   "$test_root/data" "$test_root/state"
 chmod 700 "$runtime_dir" "$test_root/config"
 cp -- "$harness_source" "$harness_dir/shell.qml"
 cp -- "$artifact_dir/BadiClient.qml" "$harness_dir/BadiClient.qml"
+cp -- "$tests_dir/panel-harness/shell.qml" "$panel_dir/shell.qml"
+cp -- "$artifact_dir/BadiClient.qml" "$artifact_dir/DesktopPanel.qml" \
+  "$artifact_dir/KeyModel.js" "$artifact_dir/StatsModel.js" "$panel_dir/"
 
 runtime_env=(
   env
@@ -63,33 +69,44 @@ runtime_env=(
   "BADI_FAKE_PID_LOG=$pid_log"
   "BADI_FAKE_HOLD_OVERVIEW=$test_root/hold-overview"
   "BADI_FAKE_HOLD_MUTATION=$test_root/hold-mutation"
+  "BADI_FAKE_FAIL_OVERVIEW=$test_root/fail-overview"
+  "BADI_FAKE_SETTINGS=$settings_extra"
   "QT_QPA_PLATFORM=offscreen"
   "NO_COLOR=1"
 )
 
-setsid "${runtime_env[@]}" qs --no-color -p "$harness_dir" >"$shell_log" 2>&1 &
-shell_pid=$!
-badi_assert_private_process_group "$shell_pid"
-
+ipc_dir=$harness_dir
+ipc_target=badi-client-lifecycle
 ipc() {
-  "${runtime_env[@]}" qs --no-color -p "$harness_dir" ipc call \
-    badi-client-lifecycle "$@"
+  "${runtime_env[@]}" qs --no-color -p "$ipc_dir" ipc call "$ipc_target" "$@"
 }
 
-for _ in $(seq 1 80); do
-  if ! kill -0 "$shell_pid" 2>/dev/null; then
-    cat "$shell_log" >&2
-    echo "client lifecycle check: Quickshell exited before IPC was ready" >&2
-    exit 1
-  fi
-  [[ $(ipc ping 2>/dev/null || true) == ok ]] && break
-  sleep 0.05
-done
-[[ $(ipc ping 2>/dev/null || true) == ok ]] || {
+# Starts Quickshell on the harness in $ipc_dir and waits for its IPC.
+start_shell() {
+  setsid "${runtime_env[@]}" qs --no-color -p "$ipc_dir" >"$shell_log" 2>&1 &
+  shell_pid=$!
+  badi_assert_private_process_group "$shell_pid"
+  for _ in $(seq 1 80); do
+    if ! kill -0 "$shell_pid" 2>/dev/null; then
+      cat "$shell_log" >&2
+      echo "client lifecycle check: Quickshell exited before IPC was ready" >&2
+      exit 1
+    fi
+    [[ $(ipc ping 2>/dev/null || true) == ok ]] && return 0
+    sleep 0.05
+  done
   cat "$shell_log" >&2
   echo "client lifecycle check: IPC did not become ready" >&2
   exit 1
 }
+
+fail() {
+  cat "$shell_log" >&2
+  echo "client lifecycle check: $*" >&2
+  exit 1
+}
+
+start_shell
 
 wait_for_call_count() {
   local expected=$1
@@ -233,6 +250,15 @@ for value in '"long"' '"medium"' 4 null true; do
     '{schema: "badi.settings.v2", revision: 1, paused: false, suggestion_length: $value, subjects: []}')
   [[ $(ipc validateSettings "$document") == false ]]
 done
+# Screen sharing: `badi screen-share suggest` writes suggest; producers omit hold.
+for value in '"hold"' '"suggest"' '"off"' null true; do
+  document=$(jq -cn --argjson value "$value" \
+    '{schema: "badi.settings.v2", revision: 1, paused: false, screen_share: $value, subjects: []}')
+  expected=$([[ $value == '"hold"' || $value == '"suggest"' ]] && echo true || echo false)
+  [[ $(ipc validateSettings "$document") == "$expected" ]] || fail "screen_share $value is not $expected"
+done
+# An unknown key fails the document: the panel never writes over a setting it cannot see.
+[[ $(ipc validateSettings '{"schema":"badi.settings.v2","revision":1,"paused":false,"subjects":[],"later":true}') == false ]]
 
 # Opt-in context: a boolean once chosen, and a canonical list of apps and
 # sites where it stays off.
@@ -270,6 +296,39 @@ for value in '["fr","de"]' '["en","en"]' '["fa"]' '"en"' null; do
     '{schema: "badi.settings.v2", revision: 1, paused: false, spelling_languages: $value, subjects: []}')
   [[ $(ipc validateSettings "$document") == false ]]
 done
+
+# Every optional key the settings schema defines, each with values the schema
+# allows (every value of an enum): the panel accepts them all, and this list is
+# the schema's, so a new broker setting cannot lock the panel's writes unseen.
+examples=$(jq -cn --argjson site "$site" '{
+  all_linux_apps: [true, false],
+  all_web_origins: [true, false],
+  battery_mode: ["explicit", "normal", "quiet"],
+  context_words: [true, false],
+  context_words_off: [[$site]],
+  escape_quiet_seconds: [1, 3600],
+  language_overrides: [{}, {"brave-origin": "pt"}],
+  languages_chosen: [true, false],
+  mid_line: [true, false],
+  screen_share: ["hold", "suggest"],
+  spelling_languages: [[], ["en", "de", "fr", "es", "it", "nl", "pl"]],
+  style_learning: [true, false],
+  suggestion_length: ["normal", "short"],
+  trailing_space_healing: [{}, {"en": true, "pt": false}],
+  writing_languages: [[], ["en", "de", "fa", "fr", "es", "pt"]],
+  writing_model: ["gemma-3-1b"]
+}')
+schema_keys=$(jq -c '[.properties | keys[]] - .required' "$schema")
+[[ $schema_keys == "$(jq -c 'keys' <<<"$examples")" ]] ||
+  fail "the schema's optional settings $schema_keys differ from this test's; teach BadiClient.isOptionalSetting the new key"
+jq -e --slurpfile schema "$schema" '
+  to_entries | all(.key as $key | $schema[0].properties[$key].enum as $enum
+    | $enum == null or (.value | sort) == ($enum | sort))
+' <<<"$examples" >/dev/null || fail "an enum example list differs from the schema's values"
+while IFS= read -r document; do
+  [[ $(ipc validateSettings "$document") == true ]] || fail "the panel refuses $document"
+done < <(jq -c 'to_entries[] | .key as $key | .value[]
+  | {schema: "badi.settings.v2", revision: 1, paused: false, subjects: []} + {($key): .}' <<<"$examples")
 
 # A settings write changes only its own field at the next revision and carries
 # every subject and the `badi site all on` flag through unchanged.
@@ -344,11 +403,116 @@ wait_for_call_count 10
 state=$(ipc state)
 jq -e '.canMutateSettings and .message == "Predictions paused."' <<<"$state" >/dev/null
 
+# A failed read reports itself, and the next good read clears it even on a
+# refresh that keeps the last result (the open popout's poll).
+touch "$test_root/fail-overview"
+ipc refresh >/dev/null
+wait_for_call_count 11
+wait_until_idle
+[[ $(jq -r '.message' <<<"$(ipc state)") == 'badictl: broker unavailable' ]] || fail "a failed read is not reported"
+rm -- "$test_root/fail-overview"
+ipc refresh >/dev/null
+wait_for_call_count 12
+wait_until_idle
+state=$(ipc state)
+jq -e '.canMutateSettings and .message == ""' <<<"$state" >/dev/null || fail "a good read kept the old error: $state"
+
+# A settings key from a newer broker turns every write off and says why;
+# a known optional key such as screen_share keeps writes on.
+printf '%s\n' '{"screen_share": "suggest"}' >"$settings_extra"
+ipc refresh >/dev/null
+wait_for_call_count 13
+wait_until_idle
+state=$(ipc state)
+jq -e '.settingsDocumentValid and .canMutateSettings and .message == ""' <<<"$state" >/dev/null ||
+  fail "screen_share suggest locked the panel: $state"
+printf '%s\n' '{"later_setting": true}' >"$settings_extra"
+ipc refresh >/dev/null
+wait_for_call_count 14
+wait_until_idle
+state=$(ipc state)
+jq -e '(.settingsDocumentValid or .canMutateSettings | not)
+  and (.message | startswith("This panel does not know every Badi setting"))' <<<"$state" >/dev/null ||
+  fail "an unknown settings key did not explain the locked panel: $state"
+rm -- "$settings_extra"
+
 ipc deactivate >/dev/null
 
 if grep -En 'TypeError|ReferenceError|Cannot assign|failed to load' "$shell_log"; then
   cat "$shell_log" >&2
   echo "client lifecycle check: QML runtime error" >&2
+  exit 1
+fi
+
+badi_stop_private_process_group "$shell_pid" "$test_root"
+shell_pid=""
+
+# The real DesktopPanel's settings changes, through the fake badi-desktop.
+: >"$call_log"
+ipc_dir=$panel_dir
+ipc_target=badi-panel-settings
+# Languages chosen: English suggestions off, English and German spelling;
+# sharing suggests.
+printf '%s\n' '{"languages_chosen": true, "screen_share": "suggest", "writing_languages": ["de"],
+  "spelling_languages": ["en", "de"]}' >"$settings_extra"
+start_shell
+wait_for_call_count 1
+wait_until_idle
+state=$(ipc state)
+jq -e '.settingsDocumentValid and .canChange and .chosenLanguages == ["en", "de"]' <<<"$state" >/dev/null ||
+  fail "the panel cannot change these settings: $state"
+rows=$(ipc rows)
+jq -e '
+  (map(.key) | index("fewer_settings") == 0 and index("languages") == 1)
+  and any(.[]; .key == "screen_share" and .value == "suggest")
+  and any(.[]; .key == "writing_en" and .label == "English" and .value == "off")
+  and any(.[]; .key == "writing_de" and .label == "German" and .value == "auto")
+  and any(.[]; .key == "spelling_nl" and .label == "Dutch")
+' <<<"$rows" >/dev/null || fail "unexpected rows: $rows"
+
+# A language chip changes only its own language, in each list that offers it.
+ipc toggleLanguage fr >/dev/null
+wait_for_call_count 3
+wait_until_idle
+jq -e '.writing_languages == ["de", "fr"] and .spelling_languages == ["en", "de", "fr"]
+  and .screen_share == "suggest"' "${call_log}.settings" >/dev/null ||
+  fail "adding French changed other languages: $(cat -- "${call_log}.settings")"
+ipc toggleLanguage en >/dev/null
+wait_for_call_count 5
+wait_until_idle
+jq -e '.writing_languages == ["de"] and .spelling_languages == ["de"]' "${call_log}.settings" >/dev/null ||
+  fail "removing English changed other languages: $(cat -- "${call_log}.settings")"
+# Portuguese only suggests, Italian only corrects.
+ipc toggleLanguage pt >/dev/null
+wait_for_call_count 7
+wait_until_idle
+jq -e '.writing_languages == ["de", "pt"] and .spelling_languages == ["en", "de"]' "${call_log}.settings" >/dev/null ||
+  fail "adding Portuguese touched spelling: $(cat -- "${call_log}.settings")"
+ipc toggleLanguage it >/dev/null
+wait_for_call_count 9
+wait_until_idle
+jq -e '.writing_languages == ["de"] and .spelling_languages == ["en", "de", "it"]' "${call_log}.settings" >/dev/null ||
+  fail "adding Italian touched suggestions: $(cat -- "${call_log}.settings")"
+
+# The screen-share choice round-trips; hold is the omitted default.
+ipc setScreenShare hold >/dev/null
+wait_for_call_count 11
+wait_until_idle
+jq -e 'has("screen_share") | not' "${call_log}.settings" >/dev/null || fail "hold was written explicitly"
+rm -- "$settings_extra"
+ipc refresh >/dev/null
+wait_for_call_count 12
+wait_until_idle
+ipc setScreenShare suggest >/dev/null
+wait_for_call_count 14
+wait_until_idle
+jq -e '.screen_share == "suggest"' "${call_log}.settings" >/dev/null || fail "suggest was not written"
+[[ $(jq -r '.message' <<<"$(ipc state)") == 'Suggestions continue while the screen is shared' ]] ||
+  fail "the screen-share write did not succeed: $(ipc state)"
+
+if grep -En 'TypeError|ReferenceError|Cannot assign|failed to load' "$shell_log"; then
+  cat "$shell_log" >&2
+  echo "client lifecycle check: QML runtime error in the panel" >&2
   exit 1
 fi
 

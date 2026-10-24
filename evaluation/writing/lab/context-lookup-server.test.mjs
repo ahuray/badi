@@ -21,11 +21,7 @@ async function setup(t, behavior = {}) {
   const prediction = { calls: 0, entered: deferred(),
     async predict() { this.calls++; this.pending = deferred(); this.entered.resolve(); return this.pending.promise; },
     async stop() { this.pending?.reject(new Error('fixture_cancelled')); } };
-  const spelling = { starts: 0, entered: deferred(), ready: null,
-    async start() { this.starts++; this.entered.resolve(); return new Promise(() => {}); },
-    async check() { throw new Error('unexpected_spelling_check'); }, async stop() { return null; } };
-  const lab = await createLabServer({ worker: prediction, spellingManifests: { de: '/fixture/manifest.json' },
-    spellingManifestLoader: async () => ({}), spellingWorkerFactory: () => spelling,
+  const lab = await createLabServer({ worker: prediction,
     contextLookupWorkerFactory: () => {
       const worker = { calls: [], stops: 0,
         async check(value, signal) { this.calls.push(structuredClone(value)); return behavior.check ? behavior.check(value, signal) : envelope(value); },
@@ -36,7 +32,7 @@ async function setup(t, behavior = {}) {
   const page = await fetch(lab.origin);
   const token = (await page.text()).match(/name="badi-lab-token" content="([a-f0-9]{64})"/u)?.[1]; assert.ok(token);
   const headers = { 'Content-Type': 'application/json', 'X-Badi-Lab-Token': token };
-  return { ...lab, workers, prediction, spellingFixture: spelling, headers,
+  return { ...lab, workers, prediction, headers,
     post: (value = input(), path = '/api/context-lookup', extra = {}) => fetch(lab.origin + path,
       { method: 'POST', headers, body: JSON.stringify(value), ...extra }) };
 }
@@ -75,7 +71,7 @@ test('lookup HTTP guards Host, Origin, capability, strict JSON and reference exc
   const status = await fetch(lab.origin + '/api/context-lookup/status', { headers: lab.headers });
   assert.equal(status.headers.get('cache-control'), 'no-store');
   assert.match(status.headers.get('content-security-policy'), /frame-ancestors 'none'/u);
-  assert.equal(lab.workers.length, 0); assert.equal(lab.prediction.calls, 0); assert.equal(lab.spellingFixture.starts, 0);
+  assert.equal(lab.workers.length, 0); assert.equal(lab.prediction.calls, 0);
 });
 
 test('successful lookup keeps exact snapshot and returns actual worker/cleanup fields without model identity', async t => {
@@ -89,7 +85,7 @@ test('successful lookup keeps exact snapshot and returns actual worker/cleanup f
   assert.deepEqual(lab.workers[0].calls, [input()]);
   assert.equal((await lab.post(input({ id: 'another' }))).status, 200);
   assert.equal(lab.workers.length, 2);
-  assert.equal(lab.prediction.calls, 0); assert.equal(lab.spellingFixture.starts, 0);
+  assert.equal(lab.prediction.calls, 0);
 });
 
 test('reset fences old uploads and waits cleanup before rejecting even a successful late reply', async t => {
@@ -112,21 +108,14 @@ test('reset fences old uploads and waits cleanup before rejecting even a success
   assert.equal(lab.contextLookup.busy, false);
 });
 
-test('lookup shares capacity with prediction and spelling, including uploads already reading bodies', async t => {
+test('lookup shares capacity with prediction, including uploads already reading bodies', async t => {
   const entered = deferred();
   const lab = await setup(t, { check: () => { entered.resolve(); return new Promise(() => {}); } });
   const upload = await partial(lab, '/api/run', predictionBody);
   const lookup = lab.post(); await entered.promise;
   upload.finish(); assert.equal((await upload.response).status, 409);
   assert.equal((await lab.post(predictionBody, '/api/run')).status, 409);
-  assert.equal((await lab.post({ before: 'word ', language: 'de', protected_words: [] }, '/api/spelling')).status, 409);
   await lab.post({}, '/api/context-lookup/reset'); assert.equal((await lookup).status, 409);
-  const lookupUpload = await partial(lab, '/api/context-lookup', input());
-  const spelling = lab.post({ before: 'word ', language: 'de', protected_words: [] }, '/api/spelling');
-  await lab.spellingFixture.entered.promise;
-  lookupUpload.finish(); assert.equal((await lookupUpload.response).status, 409);
-  assert.equal((await lab.post()).status, 409);
-  await lab.post({}, '/api/spelling/reset'); assert.equal((await spelling).status, 409);
   const prediction = await lab.post(predictionBody, '/api/run'); await lab.prediction.entered.promise;
   assert.equal((await lab.post()).status, 409);
   await lab.post({}, '/api/reset'); await prediction.text();

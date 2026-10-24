@@ -1,5 +1,5 @@
 pkgname=badi-git
-pkgver=0.1.0.r125.26eb1d9
+pkgver=0.2.0
 pkgrel=1
 pkgdesc='Local writing suggestions for Linux, Omarchy first'
 arch=('x86_64')
@@ -25,7 +25,8 @@ sha256sums=('SKIP')
 
 pkgver() {
     cd "$srcdir/badi"
-    printf '0.1.0.r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+    printf '%s.r%s.%s' "$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)" \
+        "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 prepare() {

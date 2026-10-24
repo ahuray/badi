@@ -186,7 +186,6 @@ async fn owned_runtime_death_stops_broker_and_retires_sessions() -> TestResult {
         activation: Activation::Always,
     };
     let authority = SessionAuthority {
-        protocol_version: 1,
         adapter_kind: AdapterKind::Test,
         capabilities: vec![Capability::Context, Capability::Suggestion],
     };

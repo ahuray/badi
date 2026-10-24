@@ -100,12 +100,14 @@ impl Broker {
             }
             Ok(Err(ProviderError::Cancelled)) => Err(NoSuggestionReason::Stale),
             Ok(Err(ProviderError::Unavailable)) => Err(NoSuggestionReason::ProviderError),
-            Ok(Ok(ProviderOutcome::NoSuggestion(reason))) => Err(reason),
-            Ok(Ok(ProviderOutcome::Proposal(raw))) => {
-                checked_proposal(self.inner.provider_kind, &before, &after, raw)
-                    .filter(|proposal| allow_replacement || proposal.replace_before.is_none())
-                    .ok_or(NoSuggestionReason::OutputRejected)
-            }
+            Ok(Ok(reply)) => match reply.outcome {
+                ProviderOutcome::NoSuggestion(reason) => Err(reason),
+                ProviderOutcome::Proposal(raw) => {
+                    checked_proposal(self.inner.provider_kind, &before, &after, raw)
+                        .filter(|proposal| allow_replacement || proposal.replace_before.is_none())
+                        .ok_or(NoSuggestionReason::OutputRejected)
+                }
+            },
         })
     }
 }

@@ -205,10 +205,14 @@ struct PanelObservation {
     bool foreignAuxiliary = false;
 };
 
-// Tab accepts one word; Ctrl+Right and the accept chord accept all of it.
-// Every surface uses this order (the broker accepts a spelling replacement
-// whole either way, because its next word is the whole correction).
-enum class LocalAction { PassThrough, Invoke, AcceptAll, AcceptWord, Dismiss };
+// Badi's chords after the input method: the invoke chord requests, and the
+// accept chord accepts all of Badi's live candidate.
+enum class LocalAction { PassThrough, Invoke, AcceptAll };
+// Tab accepts one word, or requests on the manual path; Ctrl+Right and the
+// accept chord accept all of it. Every surface uses this order (the broker
+// accepts a spelling replacement whole either way, because its next word is
+// the whole correction).
+enum class TabAction { PassThrough, Invoke, AcceptWord };
 
 // A key before the input method sees it.
 struct PreKey {
@@ -221,7 +225,8 @@ struct PreKey {
     // Ctrl+Shift+Tab that no earlier handler took: a real Tab for the app.
     bool literalTab = false;
     // A plain Tab would not reach the app even without a visible suggestion:
-    // one is held for a returning remainder, or the manual path requests.
+    // one is held for a returning remainder, or the manual path requests
+    // (manualTabRequests).
     bool tabTaken = false;
     // The key types the next characters of Badi's suggestion, visible or
     // hidden by an earlier typed-through key.
@@ -412,11 +417,16 @@ bool matchesCapturedContext(
 // the chord reaches the application; `badi debug` keeps the reason.
 bool claimInvokeChord(bool editingAvailable, bool policyAllowed, bool foreignIme);
 
-LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
-                              bool escapeKey, bool hasLiveOwnedCandidate,
+LocalAction decideLocalAction(bool invokeChord, bool acceptChord, bool hasLiveOwnedCandidate,
                               const PanelObservation &panel);
-LocalAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
-                            const PanelObservation &panel, NativeEditPath path);
+TabAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
+                          const PanelObservation &panel, NativeEditPath path);
+// Plain Tab requests on the manual path: a field Badi may edit there, a
+// granted policy, and Fcitx's `context` (read only once policy allows it)
+// eligible for a request. The literal-Tab chord is a real Tab exactly there,
+// besides a visible suggestion or a held Tab; elsewhere it stays the app's.
+bool manualTabRequests(NativeEditPath path, bool editingAvailable, bool policyAllowed,
+                       const std::optional<ContextWindow> &context);
 // Only Tab, Escape and Ctrl+Right on Badi's own UI are consumed before the
 // input method.
 PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeShown,
@@ -491,9 +501,6 @@ std::optional<ContextWindow> captureContextWindow(std::string_view text,
                                                   bool multiline,
                                                   std::string language);
 
-// The line typed into a terminal since its last boundary, held in memory
-// only. Keys whose effect on the line is unknown (cursor movement, paste,
-// completion) stop tracking until the next empty line.
 // What a key the terminal received does to the line it edits.
 enum class LineEdit {
     Type,          // printable text, inserted at the caret
@@ -514,6 +521,10 @@ enum class LineEdit {
 // and vertical motion, which can put the caret anywhere.
 LineEdit lineEditFor(const ::fcitx::Key &key, std::string_view typed);
 
+// The line typed into a terminal since its last boundary, held in memory
+// only. A key that changes the line invisibly (a paste, completion) starts
+// an empty line at the caret; word or vertical motion, which can put the
+// caret anywhere, stops tracking until End or an empty line.
 class TypedLine {
 public:
     // Applies one key; motion past either end of the line stops following,
@@ -522,8 +533,9 @@ public:
     void type(std::string_view text);
     // Backspace `count` scalars before the caret, as a correction does.
     void erase(std::size_t count = 1);
+    // A known empty line, or one changed invisibly with the caret at its
+    // end: follow it from here.
     void clear();
-    void restart();
     void lose();
     [[nodiscard]] bool tracking() const { return tracking_; }
     [[nodiscard]] const std::string &text() const { return text_; }
@@ -543,6 +555,19 @@ private:
     bool tracking_ = true;
 };
 
+// The id of the suggest.request a context update asks with; the broker's
+// suggestion and its refusal name it.
+std::string suggestRequestId(const Coordinates &coordinates);
+
+// What a broker refusal (an `error` frame naming a request id) retired in
+// one binding's state.
+enum class RefusedRequest {
+    None,
+    Acceptance, // the suggestion whose acceptance was in flight
+    Revision,   // a revision request, or its acceptance in flight
+    Suggestion, // the current context's suggest request: nothing will answer it
+};
+
 class SessionState {
 public:
     bool focusIn(std::string sessionId, std::string targetId,
@@ -552,9 +577,14 @@ public:
     void focusOut();
     void invalidateContext();
     void denyEditing();
-    // The observer lost this field: context and candidates end, and only the
-    // native exact class may continue through the manual path.
-    void retireObservation();
+    // The observer lost this field: context, candidates and its session end.
+    // The binding continues on the manual path under a fresh session, so no
+    // reply owed to the observed field's session can reach it; only the
+    // native exact class may use that path. False, and unfocused, for an
+    // invalid identity, as focusIn.
+    bool retireObservation(std::string sessionId, std::string targetId, std::string fingerprintSalt);
+    // Retires what the broker's refusal of `requestId` names here.
+    RefusedRequest refuseRequest(std::string_view requestId);
     std::optional<ContextUpdate> updateContext(ContextWindow context);
 
     bool showSuggestion(Suggestion suggestion, std::uint64_t nowMs);

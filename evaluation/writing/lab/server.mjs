@@ -1,30 +1,33 @@
 import { createServer } from 'node:http';
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { LabWorker } from './worker.mjs';
-import { createSpellingHandler, isSpellingRoute } from './spelling-server.mjs';
 import { createContextLookupHandler, isContextLookupRoute } from './context-lookup-server.mjs';
 import { createDiscoveryHandler, isDiscoveryRoute } from './discovery-server.mjs';
 import { DeviceQualification } from './device-qualification.mjs';
+import { fromLabOrigin, hasLabToken, readJSON as readBoundedJSON, sendJSON, setSecurityHeaders } from './http.mjs';
 import { createQualificationHandler, isQualificationRoute } from './qualification-server.mjs';
 import { validateSuite, modelInputForCase, planComparison, warmSchedule, scorePrediction, summarizeResults } from './cases.mjs';
 
-const MODES = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'framed', 'field_context', 'probability_rejoin', 'following_text', 'context_bias', 'vocabulary'];
+const MODES = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'vocabulary'];
+/** Modes that run the production provider with its own fixed settings. */
+export const FIXED_MODES = ['production_boundary', 'vocabulary'];
+/** Weights of the pinned Qwen3 1.7B, the one model the `instructed` modes'
+ * literal ChatML template is written for. The worker refuses them on any
+ * other runtime; this check only names the reason before a run starts. */
+const INSTRUCTED_TEMPLATE_MODEL_SHA256 = 'd2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5';
 
 export function labOptions(args) {
   const { values } = parseArgs({ args, strict: true, options: {
     port: { type: 'string' }, 'prefill-batch': { type: 'string' },
-    'spelling-de': { type: 'string' }, 'spelling-fa': { type: 'string' },
   } });
   const port = values.port ?? '0';
   const batch = values['prefill-batch'] ?? '16';
   if (!/^(?:0|[1-9][0-9]{0,4})$/u.test(port) || Number(port) > 65535) throw new Error('Use a port from 0 to 65535; 0 selects an available port.');
   if (!['16', '64'].includes(batch)) throw new Error('Use --prefill-batch 16 or 64.');
-  return { port: Number(port), prefillBatch: Number(batch),
-    spellingManifests: Object.fromEntries(['de', 'fa'].filter(language => values[`spelling-${language}`] !== undefined)
-      .map(language => [language, values[`spelling-${language}`]])) };
+  return { port: Number(port), prefillBatch: Number(batch) };
 }
 
 export function renderLabPage(source, capability) {
@@ -51,7 +54,7 @@ export function validateConfigs(configs) {
       || !Number.isInteger(config.max_tokens) || config.max_tokens < 8 || config.max_tokens > 64
       || typeof config.cache_prompt !== 'boolean' || !Number.isFinite(config.temperature) || config.temperature < 0 || config.temperature > 1
       || !Number.isInteger(config.seed) || config.seed < 0 || config.seed > 2147483647) throw new Error('Configuration is outside the supported limits.');
-    if (['production_boundary', 'framed', 'field_context', 'following_text', 'context_bias', 'vocabulary'].includes(config.mode)
+    if (FIXED_MODES.includes(config.mode)
       && (config.budget_ms !== 550 || config.max_tokens !== 8 || !config.cache_prompt || config.temperature !== 0 || config.seed !== 42)) throw new Error('This mode uses fixed production settings.');
     return { ...config };
   });
@@ -66,19 +69,11 @@ export function workerRequest(testCase, config) {
     style_examples: input.style.split(/\n\s*\n/u).filter(value => value.trim()), config: parameters };
 }
 
-async function readJSON(request) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += chunk.length;
-    if (size > 512 * 1024) throw new Error('Request exceeds 512 KiB.');
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-}
+const readJSON = request => readBoundedJSON(request, 512 * 1024, {
+  tooLarge: () => new Error('Request exceeds 512 KiB.'), malformed: () => new Error('Use a JSON request body.') });
 
-export async function createLabServer({ worker = new LabWorker(), port = 0, spellingManifests = {},
-  spellingWorkerFactory, spellingManifestLoader, contextLookupWorkerFactory, discoveryService, evidenceStore, qualificationDiagnostics,
+export async function createLabServer({ worker = new LabWorker(), port = 0,
+  contextLookupWorkerFactory, discoveryService, evidenceStore, qualificationDiagnostics,
   qualification = new DeviceQualification({ prefillBatch: worker.prefillBatch ?? 16, memoryMap: worker.memoryMap ?? true }) } = {}) {
   const capability = randomBytes(32).toString('hex');
   let origin;
@@ -87,6 +82,8 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
   let resetsInFlight = 0;
   let contextLookup, discovery, qualificationReview, selectedModel = null;
   let deviceInspection = null;
+  // Every handler shares one model and one busy slot.
+  const busy = () => Boolean(active || resetsInFlight || contextLookup?.busy || discovery?.busy || deviceInspection || qualificationReview?.busy);
   const stopDeviceInspection = async () => {
     const job = deviceInspection;
     job?.controller.abort();
@@ -94,15 +91,11 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
     // Keep the shared busy slot until that cleanup has completed.
     await job?.done;
   };
-  const spelling = await createSpellingHandler({ origin: () => origin, capability, manifests: spellingManifests,
-    isPredictionBusy: () => Boolean(active || resetsInFlight || contextLookup?.busy || discovery?.busy || deviceInspection || qualificationReview?.busy),
-    ...(spellingWorkerFactory ? { workerFactory: spellingWorkerFactory } : {}),
-    ...(spellingManifestLoader ? { loadManifest: spellingManifestLoader } : {}) });
   contextLookup = createContextLookupHandler({ origin: () => origin, capability,
-    isOtherBusy: () => Boolean(active || resetsInFlight || spelling.busy || discovery?.busy || deviceInspection || qualificationReview?.busy),
+    isOtherBusy: () => Boolean(active || resetsInFlight || discovery?.busy || deviceInspection || qualificationReview?.busy),
     ...(contextLookupWorkerFactory ? { workerFactory: contextLookupWorkerFactory } : {}) });
   discovery = createDiscoveryHandler({ origin: () => origin, capability,
-    isOtherBusy: () => Boolean(active || resetsInFlight || spelling.busy || contextLookup.busy || deviceInspection || qualificationReview?.busy),
+    isOtherBusy: () => Boolean(active || resetsInFlight || contextLookup.busy || deviceInspection || qualificationReview?.busy),
     assessCandidate: (candidate, signal) => qualification.assess(candidate, signal),
     ...(discoveryService ? { service: discoveryService } : {}),
     selectArtifact: async (selection, signal) => {
@@ -125,29 +118,20 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
       return { assessment, prompt_profile: assessment.prompt_profile };
     } });
   qualificationReview = createQualificationHandler({ origin: () => origin, capability, qualification, worker, makeRequest: workerRequest,
-    isOtherBusy: () => Boolean(active || resetsInFlight || spelling.busy || contextLookup.busy || discovery.busy || deviceInspection),
+    isOtherBusy: () => Boolean(active || resetsInFlight || contextLookup.busy || discovery.busy || deviceInspection),
     ...(evidenceStore ? { evidenceStore } : {}), ...(qualificationDiagnostics ? { diagnostics: qualificationDiagnostics } : {}) });
   const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']], ['/confidence.mjs', ['confidence.mjs', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']],
-    ['/spelling.mjs', ['spelling.mjs', 'text/javascript; charset=utf-8']], ['/spelling.css', ['spelling.css', 'text/css; charset=utf-8']],
     ['/context-lookup.mjs', ['context-lookup.mjs', 'text/javascript; charset=utf-8']],
     ['/context-lookup.css', ['context-lookup.css', 'text/css; charset=utf-8']], ['/tabs.mjs', ['tabs.mjs', 'text/javascript; charset=utf-8']],
     ['/qualification.mjs', ['qualification.mjs', 'text/javascript; charset=utf-8']], ['/discovery.mjs', ['discovery.mjs', 'text/javascript; charset=utf-8']], ['/discovery.css', ['discovery.css', 'text/css; charset=utf-8']]]);
   const server = createServer(async (request, response) => {
-    response.setHeader('Cache-Control', 'no-store');
-    response.setHeader('X-Content-Type-Options', 'nosniff');
-    response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-    response.setHeader('Referrer-Policy', 'no-referrer');
-    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
-    const fail = (status, error) => {
-      if (response.destroyed || response.writableEnded) return;
-      response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error }));
-    };
+    setSecurityHeaders(response);
+    const fail = (status, error) => sendJSON(response, status, { error });
     try {
-      if (isSpellingRoute(request.url)) { await spelling.handle(request, response); return; }
       if (isContextLookupRoute(request.url)) { await contextLookup.handle(request, response); return; }
       if (isDiscoveryRoute(request.url)) { await discovery.handle(request, response); return; }
       if (isQualificationRoute(request.url)) { await qualificationReview.handle(request, response); return; }
-      if (request.headers.host !== new URL(origin).host || (request.headers.origin && request.headers.origin !== origin)) return fail(403, 'This lab accepts requests only from its own local page.');
+      if (!fromLabOrigin(request, origin)) return fail(403, 'This lab accepts requests only from its own local page.');
       if (request.method === 'GET' && request.url === '/favicon.ico') { response.writeHead(204); response.end(); return; }
       if (request.method === 'GET' && assets.has(request.url)) {
         const [name, type] = assets.get(request.url);
@@ -155,15 +139,14 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
         if (name === 'index.html') body = renderLabPage(body.toString(), capability);
         response.writeHead(200, { 'Content-Type': type }); response.end(body); return;
       }
-      const token = Buffer.from(String(request.headers['x-badi-lab-token'] ?? ''));
-      if (token.length !== capability.length || !timingSafeEqual(token, Buffer.from(capability))) return fail(403, 'Refresh the lab page to reconnect.');
+      if (!hasLabToken(request, capability)) return fail(403, 'Refresh the lab page to reconnect.');
       if (request.method === 'GET' && request.url === '/api/status') {
         response.writeHead(200, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify({ schema: 'badi.prediction-lab.status.v1', active: Boolean(active), identity: worker.session?.identity ?? null,
           selected_model: selectedModel?.candidate ?? null, assessment: selectedModel?.assessment ?? null })); return;
       }
       if (request.method === 'GET' && request.url === '/api/device') {
-        if (active || resetsInFlight || spelling.busy || contextLookup.busy || discovery.busy || deviceInspection || qualificationReview?.busy) return fail(409, 'Finish or cancel the active test or device inspection first.');
+        if (busy()) return fail(409, 'Finish or cancel the active test or device inspection first.');
         const controller = new AbortController(); let finish;
         const job = { controller, done: new Promise(resolve => { finish = resolve; }) };
         const generation = resetGeneration; deviceInspection = job;
@@ -190,17 +173,17 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
         response.writeHead(200, { 'Content-Type': 'application/json' }); response.end('{}'); return;
       }
       if (request.url === '/api/model/baseline') {
-        if (active || resetsInFlight || spelling.busy || contextLookup.busy || discovery.busy || deviceInspection || qualificationReview?.busy) return fail(409, 'Finish or cancel the active test first.');
+        if (busy()) return fail(409, 'Finish or cancel the active test first.');
         const input = await readJSON(request);
         if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length) return fail(400, 'Baseline selection takes no options.');
-        if (active || resetsInFlight || spelling.busy || contextLookup.busy || discovery.busy || deviceInspection || qualificationReview?.busy) return fail(409, 'Finish or cancel the active test first.');
+        if (busy()) return fail(409, 'Finish or cancel the active test first.');
         resetGeneration++; resetsInFlight++;
         try { await qualificationReview.reset(); await worker.selectArtifact(null, null); selectedModel = null; discovery.clearSelection(); }
         finally { resetsInFlight--; }
         response.writeHead(200, { 'Content-Type': 'application/json' }); response.end('{}'); return;
       }
       if (request.url !== '/api/run') return fail(404, 'Unknown operation.');
-      if (active || resetsInFlight || spelling.busy || contextLookup.busy || discovery.busy || deviceInspection || qualificationReview?.busy) return fail(409, 'A comparison or reset is already running.');
+      if (busy()) return fail(409, 'A comparison or reset is already running.');
       const uploadGeneration = resetGeneration;
       const uploadedModel = selectedModel;
       const body = await readJSON(request);
@@ -209,9 +192,8 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
       if (suite.cases.length > 300) throw new Error('Run up to 300 cases at a time.');
       const configs = validateConfigs(body.configs);
       if (selectedModel) {
-        const legacyQwenModes = ['instructed', 'instructed_healed'];
-        if (selectedModel.candidate.sha256 !== 'd2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5'
-          && configs.some(config => legacyQwenModes.includes(config.mode))) throw new Error('These legacy instruction experiments use a pinned Qwen template. Choose Selected model instructions for this model.');
+        if (selectedModel.candidate.sha256 !== INSTRUCTED_TEMPLATE_MODEL_SHA256
+          && configs.some(config => ['instructed', 'instructed_healed'].includes(config.mode))) throw new Error('These instruction experiments use the pinned Qwen3 1.7B template. Choose Selected model instructions for this model.');
         if (selectedModel.assessment.prompt_profile === 'base_continuation' && configs.some(config => config.mode === 'native_instructed')) throw new Error('This base model has no embedded instruction template. Choose full context or word-boundary continuation.');
       }
       const seed = body.seed ?? 42;
@@ -222,7 +204,7 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
       const compared = planComparison(suite.cases, configs, seed);
       const plan = warmPrefix ? warmSchedule(compared) : compared;
       // readJSON yields: another request may have claimed the worker meanwhile.
-      if (active || resetsInFlight || spelling.busy || contextLookup.busy || discovery.busy || deviceInspection || qualificationReview?.busy) return fail(409, 'A comparison is already running.');
+      if (busy()) return fail(409, 'A comparison is already running.');
       const cancellation = new AbortController();
       active = cancellation;
       const records = [];
@@ -304,7 +286,7 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
   server.headersTimeout = 10000;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   origin = `http://127.0.0.1:${server.address().port}`;
-  return { server, origin, spelling, contextLookup, discovery, qualificationReview, async close() {
+  return { server, origin, contextLookup, discovery, qualificationReview, async close() {
     resetGeneration++;
     resetsInFlight++;
     active?.abort();
@@ -314,7 +296,6 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
     try { await qualificationReview.close(); } catch (error) { failure = error; }
     try { await discovery.close(); } catch (error) { failure = error; }
     try { await worker.stop(); } catch (error) { failure = error; }
-    try { await spelling.close(); } catch (error) { failure ??= error; }
     try { await contextLookup.close(); } catch (error) { failure ??= error; }
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
@@ -323,8 +304,8 @@ export async function createLabServer({ worker = new LabWorker(), port = 0, spel
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { port, prefillBatch, spellingManifests } = labOptions(process.argv.slice(2));
-  const lab = await createLabServer({ port, spellingManifests, worker: new LabWorker({ prefillBatch }) });
+  const { port, prefillBatch } = labOptions(process.argv.slice(2));
+  const lab = await createLabServer({ port, worker: new LabWorker({ prefillBatch }) });
   console.log(`Badi Prediction Lab: ${lab.origin}\nOpen this page in your browser. Text stays in this session unless you export it. Ctrl+C closes the lab.`);
   let closing = false;
   const close = async () => { if (closing) return; closing = true; await lab.close(); };

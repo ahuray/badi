@@ -11,7 +11,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push supersedes a pull request's run; every run on main finishes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   rust:
@@ -199,6 +200,9 @@ jobs:
           docker run --rm --volume "$GITHUB_WORKSPACE:/src:ro" --workdir /src "$IMAGE" \
             packaging/debian/ci.sh smoke target/debian/badi_*_amd64.deb
 
+  # The 2026-08-31 snapshot has Fcitx 5.1.21, below the 5.1.23 runtime floor:
+  # this job proves the addon still builds and passes there, and the AUR job
+  # builds and tests it against the current snapshot.
   fcitx5:
     name: Fcitx5 addon / pinned Arch
     runs-on: ubuntu-latest
@@ -301,4 +305,8 @@ jobs:
       - name: Run docs, editor, desktop, accessibility, Omarchy and writing checks
         run: npm run check
       - name: Check whitespace
-        run: git diff --check
+        # The whole tree against the empty tree: a clean checkout has no
+        # working-tree diff. Vendored license texts stay verbatim.
+        run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD -- . ':!packaging/licenses'
+      - name: Check shell scripts
+        run: git ls-files -z '*.sh' '*.bash' | xargs -0 shellcheck -S warning

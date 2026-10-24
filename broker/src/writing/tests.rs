@@ -277,9 +277,9 @@ fn a_typed_lexicon_word_is_healed_and_kept_only_when_the_answer_extends_it() {
         assert_eq!(finished.max_tokens, 8);
         assert!(finished.finished_word(None).is_none(), "one fallback only");
     }
-    // The Lab's own healing helpers keep the unchecked echo only.
+    // The Lab's healing helper keeps the unchecked echo only.
     assert_eq!(
-        super::production_healed_echo("I will send the rep", "en"),
+        super::production_healed_echo("I will send the rep", "en", super::TRAILING_SPACE_HEALING),
         None
     );
     for (before, language, prompt, echo) in [
@@ -1101,40 +1101,6 @@ fn the_word_limit_never_cuts_inside_a_joined_word() {
             "{raw:?}"
         );
     }
-}
-
-#[test]
-fn window_words_bias_only_english_topic_words_not_typed_just_now() {
-    let window =
-        "The data migration moves invoices to the warehouse on Thursday, which is after the audit.";
-    let words = super::bias_words("Can we finish the migration", window, Some("en"));
-    assert!(
-        words.contains(&"invoices") && words.contains(&"warehouse") && words.contains(&"Thursday")
-    );
-    assert!(
-        !words.contains(&"migration"),
-        "a word just typed invites a repeat"
-    );
-    assert!(
-        !words.contains(&"which") && !words.contains(&"after"),
-        "function words carry no topic"
-    );
-    assert!(
-        !words.contains(&"data"),
-        "short words start too many others"
-    );
-    assert_eq!(
-        super::bias_words("سلام", "کتابخانه موزه", Some("fa")),
-        Vec::<&str>::new()
-    );
-    assert_eq!(
-        super::bias_words("Hallo", "Lagerhaus Rechnungen", Some("de")),
-        Vec::<&str>::new()
-    );
-    assert_eq!(
-        super::bias_words("Hello there", "", Some("en")),
-        Vec::<&str>::new()
-    );
 }
 
 /// Each suggestion length bounds the shown words, streamed or cut short.

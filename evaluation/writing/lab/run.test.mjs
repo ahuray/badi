@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { parseOptions, validateOutputPath, prepareOutput, fileIdentity, sourceHashes, labCrateSources, brokerSources, buildWorker, WORKER_BUILD, validateCleanup, decodeEvents, runSuite, runRevisionSuite, ObservedWorker } from './run.mjs';
+import { parseOptions, validateOutputPath, prepareOutput, fileIdentity, sourceHashes, labFiles, labCrateSources, brokerSources, buildWorker, WORKER_BUILD, validateCleanup, decodeEvents, runSuite, runRevisionSuite, ObservedWorker } from './run.mjs';
 import { createLabServer } from './server.mjs';
 import { readModelArtifact } from './model-artifact.mjs';
 
@@ -76,11 +76,9 @@ test('CLI production mode keeps production settings despite experiment overrides
   assert.equal(parsed.configs.length, 4);
   assert.deepEqual(parsed.configs.find(value => value.mode === 'production_boundary'), { id: 'production_boundary',
     mode: 'production_boundary', budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 });
-  assert.deepEqual(parsed.configs.find(value => value.mode === 'framed'), undefined);
-  const framed = parseOptions([...base, '--modes', 'framed,field_context', '--budget-ms', '5000', '--max-tokens', '64', '--cache-prompt', 'false']);
-  for (const mode of ['framed', 'field_context']) {
-    assert.deepEqual(framed.configs.find(value => value.mode === mode), { id: mode, mode, budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 });
-  }
+  assert.deepEqual(parsed.configs.find(value => value.mode === 'vocabulary'), undefined);
+  const vocabulary = parseOptions([...base, '--modes', 'vocabulary', '--budget-ms', '5000', '--max-tokens', '64', '--cache-prompt', 'false']);
+  assert.deepEqual(vocabulary.configs, [{ id: 'vocabulary', mode: 'vocabulary', budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 }]);
   assert.equal(parsed.seed, 123);
   assert.equal(parsed.warmPrefix, false);
   assert.equal(parseOptions([...base, '--warm-prefix', 'true']).warmPrefix, true);
@@ -179,9 +177,9 @@ test('file/source provenance hashes exact bytes and cached hashing notices conte
   assert.deepEqual(await sourceHashes(['suite.json'], f.directory), { 'suite.json': changed.sha256 });
   const sources = await sourceHashes();
   for (const path of ['evaluation/writing/lab-worker/src/transport.rs', 'Cargo.lock', 'broker/src/provider.rs',
-    'broker/src/semantic/process.rs', 'evaluation/writing/lab-worker/src/prefill_probe.rs',
-    'evaluation/writing/lab/paced.mjs', 'evaluation/writing/lab-worker/src/paced_probe.rs',
-    'evaluation/writing/lab-worker/src/paced_probe/scheduler.rs', 'evaluation/writing/lab-worker/src/main.rs',
+    'broker/src/semantic/process.rs', 'evaluation/writing/lab/context-lookup-server.mjs',
+    'evaluation/writing/lab/context-lookup-worker.mjs', 'evaluation/writing/lab/public/app.mjs',
+    'evaluation/writing/lab-worker/src/main.rs',
     'evaluation/writing/lab-worker/src/qualification/device.rs', 'evaluation/writing/lab-worker/Cargo.toml',
     'evaluation/writing/lab/model-artifact.mjs', 'broker/src/semantic/wire.rs', 'broker/src/segment.rs',
     'broker/data/writing-lexicon/en.txt']) assert.match(sources[path], /^[a-f0-9]{64}$/u);
@@ -194,12 +192,25 @@ test('run provenance hashes every Lab worker source file in a stable order', asy
   const onDisk = (await readdir(new URL('src/', crate), { recursive: true, withFileTypes: true }))
     .filter(entry => entry.isFile())
     .map(entry => relative(fileURLToPath(new URL('../../../', import.meta.url)), join(entry.parentPath, entry.name)));
-  assert.ok(onDisk.includes('evaluation/writing/lab-worker/src/lib.rs') && onDisk.length > 20);
+  assert.ok(onDisk.includes('evaluation/writing/lab-worker/src/lib.rs') && onDisk.length > 10);
   const listed = await labCrateSources();
   assert.deepEqual(listed, ['evaluation/writing/lab-worker/Cargo.toml', ...[...onDisk].sort()]);
   const sources = await sourceHashes();
   for (const path of listed) assert.match(sources[path], /^[a-f0-9]{64}$/u, path);
   assert.equal(Object.keys(sources).some(path => path.startsWith('broker/src/writing_lab')), false);
+});
+
+test('run provenance hashes every file of the Lab, so no imported script escapes it', async () => {
+  const root = fileURLToPath(new URL('../../../', import.meta.url));
+  const onDisk = (await readdir(new URL('./', import.meta.url), { recursive: true, withFileTypes: true }))
+    .filter(entry => entry.isFile())
+    .map(entry => relative(root, join(entry.parentPath, entry.name)));
+  const listed = await labFiles();
+  assert.deepEqual(listed, [...onDisk].sort());
+  for (const path of ['evaluation/writing/lab/server.mjs', 'evaluation/writing/lab/context-lookup-server.mjs',
+    'evaluation/writing/lab/context-lookup-worker.mjs', 'evaluation/writing/lab/public/index.html']) assert.ok(listed.includes(path), path);
+  const sources = await sourceHashes();
+  for (const path of listed) assert.match(sources[path], /^[a-f0-9]{64}$/u, path);
 });
 
 test('run provenance hashes every broker source the worker links', async () => {

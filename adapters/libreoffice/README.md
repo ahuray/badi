@@ -54,7 +54,7 @@ command.
   watches its edits. After a 0.5 s pause following a word and one space at
   the end of a paragraph, one automatic request checks that word once; only a
   correction is shown, and nothing else appears. An Alt+F7 request replaces a
-  check in flight.
+  check in flight and closes its broker connection at once.
 - **Where it works.** The collapsed caret in a body-text paragraph of an
   editable, plain Writer document, with no selection or multi-selection. The
   corrected word holds the caret, ends at it (with its own space), or sits
@@ -91,12 +91,13 @@ command.
 - **Threads.** Document access runs on the office main thread
   (`com.sun.star.awt.AsyncCallback`); only broker I/O runs on worker threads, so
   a slow model never freezes Writer and an edit during the wait makes the
-  result stale.
+  result stale. Any failure on a worker thread ends the attempt; an explicit
+  request then shows a content-free notice.
 
 ## Check
 
 ```sh
-npm run libreoffice:check         # text guards, scripted-broker client tests, reproducible build
+npm run libreoffice:check         # text guards, scripted-broker client, controller attempt lifecycle, reproducible build
 npm run libreoffice:integration   # real phrase broker + headless soffice, isolated profile
 ```
 
@@ -117,40 +118,31 @@ ambiguous words go to the model in production and get nothing from the fixture.
 
 ## Boundaries
 
-Tested headless with LibreOffice 26.8 on this workstation, with the phrase
-fixture. Live on 2026-10-14 (LibreOffice 26.8.0.3, interactive Wayland
-window, Fcitx beside it, installed broker, isolated profile, disposable
-text): Alt+F7 showed the infobar `Badi: adress → address`, Alt+F7 again
-replaced it (`applied`) and one Ctrl+Z restored `adress`. Writer then leaves
-the restored word selected, so the next key typed replaces it; that is
-Writer's undo, not a Badi edit. On 2026-10-15, with German, French and
-Spanish dictionaries enabled: a finished `Hauss` in a German sentence showed
-`Hauss → Haus` on its own (the model chose among its candidates) and Alt+F7
-applied it; Alt+F7 on `muchas grasias` showed `gracias` after about 2 s.
-On 2026-10-17 (installed `78ff8ca`, interactive window, disposable text),
-after the Tab/Ctrl+→ swap: the automatic hint showed `adress → address`;
-Tab is not this extension's key (pressed with the hint showing, it stayed
-Writer's own Tab, inserted a tab character and withdrew the hint), and
-Alt+F7 showed then replaced the whole word, one Ctrl+Z restored `adress`.
+- After a replacement and Ctrl+Z, Writer leaves the restored word selected,
+  so the next key typed replaces it: Writer's undo, not a Badi edit.
+- Tab is not this extension's key. With the hint showing it stays Writer's
+  own Tab, inserts a tab character and withdraws the hint.
+- Writer's own AutoCorrect replaces some typos (`teh`) before the extension
+  sees them.
+- An English word that begins a known word, such as `fing` (`finger`), is
+  never a correction target, which also keeps abbreviations such as `dept`.
+- The paragraph's language picks the dictionary, as for Writer's own
+  spelling check: a short French sentence in a paragraph tagged Spanish was
+  corrected from Spanish (`reponce → repone`).
+- A wrong correction from the model (`cassa → casas`, `Zeitt → Zeigt` were
+  seen) stays a proposal until Alt+F7 accepts it.
 
-On 2026-10-19 (LibreOffice 26.8.1.1, interactive Wayland window, isolated
-profile with this checkout's extension, German, French and Spanish
-dictionaries, disposable text), the installed `5e141ed` broker with Gemma 3 1B
-offered no correction that needed the model: it never answered the choice
-between several candidates (`Hauss`, `grasias`, `Zeitt`), so only
-single-candidate words were corrected
-([cause](../../broker/README.md#suggestion-limits)). With the fixed broker
-from this branch run in its place on the same socket: the automatic hint
-showed `grasias → gracias` in Spanish and `vacanses → vacances` in French
-about 1 s after the space, Alt+F7 replaced each in one undo step (`Badi
-correction`) and one Ctrl+Z restored the typo; Alt+F7 on `lsit` showed `list`
-in 0.27 s. The model abstained on `Hauss` and chose wrongly for
-`cassa → casas` and `Zeitt → Zeigt`; a wrong word stays a proposal until
-Alt+F7. Writer's own AutoCorrect replaced `teh` before the extension saw it.
-An English word that begins a known word, such as `fing` (`finger`), is
-never a correction target, which also keeps abbreviations such as `dept`.
-A French sentence in a paragraph tagged Spanish was corrected from the
-Spanish dictionary (`reponce → repone`): a short sentence gives no confident
-detection, so the paragraph's language decides, as it does for Writer's own
-spelling check.
+### Tested with
+
+Interactive Wayland windows with Fcitx beside them, isolated profiles and
+disposable text; the integration lane runs headless LibreOffice 26.8 with
+the phrase fixture.
+
+| LibreOffice (installed commit, date) | Result | Boundary |
+| --- | --- | --- |
+| 26.8.0.3 (2026-10-14) | Alt+F7 showed `Badi: adress → address`, Alt+F7 again replaced it (`applied`) and one Ctrl+Z restored `adress` | |
+| 26.8.0.3 with German, French and Spanish dictionaries (2026-10-15) | A finished `Hauss` showed `Hauss → Haus` on its own and Alt+F7 applied it; `muchas grasias` showed `gracias` after about 2 s | |
+| 26.8 (`78ff8ca`, 2026-10-17) | The automatic hint showed `adress → address`; Alt+F7 showed and replaced the whole word; one Ctrl+Z restored it | |
+| 26.8.1.1 with the same dictionaries (2026-10-19) | After the broker's candidate-choice fix ([cause](../../broker/README.md#suggestion-limits)): `grasias → gracias` and `vacanses → vacances` about 1 s after the space, each in one undo step; `lsit → list` in 0.27 s; the model abstained on `Hauss` | Installed `5e141ed` with Gemma 3 1B, before that fix, corrected only single-candidate words |
+
 Not yet verified: other LibreOffice versions.

@@ -26,9 +26,12 @@ namespace {
 // A revision answers within the broker's 40-second bound (cold start
 // included); the notice waits as long, and a little more.
 constexpr std::uint64_t kRevisionWaitUs = 45'000'000;
-// The observer's one request may still be busy with an earlier read.
-constexpr std::uint64_t kRevisionRetryUs = 20'000;
-constexpr unsigned int kMaxRevisionRetries = 25;
+// The observer's one request may still be busy with an earlier read: the
+// request retries within its own budget, and a commit waits until its own
+// deadline, as a suggestion's does.
+constexpr std::uint64_t kRevisionRetryUs = InspectionSchedule::kBusyRetryUs;
+constexpr unsigned int kMaxRevisionRetries = InspectionSchedule::kMaxBusyRetries;
+constexpr std::uint64_t kRevisionCommitWaitUs = 500'000;
 // How long the field may take to report the applied revision.
 constexpr std::uint64_t kRevisionReadBackUs = 1'000'000;
 
@@ -145,21 +148,38 @@ void BadiAddon::startRevision(Binding &binding, SelectionWindow selection, std::
     inspectForRevision(binding);
 }
 
+// Runs `step` again for a waiting revision once the observer's one request
+// may be free, within the request's retry budget. One timer per binding is
+// re-armed in place: replacing it from its own callback would destroy the
+// closure that is running.
+bool BadiAddon::retryRevision(Binding &binding, void (BadiAddon::*step)(Binding &)) {
+    if (binding.revisionRetries++ >= kMaxRevisionRetries) return false;
+    binding.revisionStep = step;
+    if (!binding.revisionTimer) {
+        binding.revisionTimer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
+            [this, context = binding.inputContext](::fcitx::EventSourceTime *, std::uint64_t) {
+                if (auto *current = bindingFor(*context); current && current->revisionWaiting && current->revisionStep)
+                    (this->*current->revisionStep)(*current);
+                return true;
+            });
+    }
+    binding.revisionTimer->setNextInterval(kRevisionRetryUs);
+    binding.revisionTimer->setOneShot();
+    return true;
+}
+
 void BadiAddon::inspectForRevision(Binding &binding) {
     if (accessibility_->pending()) {
-        if (binding.revisionRetries++ < kMaxRevisionRetries) {
-            binding.revisionTimer = oneShot(kRevisionRetryUs, [this, context = binding.inputContext] {
-                if (auto *current = bindingFor(*context); current && current->revisionWaiting)
-                    inspectForRevision(*current);
-            });
-            return;
-        }
+        if (retryRevision(binding, &BadiAddon::inspectForRevision)) return;
         return endRevision(binding, notice::kObserverUnavailable, "observer_busy");
     }
+    // The observer owns its reply callbacks and may run them after the input
+    // context is gone, so they find the binding by session, never by pointer.
+    const auto session = binding.state.coordinates().sessionId;
     const auto generation = ++binding.observationGeneration;
     const bool sent = accessibility_->request(revisionInspectRequest(binding.state.appId()),
-        [this, context = binding.inputContext, generation](const Json &reply) {
-            auto *current = bindingFor(*context);
+        [this, session, generation](const Json &reply) {
+            auto *current = bindingFor(session);
             if (current && current->revisionWaiting && current->observationGeneration == generation)
                 revisionInspected(*current, reply);
         });
@@ -208,19 +228,14 @@ void BadiAddon::continueRevision(Binding &binding) {
                                            "session_unavailable");
     if (!binding.observed()) return sendRevision(binding, std::nullopt);
     if (accessibility_->pending()) {
-        if (binding.revisionRetries++ < kMaxRevisionRetries) {
-            binding.revisionTimer = oneShot(kRevisionRetryUs, [this, context = binding.inputContext] {
-                if (auto *current = bindingFor(*context); current && current->revisionWaiting)
-                    continueRevision(*current);
-            });
-            return;
-        }
+        if (retryRevision(binding, &BadiAddon::continueRevision)) return;
         return endRevision(binding, notice::kObserverUnavailable, "observer_busy");
     }
+    const auto session = binding.state.coordinates().sessionId;
     const auto generation = binding.observationGeneration;
     const bool sent = accessibility_->request(selectionSnapshotRequest(binding.observedFocus),
-        [this, context = binding.inputContext, generation, focus = binding.observedFocus](const Json &reply) {
-            auto *current = bindingFor(*context);
+        [this, session, generation, focus = binding.observedFocus](const Json &reply) {
+            auto *current = bindingFor(session);
             if (!current || !current->revisionWaiting || current->observationGeneration != generation) return;
             if (!observerAnswered(reply) || !sameSelectedField(focus, reply["focus"]))
                 return endRevision(*current, notice::kRevisionSelection, "observer_snapshot_denied");
@@ -236,8 +251,7 @@ void BadiAddon::sendRevision(Binding &binding, const std::optional<Json> &observ
     // The selection is still exactly the one asked about, and the observer
     // reads the same field text around it.
     const auto current = currentSelection(binding);
-    if (!current || current->selected != selection.selected || current->before != selection.before ||
-        current->after != selection.after || current->anchor != selection.anchor || current->head != selection.head) {
+    if (!current || !sameSelection(*current, selection, true)) {
         return endRevision(binding, notice::kRevisionSelection, "selection_changed");
     }
     if (observed && !observerAgreesSelection(*observed, selection)) {
@@ -268,11 +282,9 @@ void BadiAddon::onRevision(Revision revision) {
     if (!binding) return;
     const auto &request = binding->state.revisionRequest();
     const auto current = currentSelection(*binding);
-    // The field must still hold exactly the revised selection.
-    if (!request || !current || current->selected != request->selection.selected ||
-        current->before != request->selection.before || current->anchor != request->selection.anchor ||
-        current->head != request->selection.head || hasForeignImeUi(observePanel(*binding)) ||
-        !binding->state.showRevision(revision, transport_.nowMs())) {
+    // The field must still hold the revised selection.
+    if (!request || !current || !sameSelection(*current, request->selection, false) ||
+        hasForeignImeUi(observePanel(*binding)) || !binding->state.showRevision(revision, transport_.nowMs())) {
         debug_.record("revision_blocked", binding->state.appId(), "revision_display_mismatch");
         return cancelRevision(*binding);
     }
@@ -304,7 +316,7 @@ void BadiAddon::showRevisionCandidate(Binding &binding, const Revision &revision
     }
     list->setGlobalCursorIndex(-1);
     auto &panel = binding.inputContext->inputPanel();
-    // Badi's own panel only: clearOwnedPanel() would also retire the revision.
+    // The candidate list replaces the waiting notice in place.
     if (binding.revisionNoticeTimer) binding.revisionNoticeTimer->setEnabled(false);
     binding.ownedAuxiliary = revisionHelp(revision.mode);
     panel.setAuxUp(::fcitx::Text(binding.ownedAuxiliary));
@@ -338,6 +350,8 @@ void BadiAddon::onRevisionClear(const RevisionClear &clear) {
 }
 
 void BadiAddon::acceptRevision(Binding &binding) {
+    // A second Tab while the first is being applied is a no-op.
+    if (binding.state.revisionAcceptancePending()) return;
     const auto request = binding.state.requestRevisionAcceptance(transport_.nowMs(), observePanel(binding));
     if (!request || !transport_.requestAcceptance(*request)) {
         debug_.record("revision_blocked", binding.state.appId(), "acceptance_unavailable");
@@ -398,18 +412,36 @@ bool BadiAddon::revisionCommit(const CommitPrepare &prepare) {
         applyRevision(*binding, prepare);
         return true;
     }
-    // The observer confirms the exact field and selection just before the
-    // commit, as for every observed edit.
+    corroborateRevisionCommit(*binding, prepare, monotonicUs() + kRevisionCommitWaitUs);
+    return true;
+}
+
+// The observer confirms the exact field and selection just before the
+// commit, as for every observed edit. A request still holding the observer
+// is waited for on the commit's own timer, re-armed in place, until the
+// grant's deadline.
+void BadiAddon::corroborateRevisionCommit(Binding &binding, const CommitPrepare &prepare, std::uint64_t deadline) {
     if (accessibility_->pending()) {
-        if (binding->revisionRetries++ < kMaxRevisionRetries) {
-            binding->commitTimer = oneShot(kRevisionRetryUs, [this, prepare] { revisionCommit(prepare); });
-            return true;
-        }
-        refuseCommit(prepare, binding);
-        return true;
+        if (monotonicUs() >= deadline) return refuseCommit(prepare, &binding);
+        binding.commitTimer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
+            [this, prepare, deadline](::fcitx::EventSourceTime *timer, std::uint64_t) {
+                if (accessibility_->pending() && monotonicUs() < deadline) {
+                    timer->setNextInterval(kRevisionRetryUs);
+                    timer->setOneShot();
+                    return true;
+                }
+                auto *current = bindingFor(prepare.coordinates.sessionId);
+                if (current && current->state.revisionAcceptancePending())
+                    corroborateRevisionCommit(*current, prepare, deadline);
+                else reportStale(prepare);
+                return true;
+            });
+        binding.commitTimer->setNextInterval(kRevisionRetryUs);
+        binding.commitTimer->setOneShot();
+        return;
     }
-    const bool sent = accessibility_->request(selectionSnapshotRequest(binding->observedFocus),
-        [this, prepare, focus = binding->observedFocus, generation = binding->observationGeneration](const Json &reply) {
+    const bool sent = accessibility_->request(selectionSnapshotRequest(binding.observedFocus),
+        [this, prepare, focus = binding.observedFocus, generation = binding.observationGeneration](const Json &reply) {
             auto *current = bindingFor(prepare.coordinates.sessionId);
             if (!current) return reportStale(prepare);
             const auto &request = current->state.revisionRequest();
@@ -421,16 +453,14 @@ bool BadiAddon::revisionCommit(const CommitPrepare &prepare) {
             }
             applyRevision(*current, prepare);
         });
-    if (!sent) refuseCommit(prepare, binding);
-    return true;
+    if (!sent) refuseCommit(prepare, &binding);
 }
 
 void BadiAddon::applyRevision(Binding &binding, const CommitPrepare &prepare) {
     const auto request = binding.state.revisionRequest();
     const auto current = currentSelection(binding);
-    if (!request || !binding.inputContext->hasFocus() || !current || current->selected != request->selection.selected ||
-        current->before != request->selection.before || current->after != request->selection.after ||
-        current->anchor != request->selection.anchor || current->head != request->selection.head) {
+    if (!request || !binding.inputContext->hasFocus() || !current ||
+        !sameSelection(*current, request->selection, true)) {
         debug_.record("commit_blocked", binding.state.appId(), "selection_changed");
         return refuseCommit(prepare, &binding);
     }
@@ -475,10 +505,7 @@ bool BadiAddon::revisionSurvives(Binding &binding) {
     const auto current = currentSelection(binding);
     const auto *selection = binding.revisionWaiting ? &binding.revisionWaiting->first
                                                     : &binding.state.revisionRequest()->selection;
-    if (current && current->selected == selection->selected && current->before == selection->before &&
-        current->anchor == selection->anchor && current->head == selection->head) {
-        return true;
-    }
+    if (current && sameSelection(*current, *selection, false)) return true;
     debug_.record("revision", binding.state.appId(), "revision_retired_by_edit");
     cancelRevision(binding);
     return false;

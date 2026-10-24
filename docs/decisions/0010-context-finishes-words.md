@@ -11,7 +11,7 @@ context and local learning as opt-ins with global and per-app opt-outs. Two
 earlier forms failed in the Prediction Lab. Window text in the prompt drifted
 in unrelated cases and copied a fact the writer was changing. A logit bias
 toward the window's words changed almost nothing
-([Lab runbook](../../evaluation/writing/README.md#terminal-runs)).
+([Lab runbook](../../evaluation/writing/README.md#window-context)).
 
 Finishing the word being typed with an exact word in view does not ask the
 model to guess. On a second independent set of 60 mid-word cases, it gave 23

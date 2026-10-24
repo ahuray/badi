@@ -5,9 +5,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from preview import (Preview, disable_preview_animation, field_box_ends_before_caret, font_facts,
-                    font_pixels, ltr_text, mapped_caret, place_chip, place_edge_panel, place_inline,
-                    place_on_caret_line, valid_preview_text)
+from field import font_facts
+from preview import (Preview, disable_preview_animation, field_box_ends_before_caret, font_pixels, ltr_text,
+                     mapped_caret, place_chip, place_edge_panel, place_inline, place_on_caret_line)
 
 
 def focus():
@@ -280,12 +280,6 @@ class PreviewGeometryTests(unittest.TestCase):
             self.assertTrue(ltr_text(text), text)
         for text in ("می‌توانیم", "שלום", " word ١٢"):
             self.assertFalse(ltr_text(text), text)
-
-    def test_text_is_plain_bounded_and_excludes_hidden_controls(self):
-        for text in [" the next words", "teh → the", "می‌توانیم", "<b>literal text</b>", "één woord", "final "]:
-            self.assertTrue(valid_preview_text(text), text)
-        for text in [None, "", " ", "x" * 65, "line\nline", "x\t", "x\u202ey", "می‌ شود", "\ud800", "final  "]:
-            self.assertFalse(valid_preview_text(text), repr(text))
 
     def render_fixture(self, natural=(200, 24), baseline=19):
         preview = object.__new__(Preview)

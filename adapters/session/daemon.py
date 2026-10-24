@@ -36,7 +36,8 @@ try:
     add_signal = getattr(GLibUnix, "signal_add", None) or GLibUnix.signal_add_full
     add_fd = GLibUnix.fd_add_full
 except (ImportError, AttributeError, ValueError):
-    # Older PyGObject (the pinned CI Arch snapshot) predates the GLibUnix override.
+    # Older GLib or PyGObject without the GLibUnix binding: the pinned CI Arch
+    # snapshot, and the Debian and Ubuntu package jobs run this too.
     add_signal, add_fd = GLib.unix_signal_add_full, GLib.unix_fd_add_full
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -84,7 +85,7 @@ SCREENCAST_MEDIA_PREFIX = "xdph-streaming-"
 # The first dump of a busy graph is a few hundred kilobytes.
 DUMP_LIMIT = 16 * 1024 * 1024
 # A share that changes streams removes one before it adds the next (Chromium's
-# preview became the share 18 ms later on 2026-10-23), so a share ends only
+# preview becomes the share some milliseconds later), so a share ends only
 # when no stream has returned for this long.
 RELEASE_SECONDS = 1.0
 DBUS_TIMEOUT_MS = 2000
@@ -155,9 +156,10 @@ class Watched:
 class Reporter:
     """Keeps the broker told about the current state, reconnecting with backoff."""
 
-    def __init__(self, link, lookup_key=None):
+    def __init__(self, link, lookup_key=None, backoff=BACKOFF_SECONDS):
         self.link = link
         self.lookup_key = lookup_key
+        self.backoff = backoff
         self._key_retry = None
         self.session_active = True
         self.sleeping = False
@@ -176,15 +178,20 @@ class Reporter:
 
     def publish(self):
         """Sends the current state unless the broker already has it; returns
-        whether the broker acknowledged it."""
+        whether the broker acknowledged it.
+
+        The report goes first on a new connection: the keyring lookup is
+        synchronous and may wait for the Secret Service, so the style key
+        follows once this call (a sleep announcement, say) has returned.
+        """
         state = self.state()
         if self.link.connected and self.acknowledged == state:
             return True
         try:
-            if not self.link.connected:
+            connected = self.link.connected
+            if not connected:
                 self.link.connect()
                 self._watch_link()
-                self._deliver_key()
             status = self.link.send_report(*state)
         except LinkError as error:
             self._lost(str(error))
@@ -196,35 +203,41 @@ class Reporter:
         self.acknowledged = state
         self._attempt = 0
         self.problem = None
+        if not connected:
+            self._schedule_key(GLib.idle_add)
         return True
 
-    def _deliver_key(self):
-        """Hands the keyring's style key to a newly connected broker, which
-        keeps it in memory only. A locked keyring is retried later."""
+    def _schedule_key(self, schedule):
+        """Delivers the style key from the main loop later: `schedule` is
+        ``GLib.idle_add`` after a new connection, or a timer after a locked
+        keyring."""
         if self.lookup_key is None:
             return
         if self._key_retry is not None:
             GLib.source_remove(self._key_retry)
-            self._key_retry = None
+        self._key_retry = schedule(self._deliver_key)
+
+    def _deliver_key(self):
+        """Hands the keyring's style key to the connected broker, which keeps
+        it in memory only. A locked keyring is retried later."""
+        self._key_retry = None
+        if not self.link.connected:
+            return GLib.SOURCE_REMOVE
         try:
             key = self.lookup_key()
         except Exception as error:  # style_key.KeyringError, or a missing service
             reason = str(error) if str(error).startswith("keyring_") else "keyring_unavailable"
             log(f"style key not delivered ({reason}); retrying in {KEY_RETRY_SECONDS} s")
-            self._key_retry = GLib.timeout_add_seconds(KEY_RETRY_SECONDS, self._retry_key)
-            return
+            self._schedule_key(lambda deliver: GLib.timeout_add_seconds(KEY_RETRY_SECONDS, deliver))
+            return GLib.SOURCE_REMOVE
         if key is None:
-            return
-        state = self.link.send_style_key(*key)
+            return GLib.SOURCE_REMOVE
+        try:
+            state = self.link.send_style_key(*key)
+        except LinkError as error:
+            self._lost(str(error))
+            return GLib.SOURCE_REMOVE
         log(f"style key delivered; broker key state {state}")
-
-    def _retry_key(self):
-        self._key_retry = None
-        if self.link.connected:
-            try:
-                self._deliver_key()
-            except LinkError as error:
-                self._lost(str(error))
         return GLib.SOURCE_REMOVE
 
     def close(self):
@@ -261,7 +274,7 @@ class Reporter:
             log(f"broker unavailable ({reason}); retrying")
             self.problem = reason
         if self._retry is None:
-            delay = BACKOFF_SECONDS[min(self._attempt, len(BACKOFF_SECONDS) - 1)]
+            delay = self.backoff[min(self._attempt, len(self.backoff) - 1)]
             self._attempt += 1
             self._retry = GLib.timeout_add_seconds(delay, self._retry_now)
 
@@ -482,10 +495,13 @@ class ScreenCast:
     portal stream can exist.
     """
 
-    def __init__(self, reporter, command=None, refresh=refresh_bar):
+    def __init__(self, reporter, command=None, refresh=refresh_bar, backoff=BACKOFF_SECONDS,
+                 release_seconds=RELEASE_SECONDS):
         self.reporter = reporter
         self.command = command or pipewire_dump_command()
         self.refresh = refresh
+        self.backoff = backoff
+        self.release_seconds = release_seconds
         self.reporter.screen_shared = True
         self.known = False
         self.streams = Streams()
@@ -554,7 +570,7 @@ class ScreenCast:
             self._keep()
             self._report(True)
         elif self.reporter.screen_shared and self._release is None:
-            self._release = GLib.timeout_add(int(RELEASE_SECONDS * 1000), self._released)
+            self._release = GLib.timeout_add(int(self.release_seconds * 1000), self._released)
 
     def _released(self):
         self._release = None
@@ -584,7 +600,7 @@ class ScreenCast:
         if reason != self.problem:
             log(f"{reason}; screen sharing is watched again after a backoff")
             self.problem = reason
-        delay = BACKOFF_SECONDS[min(self._attempt, len(BACKOFF_SECONDS) - 1)]
+        delay = self.backoff[min(self._attempt, len(self.backoff) - 1)]
         self._attempt += 1
         self._retry = GLib.timeout_add_seconds(delay, self._start)
 

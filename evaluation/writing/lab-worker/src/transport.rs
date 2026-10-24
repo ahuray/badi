@@ -2,9 +2,6 @@
 //! runtime endpoint. It never changes the production streaming deadline or
 //! output contract.
 
-pub(crate) mod prefill;
-pub(crate) mod stop_token;
-
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 

@@ -1,3 +1,5 @@
+import { attachLabTabs } from './tabs.mjs';
+
 const SCHEMA = 'badi.context-lookup.request.v1';
 const MAX_RECORDS = 50;
 
@@ -179,6 +181,7 @@ export function attachLookupUI(document, fetchRequest = globalThis.fetch) {
     const link = node('a'); link.href = url; link.download = 'badi-word-tests.json'; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
   };
+  attachLabTabs(document);
   controls();
 }
 

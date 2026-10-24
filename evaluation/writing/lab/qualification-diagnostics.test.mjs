@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { runDiagnostics } from './qualification-diagnostics.mjs';
+import { workerRequest } from './server.mjs';
 
 class Clock {
   time = 0;
@@ -94,11 +95,9 @@ const cases = [
   { id: 'fa', language: 'fa', prefix: 'من دارم می‌نویسم', context: '', style: '', expected: [] },
 ];
 const config = { id: 'fixture', mode: 'healed', budget_ms: 550, cache_prompt: true, max_tokens: 8, temperature: 0, seed: 42 };
-const makeRequest = (row, config) => {
-  const settings = { ...config }; delete settings.id;
-  return { schema: 'badi.prediction-lab.request.v1', id: crypto.randomUUID(), before: row.prefix,
-    context: row.context, language: row.language, style_examples: [], config: settings };
-};
+// The request factory the Lab server passes, so the diagnostic's request
+// boundary is checked against what the server really sends.
+const makeRequest = workerRequest;
 const pressure = async () => ({ some_avg10: 0, full_avg10: 0, some_total_usec: 5, full_total_usec: 0 });
 function setup(options = {}) {
   const clock = new Clock(), worker = new Worker(clock, options);
@@ -119,6 +118,9 @@ test('diagnostics measure actual phases, reuse, scheduled typing, cancellation a
   assert.equal(report.evidenceMetrics.peak_vram_bytes, 0);
   assert.equal(report.measurements.paced.observed_events, 9);
   assert.equal(input.worker.maximumActive, 1);
+  // Every request reached the worker in the server's own shape, `after` included.
+  assert.ok(input.worker.calls.length > 0 && input.worker.calls.every(call => Object.hasOwn(call, 'after')));
+  assert.ok(report.records.every(row => row.reason !== 'invalid_request_boundary'));
   assert.equal(input.worker.checks, input.worker.starts);
   assert.equal(input.worker.starts, 2);
   assert.equal(input.worker.beforeStart, original);

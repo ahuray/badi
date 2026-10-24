@@ -167,6 +167,9 @@ impl LocalReviser {
             RevisionError::Failed
         })?);
         slot.running = Some(Arc::clone(&runtime));
+        // Armed at the start too, so a call that never finishes cannot keep
+        // the new process loaded.
+        self.arm_idle_stop(&mut slot);
         Ok((runtime, true))
     }
 
@@ -189,11 +192,17 @@ impl LocalReviser {
         })
     }
 
-    /// Records a use and stops the runtime once it has been idle for
-    /// [`IDLE_STOP`] with no request in flight.
+    /// Records a use and arms the idle stop.
     async fn touch(&self) {
+        let mut slot = self.slot.lock().await;
+        self.arm_idle_stop(&mut slot);
+    }
+
+    /// Records a use now and stops the runtime once it has been idle for
+    /// [`IDLE_STOP`] after it with no request in flight.
+    fn arm_idle_stop(&self, slot: &mut Slot) {
         let used = Instant::now();
-        self.slot.lock().await.last_used = used;
+        slot.last_used = used;
         let slot = Arc::clone(&self.slot);
         tokio::spawn(async move {
             tokio::time::sleep(IDLE_STOP).await;

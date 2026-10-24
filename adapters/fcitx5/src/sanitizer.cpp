@@ -8,8 +8,6 @@
 namespace badi::fcitx5 {
 namespace {
 
-bool continuation(unsigned char byte) { return (byte & 0xc0U) == 0x80U; }
-
 bool arabicLetter(std::uint32_t value) {
     return (value >= 0x0620U && value <= 0x063fU) ||
            (value >= 0x0641U && value <= 0x064aU) ||
@@ -25,20 +23,10 @@ bool safeJoiner(const std::vector<std::uint32_t> &scalars, std::size_t index) {
            arabicLetter(scalars[index - 1]) && arabicLetter(scalars[index + 1]);
 }
 
+// Controls, the line and paragraph separators, and format characters.
 bool forbiddenOutputScalar(std::uint32_t value) {
-    return value <= 0x1fU || (value >= 0x7fU && value <= 0x9fU) ||
-           value == 0x00adU || (value >= 0x0600U && value <= 0x0605U) ||
-           value == 0x061cU || value == 0x06ddU || value == 0x070fU ||
-           (value >= 0x0890U && value <= 0x0891U) || value == 0x08e2U ||
-           value == 0x180eU || (value >= 0x200bU && value <= 0x200fU) ||
-           (value >= 0x2028U && value <= 0x202eU) ||
-           (value >= 0x2060U && value <= 0x2064U) ||
-           (value >= 0x2066U && value <= 0x206fU) || value == 0xfeffU ||
-           (value >= 0xfff9U && value <= 0xfffbU) || value == 0x110bdU ||
-           value == 0x110cdU || (value >= 0x13430U && value <= 0x1343fU) ||
-           (value >= 0x1bca0U && value <= 0x1bca3U) ||
-           (value >= 0x1d173U && value <= 0x1d17aU) || value == 0xe0001U ||
-           (value >= 0xe0020U && value <= 0xe007fU);
+    return value <= 0x1fU || (value >= 0x7fU && value <= 0x9fU) || value == 0x2028U || value == 0x2029U ||
+           formatCharacter(value);
 }
 
 bool unicodeWhitespace(std::uint32_t value) {
@@ -71,9 +59,8 @@ std::optional<std::pair<std::uint32_t, std::size_t>> scalarAt(std::string_view v
     }
     if (index + width > value.size()) return std::nullopt;
     for (std::size_t offset = 1; offset < width; ++offset) {
-        const auto byte = static_cast<unsigned char>(value[index + offset]);
-        if (!continuation(byte)) return std::nullopt;
-        scalar = (scalar << 6U) | (byte & 0x3fU);
+        if (!utf8Continuation(value[index + offset])) return std::nullopt;
+        scalar = (scalar << 6U) | (static_cast<unsigned char>(value[index + offset]) & 0x3fU);
     }
     if ((width == 3 && scalar < 0x800U) || (width == 4 && scalar < 0x10000U) ||
         (scalar >= 0xd800U && scalar <= 0xdfffU) || scalar > 0x10ffffU) {
@@ -83,6 +70,17 @@ std::optional<std::pair<std::uint32_t, std::size_t>> scalarAt(std::string_view v
 }
 
 } // namespace
+
+bool formatCharacter(std::uint32_t scalar) {
+    return scalar == 0xAD || (scalar >= 0x600 && scalar <= 0x605) || scalar == 0x61C || scalar == 0x6DD ||
+           scalar == 0x70F || scalar == 0x890 || scalar == 0x891 || scalar == 0x8E2 || scalar == 0x180E ||
+           (scalar >= 0x200B && scalar <= 0x200F) || (scalar >= 0x202A && scalar <= 0x202E) ||
+           (scalar >= 0x2060 && scalar <= 0x2064) || (scalar >= 0x2066 && scalar <= 0x206F) ||
+           scalar == 0xFEFF || (scalar >= 0xFFF9 && scalar <= 0xFFFB) || scalar == 0x110BD ||
+           scalar == 0x110CD || (scalar >= 0x13430 && scalar <= 0x1343F) ||
+           (scalar >= 0x1BCA0 && scalar <= 0x1BCA3) || (scalar >= 0x1D173 && scalar <= 0x1D17A) ||
+           scalar == 0xE0001 || (scalar >= 0xE0020 && scalar <= 0xE007F);
+}
 
 std::optional<std::vector<std::uint32_t>> decodeUtf8(std::string_view value) {
     std::vector<std::uint32_t> result;

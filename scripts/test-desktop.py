@@ -202,6 +202,29 @@ class DesktopTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(RuntimeError):
                 desktop.main(invalid)
 
+    def test_an_unknown_form_of_any_command_changes_nothing(self):
+        untouched = AssertionError('an unknown form must not reach the broker, settings or systemd')
+
+        def transform_only(transform):
+            # badi languages checks its codes inside the transform, before any write.
+            transform({'schema': 'badi.settings.v2', 'revision': 1, 'paused': False, 'subjects': []})
+            raise untouched
+        for word in desktop.COMMANDS:
+            with self.subTest(word=word), \
+                 patch.object(desktop, 'control', side_effect=untouched), \
+                 patch.object(desktop, 'update_settings', side_effect=transform_only), \
+                 patch.object(desktop.subprocess, 'run', side_effect=untouched):
+                if word == 'ctl':
+                    continue  # every ctl form is the broker's to judge
+                try:
+                    desktop.main([word, 'no', 'such', 'form', 'here'])
+                except RuntimeError as error:
+                    self.assertRegex(str(error), 'Unknown command|Usage:')
+                else:
+                    self.fail(f'{word} accepted an unknown form')
+        with self.assertRaisesRegex(RuntimeError, 'Unknown command'):
+            desktop.main(['no-such-command'])
+
     def test_launcher_uses_normal_desktop_service_and_toolkit_modules(self):
         with patch.object(desktop.subprocess, 'run') as command:
             desktop.main(['launch', 'xournalpp'])
@@ -1355,7 +1378,7 @@ class DesktopTests(unittest.TestCase):
              patch.object(desktop, 'control', return_value=json.dumps(broker)):
             report = desktop.health_report()
         note = next(item for item in report['notes'] if 'showed no suggestion' in item)
-        self.assertIn('budget_prefill=2: the writing budget (550 ms while typing, 1.2 s after Tab) ended before the model started answering', note)
+        self.assertIn('budget_prefill=2: the writing budget (550 ms while typing, 1.2 s after an explicit request) ended before the model started answering', note)
         self.assertLess(note.index('budget_prefill=2'), note.index('budget_stream=1'))
         self.assertIn('Last: budget_prefill.', note)
         self.assertEqual(report['problems'], [])

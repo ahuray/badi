@@ -36,7 +36,7 @@ UNOBSERVED_FAMILY_PROGRAMS = {'chrome': 'chrome', 'Google-chrome': 'google-chrom
                               'Zen-Twilight': 'zen-twilight',
                               'FFPWA-01HVY3F0GDT6DCG5V6TTRHK4BT': 'ffpwa-01hvy3f0gdt6dcg5v6ttrhk4bt'}
 IME_PARITY_APPS = ('chromium', 'chromium-browser', 'brave-origin', 'zen', 'chatgpt', 'code', 'cursor', 'discord')
-RIGHT, CONTROL = 0xff53, 1 << 2
+RIGHT, CONTROL, SHIFT = 0xff53, 1 << 2, 1
 # Chromium's text-input-v3 path adds UppercaseWords (0x80072 in total).
 CHROMIUM_HINT = 1 << 19
 TERMINAL_HINT = 1 << 32
@@ -765,6 +765,17 @@ def session(root, report):
         assert backend.reads == reads
         checks.append('Native manual Tab survives an unchanged-authority reconnect with republished context and no retired grant')
 
+        def forwarded():
+            return [(values[0], values[2]) for name, values in context.events if name == 'ForwardKey']
+
+        context.text(PREFIX)
+        sent = len(forwarded())
+        assert context.key(desktop.TAB, CONTROL | SHIFT), 'Where Tab would request, Ctrl+Shift+Tab is Badi\'s'
+        wait(lambda: len(forwarded()) >= sent + 2, 'the literal Tab reaches the app')
+        assert forwarded()[sent:] == [(desktop.TAB, False), (desktop.TAB, True)]
+        assert context.candidate() is None and context.commits() == [SUFFIX, SUFFIX]
+        checks.append('Where the manual path would request, Ctrl+Shift+Tab reaches the app as one plain Tab')
+
         def open_context(app, capabilities=0):
             nonlocal context
             if context is not None:
@@ -1151,6 +1162,17 @@ def session(root, report):
         assert 'A window title' not in backend.requested
         checks.append('A non-identifier program never becomes an app identity')
 
+        disabled = reason_count('app_disabled')
+        open_context('org.gnome.texteditor')
+        context.text(PREFIX)
+        wait(lambda: reason_count('app_disabled') > disabled, 'a native app without a rule is denied')
+        assert not context.key(desktop.TAB) and not context.key(desktop.TAB, CONTROL | SHIFT), \
+            'Without a grant both Tab and Ctrl+Shift+Tab stay the app\'s'
+        quiet(.1)
+        assert context.candidate() is None and context.commits() == []
+        assert not [name for name, _ in context.events if name == 'ForwardKey']
+        checks.append('A native exact app without a rule keeps Ctrl+Shift+Tab (its previous tab or field)')
+
         # App blocklist mode: an app without a rule is allowed by default, which
         # opens only a field the observer corroborates; the manual path still
         # needs an exact rule, so Tab stays the application's.
@@ -1388,6 +1410,85 @@ def session(root, report):
             assert context.candidate() is None, 'the late extension never replaces the accepted version'
         checks.append('Tab during a delayed growing preview waits for its own snapshot and dispatches the exact '
                       'first word once; a silent field change instead reports stale without dispatch')
+
+        # A stream that moves from the panel to the grey preview leaves no
+        # panel showing other text than Tab accepts.
+        request = fake_request()
+        fake.respond(request, 'suggestion.show', {
+            'suggestion_id': 'panel-first', 'text': ' for', 'accept_word': ' for', 'ttl_ms': 10000,
+            'provider': 'phrase_v1'})
+        fake_wait(lambda: context.candidate() == 'for', 'the first suggestion in the panel')
+        render_result['value'] = True
+        renders = len(render_calls)
+        fake.respond(request, 'suggestion.show', {
+            'suggestion_id': 'overlay-next', 'text': SUFFIX, 'accept_word': ' for', 'ttl_ms': 10000,
+            'provider': 'phrase_v1'})
+        fake_wait(lambda: len(render_calls) > renders, 'the extension draws as the preview')
+        fake_quiet(.2)
+        render_result['value'] = False
+        assert context.candidate() is None, 'the panel leaves once the preview shows the suggestion'
+        assert context.key(desktop.ESCAPE), 'Escape dismisses the preview'
+        checks.append('A suggestion that moves from the panel to the grey preview leaves no stale panel behind')
+
+        # The broker refuses an acceptance (its suggestion expired): the
+        # connection stays, and only that suggestion is retired.
+        closes, connections, commits = fake.client_closes, fake.connections, context.commits()
+        fake.respond(fake_request(), 'suggestion.show', {
+            'suggestion_id': 'refused', 'text': SUFFIX, 'accept_word': ' for', 'ttl_ms': 10000,
+            'provider': 'phrase_v1'})
+        fake_wait(lambda: context.candidate() == SHOWN, 'a suggestion to accept')
+        controls = fake.count('control.request')
+        assert context.key(RIGHT, CONTROL)
+        fake_wait(lambda: fake.count('control.request') > controls, 'the acceptance reaches the fake broker')
+        acceptance = fake.last('control.request')
+        fake.send({'v': 2, 'id': acceptance['id'], 'type': 'error', 'mono_ms': 0, 'payload': {'code': 'expired'}})
+        fake_wait(lambda: context.candidate() is None, 'the refused acceptance retires its suggestion')
+        fake_quiet(.2)
+        assert fake.client_closes == closes and fake.connections == connections, 'the refusal kept the connection'
+        results = fake.count('commit.result')
+        fake.respond(acceptance, 'commit.prepare', {'suggestion_id': 'refused', 'text': SUFFIX, 'acceptance': 'all'})
+        fake_wait(lambda: fake.count('commit.result') > results, 'a grant after the refusal is reported')
+        assert fake.last('commit.result')['payload']['status'] == 'stale' and context.commits() == commits
+        checks.append('A broker refusal of an acceptance keeps the connection and retires only that suggestion')
+
+        # A second Tab while a revision's acceptance is in flight is a no-op;
+        # the grant still applies the revision once (ADR 0012).
+        open_context('omawrite')
+        fake_wait(lambda: fake.count('authority.ack') >= fake.connections > 0 and fake.peer is not None,
+                  'fake broker handshake')
+        selected, revised = 'she dont know', 'she does not know'
+        context.text(selected, len(selected), 0)
+        revisions = fake.count('revision.request')
+        assert context.key(ord(' '), CONTROL | SHIFT)
+        fake_wait(lambda: fake.count('revision.request') > revisions, 'the selection reaches the fake broker')
+        request = fake.last('revision.request')
+        assert request['payload']['selected'] == selected
+        fake.respond(request, 'revision.show', {
+            'revision_id': 'r1', 'mode': 'grammar', 'original': selected, 'text': revised, 'ttl_ms': 30000,
+            'provider': 'phrase_v1'})
+        fake_wait(lambda: context.candidate() is not None, 'the revision shows')
+        controls = fake.count('control.request')
+        assert context.key(desktop.TAB)
+        fake_wait(lambda: fake.count('control.request') > controls, 'Tab asks to apply the revision')
+        assert context.key(desktop.TAB), 'a second Tab is still Badi\'s'
+        fake_quiet(.1)
+        acceptance = fake.last('control.request')
+        assert fake.count('control.request') == controls + 1 and acceptance['payload']['action'] == 'accept_all'
+        results = fake.count('commit.result')
+        fake.respond(acceptance, 'commit.prepare', {
+            'suggestion_id': 'r1', 'text': revised, 'acceptance': 'all',
+            'replace_selection': request['payload']['selection']})
+        fake_wait(lambda: fake.count('commit.result') > results, 'the revision grant is reported')
+        assert fake.last('commit.result')['payload']['status'] == 'dispatched-unverified'
+        assert context.commits()[-1:] == [revised]
+        checks.append('A second Tab while a revision is being applied leaves it in flight; it is applied once')
+
+        # Any other refusal shape still closes the connection.
+        closes = fake.client_closes
+        fake.send({'v': 2, 'id': 'fcitx.accept.1.1', 'type': 'error', 'mono_ms': 0,
+                   'payload': {'code': 'stale', 'committed': False}})
+        fake_wait(lambda: fake.client_closes > closes, 'a malformed refusal closes the connection')
+        checks.append('A malformed broker refusal closes the connection')
 
         result = {'boundary': 'unavailable apps + IME-parity observed targets + synthetic desktop D-Bus fields '
                               '+ actual Fcitx addon/observer + phrase broker + injected-frame peer',

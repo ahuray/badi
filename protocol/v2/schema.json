@@ -504,7 +504,7 @@
       "additionalProperties": false,
       "required": ["kind", "name", "version"],
       "properties": {
-        "kind": { "enum": ["browser", "obsidian", "fcitx", "cli", "test", "terminal", "session", "neovim", "libreoffice"] },
+        "kind": { "enum": ["obsidian", "fcitx", "cli", "test", "terminal", "session", "neovim", "libreoffice"] },
         "name": { "type": "string", "minLength": 1, "maxLength": 64 },
         "version": { "type": "string", "minLength": 1, "maxLength": 32 }
       }

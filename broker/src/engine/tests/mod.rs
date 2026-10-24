@@ -24,9 +24,7 @@ use crate::protocol::{
     SessionId, SessionOpenPayload, SuggestRequestPayload, TargetDescriptor, TargetKind,
 };
 use crate::protocol::{ProbeOutcome, ProbeRequestPayload};
-use crate::provider::{
-    CompletionProvider, ProviderError, ProviderRequest, RequestTrigger, WritingProposal,
-};
+use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
 use crate::settings::{
     BrowserAdapter, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV2,
     StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
@@ -46,7 +44,6 @@ mod spelling;
 mod stats;
 mod style;
 mod type_through;
-#[cfg(feature = "local-model")]
 mod word_start;
 
 struct CountingProvider {
@@ -186,7 +183,7 @@ fn context(revision: u64, purpose: FieldPurpose) -> ContextChangedPayload {
         selection: Selection {
             anchor: 1,
             head: 1,
-            unit: OffsetUnit::Utf16CodeUnits,
+            unit: OffsetUnit::UnicodeScalarValues,
         },
         field: FieldDescriptor {
             purpose,
@@ -268,8 +265,7 @@ async fn setup_with_capabilities(
                 activation: Activation::Always,
             },
             SessionAuthority {
-                protocol_version: 1,
-                adapter_kind: AdapterKind::Browser,
+                adapter_kind: AdapterKind::Test,
                 capabilities,
             },
             event_sink(sink),
@@ -387,8 +383,7 @@ fn controlled_learning_settings(revision: u64, retention: RetentionPermission) -
 
 fn controlled_authority() -> SessionAuthority {
     SessionAuthority {
-        protocol_version: 1,
-        adapter_kind: AdapterKind::Browser,
+        adapter_kind: AdapterKind::Test,
         capabilities: vec![
             Capability::Context,
             Capability::Suggestion,
@@ -482,7 +477,6 @@ async fn open_observed_session(
                 activation: Activation::Always,
             },
             SessionAuthority {
-                protocol_version: 2,
                 adapter_kind: AdapterKind::Fcitx,
                 capabilities: vec![
                     Capability::Context,

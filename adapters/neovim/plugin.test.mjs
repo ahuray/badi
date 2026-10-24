@@ -12,13 +12,14 @@ import { delay, neovimSkipReason, PLUGIN, startNeovim } from './tests/harness.mj
 const skip = neovimSkipReason();
 const FAKE = join(PLUGIN, 'tests/fake-bridge.mjs');
 
-async function fakeEditor(t, config = {}) {
+async function fakeEditor(t, config = {}, policy = 'automatic') {
   const editor = await startNeovim({ config: { bridge: FAKE, delay_ms: 40, ...config } });
   const log = join(editor.root, 'bridge.log');
   await writeFile(log, '');
   editor.environment.FAKE_BRIDGE_LOG = log;
   // The bridge inherits Neovim's environment; set its log path there too.
   await editor.command(`let $FAKE_BRIDGE_LOG = ${JSON.stringify(log)}`);
+  await editor.command(`let $FAKE_BRIDGE_POLICY = ${JSON.stringify(policy)}`);
   editor.operations = async () => (await readFile(log, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
   t.after(() => editor.close());
   return editor;
@@ -101,7 +102,10 @@ test('multibyte text before the caret keeps byte-exact placement and undo', { sk
 
 test('a result for text that changed in flight is never shown', { skip }, async t => {
   const editor = await fakeEditor(t);
-  await markdown(editor, 'iplease be slow');
+  // Once the bridge has reported its policy, a pause sends the text at once.
+  await markdown(editor, 'i');
+  await editor.until(current => current.status.policy === 'automatic', 'policy');
+  await editor.send('please be slow');
   await delay(100);
   await editor.send('er');
   await delay(700);
@@ -192,6 +196,51 @@ test('read-only, special, non-prose and sensitive buffers are never read', { ski
   await editor.command('lua require("badi").request(true)');
   assert.equal(((await editor.operations()).filter(entry => entry.op === 'suggest')).length, 0,
     'No denied buffer reached the bridge');
+});
+
+test('a paused broker or a blocked Neovim gets no buffer text, and a grant resumes', { skip }, async t => {
+  const editor = await fakeEditor(t, {}, 'refused');
+  await markdown(editor, 'ithank you');
+  await editor.until(current => current.status.policy === 'refused', 'refused policy');
+  await delay(200);
+  const output = await editor.command('lua require("badi").request(true)');
+  assert.match(output, /Badi: app disabled or model paused/u);
+  let state = await editor.state();
+  assert.equal(state.status.status, 'app_disabled_or_model_paused');
+  assert.equal(state.preview, null);
+  assert.deepEqual((await editor.operations()).filter(entry => entry.op === 'suggest'), [],
+    'Neither a typing pause nor an explicit request sent text');
+  await editor.command(`call chansend(${await bridgeJob(editor)}, '{"op":"policy","allowed":true,"automatic":true}' .. "\\n")`);
+  await editor.until(current => current.status.policy === 'automatic', 'granted policy');
+  await editor.send(' <BS>');
+  state = await editor.until(current => current.preview === ' for your time', 'preview after the grant');
+  await editor.command(`call chansend(${await bridgeJob(editor)}, '{"op":"policy","allowed":false}' .. "\\n")`);
+  await editor.until(current => current.status.policy === 'refused', 'paused again');
+  const suggested = (await editor.operations()).filter(entry => entry.op === 'suggest').length;
+  await editor.send('<CR>thank you');
+  await delay(200);
+  assert.equal((await editor.operations()).filter(entry => entry.op === 'suggest').length, suggested,
+    'A pause after the broker paused sends nothing');
+});
+
+test('manual policy reads the buffer only for an explicit request', { skip }, async t => {
+  const editor = await fakeEditor(t, {}, 'manual');
+  await markdown(editor, 'ithank you');
+  await editor.until(current => current.status.policy === 'manual', 'manual policy');
+  await delay(200);
+  assert.deepEqual((await editor.operations()).filter(entry => entry.op === 'suggest'), []);
+  assert.equal((await editor.state()).status.status, 'manual_required');
+  await editor.command('lua require("badi").request(true)');
+  await editor.until(current => current.preview === ' for your time', 'explicit preview');
+  assert.deepEqual((await editor.operations()).filter(entry => entry.op === 'suggest').map(entry => entry.explicit), [true]);
+});
+
+test('a bridge that has not reported its policy is asked before any text is sent', { skip }, async t => {
+  const editor = await fakeEditor(t, {}, 'silent');
+  await markdown(editor, 'ithank you');
+  await editor.until(current => current.preview === ' for your time', 'preview');
+  const operations = (await editor.operations()).map(entry => entry.op);
+  assert.ok(operations.indexOf('status') >= 0 && operations.indexOf('status') < operations.indexOf('suggest'), operations.join());
 });
 
 test('Escape dismisses, expiry withdraws, and a bridge exit leaves no stuck preview', { skip }, async t => {

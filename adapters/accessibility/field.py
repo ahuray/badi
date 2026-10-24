@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
+import math
 import time
 from typing import NamedTuple
+import unicodedata
 from urllib.parse import urlsplit
 
-from contract import Denied, canonical_origin, credential_label
+from contract import Denied, arabic_joiner, canonical_origin, credential_label
 from desktop import Desktop
 from geometry import (calibrated_geometry, gecko_calibrated_geometry, input_method_geometry,
                       native_calibrated_geometry, visual_direction)
-from preview import font_facts
 
 # Empty sentence answers skipped back from the caret (trailing spaces).
 MAX_SENTENCE_STEPS = 8
@@ -92,11 +93,94 @@ def narrow_field(field, glyph):
     return field.width < 12 * glyph.width
 
 
+_WEIGHTS = {
+    "thin": 100, "hairline": 100, "extralight": 200, "ultralight": 200,
+    "light": 300, "normal": 400, "regular": 400, "book": 400, "medium": 500,
+    "semibold": 600, "demibold": 600, "bold": 700, "extrabold": 800,
+    "ultrabold": 800, "black": 900, "heavy": 900,
+}
+
+
+def _family(value):
+    if not isinstance(value, str):
+        return None
+    name = value.split(",", 1)[0].strip().strip("'\"")
+    if not 1 <= len(name) <= 64 or any(ord(char) < 32 or char in "\\{}<>;" for char in name):
+        return None
+    return name
+
+
+def _font_size(value):
+    """(points, pixels). A bare AT-SPI size is in points; an explicit px is pixels."""
+    if isinstance(value, bool) or value is None:
+        return None, None
+    unit = "pt"
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        text = value.strip().lower()
+        if text.endswith("px"):
+            unit, text = "px", text[:-2].strip()
+        elif text.endswith("pt"):
+            text = text[:-2].strip()
+        try:
+            number = float(text)
+        except ValueError:
+            return None, None
+    else:
+        return None, None
+    if not math.isfinite(number) or not 4 <= number <= 96:
+        return None, None
+    return (None, number) if unit == "px" else (number, None)
+
+
+def _font_weight(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, str):
+        named = _WEIGHTS.get(value.strip().lower().replace(" ", "").replace("-", ""))
+        if named is not None:
+            return named
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+    elif isinstance(value, (int, float)) and math.isfinite(value):
+        number = float(value)
+    else:
+        return None
+    if not math.isfinite(number) or not 100 <= number <= 900:
+        return None
+    return int(round(number / 100) * 100)
+
+
+def font_facts(attributes):
+    """Family, size and weight from one AT-SPI text-attribute run.
+
+    Missing or unusable values are omitted. The caret glyph then supplies the size.
+    """
+    if not isinstance(attributes, dict):
+        return {}
+    facts = {}
+    family = _family(attributes.get("family-name", attributes.get("font-family")))
+    if family:
+        facts["family"] = family
+    points, pixels = _font_size(attributes.get("size", attributes.get("font-size")))
+    if points is not None:
+        facts["size_pt"] = points
+    elif pixels is not None:
+        facts["size_px"] = pixels
+    weight = _font_weight(attributes.get("weight", attributes.get("font-weight")))
+    if weight is not None:
+        facts["weight"] = weight
+    return facts
+
+
 class FieldBackend:
     """The Observer's backend: the one focused field of the verified active window.
 
     Every AT-SPI and desktop call first checks the operation's `deadline`,
-    which the daemon sets per request.
+    which the daemon sets for each request and each field event it handles.
     """
 
     def __init__(self, atspi, apps):
@@ -584,15 +668,18 @@ class FieldBackend:
         found = {"chunks": [], "chars": 0, "visits": 0, "until": until}
         child = node
         for ancestor in self.ancestors(node.get_parent()):
-            index = child.get_index_in_parent()
-            count = min(ancestor.get_child_count(), MAX_CHILDREN)
-            nearest = [*range(min(index, count) - 1, -1, -1), *range(index + 1, count)]
-            for sibling_index in nearest:
-                if self.vocabulary_full(found):
-                    break
-                sibling = ancestor.get_child_at_index(sibling_index)
-                if sibling is not None:
-                    self.vocabulary_walk(sibling, found, 0)
+            # Once the walk is full only the climb to the document remains,
+            # two calls per level, which the headroom is for.
+            if not self.vocabulary_full(found):
+                index = child.get_index_in_parent()
+                count = min(ancestor.get_child_count(), MAX_CHILDREN)
+                nearest = [*range(min(index, count) - 1, -1, -1), *range(index + 1, count)]
+                for sibling_index in nearest:
+                    if self.vocabulary_full(found):
+                        break
+                    sibling = ancestor.get_child_at_index(sibling_index)
+                    if sibling is not None:
+                        self.vocabulary_walk(sibling, found, 0)
             if ancestor.get_role_name() == "document web":
                 text = " ".join(found["chunks"])
                 return window_text(text, VOCABULARY_CHARS, tail=False) if text else None
@@ -620,7 +707,7 @@ class FieldBackend:
             text = node.get_text_iface()
             count = min(text.get_character_count(), VOCABULARY_CHARS)
             # A child element appears as one embedded object and is read itself.
-            value = " ".join(self.atspi.Text.get_text(text, 0, count).replace(EMBEDDED_OBJECT, " ").split())
+            value = displayed_text(self.atspi.Text.get_text(text, 0, count))
             if value:
                 found["chunks"].append(value)
                 found["chars"] += len(value) + 1
@@ -879,10 +966,28 @@ class FieldBackend:
         return value
 
 
+def displayed_text(value):
+    """`value` as the Fcitx addon accepts window text (validContextText).
+
+    Format characters (Unicode Cf: a soft hyphen, the zero-width joiner inside
+    an emoji sequence, a byte-order mark, bidi controls) are deleted, except a
+    zero-width non-joiner between two Arabic letters. Control characters (Cc)
+    and embedded objects become spaces, and spacing is collapsed.
+    """
+    kept = []
+    for index, char in enumerate(value):
+        category = unicodedata.category(char)
+        if char == EMBEDDED_OBJECT or category == "Cc":
+            kept.append(" ")
+        elif category != "Cf" or arabic_joiner(value, index):
+            kept.append(char)
+    return " ".join("".join(kept).split())
+
+
 def window_text(value, limit, tail):
-    """Prose from one heading or paragraph: embedded objects dropped, spacing
-    collapsed, and cut at a word boundary to `limit` characters."""
-    text = " ".join(value.replace(EMBEDDED_OBJECT, " ").split())
+    """Prose from one heading or paragraph (`displayed_text`), cut at a word
+    boundary to `limit` characters."""
+    text = displayed_text(value)
     if len(text) <= limit:
         return text
     if tail:

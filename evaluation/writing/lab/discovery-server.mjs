@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { fromLabPage, readJSON, sendJSON, setSecurityHeaders } from './http.mjs';
 import { DiscoveryService } from './discovery.mjs';
 
 const OPERATIONS = { search: ['query', 'cursor'], inspect: ['model_id'], assess: ['candidate_id'], download: ['candidate_id'], select: ['artifact_id'], reset: [] };
@@ -7,15 +7,9 @@ export const isDiscoveryRoute = path => ROUTES.has(path);
 const error = (code, message = code) => Object.assign(new Error(message), { code });
 
 async function inputJSON(request, operation) {
-  const chunks = []; let length = 0;
-  for await (const chunk of request) {
-    length += chunk.length;
-    if (length > 2048) throw error('discovery_invalid_input', 'Discovery accepts only bounded model search and selection fields.');
-    chunks.push(chunk);
-  }
-  let value;
-  try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); }
-  catch { throw error('discovery_invalid_input', 'Use a JSON object.'); }
+  const value = await readJSON(request, 2048, {
+    tooLarge: () => error('discovery_invalid_input', 'Discovery accepts only bounded model search and selection fields.'),
+    malformed: () => error('discovery_invalid_input', 'Use a JSON object.') });
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !OPERATIONS[operation].includes(key))
     || Object.values(value).some(field => typeof field !== 'string')
     || operation !== 'reset' && Object.keys(value).length < 1
@@ -43,20 +37,10 @@ export function createDiscoveryHandler({ origin, capability, isOtherBusy = () =>
     reset,
     async handle(request, response) {
       if (!isDiscoveryRoute(request.url)) return false;
-      response.setHeader('Cache-Control', 'no-store');
-      response.setHeader('X-Content-Type-Options', 'nosniff');
-      response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-      response.setHeader('Referrer-Policy', 'no-referrer');
-      response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
-      const send = (status, value) => {
-        if (response.destroyed || response.writableEnded) return;
-        response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(value));
-      };
+      setSecurityHeaders(response);
+      const send = (status, value) => sendJSON(response, status, value);
       try {
-        const expectedOrigin = origin();
-        const token = Buffer.from(String(request.headers['x-badi-lab-token'] ?? ''));
-        if (request.headers.host !== new URL(expectedOrigin).host || request.headers.origin && request.headers.origin !== expectedOrigin
-          || token.length !== capability.length || !timingSafeEqual(token, Buffer.from(capability))) {
+        if (!fromLabPage(request, origin(), capability)) {
           send(403, { error: 'discovery_forbidden', message: 'Refresh the local Lab page to reconnect.' }); return true;
         }
         if (request.method === 'GET' && request.url === '/api/discovery/status') {

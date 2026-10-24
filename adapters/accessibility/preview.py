@@ -3,43 +3,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-import re
 import subprocess
 from threading import Thread
 import time
 import unicodedata
 
-from contract import MAX_PREVIEW_TTL_MS, RIGHT_TO_LEFT
+from contract import MAX_PREVIEW_TTL_MS, RIGHT_TO_LEFT, suggestion_text
 from geometry import CALIBRATED
 import debugtrace as trace
 
 
 def _number(value, minimum=-100000, maximum=100000):
     return type(value) in (int, float) and math.isfinite(value) and minimum <= value <= maximum
-
-
-def _arabic_letter(value):
-    return any(low <= ord(value) <= high for low, high in (
-        (0x0620, 0x063F), (0x0641, 0x064A), (0x066E, 0x066F),
-        (0x0671, 0x06D3), (0x06D5, 0x06D5), (0x06E5, 0x06E6),
-        (0x06EE, 0x06EF), (0x06FA, 0x06FC), (0x06FF, 0x06FF)))
-
-
-# One trailing ASCII space is the mid-sentence separator. Repeated spaces and
-# any other whitespace stay out of the grey text.
-_PREVIEW_SPACING = re.compile(r"^ ?\S(?: ?\S)* ?$")
-
-
-def valid_preview_text(text):
-    if not isinstance(text, str) or not 1 <= len(text) <= 64 or _PREVIEW_SPACING.fullmatch(text) is None:
-        return False
-    for index, char in enumerate(text):
-        if char == "\u200c":
-            if not (0 < index < len(text) - 1 and _arabic_letter(text[index - 1]) and _arabic_letter(text[index + 1])):
-                return False
-        elif unicodedata.category(char).startswith("C") or (char.isspace() and char != " "):
-            return False
-    return True
 
 
 # Space between a chip's edge and its text: (horizontal, vertical).
@@ -120,89 +95,6 @@ def mapped_caret(focus):
         return None
 
 
-_WEIGHTS = {
-    "thin": 100, "hairline": 100, "extralight": 200, "ultralight": 200,
-    "light": 300, "normal": 400, "regular": 400, "book": 400, "medium": 500,
-    "semibold": 600, "demibold": 600, "bold": 700, "extrabold": 800,
-    "ultrabold": 800, "black": 900, "heavy": 900,
-}
-
-
-def _family(value):
-    if not isinstance(value, str):
-        return None
-    name = value.split(",", 1)[0].strip().strip("'\"")
-    if not 1 <= len(name) <= 64 or any(ord(char) < 32 or char in "\\{}<>;" for char in name):
-        return None
-    return name
-
-
-def _font_size(value):
-    """(points, pixels). A bare AT-SPI size is in points; an explicit px is pixels."""
-    if isinstance(value, bool) or value is None:
-        return None, None
-    unit = "pt"
-    if isinstance(value, (int, float)):
-        number = float(value)
-    elif isinstance(value, str):
-        text = value.strip().lower()
-        if text.endswith("px"):
-            unit, text = "px", text[:-2].strip()
-        elif text.endswith("pt"):
-            text = text[:-2].strip()
-        try:
-            number = float(text)
-        except ValueError:
-            return None, None
-    else:
-        return None, None
-    if not math.isfinite(number) or not 4 <= number <= 96:
-        return None, None
-    return (None, number) if unit == "px" else (number, None)
-
-
-def _font_weight(value):
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, str):
-        named = _WEIGHTS.get(value.strip().lower().replace(" ", "").replace("-", ""))
-        if named is not None:
-            return named
-        try:
-            number = float(value.strip())
-        except ValueError:
-            return None
-    elif isinstance(value, (int, float)) and math.isfinite(value):
-        number = float(value)
-    else:
-        return None
-    if not math.isfinite(number) or not 100 <= number <= 900:
-        return None
-    return int(round(number / 100) * 100)
-
-
-def font_facts(attributes):
-    """Family, size and weight from one AT-SPI text-attribute run.
-
-    Missing or unusable values are omitted. The caret glyph then supplies the size.
-    """
-    if not isinstance(attributes, dict):
-        return {}
-    facts = {}
-    family = _family(attributes.get("family-name", attributes.get("font-family")))
-    if family:
-        facts["family"] = family
-    points, pixels = _font_size(attributes.get("size", attributes.get("font-size")))
-    if points is not None:
-        facts["size_pt"] = points
-    elif pixels is not None:
-        facts["size_px"] = pixels
-    weight = _font_weight(attributes.get("weight", attributes.get("font-weight")))
-    if weight is not None:
-        facts["weight"] = weight
-    return facts
-
-
 def font_pixels(caret, font=None):
     """The field's reported size when it is usable, otherwise its glyph box."""
     fallback = max(6, min(72, caret.line_height * .86))
@@ -235,8 +127,8 @@ def _baseline_y(caret, height, baseline, field_ascent):
     """Ghost top so its baseline lands on the field's baseline.
 
     With the field font's real ascent, the field baseline sits that far
-    below the glyph box top. Without it, scale the layout's own baseline
-    ratio onto the glyph box (the earlier heuristic).
+    below the glyph box top. Without it, the fallback scales the layout's own
+    baseline ratio onto the glyph box.
     """
     if field_ascent is not None and _number(field_ascent, 1, 256):
         return caret.y + field_ascent - baseline
@@ -557,7 +449,9 @@ class Preview:
 
     def _render(self, focus, text, ttl_ms):
         """The drawn placement and box, or the `reason` it was declined."""
-        if not valid_preview_text(text) or type(ttl_ms) is not int or not 1 <= ttl_ms <= MAX_PREVIEW_TTL_MS:
+        # The observer checked the request already; the overlay keeps its own
+        # bound on what it draws and for how long, with the same rule.
+        if not suggestion_text(text) or type(ttl_ms) is not int or not 1 <= ttl_ms <= MAX_PREVIEW_TTL_MS:
             return {"reason": "invalid_request"}
         caret = mapped_caret(focus)
         if caret is None:

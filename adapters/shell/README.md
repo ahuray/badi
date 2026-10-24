@@ -29,6 +29,11 @@ other keys or runs a command. The Bash hook is the only mutation path, through
 characters (Bash 5.0+). Each shell starts its Node bridge (about 60 MB) on the
 first Ctrl-X Tab, and the bridge exits after ten idle minutes.
 
+Ctrl-X Escape sends the bridge `dismiss`, which tells the broker the user
+declined the suggestion: it ends the type-through carry and starts any Escape
+quiet period. A preview Bash cannot draw sends `cancel` instead, which only
+closes the session.
+
 ## Build and install
 
 Needs Python 3, a C compiler and the Bash and Readline development headers (on
@@ -59,8 +64,10 @@ bridge, covering:
 - Persian caret positions;
 - Ctrl-C and SIGHUP handling.
 
-`npm run editors:integration` adds a real phrase broker, pause and reconnects.
+`npm run editors:integration` adds a real phrase broker, pause, reconnects,
+and the bridge's `cancel` keeping the carried rest while `dismiss` ends it.
 
-A physical trial in Ghostty 1.3.1 with Bash 5.3.15, Readline 8.3 and the real
-model showed the preview, acceptance, an `adress ` → `address ` correction and
-exact undo, without submitting anything.
+| Bash, Readline | Terminal | Provider | Result |
+| --- | --- | --- | --- |
+| 5.3.20, 8.3 | PTY (both lanes above) | controlled bridge, phrase fixture | pass |
+| 5.3.15, 8.3 | Ghostty 1.3.1 | real model | preview, acceptance, an `adress ` → `address ` correction and exact undo, nothing submitted |

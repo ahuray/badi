@@ -64,7 +64,7 @@ links to it. A tested app version is not a claim about Linux in general.
   ([model fit](docs/architecture/model-selection.md)). Mid-sentence
   suggestions rarely help, and longer Tab chains drift; the model, not the
   context window, is the limit ([why](broker/README.md#suggestion-limits)).
-  Revision with Qwen3 1.7B fixed 50 of 75 development errors across the five
+  Revision with Qwen3 1.7B fixed 53 of 75 development errors across the five
   languages (Spanish 7/15, weakest) and left 19 of 20 correct inputs alone
   ([Lab](evaluation/writing/README.md#selection-revision)).
 - **Security:** a review on 2026-10-23 found nothing critical or high; the
@@ -87,6 +87,10 @@ links to it. A tested app version is not a claim about Linux in general.
   [Debian 13 and Ubuntu 24.04 package](packaging/debian/README.md), which CI
   builds, lints and installs in containers (2026-10-23); neither is
   published, and no GNOME or KDE session has run Badi (step 7).
+- **Code health:** a full review before the 0.2.0 fresh start (2026-10-24)
+  fixed every correctness finding it confirmed, with regression tests, and
+  removed dormant paths and failed experiments; what it could not check live
+  is under [Engineering upkeep](#engineering-upkeep).
 
 Standing user decisions:
 - IME-parity for Chromium-based apps, Zen and LibreOffice Writer
@@ -368,7 +372,8 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       an uncached model call of 0.4–0.6 s at the 28 W limit (1–2.5 s with
       the earlier Qwen3 1.7B at 15 W), so it fits Writer's spelling budget
       but often not the 550 ms typing budget; a cached spelling prompt slot
-      would close that gap.
+      would close that gap. The Lab has no separate spelling engine: measure
+      through `production_boundary` with the dictionary languages on.
 
 - [ ] Qualify French, Spanish and Portuguese before turning them on by default
       (they are opt-in with `badi suggest LANG on`). Gather independently
@@ -381,7 +386,8 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] A strength setting that trades frequency for confidence (instructions
       are in step 1).
 - [ ] Cut the latency of the combined instruction/boundary mode (18/22 useful
-      in development, 2.8 s cold median) and confirm it independently.
+      in development, 2.8 s cold median) and confirm it independently. Its
+      template is Qwen3's, so the Lab runs it only on Qwen3 1.7B.
 - [ ] Keep facts in style examples from overriding the draft; confirm the Lab's
       `style_fact_conflict` fence across languages.
 - [ ] Tell an intended partial word from a completed one before contextual
@@ -448,16 +454,43 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 ### Engineering upkeep
 
-- [ ] The partial-suggestion path (`KeepPartial`, `shown_partial` in
-      `broker/src/engine/generation.rs`) no longer runs: the confidence gate
-      delivers each suggestion whole, and only test fakes send partials.
-      Delete it, or reuse it for showing the first word once its own tokens
-      pass the gate (Speed and footprint).
+- [ ] Live-check what the 0.2.0 review fixed from source only, each with
+      `badi debug on --text` and disposable text: the grey preview following
+      a scroll, window words on a page with emoji and soft hyphens,
+      Ctrl+Shift+Tab staying the app's key in a native app with no rule, a
+      broker `error` frame ending only its request, the panel after `badi
+      screen-share suggest` (writes still enabled), one language chip, rows
+      and the site draft surviving a poll, Neovim reading no buffer while
+      paused, and Writer superseding a slow spelling request.
+- [ ] Broker `error` frames carry no session, and the Fcitx addon's request
+      ids repeat across sessions, so the addon retires a refused id in every
+      binding holding it (this only withdraws). Echo the session coordinates
+      in `error`, or make ids per session, so the match is exact. A refused
+      `session.open` also leaves the binding thinking it is open until the
+      authority change that follows.
+- [ ] The session helper delivers the keyring's style key after its report
+      now, but libsecret's lookup is still synchronous on the main loop; make
+      it asynchronous.
+- [ ] Structure left by the review, each only when its file is next touched:
+      the Fcitx `Binding` (about 50 fields, one expiry timer for notices,
+      suggestions and revisions) as small reset-able parts and one retire
+      function for authority change and disconnect; `Observer.snapshot` and
+      `Preview._render`; a shared stdio and idle-exit module for the Bash
+      and Neovim bridges; and a tested `SettingsModel.js` with one status
+      ladder for the panel (new files need the installers' and the
+      PKGBUILD's lists, which a test now compares).
 
-- [ ] Carry out [ADR 0007](docs/decisions/0007-retire-protocol-v1.md),
-      accepted on 2026-10-13: `PROTOCOL_VERSION` is still 1, the v1 surface is
-      live in the broker, and `protocol/v1/` and the v1 settings schema are
-      still loaded by tests. Every client already sends `min_v: 2`.
+- [ ] [ADR 0007](docs/decisions/0007-retire-protocol-v1.md) step 4: once
+      every known install has started a v2-only broker (0.2.0), delete the
+      on-disk v1 settings migration, `badi.settings.v1.schema.json` and the
+      panel lifecycle and schema tests that exercise it.
+- [ ] Broker structure left by the review: share the provider-result
+      classification between `engine/generation.rs` and `probe.rs`, fold the
+      five queue-and-reply copies in `outcomes.rs` into one, move the
+      provider-kind validator choice out of the engine, collapse
+      `complete`/`propose` once the Lab calls `propose_outcome`, and move the
+      remaining inline tests into `<module>/tests.rs` when those files are
+      next touched.
 
 - [ ] The Lab test "process exit rejects the active request and a later
       request starts a fresh process" (`worker.test.mjs`) failed once in CI

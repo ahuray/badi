@@ -14,7 +14,6 @@ namespace badi::fcitx5 {
 namespace {
 
 constexpr std::uint64_t kMaxSafeCounter = (std::uint64_t{1} << 53U) - 1U;
-// Chromium's text-input serialization of a <p> block end (see state.h).
 
 std::uint64_t mix(std::string_view value, std::uint64_t seed) {
     auto hash = seed;
@@ -173,7 +172,7 @@ bool correctsAfterChecks(std::string_view appId) {
 bool correctionLanded(std::string_view before, std::string_view expected) {
     constexpr std::size_t kReadBackBytes = 64;
     auto tail = expected.size() > kReadBackBytes ? expected.substr(expected.size() - kReadBackBytes) : expected;
-    while (!tail.empty() && (static_cast<unsigned char>(tail.front()) & 0xC0U) == 0x80U) tail.remove_prefix(1);
+    while (!tail.empty() && utf8Continuation(tail.front())) tail.remove_prefix(1);
     return !tail.empty() && before.ends_with(tail);
 }
 
@@ -181,8 +180,8 @@ std::optional<unsigned> nativeReplacementChars(bool imeParity, std::string_view 
                                                 std::string_view suffix) {
     if (imeParity || suffix.empty() || !before.ends_with(suffix)) return std::nullopt;
     unsigned count = 0;
-    for (const unsigned char byte : suffix) {
-        if ((byte & 0xC0U) != 0x80U) ++count;
+    for (const char byte : suffix) {
+        if (!utf8Continuation(byte)) ++count;
     }
     if (count == 0) return std::nullopt;
     return count;
@@ -239,27 +238,27 @@ bool claimInvokeChord(bool editingAvailable, bool policyAllowed, bool foreignIme
     return editingAvailable && policyAllowed && !foreignIme;
 }
 
-LocalAction decideLocalAction(bool invokeChord, bool acceptChord,
-                              bool escapeKey, bool hasLiveOwnedCandidate,
+LocalAction decideLocalAction(bool invokeChord, bool acceptChord, bool hasLiveOwnedCandidate,
                               const PanelObservation &panel) {
     if (hasForeignImeUi(panel)) return LocalAction::PassThrough;
     if (invokeChord) return LocalAction::Invoke;
-    if (!hasLiveOwnedCandidate || !hasOwnedCandidate(panel)) {
-        return LocalAction::PassThrough;
-    }
-    if (acceptChord) return LocalAction::AcceptAll;
-    if (escapeKey) return LocalAction::Dismiss;
+    if (acceptChord && hasLiveOwnedCandidate && hasOwnedCandidate(panel)) return LocalAction::AcceptAll;
     return LocalAction::PassThrough;
 }
 
-LocalAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
-                            const PanelObservation &panel, NativeEditPath path) {
-    if (hasForeignImeUi(panel)) return LocalAction::PassThrough;
-    if (hasLiveOwnedCandidate && hasOwnedCandidate(panel)) return LocalAction::AcceptWord;
+TabAction decideTabAction(bool eligibleContext, bool hasLiveOwnedCandidate,
+                          const PanelObservation &panel, NativeEditPath path) {
+    if (hasForeignImeUi(panel)) return TabAction::PassThrough;
+    if (hasLiveOwnedCandidate && hasOwnedCandidate(panel)) return TabAction::AcceptWord;
     // Observed fields suggest on their own, so Tab without a suggestion keeps
     // its meaning (next field, indent); requesting there takes the chord.
     const bool tabRequests = eligibleContext && path == NativeEditPath::Manual;
-    return tabRequests ? LocalAction::Invoke : LocalAction::PassThrough;
+    return tabRequests ? TabAction::Invoke : TabAction::PassThrough;
+}
+
+bool manualTabRequests(NativeEditPath path, bool editingAvailable, bool policyAllowed,
+                       const std::optional<ContextWindow> &context) {
+    return path == NativeEditPath::Manual && editingAvailable && policyAllowed && tabEligibleContext(context);
 }
 
 PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeShown,
@@ -282,11 +281,9 @@ PreKeyAction decidePreKey(const PreKey &key, bool editingAvailable, bool noticeS
     if (key.escape && noticeShown && !suggestionVisible && !hasForeignImeUi(panel)) {
         return PreKeyAction::CloseNotice;
     }
-    const bool liveOwnedCandidate = suggestionVisible && panel.candidatesOwnedByBadi;
-    if (decideLocalAction(false, false, key.escape, liveOwnedCandidate, panel) == LocalAction::Dismiss) {
-        return PreKeyAction::Dismiss;
-    }
-    const bool ownedUi = liveOwnedCandidate && hasOwnedCandidate(panel) && !hasForeignImeUi(panel);
+    // Badi's own live candidate: Escape dismisses it and Ctrl+Right takes it.
+    const bool ownedUi = suggestionVisible && panel.candidatesOwnedByBadi && hasOwnedCandidate(panel);
+    if (key.escape && ownedUi) return PreKeyAction::Dismiss;
     if (key.all && ownedUi) return PreKeyAction::AcceptAll;
     if (key.modifier || key.chord) return PreKeyAction::PassThrough;
     if (key.escape) return PreKeyAction::CancelDeclining;
@@ -442,12 +439,6 @@ std::string observedAfter(const ContextWindow &context) {
     return context.paragraphEnd.empty() ? context.after : context.paragraphEnd;
 }
 
-namespace {
-
-bool continuation(char byte) { return (static_cast<unsigned char>(byte) & 0xC0U) == 0x80U; }
-
-} // namespace
-
 LineEdit lineEditFor(const ::fcitx::Key &key, std::string_view typed) {
     const auto states = key.states();
     const bool ctrl = !!(states & ::fcitx::KeyState::Ctrl);
@@ -490,17 +481,17 @@ LineEdit lineEditFor(const ::fcitx::Key &key, std::string_view typed) {
     }
     // Readline's word motion and deletion.
     if (alt && !ctrl && (letter('b') || letter('f') || letter('d'))) return LineEdit::Lose;
-    if (!typed.empty() && static_cast<unsigned char>(typed[0]) >= 0x20 && typed != "\x7f") return LineEdit::Type;
+    if (printableKey(typed)) return LineEdit::Type;
     return LineEdit::Restart;
 }
 
 void TypedLine::apply(LineEdit edit, std::string_view typed) {
     if (edit == LineEdit::Clear) return clear();
-    if (edit == LineEdit::Restart) return restart();
+    if (edit == LineEdit::Restart) return clear();
     if (edit == LineEdit::Lose) return lose();
     if (!tracking_) {
         // End puts the caret back at the end of whatever the line holds.
-        if (edit == LineEdit::End) restart();
+        if (edit == LineEdit::End) clear();
         return;
     }
     switch (edit) {
@@ -512,7 +503,7 @@ void TypedLine::apply(LineEdit edit, std::string_view typed) {
         if (text_.empty()) return clear();
         if (caret_ < text_.size()) {
             auto end = caret_ + 1;
-            while (end < text_.size() && continuation(text_[end])) ++end;
+            while (end < text_.size() && utf8Continuation(text_[end])) ++end;
             text_.erase(caret_, end - caret_);
         }
         return;
@@ -533,7 +524,7 @@ void TypedLine::type(std::string_view text) {
     constexpr std::size_t limit = kMaxBeforeScalars * 4;
     if (text_.size() > limit) {
         auto start = text_.size() - limit;
-        while (start < text_.size() && continuation(text_[start])) ++start;
+        while (start < text_.size() && utf8Continuation(text_[start])) ++start;
         text_.erase(0, start);
         caret_ = caret_ > start ? caret_ - start : 0;
     }
@@ -543,7 +534,7 @@ void TypedLine::erase(std::size_t count) {
     if (!tracking_) return;
     for (; count > 0 && caret_ > 0; --count) {
         auto start = caret_ - 1;
-        while (start > 0 && continuation(text_[start])) --start;
+        while (start > 0 && utf8Continuation(text_[start])) --start;
         text_.erase(start, caret_ - start);
         caret_ = start;
     }
@@ -563,13 +554,13 @@ void TypedLine::eraseWord() {
 
 bool TypedLine::left() {
     if (caret_ == 0) return false;
-    do --caret_; while (caret_ > 0 && continuation(text_[caret_]));
+    do --caret_; while (caret_ > 0 && utf8Continuation(text_[caret_]));
     return true;
 }
 
 bool TypedLine::right() {
     if (caret_ >= text_.size()) return false;
-    do ++caret_; while (caret_ < text_.size() && continuation(text_[caret_]));
+    do ++caret_; while (caret_ < text_.size() && utf8Continuation(text_[caret_]));
     return true;
 }
 
@@ -578,8 +569,6 @@ void TypedLine::clear() {
     caret_ = 0;
     tracking_ = true;
 }
-
-void TypedLine::restart() { clear(); }
 
 void TypedLine::lose() {
     text_.clear();
@@ -590,7 +579,7 @@ void TypedLine::lose() {
 std::size_t TypedLine::caretScalars() const {
     const auto head = before();
     return static_cast<std::size_t>(std::count_if(head.begin(), head.end(),
-                                                  [](char byte) { return !continuation(byte); }));
+                                                  [](char byte) { return !utf8Continuation(byte); }));
 }
 
 bool TypedLine::prose() const {
@@ -647,9 +636,30 @@ void SessionState::denyEditing() {
     invalidateContext();
 }
 
-void SessionState::retireObservation() {
-    editPath_ = NativeEditPath::Manual;
-    invalidateContext();
+bool SessionState::retireObservation(std::string sessionId, std::string targetId, std::string fingerprintSalt) {
+    const auto appId = appId_;
+    return focusIn(std::move(sessionId), std::move(targetId), appId, std::move(fingerprintSalt),
+                   NativeEditTarget::DesktopApplication, NativeEditPath::Manual);
+}
+
+std::string suggestRequestId(const Coordinates &coordinates) {
+    return "fcitx.suggest." + std::to_string(coordinates.focusEpoch) + "." + std::to_string(coordinates.revision);
+}
+
+RefusedRequest SessionState::refuseRequest(std::string_view requestId) {
+    if (!focused_ || requestId.empty()) return RefusedRequest::None;
+    if (pendingAcceptance_ && pendingAcceptance_->controlId == requestId) {
+        clearSuggestion();
+        return RefusedRequest::Acceptance;
+    }
+    if ((revisionAcceptance_ && revisionAcceptance_->controlId == requestId) ||
+        (revisionRequest_ && revisionRequest_->requestId == requestId)) {
+        clearRevision();
+        return RefusedRequest::Revision;
+    }
+    // The context stays: only a new edit or an explicit request asks again.
+    if (lastContext_ && requestId == suggestRequestId(lastContext_->coordinates)) return RefusedRequest::Suggestion;
+    return RefusedRequest::None;
 }
 
 void SessionState::invalidateContext() {
@@ -731,8 +741,7 @@ SessionState::requestAcceptance(std::uint64_t nowMs,
         clearSuggestion();
         return std::nullopt;
     }
-    if (!focused_ || hasForeignImeUi(panel) ||
-        pendingAcceptance_ || !visible_ || visible_->expiresAtMs <= nowMs ||
+    if (!focused_ || pendingAcceptance_ || !visible_ || visible_->expiresAtMs <= nowMs ||
         visible_->coordinates != coordinates_) {
         if (visible_ && visible_->expiresAtMs <= nowMs) clearSuggestion();
         return std::nullopt;
@@ -757,8 +766,7 @@ SessionState::requestDismissal(std::uint64_t nowMs,
         clearSuggestion();
         return std::nullopt;
     }
-    if (!focused_ || hasForeignImeUi(panel) || !visible_ ||
-        visible_->expiresAtMs <= nowMs ||
+    if (!focused_ || !visible_ || visible_->expiresAtMs <= nowMs ||
         visible_->coordinates != coordinates_) {
         if (visible_ && visible_->expiresAtMs <= nowMs) clearSuggestion();
         return std::nullopt;
@@ -864,7 +872,7 @@ bool SessionState::showRevision(Revision revision, std::uint64_t nowMs) {
 std::optional<AcceptRequest> SessionState::requestRevisionAcceptance(std::uint64_t nowMs,
                                                                      const PanelObservation &panel) {
     if (!focused_ || !editingAvailable() || !revision_ || revisionAcceptance_ || !hasOwnedCandidate(panel) ||
-        hasForeignImeUi(panel) || revision_->coordinates != coordinates_) {
+        revision_->coordinates != coordinates_) {
         return std::nullopt;
     }
     if (revision_->expiresAtMs <= nowMs) {

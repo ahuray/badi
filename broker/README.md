@@ -24,13 +24,16 @@ and whether they were dirty (`--version` prints both; packagers may set
   only ([ADR 0001](../docs/decisions/0001-same-uid-trust-boundary.md)). Frames
   are at most 64 KiB. Wire schemas live in [protocol/](../protocol/), control
   documents in [schemas/](schemas/).
-- **Negotiation.** `hello` negotiates protocol v1 or v2 and the capabilities a
-  connection may use: context, suggestion, commit kinds, text replacement,
-  policy, control, health, settings, an optional `long_reading_window` and,
-  for the session helper only, `desktop_signals` (v2). Every shipped client
-  negotiates v2 only; retiring v1, including what keeps it alive and the
-  removal order, is decided in
-  [ADR 0007](../docs/decisions/0007-retire-protocol-v1.md).
+- **Negotiation.** `hello` names protocol v2 (`min_v` and `max_v` 2) and the
+  capabilities a connection may use: context, suggestion, commit kinds, text
+  replacement, policy, control, health, settings, an optional
+  `long_reading_window` and, for the session helper only, `desktop_signals`.
+  Protocol v1 is retired
+  ([ADR 0007](../docs/decisions/0007-retire-protocol-v1.md)): a v1 frame or a
+  hello asking for v1 is answered with an `unsupported_version` error and
+  closed before any session, grant or settings access exists. Every other
+  refused hello also gets an `error` naming its reason, and leaves a
+  content-free journal line; a peer of another user gets no reply.
 - **Binding.** A suggestion is bound to its session, focus epoch, revision,
   fingerprint and expiry, and acceptance is one-shot.
 - **Authority acknowledgement.** A policy-capable connection must answer
@@ -43,23 +46,20 @@ and whether they were dirty (`--version` prints both; packagers may set
   data plane until the new epoch is acknowledged.
 - **Leases.** An adapter must report a granted commit within 1.5 s. Retained
   context normally expires after 3 s of silence. V2 native/editor clients
-  negotiating `long_reading_window` get 15 s to read a suggestion; other v2
-  native/editor clients retain 5 s, and v1/browser clients retain 600 ms.
+  negotiating `long_reading_window` get 15 s to read a suggestion; other
+  native/editor clients retain 5 s, and other clients 600 ms.
   Native/editor context lasts at least the generation budget plus that reading
-  window (up to 16.25 s for an explicit extended request). Growing previews
-  and type-through keep the original expiry; there is no periodic renewal.
+  window (up to 16.25 s for an explicit extended request). Type-through
+  keeps the original expiry; there is no periodic renewal.
   Every field, revision, fingerprint, focus, policy and one-shot guard remains.
   Update the broker before clients advertising the new capability; an older
   broker rejects it. Fcitx, Obsidian, Neovim and the LibreOffice Writer
   extension opt in; Bash keeps its existing lease.
-- **Growing previews.** The protocol lets a suggestion grow in versions,
-  each with an immutable id and text. An earlier version stays acceptable
-  only within the same generation, field revision and original expiry, so a
-  word crossing Tab on the socket cannot swallow the acceptance; accepting or
-  dismissing any version retires them all. The local model's
-  [confidence gate](#suggestion-limits) now holds each suggestion until it is
-  judged whole, so every suggestion arrives as one version and the partial
-  path is dormant ([backlog](<../future plans.md>)).
+- **One version.** Each request is answered by at most one
+  `suggestion.show`, with an immutable id and text, after the local model's
+  [confidence gate](#suggestion-limits) judged the whole suggestion. Accepting
+  or dismissing it, or its `suggestion.clear`, which names that id, retires
+  it.
 - **Type-through** ([ADR 0004](../docs/decisions/0004-type-through-carries-text-not-authority.md)).
   The last shown continuation is kept as text only.
   - When a later admitted request in the same app or site keeps `after` and
@@ -74,15 +74,17 @@ and whether they were dirty (`--version` prints both; packagers may set
     session, which Fcitx does on every edit, does not end the carry. A carried
     remainder is not another shown suggestion and does not record a second
     outcome on the original aggregate.
-- **Settings** (`badi.settings.v2`) are replaced by compare-and-swap on their
-  revision; while a replacement's outcome is unknown, suggestions pause.
+- **Settings** (`badi.settings.v2`, the only settings schema on the wire)
+  are replaced by compare-and-swap on their revision; while a replacement's
+  outcome is unknown, suggestions pause. A `badi.settings.v1` file on disk
+  still migrates to v2 on load.
   `badi pause` persists in settings; `badictl pause` is runtime only.
 - **List modes.** `all_web_origins` (`badi sites blocklist`, or `badi site all
   on`) and `all_linux_apps` (`badi apps blocklist`) let a site or app without
   its own rule read context and suggest, but never learn or retain. Exact rules
   win, field denial and pause still apply, and private windows are not
-  distinguished. An app allowed this way gets policy reason `matched_default`,
-  so the Fcitx addon opens only observed fields for it. While the memory store
+  distinguished. An app or site allowed this way gets policy reason
+  `matched_default`, so the Fcitx addon opens only observed fields for it. While the memory store
   is unavailable, only strict authority reductions are accepted.
 - **Connections.** Policy and desktop-signal connections stay open while
   idle; control and health clients close after 300 s without a request.
@@ -121,8 +123,7 @@ share (below).
 - **Low power.** Battery power or the power-saver profile from any helper
   makes `low_power` true. That changes no authority and advances no epoch; it
   selects automatic scheduling from `battery_mode` (below).
-- v2 `health.status` (and `badictl status`) includes `desktop`; protocol v1
-  health omits it.
+- `health.status` (and `badictl status`) includes `desktop`.
 
 ## Editor focus
 
@@ -140,7 +141,7 @@ to its connection and ends with it; it withholds only and never grants.
 ## Snooze
 
 `badi snooze [MINUTES]` (the session helper's `snooze` shortcut, 10 minutes
-by default, at most 1440) sends the v2 global control `snooze {minutes}`. The
+by default, at most 1440) sends the global control `snooze {minutes}`. The
 broker snoozes the settings identity of the one focused field it follows: the
 exact app id, or the site origin, which every browser shares as it shares
 site rules. It refuses with `no_context` when no session has focused context,
@@ -153,14 +154,13 @@ and `paused` while every grant is already withheld; `badictl` prints these as
   pending inference, visible suggestion and pending commit of every session
   on that identity, and ends the type-through carry. Policy for it resolves
   to `snoozed` (not `paused`): no session opens, open ones lose their data
-  access, and every other app and site keeps its policy. Protocol v1 policy
-  clients see `suggestions_disabled`.
+  access, and every other app and site keeps its policy.
 - **Runtime only.** Snoozes live in the broker's memory, never in settings,
   and end with a broker restart. When one runs out, a timer advances the
   epoch again so adapters resolve their policy afresh. `snooze_end` (`badi
   snooze end`, `badi resume` and a resuming `badi pause toggle`) ends every
   snooze at once.
-- v2 `health.status`, `badictl status` and `badictl overview` (under
+- `health.status`, `badictl status` and `badictl overview` (under
   `broker`) list `snoozes`: each `subject` identity and its `remaining_ms`.
 
 ## Style learning (opt-in)
@@ -248,12 +248,11 @@ for admitted requests that reached the provider although a carry existed,
 the gate that declined it (`scope`, `after_changed`, `language_changed`,
 `deadline_tight`, `prefix_mismatch`, `shape_rejected`, latest in `last_miss`);
 no counter moving while `provider_calls` rises means no carry existed.
-Its optional v2 `word_savings` counts space-delimited word parts after a valid
+Its `word_savings` counts space-delimited word parts after a valid
 commit result, separately for `applied` and `dispatched_unverified`. Spelling
 replacements, failed, stale and expired results add nothing. Partial words
 count; later undo is unknown. All health counters reset at broker restart;
 the per-day counts that persist are under [Usage statistics](#usage-statistics).
-The frozen v1 health response omits the new counters.
 
 Settings replacements accept a bounded UTF-8 document on stdin with `--json -`;
 the desktop helper and panel use this path so settings stay out of process
@@ -267,19 +266,13 @@ prints pinned download advice and downloads nothing
 
 ## Writing model runtime
 
-- **Release.** llama.cpp b11840 (2026-10-23, the Ubuntu x64 CPU build),
-  pinned by `src/semantic/pinned_runtime.rs`: the archive, `llama-server` and
-  the unpacked bundle's manifest. It is past b11393, whose fix for a double
-  free through a client-supplied `chat_parser` on `/completion`
+- **Release.** llama.cpp b11840 (the Ubuntu x64 CPU build), pinned by
+  `src/semantic/pinned_runtime.rs`: the archive, `llama-server` and the
+  unpacked bundle's manifest. It is past b11393, whose fix for a double free
+  through a client-supplied `chat_parser` on `/completion`
   ([llama.cpp#29942](https://github.com/ggml-org/llama.cpp/pull/29942)) Badi
   needs only as hardening (the broker never sends that field), and outside
-  b11555–b11634, which slowed quantized kernels. Paired against b10726 (seed
-  42, 15 W, `output/writing/2026-10-24-runtime-b11840/`), the European and
-  Portuguese production-boundary suites scored the same (exact, first word,
-  keystrokes saved) with the same p50, and the revision suite fixed 53 of 75
-  errors (50 before) with 19 of 20 correct inputs left alone; the changed
-  cases are near-tie token choices. Measurements below dated before
-  2026-10-24 used b10726.
+  b11555–b11634, which slowed quantized kernels.
 - **Selection.** Startup reads the settings' `writing_model` (the user's
   `badi model use` choice) and loads that installed catalog model when it
   fits total memory after a host reserve; otherwise the installed model the
@@ -314,66 +307,37 @@ prints pinned download advice and downloads nothing
   any suffix of its prompt and reuse the rest; other models ignore it. A
   second slot would split that 512-token context in half, so the server
   stays at one slot. Prefill batches are 16 tokens so cancellation lands
-  quickly; up to four threads. The GPU is not used: Vulkan on the Iris Xe was
-  slower for these short requests.
-- **Measured and not adopted** (2026-10-12, this machine, five disposable
-  prefixes): six threads produced the same greedy text and were not faster.
-  Bartowski's Q4_0 of Qwen3-1.7B
-  (`c470091d31c4ada174ee5c2547daa020e930593cbca5ca8ca385ce8ff59a2fdf`, not a
-  re-quant of the pinned file) was slightly faster in four of six paired
-  8-token decodes, slower in one, and changed greedy text on four prefixes
-  ("Thank" → " youngster"); production stays on Q4_K_M. N-gram speculation
-  was no faster, and a Qwen3-0.6B Q4_K_M draft
-  (`9acfc1e001311f34b4252001b626f2e466d592a42065f66571bff3790d4e1b14`, two
-  tokens ahead) took 0.5–1.8 s to the first word against 0.15–0.47 s without
-  it, so no draft model is loaded.
-  On 2026-10-19 (pinned `b10726` `llama-bench`, 48-token prompts in 16-token
-  batches, 32 generated tokens, battery, the CPU power limit raised to 28 W)
-  Gemma 3 1B generated 37.6 tok/s at four threads, 41.4 at six and 33.9 at
-  twenty, and Gemma 4 E2B 21.3, 22.3 and 19.2: six threads would gain 5–10%,
-  more threads lose. On the Iris Xe (Vulkan, `b11719`, all layers) Gemma 3
-  read prompts faster (172 against 106 tok/s) but generated slower (28.8
-  against 37.7 on the same build), and so did Gemma 4 E2B against the pinned
-  CPU runtime (77 against 61, 17.1 against 21.3);
-  typing waits mostly on generation, so the GPU stays unused.
-- **Full sliding-window cache** (2026-10-19, Gemma 3 1B, pinned `b10726`,
-  disposable English and German, [bench](../evaluation/llm-bench/README.md)).
-  Without it the runtime cannot roll a sliding-window cache back. At this
-  launch (four alternating runs, 720 typing requests per arm) typing read 2.5
-  instead of 7.9 new tokens per request, first token p50 68 against 158 ms,
-  and after a rejected suggestion p90 249 against 4095 ms; decode speed was
-  unchanged and peak RSS fell to 1.02 from 1.08–1.10 GB. Cached text matched
-  an uncached run as often as before (100 of 120, the rest near-ties).
-  Through the real broker (504 `badictl probe` steps per arm against the
-  installed build and a same-build control) appended words showed at p50 245
-  against 327 ms with 3 against 31 deadline misses; sentence starts were
-  slower (p50 441 against 397 ms, 36 per arm, unexplained), and 423 against
-  435 probes showed a suggestion, mostly at the deadline. Live in Chromium 154
-  (`5e141ed` against `3184097`, the same 1,109 `wtype` keys) each call read
-  1.5 instead of 6.4 new tokens and the preview appeared p50 241 against 288
-  ms (p90 345 against 396) after the key, with 116 against 115 proposals.
-- **Speed sample.** Build `5faafcf` (2026-10-12; the same five prefixes four
-  times each, predictions on): first grey word in Omawrite 0.5.0 20/20 at
-  209–250 ms, middle 220–223 ms, 19th of 20 at 244 ms; in a Chromium
-  textarea 20/20 at 227–371 ms, middle 246–249 ms, 19th at 314 ms. A known
-  field starts the model on the key, so the 120 ms typing pause runs inside
-  the generation wait ([Fcitx runbook](../adapters/fcitx5/README.md)). One
-  machine and these prefixes, not a universal latency.
+  quickly; up to four threads. The GPU is not used: typing waits mostly on
+  generation, which the Iris Xe ran slower than the CPU.
 - **Memory.** CPU weights are copied instead of mapped, allowing repacking to
-  release the original allocation. A frozen 260-case UD r2.16 confirmation
-  comparison on 2026-10-13 produced identical raw and displayed output for
-  both loading modes, with no errors or deadline misses. The installed
-  broker plus runtime used 1.43 GB RSS (1.33 GiB) after twenty warm Chromium
-  trials, versus 2.10 GB before. This is RSS, not cgroup memory or a claim
-  about other model sizes and hardware. The model and prompt are unchanged.
+  release the original allocation; the output is the same either way.
+
+### Runtime: tested with
+
+One machine (Iris Xe graphics); these are its numbers, not a universal
+latency. Rows after the first ran on the earlier pin, b10726, unless they
+name another build.
+
+| Change or setting | Setup | Result |
+| --- | --- | --- |
+| b11840 against b10726 | Paired Lab runs, seed 42, 15 W, `output/writing/2026-10-24-runtime-b11840/` | European and Portuguese production-boundary suites: same exact, first-word and keystroke scores and p50. Revision suite: 53 of 75 errors fixed (50 before), 19 of 20 correct inputs left alone; changed cases are near-tie token choices |
+| Full sliding-window cache, Lab | Gemma 3 1B, disposable English and German, four alternating runs, 720 typing requests per arm ([bench](../evaluation/llm-bench/README.md)) | New tokens per request 2.5 against 7.9; first token p50 68 against 158 ms; after a rejected suggestion p90 249 against 4,095 ms; decode speed unchanged; peak RSS 1.02 against 1.08–1.10 GB; cached text matched an uncached run 100 of 120 (the rest near-ties) |
+| Full sliding-window cache, real broker | 504 `badictl probe` steps per arm, installed build against a same-build control | Appended words shown at p50 245 against 327 ms, 3 against 31 deadline misses; sentence starts p50 441 against 397 ms (36 per arm, unexplained); 423 against 435 probes showed a suggestion |
+| Full sliding-window cache, live | Chromium 154, `5e141ed` against `3184097`, the same 1,109 `wtype` keys | New tokens per call 1.5 against 6.4; preview p50 241 against 288 ms (p90 345 against 396) after the key; 116 against 115 proposals |
+| Threads | `llama-bench`, 48-token prompts in 16-token batches, 32 generated tokens, battery, 28 W | Gemma 3 1B 37.6, 41.4 and 33.9 tok/s at four, six and twenty threads; Gemma 4 E2B 21.3, 22.3 and 19.2. Five prefixes earlier: six threads wrote the same greedy text, no faster |
+| Iris Xe (Vulkan, b11719, all layers) | Same bench | Gemma 3 1B prompt 172 against 106 tok/s, generation 28.8 against 37.7; Gemma 4 E2B 77 against 61 and 17.1 against 21.3. Not adopted |
+| Bartowski Q4_0 of Qwen3-1.7B (`c470091d31c4ada174ee5c2547daa020e930593cbca5ca8ca385ce8ff59a2fdf`) | Six paired 8-token decodes | Faster in four, slower in one; changed greedy text on four prefixes ("Thank" → " youngster"). Not adopted; production stays on Q4_K_M |
+| N-gram speculation; Qwen3-0.6B Q4_K_M draft (`9acfc1e001311f34b4252001b626f2e466d592a42065f66571bff3790d4e1b14`, two tokens ahead) | Five disposable prefixes | N-gram no faster; the draft took 0.5–1.8 s to the first word against 0.15–0.47 s. No draft model is loaded |
+| Copied weights | Frozen 260-case UD r2.16 confirmation, both loading modes; installed broker plus runtime after twenty warm Chromium trials | Identical raw and displayed output, no errors or deadline misses; 1.43 GB RSS (1.33 GiB) against 2.10 GB mapped (RSS, not cgroup memory) |
+| First grey word | Build `5faafcf`, five prefixes four times each | Omawrite 0.5.0: 20/20 at 209–250 ms, middle 220–223 ms. Chromium textarea: 20/20 at 227–371 ms, middle 246–249 ms. A known field starts the model on the key, so the 120 ms typing pause runs inside the wait ([Fcitx runbook](../adapters/fcitx5/README.md)) |
 
 Field language is selected only after context admission, from the last 512
 Unicode scalars before the caret. `whatlang` 0.18 considers its full language
 inventory; Badi uses only confident (≥0.9), at least 32-scalar English,
-German or Persian detections. Otherwise the adapter hint stays. An explicit
-per-app language always wins. The text, fingerprint, caret and edit authority
-are unchanged, and no sample is retained. French and Spanish generation
-still requires independent qualification.
+German, Persian, French, Spanish or Portuguese detections. Otherwise the
+adapter hint stays. An explicit per-app language always wins. The text,
+fingerprint, caret and edit authority are unchanged, and no sample is
+retained.
 
 ## Selection revision
 
@@ -383,7 +347,7 @@ in `src/revision.rs` (prompts and gate), `src/revision/` (the runtime and its
 fixture) and `src/engine/revision.rs` (authority).
 
 - **Admission.** `revision.request` needs the negotiated `selection_revision`
-  capability (the v2 Fcitx addon) and is a context snapshot of its own: it
+  capability (the Fcitx addon) and is a context snapshot of its own: it
   revokes the session's context, suggestion and earlier revision first. Policy
   is that of an explicit request, plus no terminal field; a refusal (pause,
   snooze, hold, setting, sensitive or composing field) is answered with
@@ -455,7 +419,7 @@ A request carries a vocabulary only while context is on for its subject
 (`context_words`, [ADR 0010](../docs/decisions/0010-context-finishes-words.md)).
 Without it, the draft is not used either, and nothing changes. Two
 independent sets measured a large gain and more wrong words in traps
-([Lab runbook](../evaluation/writing/README.md#terminal-runs)); the user
+([Lab runbook](../evaluation/writing/README.md#vocabulary-completion)); the user
 accepted that cost.
 
 ## Context: window words and learned words (opt-in)
@@ -476,7 +440,10 @@ is on and the subject may suggest, the broker does four things:
   denied field is rejected.
 - **Uses it.** Each admitted request's provider call carries the window's
   words (at most 256) and the subject's learned words (at most 1,024). The
-  generation task reads the learned words after the state lock is released.
+  generation task reads the learned words after the state lock is released,
+  from a decrypted copy in memory that the broker replaces after every change
+  to the settings, the key or the file, so a suggestion never waits for a
+  write.
 - **Learns.** The finished words of a `normal`-purpose field's text are
   counted toward that subject's learned words: letters only, six to 24 long,
   without the word still being typed, and without the first word when the
@@ -507,8 +474,8 @@ acceptances the adapter reported `applied` or `dispatched_unverified` and the
 word parts they inserted (as `word_savings` counts them). No text,
 fingerprint, field or window detail is kept.
 
-- **What counts.** A show counts where `suggestions_shown` does, so growing
-  versions and type-through remainders are the same suggestion. Every landed
+- **What counts.** A show counts where `suggestions_shown` does, so a
+  type-through remainder is the same suggestion. Every landed
   acceptance counts, so a suggestion taken word by word counts once per word;
   a failed, stale or expired one counts nothing.
 - **What never counts.** The outcome worker keeps a count only under the
@@ -531,19 +498,6 @@ fingerprint, field or window detail is kept.
   need the CLI settings capability (`badictl stats status|forget`, or `badi
   stats`).
 
-## Context word bias
-
-`SemanticClient::with_window_context(text)` lets a caller hand the client the
-bounded text around a field. Its distinctive English words (letters only, at
-least five scalars, not common function words, not among the last six words
-typed, at most 24) raise the first token of each by a logit bias of 2.0
-(`writing::CONTEXT_BIAS`). The tokens come from one `/tokenize` call with
-pieces, capped at 60 ms and cached per client; a first token of one or two
-letters is skipped, and any failure sends the request unbiased. The prompt
-never grows, so prefill and the 550 ms budget are unchanged. Only the
-Prediction Lab supplies window text today, so production requests carry no
-bias; the measurements are in the [Lab runbook](../evaluation/writing/README.md#terminal-runs).
-
 ## Suggestion limits
 
 The exact rules live in [src/writing.rs](src/writing.rs).
@@ -557,24 +511,13 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   sentence narrowing), then extends back a sentence at a time to four words.
   Consecutive requests therefore share a prompt prefix while a long sentence
   grows, instead of changing its first bytes on every keystroke and losing
-  llama.cpp's prefix cache. Each step re-reads the whole window once. Measured
-  2026-10-17 (installed build, real model, a 380-character run-on sentence
-  typed word by word into Ghostty): in the performance profile at 250 ms per
-  word, 40 of 47 requests showed a suggestion, and each step at inputs 228,
-  292 and 359 cost one request cancelled before its first token while it
-  re-read about 30 tokens; the next request was warm again (`cache_n` 27-28),
-  because the runtime keeps what a cancelled request read. No request missed
-  its budget. Reading the next window ahead of time is not done: with one
-  runtime slot it would evict the window in use. In the power-saver profile
-  (450 ms per word), `quiet` battery scheduling, not the step, set the rate:
-  15 of 62 requests showed one, most cancelled by the next word after
-  generation had started.
-  Giving the model the whole 160–224-scalar window instead of the current
-  sentence was tried on 2026-10-17 and not kept: cold Lab prompts showed
-  fewer suggestions (10 against 15 of 19 real-text cases) with no more
-  matches, and a live paragraph in Ghostty read no better. Long Tab-only
-  chains drift (a run of Tabs turned a sentence into a maths exercise); the
-  model, not the window, is the limit.
+  llama.cpp's prefix cache. Each step re-reads the whole window once, and the
+  runtime keeps what a cancelled request read. The next window is not read
+  ahead: with one runtime slot that would evict the window in use. The
+  prompt is the current sentence, not the whole window, which read no
+  better; long Tab-only chains drift either way (a run of Tabs turned a
+  sentence into a maths exercise), so the model, not the window, is the
+  limit.
 - **Shape.** At most four words (two with `short`, below) and 64
   characters. `en`, `de`, `fa`, `fr`,
   `es` and `pt` are routed; every language but Persian must be Latin
@@ -587,19 +530,16 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   soon as its second word is complete. Settings changes retire live
   sessions, so a type-through carry never outlives a change of length.
   Corrections, vocabulary completions and the phrase fixture ignore it.
-  In the paired Lab comparison of 2026-10-21 (395 requests in six
-  languages, two blind rounds, 15 W) short cut harmful additions from 16/20
-  to 8/9 with more useful full additions and a p50 of 201 against 259 ms;
-  up to eight words (`f9515e0`) doubled them to 32/39, rising in five
-  languages, and was removed. Runs:
-  `output/writing/2026-10-20-suggestion-length/`.
+  Short cut harmful additions; up to eight words doubled them and was
+  removed ([tested with](#suggestion-limits-tested-with)).
 - **Partial words.** An English suffix that continues the typed word must form
   a word in the pinned [SCOWL lexicon](data/writing-lexicon/README.md); German
   and Persian suggest whole words only. English healing echoes the last
   unfinished word together with the spaces around it, so the prompt does not
-  end on a bare space. English and Persian prompts also echo trailing spaces
-  and require them back (`TRAILING_SPACE_HEALING`). Persian uses that same
-  token count. A 2.6× Persian budget missed 550 ms on the development cases.
+  end on a bare space. Prompts in a healed language (below) also echo
+  trailing spaces and require them back. Every language gets the same token
+  count, 8, or 12 after a healed English word: a larger Persian budget missed
+  550 ms.
 - **Typed lexicon words.** An English word at the caret that is itself a
   lexicon word but begins a longer one (`rep`, `fin`, `the`) is healed too,
   because unhealed the model took it as finished (`can sh` became `uck off
@@ -611,40 +551,20 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   the unhealed prompt is sent within the same budget
   (`CompletionPlan::finished_word`). The confidence gate skips the token
   that writes the word: its probability is how likely the word was before
-  any letter was typed. In the paired Lab comparison of 2026-10-23 (134
-  English stems from the development references, 34 of them mid-sentence,
-  and 29 prefixes ending on a finished word; seed 42, 15 W) the intended
-  word was finished 75 times against 0 (23 of the mid-sentence ones
-  against 0), text running on after the stem fell from 40 to 9, finished
-  words kept their 23 suggestions, and shown p90 fell from 485 to 392 ms.
-  Runs: `output/writing/2026-10-23-word-stems/`.
+  any letter was typed.
 - **Abstention.** A continuation abstains when it adds a number absent from the
   typed text, and every request when the caret splits a word.
 - **Token confidence gate.** Each continuation request asks the runtime for
   `n_probs: 1` (pre-sampling), and a continuation is shown only when every
   token of its shown text has a log-probability of at least −2.75
-  (`writing::CONFIDENCE_FLOOR`, user decision 2026-10-20). Tokens wholly
+  (`writing::CONFIDENCE_FLOOR`, user decision). Tokens wholly
   inside the healed echo and a withheld stop token do not count; a token
   that straddles the echo does. Missing or misaligned probabilities fail
   closed. A withheld suggestion is `low_confidence`, and `model done` in the
   trace carries `min_logprob`. The whole suggestion is judged before
-  display, so no partial streams first. Spelling choices are not gated.
-  The floor was calibrated by replaying Gemma 3 1B's exact production
-  payloads for 301 reviewed development suggestions, each with three blind
-  label rounds; every replay reproduced its text. The lowest token
-  log-probability separates useful from unhelpful or harmful at an AUC of
-  0.70–0.77 overall, strongly in German and not at all in English. On the
-  held-out confirmation outputs (224 shown) the rule, frozen before that
-  test, cut harmful additions from 15 to 10 and unhelpful ones from 18 to
-  10, with harm falling or holding in every language. It lost 7 of 51
-  useful full additions (2 in English, 3 in Persian) and showed 19% fewer
-  suggestions. Cutting before the first low-confidence token removed almost
-  no harm, because invented facts are fluent, and the first word's
-  confidence alone was much weaker. Live in Chromium 154 at the 15 W limit
-  (2026-10-20, 115 paced word pauses of the same disposable text), the
-  preview appeared at p50 294 against 218 ms (p90 395 against 265; 4 against
-  0 over 550 ms) after the last key, and 92 against 112 pauses showed one
-  (17 withheld as `low_confidence`).
+  display. Spelling choices are not gated. Cutting before the first
+  low-confidence token instead removed almost no harm, because invented
+  facts are fluent ([tested with](#suggestion-limits-tested-with)).
 - **Languages and healing.** Settings `writing_languages` (default `en` and
   `de`; `fr`, `es`, `pt` and, from the terminal only, `fa` opt-in) decide
   where Badi suggests, and `languages_chosen` records that the user picked
@@ -654,15 +574,12 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   `healed_languages` lists the languages whose trailing space it heals, by
   its own blind review; the engine hands settings `trailing_space_healing`
   choices to the provider (`set_language_preferences`), which applies them
-  per language over that default. An unhealed request that ends in a space
-  abstains before any model call: after a bare space a model must start a
-  word without its usual leading-space token, and neither Qwen3 1.7B (0
-  useful of 20) nor Gemma 3 1B (0 of 26, markup or fragments such as
-  `uralt.`) continued one usefully. Gemma 3 1B heals German (15 useful against
-  7 of 67 German development and boundary requests, and 3 harmful against 2,
-  promoted by user decision), French and Spanish (12 and 14 useful of 20
-  boundary requests ending in a space, none harmful) and Portuguese (11 of
-  20, none harmful).
+  per language over that default; a model outside the catalog heals English
+  and Persian (`TRAILING_SPACE_HEALING`). An unhealed request that ends in a
+  space abstains before any model call: after a bare space a model must
+  start a word without its usual leading-space token, and no reviewed model
+  continued one usefully. Gemma 3 1B heals English, German (by user
+  decision), Persian, French, Spanish and Portuguese.
 - **Generation grammar.** Every continuation request carries a grammar that
   excludes what could never be shown: `<`, `>`, backticks and line breaks,
   and, when the typed text has no digit, digits in any script. Without it
@@ -673,14 +590,10 @@ The exact rules live in [src/writing.rs](src/writing.rs).
 - **Mid-line.** Off by default (`badi mid-line off`; omit `mid_line` in
   settings). A word after the caret then abstains before any model call.
   Punctuation after the caret can still complete the word being typed.
-  `badi mid-line on` asks the model. A 2026-10-12 Lab comparison of the 41
-  English development cases did not change this rejoin: today's rejoin showed
-  two suggestions and one matched the reference; the framed prompt missed 550 ms
-  on every cold case; the probability check showed only the punctuation
-  completion. Naming the line after the caret in a lab prompt
-  (`following_text`) showed one suggestion and missed 550 ms on 34 of 41,
-  because that line changes every case and is not cached. The prompt is still
-  the text before the caret, and `mid_line_insertion()` keeps only what fits:
+  `badi mid-line on` asks the model. The prompt is the text before the caret
+  (a framed prompt or the line after the caret missed 550 ms; [tested
+  with](#suggestion-limits-tested-with)), and `mid_line_insertion()` keeps
+  only what fits:
   the words before the point where the continuation reproduces the line's
   first word or mark, a phrase the model closes with a clause mark before the
   line's own mark, or else the rest of the word being typed. Anything else is
@@ -712,9 +625,8 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   Brave and Zen retain their own app ids while sharing origin permissions.
   Without an override, confident field detection takes precedence over the
   adapter's existing language hint.
-  An admitted v2 `policy.status` includes the optional `language_override`
-  so Fcitx manual Tab eligibility also uses this preference. Protocol v1
-  responses omit it; broker-side context handling still applies it.
+  An admitted `policy.status` includes the optional `language_override` so
+  Fcitx manual Tab eligibility also uses this preference.
 - **Battery mode.** `battery_mode` in settings (`badi battery
   quiet|normal|explicit`; omitted when `quiet`, the default) applies only
   while a session helper reports low power. `quiet` delays the model's start for an automatic
@@ -754,12 +666,7 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   inside an opened quote (`The intended word is "`) and its raw answer is read
   up to the closing quote; echoing the typo is how the model abstains. After
   a bare `Answer:`, base models such as Gemma 3 1B start a new line and never
-  answered, so from the Gemma 3 switch until 2026-10-19 no correction with
-  several candidates was made. On 26 disposable development cases (German,
-  Spanish, French, at the 28 W limit) the quote prompt chose the intended word
-  in 18 with Gemma 3 1B (2 wrong, 6 abstained), 15 with Llama 3.2 1B (4 wrong)
-  and 22 with Qwen3 1.7B (3 wrong), at 0.4–0.6 s per choice; the old prompt
-  chose 1, 4 and 20. A word without its typed
+  answer. A word without its typed
   space is checked only on an explicit request, and a capitalized word
   mid-sentence only in German. Replacements are 2-32 characters with case
   (Unicode Lowercase or Uppercase) plus the optional space, in every
@@ -772,6 +679,28 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   2.5 s to choose between candidates (2.75 s generation limit). It reports
   `applied` only after reading the edit back. Settings order Linux app rules by adapter name, as
   the desktop CLI and panel sort them.
+
+### Suggestion limits: tested with
+
+Lab rows are development or held-out comparisons on this machine, not
+universal scores.
+
+| Rule | Setup | Result |
+| --- | --- | --- |
+| Window steps | Installed build, real model, a 380-character run-on sentence typed word by word into Ghostty | Performance profile, 250 ms per word: 40 of 47 requests showed a suggestion; each step (inputs 228, 292 and 359) cost one request cancelled before its first token while it re-read about 30 tokens, and the next was warm again (`cache_n` 27–28); none missed its budget. Power-saver, 450 ms per word: `quiet` scheduling set the rate, 15 of 62 showed one |
+| Per-keystroke sliding start (replaced by steps) | Once one sentence passed 160 scalars | Prefix cache reuse 0 of about 30 prompt tokens; first token 380–510 ms |
+| Whole window as the prompt (not kept) | 19 real-text Lab cases, cold; a live paragraph in Ghostty | 10 against 15 suggestions, no more matches; read no better live |
+| `short` length | Paired Lab, 395 requests in six languages, two blind rounds, 15 W, `output/writing/2026-10-20-suggestion-length/` | Harmful additions 16/20 → 8/9 with more useful full additions; p50 201 against 259 ms. Up to eight words (`f9515e0`) doubled them to 32/39, rising in five languages |
+| Persian token budget | Lab `production_boundary`, the 13 Persian development cases, Qwen3 1.7B | 21 tokens (2.6×): all 13 missed 550 ms and four returned no word. 8 tokens: two misses, a word for every case 21 had answered (one shorter: `نظر من` became `نظر`); neither matched a reference first word |
+| Typed lexicon words | Paired Lab, 134 English stems from the development references (34 mid-sentence) and 29 prefixes ending on a finished word, seed 42, 15 W, `output/writing/2026-10-23-word-stems/` | Intended word finished 75 times against 0 (23 of the mid-sentence ones against 0); text running on after the stem 9 against 40; finished words kept their 23 suggestions; shown p90 392 against 485 ms. Forbidding the lone space token: 124 of 134 first tokens stood against 91 |
+| Confidence floor, calibration | Gemma 3 1B's exact production payloads replayed for 301 reviewed development suggestions, three blind label rounds each; every replay reproduced its text | The lowest token log-probability separates useful from unhelpful or harmful at an AUC of 0.70–0.77 overall, strongly in German and not at all in English; the first word's confidence alone was much weaker |
+| Confidence floor, held out | Confirmation outputs (224 shown), rule frozen before the test | Harmful additions 15 → 10, unhelpful 18 → 10, harm falling or holding in every language; lost 7 of 51 useful full additions (2 English, 3 Persian); 19% fewer suggestions |
+| Confidence floor, live | Chromium 154, 15 W, 115 paced word pauses of the same disposable text | Preview p50 294 against 218 ms (p90 395 against 265; 4 against 0 over 550 ms) after the last key; 92 against 112 pauses showed one, 17 withheld as `low_confidence` |
+| Unhealed prompt ending in a space | German boundary requests | Qwen3 1.7B 0 useful of 20; Gemma 3 1B 0 of 26 (markup, or with markup excluded, fragments such as `uralt.`) |
+| Gemma 3 1B healing | Blind review per language against the unhealed prompt | German 15 useful against 7 of 67 development and boundary requests, 3 harmful against 2 (user decision); French and Spanish 12 and 14 useful of 20 boundary requests ending in a space, none harmful; Portuguese 11 of 20, none harmful |
+| Fallback healing set | Sealed and development sets before the catalog's per-model review | German unlisted: the sealed set rose from 1 to 9 harmful. English kept by user decision at +1 harmful for +19 useful in 40 |
+| Mid-line prompts | The 41 English mid-sentence development cases | The rejoin showed two suggestions, one matching the reference; a framed prompt missed 550 ms on every cold case; a probability check showed only the punctuation completion; naming the line after the caret (`following_text`) showed one and missed 550 ms on 34 of 41, uncached |
+| Spelling choice prompt | 26 disposable development cases (German, Spanish, French), 28 W | The quoted prompt chose the intended word in 18 with Gemma 3 1B (2 wrong, 6 abstained), 15 with Llama 3.2 1B (4 wrong) and 22 with Qwen3 1.7B (3 wrong), 0.4–0.6 s per choice; a bare `Answer:` chose 1, 4 and 20 |
 
 ## Shutdown and tests
 

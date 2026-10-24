@@ -6,10 +6,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::time;
 use tokio_util::sync::CancellationToken;
 
-use super::{Broker, BrokerError, BrokerEvent, PendingCommit, SessionState, duration_millis};
+use super::{Broker, BrokerError, BrokerEvent, SessionState, duration_millis};
 use crate::debug_trace;
 use crate::policy::{PolicyDecision, PolicyInput, PolicyReason, evaluate};
 use crate::protocol::{
@@ -151,7 +150,7 @@ impl Broker {
                     } else {
                         ReasonCode::RevisionUnavailable
                     },
-                    refusal_reason,
+                    PolicyReason::refusal_code,
                 );
                 trace_outcome(coordinates, payload.mode, None, reason_name(reason), None);
                 let _ = session.sink.send(clear(
@@ -365,20 +364,6 @@ fn revision_policy(
     }
 }
 
-/// The answer's reason for a refused request.
-const fn refusal_reason(reason: PolicyReason) -> ReasonCode {
-    match reason {
-        PolicyReason::Paused => ReasonCode::Paused,
-        PolicyReason::FieldSensitive => ReasonCode::FieldSensitive,
-        PolicyReason::FieldNotEditable => ReasonCode::FieldNotEditable,
-        PolicyReason::FieldAmbiguous => ReasonCode::FieldAmbiguous,
-        PolicyReason::ManualRequired => ReasonCode::ManualRequired,
-        PolicyReason::PolicyNever | PolicyReason::AllowedAlways | PolicyReason::AllowedExplicit => {
-            ReasonCode::PolicyNever
-        }
-    }
-}
-
 /// The selection's language from its own text and what precedes it.
 fn detect_selection_language(payload: &RevisionRequestPayload) -> Option<&'static str> {
     crate::language::detect_field_language(&format!("{}{}", payload.before, payload.selected))
@@ -425,44 +410,16 @@ impl SessionState {
             return Err(BrokerError::NoSuggestion);
         }
         trace_control(coordinates, "accepted");
-        let lease = broker.inner.config.commit_result_lease;
-        let expires_at = Instant::now() + lease;
-        let suggestion_id = revision.revision_id;
-        let pending = PendingCommit {
-            coordinates,
-            fingerprint: revision.fingerprint.clone(),
-            suggestion_id: suggestion_id.clone(),
-            request_id: request_id.clone(),
-            expires_at,
-            saved_words: 0,
-            revision: true,
+        let commit = CommitPreparePayload {
+            fingerprint: revision.fingerprint,
+            suggestion_id: revision.revision_id,
+            text,
+            replace_before: None,
+            replace_selection: Some(revision.selection),
+            acceptance: Acceptance::All,
         };
-        let prepare = BrokerEvent::CommitPrepare {
-            coordinates,
-            payload: CommitPreparePayload {
-                fingerprint: revision.fingerprint,
-                suggestion_id: suggestion_id.clone(),
-                text,
-                replace_before: None,
-                replace_selection: Some(revision.selection),
-                acceptance: Acceptance::All,
-            },
-            request_id,
-        };
-        if self.sink.send(prepare).is_err() {
-            broker.inner.metrics.record_commit_failure();
-            return Err(BrokerError::EventSinkClosed);
-        }
-        self.pending = Some(pending);
-        broker.arm_context_authority_lease(self, lease);
-        broker.inner.metrics.record_commit_prepared();
-        let broker = broker.clone();
-        tokio::spawn(async move {
-            time::sleep(lease).await;
-            broker
-                .expire_pending_commit(coordinates, suggestion_id, expires_at)
-                .await;
-        });
+        broker.grant_commit(self, commit, request_id, 0, true)?;
+        broker.arm_context_authority_lease(self, broker.inner.config.commit_result_lease);
         Ok(())
     }
 }

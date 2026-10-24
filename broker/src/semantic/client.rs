@@ -17,7 +17,6 @@ use crate::spelling::Located;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -416,11 +415,6 @@ pub trait RequestObserver: fmt::Debug + Send + Sync {
 pub struct SemanticClient {
     config: SemanticClientConfig,
     request_observer: Option<Arc<dyn RequestObserver>>,
-    /// Bounded text around the field, when a caller has it; only its words
-    /// are used, as a logit bias, never as prompt text.
-    window_context: Option<Arc<str>>,
-    /// First token of each biased word, shared by this client's clones.
-    bias_tokens: Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
     /// The languages whose trailing space is healed for the loaded model.
     healing: Vec<crate::writing::WritingLanguage>,
     /// The person's language choices, shared by this client's clones.
@@ -435,8 +429,6 @@ impl SemanticClient {
         Ok(Self {
             config,
             request_observer: None,
-            window_context: None,
-            bias_tokens: Arc::default(),
             healing: crate::writing::TRAILING_SPACE_HEALING.to_vec(),
             preferences: Arc::default(),
             length: Arc::default(),
@@ -470,70 +462,6 @@ impl SemanticClient {
         self.length
             .read()
             .map_or_else(|poisoned| *poisoned.into_inner(), |guard| *guard)
-    }
-
-    /// This client with `text` as the window context whose words may bias
-    /// a continuation (Lab only until a production source exists).
-    #[must_use]
-    pub fn with_window_context(mut self, text: &str) -> Self {
-        self.window_context = (!text.is_empty()).then(|| Arc::from(text));
-        self
-    }
-
-    /// `logit_bias` entries for the first token of each context word, or
-    /// `None` when there are none or the runtime cannot name them in time.
-    /// Words already looked up cost nothing; the rest take one `/tokenize`.
-    async fn context_bias(&self, words: &[&str]) -> Option<serde_json::Value> {
-        const LOOKUP_TIMEOUT: Duration = Duration::from_millis(60);
-        const CACHE_LIMIT: usize = 4096;
-        if words.is_empty() || crate::writing::CONTEXT_BIAS <= 0.0 {
-            return None;
-        }
-        let missing: Vec<&str> = {
-            let cache = self.bias_tokens.lock().ok()?;
-            words
-                .iter()
-                .copied()
-                .filter(|word| !cache.contains_key(*word))
-                .collect()
-        };
-        if !missing.is_empty() {
-            let content = missing.iter().fold(String::new(), |mut content, word| {
-                content.push(' ');
-                content.push_str(word);
-                content
-            });
-            let body = serde_json::to_vec(&serde_json::json!({
-                "content": content, "add_special": false, "with_pieces": true,
-            }))
-            .ok()?;
-            let response = self
-                .post_runtime("/tokenize", body, Some(LOOKUP_TIMEOUT))
-                .await
-                .ok()?;
-            if response.status() != StatusCode::OK {
-                return None;
-            }
-            let body = read_bounded_body(response, MAX_RESPONSE_BYTES).await.ok()?;
-            let firsts = first_word_tokens(&serde_json::from_slice(&body).ok()?)?;
-            if firsts.len() != missing.len() {
-                return None;
-            }
-            let mut cache = self.bias_tokens.lock().ok()?;
-            if cache.len() + missing.len() > CACHE_LIMIT {
-                cache.clear();
-            }
-            for (word, token) in missing.iter().zip(firsts) {
-                cache.insert((*word).to_owned(), token);
-            }
-        }
-        let cache = self.bias_tokens.lock().ok()?;
-        let entries: Vec<serde_json::Value> = words
-            .iter()
-            .filter_map(|word| cache.get(*word).filter(|token| **token != 0))
-            .map(|token| serde_json::json!([token, crate::writing::CONTEXT_BIAS]))
-            .collect();
-        (!entries.is_empty()).then_some(serde_json::Value::Array(entries))
     }
 
     #[must_use]
@@ -625,7 +553,6 @@ impl SemanticClient {
             cancellation,
             Instant::now(),
             trigger.writing_budget(),
-            None,
         )
         .await
     }
@@ -636,7 +563,6 @@ impl SemanticClient {
         cancellation: CancellationToken,
         started: Instant,
         budget: Duration,
-        partials: Option<UnboundedSender<String>>,
     ) -> Result<ObservedCompletion, ClientError> {
         match validate_request(&request)? {
             InputEligibility::Abstain => return Ok(ObservedCompletion::language_abstention()),
@@ -671,22 +597,14 @@ impl SemanticClient {
         if plan.sends_nothing() {
             return Ok(ObservedCompletion::language_abstention());
         }
-        let words = crate::writing::bias_words(
-            &request.before,
-            self.window_context.as_deref().unwrap_or(""),
-            request.language.as_deref(),
-        );
-        let bias = self.context_bias(&words).await;
         let run = |plan| {
             self.complete_plan(
                 plan,
-                bias.as_ref(),
                 &cancellation,
                 started,
                 budget,
                 StreamShape {
                     echoed_prefix: None,
-                    partials: partials.as_ref(),
                     confidence_floor: Some(crate::writing::CONFIDENCE_FLOOR),
                     length,
                     first_token_must_extend: false,
@@ -722,19 +640,12 @@ impl SemanticClient {
     async fn complete_plan(
         &self,
         plan: crate::writing::CompletionPlan<'_>,
-        bias: Option<&serde_json::Value>,
         cancellation: &CancellationToken,
         started: Instant,
         budget: Duration,
         shape: StreamShape<'_>,
     ) -> Result<ObservedCompletion, ClientError> {
         let mut payload = plan.payload();
-        if let Some(bias) = bias.and_then(serde_json::Value::as_array) {
-            match payload["logit_bias"].as_array_mut() {
-                Some(entries) => entries.extend(bias.iter().cloned()),
-                None => payload["logit_bias"] = serde_json::Value::Array(bias.clone()),
-            }
-        }
         // The confidence gate needs each token's probability before sampling.
         payload["n_probs"] = serde_json::json!(1);
         payload["post_sampling_probs"] = serde_json::json!(false);
@@ -795,10 +706,9 @@ impl SemanticClient {
         cancellation: CancellationToken,
         started: Instant,
         budget: Duration,
-        partials: Option<UnboundedSender<String>>,
     ) -> Result<(Result<String, NoSuggestionReason>, ProviderStats), ProviderError> {
         let observed = self
-            .complete_observed_started(request, cancellation, started, budget, partials)
+            .complete_observed_started(request, cancellation, started, budget)
             .await
             .map_err(|error| match error {
                 ClientError::Cancelled => ProviderError::Cancelled,
@@ -1113,7 +1023,7 @@ impl CompletionProvider for SemanticClient {
             RequestTrigger::Automatic,
         )
         .await
-        .map(ProviderOutcome::into_proposal)
+        .map(|reply| reply.outcome.into_proposal())
     }
 
     async fn propose_outcome(
@@ -1122,19 +1032,6 @@ impl CompletionProvider for SemanticClient {
         cancellation: CancellationToken,
         allow_replacement: bool,
         trigger: RequestTrigger,
-    ) -> Result<ProviderOutcome, ProviderError> {
-        self.propose_outcome_with_partials(request, cancellation, allow_replacement, trigger, None)
-            .await
-            .map(|reply| reply.outcome)
-    }
-
-    async fn propose_outcome_with_partials(
-        &self,
-        request: ProviderRequest,
-        cancellation: CancellationToken,
-        allow_replacement: bool,
-        trigger: RequestTrigger,
-        partials: Option<UnboundedSender<String>>,
     ) -> Result<ProviderReply, ProviderError> {
         let started = Instant::now();
         let budget = trigger.writing_budget();
@@ -1167,7 +1064,7 @@ impl CompletionProvider for SemanticClient {
         let after = request.after.clone();
         let language = request.language.clone();
         let (text, stats) = match self
-            .complete_started(request, cancellation, started, budget, partials)
+            .complete_started(request, cancellation, started, budget)
             .await?
         {
             (Ok(text), stats) => (text, stats),
@@ -1211,7 +1108,6 @@ impl CompletionProvider for SemanticClient {
             cancellation,
             Instant::now(),
             RequestTrigger::Automatic.writing_budget(),
-            None,
         )
         .await
         .map(|(text, _stats)| text.ok())
@@ -1337,25 +1233,6 @@ fn trace_spelling(
 #[derive(Debug, Deserialize)]
 struct HealthResponse {
     status: String,
-}
-
-/// The first token of each word in a `/tokenize` answer with pieces, where
-/// every word was sent with one leading space.
-fn first_word_tokens(answer: &serde_json::Value) -> Option<Vec<u32>> {
-    let mut firsts = Vec::new();
-    for token in answer.get("tokens")?.as_array()? {
-        let id = u32::try_from(token.get("id")?.as_u64()?).ok()?;
-        if let Some(piece) = token
-            .get("piece")?
-            .as_str()
-            .and_then(|piece| piece.strip_prefix(' '))
-        {
-            // A word whose first token is one or two letters is not biased:
-            // that token starts too many other words (0 marks it skipped).
-            firsts.push(if piece.chars().count() >= 3 { id } else { 0 });
-        }
-    }
-    Some(firsts)
 }
 
 #[derive(Debug, Serialize)]
@@ -1602,12 +1479,10 @@ fn observed_completion(
 }
 
 /// How a streamed completion becomes a suggestion: the healed echo to strip,
-/// where partial suggestions go, the confidence floor when gated, and how
-/// many words it may show.
+/// the confidence floor when gated, and how many words it may show.
 #[derive(Clone, Copy, Default)]
 struct StreamShape<'a> {
     echoed_prefix: Option<&'a str>,
-    partials: Option<&'a UnboundedSender<String>>,
     confidence_floor: Option<f64>,
     length: crate::writing::SuggestionLength,
     /// The echo is a typed lexicon word: stop reading as soon as the first
@@ -1664,12 +1539,9 @@ async fn read_stream(
 ) -> Result<ObservedCompletion, ClientError> {
     let echoed_prefix = shape.echoed_prefix;
     let words = shape.length.max_words();
-    // A gated suggestion is judged whole, so no partial may show first.
-    let partials = shape.partials.filter(|_| shape.confidence_floor.is_none());
     let gate = |observed: ObservedCompletion, accumulator: &StreamAccumulator| {
         gate_confidence(observed, accumulator, shape)
     };
-    let mut shown_partial = String::new();
     let mut pending = Vec::new();
     let mut response_body_bytes = 0_usize;
     let mut accumulator = StreamAccumulator::default();
@@ -1722,18 +1594,6 @@ async fn read_stream(
                 accumulator.ttft = None;
             }
             if !accumulator.invalid {
-                if let Some(output) =
-                    crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
-                        .and_then(|raw| crate::writing::available_complete_words(raw, words))
-                {
-                    let extends = shown_partial.is_empty() || output.starts_with(&shown_partial);
-                    if extends && output != shown_partial {
-                        if let Some(partials) = partials {
-                            let _ = partials.send(output.clone());
-                        }
-                        shown_partial = output;
-                    }
-                }
                 if let Some(output) =
                     crate::writing::strip_healed_prefix(&accumulator.output, echoed_prefix)
                         .and_then(|raw| crate::writing::complete_word_prefix(raw, words, false))
@@ -1868,20 +1728,6 @@ fn finish_observed_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn word_starts_name_a_token_only_when_it_is_a_real_word_start() {
-        let answer = serde_json::json!({"tokens": [
-            {"id": 11, "piece": " ware"}, {"id": 12, "piece": "house"},
-            {"id": 13, "piece": " ب"}, {"id": 14, "piece": "ستن"},
-            {"id": 15, "piece": " Thursday"},
-        ]});
-        assert_eq!(first_word_tokens(&answer), Some(vec![11, 0, 15]));
-        assert_eq!(
-            first_word_tokens(&serde_json::json!({"tokens": [{"id": "x"}]})),
-            None
-        );
-    }
 
     #[test]
     fn stream_counts_come_from_per_token_timings() {

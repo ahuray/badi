@@ -1023,3 +1023,50 @@ fn unreadable_usage_statistics_are_preserved_until_forget() {
             .expect("counts again")
     );
 }
+
+#[test]
+fn learned_words_are_read_while_a_write_holds_the_state_lock() {
+    let temporary = tempdir().expect("temporary directory");
+    let control_plane = ControlPlane::open(paths(temporary.path())).expect("control plane");
+    let mut settings = granted_settings(1);
+    settings.context_words = Some(true);
+    control_plane
+        .replace_settings(0, settings)
+        .expect("context on");
+    let key = crate::style::StyleKey::from_hex(&"5a".repeat(16), &"c3".repeat(32)).expect("key");
+    control_plane.deliver_style_key(key).expect("key");
+    let words = vec!["Okonkwo".to_owned()];
+    for _ in 0..2 {
+        assert!(
+            control_plane
+                .record_learned_at_settings_revision(1, &identity(), &words)
+                .expect("record")
+        );
+    }
+
+    // The outcome worker holds this lock while it writes and syncs a file.
+    let writing = control_plane.state.lock().expect("state");
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let _ = sender.send(control_plane.learned_words(&identity()));
+        });
+        let read = receiver.recv_timeout(Duration::from_secs(5));
+        drop(writing);
+        assert_eq!(
+            read.expect("the read does not wait for the write")
+                .expect("words"),
+            words
+        );
+    });
+
+    // Turning context off there withdraws them at once.
+    let mut off = granted_settings(2);
+    off.context_words = Some(true);
+    off.context_words_off = vec![identity()];
+    control_plane.replace_settings(1, off).expect("context off");
+    assert_eq!(
+        control_plane.learned_words(&identity()).expect("words"),
+        Vec::<String>::new()
+    );
+}

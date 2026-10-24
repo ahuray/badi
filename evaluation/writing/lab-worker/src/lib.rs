@@ -8,14 +8,8 @@
 
 pub mod artifact;
 pub mod context_lookup;
-mod field_context;
-mod midline;
-pub mod paced_probe;
-pub mod prefill_probe;
 pub mod qualification;
 pub mod revision;
-pub mod spelling;
-pub mod stop_token_probe;
 mod transport;
 
 use std::collections::BTreeSet;
@@ -40,6 +34,10 @@ pub const REQUEST_SCHEMA: &str = "badi.prediction-lab.request.v1";
 pub const LAUNCH_CONTRACT: &str = "badi.prediction-lab.owned-2048.v2";
 pub const CONTEXT_TOKENS: u16 = 2048;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
+/// Weights of the pinned Qwen3 1.7B (catalog `qwen3-1.7b`), the one model
+/// the `instructed` modes' literal Qwen3 chat template is written for.
+pub const INSTRUCTED_TEMPLATE_MODEL_SHA256: &str =
+    "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5";
 
 /// Languages admitted for experiments, independently of production support.
 #[must_use]
@@ -112,19 +110,6 @@ pub enum Mode {
     Healed,
     InstructedHealed,
     NativeInstructed,
-    /// Lab-only: production healing and rejoin, with the constant frame in front.
-    Framed,
-    /// Lab-only: earlier text of the same field, cut on a stable character grid.
-    FieldContext,
-    /// Lab-only: force the next one or two words, then keep a prefix only when
-    /// those words are not unlikely. The floor is uncalibrated.
-    ProbabilityRejoin,
-    /// Lab-only: name the line after the caret, then continue from the text
-    /// before it. Production prompts do not include that line.
-    FollowingText,
-    /// The production provider with the case's context as window text: its
-    /// words bias the continuation's first tokens; the prompt is unchanged.
-    ContextBias,
     /// The production provider with context on: the case's context gives the
     /// window's words and its style examples the earlier writing's, and a
     /// unique word starting with the typed letters is finished before any
@@ -177,6 +162,9 @@ pub enum LabError {
     Cancelled,
     #[error("malformed_runtime_response")]
     MalformedResponse,
+    /// An `instructed` mode against weights its template was not written for.
+    #[error("instructed_template_model_mismatch")]
+    TemplateModelMismatch,
 }
 
 impl From<ClientError> for LabError {
@@ -258,10 +246,15 @@ pub async fn activate_with_options(
         .spawn()
         .await
         .map_err(|_| LabError::RuntimeUnavailable)?;
-    // The Lab measures every language the provider writes, each healed as
-    // the model's review decided; the person's settings never reach it.
-    // `BADI_LAB_HEALING=all` heals every language instead, so models outside
-    // the catalog are screened on equal terms.
+    runtime.set_language_preferences(&lab_language_preferences());
+    Ok(runtime)
+}
+
+/// The language choices the Lab gives the provider: every language it
+/// writes, each healed as the model's review decided; the person's settings
+/// never reach it. `BADI_LAB_HEALING=all` heals every language instead, so
+/// models outside the catalog are screened on equal terms.
+fn lab_language_preferences() -> writing::LanguagePreferences {
     let mut preferences = writing::LanguagePreferences::all();
     if std::env::var("BADI_LAB_HEALING").is_ok_and(|value| value == "all") {
         preferences.healing = preferences
@@ -270,8 +263,15 @@ pub async fn activate_with_options(
             .map(|language| (*language, true))
             .collect();
     }
-    runtime.set_language_preferences(&preferences);
-    Ok(runtime)
+    preferences
+}
+
+/// The languages whose trailing space the runtime's provider heals: the
+/// loaded model's reviewed set with the Lab's choices applied, as the
+/// provider computes it, so the healed modes echo what production echoes.
+#[must_use]
+pub fn healed_languages(identity: &StableRuntimeIdentity) -> Vec<WritingLanguage> {
+    lab_language_preferences().healed(&writing::trailing_space_healing(&identity.model_sha256))
 }
 
 /// The installed model's launch. Unlike the broker, the Lab reports a host
@@ -433,15 +433,17 @@ pub struct PreparedPrompt {
 
 /// Preserve all supplied text. Token preflight rejects overflow rather than
 /// silently dropping contextual cues or examples to fit the runtime.
+/// `healed` lists the languages the runtime's provider heals
+/// ([`healed_languages`]).
 #[must_use]
-pub fn prepare_prompt(request: &Request) -> PreparedPrompt {
+pub fn prepare_prompt(request: &Request, healed: &[WritingLanguage]) -> PreparedPrompt {
     let mut before = request.before.as_str();
     let mut echo = String::new();
     if matches!(
         request.config.mode,
         Mode::Healed | Mode::InstructedHealed | Mode::NativeInstructed
     ) {
-        if let Some(boundary) = writing::production_healed_echo(before, &request.language) {
+        if let Some(boundary) = writing::production_healed_echo(before, &request.language, healed) {
             boundary.clone_into(&mut echo);
             before = &before[..before.len() - boundary.len()];
         }
@@ -475,8 +477,6 @@ pub fn prepare_prompt(request: &Request) -> PreparedPrompt {
     PreparedPrompt { payload, echo }
 }
 
-// The paced primer receives only this stable prefix. Accepting draft text here
-// would make future keystrokes available before their scheduled event.
 fn context_prefix(context: &str, styles: &[String]) -> String {
     let mut prefix = String::new();
     if !context.is_empty() {
@@ -497,6 +497,19 @@ fn native_instruction_messages(request: &Request) -> Value {
     ])
 }
 
+/// The `instructed` modes write Qwen3's chat-template delimiters into the prompt
+/// literally, so they run only on the weights that template belongs to;
+/// another model would continue markup it never learned, and its results
+/// would mean nothing. `native_instructed` uses each model's own template.
+fn template_fits(mode: Mode, identity: &StableRuntimeIdentity) -> Result<(), LabError> {
+    if matches!(mode, Mode::Instructed | Mode::InstructedHealed)
+        && identity.model_sha256 != INSTRUCTED_TEMPLATE_MODEL_SHA256
+    {
+        return Err(LabError::TemplateModelMismatch);
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 pub async fn run(
     runtime: &OwnedRuntime,
@@ -507,20 +520,15 @@ pub async fn run(
     if !runtime.is_alive() {
         return Err(LabError::RuntimeUnavailable);
     }
+    template_fits(request.config.mode, runtime.identity())?;
     let started = Instant::now();
     if matches!(
         request.config.mode,
-        Mode::ProductionBoundary | Mode::ContextBias | Mode::Vocabulary
+        Mode::ProductionBoundary | Mode::Vocabulary
     ) {
         return baseline(runtime, &request, cancellation, started).await;
     }
-    if matches!(
-        request.config.mode,
-        Mode::Framed | Mode::FieldContext | Mode::ProbabilityRejoin | Mode::FollowingText
-    ) {
-        return lab_rejoin(runtime, &request, cancellation, started).await;
-    }
-    let mut prepared = prepare_prompt(&request);
+    let mut prepared = prepare_prompt(&request, &healed_languages(runtime.identity()));
     let mut result = request.result(runtime.identity());
     result.used_context = !request.context.is_empty();
     result.used_style = !request.style_examples.is_empty();
@@ -627,19 +635,16 @@ async fn baseline(
         seed: 42,
         length: request.config.length,
     };
-    let bias_context = request.config.mode == Mode::ContextBias;
     let vocabulary = (request.config.mode == Mode::Vocabulary).then(|| {
         badi_broker::vocabulary::Vocabulary::from_texts(&request.context, &request.style_examples)
     });
-    if vocabulary.is_none()
-        && ((!bias_context && !request.context.is_empty()) || !request.style_examples.is_empty())
-    {
+    if vocabulary.is_none() && (!request.context.is_empty() || !request.style_examples.is_empty()) {
         result
             .warnings
             .push("context_and_style_ignored_by_production");
     }
     result.warnings.push("production_raw_and_ttft_not_retained");
-    result.used_context = (bias_context || vocabulary.is_some()) && !request.context.is_empty();
+    result.used_context = vocabulary.is_some() && !request.context.is_empty();
     result.used_style = vocabulary.is_some() && !request.style_examples.is_empty();
     // The same rule the provider runs first, so a result says which path answered.
     let finished_word = vocabulary.as_ref().and_then(|vocabulary| {
@@ -652,8 +657,7 @@ async fn baseline(
     let client = runtime
         .client()
         .clone()
-        .with_request_observer(Arc::clone(&trace) as _)
-        .with_window_context(if bias_context { &request.context } else { "" });
+        .with_request_observer(Arc::clone(&trace) as _);
     // Clones share the length, and each request sets its own.
     client.set_suggestion_length(request.config.length);
     let mut provider_request = request.provider_request();
@@ -701,257 +705,6 @@ async fn baseline(
     }
     result.within_production_budget = result.latency_ms <= 550.0;
     Ok(result)
-}
-
-fn quality_parts(request: &Request) -> (String, String) {
-    let echo = writing::production_healed_echo(&request.before, &request.language).unwrap_or("");
-    let stem = request.before.strip_suffix(echo).unwrap_or(&request.before);
-    let prefix = match request.config.mode {
-        Mode::FieldContext => {
-            let earlier = field_context::stable_prefix(&request.context);
-            if earlier.is_empty() {
-                String::new()
-            } else {
-                format!("{earlier}\n\n")
-            }
-        }
-        Mode::FollowingText => midline::following_text_prefix(&request.after),
-        _ => midline::FRAME.to_owned(),
-    };
-    (format!("{prefix}{stem}"), echo.to_owned())
-}
-
-fn lab_completion_payload(
-    prompt: &str,
-    echo: &str,
-    grammar: Option<String>,
-    n_predict: u16,
-    probs: bool,
-) -> Value {
-    let mut payload = json!({"prompt":prompt,"n_predict":n_predict,"temperature":0.0,"seed":42,
-        "stop":[".","\n"],"stream":true,"cache_prompt":true});
-    if probs {
-        payload["n_probs"] = json!(1);
-        payload["post_sampling_probs"] = json!(false);
-    }
-    if let Some(grammar) = grammar {
-        payload["grammar"] = json!(grammar);
-    } else if !echo.is_empty() {
-        let literal = serde_json::to_string(echo).expect("echo is serializable");
-        payload["grammar"] = json!(format!("root ::= {literal} [^<>\\n\\r`]*"));
-    }
-    payload
-}
-
-struct RejoinJob {
-    payload: Value,
-    echo: String,
-    forced: bool,
-}
-
-async fn lab_rejoin(
-    runtime: &OwnedRuntime,
-    request: &Request,
-    cancellation: CancellationToken,
-    started: Instant,
-) -> Result<ResultRecord, LabError> {
-    if request.config.mode == Mode::ProbabilityRejoin {
-        return probability_rejoin(runtime, request, cancellation, started).await;
-    }
-    let mut result = request.result(runtime.identity());
-    let lab_only = match request.config.mode {
-        Mode::FieldContext => "field_context_is_lab_only",
-        Mode::FollowingText => "following_text_prompt_is_lab_only",
-        _ => midline::framed_warning(),
-    };
-    result.warnings.push(lab_only);
-    result
-        .warnings
-        .push("experimental_output_not_qualified_for_production");
-    result.used_context = request.config.mode == Mode::FieldContext && !request.context.is_empty();
-    result.config.budget_ms = 550;
-    result.config.max_tokens = 8;
-    result.config.cache_prompt = true;
-    result.config.temperature = 0.0;
-    result.config.seed = 42;
-    let (prompt, echo) = quality_parts(request);
-    let payload = lab_completion_payload(&prompt, &echo, None, 8, false);
-    finish_lab_rejoin(
-        runtime,
-        request,
-        cancellation,
-        started,
-        result,
-        RejoinJob {
-            payload,
-            echo,
-            forced: false,
-        },
-    )
-    .await
-}
-
-async fn probability_rejoin(
-    runtime: &OwnedRuntime,
-    request: &Request,
-    cancellation: CancellationToken,
-    started: Instant,
-) -> Result<ResultRecord, LabError> {
-    let Some(words) = midline::following_words(&request.after) else {
-        let mut result = baseline(runtime, request, cancellation, started).await?;
-        result.warnings.push("two_word_check_not_applicable");
-        return Ok(result);
-    };
-    let Some(forced) = midline::forced_word_grammar(&words) else {
-        return Err(LabError::InvalidRequest);
-    };
-    let echo = writing::production_healed_echo(&request.before, &request.language).unwrap_or("");
-    let stem = request.before.strip_suffix(echo).unwrap_or(&request.before);
-    let grammar = if echo.is_empty() {
-        forced
-    } else {
-        let literal = serde_json::to_string(echo).expect("echo is serializable");
-        format!(
-            "root ::= {literal} {}",
-            forced.trim_start_matches("root ::= ")
-        )
-    };
-    let mut result = request.result(runtime.identity());
-    result
-        .warnings
-        .push("rejoin_logprob_floor_minus_2_is_uncalibrated");
-    result
-        .warnings
-        .push("experimental_output_not_qualified_for_production");
-    // Room for a short prefix plus the forced words. The deadline stays the
-    // request budget, so a longer token cap can still miss 550 ms.
-    let tokens = request.config.max_tokens.max(24);
-    let payload = lab_completion_payload(stem, echo, Some(grammar), tokens, true);
-    finish_lab_rejoin(
-        runtime,
-        request,
-        cancellation,
-        started,
-        result,
-        RejoinJob {
-            payload,
-            echo: echo.to_owned(),
-            forced: true,
-        },
-    )
-    .await
-}
-
-async fn finish_lab_rejoin(
-    runtime: &OwnedRuntime,
-    request: &Request,
-    cancellation: CancellationToken,
-    started: Instant,
-    mut result: ResultRecord,
-    job: RejoinJob,
-) -> Result<ResultRecord, LabError> {
-    result.effective_prompt = job.payload["prompt"].as_str().map(str::to_owned);
-    result.model_requests.push(job.payload.clone());
-    let budget_ms = if matches!(
-        request.config.mode,
-        Mode::Framed | Mode::FieldContext | Mode::FollowingText
-    ) {
-        550
-    } else {
-        request.config.budget_ms
-    };
-    let remaining =
-        budget_ms.saturating_sub(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
-    let observed = transport::stream(
-        runtime.client(),
-        job.payload,
-        remaining,
-        cancellation,
-        Some(LabObservation {
-            before: &request.before,
-            language: &request.language,
-            echo: &job.echo,
-            started,
-        }),
-    )
-    .await?;
-    record_observation_metrics(&mut result, &observed);
-    let continuation = observed
-        .raw
-        .strip_prefix(job.echo.as_str())
-        .unwrap_or(observed.raw.as_str());
-    result.raw = Some(observed.raw.clone());
-    let insertion = if job.forced {
-        forced_insertion(
-            request,
-            &observed.raw,
-            &job.echo,
-            observed.token_logprobs.as_deref(),
-        )
-    } else {
-        midline::rejoin(&request.before, &request.after, continuation)
-            .or_else(|| end_of_text_continuation(&request.after, continuation))
-    };
-    let Some(insertion) = insertion else {
-        result.outcome = if observed.deadline {
-            "deadline"
-        } else {
-            "abstention"
-        };
-        result.reason = if job.forced {
-            "forced_words_unlikely"
-        } else if observed.deadline {
-            "no_complete_word"
-        } else {
-            "rejoin_rejected"
-        };
-        result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
-        result.within_production_budget = result.latency_ms <= 550.0;
-        return Ok(result);
-    };
-    if writing::validate_proposal(
-        &request.before,
-        &request.after,
-        &insertion,
-        Some(&request.language),
-    )
-    .is_err()
-        || !accepts_language_output(&request.language, &insertion)
-    {
-        result.outcome = "abstention";
-        result.reason = "output_seam";
-    } else {
-        result.outcome = "suggestion";
-        result.reason = "lab_rejoin";
-        result.word_complete = true;
-        result.shape_valid = true;
-        result.text = Some(insertion);
-    }
-    result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
-    result.within_production_budget = result.latency_ms <= 550.0;
-    Ok(result)
-}
-
-fn end_of_text_continuation(after: &str, continuation: &str) -> Option<String> {
-    if writing::line_rest(after).is_some() {
-        return None;
-    }
-    writing::complete_word_prefix(continuation, 4, true)
-}
-
-fn forced_insertion(
-    request: &Request,
-    raw: &str,
-    echo: &str,
-    tokens: Option<&[TokenLogprob]>,
-) -> Option<String> {
-    let continuation = raw.strip_prefix(echo).unwrap_or(raw);
-    let words = midline::following_words(&request.after)?;
-    let prefix = midline::prefix_before_forced(continuation, &words)?;
-    let suffix = format!(" {}", words.join(" "));
-    let mean = midline::suffix_mean_logprob(raw, &suffix, tokens?)?;
-    midline::accept_forced_prefix(prefix, mean)?;
-    midline::rejoin(&request.before, &request.after, continuation)
 }
 
 fn apply_observation(

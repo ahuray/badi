@@ -10,6 +10,9 @@ Scope {
   property var overview: ({})
   property string message: ""
   property string messageTone: "neutral"
+  // The message reports a failed or refused read; the next good read clears
+  // it, even on a refresh that otherwise keeps the last result.
+  property bool messageFromRead: false
   property bool overviewTimedOut: false
   property bool overviewInvalidated: false
   property bool mutationTimedOut: false
@@ -23,6 +26,9 @@ Scope {
   property int mutationGeneration: -1
   property bool refreshQueued: false
   property bool queuedPreserveMessage: false
+  // A settings document the validator refuses while the broker answers.
+  readonly property string unknownSettingsMessage:
+    "This panel does not know every Badi setting; update the panel. Changes stay off until then."
 
   readonly property bool loading: overviewProcess.running
   readonly property bool mutating: mutationProcess.running
@@ -166,93 +172,76 @@ Scope {
     return left.kind === "browser_origin" ? left.port - right.port : 0
   }
 
+  // Codes in `order` without repeats, in that order.
+  function isOrderedCodes(value, order) {
+    if (!Array.isArray(value)) return false
+    for (var index = 0; index < value.length; index += 1) {
+      var position = order.indexOf(value[index])
+      if (position < 0 || (index > 0 && position <= order.indexOf(value[index - 1]))) return false
+    }
+    return true
+  }
+
+  // Whether `value` is one the settings schema
+  // (broker/schemas/badi.settings.v2.schema.json) allows for the optional
+  // key `key`. Producers omit a key at its default. A key this panel does
+  // not know fails the whole document, so the panel never writes over a
+  // setting it cannot see; run-client-lifecycle.sh keeps this list equal to
+  // the schema's.
+  function isOptionalSetting(key, value) {
+    var writingCodes = ["en", "de", "fa", "fr", "es", "pt"]
+    switch (key) {
+    case "all_web_origins":
+    case "all_linux_apps":
+    case "mid_line":
+    case "style_learning":
+    case "context_words":
+    case "languages_chosen":
+      return typeof value === "boolean"
+    case "escape_quiet_seconds":
+      return Number.isSafeInteger(value) && value >= 1 && value <= 3600
+    case "battery_mode":
+      return ["normal", "quiet", "explicit"].indexOf(value) >= 0
+    case "screen_share":
+      return value === "hold" || value === "suggest"
+    case "suggestion_length":
+      return value === "short" || value === "normal"
+    case "spelling_languages":
+      return isOrderedCodes(value, ["en", "de", "fr", "es", "it", "nl", "pl"])
+    case "writing_languages":
+      return isOrderedCodes(value, writingCodes)
+    case "trailing_space_healing":
+      return isObject(value) && Object.keys(value).every(function(code) {
+        return writingCodes.indexOf(code) >= 0 && typeof value[code] === "boolean"
+      })
+    case "writing_model":
+      return typeof value === "string" && /^[a-z0-9.-]{1,64}$/.test(value)
+    case "context_words_off":
+      // In the broker's identity order.
+      if (!Array.isArray(value) || value.length === 0 || value.length > 64) return false
+      for (var index = 0; index < value.length; index += 1) {
+        if (!isIdentity(value[index])
+            || (index > 0 && compareIdentities(value[index - 1], value[index]) >= 0)) return false
+      }
+      return true
+    case "language_overrides":
+      return isObject(value) && Object.keys(value).length <= 64 && Object.keys(value).every(function(app) {
+        return app.length <= 128 && /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/.test(app)
+          && writingCodes.indexOf(value[app]) >= 0
+      })
+    default:
+      return false
+    }
+  }
+
   function isSettingsDocument(value) {
-    // The blocklist modes add all_web_origins and all_linux_apps; producers
-    // omit them when false.
-    var keys = ["schema", "revision", "paused", "subjects"]
-    var modes = ["all_web_origins", "all_linux_apps", "mid_line", "style_learning", "context_words", "languages_chosen"]
-    for (var mode = 0; mode < modes.length; mode += 1) {
-      if (isObject(value) && Object.prototype.hasOwnProperty.call(value, modes[mode])) {
-        if (typeof value[modes[mode]] !== "boolean") return false
-        keys.push(modes[mode])
-      }
+    if (!isObject(value)) return false
+    var required = ["schema", "revision", "paused", "subjects"]
+    var keys = Object.keys(value)
+    for (var key = 0; key < keys.length; key += 1) {
+      if (required.indexOf(keys[key]) < 0 && !isOptionalSetting(keys[key], value[keys[key]])) return false
     }
-    // The timed Escape quiet is an optional whole number of seconds;
-    // producers omit it at zero.
-    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "escape_quiet_seconds")) {
-      if (!Number.isSafeInteger(value.escape_quiet_seconds)
-          || value.escape_quiet_seconds < 1 || value.escape_quiet_seconds > 3600) return false
-      keys.push("escape_quiet_seconds")
-    }
-    // Battery scheduling: producers omit the default, quiet.
-    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "battery_mode")) {
-      if (["normal", "quiet", "explicit"].indexOf(value.battery_mode) < 0) return false
-      keys.push("battery_mode")
-    }
-    // Suggestion length: producers omit the default, normal.
-    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "suggestion_length")) {
-      if (["short", "normal"].indexOf(value.suggestion_length) < 0) return false
-      keys.push("suggestion_length")
-    }
-    // Spelling languages: producers omit exactly ["en"] and keep this order.
-    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "spelling_languages")) {
-      var order = ["en", "de", "fr", "es", "it", "nl", "pl"]
-      var languages = value.spelling_languages
-      if (!Array.isArray(languages)) return false
-      for (var language = 0; language < languages.length; language += 1) {
-        var position = order.indexOf(languages[language])
-        if (position < 0 || (language > 0 && position <= order.indexOf(languages[language - 1]))) return false
-      }
-      keys.push("spelling_languages")
-    }
-    // Suggestion languages: producers omit exactly ["en", "de", "fa"] and keep this order.
-    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "writing_languages")) {
-      var writingOrder = ["en", "de", "fa", "fr", "es", "pt"]
-      var writing = value.writing_languages
-      if (!Array.isArray(writing)) return false
-      for (var w = 0; w < writing.length; w += 1) {
-        var place = writingOrder.indexOf(writing[w])
-        if (place < 0 || (w > 0 && place <= writingOrder.indexOf(writing[w - 1]))) return false
-      }
-      keys.push("writing_languages")
-    }
-    // Per-language healing choices over the model's reviewed default.
-    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "trailing_space_healing")) {
-      if (!isObject(value.trailing_space_healing)) return false
-      var healed = Object.keys(value.trailing_space_healing)
-      for (var h = 0; h < healed.length; h += 1) {
-        if (["en", "de", "fa", "fr", "es", "pt"].indexOf(healed[h]) < 0
-            || typeof value.trailing_space_healing[healed[h]] !== "boolean") return false
-      }
-      keys.push("trailing_space_healing")
-    }
-    // Apps and sites with context off, in the broker's identity order;
-    // producers omit an empty list.
-    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "context_words_off")) {
-      var off = value.context_words_off
-      if (!Array.isArray(off) || off.length === 0 || off.length > 64) return false
-      for (var o = 0; o < off.length; o += 1) {
-        if (!isIdentity(off[o]) || (o > 0 && compareIdentities(off[o - 1], off[o]) >= 0)) return false
-      }
-      keys.push("context_words_off")
-    }
-    // The chosen writing model: a catalog id the broker reads at its start.
-    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "writing_model")) {
-      if (typeof value.writing_model !== "string" || !/^[a-z0-9.-]{1,64}$/.test(value.writing_model)) return false
-      keys.push("writing_model")
-    }
-    if (isObject(value) && Object.prototype.hasOwnProperty.call(value, "language_overrides")) {
-      if (!isObject(value.language_overrides)) return false
-      var apps = Object.keys(value.language_overrides)
-      if (apps.length > 64) return false
-      for (var app = 0; app < apps.length; app += 1) {
-        if (apps[app].length > 128 || !/^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/.test(apps[app])
-            || ["en", "de", "fa", "fr", "es", "pt"].indexOf(value.language_overrides[apps[app]]) < 0) return false
-      }
-      keys.push("language_overrides")
-    }
-    if (!hasExactKeys(value, keys)
-        || value.schema !== "badi.settings.v2"
+    if (value.schema !== "badi.settings.v2"
         || !Number.isSafeInteger(value.revision)
         || value.revision < 0
         || typeof value.paused !== "boolean"
@@ -269,6 +258,12 @@ Scope {
 
   function cloneSettings() {
     return settingsDocumentValid ? JSON.parse(JSON.stringify(settings)) : null
+  }
+
+  function say(text, tone, fromRead) {
+    message = text
+    messageTone = tone
+    messageFromRead = fromRead === true
   }
 
   function safeError(stderrText, fallback) {
@@ -298,7 +293,7 @@ Scope {
     refreshQueued = false
     queuedPreserveMessage = false
     preserveMessageOnRefresh = preserveMessage === true
-    if (!preserveMessageOnRefresh) message = ""
+    if (!preserveMessageOnRefresh) say("", "neutral")
     overviewTimedOut = false
     overviewInvalidated = false
     overviewGeneration = lifecycleGeneration
@@ -316,24 +311,21 @@ Scope {
 
   function replaceSettings(document, successMessage) {
     if (!canMutateSettings || document === null) {
-      messageTone = "danger"
-      message = "Refresh a coherent settings document before changing policy."
+      say("Refresh a coherent settings document before changing policy.", "danger")
       return
     }
     if (settingsRevision >= Number.MAX_SAFE_INTEGER) {
-      messageTone = "danger"
-      message = "The settings revision cannot be advanced safely."
+      say("The settings revision cannot be advanced safely.", "danger")
       return
     }
     document.revision = settingsRevision + 1
     if (!isSettingsDocument(document)) {
-      messageTone = "danger"
-      message = "The requested change did not produce valid badi.settings.v2 data."
+      say("The requested change did not produce valid badi.settings.v2 data.", "danger")
       return
     }
     invalidateOverview()
     pendingSuccessMessage = successMessage
-    message = ""
+    say("", "neutral")
     mutationTimedOut = false
     mutationGeneration = lifecycleGeneration
     pendingSettings = JSON.stringify(document)
@@ -465,18 +457,15 @@ Scope {
       }
       if (root.overviewTimedOut) {
         root.overview = ({})
-        root.messageTone = "danger"
-        root.message = "Reading Badi status exceeded five seconds."
+        root.say("Reading Badi status exceeded five seconds.", "danger", true)
         root.preserveMessageOnRefresh = false
         root.scheduleQueuedRefresh()
         return
       }
       if (exitCode !== 0) {
         root.overview = ({})
-        root.messageTone = "danger"
-        root.message = root.safeError(
-          overviewStderr.text,
-          "Could not read Badi status. Is the broker running?")
+        root.say(root.safeError(overviewStderr.text, "Could not read Badi status. Is the broker running?"),
+          "danger", true)
         root.preserveMessageOnRefresh = false
         root.scheduleQueuedRefresh()
         return
@@ -486,11 +475,14 @@ Scope {
         if (!root.isObject(parsed) || parsed.schema !== "badi.overview.v2")
           throw new Error("unexpected overview schema")
         root.overview = parsed
-        if (!root.preserveMessageOnRefresh) root.message = ""
+        if (root.isObject(parsed.broker) && parsed.broker.reachable === true
+            && !root.isSettingsDocument(parsed.settings)) {
+          // Every write is then refused; say why rather than only dim the controls.
+          root.say(root.unknownSettingsMessage, "danger", true)
+        } else if (!root.preserveMessageOnRefresh || root.messageFromRead) root.say("", "neutral")
       } catch (error) {
         root.overview = ({})
-        root.messageTone = "danger"
-        root.message = "badictl returned invalid badi.overview.v2 data."
+        root.say("badictl returned invalid badi.overview.v2 data.", "danger", true)
       }
       root.preserveMessageOnRefresh = false
       root.scheduleQueuedRefresh()
@@ -521,12 +513,12 @@ Scope {
         return
       }
       var succeeded = exitCode === 0 && !root.mutationTimedOut
-      root.messageTone = succeeded ? "positive" : "danger"
-      root.message = root.mutationTimedOut
+      root.say(root.mutationTimedOut
         ? "The Badi change exceeded five seconds; refreshing status."
         : succeeded
           ? root.pendingSuccessMessage
-          : root.safeError(mutationStderr.text, "Badi rejected the requested change.")
+          : root.safeError(mutationStderr.text, "Badi rejected the requested change."),
+        succeeded ? "positive" : "danger")
       root.pendingSuccessMessage = ""
       root.queueRefresh(true)
       root.scheduleQueuedRefresh()

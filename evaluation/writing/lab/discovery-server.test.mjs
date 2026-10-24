@@ -44,6 +44,7 @@ test('HTTP discovery rejects foreign origin, missing capability, arbitrary paths
   assert.deepEqual(lab.calls, [{ query: 'small' }]);
   const status = await fetch(`${lab.origin}/api/discovery/status`, { headers: lab.headers });
   assert.equal(status.headers.get('cache-control'), 'no-store');
+  assert.match(status.headers.get('content-security-policy'), /frame-ancestors 'none'/u);
   assert.match((await status.json()).recommendation, /No qualified model/u);
 });
 

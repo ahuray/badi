@@ -2,7 +2,7 @@ const arabicLetter = value => value !== undefined && /[\u0620-\u063f\u0641-\u064
 
 // V2 safe suggestion spacing: isolated U+0020, at most one leading and one
 // trailing. The trailing space separates a mid-sentence insertion from the
-// next word. Bash and Obsidian both display this text unchanged.
+// next word. Obsidian, Bash and Neovim display this text unchanged.
 export const hasIsolatedSpaces = value => /^ ?[^\s](?: ?[^\s])* ?$/u.test(value);
 
 export function hasUnsafeText(value, allowContextWhitespace = false) {

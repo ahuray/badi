@@ -139,8 +139,7 @@ async fn open_field(
                 activation: Activation::Always,
             },
             SessionAuthority {
-                protocol_version: 2,
-                adapter_kind: AdapterKind::Browser,
+                adapter_kind: AdapterKind::Test,
                 capabilities: vec![
                     Capability::Context,
                     Capability::Suggestion,

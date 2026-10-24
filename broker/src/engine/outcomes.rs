@@ -332,8 +332,8 @@ impl Broker {
         let Some(recorder) = self.inner.outcome_recorder.as_ref() else {
             return Ok(());
         };
-        // Same bound as shutdown. A hung recorder must not hold the pause
-        // acknowledgement open, and a failed fence is not success.
+        // Same bound as shutdown: a hung recorder must not hold the pause
+        // acknowledgement open. The failure is logged here and returned.
         match time::timeout(OUTCOME_FLUSH_TIMEOUT, recorder.flush()).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => {

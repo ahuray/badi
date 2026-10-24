@@ -15,6 +15,7 @@ const run = promisify(execFile);
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 let previousWindow;
 if (!headless) {
+  assert.ok(process.env.XDG_RUNTIME_DIR && process.env.WAYLAND_DISPLAY, 'The visible trial needs the Wayland session');
   const lock = JSON.parse((await run('omarchy-shell', ['lock', 'status'])).stdout);
   assert.ok(['locked', 'requested', 'pending', 'sessionLocked', 'secure'].every(key => lock[key] === false),
     'Run the visible Obsidian trial after normal desktop unlock');
@@ -27,9 +28,11 @@ const profile = join(root, 'profile');
 const vault = join(root, 'Badi writing trial');
 const env = { ...process.env, HOME: root, XDG_RUNTIME_DIR: join(root, 'runtime'),
   XDG_CONFIG_HOME: join(root, 'config'), XDG_DATA_HOME: join(root, 'data'),
-  XDG_CACHE_HOME: join(root, 'cache'),
-  WAYLAND_DISPLAY: resolve(process.env.XDG_RUNTIME_DIR, process.env.WAYLAND_DISPLAY) };
+  XDG_CACHE_HOME: join(root, 'cache') };
+// Headless Ozone uses no display; the window finds the session's Wayland
+// socket by absolute path, since XDG_RUNTIME_DIR is the trial's own.
 if (headless) { delete env.WAYLAND_DISPLAY; delete env.DISPLAY; }
+else env.WAYLAND_DISPLAY = resolve(process.env.XDG_RUNTIME_DIR, process.env.WAYLAND_DISPLAY);
 const endpoint = join(env.XDG_RUNTIME_DIR, 'badi/broker.sock');
 const control = async (...args) => JSON.parse((await run(join(ROOT, 'target/release/badictl'),
   ['--socket', endpoint, ...args], { env, timeout: 5000 })).stdout);

@@ -28,7 +28,7 @@ Face repository and file or as a path relative to the repository or `~`.
 | `scripts/step4_backends.sh LABEL THREADS` | Same file on the CPU and Vulkan builds, full and partial offload, no op-offload |
 | `scripts/run_latency.sh OUTDIR "ARGS" LABEL[@NAME=EXTRA]...` | `latency.py` per model under a logind idle inhibitor; `LATENCY_BIN` selects another `llama-server`, such as Badi's pinned runtime |
 | `scripts/run_quality.sh [LABEL...]` | `quality.py` per model |
-| `scripts/summarize_latency.py`, `scripts/h4_table.py`, `scripts/summarize_quality.py` | Tables from raw results |
+| `scripts/summarize_latency.py`, `scripts/cache_table.py`, `scripts/summarize_quality.py` | Tables from raw results; `cache_table.py` lists newly evaluated tokens per latency scenario |
 | `scripts/compare_arms.py DIR PREFIX_A PREFIX_B` | Two arms of latency runs side by side: tokens read, TTFT and total percentiles, and same-prompt text agreement |
 | `scripts/models_table.py DIR CEILINGS` | One row per model from runs at Badi's launch: decode against the ceiling, TTFT and 8-token totals by scenario, keystrokes over 550 ms, peak RSS, pass/fail |
 | `scripts/cold_starts.py --arm NAME="ARGS"...` | Short cold prompts on alternating `llama-server` arms at Badi's launch flags, optionally each after a long prompt |

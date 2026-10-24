@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline';
-import { BrokerClient } from '../shared/broker-client.mjs';
+import { BrokerClient, boundedContext, refusalReason } from '../shared/broker-client.mjs';
 import { recordActivity } from '../shared/activity.mjs';
-import { writingLanguage } from '../shared/writing-language.mjs';
+import { bridgeLanguage } from '../shared/writing-language.mjs';
 
 // Exit after this long without a request so a quiet shell does not keep a Node
-// process (~45 MB); badi.bash starts a new bridge on the next Ctrl-X Tab.
+// process (about 60 MB); badi.bash starts a new bridge on the next Ctrl-X Tab.
 const IDLE_MS = /^[1-9][0-9]{0,8}$/.test(process.env.BADI_BRIDGE_IDLE_MS ?? '')
   ? Number(process.env.BADI_BRIDGE_IDLE_MS) : 10 * 60 * 1000;
+
+// Bash prints a reason as it is, so the offline one names the next step.
+const OFFLINE = 'model_offline_run_badi_doctor';
+const reason = () => (refusalReason(client) === 'model_offline' ? OFFLINE : refusalReason(client));
 
 let client = new BrokerClient('terminal', { textReplacement: true });
 let connectionGeneration = 0;
@@ -48,8 +52,8 @@ try {
         const source = Buffer.from(command.before, 'base64').toString('utf8');
         if (Buffer.from(source).toString('base64') !== command.before) throw new Error();
         recordActivity('terminal', 'context', 'explicit_buffer');
-        const before = [...source].slice(-512).join('');
-        const language = writingLanguage(before, process.env.BADI_LANGUAGE ?? Intl.DateTimeFormat().resolvedOptions().locale);
+        const { before } = boundedContext(source);
+        const language = bridgeLanguage(before);
         if (!language) throw new Error('Writing language unavailable');
         const text = await client.suggest(before, { language });
         respond(text ? 'SUGGEST' : 'EMPTY', text ? Buffer.from(text).toString('base64') + (
@@ -62,9 +66,10 @@ try {
         client.report(grant, command.applied === true ? 'applied' : 'failed');
         grant = null;
         respond('DONE');
-      } else if (command.operation === 'cancel') {
+      } else if (command.operation === 'cancel' || command.operation === 'dismiss') {
+        // Only dismiss (Ctrl-X Escape) tells the broker the user declined it.
         grant = null;
-        client.dismiss();
+        if (command.operation === 'dismiss') client.dismiss(); else client.cancel();
         respond('DONE');
       } else {
         respond('ERROR', 'invalid_operation');
@@ -72,14 +77,13 @@ try {
     } catch {
       grant = null;
       client.cancel();
-      respond('ERROR', !client.connected ? 'model_offline_run_badi_doctor'
-        : client.allowed ? 'expired_or_unavailable' : 'app_disabled_or_model_paused');
+      respond('ERROR', reason());
     } finally {
       armIdleExit();
     }
   }
 } catch {
-  respond('ERROR', 'model_offline_run_badi_doctor');
+  respond('ERROR', OFFLINE);
 } finally {
   clearTimeout(idle);
   client.close();

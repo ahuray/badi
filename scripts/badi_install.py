@@ -752,9 +752,6 @@ def main(arguments=None):
         raise SystemExit(1)
 
 
-if __name__ == "__main__":
-    main()
-
 
 def chromium_line_tokens(line):
     # GLib starts comments at an unquoted token boundary. shlex's built-in
@@ -907,20 +904,47 @@ def download_model(model, directory):
     url = f"https://huggingface.co/{model['repository']}/resolve/{model['revision']}/{model['filename']}"
     digest = hashlib.sha256()
     received = 0
-    with urllib.request.urlopen(url, timeout=60) as response, open(partial, "wb") as out:
-        os.fchmod(out.fileno(), 0o600)
-        while chunk := response.read(1 << 20):
-            out.write(chunk)
-            digest.update(chunk)
-            received += len(chunk)
-            if received > model["download_bytes"]:
-                break
-            if sys.stdout.isatty():
-                print(f"\rDownloading {model['name']}: {100 * received // model['download_bytes']}%", end="", flush=True)
-    if sys.stdout.isatty():
-        print()
-    if received != model["download_bytes"] or digest.hexdigest() != model["sha256"]:
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response, open(partial, "wb") as out:
+            os.fchmod(out.fileno(), 0o600)
+            while chunk := response.read(1 << 20):
+                out.write(chunk)
+                digest.update(chunk)
+                received += len(chunk)
+                if received > model["download_bytes"]:
+                    break
+                if sys.stdout.isatty():
+                    print(f"\rDownloading {model['name']}: {100 * received // model['download_bytes']}%", end="",
+                          flush=True)
+            out.flush()
+            os.fsync(out.fileno())
+        if sys.stdout.isatty():
+            print()
+        if received != model["download_bytes"] or digest.hexdigest() != model["sha256"]:
+            raise RuntimeError(f"{model['filename']} did not match its pinned size and hash; nothing was installed.")
+    except BaseException:
+        # A failed or interrupted download leaves no partial file behind.
         partial.unlink(missing_ok=True)
-        raise RuntimeError(f"{model['filename']} did not match its pinned size and hash; nothing was installed.")
+        raise
     partial.rename(target)
     return target
+
+
+def run_installer(main):
+    """Run an installer's main: its own refusals and a failed build step end
+    with one line on stderr instead of a traceback."""
+    try:
+        main()
+    except KeyboardInterrupt:
+        raise SystemExit(130) from None
+    except subprocess.CalledProcessError as error:
+        command = error.cmd if isinstance(error.cmd, str) else " ".join(map(str, error.cmd))
+        print(f"{command} failed with exit status {error.returncode}; see its output above.", file=sys.stderr)
+        raise SystemExit(1) from None
+    except RuntimeError as error:
+        print(error, file=sys.stderr)
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()

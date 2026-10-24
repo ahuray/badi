@@ -152,7 +152,7 @@ mod tests {
             selection: Selection {
                 anchor: 0,
                 head: 0,
-                unit: OffsetUnit::Utf16CodeUnits,
+                unit: OffsetUnit::UnicodeScalarValues,
             },
             field: FieldDescriptor {
                 purpose: FieldPurpose::Normal,

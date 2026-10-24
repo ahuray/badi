@@ -54,6 +54,7 @@ WireCallbacks BadiAddon::callbacksFor(BadiAddon *addon) {
         },
         .onRevision = [addon](Revision revision) { addon->onRevision(std::move(revision)); },
         .onRevisionClear = [addon](const RevisionClear &clear) { addon->onRevisionClear(clear); },
+        .onRefusal = [addon](const RequestRefusal &refusal) { addon->onRefusal(refusal); },
     };
 }
 
@@ -124,15 +125,13 @@ void BadiAddon::focusIn(::fcitx::InputContext &inputContext) {
     binding.requestExplicit = false;
     dropHeldTab(binding);
     binding.dismissedContext.reset();
-    binding.typedThrough = false;
-    binding.typeThroughAutomatic = false;
-    binding.typeThroughRest.clear();
-    binding.typeThroughBase.clear();
-    binding.typeThroughTyped.clear();
-    binding.typeThroughWaits = 0;
+    clearTypeThrough(binding);
     binding.inspection.input();
     binding.revisionWaiting.reset();
     binding.revisionExpected.reset();
+    // An IME-parity correction's read-back (correctionExpected) outlives
+    // focus: a page that moves focus between its two edits split it, and
+    // its notice must still say so (ADR 0011).
     binding.surroundingFreshness.focusIn();
     binding.surroundingEcho.reset();
     binding.typedLine.clear();

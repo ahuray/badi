@@ -22,9 +22,12 @@ texts = defaultdict(dict)  # (rep, lang, size, scenario, step) -> {arm: text}
 references = defaultdict(lambda: defaultdict(int))
 for f in sorted(glob.glob(str(Path(directory) / "*.jsonl"))):
     label = Path(f).stem
-    arm = arm_a if label.startswith(arm_a) else arm_b if label.startswith(arm_b) else None
-    if arm is None:
+    # The longest matching prefix decides, so a `gemma3-swa` run is never
+    # filed under a `gemma3` arm.
+    matches = [prefix for prefix in (arm_a, arm_b) if label.startswith(prefix)]
+    if not matches:
         continue
+    arm = max(matches, key=len)
     rep = label[len(arm):]
     for line in open(f):
         r = json.loads(line)

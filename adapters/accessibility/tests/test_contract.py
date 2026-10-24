@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from contract import Observer, SCHEMA, canonical_origin, Denied
+from contract import MAX_PREVIEW_CHARS, Observer, SCHEMA, canonical_origin, Denied, suggestion_text
 
 
 class FakeBackend:
@@ -329,13 +329,22 @@ class ContractTests(unittest.TestCase):
         self.observer.hide = lambda: hidden.append(True)
         base = self.preview_request(focus)
         self.assertTrue(self.observer.request({**base, "ttl_ms": 15000})["ok"])
-        for patch in ({"text": "\n"}, {"text": ""}, {"text": "x"*161}, {"text": "a\u202eb"}, {"ttl_ms": 15001}, {"ttl_ms": True},
+        for patch in ({"text": "\n"}, {"text": ""}, {"text": "x" * (MAX_PREVIEW_CHARS + 1)}, {"text": "a\u202eb"}, {"ttl_ms": 15001}, {"ttl_ms": True},
                       {"expected_caret": -1}, {"expected_caret": True}, {"expected_caret": 9.0}, {"expected_caret": "9"},
                       {"expected_total_chars": 8}, {"expected_total_chars": True}, {"expected_total_chars": 2**31}):
             self.assertEqual(self.observer.request({**base, **patch})["error"], "invalid_preview")
         self.assertTrue(self.observer.request({"schema": SCHEMA, "id": "hide", "op": "hide"})["hidden"])
         self.observer.invalidate("focus_changed")
         self.assertEqual(len(hidden), 2)
+
+    def test_preview_text_is_plain_bounded_and_excludes_hidden_controls(self):
+        # The one rule for preview text, at the request boundary and in the renderer.
+        for text in [" the next words", "teh → the", "→ " + "x" * 64, "می‌توانیم", "<b>literal text</b>",
+                     "één woord", "final "]:
+            self.assertTrue(suggestion_text(text), text)
+        for text in [None, "", " ", "x" * (MAX_PREVIEW_CHARS + 1), "line\nline", "x\t", "x\u202ey", "x\u00a0y",
+                     "می‌ شود", "word\u200cword", "\ue000", "\ud800", "final  "]:
+            self.assertFalse(suggestion_text(text), repr(text))
 
     def test_snapshot_marks_only_verified_ltr_caret_edges(self):
         for text, direction, web, expected in [
@@ -346,19 +355,31 @@ class ContractTests(unittest.TestCase):
                 ("Hello", "rl", False, None)]:
             self.setUp()
             self.backend.content = text
-            self.backend.meta.update(caret=len(text), total_chars=len(text), direction=direction, web=web,
-                                     geometry={"test": True})
-            focus = self.snapshot(self.inspect()["focus"])["focus"]
-            self.assertEqual(focus["geometry"].get("caret_edge"), expected)
+            self.backend.meta.update(caret=len(text), total_chars=len(text), direction=direction, web=web)
+            self.assertEqual(self.drawn_geometry().get("caret_edge"), expected)
+
+    def drawn_geometry(self):
+        """The geometry a preview after the snapshot hands the renderer.
+
+        Only a preview calibrates; the snapshot's facts reach it through the
+        observer, never the snapshot reply.
+        """
+        focus = self.snapshot(self.inspect()["focus"])["focus"]
+        self.assertIsNone(focus["geometry"])
+        drawn = []
+        self.observer.render = lambda shown, _text, _ttl: drawn.append(shown) or True
+        self.backend.meta["geometry"] = {"test": True}
+        self.assertTrue(self.observer.request(self.preview_request(focus))["ok"])
+        self.backend.meta.pop("geometry")
+        return drawn[0]["geometry"]
 
     def test_snapshot_marks_words_after_the_caret_on_its_line(self):
         for content, caret, follows in (("Please find the report", 15, True), ("Please find the\nreport", 15, False),
                                         ("Please find the  ", 15, False), ("Please find the", 15, False)):
             self.setUp()
             self.backend.content = content
-            self.backend.meta.update(caret=caret, total_chars=len(content), direction="lr", geometry={"test": True})
-            focus = self.snapshot(self.inspect()["focus"])["focus"]
-            self.assertIs(focus["geometry"]["text_follows"], follows, content)
+            self.backend.meta.update(caret=caret, total_chars=len(content), direction="lr")
+            self.assertIs(self.drawn_geometry()["text_follows"], follows, content)
             self.assertIs(self.observer.text_follows, follows)
         self.observer.withdraw()
         self.assertFalse(self.observer.text_follows)
@@ -368,9 +389,8 @@ class ContractTests(unittest.TestCase):
                                      ("Please find the\nreport", 15, False), ("Please find the report", 15, False)):
             self.setUp()
             self.backend.content = content
-            self.backend.meta.update(caret=caret, total_chars=len(content), direction="lr", geometry={"test": True})
-            focus = self.snapshot(self.inspect()["focus"])["focus"]
-            self.assertIs(focus["geometry"]["text_ends"], ends, content)
+            self.backend.meta.update(caret=caret, total_chars=len(content), direction="lr")
+            self.assertIs(self.drawn_geometry()["text_ends"], ends, content)
             self.assertIs(self.observer.text_ends, ends)
         self.observer.withdraw()
         self.assertFalse(self.observer.text_ends)

@@ -137,8 +137,8 @@ void BadiAddon::presentSuggestion(Binding &binding, Suggestion suggestion) {
     }
     // SessionState keeps IME-parity apps off this unobserved display path.
     if (!binding.observed()) return displaySuggestion(std::move(suggestion));
-    binding.pendingSuggestion = suggestion.suggestionId;
     const auto generation = binding.observationGeneration;
+    const auto id = suggestion.suggestionId;
     const bool sent = accessibility_->request(snapshotRequest(binding.observedFocus),
         [this, suggestion, focus = binding.observedFocus, generation](const Json &reply) {
             auto *current = bindingFor(suggestion.coordinates.sessionId);
@@ -146,7 +146,8 @@ void BadiAddon::presentSuggestion(Binding &binding, Suggestion suggestion) {
                 current->state.coordinates() == suggestion.coordinates)
                 previewIfCorroborated(*current, suggestion, focus, reply);
         });
-    if (!sent) debug_.record("suggestion_blocked", binding.state.appId(), "observer_display_unavailable");
+    if (sent) binding.pendingSuggestion = id;
+    else debug_.record("suggestion_blocked", binding.state.appId(), "observer_display_unavailable");
 }
 
 void BadiAddon::previewIfCorroborated(Binding &binding, const Suggestion &suggestion, const Json &focus, const Json &reply) {
@@ -213,14 +214,14 @@ void BadiAddon::displaySuggestion(Suggestion suggestion, bool overlay) {
         if (binding && binding->state.visibleText().empty()) clearOwnedPanel(*binding);
         return;
     }
+    // One display at a time: a stream may move between the panel and the
+    // grey preview once the caret is calibrated, and an earlier one left
+    // showing would show other text than Tab accepts.
+    if (overlay) removeOwnedPanel(*binding);
+    else hidePreview();
     binding->overlayOwned = overlay;
     binding->pendingSuggestion.reset();
-    binding->typedThrough = false;
-    binding->typeThroughAutomatic = false;
-    binding->typeThroughRest.clear();
-    binding->typeThroughBase.clear();
-    binding->typeThroughTyped.clear();
-    binding->typeThroughWaits = 0;
+    clearTypeThrough(*binding);
     if (!overlay) showCandidate(*binding, suggestion);
     // The local lease must also hide UI if the broker stalls before its
     // suggestion.clear arrives. Only this exact candidate may be retired.
@@ -473,6 +474,34 @@ void BadiAddon::refuseCommit(const CommitPrepare &prepare, Binding *binding) {
 
 void BadiAddon::reportStale(const CommitPrepare &prepare) {
     transport_.reportCommit(prepare.coordinates, prepare.controlId, prepare.suggestionId, "stale");
+}
+
+// The broker refused one request and keeps the connection. Only what that
+// id names ends; ids repeat across sessions, so every binding that holds it
+// retires it, which only ever withdraws.
+void BadiAddon::onRefusal(const RequestRefusal &refusal) {
+    for (auto &[_, binding] : bindings_) {
+        switch (binding.state.refuseRequest(refusal.requestId)) {
+        case RefusedRequest::None:
+            break;
+        case RefusedRequest::Acceptance:
+            debug_.record("commit_blocked", binding.state.appId(), "broker_refused");
+            clearOwnedPanel(binding);
+            break;
+        case RefusedRequest::Revision: {
+            const auto text = revisionClearNotice(refusal.reason);
+            endRevision(binding, text ? *text : notice::kRequestFailed, "broker_refused");
+            break;
+        }
+        case RefusedRequest::Suggestion:
+            debug_.record("request_blocked", binding.state.appId(), "broker_refused");
+            // The user asked and nothing will answer: say so instead of
+            // leaving "thinking" up.
+            if (binding.requestExplicit)
+                showNotice(binding, refusal.reason == "paused" ? notice::kPaused : notice::kRequestFailed);
+            break;
+        }
+    }
 }
 
 void BadiAddon::onDisconnected() {

@@ -10,7 +10,6 @@ use unicode_segmentation::UnicodeSegmentation;
 
 pub mod learned;
 
-#[cfg(feature = "local-model")]
 use crate::writing::WritingLanguage;
 
 /// Fewer typed letters too often start an unrelated word: on the 2026-10-20
@@ -170,7 +169,6 @@ impl Abstention {
     }
 }
 
-#[cfg(feature = "local-model")]
 /// The rest of the word ending at the caret, when exactly one longer word in
 /// `vocabulary` or earlier in `before` starts with the typed letters, or one
 /// such word begins all the others, matched case-sensitively and without
@@ -263,7 +261,6 @@ pub fn complete(
     })
 }
 
-#[cfg(feature = "local-model")]
 /// The partial word ending `before`, with its byte offset, when it follows a
 /// separator and has the length and script of a word worth finishing.
 fn stem(before: &str, language: WritingLanguage) -> Option<(usize, &str)> {
@@ -280,10 +277,8 @@ fn stem(before: &str, language: WritingLanguage) -> Option<(usize, &str)> {
     .then_some((start, word))
 }
 
-#[cfg(feature = "local-model")]
 /// English function words of three or more letters. Typed whole, they are far
 /// more often finished than the start of a longer word (`the`, not `theme`).
-#[cfg(feature = "local-model")]
 const FUNCTION_WORDS: &[&str] = &[
     "about", "above", "after", "again", "against", "all", "also", "and", "any", "are", "because",
     "been", "before", "being", "below", "between", "both", "but", "can", "could", "did", "does",
@@ -297,7 +292,6 @@ const FUNCTION_WORDS: &[&str] = &[
 ];
 
 /// Endings that turn a finished English word into another form of it.
-#[cfg(feature = "local-model")]
 const INFLECTIONS: &[&str] = &["s", "es", "d", "ed", "ing", "er", "ers", "est", "ly"];
 
 /// Whether an English writer may have finished the typed word: it is in the
@@ -317,7 +311,6 @@ fn typed_word_may_be_finished(
     !capitalized || sentence_start(&before[..start])
 }
 
-#[cfg(feature = "local-model")]
 /// Whether a word starting after `before` begins a sentence or a line.
 fn sentence_start(before: &str) -> bool {
     before.ends_with('\n')

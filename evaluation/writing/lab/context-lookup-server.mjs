@@ -1,21 +1,11 @@
-import { timingSafeEqual } from 'node:crypto';
+import { fromLabPage, readJSON, sendJSON, setSecurityHeaders } from './http.mjs';
 import { ContextLookupWorker, validateContextLookupRequest, validateContextLookupResult } from './context-lookup-worker.mjs';
 
 const ROUTES = new Set(['/api/context-lookup', '/api/context-lookup/reset', '/api/context-lookup/status']);
 export const isContextLookupRoute = path => ROUTES.has(path);
 const error = code => Object.assign(new Error(code), { code });
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
-
-async function bodyJSON(request) {
-  const chunks = []; let bytes = 0;
-  for await (const chunk of request) {
-    bytes += chunk.length;
-    if (bytes > 64 * 1024) throw error('context_lookup_invalid_input');
-    chunks.push(chunk);
-  }
-  try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); }
-  catch { throw error('context_lookup_invalid_input'); }
-}
+const invalid = () => error('context_lookup_invalid_input');
+const bodyJSON = request => readJSON(request, 64 * 1024, { tooLarge: invalid, malformed: invalid });
 
 async function abortable(operation, signal) {
   let rejectAbort;
@@ -47,22 +37,10 @@ export function createContextLookupHandler({ origin, capability, isOtherBusy = (
     get busy() { return Boolean(active || resets || fault); },
     async handle(request, response) {
       if (!isContextLookupRoute(request.url)) return false;
-      response.setHeader('Cache-Control', 'no-store');
-      response.setHeader('X-Content-Type-Options', 'nosniff');
-      response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-      response.setHeader('Referrer-Policy', 'no-referrer');
-      response.setHeader('Content-Security-Policy', CSP);
-      const send = (status, value) => {
-        if (response.destroyed || response.writableEnded) return;
-        response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-        response.end(JSON.stringify(value));
-      };
+      setSecurityHeaders(response);
+      const send = (status, value) => sendJSON(response, status, value);
       try {
-        const expectedOrigin = origin();
-        const token = Buffer.from(String(request.headers['x-badi-lab-token'] ?? ''));
-        if (request.headers.host !== new URL(expectedOrigin).host
-          || (request.headers.origin && request.headers.origin !== expectedOrigin)
-          || token.length !== capability.length || !timingSafeEqual(token, Buffer.from(capability))) {
+        if (!fromLabPage(request, origin(), capability)) {
           send(403, { error: 'context_lookup_forbidden' }); return true;
         }
         if (request.method === 'GET' && request.url === '/api/context-lookup/status') {

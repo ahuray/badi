@@ -114,6 +114,12 @@ bool BadiAddon::safeToObserve(const Binding &binding) const {
 }
 
 std::optional<ContextWindow> BadiAddon::currentContext(const Binding &binding) const {
+    return currentContext(binding, binding.observedFocus);
+}
+
+// `observed` is the observer snapshot Writer's trailing spaces may come from:
+// the one being checked, not an older one.
+std::optional<ContextWindow> BadiAddon::currentContext(const Binding &binding, const Json &observed) const {
     if (!contextReadable(binding)) return std::nullopt;
     auto &input = *binding.inputContext;
     if (binding.state.editPath() == NativeEditPath::TypedLine) {
@@ -144,7 +150,7 @@ std::optional<ContextWindow> BadiAddon::currentContext(const Binding &binding) c
     // as end of field; every observer check still compares observedAfter().
     if (context->identityKnown && imeParityApp(binding.state.appId())) normalizeObservedParagraphEnd(*context);
     if (context->identityKnown && binding.state.appId() == "libreoffice")
-        restoreObservedTrailingSpaces(*context, binding.observedFocus);
+        restoreObservedTrailingSpaces(*context, observed);
     return context;
 }
 
@@ -168,8 +174,7 @@ std::string_view BadiAddon::unavailableContextReason(const Binding &binding) con
 // Chord formation may republish an unchanged toolkit buffer; only a
 // changed context retires the captured revision and Badi's panel.
 void BadiAddon::invalidateChangedContext(Binding &binding) {
-    const auto &captured = binding.state.lastContext();
-    if (captured && matchesCapturedContext(captured, currentContext(binding))) return;
+    if (matchesCapturedContext(binding.state.lastContext(), currentContext(binding))) return;
     binding.state.invalidateContext();
     clearOwnedPanel(binding);
 }
@@ -187,9 +192,10 @@ void BadiAddon::showNotice(Binding &binding, std::string_view message) {
     binding.inputContext->updateUserInterface(::fcitx::UserInterfaceComponent::InputPanel);
 }
 
+// Badi's display (its panel, notice and grey preview), the suggestion it
+// showed, and the timers serving them. A revision's state ends only through
+// its own paths (cancelRevision, endRevision, a broker clear).
 void BadiAddon::clearOwnedPanel(Binding &binding) {
-    // The display Badi owns, not the suggestion state: a broker clear or the
-    // local lease retires the state before the display is cleared here.
     if (binding.overlayOwned || binding.ownedCandidates) {
         debug_.trace("ghost hidden", binding.state.appId(),
             {{"display", binding.overlayOwned ? "overlay" : "panel"}});
@@ -203,6 +209,13 @@ void BadiAddon::clearOwnedPanel(Binding &binding) {
     }
     if (binding.expiryTimer) binding.expiryTimer->setEnabled(false);
     if (binding.commitTimer) binding.commitTimer->setEnabled(false);
+    removeOwnedPanel(binding);
+    binding.state.clearSuggestion();
+}
+
+// Badi's candidate list and notice leave Fcitx's panel; a foreign input
+// method's content stays.
+void BadiAddon::removeOwnedPanel(Binding &binding) {
     if (binding.inputContext != nullptr) {
         auto &panel = binding.inputContext->inputPanel();
         bool changed = false;
@@ -218,7 +231,6 @@ void BadiAddon::clearOwnedPanel(Binding &binding) {
     }
     binding.ownedCandidates.reset();
     binding.ownedAuxiliary.clear();
-    binding.state.clearSuggestion();
 }
 
 // Qt's Fcitx module reports the caret relative to its window (RelativeRect);

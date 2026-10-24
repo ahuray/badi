@@ -17,7 +17,7 @@ use crate::stats::{
     STATS_FILE_NAME, StatsError, StatsEvent, StatsStore, StatsSummary, local_today,
 };
 use crate::style::{STYLE_FILE_NAME, StyleError, StyleKey, StyleSample, StyleStatus, StyleStore};
-use crate::vocabulary::learned::{LEARNED_FILE_NAME, LearnedStatus, LearnedStore};
+use crate::vocabulary::learned::{LEARNED_FILE_NAME, LearnedStatus, LearnedStore, OfferedWords};
 
 const SECONDS_PER_DAY: u64 = 86_400;
 
@@ -35,6 +35,11 @@ pub struct ControlPlane {
     // roots for this instance's lifetime.
     storage: PrivateStorage,
     state: Mutex<ControlPlaneState>,
+    /// The learned words each subject offers, republished under `state`
+    /// after every change to the settings, the key or the learned store. A
+    /// suggestion reads them here, so it never waits for a write that holds
+    /// `state` (`state` is always locked first).
+    offered: Mutex<OfferedWords>,
 }
 
 #[derive(Debug)]
@@ -124,6 +129,8 @@ impl ControlPlane {
                 learned,
                 stats,
             }),
+            // No key is delivered yet, so nothing is offered.
+            offered: Mutex::new(OfferedWords::default()),
         })
     }
 
@@ -192,6 +199,7 @@ impl ControlPlane {
         if let Some(learned) = state.learned.as_mut() {
             learned.set_key(key.clone());
         }
+        self.publish_offered(&state);
         let store = state
             .style
             .as_mut()
@@ -214,18 +222,32 @@ impl ControlPlane {
     }
 
     /// The learned words `identity` offers now; empty while context is off
-    /// there, without a key, or with an unreadable file.
+    /// there, without a key, or with an unreadable file. Never waits for
+    /// the state lock, which a disk write may hold.
     pub fn learned_words(
         &self,
         identity: &StableIdentity,
     ) -> Result<Vec<String>, ControlPlaneError> {
         let today = unix_day_now()?;
-        let state = self.lock_state()?;
-        Ok(state
+        let offered = self
+            .offered
+            .lock()
+            .map_err(|_| ControlPlaneError::LockPoisoned)?;
+        Ok(offered.of(identity, today))
+    }
+
+    /// Republishes what [`Self::learned_words`] reads from `state`.
+    fn publish_offered(&self, state: &ControlPlaneState) {
+        let offered = state
             .learned
             .as_ref()
-            .map(|store| store.offered(&state.settings, today, identity))
-            .unwrap_or_default())
+            .map(|store| store.offerable(&state.settings))
+            .unwrap_or_default();
+        // Only this assignment runs under the lock, so it cannot poison it.
+        *self
+            .offered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = offered;
     }
 
     /// Counts the words of one field when the settings the request was
@@ -247,7 +269,9 @@ impl ControlPlane {
         let store = learned
             .as_mut()
             .ok_or(ControlPlaneError::StyleUnavailable)?;
-        Ok(store.record(settings, today, identity, words)?)
+        let recorded = store.record(settings, today, identity, words);
+        self.publish_offered(&state);
+        Ok(recorded?)
     }
 
     /// Deletes every learned word, repairing an unreadable file. The key
@@ -256,8 +280,9 @@ impl ControlPlane {
         let mut state = self.lock_state()?;
         let path = self.storage.paths().data_dir().join(LEARNED_FILE_NAME);
         if let Some(store) = state.learned.as_mut() {
-            store.forget()?;
-            return Ok(store.status());
+            let forgotten = store.forget().map(|_| store.status());
+            self.publish_offered(&state);
+            return Ok(forgotten?);
         }
         remove_private_temporary_files(&path)?;
         remove_private_file(&path)?;
@@ -319,7 +344,9 @@ impl ControlPlane {
     pub fn snapshot(&self) -> Result<ControlPlaneSnapshot, ControlPlaneError> {
         let today = unix_day_now()?;
         let mut state = self.lock_state()?;
-        if let Err(error) = reconcile_personalization_locked(&mut state, today) {
+        let reconciled = reconcile_personalization_locked(&mut state, today);
+        self.publish_offered(&state);
+        if let Err(error) = reconciled {
             eprintln!(
                 "badi-broker: personalization retention reconciliation failed; store preserved and disabled until explicit clear: {error}"
             );
@@ -374,98 +401,10 @@ impl ControlPlane {
     ) -> Result<SettingsV2, ControlPlaneError> {
         let today = unix_day_now()?;
         let mut state = self.lock_state()?;
-
-        next.validate().map_err(SettingsStoreError::from)?;
-        let required_revision = expected_revision
-            .checked_add(1)
-            .filter(|revision| *revision <= crate::protocol::MAX_SAFE_COUNTER)
-            .ok_or_else(|| {
-                SettingsStoreError::from(
-                    crate::settings::SettingsValidationError::RevisionOutOfRange,
-                )
-            })?;
-        if next.revision != required_revision {
-            return Err(SettingsStoreError::NextRevision {
-                expected: required_revision,
-                actual: next.revision,
-            }
-            .into());
-        }
-        if state.settings.revision != expected_revision {
-            return Err(SettingsStoreError::RevisionConflict {
-                expected: expected_revision,
-                actual: state.settings.revision,
-            }
-            .into());
-        }
-        SettingsStore::preflight_replace(&next)?;
-        if state.personalization.is_none() {
-            // Corrupt aggregate bytes must stay unavailable and untouched
-            // until the explicit clear path repairs them. The settings store
-            // is an independent durable authority record, though, so permit a
-            // document that is strictly lower in the authority partial order.
-            // Persisting that deny before returning lets the broker revoke its
-            // live authority without waiting for aggregate repair. Any grant,
-            // mixed grant/revoke, retention growth, or no-op is rejected.
-            if !strictly_reduces_authority(&state.settings, &next) {
-                return Err(ControlPlaneError::PersonalizationUnavailable);
-            }
-            reconcile_style_locked(&mut state, &next, today);
-            let replaced = state
-                .settings_store
-                .compare_and_replace(expected_revision, next)?;
-            state.settings = replaced.clone();
-            return Ok(replaced);
-        }
-
-        // Reconcile the privacy intersection before settings commit. A crash
-        // can therefore lose aggregates, but can never leave data on disk
-        // after the committed settings revoke or shorten its retention.
-        let personalization_revision = state
-            .personalization
-            .as_ref()
-            .expect("availability checked")
-            .snapshot()?
-            .revision;
-        let privacy_floor = personalization_privacy_floor(&state.settings, &next);
-        reconcile_style_locked(&mut state, &privacy_floor, today);
-        let privacy_result = state
-            .personalization
-            .as_ref()
-            .expect("availability checked")
-            .reconcile(personalization_revision, &privacy_floor, today);
-        if let Err(source) = privacy_result {
-            if personalization_commit_state_unknown(&source) {
-                state.personalization = None;
-            }
-            return Err(source.into());
-        }
-        let replaced = state
-            .settings_store
-            .compare_and_replace(expected_revision, next)?;
-        state.settings = replaced.clone();
-        reconcile_style_locked(&mut state, &replaced, today);
-        let personalization_revision = state
-            .personalization
-            .as_ref()
-            .expect("availability checked")
-            .snapshot()?
-            .revision;
-        if let Err(source) = state
-            .personalization
-            .as_ref()
-            .expect("availability checked")
-            .reconcile(personalization_revision, &replaced, today)
-        {
-            if personalization_commit_state_unknown(&source) {
-                state.personalization = None;
-            }
-            return Err(ControlPlaneError::SettingsCommittedReconciliation {
-                settings_revision: replaced.revision,
-                source,
-            });
-        }
-        Ok(replaced)
+        let replaced = replace_settings_locked(&mut state, expected_revision, next, today);
+        // Committed or not, a purge may already have run.
+        self.publish_offered(&state);
+        replaced
     }
 
     pub fn clear_personalization(&self) -> Result<PersonalizationMutation, ControlPlaneError> {
@@ -513,7 +452,9 @@ impl ControlPlane {
         today: u64,
     ) -> Result<Option<PersonalizationMutation>, ControlPlaneError> {
         let mut state = self.lock_state()?;
-        reconcile_personalization_locked(&mut state, today).map_err(ControlPlaneError::from)
+        let reconciled = reconcile_personalization_locked(&mut state, today);
+        self.publish_offered(&state);
+        reconciled.map_err(ControlPlaneError::from)
     }
 
     pub fn record_signal(
@@ -599,6 +540,105 @@ impl ControlPlane {
             .lock()
             .map_err(|_| ControlPlaneError::LockPoisoned)
     }
+}
+
+/// Validates and commits `next` by compare-and-swap, purging what it no
+/// longer allows first.
+fn replace_settings_locked(
+    state: &mut ControlPlaneState,
+    expected_revision: u64,
+    next: SettingsV2,
+    today: u64,
+) -> Result<SettingsV2, ControlPlaneError> {
+    next.validate().map_err(SettingsStoreError::from)?;
+    let required_revision = expected_revision
+        .checked_add(1)
+        .filter(|revision| *revision <= crate::protocol::MAX_SAFE_COUNTER)
+        .ok_or_else(|| {
+            SettingsStoreError::from(crate::settings::SettingsValidationError::RevisionOutOfRange)
+        })?;
+    if next.revision != required_revision {
+        return Err(SettingsStoreError::NextRevision {
+            expected: required_revision,
+            actual: next.revision,
+        }
+        .into());
+    }
+    if state.settings.revision != expected_revision {
+        return Err(SettingsStoreError::RevisionConflict {
+            expected: expected_revision,
+            actual: state.settings.revision,
+        }
+        .into());
+    }
+    SettingsStore::preflight_replace(&next)?;
+    if state.personalization.is_none() {
+        // Corrupt aggregate bytes must stay unavailable and untouched
+        // until the explicit clear path repairs them. The settings store
+        // is an independent durable authority record, though, so permit a
+        // document that is strictly lower in the authority partial order.
+        // Persisting that deny before returning lets the broker revoke its
+        // live authority without waiting for aggregate repair. Any grant,
+        // mixed grant/revoke, retention growth, or no-op is rejected.
+        if !strictly_reduces_authority(&state.settings, &next) {
+            return Err(ControlPlaneError::PersonalizationUnavailable);
+        }
+        reconcile_style_locked(state, &next, today);
+        let replaced = state
+            .settings_store
+            .compare_and_replace(expected_revision, next)?;
+        state.settings = replaced.clone();
+        return Ok(replaced);
+    }
+
+    // Reconcile the privacy intersection before settings commit. A crash
+    // can therefore lose aggregates, but can never leave data on disk
+    // after the committed settings revoke or shorten its retention.
+    let personalization_revision = state
+        .personalization
+        .as_ref()
+        .expect("availability checked")
+        .snapshot()?
+        .revision;
+    let privacy_floor = personalization_privacy_floor(&state.settings, &next);
+    reconcile_style_locked(state, &privacy_floor, today);
+    let privacy_result = state
+        .personalization
+        .as_ref()
+        .expect("availability checked")
+        .reconcile(personalization_revision, &privacy_floor, today);
+    if let Err(source) = privacy_result {
+        if personalization_commit_state_unknown(&source) {
+            state.personalization = None;
+        }
+        return Err(source.into());
+    }
+    let replaced = state
+        .settings_store
+        .compare_and_replace(expected_revision, next)?;
+    state.settings = replaced.clone();
+    reconcile_style_locked(state, &replaced, today);
+    let personalization_revision = state
+        .personalization
+        .as_ref()
+        .expect("availability checked")
+        .snapshot()?
+        .revision;
+    if let Err(source) = state
+        .personalization
+        .as_ref()
+        .expect("availability checked")
+        .reconcile(personalization_revision, &replaced, today)
+    {
+        if personalization_commit_state_unknown(&source) {
+            state.personalization = None;
+        }
+        return Err(ControlPlaneError::SettingsCommittedReconciliation {
+            settings_revision: replaced.revision,
+            source,
+        });
+    }
+    Ok(replaced)
 }
 
 fn strictly_reduces_authority(current: &SettingsV2, next: &SettingsV2) -> bool {

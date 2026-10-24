@@ -42,6 +42,14 @@ std::optional<SelectionWindow> captureSelectionWindow(std::string_view text, std
                                                       std::size_t anchor, bool multiline,
                                                       std::string language);
 
+// The same selection: its text, the text before it, and its anchor and head;
+// with `withAfter`, the text after it too. Sending and applying a revision
+// need the field exactly as the broker saw it. While the revision waits or
+// shows, Fcitx may report the text after the selection differently (Chromium
+// cuts its window short or adds a paragraph end) without the selection
+// moving, so that alone retires nothing; applying compares it again.
+bool sameSelection(const SelectionWindow &current, const SelectionWindow &requested, bool withAfter);
+
 // Text a revision may read or write: 1–`maxScalars` scalars of valid UTF-8,
 // one line, no control or format (Cf) character, and no whitespace other
 // than U+0020 and the no-break spaces U+00A0 and U+202F. The broker's

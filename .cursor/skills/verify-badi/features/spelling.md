@@ -1,6 +1,6 @@
 # Spelling
 
-Spelling offers one correction for a finished word. You accept it explicitly. Bash, Obsidian, and native exact fields replace the word. Append-only apps do not delete a typo. Writer replaces through its own undo.
+Spelling offers one correction for a finished word. You accept it explicitly. Bash, Obsidian, and native exact fields replace the word. In append-only apps, Tab deletes exactly the typed typo, commits the fix and reads the field back ([ADR 0011](../../../../docs/decisions/0011-checked-corrections-in-append-only-apps.md)). Writer replaces through its own extension and undo.
 
 ## Sub-features
 
@@ -8,6 +8,7 @@ Spelling offers one correction for a finished word. You accept it explicitly. Ba
 - `spell-accept` replaces that word and leaves one undo that restores it.
 - `spell-ambiguous` does not pretend a single dictionary hit when several words fit.
 - `spell-writer` shows Writer's infobar and replaces on a second Alt+F7.
+- `spell-append-only` shows `→ address` after the typo in an observed field of an append-only app; Tab corrects it and the read-back records `correction_confirmed`.
 
 ## How to get to it (user POV)
 
@@ -30,7 +31,7 @@ Preconditions:
 
 ## Gotchas
 
-- Append-only apps (Chromium, Zen, VS Code, Cursor) do not delete the typo. A suggestion there is not a spelling replacement.
+- In append-only apps (Chromium-based apps, Zen, VS Code, Cursor) a correction is two edits, a delete and a commit. Only the read-back proves it: `correction_unconfirmed` and its notice mean the field did not end as expected. In Chromium one Ctrl+Z undoes both; other apps may differ.
 - Omawrite with fcitx5-qt 5.1.16 does not get a spelling replacement. Do not claim one from a general Fcitx pass.
 - The phrase path proves the replacement payload. It does not prove the grey `original → corrected` label or a native undo stack.
 - Writer's grey continuations stay append-only. Only the extension replaces text.

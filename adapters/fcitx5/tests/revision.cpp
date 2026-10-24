@@ -2,6 +2,7 @@
 // safety, the panel's word diff, the read-back check, the revision state and
 // its wire request.
 
+#include "observation.h"
 #include "revision.h"
 #include "state.h"
 #include "transport.h"
@@ -218,6 +219,92 @@ void theRequestCarriesExactlyTheSelection() {
     check(!serializeRevisionEnvelope(broken, 7), "offsets must span the selection");
 }
 
+void aSelectionIsTheSameOnlyAsFarAsItsUseNeeds() {
+    const auto requested = selection();
+    auto moved = requested;
+    check(sameSelection(requested, requested, true) && sameSelection(requested, requested, false), "itself");
+    moved.after = " with Anna.\n\n";
+    check(sameSelection(moved, requested, false) && !sameSelection(moved, requested, true),
+          "text after it changes nothing while it waits or shows, but blocks sending and applying");
+    const auto differs = [&requested](auto change) {
+        auto changed = requested;
+        change(changed);
+        return !sameSelection(changed, requested, false);
+    };
+    check(differs([](SelectionWindow &window) { window.selected = "i has gone to the shop"; }) &&
+              differs([](SelectionWindow &window) { window.before = "Today "; }) &&
+              differs([](SelectionWindow &window) { window.anchor = 11; }) &&
+              differs([](SelectionWindow &window) { window.head = 31; }),
+          "its text, the text before it and its offsets always count");
+}
+
+Json selectedFocus(std::string_view app = "org.gnome.texteditor", int selections = 1) {
+    return Json{{"binding", {{"bus", ":1.7"}, {"path", "/field/1"}, {"app_id", app}, {"epoch", 3}}},
+                {"target", {{"kind", "desktop_application"}, {"app_id", app}, {"target_id", "field-1"}}},
+                {"purpose", "plain_text"},
+                {"selection_count", selections},
+                {"caret", 32},
+                {"total_chars", 43}};
+}
+
+void theObserverBindsExactlyTheSelectedField() {
+    check(revisionEditTarget(selectedFocus(), "org.gnome.texteditor") == NativeEditTarget::DesktopApplication,
+          "a field of this app holding one selection binds like a caret would");
+    auto browser = selectedFocus("chromium");
+    browser["target"] = Json{{"kind", "browser"}, {"app_id", "chromium"}, {"origin", "https://example.test"},
+                             {"target_id", "field-1"}};
+    check(revisionEditTarget(browser, "chromium") == NativeEditTarget::BrowserOrigin, "a browser field by origin");
+    check(!revisionEditTarget(selectedFocus("org.gnome.texteditor", 0), "org.gnome.texteditor") &&
+              !revisionEditTarget(selectedFocus("org.gnome.texteditor", 2), "org.gnome.texteditor"),
+          "only exactly one selection");
+    check(!revisionEditTarget(selectedFocus("other.app"), "org.gnome.texteditor"), "another app's field");
+    auto password = selectedFocus();
+    password["purpose"] = "password";
+    auto noCaret = selectedFocus();
+    noCaret.erase("caret");
+    auto unnamed = selectedFocus();
+    unnamed["target"].erase("target_id");
+    check(!revisionEditTarget(password, "org.gnome.texteditor") && !revisionEditTarget(noCaret, "org.gnome.texteditor") &&
+              !revisionEditTarget(unnamed, "org.gnome.texteditor") && !revisionEditTarget(Json(), "org.gnome.texteditor"),
+          "a password, a field without a caret or a target id, and no focus never bind");
+
+    const auto captured = selectedFocus();
+    check(sameSelectedField(captured, selectedFocus()), "the same binding and target, still one selection");
+    auto otherBinding = selectedFocus();
+    otherBinding["binding"]["epoch"] = 4;
+    auto otherTarget = selectedFocus();
+    otherTarget["target"]["target_id"] = "field-2";
+    check(!sameSelectedField(captured, otherBinding) && !sameSelectedField(captured, otherTarget) &&
+              !sameSelectedField(captured, selectedFocus("org.gnome.texteditor", 0)) &&
+              !sameSelectedField(captured, password) && !sameSelectedField(Json(), captured),
+          "another observation epoch or target, a collapsed selection or a password is not the field");
+
+    const auto window = selection();
+    const auto observed = [](std::string before, std::string selected, std::string after) {
+        return Json{{"before", std::move(before)}, {"selected", std::move(selected)}, {"after", std::move(after)}};
+    };
+    check(observerAgreesSelection(observed("Yesterday ", "i has went to the shop", " with Anna."), window),
+          "the same selection and surroundings agree");
+    check(observerAgreesSelection(observed("Before that. Yesterday ", "i has went to the shop", " with Anna. Then"),
+                                  window),
+          "Fcitx may hold less of the field than the observer");
+    auto paragraphEnd = window;
+    paragraphEnd.after = " with Anna.\n\n";
+    check(observerAgreesSelection(observed("Yesterday ", "i has went to the shop", " with Anna."), paragraphEnd),
+          "Chromium's paragraph end after Fcitx's text agrees");
+    check(!observerAgreesSelection(observed("Yesterday ", "i has gone to the shop", " with Anna."), window) &&
+              !observerAgreesSelection(observed("Today ", "i has went to the shop", " with Anna."), window) &&
+              !observerAgreesSelection(observed("Yesterday ", "i has went to the shop", " with Ann"), window),
+          "another selection, other text before it or text cut from after it disagree");
+    auto scoped = observed("Yesterday ", "i has went to the shop", " with Anna.");
+    scoped["scope"] = "block";
+    auto missing = observed("Yesterday ", "i has went to the shop", " with Anna.");
+    missing.erase("after");
+    check(!observerAgreesSelection(scoped, window) && !observerAgreesSelection(missing, window) &&
+              !observerAgreesSelection(Json(), window),
+          "a block-scoped, incomplete or absent snapshot never agrees");
+}
+
 } // namespace
 
 int main() {
@@ -231,6 +318,8 @@ int main() {
         aRevisionIsShownAndAppliedOnceOverItsSelection();
         anyFieldChangeOrExpiryRetiresTheRevision();
         theRequestCarriesExactlyTheSelection();
+        aSelectionIsTheSameOnlyAsFarAsItsUseNeeds();
+        theObserverBindsExactlyTheSelectedField();
     } catch (const std::exception &error) {
         std::cerr << "not ok - " << error.what() << '\n';
         return 1;

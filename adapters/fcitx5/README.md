@@ -28,7 +28,7 @@ observer wire details.
   | Ctrl+Right | Accepts all of Badi's live candidate; otherwise the app's key. |
   | Escape | Dismisses the suggestion or closes a notice. |
   | Ctrl+Shift+Space, Ctrl+Shift+Y | Request or refresh; accept. |
-  | Ctrl+Shift+Tab | Wherever Badi would take Tab (a suggestion shows, a Tab is held for its remainder, or the manual path requests): retires the suggestion and sends the app a real Tab. Otherwise it stays the app's key. |
+  | Ctrl+Shift+Tab | Wherever Badi would take Tab (a suggestion shows, a Tab is held for its remainder, or Tab would request on the manual path: a granted app at an eligible caret): retires the suggestion and sends the app a real Tab. Otherwise, as in an app without a grant, it stays the app's key. |
 
 - **Literal Tab.** Ctrl+Shift+Tab is Cotypist's Option+Tab; Omarchy 4.0.6
   keeps Alt+Tab, Alt+Shift+Tab and Super+Tab for windows and workspaces, and
@@ -117,7 +117,9 @@ observer wire details.
   candidate, grant and pending observer reply. Reconnection retries at most ten
   times, with backoff capped at five seconds, renewed by a key or focus. Unchanged
   authority lets Tab reread Fcitx's current text; automatic requests wait for
-  new text.
+  new text. A broker refusal of one request (an `error` frame, such as an
+  acceptance of a suggestion that just expired) keeps the connection and ends
+  only that request ([wire](WIRE_PROTOCOL.md#refusals)).
 - **Replacement.** Native exact fields (`omawrite`, Telegram, Xournal++, and
   other granted native ids) may delete the exact typed suffix and then
   `commitString` the correction, still reported as `dispatched-unverified`.
@@ -129,10 +131,8 @@ observer wire details.
   app's surrounding text to end as the correction left it, and records
   `correction_confirmed` or `correction_unconfirmed`; an unconfirmed one also
   gets the notice "Badi could not confirm that correction — check the text".
-  An update between the two edits gives no verdict. In Omawrite
-  0.5.0 on 2026-10-12, accepting `teh ` → `the ` took two native undos: the
-  first removed `the ` and the second restored `teh `. Telegram and Xournal++
-  were not retried.
+  An update between the two edits gives no verdict. Native undo may take one
+  step per edit (Omawrite 0.5.0, [tested with](#tested-with)).
 
 ### Revising a selection
 
@@ -192,7 +192,9 @@ In this module that means:
 - **Target kind** must match the class (`ime_parity_target_mismatch`,
   `ime_parity_target_invalid`).
 - **Browser fields** need an exact origin rule or `badi site all on`, which
-  also covers private windows.
+  also covers private windows. A site allowed only by `site all on` also
+  reports `matched_default`; browser targets come only from observed fields,
+  which that reason opens.
 - **Blocklist mode.** An app allowed only by the app blocklist mode (policy
   reason `matched_default`) opens observed fields only. On the manual path it
   counts as denied (`app_rule_required`) until it gets an exact rule.
@@ -220,7 +222,7 @@ keys), or Left/Right past an end, stops tracking (`line_unknown`) until End
 or an empty line; any other key, such as a paste or completion, restarts it
 from the caret. A correction shows as `teh → the`; Tab commits one DEL per
 tracked scalar of the typo followed by the fix, because a terminal ignores
-`deleteSurroundingText` (live 2026-10-17: before, Tab left `adress address`).
+`deleteSurroundingText`.
 After the typing pause a line of two or more words
 requests automatically; the panel shows the suggestion with the word Tab
 takes in the theme's bold highlight and the rest plain, without the leading
@@ -235,33 +237,8 @@ records how the published request was made; `onClear` shows
 the Badi plugin holds the terminal's focus, the broker answers the terminal's
 policy with `editor_focused` (trace `policy editor_focused`): the typed line
 requests nothing, and Tab and Ctrl+Shift+Space reach Neovim, whose own
-integration suggests with exact undo. Live on 2026-10-17 (Ghostty 1.3.1,
-the user's LazyVim, real model): before, one pause made two model calls and
-showed Fcitx's panel beside Neovim's grey text, and Tab typed Fcitx's
-suggestion into the buffer; after, only Neovim asked, Tab and the chord went
-to Neovim, and after `:q` the shell's typed line suggested again. The broker,
-not the addon, owns the prompt window, so the typed line itself is not
-trimmed here.
-Measured 2026-10-17 with the same seeded, word-paced disposable typing
-into Claude Code in Ghostty: a 287-character text of short sentences made
-46 automatic requests before and after the broker's coarse context cut,
-with 39 proposals, five `output_rejected` and two cancellations each time
-and no budget outcome. A 337-character single sentence separated the
-cause. Before the fix, its first 24 requests (through a 159-byte model
-input) mostly evaluated one new prompt token (`prompt_n=1`) while
-`cache_n` rose to 30 and time to first token stayed around 30–48 ms.
-From 163 bytes on, 31 requests produced eight proposals, 14 cancellations,
-four `budget_stream`, four `budget_prefill` and one model abstention; 13
-were cancelled before a first token, and the completed cold rows showed
-`prompt_n=30–31`, `cache_n=0` and 369–512 ms to the first token. The
-sliding 160-scalar sentence start was changing the prompt's first bytes
-on every request. With the broker moving that start in 64-scalar steps,
-the same run-on typing made 51 requests: 50 proposals and one
-`output_rejected`, with no cancellation or budget outcome. At inputs of
-160 bytes or more, all 27 were proposals and 25 had a distinct first
-ghost within 550 ms; only the two cut boundaries (inputs 230 and 294)
-re-evaluated 32/31 prompt tokens with `cache_n=0`, at 358/440 ms to the
-first token. Budgets were not raised.
+integration suggests with exact undo. The broker, not the addon, owns the
+prompt window, so the typed line itself is not trimmed here.
 
 ### Observed fields
 
@@ -341,19 +318,11 @@ What the live trials established, beyond those cells:
 
 - **Selection revision** (Chromium 155, installed `2956224`, 2026-10-23,
   [ADR 0012](../../docs/decisions/0012-explicit-revision-of-one-selection.md)):
-  - In a textarea, "She dont know where is the station" showed its grammar
-    fix with marked changes after 4.1 s, the runtime starting cold.
-    Ctrl+Shift+Space again showed a refinement in 2.3 s. Escape left the
-    text and selection as they were. The fix, asked for again (0.4 s), was
-    applied with Tab and confirmed by the read-back.
-  - A German clause after "dass" came back with its verb last
-    ("die Rechnung bereits bezahlt worden ist"), applied and confirmed.
-  - One Ctrl+Z after an applied revision restored the original text,
-    selected again.
-  - A correct selection said Badi found nothing to change. A selection in
-    a password field sent no request and left no key lines.
-  - Writer refuses, since it gives Fcitx only the caret's sentence. Native
-    GTK editors were not tried (none installed).
+  an English grammar fix (4.1 s cold) and its refinement showed with marked
+  changes, applied once with a confirmed read-back, and one Ctrl+Z restored
+  the selection; a German clause kept its verb last; a correct selection said
+  nothing to change, and a password field sent no request. Writer refuses
+  (Fcitx gets only the caret's sentence); native GTK editors were not tried.
 
 - **Display and timing** (Chromium 152, 2026-10-13): 20/20 warm suggestions
   shown and accepted, visible p50 228 ms and p95 284 ms from the last key
@@ -382,6 +351,17 @@ What the live trials established, beyond those cells:
 - **Quiet**: Escape quiet across edits, a request during quiet,
   narrow-field quiet before acquisition, and Omawrite's Open File dialog
   (`file_dialog`, explicit requests only).
+- **Neovim in Ghostty** (the user's LazyVim, 2026-10-17): with the Badi
+  plugin focused only Neovim asked, Tab and the chord reached Neovim, and
+  after `:q` the shell's typed line suggested again.
+- **A prompt window's run-on line** (Claude Code in Ghostty, 2026-10-17):
+  with the broker moving the prompt's sentence start in 64-scalar steps, 50
+  of 51 requests were proposals with no cancellation or budget outcome,
+  where the sliding start had cost 14 cancellations and eight budget
+  outcomes in 31.
+- **Language override** (Chromium, 2026-10-13): `badi language chromium de`
+  gave German suggestions under `keyboard-us`; without it, unfinished German
+  phrases chose German from their own text. Not a quality score.
 
 Not yet tried live:
 - a real suspend and resume, and a VT switch;
@@ -446,18 +426,6 @@ insertion or undo; check those in an app.
 
 ## Try it
 
-On 2026-10-13, the installed `badi language chromium de` override produced
-and accepted German suggestions in three disposable Chromium fields while
-Fcitx stayed on `keyboard-us`; no insertion reached the second field. The
-previous language setting was restored. This tests the override and native
-dispatch, not independent German quality.
-
-With the override removed and the same English keyboard, two unfinished German
-phrases selected German from their field text and accepted into the correct
-field: one automatic suggestion and one explicit request after no automatic
-suggestion appeared. Two earlier complete phrases abstained. This verifies
-the installed language path, not a latency distribution or quality score.
-
 Open Omawrite or Xournal++ with `badi launch omawrite` or `badi launch
 xournalpp` (in Xournal++, select the **Text** tool and click the page). Type
 `Please find attached the` with the caret at the end. Omawrite suggests on its
@@ -489,9 +457,9 @@ other difference is known; neither older version has run in a live session.
 
 | Command | Covers |
 | --- | --- |
-| `npm run fcitx5:check` | Build plus deterministic suites: app classes and ids (and their agreement with the observer, `tests/observer-identities.py`), key, Tab, invoke and inspection decisions, type-through, word acceptance and the held Tab, binding and sanitization, framing and strict wire shapes, one-shot commits, foreign-IME yield, debug snapshots, reconnect |
+| `npm run fcitx5:check` | Build plus deterministic suites: app classes and ids (and their agreement with the observer, `tests/observer-identities.py`), key, Tab, literal-Tab, invoke and inspection decisions, type-through, word acceptance and the held Tab, binding and sanitization, framing and strict wire shapes, broker refusals, one-shot commits, foreign-IME yield, debug snapshots, reconnect, the revision core and its observer gates, and the broker and observer sockets |
 | `npm run fcitx5:integration` | Also needs Cargo and Python 3. The shipped transport against a real broker in temporary roots: context, accept, report, dismiss, a type-through and word-acceptance scenario that must generate once, and recovery after a broker restart |
-| `PYTHONDONTWRITEBYTECODE=1 python3 adapters/fcitx5/tests/observed-desktop.py` | The real addon in a private D-Bus session with its own Fcitx, broker and a synthetic observer: every app class, denials, panel and preview display, disagreement at request, display and dispatch, type-through with Tab, the held Tab and Ctrl+Right, a Ghostty typed line with quiet automatic misses, the Zen urlbar, foreign preedit, paragraph ends and recovery. Proves transport and state, not app behavior. Each run writes `output/observed-desktop/observed-dbus-*/` with `result.json`, the broker and Fcitx logs and the session's own output (`session.log`), even when the session dies before its logs open; it needs a python3 that imports PyGObject |
+| `PYTHONDONTWRITEBYTECODE=1 python3 adapters/fcitx5/tests/observed-desktop.py` | The real addon in a private D-Bus session with its own Fcitx, broker and a synthetic observer: every app class, denials, panel and preview display, disagreement at request, display and dispatch, type-through with Tab, the held Tab and Ctrl+Right, a Ghostty typed line with quiet automatic misses, the Zen urlbar, foreign preedit, paragraph ends, recovery, the literal Tab with and without a grant, a stream moving from the panel to the preview, a refused acceptance, and a revision applied once despite a second Tab. Proves transport and state, not app behavior. Each run writes `output/observed-desktop/observed-dbus-*/` with `result.json`, the broker and Fcitx logs and the session's own output (`session.log`), even when the session dies before its logs open; it needs a python3 that imports PyGObject |
 | `PYTHONDONTWRITEBYTECODE=1 python3 adapters/fcitx5/tests/desktop-tab.py` | Opt-in, after installation: synthetic contexts drive the installed addon and model through Tab request, accept and denials; run it while not typing elsewhere |
 
 A staged install leaves the live Fcitx alone:

@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import unittest.mock
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "adapters" / "libreoffice" / "extension" / "pythonpath"))
@@ -303,6 +304,24 @@ class ClientTest(unittest.TestCase):
             with self.assertRaises(broker.BrokerError):
                 self.attempt(fake).request(before, "", language)
         self.assertEqual(fake.received, [], "nothing reaches the broker")
+
+    def test_no_socket_or_a_close_while_connecting_is_an_error_not_a_crash(self):
+        fake = self.broker(standard())
+        with unittest.mock.patch.object(broker.socket, "socket", side_effect=OSError("no descriptors")), \
+                self.assertRaises(broker.BrokerError) as raised:
+            self.attempt(fake).request("adress ", "", "en")
+        self.assertEqual(raised.exception.code, "offline")
+        attempt = self.attempt(fake)
+        connect = socket.socket.connect
+
+        def superseded(connection, address):
+            attempt.close()  # The owner retires the attempt mid-connect.
+            return connect(connection, address)
+        with unittest.mock.patch.object(socket.socket, "connect", superseded), \
+                self.assertRaises(broker.BrokerError) as raised:
+            attempt.request("adress ", "", "en")
+        self.assertEqual(raised.exception.code, "closed")
+        self.assertIsNone(attempt._socket, "the connection was closed, not kept")
 
     def test_socket_must_be_private(self):
         self.assertRaises(broker.BrokerError, broker.socket_path, {"XDG_RUNTIME_DIR": "relative"})

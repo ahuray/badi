@@ -622,10 +622,14 @@ def build(plan):
 
 def build_addon():
     """Build the Fcitx addon against this system's Fcitx and run its tests,
-    as `npm run fcitx5:check` does, without needing Node."""
+    as `npm run fcitx5:check` does, without needing Node.
+
+    Warnings stay errors in CI and in the check, which set BADI_WERROR=ON
+    explicitly on the same build directory; an install, like the packages,
+    keeps building when a newer compiler adds a warning."""
     build = ROOT / "adapters/fcitx5/build"
     run(["cmake", "-S", str(ROOT / "adapters/fcitx5"), "-B", str(build), "-G", "Ninja",
-         "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTING=ON"], cwd=ROOT)
+         "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTING=ON", "-DBADI_WERROR=OFF"], cwd=ROOT)
     run(["cmake", "--build", str(build)], cwd=ROOT)
     run(["ctest", "--test-dir", str(build), "--output-on-failure"], cwd=ROOT)
 
@@ -654,15 +658,25 @@ def xournal_launcher(home):
                              for line in text.splitlines()) + "\n"
 
 
+def require_flag_file_unchanged(target, original):
+    if target.parent.resolve() != target.parent or target.is_symlink() or \
+            (target.read_text() if target.exists() else None) != original:
+        raise RuntimeError("App startup configuration changed during the build; newer user settings were preserved.")
+
+
+def require_hypr_unchanged(target, original):
+    if target.is_symlink() or not target.exists() or target.read_text() != original:
+        raise RuntimeError("Hyprland configuration changed during the build; newer user settings were preserved.")
+
+
 def flags_still_match(plan):
-    """Reject flag files that changed while the build ran, before any write."""
+    """Reject user configuration that changed while the build ran, before any
+    write; each file is checked again just before it is written."""
     for target, (original, _text) in plan.flag_updates.items():
-        if target.parent.resolve() != target.parent or target.is_symlink() or (target.read_text() if target.exists() else None) != original:
-            raise RuntimeError("App startup configuration changed during the build; newer user settings were preserved.")
+        require_flag_file_unchanged(target, original)
     if plan.hypr_update is not None:
         target, original, _text = plan.hypr_update
-        if target.is_symlink() or not target.exists() or target.read_text() != original:
-            raise RuntimeError("Hyprland configuration changed during the build; newer user settings were preserved.")
+        require_hypr_unchanged(target, original)
 
 
 def install_files(plan):
@@ -728,12 +742,10 @@ def install_prepared_files(plan, installation):
                 install(ROOT / "packaging/omarchy/badi-repair.hook", hooks / name / "badi-repair")
         if plan.hypr_update is not None:
             target, original, text = plan.hypr_update
-            if target.is_symlink() or not target.exists() or target.read_text() != original:
-                raise RuntimeError("Hyprland configuration changed during the build; newer user settings were preserved.")
+            require_hypr_unchanged(target, original)
             installation.write(target, text.encode(), stat.S_IMODE(target.stat().st_mode))
         for target, (original, text) in plan.flag_updates.items():
-            if target.parent.resolve() != target.parent or target.is_symlink() or (target.read_text() if target.exists() else None) != original:
-                raise RuntimeError("App startup configuration changed during the build; newer user settings were preserved.")
+            require_flag_file_unchanged(target, original)
             installation.write(target, text.encode(), stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600)
     install(ROOT / "packaging/systemd/badi-broker.service", home / ".config/systemd/user/badi-broker.service")
     # The session helper reports suspend, session and power state to the
@@ -897,4 +909,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    badi_install.run_installer(main)

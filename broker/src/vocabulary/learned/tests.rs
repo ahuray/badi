@@ -64,16 +64,19 @@ fn a_word_is_offered_only_after_two_fields_and_only_where_context_is_on() {
             .unwrap()
     );
     assert!(
-        store.offered(&on, TODAY, &claude).is_empty(),
+        store.offerable(&on).of(&claude, TODAY).is_empty(),
         "one field is not enough"
     );
     assert_eq!(OFFER_AFTER_FIELDS, 2);
     store
         .record(&on, TODAY + 1, &claude, &words(&["Okonkwo"]))
         .unwrap();
-    assert_eq!(store.offered(&on, TODAY + 1, &claude), vec!["Okonkwo"]);
+    assert_eq!(store.offerable(&on).of(&claude, TODAY + 1), vec!["Okonkwo"]);
     assert!(
-        store.offered(&on, TODAY + 1, &app("telegram")).is_empty(),
+        store
+            .offerable(&on)
+            .of(&app("telegram"), TODAY + 1)
+            .is_empty(),
         "per subject"
     );
     for settings in [
@@ -82,7 +85,7 @@ fn a_word_is_offered_only_after_two_fields_and_only_where_context_is_on() {
         context(Some(true), vec![claude.clone()]),
     ] {
         assert_eq!(
-            store.offered(&settings, TODAY + 1, &claude),
+            store.offerable(&settings).of(&claude, TODAY + 1),
             Vec::<String>::new()
         );
         assert!(
@@ -124,7 +127,10 @@ fn the_file_holds_no_word_in_the_clear_and_another_key_cannot_read_it() {
     let mut reopened = LearnedStore::open(path.clone()).unwrap();
     assert_eq!(reopened.status().words, None, "no key, no words");
     assert_eq!(reopened.set_key(key("cd")), StyleKeyState::Mismatch);
-    assert_eq!(reopened.offered(&on, TODAY, &mail), Vec::<String>::new());
+    assert_eq!(
+        reopened.offerable(&on).of(&mail, TODAY),
+        Vec::<String>::new()
+    );
     // A new key's words replace what it cannot read.
     assert!(
         reopened
@@ -179,10 +185,14 @@ fn a_word_unused_past_retention_is_no_longer_offered_or_kept() {
     let later = TODAY + LEARNED_RETENTION_DAYS;
     assert!(
         store
-            .offered(&on, later - 1, &claude)
+            .offerable(&on)
+            .of(&claude, later - 1)
             .contains(&"Okonkwo".to_owned())
     );
-    assert_eq!(store.offered(&on, later, &claude), Vec::<String>::new());
+    assert_eq!(
+        store.offerable(&on).of(&claude, later),
+        Vec::<String>::new()
+    );
     store
         .record(&on, later, &claude, &words(&["tokenizer"]))
         .unwrap();

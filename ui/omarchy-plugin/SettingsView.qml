@@ -16,17 +16,27 @@ Item {
   required property var controller
   required property QtObject bar
   property int cursor: -1
+  // The key of the row under the cursor, which the cursor follows while
+  // rows appear or vanish around it.
+  property string cursorKey: ""
   // The chip under the cursor on a multi-select row.
   property int chip: 0
   // A text input owns the keyboard; the host's key catcher steps aside.
   readonly property bool editing: search.activeFocus || siteInputFocused
   property bool siteInputFocused: false
   property Item siteInput: null
+  // What the "Add a site" field holds, kept when its row is rebuilt.
+  property string siteDraft: ""
   signal editingFinished()
   signal closeRequested()
 
   readonly property var client: controller.client
-  readonly property var rows: controller.rows()
+  // The rows shown. Every poll rebuilds the controller's rows; one that
+  // shows nothing new keeps this list, so no delegate is rebuilt.
+  property var rows: []
+  readonly property var latestRows: controller.rows()
+  onLatestRowsChanged: if (!KeyModel.sameRows(rows, latestRows)) rows = latestRows
+  Component.onCompleted: rows = latestRows
   readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.45)
   readonly property string fontFamily: bar && bar.fontFamily ? bar.fontFamily : Style.font.family
@@ -50,6 +60,8 @@ Item {
     cursor = -1
     chip = 0
     search.text = ""
+    siteDraft = ""
+    if (siteInput) siteInput.text = ""
     flick.contentY = 0
     controller.showAll = false
     controller.pickedLanguages = null
@@ -96,7 +108,11 @@ Item {
       flick.contentY = Math.min(Math.max(0, list.implicitHeight - flick.height), top + item.height + margin - flick.height)
   }
 
-  onRowsChanged: if (cursor >= rows.length) cursor = rows.length - 1
+  function rememberCursor() {
+    cursorKey = cursor >= 0 && cursor < rows.length ? rows[cursor].key : ""
+  }
+  onCursorChanged: rememberCursor()
+  onRowsChanged: { cursor = KeyModel.follow(rows, cursorKey, cursor); rememberCursor() }
   // Expanding or collapsing starts again at the top.
   Connections {
     target: view.controller
@@ -111,7 +127,6 @@ Item {
     spacing: Style.space(12)
 
     PanelHero {
-      id: hero
       width: parent.width
       title: "Badi"
       detail: controller.modelName
@@ -259,7 +274,6 @@ Item {
       Row {
         spacing: Style.space(10)
         Row {
-          id: weekBars
           height: Style.space(14)
           spacing: Style.space(2)
           anchors.verticalCenter: parent.verticalCenter
@@ -373,7 +387,6 @@ Item {
           }
 
           Loader {
-            id: rowLoader
             width: parent.width
             sourceComponent: rowItem.modelData.kind === "toggle" ? toggleRow
               : rowItem.modelData.kind === "choice" ? choiceRow
@@ -572,7 +585,8 @@ Item {
                 foreground: view.foreground
                 font.family: view.fontFamily
                 font.pixelSize: Style.font.bodySmall
-                Component.onCompleted: view.siteInput = siteField
+                Component.onCompleted: { text = view.siteDraft; view.siteInput = siteField }
+                onTextChanged: view.siteDraft = text
                 onActiveFocusChanged: view.siteInputFocused = activeFocus
                 Keys.onReturnPressed: function(event) {
                   if (controller.setSite(text, (event.modifiers & Qt.ShiftModifier) ? "block" : "allow")) text = ""

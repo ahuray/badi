@@ -40,6 +40,83 @@ fn fixture_identity() -> StableRuntimeIdentity {
     }
 }
 
+/// The prompt for the fixture runtime, whose weights are outside the catalog
+/// and so heal the fallback languages, English and Persian.
+fn prepare(request: &Request) -> PreparedPrompt {
+    prepare_prompt(request, &healed_languages(&fixture_identity()))
+}
+
+/// The catalog's weights for `id`.
+fn catalog_sha256(id: &str) -> &'static str {
+    use badi_broker::model_selection::{ModelUseCase, detect_hardware, recommend_model};
+    recommend_model(detect_hardware(), ModelUseCase::Writing)
+        .catalog
+        .iter()
+        .find(|choice| choice.artifact.id == id)
+        .map(|choice| choice.artifact.sha256)
+        .expect("catalog model")
+}
+
+#[test]
+fn instructed_modes_run_only_on_the_model_their_template_belongs_to() {
+    assert_eq!(
+        INSTRUCTED_TEMPLATE_MODEL_SHA256,
+        catalog_sha256("qwen3-1.7b")
+    );
+    let mut qwen = fixture_identity();
+    qwen.model_sha256 = INSTRUCTED_TEMPLATE_MODEL_SHA256.to_owned();
+    let mut gemma = fixture_identity();
+    gemma.model_sha256 = catalog_sha256("gemma-3-1b").to_owned();
+    for mode in [Mode::Instructed, Mode::InstructedHealed] {
+        assert!(template_fits(mode, &qwen).is_ok());
+        for other in [&gemma, &fixture_identity()] {
+            assert!(matches!(
+                template_fits(mode, other),
+                Err(LabError::TemplateModelMismatch)
+            ));
+        }
+    }
+    // The other modes carry no foreign template.
+    for mode in [
+        Mode::ProductionBoundary,
+        Mode::Context,
+        Mode::ContextConfidence,
+        Mode::Healed,
+        Mode::NativeInstructed,
+        Mode::Vocabulary,
+    ] {
+        assert!(template_fits(mode, &gemma).is_ok());
+    }
+    assert_eq!(
+        LabError::TemplateModelMismatch.to_string(),
+        "instructed_template_model_mismatch"
+    );
+}
+
+#[test]
+fn healed_modes_heal_the_languages_the_loaded_model_heals_in_production() {
+    let mut gemma = fixture_identity();
+    gemma.model_sha256 = catalog_sha256("gemma-3-1b").to_owned();
+    let mut value = request(Mode::Healed);
+    value.language = "de".to_owned();
+    value.before = "Vielen Dank für Ihre ".to_owned();
+    // Gemma 3 1B heals German in production; a model outside the catalog
+    // keeps the fallback set, which does not.
+    let healed = prepare_prompt(&value, &healed_languages(&gemma));
+    assert_eq!(healed.echo, " ");
+    assert!(
+        healed.payload["prompt"]
+            .as_str()
+            .expect("prompt")
+            .ends_with("Ihre")
+    );
+    assert_eq!(prepare(&value).echo, "");
+    assert_eq!(
+        healed_languages(&gemma),
+        writing::trailing_space_healing(&gemma.model_sha256)
+    );
+}
+
 #[test]
 fn cache_counter_mapping_preserves_null_zero_and_distinct_measurements() {
     let request = request(Mode::Context);
@@ -117,7 +194,7 @@ fn prompts_preserve_context_and_style_and_healing_preserves_exact_space() {
     for mode in [Mode::Context, Mode::Instructed, Mode::Healed] {
         let value = request(mode);
         value.validate().expect("valid");
-        let prepared = prepare_prompt(&value);
+        let prepared = prepare(&value);
         let prompt = prepared.payload["prompt"].as_str().expect("prompt");
         assert!(prompt.contains(&value.context));
         assert!(prompt.contains(&value.style_examples[0]));
@@ -137,15 +214,15 @@ fn prompts_preserve_context_and_style_and_healing_preserves_exact_space() {
     }
     let mut value = request(Mode::Healed);
     value.before = "Hello\u{a0}".to_owned();
-    assert_eq!(prepare_prompt(&value).echo, "");
+    assert_eq!(prepare(&value).echo, "");
     value.before = "Please review the docum".to_owned();
-    assert_eq!(prepare_prompt(&value).echo, " docum");
+    assert_eq!(prepare(&value).echo, " docum");
 }
 
 #[test]
 fn context_confidence_changes_only_probability_capture() {
-    let ordinary = prepare_prompt(&request(Mode::Context));
-    let confidence = prepare_prompt(&request(Mode::ContextConfidence));
+    let ordinary = prepare(&request(Mode::Context));
+    let confidence = prepare(&request(Mode::ContextConfidence));
     let mut expected = ordinary.payload;
     expected["n_probs"] = json!(1);
     expected["post_sampling_probs"] = json!(false);
@@ -212,7 +289,7 @@ fn legacy_context_instruction_and_healing_payloads_remain_exact() {
         (Mode::Instructed, instructed, ""),
         (Mode::Healed, plain.trim_end_matches(' '), " "),
     ] {
-        let prepared = prepare_prompt(&request(mode));
+        let prepared = prepare(&request(mode));
         let mut expected = json!({"prompt":prompt,"n_predict":32,"temperature":0.0,
             "seed":42,"stop":["\n","<|im_end|>","<|endoftext|>"],"stream":true,"cache_prompt":true});
         if mode == Mode::Healed {
@@ -243,9 +320,9 @@ fn instructed_healed_composes_existing_prompt_and_echo_without_budget_or_whitesp
         value.config.budget_ms = 550;
         value.config.max_tokens = 8;
         value.validate().unwrap();
-        let mut expected = prepare_prompt(&value).payload;
+        let mut expected = prepare(&value).payload;
         value.config.mode = Mode::Healed;
-        let healed = prepare_prompt(&value);
+        let healed = prepare(&value);
         let prefix = expected["prompt"]
             .as_str()
             .unwrap()
@@ -259,7 +336,7 @@ fn instructed_healed_composes_existing_prompt_and_echo_without_budget_or_whitesp
             expected["grammar"] = grammar.clone();
         }
         value.config.mode = Mode::InstructedHealed;
-        let combined = prepare_prompt(&value);
+        let combined = prepare(&value);
         assert_eq!(combined.payload, expected);
         assert_eq!(combined.echo, healed.echo);
         assert_eq!(combined.payload["n_predict"], 8);
@@ -293,7 +370,7 @@ fn instructed_healed_returns_only_exact_multilingual_continuations() {
         value.before = before.to_owned();
         value.language = language.to_owned();
         value.validate().unwrap();
-        let prepared = prepare_prompt(&value);
+        let prepared = prepare(&value);
         let mut result = value.result(&fixture_identity());
         apply_observation(
             &mut result,
@@ -384,7 +461,7 @@ fn instructed_healed_preserves_exact_echo_language_seam_and_completion_guards() 
         value.before = before.to_owned();
         value.language = language.to_owned();
         value.validate().unwrap();
-        let prepared = prepare_prompt(&value);
+        let prepared = prepare(&value);
         let mut result = value.result(&fixture_identity());
         apply_observation(
             &mut result,
@@ -404,38 +481,6 @@ fn instructed_healed_preserves_exact_echo_language_seam_and_completion_guards() 
         );
         assert_eq!(result.reason, reason);
         assert!(result.text.is_none() && !result.word_complete && !result.shape_valid);
-    }
-}
-
-#[test]
-fn instructed_healed_does_not_change_the_frozen_paced_healed_contract() {
-    let events: Vec<_> = [0, 100, 250, 500]
-        .into_iter()
-        .enumerate()
-        .map(|(index, at_ms)| {
-            json!({"at_ms":at_ms,"request":{"schema":REQUEST_SCHEMA,
-            "id":uuid::Uuid::new_v4(),"before":format!("Draft {}", &"abc"[..index]),
-            "language":"en","context":"Stable context.","style_examples":[],
-            "config":{"mode":"healed","budget_ms":550,"max_tokens":8,
-                "cache_prompt":true,"temperature":0,"seed":42}}})
-        })
-        .collect();
-    let mut wire = json!({"schema":"badi.paced-probe.request.v1","arm":"cold",
-        "prelude_ms":1500,"events":events});
-    serde_json::from_value::<paced_probe::ProbeInput>(wire.clone())
-        .unwrap()
-        .validate()
-        .unwrap();
-    for mode in ["instructed_healed"] {
-        for event in wire["events"].as_array_mut().unwrap() {
-            event["request"]["config"]["mode"] = json!(mode);
-        }
-        assert!(
-            serde_json::from_value::<paced_probe::ProbeInput>(wire.clone())
-                .unwrap()
-                .validate()
-                .is_err()
-        );
     }
 }
 
@@ -466,7 +511,7 @@ fn observe_continuation(
     value.language = language.to_owned();
     value.context = context.to_owned();
     value.style_examples = style.iter().map(|example| (*example).to_owned()).collect();
-    let prepared = prepare_prompt(&value);
+    let prepared = prepare(&value);
     let raw = format!("{}{continuation}", prepared.echo);
     let mut result = value.result(&fixture_identity());
     apply_observation(

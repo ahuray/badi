@@ -1,5 +1,3 @@
-#![cfg(feature = "local-model")]
-
 use std::collections::BTreeSet;
 
 use badi_broker::provider::{CompletionProvider, ProviderRequest, RequestTrigger};
@@ -223,6 +221,7 @@ async fn installed_model_never_shows_invented_numbers() {
                 RequestTrigger::Automatic,
             )
             .await
+            .map(|reply| reply.outcome)
             .expect("inference");
         eprintln!(
             "synthetic_input={before:?} language={language} outcome={outcome:?} elapsed_ms={}",
@@ -281,6 +280,7 @@ async fn installed_model_heals_trailing_spaces_within_the_explicit_budget() {
                     trigger,
                 )
                 .await
+                .map(|reply| reply.outcome)
                 .expect("inference");
             let elapsed = started.elapsed();
             eprintln!(

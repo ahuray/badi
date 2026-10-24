@@ -1,6 +1,0 @@
-{
-  "v": 1,
-  "type": "health.request",
-  "mono_ms": 1,
-  "payload": { "prose": "not allowed" }
-}

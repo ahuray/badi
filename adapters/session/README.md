@@ -18,8 +18,8 @@ changes a system setting.
 
 ## Broker contract
 
-The helper speaks protocol v2 with the single capability `desktop_signals`
-(adapter kind `session`) and sends `desktop.state`
+The helper speaks protocol v2 with the capabilities `desktop_signals` and
+`style_key` (adapter kind `session`) and sends `desktop.state`
 `{session: active|inactive|sleeping, on_battery, power_saver, screen_shared}`
 whenever one changes; the reply is `desktop.status`
 ([schema](../../protocol/v2/schema.json), [broker runbook](../../broker/README.md#desktop-session-signals)).
@@ -44,10 +44,12 @@ whenever one changes; the reply is `desktop.status`
 
 At start, and again after each resume, the helper takes a logind `delay`
 inhibitor for `sleep`. On `PrepareForSleep(true)` it reports `sleeping`, waits
-for the broker's acknowledgement (at most 1.5 s), then closes the inhibitor so
-sleep proceeds. A broker that is offline or slow never holds sleep longer than
-that. A restarted logind forgets inhibitors; the helper takes a new one when
-the name returns.
+for the broker's acknowledgement, then closes the inhibitor so sleep
+proceeds. Each exchange with the broker gives up after 1.5 s: one when the
+helper is connected, the hello first when it has to reconnect. The style key
+of a new connection is looked up only after the report, so the keyring never
+holds sleep. A restarted logind forgets inhibitors; the helper takes a new
+one when the name returns.
 
 ## Screen sharing
 
@@ -65,8 +67,8 @@ produce it without a share.
 - While any such stream exists the report says `screen_shared: true`, from
   the moment the first one appears until one second after the last one
   ends, so a share that changes streams (Chromium's preview becoming the
-  share replaced one stream with the next 18 ms later) is never released in
-  between. With
+  share replaces one stream with the next within milliseconds) is never
+  released in between. With
   settings `screen_share: hold` (the default, `badi screen-share hold`) the
   broker holds every grant as for an inactive session; `badi screen-share
   suggest` keeps suggesting. `badi status`, `badi doctor` and the panel name
@@ -85,7 +87,7 @@ produce it without a share.
   without output could not reach PipeWire, and the share ends. Without
   `pw-dump` nothing is detected, and `badi doctor` says so.
 - Other portal backends' node names are not checked yet: only
-  xdg-desktop-portal-hyprland has been tried (see below).
+  xdg-desktop-portal-hyprland has been tried ([tested with](#tested-with)).
 
 ## Battery
 
@@ -109,25 +111,25 @@ resident in every mode.
 automatic scheduling.
 
 The [paced battery trial](../../evaluation/power/battery-trial.py) compares
-`quiet` with `normal`. On 2026-10-13 (battery, power-saver, release build,
-752 disposable keys per mode at 150 ms per key, 450 ms after words and 1.5 s
-after sentences) `quiet` made 122 model calls against 586, used 182 against
-464 runtime CPU seconds, showed 313 against 257 suggestions with 211 against
-190 matching the reference, and had visible p95 550 against 525 ms. Charging
-in the performance profile the same day (one repeat, 376 keys per mode) it
-made 45 against 220 calls and used 50 against 148 CPU seconds, but covered 27
-against 31 distinct reference words at p95 456 against 211 ms. On 2026-10-17
-in power-saver, a run-on sentence typed at 450 ms per word showed 15
-suggestions from 62 requests under `quiet`, most cancelled by the next word
-after generation began. Still unmeasured: the balanced profile on battery,
-real typing intervals, energy from a privileged power counter rather than
-runtime CPU time, and a reviewed count of fully accepted additions.
+`quiet` with `normal` on disposable keys typed at 150 ms per key, 450 ms
+after words and 1.5 s after sentences (`quiet` against `normal`):
+
+| Run (date) | Model calls | Runtime CPU s | Shown (matching) | Visible p95 |
+| --- | --- | --- | --- | --- |
+| Battery, power-saver, release build, 752 keys per mode (2026-10-13) | 122 / 586 | 182 / 464 | 313 (211) / 257 (190) | 550 / 525 ms |
+| Charging, performance, 376 keys per mode, one repeat (2026-10-13) | 45 / 220 | 50 / 148 | 27 / 31 distinct reference words | 456 / 211 ms |
+| Power-saver, a run-on sentence at 450 ms per word (2026-10-17) | 62 requests | | 15 under `quiet`, most cancelled by the next word | |
+
+Still unmeasured: the balanced profile on battery, real typing intervals,
+energy from a privileged power counter rather than runtime CPU time, and a
+reviewed count of fully accepted additions.
 
 ## Style key
 
-When it connects to a broker, the helper looks up the style-learning key in
-the Secret Service ([style_key.py](style_key.py), libsecret) and hands it over
-with `style.key`. It never prompts: a locked keyring is retried every two
+When it connects to a broker, the helper first sends its report, then looks
+up the style-learning key in the Secret Service ([style_key.py](style_key.py),
+libsecret) from the main loop and hands it over with `style.key`. It never
+prompts: a locked keyring is retried every two
 minutes, and no stored key sends nothing. The keyring item is labelled
 `Badi style learning key` with the single attribute `purpose=style-learning`;
 its value is two random hex strings. `badi style on` creates it (the keyring
@@ -180,7 +182,7 @@ what the broker last heard. The journal holds fixed, content-free lines only.
 ## Tests
 
 ```sh
-npm run session:check         # broker link, report de-duplication, sleep order
+npm run session:check         # broker link, report de-duplication, sleep order, report before the style key
 npm run session:integration   # real phrase broker, private bus with fake logind, UPower, profiles and portal,
                               # a fake pw-dump, and an isolated GNOME Keyring when gnome-keyring-daemon is installed
 python3 evaluation/power/battery-trial.py --broker target/release/badi-broker   # real model, paced typing
@@ -202,52 +204,16 @@ gone. With `gnome-keyring-daemon` installed, a
 third test stores a key in an isolated keyring on the private bus, restarts
 the broker and checks that the helper delivered it without logging it.
 
-### Tested on this workstation
+### Tested with
 
-On 2026-10-13 (Hyprland 0.56.2, xdg-desktop-portal 1.22.1,
-xdg-desktop-portal-hyprland 1.4.1, systemd logind, UPower 1.91.3,
-power-profiles-daemon 0.30), the helper ran against a temporary phrase broker
-on the real buses: it reported `on_battery=true power_saver=true`, held a
-`delay` sleep inhibitor (`systemd-inhibit --list`), registered both shortcuts
-under `io.github.ahuray.badi` (`hyprctl globalshortcuts`), and
-`hyprctl dispatch 'hl.dsp.global("io.github.ahuray.badi:pause-toggle")'` ran
-the controller command. Stopping it released the inhibitor and the broker
-report. On 2026-10-19 (installed `5e141ed`, real model, Chromium 154 on a
-disposable page) the helper was restarted while a suggestion showed: it
-reconnected within 0.2 s and reported the same active, mains-power state, so
-nothing was withheld, and Tab accepted that suggestion into the same field
-([matrix](../fcitx5/README.md#tested-with)). A real suspend and resume, and a
-real VT switch, were not exercised: the session locks on sleep and needs
-someone present to unlock it.
+Live on the development workstation: Hyprland 0.56.2, xdg-desktop-portal
+1.22.1, xdg-desktop-portal-hyprland 1.4.1, systemd logind, UPower 1.91.3,
+power-profiles-daemon 0.30, PipeWire 1.6.9, disposable pages.
 
-On 2026-10-20 (installed `e1fa107`, xdg-desktop-portal 1.22.1,
-xdg-desktop-portal-hyprland 1.4.1, Chromium 154, real model),
-`hyprctl globalshortcuts` listed `io.github.ahuray.badi:snooze`, and
-`hyprctl eval 'hl.dispatch(hl.dsp.global("io.github.ahuray.badi:snooze"))'`
-while a suggestion showed in a disposable page on `http://127.0.0.1:47811`
-hid it, made the policy `snoozed`, showed the notification "Badi is snoozed in
-http://127.0.0.1:47811 for 10 minutes. badi resume ends it sooner." and listed
-the origin in `badi status` and the panel's Snoozed row. Typing there showed
-nothing, while the same page on port 47812 in the next tab still suggested.
-`badi resume` restored suggestions at once, and `badi snooze 1` ran out on its
-own 60.0 s later. A key bound with `hl.bind` was not tried; the dispatch
-reaches the same portal signal.
-
-On 2026-10-23 (installed `7b2d5fc`, PipeWire 1.6.9, xdg-desktop-portal
-1.22.1, xdg-desktop-portal-hyprland 1.4.1 with Omarchy's preview share
-picker, Chromium 155, real model) an entire-screen share from
-`getDisplayMedia` on a disposable local page held suggestions from the moment
-Chromium's dialog began previewing the screen, which is already a portal
-stream, until about a second after the share stopped: while shared nothing
-showed and no model started, `badi screen-share suggest` showed suggestions
-during the share and `hold` withdrew them again, and afterwards they
-returned. `badi status`, the panel and Omarchy's `notifications probe`
-agreed, and the events-only debug trace named `screen_share: held` without
-text. At `29ec777`, `systemctl --user restart badi-session.service` and a
-SIGKILL (systemd restarted it 3 s later) mid-share each kept the hold: the
-authority epoch did not move, typing in that gap showed nothing, and the
-trace held only `held` until the share ended. At `827492a`, under the
-unit's `RestrictRealtime`, `RestrictNamespaces`, `SystemCallArchitectures`
-and `LimitCORE` limits, `pw-dump` still ran as the helper's child and the
-same share held and released. Not tried: window or region shares, OBS,
-meeting apps and other portal backends.
+| What (installed commit, date) | Result | Boundary |
+| --- | --- | --- |
+| Real buses, temporary phrase broker (2026-10-13) | Reported `on_battery=true power_saver=true`; held a `delay` sleep inhibitor (`systemd-inhibit --list`); registered the shortcuts under `io.github.ahuray.badi`; a `pause-toggle` dispatch ran the controller; stopping released the inhibitor and the report | No real suspend and resume or VT switch: the session locks on sleep and needs someone to unlock it |
+| Helper restart while a suggestion showed, Chromium 154, real model (`5e141ed`, 2026-10-19) | Reconnected within 0.2 s with the same active, mains state; nothing was withheld and Tab accepted into the same field ([matrix](../fcitx5/README.md#tested-with)) | |
+| Snooze shortcut by `hl.dispatch`, Chromium 154 (`e1fa107`, 2026-10-20) | Hid the suggestion and snoozed only that origin (the notification, `badi status` and the panel named it; another port still suggested); `badi resume` restored it; `badi snooze 1` ran out after 60 s | A key bound with `hl.bind` not tried; the dispatch reaches the same portal signal |
+| Entire-screen share from `getDisplayMedia`, Chromium 155 with Omarchy's picker (`7b2d5fc`, 2026-10-23) | Held from the picker's preview (already a portal stream) until about a second after the share stopped; `screen-share suggest` and `hold` switched it during the share; status, the panel, Omarchy's `notifications probe` and the text-free trace agreed | Not tried: window or region shares, OBS, meeting apps, other portal backends |
+| Helper restart and SIGKILL mid-share (`29ec777`), and under the unit's sandbox limits (`827492a`) | The hold and the authority epoch stayed until the share ended; `pw-dump` ran as the helper's child under `RestrictRealtime`, `RestrictNamespaces`, `SystemCallArchitectures` and `LimitCORE` | |

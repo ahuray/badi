@@ -88,10 +88,10 @@ test('opening the raw file explains server startup; only served HTML exposes ena
 });
 
 test('server launch accepts a reusable local port and exactly the supported prefill batches', () => {
-  assert.deepEqual(labOptions([]), { port: 0, prefillBatch: 16, spellingManifests: {} });
+  assert.deepEqual(labOptions([]), { port: 0, prefillBatch: 16 });
   assert.deepEqual(labOptions(['--port', '36889', '--prefill-batch', '64']),
-    { port: 36889, prefillBatch: 64, spellingManifests: {} });
-  for (const args of [['--port', '65536'], ['--port', '-1'], ['--port', '12x'], ['--prefill-batch', '32'], ['--host', '0.0.0.0']]) {
+    { port: 36889, prefillBatch: 64 });
+  for (const args of [['--port', '65536'], ['--port', '-1'], ['--port', '12x'], ['--prefill-batch', '32'], ['--host', '0.0.0.0'], ['--spelling-de', '/x.json']]) {
     assert.throws(() => labOptions(args));
   }
 });
@@ -155,7 +155,7 @@ test('comparison preserves trace order and resets cache between each configurati
 test('warm prefix keeps one runtime for a configuration and still resets between configurations', async t => {
   const lab = await setup(t);
   const cases = [testCase({ id: 'one' }), testCase({ id: 'two', prefix: 'See you' })];
-  const configs = [config(), config({ id: 'framed', mode: 'framed' })];
+  const configs = [config(), config({ id: 'vocabulary', mode: 'vocabulary' })];
   const output = await events(await lab.post(payload({ suite: { ...payload().suite, cases }, configs, warm_prefix: true })));
   assert.match(output[0].measurement, /repeated prompt prefix/u);
   const records = output.filter(event => event.type === 'record');
@@ -231,18 +231,19 @@ test('configuration and inference request allowlists keep arbitrary model parame
 });
 
 test('production-boundary mode requires the production budget, nominal tokens, cache and decoding settings', () => {
-  for (const mode of ['production_boundary', 'framed', 'field_context', 'following_text', 'context_bias', 'vocabulary']) {
+  for (const mode of ['production_boundary', 'vocabulary']) {
     const fixed = config({ id: mode, mode });
     assert.deepEqual(validateConfigs([fixed]), [fixed]);
     for (const changed of [{ budget_ms: 551 }, { max_tokens: 9 }, { cache_prompt: false }, { temperature: .1 }, { seed: 43 }]) {
       assert.throws(() => validateConfigs([{ ...fixed, ...changed }]), /fixed production settings/u);
     }
   }
-  const modes = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'framed', 'field_context', 'probability_rejoin', 'following_text', 'context_bias', 'vocabulary'];
+  const modes = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'vocabulary'];
   const all = modes.map(mode => config({ id: mode, mode }));
-  assert.equal(validateConfigs(all).length, 13);
-  assert.throws(() => validateConfigs([...all, config({ id: 'extra' })]), /13 configurations/u);
-  for (const mode of ['instructed_word', 'healed_attested']) {
+  assert.equal(validateConfigs(all).length, 8);
+  assert.throws(() => validateConfigs([...all, config({ id: 'extra' })]), /8 configurations/u);
+  // Failed experiments are gone, not dormant.
+  for (const mode of ['instructed_word', 'healed_attested', 'framed', 'field_context', 'probability_rejoin', 'following_text', 'context_bias']) {
     assert.throws(() => validateConfigs([config({ mode })]), /supported limits/u);
   }
   // The historical unhealed baseline is retired; production is the only baseline.
@@ -256,7 +257,7 @@ test('the served UI offers production as "Current Badi logic" and no retired bas
     .filter(choice => choice.includes('Current Badi logic'));
   assert.equal(current.length, 1);
   assert.match(current[0], /value="production_boundary" checked/u);
-  assert.match(current[0], /trailing-space handling for English and Persian/u);
+  assert.match(current[0], /trailing-space healing reviewed for the loaded model/u);
   assert.doesNotMatch(html, /production_baseline|Isolated boundary fix/u);
   const app = await readFile(new URL('./public/app.mjs', import.meta.url), 'utf8');
   assert.match(app, /production_boundary: 'Current Badi logic'/u);

@@ -246,19 +246,6 @@ pub struct WordSavings {
     pub dispatched_unverified: u64,
 }
 
-impl MetricsSnapshot {
-    /// The frozen protocol v1 counter set.
-    #[must_use]
-    pub const fn for_protocol_v1(self) -> Self {
-        Self {
-            no_suggestion: None,
-            word_savings: None,
-            type_through: None,
-            ..self
-        }
-    }
-}
-
 impl Metrics {
     pub fn record_context_update(&self) {
         self.context_updates.fetch_add(1, Ordering::Relaxed);
@@ -454,11 +441,13 @@ mod tests {
         let value = serde_json::to_value(metrics.snapshot()).expect("metrics JSON");
         assert_eq!(value["no_suggestion"]["budget_prefill"], 1);
         assert_eq!(value["no_suggestion"]["last"], "budget_prefill");
-        let legacy =
-            serde_json::to_value(metrics.snapshot().for_protocol_v1()).expect("legacy JSON");
-        assert!(legacy.get("no_suggestion").is_none());
-        assert!(legacy.get("word_savings").is_none());
-        assert!(legacy.get("type_through").is_none());
+        let mut legacy = value.clone();
+        for counter in ["no_suggestion", "word_savings", "type_through"] {
+            legacy
+                .as_object_mut()
+                .expect("metrics object")
+                .remove(counter);
+        }
         let decoded: MetricsSnapshot = serde_json::from_value(legacy).expect("older broker");
         assert_eq!(decoded.no_suggestion, None);
         assert_eq!(decoded.word_savings, None);

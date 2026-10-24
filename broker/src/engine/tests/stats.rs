@@ -23,10 +23,7 @@ fn controlled_broker(root: &std::path::Path) -> Broker {
         .expect("allow the controlled site");
     Broker::with_control_plane(
         std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
+        BrokerConfig::default(),
         control_plane,
     )
     .expect("controlled broker")
@@ -196,9 +193,9 @@ async fn nothing_counts_while_paused_or_for_a_blocked_site() {
     assert_eq!(counted.summary.totals.today.shown, 1);
 
     // Runtime pause (badictl pause, or the session helper's hold).
-    broker.set_paused(true).await.expect("pause");
+    broker.set_paused(true).await;
     assert!(!try_to_show(&broker).await);
-    broker.set_paused(false).await.expect("resume");
+    broker.set_paused(false).await;
 
     // Persistent pause (badi pause).
     let paused = SettingsV2 {

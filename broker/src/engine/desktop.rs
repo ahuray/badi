@@ -24,9 +24,8 @@ use crate::settings::{BatteryMode, ScreenShareMode};
 
 /// In quiet battery mode an automatic request waits this long before the
 /// model starts; any newer request or edit cancels it first, so keys typed
-/// closer together never start the model. On the 2026-10-13 power-saver
-/// trial a 120 ms wait (the Fcitx display pause) still started the model for
-/// every key typed 150 ms apart, so this is a real typing pause instead.
+/// closer together never start the model. The 120 ms Fcitx display pause was
+/// too short: it still started the model for keys typed 150 ms apart.
 pub const QUIET_START_DELAY: Duration = Duration::from_millis(300);
 
 /// How long a share stays held after its helper disconnected mid-share,

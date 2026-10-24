@@ -110,13 +110,16 @@ bool Accessibility::request(nlohmann::json value, Reply reply) {
     const auto frame = value.dump() + "\n";
     if (frame.size() + output_.size() > maxFrame) return false;
     output_ += frame;
+    // A failed send disconnects before the reply is registered: the caller
+    // learns of it once, from the false return, never also from the reply.
+    if (!flush()) return false;
     id_ = id;
     reply_ = std::move(reply);
-    if (!timeout_) timeout_ = loop_.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
+    if (!timeout_) timeout_ = loop_.addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
         [this](::fcitx::EventSourceTime *, std::uint64_t) { disconnect(); return true; });
     timeout_->setNextInterval(500'000);
     timeout_->setOneShot();
-    return flush();
+    return true;
 }
 
 bool Accessibility::flush() {

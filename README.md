@@ -191,8 +191,11 @@ downloads it (pinned and hash-checked) only after you accept. Unattended,
 `--model ID` picks the model and `--accept-model-license` accepts its terms.
 After the install, `badi model` switches models ([below](#choose-the-writing-model)). The pinned
 llama.cpp runtime is `~/.local/share/badi/runtimes/llama-b11840`, with its
-archive in `runtimes/downloads/`. `install-desktop.py` checks those pinned
-hashes before it builds, and the broker checks them again before it starts.
+archive in `runtimes/downloads/`; on a new machine, fetch both first as
+[Writing assets](packaging/aur/README.md#writing-assets) shows (the model
+there is optional, since the installer offers one). `install-desktop.py`
+checks those pinned hashes before it builds, and the broker checks them again
+before it starts.
 
 ## Choose the writing model
 
@@ -431,7 +434,7 @@ installed model.
 | [AGENTS.md](AGENTS.md) | How to work here: architecture, invariants, checks |
 | [VISION.md](VISION.md) | The product contract |
 | [future plans.md](<future plans.md>) | The only backlog, with the ordered next steps |
-| [CHANGELOG.md](CHANGELOG.md) | What shipped, by pull request |
+| [CHANGELOG.md](CHANGELOG.md) | What shipped, by release |
 | [docs/decisions](docs/decisions/) | Durable architecture decisions |
 | Component runbooks | [broker](broker/README.md), [Fcitx addon](adapters/fcitx5/README.md), [observer](adapters/accessibility/README.md), [session helper](adapters/session/README.md), [editors](adapters/shared/README.md), [Bash](adapters/shell/README.md), [Neovim](adapters/neovim/README.md), [LibreOffice Writer](adapters/libreoffice/README.md), [Omarchy panel](ui/omarchy-plugin/README.md), [Prediction Lab](evaluation/writing/README.md) |
 

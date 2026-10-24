@@ -356,9 +356,7 @@ fn the_largest_summary_fits_one_frame() {
         0,
         &payload,
     )
-    .expect("envelope")
-    .at_version(crate::protocol::CURRENT_PROTOCOL_VERSION)
-    .expect("v2");
+    .expect("envelope");
     let bytes = serde_json::to_vec(&frame).expect("frame JSON");
     assert!(
         bytes.len() < crate::protocol::MAX_FRAME_BYTES,

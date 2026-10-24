@@ -14,7 +14,7 @@ const EXIT_CONFIGURATION: u8 = 78;
 
 fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
-    #[cfg(all(feature = "local-model", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     if arguments
         .first()
         .is_some_and(|argument| argument == badi_broker::writing::EXEC_HELPER_FLAG)
@@ -70,8 +70,6 @@ async fn run(arguments: Vec<OsString>) -> Result<(), ExitError> {
             configuration: error.restart_cannot_help(),
         }
     })?);
-    // Awaited directly on main's block_on thread: the runtime's parent-death
-    // signal fires when the thread that spawned it exits.
     // The user's model choice, read once: a new choice takes effect when
     // `badi model use` restarts the service.
     let chosen_model = control_plane
@@ -79,6 +77,8 @@ async fn run(arguments: Vec<OsString>) -> Result<(), ExitError> {
         .ok()
         .and_then(|snapshot| snapshot.settings.writing_model);
     let reviser = reviser(provider, model_directory.clone());
+    // Awaited directly on main's block_on thread: the runtime's parent-death
+    // signal fires when the thread that spawned it exits.
     let provider = start_provider(provider, model_directory, chosen_model).await?;
     let broker = Broker::with_control_plane(provider, BrokerConfig::default(), control_plane)
         .map_err(|error| match error {
@@ -123,7 +123,7 @@ fn reviser(
     match kind {
         ProviderSelection::Phrase => Some(Arc::new(badi_broker::revision::service::FixtureReviser)),
         ProviderSelection::Local => {
-            #[cfg(all(feature = "local-model", target_os = "linux"))]
+            #[cfg(target_os = "linux")]
             {
                 let reviser = directory
                     .map_or_else(badi_broker::writing::data_directory, Ok)
@@ -138,7 +138,7 @@ fn reviser(
                     Arc::new(reviser) as Arc<dyn badi_broker::revision::service::Reviser>
                 })
             }
-            #[cfg(not(all(feature = "local-model", target_os = "linux")))]
+            #[cfg(not(target_os = "linux"))]
             {
                 let _ = directory;
                 None
@@ -147,10 +147,7 @@ fn reviser(
     }
 }
 
-#[cfg_attr(
-    not(all(feature = "local-model", target_os = "linux")),
-    allow(clippy::unused_async)
-)]
+#[cfg_attr(not(target_os = "linux"), allow(clippy::unused_async))]
 async fn start_provider(
     kind: ProviderSelection,
     directory: Option<PathBuf>,
@@ -159,7 +156,7 @@ async fn start_provider(
     match kind {
         ProviderSelection::Phrase => Ok(Arc::new(DeterministicPhraseProvider::default())),
         ProviderSelection::Local => {
-            #[cfg(all(feature = "local-model", target_os = "linux"))]
+            #[cfg(target_os = "linux")]
             {
                 let model_error = |error: badi_broker::writing::WritingError| ExitError::Model {
                     message: error.to_string(),
@@ -178,11 +175,11 @@ async fn start_provider(
                 );
                 Ok(Arc::new(runtime))
             }
-            #[cfg(not(all(feature = "local-model", target_os = "linux")))]
+            #[cfg(not(target_os = "linux"))]
             {
                 let _ = (directory, chosen_model);
                 Err(ExitError::Model {
-                    message: "rebuild with the local-model feature on Linux".to_owned(),
+                    message: "the local model runs only on Linux".to_owned(),
                     configuration: true,
                 })
             }

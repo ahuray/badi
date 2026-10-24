@@ -1,10 +1,11 @@
 """Protocol v2 client for one Writer correction attempt.
 
 Each attempt owns one private broker connection and one session: hello,
-authority acknowledgement, exact policy, context, an explicit request and at
-most one one-shot grant. Closing the attempt closes the connection, which
-retires the session and any grant in the broker. Errors carry content-free
-codes only; no text is logged or stored.
+authority acknowledgement, exact policy, context, one request (explicit, or
+the automatic check of a finished word) and at most one one-shot grant.
+Closing the attempt, from any thread, closes the connection, which retires
+the session and any grant in the broker. Errors carry content-free codes
+only; no text is logged or stored.
 """
 
 import hashlib
@@ -38,7 +39,8 @@ _POLICY_FLAGS = ("paused", "context_allowed", "display_allowed", "suggestions_al
 
 class BrokerError(Exception):
     """A failed attempt. `code` is one of offline, blocked, protocol, timeout,
-    rejected, revoked or expired, and names no text."""
+    rejected, revoked, expired or closed (the attempt was closed by its
+    owner), and names no text."""
 
     def __init__(self, code):
         super().__init__(code)
@@ -106,8 +108,9 @@ class Attempt:
 
     def _connect(self):
         check_private_socket(self._path)
-        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
+        connection = None
         try:
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
             connection.settimeout(RPC_TIMEOUT)
             connection.connect(self._path)
             credentials = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
@@ -117,12 +120,19 @@ class Attempt:
                 raise BrokerError("offline")
             connection.settimeout(None)
         except OSError as error:
-            connection.close()
+            if connection is not None:
+                connection.close()
             raise BrokerError("offline") from error
         except BrokerError:
             connection.close()
             raise
-        self._socket = connection
+        with self._lock:
+            # The owner may have closed a superseded attempt while it connected.
+            if not self._closed:
+                self._socket = connection
+        if self._socket is not connection:
+            connection.close()
+            raise BrokerError(self._revoked or "offline")
         threading.Thread(target=self._read, name="badi-broker-reader", daemon=True).start()
         hello = self._rpc("hello", {"min_v": 2, "max_v": 2, "adapter": ADAPTER,
                                     "capabilities": list(CAPABILITIES)}, ("hello.ack",))

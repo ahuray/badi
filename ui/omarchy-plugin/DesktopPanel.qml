@@ -36,18 +36,19 @@ Item {
     {name: "Claude", appId: "com.anthropic.claude", context: "window", detail: "Desktop app composer"},
     {name: "Discord", appId: "discord", context: "window", detail: "Needs renderer accessibility"}]
 
-  // The languages the panel offers, European only: `writing` the model
+  // The languages the panel offers, European only: `name` on the chips,
+  // `english` in the Suggestions and Spelling rows; `writing` the model
   // suggests in it, `spelling` its typos are corrected. Persian stays
   // reachable from the terminal (badi suggest fa on) and is never listed.
   readonly property var languageCatalog: [
-    {code: "en", name: "English", writing: true, spelling: true},
-    {code: "de", name: "Deutsch", writing: true, spelling: true},
-    {code: "fr", name: "Français", writing: true, spelling: true},
-    {code: "es", name: "Español", writing: true, spelling: true},
-    {code: "pt", name: "Português", writing: true, spelling: false},
-    {code: "it", name: "Italiano", writing: false, spelling: true},
-    {code: "nl", name: "Nederlands", writing: false, spelling: true},
-    {code: "pl", name: "Polski", writing: false, spelling: true}]
+    {code: "en", name: "English", english: "English", writing: true, spelling: true},
+    {code: "de", name: "Deutsch", english: "German", writing: true, spelling: true},
+    {code: "fr", name: "Français", english: "French", writing: true, spelling: true},
+    {code: "es", name: "Español", english: "Spanish", writing: true, spelling: true},
+    {code: "pt", name: "Português", english: "Portuguese", writing: true, spelling: false},
+    {code: "it", name: "Italiano", english: "Italian", writing: false, spelling: true},
+    {code: "nl", name: "Nederlands", english: "Dutch", writing: false, spelling: true},
+    {code: "pl", name: "Polski", english: "Polish", writing: false, spelling: true}]
 
   property alias client: client
   property string query: ""
@@ -157,11 +158,6 @@ Item {
   function refresh() {
     actionMessage = ""
     client.refresh()
-    probeService()
-  }
-
-  function activate() {
-    client.activate()
     probeService()
   }
 
@@ -284,13 +280,25 @@ Item {
     return Array.isArray(languages) ? languages : ["en"]
   }
 
+  // `list` with `code` turned on or off, in the broker's `order`.
+  function withLanguage(list, order, code, on) {
+    return order.filter(function(item) { return item === code ? on : list.indexOf(item) >= 0 })
+  }
+
+  // Each language list, omitted at its default as the broker writes it.
+  function putSpelling(document, languages) {
+    if (languages.join() === "en") delete document.spelling_languages
+    else document.spelling_languages = languages
+  }
+
+  function putWriting(document, languages) {
+    if (languages.join() === "en,de") delete document.writing_languages
+    else document.writing_languages = languages
+  }
+
   function setSpelling(code, on) {
     change(function(document) {
-      var chosen = spellingLanguages().filter(function(item) { return item !== code })
-      if (on) chosen.push(code)
-      chosen = spellingOrder.filter(function(item) { return chosen.indexOf(item) >= 0 })
-      if (chosen.length === 1 && chosen[0] === "en") delete document.spelling_languages
-      else document.spelling_languages = chosen
+      putSpelling(document, withLanguage(spellingLanguages(), spellingOrder, code, on))
     }, on ? "Spelling on" : "Spelling off")
   }
 
@@ -338,39 +346,42 @@ Item {
       : notes.length > 0 ? notes.join(" · ") : "Suggestions and typo fixes in each"
   }
 
-  // One write for the language picker: suggestions and spelling in every
-  // picked language that has them. `chosen` also answers the first-run
-  // question for good.
-  function setLanguages(codes, chosen) {
+  // The first-run answer in one write: suggestions and spelling in every
+  // picked language that has them, and the question answered for good.
+  function setLanguages(codes) {
     change(function(document) {
       var keepsPersian = writingLanguages().indexOf("fa") >= 0
-      var writing = writingOrder.filter(function(code) {
+      putWriting(document, writingOrder.filter(function(code) {
         return code === "fa" ? keepsPersian : codes.indexOf(code) >= 0 && languageInfo(code).writing === true
-      })
-      if (writing.join() === "en,de") delete document.writing_languages
-      else document.writing_languages = writing
-      var spelled = spellingOrder.filter(function(code) {
+      }))
+      putSpelling(document, spellingOrder.filter(function(code) {
         return codes.indexOf(code) >= 0 && languageInfo(code).spelling === true
-      })
-      if (spelled.join() === "en") delete document.spelling_languages
-      else document.spelling_languages = spelled
-      if (chosen) document.languages_chosen = true
-    }, codes.length === 0 ? "No languages · suggestions and typo fixes off" : "Languages: " + languageNames(codes))
+      }))
+      document.languages_chosen = true
+    }, languagesMessage(codes))
   }
 
+  function languagesMessage(codes) {
+    return codes.length === 0 ? "No languages · suggestions and typo fixes off" : "Languages: " + languageNames(codes)
+  }
+
+  // A Languages chip: its language's suggestions and typo fixes on or off
+  // together, in each list that offers them. Every other language keeps its
+  // own choice in both lists (Suggestions and Spelling set them apart).
   function toggleLanguage(code) {
-    var codes = chosenLanguages()
-    setLanguages(codes.indexOf(code) >= 0 ? codes.filter(function(item) { return item !== code }) : codes.concat([code]), false)
+    var info = languageInfo(code)
+    var chosen = chosenLanguages()
+    var on = chosen.indexOf(code) < 0
+    change(function(document) {
+      if (info.writing) putWriting(document, withLanguage(writingLanguages(), writingOrder, code, on))
+      if (info.spelling) putSpelling(document, withLanguage(spellingLanguages(), spellingOrder, code, on))
+    }, languagesMessage(withLanguage(chosen, languageCatalog.map(function(language) { return language.code }), code, on)))
   }
 
   // One language's choice: off, or on with healing auto, forced on or off.
   function setWriting(code, value) {
     change(function(document) {
-      var chosen = writingLanguages().filter(function(item) { return item !== code })
-      if (value !== "off") chosen.push(code)
-      chosen = writingOrder.filter(function(item) { return chosen.indexOf(item) >= 0 })
-      if (chosen.join() === "en,de") delete document.writing_languages
-      else document.writing_languages = chosen
+      putWriting(document, withLanguage(writingLanguages(), writingOrder, code, value !== "off"))
       var healing = client.objectValue(document, "trailing_space_healing")
       var choices = {}
       Object.keys(healing).forEach(function(key) { if (key !== code) choices[key] = healing[key] })
@@ -503,7 +514,7 @@ Item {
         label: picked.length > 0 ? "Start with these languages" : "Pick at least one language",
         detail: (picked.length > 0 ? languageNames(picked) + " · " : "") + "change them any time under Languages",
         enabled: canChange && picked.length > 0,
-        activate: function() { root.setLanguages(picked, true); root.pickedLanguages = null }}]
+        activate: function() { root.setLanguages(picked); root.pickedLanguages = null }}]
   }
 
   // Day to day: languages, length and context. Everything else, the model
@@ -648,13 +659,12 @@ Item {
     var writing = writingLanguages()
     var healingChoices = client.objectValue(client.settings, "trailing_space_healing")
     var modelHealed = Array.isArray(activeModel.healed_languages) ? activeModel.healed_languages : ["en", "fa"]
-    var writingNames = {en: "English", de: "German", fr: "French", es: "Spanish", pt: "Portuguese"}
     writingOrder.filter(function(code) { return code !== "fa" }).forEach(function(code) {
       var on = writing.indexOf(code) >= 0
       var choice = healingChoices[code]
       var value = !on ? "off" : choice === true ? "heal" : choice === false ? "plain" : "auto"
       var healed = choice === true || (choice !== false && modelHealed.indexOf(code) >= 0)
-      list.push({key: "writing_" + code, section: "Suggestions", kind: "choice", label: writingNames[code],
+      list.push({key: "writing_" + code, section: "Suggestions", kind: "choice", label: languageInfo(code).english,
         detail: (["fr", "es", "pt"].indexOf(code) >= 0 ? "Experimental · " : "")
           + (!on ? "No suggestions" : healed ? "Heals the space after a word" : "Nothing after a typed space")
           + (value === "auto" && modelName ? " · as reviewed for " + modelName : ""),
@@ -667,12 +677,11 @@ Item {
     var chosen = spellingLanguages()
     var report = {}
     for (var r = 0; r < spelling.length; r++) report[spelling[r].language] = spelling[r]
-    var names = {en: "English", de: "German", fr: "French", es: "Spanish", it: "Italian", nl: "Dutch", pl: "Polish"}
     spellingOrder.forEach(function(code) {
       var entry = report[code] || {}
       var on = chosen.indexOf(code) >= 0
       var installed = typeof entry.dictionary === "string"
-      list.push({key: "spelling_" + code, section: "Spelling", kind: "toggle", label: names[code],
+      list.push({key: "spelling_" + code, section: "Spelling", kind: "toggle", label: languageInfo(code).english,
         detail: code === "en" ? "Built in" : installed ? "Dictionary " + entry.dictionary
           : "Needs sudo pacman -S " + (entry.package || "its hunspell dictionary"),
         warn: on && !installed && code !== "en", checked: on, enabled: canChange,

@@ -9,7 +9,6 @@ async fn abrupt_silence_expires_context_and_all_derived_authority() {
     let (broker, session_id, _events) = setup(
         provider,
         BrokerConfig {
-            debounce: Duration::ZERO,
             provider_timeout: Duration::from_secs(2),
             suggestion_ttl: Duration::from_millis(10),
             context_authority_lease: Duration::from_millis(500),
@@ -106,7 +105,6 @@ async fn paused_and_stale_addressed_accepts_emit_no_commit_prepare() {
     let (broker, session_id, mut events) = setup(
         provider,
         BrokerConfig {
-            debounce: Duration::ZERO,
             provider_timeout: Duration::from_secs(1),
             suggestion_ttl: Duration::from_secs(1),
             ..BrokerConfig::default()
@@ -142,7 +140,7 @@ async fn paused_and_stale_addressed_accepts_emit_no_commit_prepare() {
         suggestion_id: Some(payload.suggestion_id.clone()),
     };
 
-    assert!(broker.set_paused(true).await.expect("pause"));
+    assert!(broker.set_paused(true).await);
     assert!(matches!(
         broker
             .session_control(coordinates(session_id, 1), control.clone(), None)
@@ -152,7 +150,7 @@ async fn paused_and_stale_addressed_accepts_emit_no_commit_prepare() {
     while events.try_recv().is_ok() {}
     assert!(events.try_recv().is_err());
 
-    assert!(!broker.set_paused(false).await.expect("resume"));
+    assert!(!broker.set_paused(false).await);
     let second = context(2, FieldPurpose::Normal);
     broker
         .update_context(coordinates(session_id, 2), second)
@@ -174,7 +172,6 @@ async fn expired_suggestion_is_cleared_and_ineligible() {
     let (broker, session_id, mut events) = setup(
         provider,
         BrokerConfig {
-            debounce: Duration::ZERO,
             provider_timeout: Duration::from_secs(1),
             suggestion_ttl: Duration::from_millis(10),
             ..BrokerConfig::default()
@@ -231,7 +228,6 @@ async fn ignored_commit_authorization_expires_and_becomes_ineligible() {
     let (broker, session_id, mut events) = setup(
         provider,
         BrokerConfig {
-            debounce: Duration::ZERO,
             provider_timeout: Duration::from_secs(1),
             suggestion_ttl: Duration::from_millis(100),
             commit_result_lease: Duration::from_millis(10),
@@ -306,14 +302,7 @@ async fn ignored_commit_authorization_expires_and_becomes_ineligible() {
 #[tokio::test]
 async fn applied_all_retires_pre_mutation_context_without_continuation() {
     let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
-    let (broker, session_id, mut events) = setup(
-        provider,
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
-    )
-    .await;
+    let (broker, session_id, mut events) = setup(provider, BrokerConfig::default()).await;
     let (update, suggestion_id) =
         prepare_commit_result_case(&broker, session_id, &mut events, ControlAction::AcceptAll)
             .await;
@@ -343,10 +332,7 @@ async fn applied_all_retires_pre_mutation_context_without_continuation() {
 async fn native_dispatch_counts_words_once_without_claiming_applied_edits() {
     let broker = Broker::new(
         std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
+        BrokerConfig::default(),
     );
     let (session_id, mut events) = open_observed_session(&broker, "field-1").await;
     let (update, suggestion_id) =
@@ -376,14 +362,7 @@ async fn native_dispatch_counts_words_once_without_claiming_applied_edits() {
 #[tokio::test]
 async fn applied_word_without_rebind_retires_remainder_and_context() {
     let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
-    let (broker, session_id, mut events) = setup(
-        provider,
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
-    )
-    .await;
+    let (broker, session_id, mut events) = setup(provider, BrokerConfig::default()).await;
     let (update, suggestion_id) =
         prepare_commit_result_case(&broker, session_id, &mut events, ControlAction::AcceptWord)
             .await;
@@ -416,14 +395,7 @@ async fn terminal_commit_failures_revoke_pre_commit_context_authority() {
         CommitStatus::Failed,
     ] {
         let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
-        let (broker, session_id, mut events) = setup(
-            provider,
-            BrokerConfig {
-                debounce: Duration::ZERO,
-                ..BrokerConfig::default()
-            },
-        )
-        .await;
+        let (broker, session_id, mut events) = setup(provider, BrokerConfig::default()).await;
         let (update, suggestion_id) =
             prepare_commit_result_case(&broker, session_id, &mut events, ControlAction::AcceptAll)
                 .await;
@@ -466,14 +438,7 @@ async fn terminal_commit_failures_revoke_pre_commit_context_authority() {
 #[tokio::test]
 async fn commit_result_rechecks_expired_lease_before_timer_runs() {
     let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
-    let (broker, session_id, mut events) = setup(
-        provider,
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
-    )
-    .await;
+    let (broker, session_id, mut events) = setup(provider, BrokerConfig::default()).await;
     let update = context(1, FieldPurpose::Normal);
     broker
         .update_context(coordinates(session_id, 1), update.clone())
@@ -550,14 +515,7 @@ async fn commit_result_rechecks_expired_lease_before_timer_runs() {
 #[tokio::test]
 async fn mismatched_commit_result_does_not_consume_valid_pending_lease() {
     let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
-    let (broker, session_id, mut events) = setup(
-        provider,
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
-    )
-    .await;
+    let (broker, session_id, mut events) = setup(provider, BrokerConfig::default()).await;
     let (update, suggestion_id) =
         prepare_commit_result_case(&broker, session_id, &mut events, ControlAction::AcceptAll)
             .await;
@@ -601,14 +559,7 @@ async fn mismatched_commit_result_does_not_consume_valid_pending_lease() {
 #[tokio::test]
 async fn failed_commit_prepare_enqueue_rejects_without_pending_state() {
     let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
-    let (broker, session_id, mut events) = setup(
-        provider,
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
-    )
-    .await;
+    let (broker, session_id, mut events) = setup(provider, BrokerConfig::default()).await;
     let update = context(1, FieldPurpose::Normal);
     broker
         .update_context(coordinates(session_id, 1), update.clone())
@@ -672,7 +623,6 @@ async fn pause_revokes_a_pending_commit_and_rejects_its_result() {
     let (broker, session_id, mut events) = setup(
         provider,
         BrokerConfig {
-            debounce: Duration::ZERO,
             provider_timeout: Duration::from_secs(1),
             suggestion_ttl: Duration::from_millis(100),
             ..BrokerConfig::default()
@@ -720,7 +670,7 @@ async fn pause_revokes_a_pending_commit_and_rejects_its_result() {
             if request_id.as_deref() == Some("accept-before-pause")
     ));
 
-    assert!(broker.set_paused(true).await.expect("pause"));
+    assert!(broker.set_paused(true).await);
     assert!(matches!(
         events.recv().await,
         Some(BrokerEvent::SuggestionClear { payload, request_id, .. })

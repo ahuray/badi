@@ -58,16 +58,17 @@ MAX_BUFFER = MAX_FRAME * 4
 # Only the owning connection may acquire or draw; status is open to any client.
 OWNER_OPERATIONS = frozenset({"inspect", "snapshot", "preview", "hide"})
 # Producer interest requested from the armed application. Its events reach
-# this helper only through a match on the armed field's exact sender and path.
-# Bounds and visible-data changes are how a toolkit reports that the caret
-# moved on screen without a text edit, including a scroll of that object.
-# A scroll reported only on an ancestor does not arrive here.
+# this helper only through a match on the armed field's exact sender and path,
+# or on one of its scroll-pane ancestors' paths. Bounds and visible-data
+# changes are how a toolkit reports that the caret moved on screen without a
+# text edit, including a scroll of that object.
 FIELD_EVENTS = ("object:text-changed", "object:text-caret-moved", "object:text-selection-changed",
                 "object:bounds-changed", "object:visible-data-changed",
                 "object:state-changed:editable", "object:state-changed:showing",
                 "object:state-changed:defunct", "object:property-change:accessible-role")
 # A document scroll usually reports on the scroll pane, not the text field.
 SCROLL_ANCESTOR_ROLES = frozenset({"scroll pane"})
+SCROLL_SIGNALS = frozenset({"BoundsChanged", "VisibleDataChanged"})
 MAX_SCROLL_ANCESTORS = 3
 
 
@@ -199,13 +200,13 @@ class Daemon:
         # The payload is never unpacked: a text change carries the typed text.
         # A bounds or visible-data signal is a scroll of this same field. Move
         # the preview when the text offset is unchanged.
-        if signal in {"BoundsChanged", "VisibleDataChanged"}:
-            self.observer.reposition_preview()
+        if signal in SCROLL_SIGNALS:
+            self.reposition_preview()
             return
         # Text attributes change neither the text nor the caret. Chromium's
         # spellchecker underlines a misspelled word about 150 ms after it is
-        # typed (measured 2026-10-23), which would otherwise end the
-        # suggestion shown for it, a correction above all.
+        # typed, which must not end the suggestion shown for it, a correction
+        # above all.
         if signal == "TextAttributesChanged":
             return
         self.observer.invalidate("field_changed")
@@ -213,8 +214,22 @@ class Daemon:
     def ancestor_event(self, _connection, _sender, _path, _interface, signal, _parameters, _data):
         # Only a scroll of the container. Other ancestor signals are not the
         # field's text and must not end the suggestion.
-        if signal in {"BoundsChanged", "VisibleDataChanged"}:
-            self.observer.reposition_preview()
+        if signal in SCROLL_SIGNALS:
+            self.reposition_preview()
+
+    def reposition_preview(self):
+        """Move a showing preview after a scroll, as one operation of its own.
+
+        A D-Bus signal arrives outside any request, so it gets a fresh
+        deadline, and no exception may escape into GDBus: an unexpected
+        failure ends the suggestion and logs only its class.
+        """
+        try:
+            with self.operation():
+                self.observer.reposition_preview()
+        except Exception as error:
+            print(f"badi-accessibility: {type(error).__name__}", file=sys.stderr)
+            self.observer.invalidate("accessibility_unavailable")
 
     def disarm_field_events(self):
         if self.event_bus is not None:
@@ -227,9 +242,18 @@ class Daemon:
         self.field_binding = None
 
     def register_producer(self, bus):
+        """Ask `bus` to emit the field events. `producer` names it only once
+        every registration succeeded; a failure withdraws the ones made."""
+        registered = []
+        try:
+            for event in FIELD_EVENTS:
+                self.registry("RegisterEvent", "(sass)", (event, [], bus), sync=True)
+                registered.append(event)
+        except Exception:
+            for event in registered:
+                self.registry("DeregisterEvent", "(ss)", (event, bus), sync=False)
+            raise
         self.producer = bus
-        for event in FIELD_EVENTS:
-            self.registry("RegisterEvent", "(sass)", (event, [], bus), sync=True)
 
     def withdraw_producer(self):
         if self.producer is not None:
@@ -415,27 +439,37 @@ class Daemon:
             self.GLib.idle_add(self.process_next, fd, client)
         return False
 
+    @contextlib.contextmanager
+    def operation(self):
+        """One bounded operation: every backend call inside it checks this
+        deadline, and a call outside any operation fails at once."""
+        self.backend.deadline = time.monotonic() + OPERATION_SECONDS
+        try:
+            yield
+        finally:
+            self.backend.deadline = 0
+
     def answer(self, fd, client, raw):
-        """Reply to one frame; False when it is not a well-formed JSON object."""
-        request = None
+        """Reply to one frame; False when it is not well-formed JSON."""
         try:
             request = json.loads(raw, object_pairs_hook=unique_object)
-            self.backend.deadline = time.monotonic() + OPERATION_SECONDS
-            response = self.respond(fd, client, request)
-            self.backend.budget()
+        except (json.JSONDecodeError, UnicodeError):
+            return False
+        except ValueError:
+            # A duplicate key: valid JSON with an ambiguous meaning. Like any
+            # malformed request it changes no field state, and its id is not
+            # trusted.
+            self.send(fd, self.failure(None, "invalid_request"))
+            return True
+        try:
+            with self.operation():
+                response = self.respond(fd, client, request)
+                self.backend.budget()
             if response is not None:
                 self.send(fd, response)
         except Denied as error:
             self.observer.invalidate("operation_timeout" if error.timed_out else "field_unavailable")
             self.send(fd, self.failure(request, str(error)))
-        except (json.JSONDecodeError, UnicodeError):
-            return False
-        except ValueError as error:
-            # A hook such as a duplicate key is not a broken frame. Keep the
-            # owner; log only the exception class.
-            print(f"badi-accessibility: {type(error).__name__}", file=sys.stderr)
-            self.observer.invalidate("accessibility_unavailable")
-            self.send(fd, self.failure(request, "accessibility_unavailable"))
         except Exception as error:
             print(f"badi-accessibility: {type(error).__name__}", file=sys.stderr)
             self.observer.invalidate("accessibility_unavailable")
@@ -557,7 +591,8 @@ def main():
         from gi.repository import GLibUnix
         add_signal = GLibUnix.signal_add_full
     except (ImportError, AttributeError):
-        # The pinned CI Arch snapshot predates the GLibUnix override.
+        # Older GLib or PyGObject without the GLibUnix binding: the pinned CI
+        # Arch snapshot, and the Debian and Ubuntu package jobs run this too.
         add_signal = GLib.unix_signal_add_full
     for signum in (15, 2):
         add_signal(GLib.PRIORITY_DEFAULT, signum, quit_loop)

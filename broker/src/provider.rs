@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use thiserror::Error;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
 use crate::metrics::NoSuggestionReason;
@@ -153,41 +152,28 @@ pub trait CompletionProvider: Send + Sync + 'static {
         })
     }
 
-    /// Like `propose`, and names the content-free class of a missing proposal.
-    /// Providers that cannot distinguish request and model abstention report
-    /// the model class. A provider with a time budget sizes it by `trigger`.
+    /// What the broker calls: like `propose`, and names the content-free
+    /// class of a missing proposal, with the call's counts when the provider
+    /// measured them. Providers that cannot distinguish request and model
+    /// abstention report the model class. A provider with a time budget
+    /// sizes it by `trigger`. The reply is one whole suggestion.
     async fn propose_outcome(
         &self,
         request: ProviderRequest,
         cancellation: CancellationToken,
         allow_replacement: bool,
         _trigger: RequestTrigger,
-    ) -> Result<ProviderOutcome, ProviderError> {
+    ) -> Result<ProviderReply, ProviderError> {
         self.propose(request, cancellation, allow_replacement)
             .await
             .map(|proposal| {
-                proposal.map_or(
-                    ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained),
-                    ProviderOutcome::Proposal,
-                )
+                proposal
+                    .map_or(
+                        ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained),
+                        ProviderOutcome::Proposal,
+                    )
+                    .into()
             })
-    }
-
-    /// Like [`Self::propose_outcome`], and may publish a growing prefix of the
-    /// same continuation before the final text. The final outcome is still
-    /// authoritative. Senders that are dropped are ignored.
-    async fn propose_outcome_with_partials(
-        &self,
-        request: ProviderRequest,
-        cancellation: CancellationToken,
-        allow_replacement: bool,
-        trigger: RequestTrigger,
-        partials: Option<UnboundedSender<String>>,
-    ) -> Result<ProviderReply, ProviderError> {
-        let _ = partials;
-        self.propose_outcome(request, cancellation, allow_replacement, trigger)
-            .await
-            .map(ProviderReply::from)
     }
 }
 
@@ -278,13 +264,13 @@ impl CompletionProvider for DeterministicPhraseProvider {
         cancellation: CancellationToken,
         allow_replacement: bool,
         _trigger: RequestTrigger,
-    ) -> Result<ProviderOutcome, ProviderError> {
+    ) -> Result<ProviderReply, ProviderError> {
         if cancellation.is_cancelled() {
             return Err(ProviderError::Cancelled);
         }
         if allow_replacement {
             if let Some(proposal) = dictionary_correction(&request) {
-                return Ok(ProviderOutcome::Proposal(proposal));
+                return Ok(ProviderOutcome::Proposal(proposal).into());
             }
         }
         Ok(match self.phrase(&request) {
@@ -293,7 +279,8 @@ impl CompletionProvider for DeterministicPhraseProvider {
                 replace_before: None,
             }),
             Err(reason) => ProviderOutcome::NoSuggestion(reason),
-        })
+        }
+        .into())
     }
 }
 
@@ -301,7 +288,6 @@ impl CompletionProvider for DeterministicPhraseProvider {
 /// English word before the caret, at the end of the field, with exactly one
 /// single-edit dictionary candidate. Editor integrations can then test exact
 /// replacement deterministically; ambiguous words stay a model decision.
-#[cfg(feature = "local-model")]
 fn dictionary_correction(request: &ProviderRequest) -> Option<WritingProposal> {
     let english = request.language.as_deref().is_some_and(|language| {
         language
@@ -318,11 +304,6 @@ fn dictionary_correction(request: &ProviderRequest) -> Option<WritingProposal> {
         text: format!("{corrected}{}", target.delimiter),
         replace_before: Some(target.suffix.to_owned()),
     })
-}
-
-#[cfg(not(feature = "local-model"))]
-fn dictionary_correction(_request: &ProviderRequest) -> Option<WritingProposal> {
-    None
 }
 
 impl DeterministicPhraseProvider {
@@ -536,7 +517,8 @@ mod tests {
                     RequestTrigger::Automatic,
                 )
                 .await
-                .expect("provider outcome");
+                .expect("provider outcome")
+                .outcome;
             assert_eq!(outcome, ProviderOutcome::NoSuggestion(expected));
         }
         let outcome = provider
@@ -552,7 +534,8 @@ mod tests {
                 RequestTrigger::Explicit,
             )
             .await
-            .expect("provider outcome");
+            .expect("provider outcome")
+            .outcome;
         assert_eq!(
             outcome
                 .into_proposal()
@@ -580,23 +563,25 @@ mod tests {
         ));
     }
 
-    #[cfg(feature = "local-model")]
     #[tokio::test]
     async fn phrase_fixture_offers_only_negotiated_unambiguous_dictionary_corrections() {
         use super::{ProviderOutcome, RequestTrigger, WritingProposal};
         let provider = DeterministicPhraseProvider::default();
-        let propose = |before: &str, after: &str, language: &str, allow_replacement: bool| {
-            provider.propose_outcome(
-                ProviderRequest {
-                    before: before.to_owned(),
-                    after: after.to_owned(),
-                    language: Some(language.to_owned()),
-                    vocabulary: None,
-                },
-                CancellationToken::new(),
-                allow_replacement,
-                RequestTrigger::Explicit,
-            )
+        let propose = async |before: &str, after: &str, language: &str, allow_replacement: bool| {
+            provider
+                .propose_outcome(
+                    ProviderRequest {
+                        before: before.to_owned(),
+                        after: after.to_owned(),
+                        language: Some(language.to_owned()),
+                        vocabulary: None,
+                    },
+                    CancellationToken::new(),
+                    allow_replacement,
+                    RequestTrigger::Explicit,
+                )
+                .await
+                .map(|reply| reply.outcome)
         };
         assert_eq!(
             propose("We need an adress ", "", "en-US", true)

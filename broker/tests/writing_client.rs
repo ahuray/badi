@@ -1,5 +1,3 @@
-#![cfg(feature = "local-model")]
-
 use std::error::Error;
 use std::time::Duration;
 
@@ -103,7 +101,8 @@ async fn unsupported_writing_requests_never_reach_the_runtime() -> Result<(), Bo
                         allow_replacement,
                         RequestTrigger::Automatic,
                     )
-                    .await,
+                    .await
+                    .map(|reply| reply.outcome),
                 Ok(ProviderOutcome::NoSuggestion(
                     NoSuggestionReason::RequestAbstained
                 ))
@@ -174,7 +173,8 @@ async fn vocabulary_finishes_a_word_before_any_model_request() -> Result<(), Box
                 true,
                 RequestTrigger::Automatic,
             )
-            .await?;
+            .await
+            .map(|reply| reply.outcome)?;
         assert!(
             matches!(&outcome, ProviderOutcome::Proposal(proposal)
                 if proposal.text == suffix && proposal.replace_before.is_none()),
@@ -194,7 +194,8 @@ async fn vocabulary_finishes_a_word_before_any_model_request() -> Result<(), Box
                 false,
                 RequestTrigger::Automatic,
             )
-            .await?,
+            .await
+            .map(|reply| reply.outcome)?,
         ProviderOutcome::NoSuggestion(NoSuggestionReason::RequestAbstained)
     ));
     assert!(
@@ -258,7 +259,8 @@ async fn language_choices_gate_and_heal_each_request() -> Result<(), Box<dyn Err
             false,
             RequestTrigger::Automatic,
         )
-        .await?;
+        .await
+        .map(|reply| reply.outcome)?;
     let payload = server.await?;
     assert_eq!(payload["prompt"], "Merci beaucoup pour votre");
     assert_eq!(payload["grammar"], format!("root ::= \" \" {NO_DIGITS}"));
@@ -309,7 +311,8 @@ async fn healing_that_empties_the_prompt_abstains_before_any_request() -> Result
                         allow_replacement,
                         trigger,
                     )
-                    .await,
+                    .await
+                    .map(|reply| reply.outcome),
                 Ok(ProviderOutcome::NoSuggestion(
                     NoSuggestionReason::RequestAbstained
                 ))
@@ -438,7 +441,8 @@ async fn stream_outcome_until(
             false,
             RequestTrigger::Automatic,
         )
-        .await;
+        .await
+        .map(|reply| reply.outcome);
     server.await?;
     Ok(result?)
 }
@@ -581,7 +585,8 @@ async fn stems_exchange(
             false,
             RequestTrigger::Automatic,
         )
-        .await?;
+        .await
+        .map(|reply| reply.outcome)?;
     Ok((server.await?, outcome))
 }
 
@@ -1207,7 +1212,8 @@ async fn runtime_exchange(
             false,
             RequestTrigger::Automatic,
         )
-        .await;
+        .await
+        .map(|reply| reply.outcome);
     Ok((server.await?, outcome))
 }
 
@@ -1596,7 +1602,8 @@ async fn event_exchange(
             false,
             RequestTrigger::Automatic,
         )
-        .await?;
+        .await
+        .map(|reply| reply.outcome)?;
     Ok((server.await?, outcome))
 }
 
@@ -1760,7 +1767,8 @@ async fn length_exchange(
             false,
             RequestTrigger::Automatic,
         )
-        .await?;
+        .await
+        .map(|reply| reply.outcome)?;
     Ok((server.await?, shown_text(outcome)))
 }
 

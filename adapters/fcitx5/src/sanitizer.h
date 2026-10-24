@@ -17,6 +17,12 @@ constexpr std::size_t kMaxSuggestionScalars = 64;
 constexpr std::size_t kMaxSuggestionWords = 8;
 constexpr std::size_t kMaxContextSourceBytes = 65'536;
 
+// A UTF-8 continuation byte (10xxxxxx), never the start of a scalar.
+constexpr bool utf8Continuation(char byte) { return (static_cast<unsigned char>(byte) & 0xC0U) == 0x80U; }
+// Unicode general category Cf (format characters), which can reorder or
+// hide text.
+bool formatCharacter(std::uint32_t scalar);
+
 std::optional<std::vector<std::uint32_t>> decodeUtf8(std::string_view value);
 std::optional<std::string> sanitizeSuggestion(std::string_view value);
 

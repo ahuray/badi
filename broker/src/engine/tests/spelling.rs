@@ -360,7 +360,6 @@ async fn append_only_apps_receive_corrections_except_where_spelling_lives_elsewh
                     activation: Activation::Always,
                 },
                 SessionAuthority {
-                    protocol_version: 1,
                     adapter_kind: AdapterKind::Fcitx,
                     capabilities: vec![
                         Capability::Context,
@@ -437,7 +436,6 @@ async fn open_writer_session(
                 activation: Activation::Always,
             },
             SessionAuthority {
-                protocol_version: 2,
                 adapter_kind: AdapterKind::Libreoffice,
                 capabilities: vec![
                     Capability::Context,

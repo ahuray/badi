@@ -139,8 +139,7 @@ impl Field {
                     activation: Activation::Always,
                 },
                 SessionAuthority {
-                    protocol_version: 2,
-                    adapter_kind: AdapterKind::Browser,
+                    adapter_kind: AdapterKind::Test,
                     capabilities: vec![
                         Capability::Context,
                         Capability::Suggestion,
@@ -326,8 +325,8 @@ async fn a_pause_ends_the_word_start_with_the_authority_it_was_seen_under() {
     field
         .context(&fixture.broker, "Please find the ", "report today")
         .await;
-    fixture.broker.set_paused(true).await.expect("pause");
-    fixture.broker.set_paused(false).await.expect("resume");
+    fixture.broker.set_paused(true).await;
+    fixture.broker.set_paused(false).await;
     // The pause closed the session; the field opens again after it.
     let mut reopened = Field::open_as(&fixture.broker, "visit-2").await;
     reopened

@@ -259,6 +259,26 @@ void timeoutDisconnects() {
     require(replies == 1 && test.invalidations.size() == 1, "timeout callbacks lost or repeated");
 }
 
+void failedSendReportsOnlyByItsReturn() {
+    Harness test;
+    unsigned replies = 0;
+    bool calledBack = false;
+    bool refused = false;
+    test.respond = [&](const Json &request) { test.reply(request); };
+    require(test.request(Json{{"op", "inspect"}}, [&](const Json &value) {
+        require(value.value("ok", false), "first observation failed");
+        ++replies;
+        // The observer stops reading, so the next request's send fails at once.
+        require(::shutdown(test.peer, SHUT_RD) == 0, "peer shutdown failed");
+        refused = !test.request(Json{{"op", "snapshot"}}, [&](const Json &) { calledBack = true; });
+        test.done();
+    }), "first request refused");
+    test.run();
+    require(refused, "a request whose send failed was accepted");
+    require(!calledBack, "a failed send also reported through its reply, so a caller refused twice");
+    require(replies == 1 && test.invalidations.size() == 1, "a failed send retires the observer once");
+}
+
 void backpressuredHideOrdering() {
     Harness test;
     constexpr unsigned hideCount = 64;
@@ -350,6 +370,7 @@ int main() {
         hideDuringRequest();
         backpressuredHideOrdering();
         timeoutDisconnects();
+        failedSendReportsOnlyByItsReturn();
         shallowNestedReply();
         for (const auto &frame : std::vector<std::string>{"{broken\n", "[]\n", "{\"schema\":\"foreign\"}\n",
                  "{\"schema\":\"badi.accessibility.v1\",\"schema\":\"badi.accessibility.v1\",\"id\":\"@REQUEST_ID@\",\"ok\":true}\n",
@@ -359,7 +380,8 @@ int main() {
                      std::string(65, '[') + "0" + std::string(65, ']') + "}\n",
                  std::string(16'385, 'x'), std::string(16'385, 'x') + "\n"}) malformedDisconnects(frame);
         privateEndpointAndOutgoingBound();
-        std::cout << "Accessibility socket: private endpoint, fragments, invalidation, one pending request, hide, timeout and frame bounds passed\n";
+        std::cout << "Accessibility socket: private endpoint, fragments, invalidation, one pending request, hide, timeout, "
+                     "failed send and frame bounds passed\n";
         return 0;
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';

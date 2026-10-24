@@ -1,4 +1,5 @@
 import contextlib
+import io
 import json
 import os
 import pathlib
@@ -67,12 +68,17 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             json.loads('{"id":"first","id":"second"}', object_pairs_hook=unique_object)
 
-    def test_a_duplicate_key_keeps_the_owner_and_broken_json_does_not(self):
+    def test_a_duplicate_key_is_a_malformed_request_and_broken_json_closes(self):
         client, fd = self.client()
+        tracked = {"app_id": "chromium"}
+        self.daemon.observer.tracked = dict(tracked)
         client.sendall(b'{"id":"first","id":"second"}\n')
         self.assertTrue(self.daemon.read(fd, FakeGLib.IO_IN))
         self.assertIn(fd, self.daemon.clients)
-        self.assertEqual(json.loads(client.recv(4096))["error"], "accessibility_unavailable")
+        self.assertEqual(json.loads(client.recv(4096)), {"schema": SCHEMA, "id": None, "ok": False,
+                                                         "error": "invalid_request", "epoch": 1})
+        self.assertEqual((self.daemon.observer.epoch, self.daemon.observer.tracked), (1, tracked),
+                         "a malformed request changes no field state")
         client.sendall(b'{not json}\n')
         self.assertFalse(self.daemon.read(fd, FakeGLib.IO_IN))
         self.assertNotIn(fd, self.daemon.clients)
@@ -330,6 +336,84 @@ class EventTests(unittest.TestCase):
                 observer_desktop.hyprland_directory()
 
 
+class BudgetedBackend(FakeBackend):
+    """The fixture field behind FieldBackend's real operation deadline."""
+    deadline = 0
+    budget = FieldBackend.budget
+
+    def __init__(self):
+        super().__init__()
+        self.failure = None
+
+    def metadata(self, *args):
+        self.budget()
+        if self.failure is not None:
+            raise self.failure
+        return super().metadata(*args)
+
+
+class EventOperationTests(unittest.TestCase):
+    """A field event is an operation of its own, never on a request's deadline."""
+
+    def setUp(self):
+        self.backend = BudgetedBackend()
+        self.daemon = Daemon("/unused/accessibility.sock", None, FakeGLib)
+        self.daemon.backend = self.backend
+        self.daemon.observer = Observer(self.backend)
+        self.events, self.renders = [], []
+        self.daemon.observer.notify = self.events.append
+        self.daemon.observer.render = lambda _focus, _text, ttl: self.renders.append(ttl) or True
+
+    def request(self, op, **fields):
+        with self.daemon.operation():
+            return self.daemon.observer.request({"schema": SCHEMA, "id": op, "op": op, **fields})
+
+    def show(self):
+        focus = self.request("inspect", app_id="chromium")["focus"]
+        focus = self.request("snapshot", binding=focus["binding"], policy_target=focus["target"])["focus"]
+        preview = self.request("preview", binding=focus["binding"], policy_target=focus["target"],
+                               text=" suggestion", ttl_ms=5000, expected_caret=focus["caret"],
+                               expected_total_chars=focus["total_chars"])
+        self.assertTrue(preview["focus"]["rendered"])
+        self.assertEqual(self.backend.deadline, 0, "no deadline outlives its operation")
+
+    def scroll(self):
+        self.daemon.field_event(None, ":1.25", "/org/a11y/atspi/accessible/2", "org.a11y.atspi.Event.Object",
+                                "BoundsChanged", None, None)
+
+    def test_a_scroll_after_the_request_deadline_moves_the_preview(self):
+        self.show()
+        # Far more than one 350 ms operation after the preview request.
+        self.backend.deadline = time.monotonic() - 1
+        self.scroll()
+        self.daemon.ancestor_event(None, None, "/scroll", None, "VisibleDataChanged", None, None)
+        self.assertEqual(self.events, [], "the suggestion stands")
+        self.assertEqual(len(self.renders), 3)
+        self.assertLessEqual(self.renders[2], self.renders[0], "a move never renews the lease")
+        self.assertIsNotNone(self.daemon.observer.preview_hold)
+        self.assertEqual(self.backend.deadline, 0)
+
+    def test_an_unexpected_failure_ends_the_suggestion_inside_the_callback(self):
+        self.show()
+
+        class BusError(Exception):
+            pass
+        self.backend.failure = BusError("typed prose must not be logged")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.scroll()
+        self.assertEqual(stderr.getvalue(), "badi-accessibility: BusError\n")
+        self.assertEqual([event["reason"] for event in self.events], ["accessibility_unavailable"])
+        self.assertIsNone(self.daemon.observer.preview_hold)
+
+    def test_an_event_that_overruns_its_own_budget_ends_the_suggestion(self):
+        self.show()
+        self.backend.failure = Denied("operation_timeout")
+        self.scroll()
+        self.assertEqual([event["reason"] for event in self.events], ["field_changed"])
+        self.assertEqual(len(self.renders), 1)
+
+
 class FieldSubscriptionTests(unittest.TestCase):
     """Producer interest follows the armed application; the match follows the field."""
 
@@ -391,6 +475,37 @@ class FieldSubscriptionTests(unittest.TestCase):
                                                       for event in observer_daemon.FIELD_EVENTS])
         self.assertIsNone(self.daemon.producer)
         self.assertEqual(self.bus.subscriptions[-1], None, "invalidation removed the field match")
+
+    def test_a_failed_registration_is_withdrawn_and_retried(self):
+        calls = self.bus.calls
+
+        class Refusing(self.Bus):
+            def call_sync(self, *args):
+                if len(calls) == 3:
+                    raise RuntimeError("registry")
+                calls.append(("sync", args[3], args[4].unpack()))
+
+            def call(self, *args):
+                calls.append(("async", args[3], args[4].unpack()))
+        self.daemon.event_bus = Refusing()
+        with self.assertRaises(RuntimeError):
+            self.daemon.arm_field_events(self.binding())
+        self.assertIsNone(self.daemon.producer, "nothing counts as registered")
+        self.assertEqual(calls[3:], [("async", "DeregisterEvent", (event, ":1.7"))
+                                     for event in observer_daemon.FIELD_EVENTS[:3]])
+        self.daemon.event_bus = self.bus
+        self.daemon.arm_field_events(self.binding())
+        self.assertEqual(self.daemon.producer, ":1.7")
+        self.assertEqual(calls[6:], [("sync", "RegisterEvent", (event, [], ":1.7"))
+                                     for event in observer_daemon.FIELD_EVENTS])
+
+    def test_a_wake_up_without_events_keeps_following_the_desktop(self):
+        def nothing(_size):
+            raise BlockingIOError
+        self.daemon.window_events = WindowEvents(SimpleNamespace(recv=nothing))
+        self.daemon.loop = None
+        self.assertTrue(self.daemon.window_event(None, 0))
+        self.assertFalse(self.daemon.failed)
 
     def test_a_scroll_pane_ancestor_moves_the_preview(self):
         class Node:

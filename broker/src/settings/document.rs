@@ -1,4 +1,5 @@
-//! The `badi.settings.v2` document, its decoding from v1 or v2, and validation.
+//! The `badi.settings.v2` document, its decoding from v2 or a v1 file on disk,
+//! and validation.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -597,80 +598,11 @@ impl SettingsV2 {
     }
 
     #[must_use]
-    pub fn resolve_target(&self, target: &TargetDescriptor) -> PolicyResolution {
-        if self.validate().is_err() {
-            return PolicyResolution::unknown(self.revision, self.paused);
-        }
-        self.resolve_target_validated(target)
-    }
-
-    #[must_use]
     pub(crate) fn resolve_target_validated(&self, target: &TargetDescriptor) -> PolicyResolution {
         StableIdentity::from_target(target).map_or_else(
             |_| PolicyResolution::unknown(self.revision, self.paused),
             |identity| self.resolve_identity_validated(&identity),
         )
-    }
-
-    pub fn wire_document(
-        &self,
-        protocol_version: u8,
-    ) -> Result<serde_json::Value, serde_json::Error> {
-        if protocol_version == crate::protocol::PROTOCOL_VERSION {
-            let subjects = self
-                .subjects
-                .iter()
-                .filter(|rule| matches!(rule.identity, StableIdentity::BrowserOrigin { .. }))
-                .collect::<Vec<_>>();
-            Ok(serde_json::json!({
-                "schema": SETTINGS_SCHEMA_V1,
-                "revision": self.revision,
-                "paused": self.paused,
-                "subjects": subjects,
-            }))
-        } else {
-            serde_json::to_value(self)
-        }
-    }
-
-    /// A protocol v1 settings client can still manage its browser-origin
-    /// slice, but cannot erase native rules or the all-web and all-app
-    /// defaults that its schema is unable to represent.
-    #[must_use]
-    pub fn preserving_v2_policy_from(mut self, current: &Self) -> Self {
-        self.all_web_origins = current.all_web_origins;
-        self.all_linux_apps = current.all_linux_apps;
-        self.mid_line = current.mid_line;
-        self.escape_quiet_seconds = current.escape_quiet_seconds;
-        self.battery_mode = current.battery_mode;
-        self.screen_share = current.screen_share;
-        self.suggestion_length = current.suggestion_length;
-        self.languages_chosen = current.languages_chosen;
-        self.style_learning = current.style_learning;
-        self.context_words = current.context_words;
-        self.context_words_off
-            .clone_from(&current.context_words_off);
-        self.language_overrides
-            .clone_from(&current.language_overrides);
-        self.spelling_languages
-            .clone_from(&current.spelling_languages);
-        // A v1 document cannot name these either; without them a v1 write
-        // turned suggestions back on in languages the user had turned off.
-        self.writing_model.clone_from(&current.writing_model);
-        self.writing_languages
-            .clone_from(&current.writing_languages);
-        self.trailing_space_healing
-            .clone_from(&current.trailing_space_healing);
-        self.subjects.extend(
-            current
-                .subjects
-                .iter()
-                .filter(|rule| matches!(rule.identity, StableIdentity::LinuxApp { .. }))
-                .cloned(),
-        );
-        self.subjects
-            .sort_by(|left, right| left.identity.cmp(&right.identity));
-        self
     }
 }
 

@@ -123,4 +123,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    badi_install.run_installer(main)

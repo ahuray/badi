@@ -798,7 +798,7 @@ fn cli_global<P: Serialize>(
     message_type: MessageType,
     payload: &P,
 ) -> Result<WireEnvelope, ProtocolError> {
-    WireEnvelope::global(message_type, 0, payload)?.at_version(CURRENT_PROTOCOL_VERSION)
+    WireEnvelope::global(message_type, 0, payload)
 }
 
 fn cli_session<P: Serialize>(
@@ -806,8 +806,7 @@ fn cli_session<P: Serialize>(
     coordinates: Coordinates,
     payload: &P,
 ) -> Result<WireEnvelope, ProtocolError> {
-    WireEnvelope::session(message_type, coordinates, 0, payload)?
-        .at_version(CURRENT_PROTOCOL_VERSION)
+    WireEnvelope::session(message_type, coordinates, 0, payload)
 }
 
 const CLI_USAGE: &str = "Usage: badictl [--socket ABSOLUTE] COMMAND\n\

@@ -153,7 +153,7 @@ export async function runDiagnostics({ worker, cases, config, makeRequest, signa
     let request;
     try {
       request = makeRequest(row, config);
-      const keys = ['schema', 'id', 'before', 'language', 'context', 'style_examples', 'config'];
+      const keys = ['schema', 'id', 'before', 'after', 'language', 'context', 'style_examples', 'config'];
       if (!request || typeof request.id !== 'string' || Object.keys(request).some(key => !keys.includes(key))) throw new Error();
     } catch { record.outcome = 'error'; record.reason = 'invalid_request_boundary'; return null; }
     const local = new AbortController();

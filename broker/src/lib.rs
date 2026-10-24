@@ -16,7 +16,6 @@ pub mod protocol;
 pub mod provider;
 pub mod revision;
 pub mod segment;
-#[cfg(feature = "local-model")]
 pub mod semantic;
 pub mod server;
 pub mod settings;
@@ -24,7 +23,6 @@ pub mod spelling;
 pub mod stats;
 pub mod style;
 pub mod vocabulary;
-#[cfg(feature = "local-model")]
 pub mod writing;
 
 pub use control_plane::{ControlPlane, ControlPlaneError, ControlPlaneSnapshot};

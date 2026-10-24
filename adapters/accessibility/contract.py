@@ -18,6 +18,9 @@ MAX_AFTER = 128
 # A revision reads one selection of at most this many characters (ADR 0012).
 MAX_SELECTED = 600
 MAX_PREVIEW_TTL_MS = 15_000
+# A preview draws a broker suggestion (at most 64 characters, the broker's and
+# the addon's cap) or, for a correction, "→ " and the corrected words.
+MAX_PREVIEW_CHARS = 66
 MAX_POSITION = 2**31 - 1
 ID = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 APP_ID = re.compile(r"[a-zA-Z0-9_.-]{1,128}")
@@ -75,7 +78,7 @@ def canonical_origin(uri):
 # card or one-time-code fields are often plain text from the start: their
 # label is then all that marks them.
 CREDENTIAL_LABEL = re.compile(
-    r"\b(?:password|passwort|kennwort|passphrase|passcode|pin|pin code|otp|one[- ]time (?:code|password)|"
+    r"\b(?:password|passwort|kennwort|passphrase|passcode|pin|otp|one[- ]time (?:code|password)|"
     r"verification code|security code|authentication code|2fa|cvv|cvc|csc|card number|"
     r"mot de passe|code de v[ée]rification|contrase[ñn]a|clave|c[óo]digo de verificaci[óo]n|"
     r"senha|palavra[- ]passe|c[óo]digo de verifica[çc][ãa]o|wachtwoord|has[łl]o|"
@@ -132,7 +135,7 @@ def reply_facts(reply, tracked):
     for key in ("caret", "total_chars", "rendered", "scope", "purpose"):
         if key in focus:
             facts[key] = focus[key]
-    for key in ("before", "after", "window_text"):
+    for key in ("before", "selected", "after", "window_text"):
         if isinstance(focus.get(key), str):
             facts[f"{key}_chars"] = len(focus[key])
     if isinstance(focus.get("geometry"), dict):
@@ -248,9 +251,6 @@ class Observer:
         # it are empty, so a chip there covers no text. A rich editor's
         # window is one block, which proves nothing about the blocks below.
         self.text_ends = not margin and end == metadata["total_chars"] and not after.strip()
-        if focus["geometry"] and self.caret_edge:
-            focus["geometry"].update(caret_edge=self.caret_edge, text_follows=self.text_follows,
-                                     text_ends=self.text_ends)
         focus.update(before=before, after=after, total_chars=metadata["total_chars"])
         if request.get("window"):
             window = self.backend.vocabulary_text(metadata)
@@ -437,23 +437,37 @@ def caret_rectangle(value):
     return type(scale) in (int, float) and math.isfinite(scale) and .5 <= scale <= 4
 
 
-# Same isolated-space rule as v2 safeSuggestionText, including one trailing space.
+# The Fcitx addon's isolated-space rule (sanitizeSuggestion): single ASCII
+# spaces between words, one leading or trailing space at most.
 _SUGGESTION_SPACING = re.compile(r"^ ?\S(?: ?\S)* ?$")
+ZERO_WIDTH_NON_JOINER = "\u200c"
 
 
 def suggestion_text(text):
-    """1–160 characters, none a control or format character except a
-    zero-width non-joiner between two letters. One trailing ASCII space is
-    the mid-sentence separator; repeated spaces are not."""
-    if not isinstance(text, str) or not 1 <= len(text) <= 160 or _SUGGESTION_SPACING.fullmatch(text) is None:
+    """The one rule for preview text: 1–MAX_PREVIEW_CHARS characters, none
+    a control, format, private-use or unassigned character except a
+    zero-width non-joiner between two Arabic letters, as the addon allows.
+    One trailing ASCII space is the mid-sentence separator; repeated spaces
+    and any other whitespace are not."""
+    if (not isinstance(text, str) or not 1 <= len(text) <= MAX_PREVIEW_CHARS
+            or _SUGGESTION_SPACING.fullmatch(text) is None):
         return False
-    return all(not unicodedata.category(char).startswith("C") or joins_letters(text, index)
+    return all(not unicodedata.category(char).startswith("C") or arabic_joiner(text, index)
                for index, char in enumerate(text))
 
 
-def joins_letters(text, index):
-    return (text[index] == "‌" and 0 < index < len(text) - 1
-            and text[index - 1].isalpha() and text[index + 1].isalpha())
+def arabic_letter(char):
+    """The Fcitx addon's Arabic-script letter ranges (sanitizer.cpp)."""
+    return any(low <= ord(char) <= high for low, high in (
+        (0x0620, 0x063F), (0x0641, 0x064A), (0x066E, 0x066F),
+        (0x0671, 0x06D3), (0x06D5, 0x06D5), (0x06E5, 0x06E6),
+        (0x06EE, 0x06EF), (0x06FA, 0x06FC), (0x06FF, 0x06FF)))
+
+
+def arabic_joiner(text, index):
+    """Whether `text[index]` is a zero-width non-joiner between two Arabic letters."""
+    return (text[index] == ZERO_WIDTH_NON_JOINER and 0 < index < len(text) - 1
+            and arabic_letter(text[index - 1]) and arabic_letter(text[index + 1]))
 
 
 def ltr_caret_line(direction, before, native=False):

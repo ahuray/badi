@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// A scripted stand-in for bridge.mjs, so plugin tests control timing, grants
-// and exits. It records each operation's name and flags, never its text, to
-// FAKE_BRIDGE_LOG.
+// A scripted stand-in for bridge.mjs, so plugin tests control timing, grants,
+// policy and exits. It records each operation's name and flags, never its
+// text, to FAKE_BRIDGE_LOG.
 import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
@@ -19,12 +19,22 @@ const RULES = [
 ];
 let candidate = null;
 let generation = 0;
+// The broker's policy as bridge.mjs reports it. FAKE_BRIDGE_POLICY 'refused'
+// or 'manual' starts so; 'silent' allows but reports only when asked.
+const initial = process.env.FAKE_BRIDGE_POLICY || 'automatic';
+let policy = { connected: true, allowed: initial !== 'refused', automatic: initial === 'automatic' || initial === 'silent' };
+const report = state => send({ event: 'state', state, ...policy });
 
 log({ op: 'start' });
+if (initial !== 'silent') report(policy.allowed ? 'ready' : 'app_disabled');
 for await (const line of createInterface({ input: process.stdin })) {
   const command = JSON.parse(line);
   log({ op: command.op, explicit: command.explicit, acceptance: command.acceptance, status: command.status });
   if (command.op === 'suggest') {
+    if (!policy.allowed || (!command.explicit && !policy.automatic)) {
+      send({ id: command.id, ok: false, reason: policy.allowed ? 'manual_required' : 'app_disabled_or_model_paused' });
+      continue;
+    }
     const mine = ++generation;
     candidate = null;
     const rule = RULES.find(([end]) => command.before.endsWith(end));
@@ -48,5 +58,12 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (command.op === 'expire') {
     candidate = null;
     send({ event: 'clear' });
+  } else if (command.op === 'status') {
+    send({ id: command.id, ok: true, ...policy });
+  } else if (command.op === 'policy') {
+    // A settings change, as the broker's new authority epoch reports it.
+    policy = { connected: true, allowed: command.allowed === true, automatic: command.automatic === true };
+    candidate = null;
+    report(policy.allowed ? 'ready' : 'paused');
   }
 }

@@ -3,6 +3,7 @@ import { Decoration, ViewPlugin, WidgetType } from '@codemirror/view';
 import { Prec, Transaction } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { completionStatus } from '@codemirror/autocomplete';
+import { boundedContext } from '../shared/broker-client.mjs';
 import { RecoveringBrokerClient } from '../shared/recovering-client.mjs';
 import { recordActivity } from '../shared/activity.mjs';
 import { writingLanguage } from '../shared/writing-language.mjs';
@@ -129,9 +130,10 @@ class WritingView {
     clearTimeout(this.timer);
     const snapshot = { doc: this.view.state.doc, selection: this.view.state.selection };
     const end = snapshot.selection.main.head;
-    const before = [...snapshot.doc.sliceString(Math.max(0, end - 1024), end)].slice(-512).join('');
     // Text after the caret lets the broker suggest only what fits before it.
-    const after = [...snapshot.doc.sliceString(end, end + 256)].slice(0, 128).join('');
+    // UTF-16 slices of twice the scalar limits always hold enough scalars.
+    const { before, after } = boundedContext(snapshot.doc.sliceString(Math.max(0, end - 1024), end),
+      snapshot.doc.sliceString(end, end + 256));
     if (!before.trim()) return;
     this.pending = true;
     this.owner.session = this;
@@ -175,10 +177,15 @@ class WritingView {
     this.pending = true;
     const generation = this.generation;
     const replaceBefore = this.replaceBefore;
+    const shown = this.text;
     let inserted = false;
     try {
       const grant = await this.client.authorize(acceptance);
-      if (generation !== this.generation || !this.matches(snapshot) || grant.replaceBefore !== replaceBefore ||
+      // The client may hold a streamed continuation this editor declined to
+      // show; a grant inserts only what is on screen (all of it, or its start).
+      const showsGrant = (acceptance === 'all' || replaceBefore !== undefined)
+        ? grant.text === shown : typeof grant.text === 'string' && grant.text !== '' && shown.startsWith(grant.text);
+      if (generation !== this.generation || !this.matches(snapshot) || grant.replaceBefore !== replaceBefore || !showsGrant ||
           (replaceBefore !== undefined && !validCorrection(snapshot.doc.toString(), replaceBefore, grant.text))) {
         this.client.report(grant, 'stale'); return;
       }
@@ -235,7 +242,6 @@ class WritingView {
     if (event.ctrlKey || event.metaKey) return false;
     if (event.key !== 'Tab') return false;
     if (!this.text) return false;
-    if (!this.client.connected) void this.client.connect().catch(() => undefined);
     const reason = this.blockedReason();
     recordActivity('obsidian', 'tab', reason ?? 'eligible');
     if (reason) { this.owner.status.setText(`Badi · ${reason.replaceAll('_', ' ')}`); return false; }

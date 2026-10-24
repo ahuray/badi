@@ -213,30 +213,31 @@ impl LearnedStore {
         Ok(true)
     }
 
-    /// The words `identity` offers today: seen in at least
-    /// [`OFFER_AFTER_FIELDS`] fields within retention, while context is on
-    /// there. Empty without a usable key.
+    /// The words each subject offers under `settings`: seen in at least
+    /// [`OFFER_AFTER_FIELDS`] fields, while context is on there. Empty
+    /// without a usable key. [`OfferedWords::of`] applies retention.
     #[must_use]
-    pub fn offered(
-        &self,
-        settings: &SettingsV2,
-        today: u64,
-        identity: &StableIdentity,
-    ) -> Vec<String> {
-        if !settings.context_words_for(identity) || self.key_state() != StyleKeyState::Ready {
-            return Vec::new();
+    pub fn offerable(&self, settings: &SettingsV2) -> OfferedWords {
+        if self.key_state() != StyleKeyState::Ready {
+            return OfferedWords::default();
         }
-        self.document
-            .subjects
-            .iter()
-            .find(|record| &record.identity == identity)
-            .and_then(|record| self.words_of(record).ok())
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|word| word.fields >= OFFER_AFTER_FIELDS && within_retention(word.day, today))
-            .map(|word| word.word)
-            .take(crate::vocabulary::MAX_LEARNED_WORDS)
-            .collect()
+        OfferedWords(
+            self.document
+                .subjects
+                .iter()
+                .filter(|record| settings.context_words_for(&record.identity))
+                .filter_map(|record| {
+                    let words: Vec<(String, u64)> = self
+                        .words_of(record)
+                        .ok()?
+                        .into_iter()
+                        .filter(|word| word.fields >= OFFER_AFTER_FIELDS)
+                        .map(|word| (word.word, word.day))
+                        .collect();
+                    (!words.is_empty()).then(|| (record.identity.clone(), words))
+                })
+                .collect(),
+        )
     }
 
     /// Drops every subject where context is now off, and every subject
@@ -306,6 +307,26 @@ impl LearnedStore {
         }
         self.document = next;
         Ok(())
+    }
+}
+
+/// The decrypted words each subject offers, with the day each was last
+/// seen, so a suggestion reads them without the key, the file or its lock.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct OfferedWords(BTreeMap<StableIdentity, Vec<(String, u64)>>);
+
+impl OfferedWords {
+    /// The words `identity` offers on `today`, within retention.
+    #[must_use]
+    pub fn of(&self, identity: &StableIdentity, today: u64) -> Vec<String> {
+        self.0
+            .get(identity)
+            .into_iter()
+            .flatten()
+            .filter(|(_, day)| within_retention(*day, today))
+            .map(|(word, _)| word.clone())
+            .take(crate::vocabulary::MAX_LEARNED_WORDS)
+            .collect()
     }
 }
 

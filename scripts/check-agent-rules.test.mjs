@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { changelogProblems, isProductPath, parallelDocuments, vocabularyProblems } from "./check-agent-rules.mjs";
+import { changelogProblems, isProductPath, parallelDocuments, pushRange, vocabularyProblems } from "./check-agent-rules.mjs";
 
 const lookup = "evaluation/writing/lab-worker/src/context_lookup.rs";
 
@@ -57,4 +57,15 @@ test("changelog silence fails only when the commit edits behavior", () => {
   assert.equal(changelogProblems([{ label: "abc", paths: ["broker/src/policy.rs"], changelog: true }]).length, 0);
   assert.match(changelogProblems([{ label: "abc", paths: ["broker/src/policy.rs"], changelog: false }])[0], /CHANGELOG\.md/);
   assert.match(changelogProblems([{ label: "abc", paths: ["adapters/shell/preview.c"], changelog: false }])[0], /preview\.c/);
+});
+
+test("a push is checked from its old tip, or alone when it replaced history", () => {
+  const before = "a".repeat(40);
+  const head = "b".repeat(40);
+  const ancestor = () => true;
+  assert.deepEqual(pushRange({ before }, head, ancestor), { base: before, head });
+  assert.deepEqual(pushRange({ before, forced: true }, head, ancestor), { only: head });
+  assert.deepEqual(pushRange({ before }, head, () => false), { only: head });
+  assert.equal(pushRange({ before: "0".repeat(40) }, head, ancestor), null);
+  assert.equal(pushRange({}, head, ancestor), null);
 });

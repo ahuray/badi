@@ -4,12 +4,13 @@ import pathlib
 import sys
 import time
 from types import SimpleNamespace
+import unicodedata
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from contract import Denied  # noqa: E402
 from field import (EMBEDDED_OBJECT, MAX_WINDOW_NODES, VOCABULARY_CHARS, VOCABULARY_NODES,  # noqa: E402
-                   WINDOW_HEADING_CHARS, WINDOW_PARAGRAPH_CHARS, FieldBackend, window_text)
+                   WINDOW_HEADING_CHARS, WINDOW_PARAGRAPH_CHARS, FieldBackend, displayed_text, window_text)
 
 PAGE = "https://mail.example/compose"
 SHOWN = frozenset({"showing"})
@@ -219,6 +220,39 @@ class VocabularyTextTests(unittest.TestCase):
         slow = backend()
         slow.deadline = time.monotonic()
         self.assertIsNone(slow.vocabulary_text(metadata(late)), "no headroom left: nothing is read")
+
+    def test_a_full_walk_only_climbs_to_the_document(self):
+        listed = []
+
+        class Listed(Node):
+            def get_child_count(self):
+                listed.append(self.role)
+                return super().get_child_count()
+        target = field()
+        Listed("document web", children=[Listed("section", children=[Listed("form", children=[target])])])
+        slow = backend()
+        slow.deadline = time.monotonic()
+        self.assertIsNone(slow.vocabulary_text(metadata(target)))
+        self.assertEqual(listed, [], "no sibling is listed once the time is spent")
+
+    def test_window_text_keeps_only_what_the_addon_accepts(self):
+        # Emoji sequences join with U+200D, German pages hyphenate with
+        # U+00AD; the addon refuses window text holding either.
+        family = "\U0001F468\u200d\U0001F469\u200d\U0001F467"
+        target = field()
+        Node("document web", children=[
+            Node("paragraph", f"Silben\u00adtrennung f\u00fcr {family} und\u200bZero\ufeff"),
+            Node("paragraph", "\u202eMarinella\u202c\x07rang\tback\x85soon"),
+            Node("paragraph", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645 and non\u200cjoiner"),
+            target])
+        text = backend().vocabulary_text(metadata(target))
+        self.assertEqual(text, "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645 and nonjoiner "
+                               "Marinella rang back soon "
+                               "Silbentrennung f\u00fcr \U0001F468\U0001F469\U0001F467 undZero")
+        for index, char in enumerate(text):
+            category = unicodedata.category(char)
+            self.assertTrue(category not in ("Cc", "Cf") or (char == "\u200c" and index), repr(char))
+        self.assertEqual(displayed_text(f" a{EMBEDDED_OBJECT}b\n\n c "), "a b c")
 
 
 class DocumentAnchorTests(unittest.TestCase):

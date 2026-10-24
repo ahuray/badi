@@ -8,7 +8,7 @@ The Omarchy plugin `io.github.ahuray.badi`:
 | `BadiMark.qml` | The **b** speech-bubble mark |
 | `DesktopPanel.qml` | State and actions without visuals: the client, helper processes, every settings change and the typed rows |
 | `SettingsView.qml` | The popout's content |
-| `KeyModel.js` | The keyboard model (j/k, h/l, Enter, x, search) without QML, tested by `tests/key-model.test.mjs` |
+| `KeyModel.js` | The keyboard model (j/k, h/l, Enter, x, search, the cursor following its row) without QML, tested by `tests/key-model.test.mjs` |
 | `StatsModel.js` | The history's numbers (the week's bars, the leading apps) without QML, tested by `tests/stats-model.test.mjs` |
 | `BadiClient.qml` | The shared `badictl` client |
 
@@ -26,7 +26,8 @@ which saves suggestions and spelling for them and `languages_chosen` in one
 write, as `badi languages` does. Persian is never offered here. Afterwards the
 popout opens compact: the hero, the activity line, the week's words, search
 and only Languages (the same chips; toggling one turns its suggestions and
-typo fixes on or off together), Suggestion length and context. **All
+typo fixes on or off together and leaves every other language as it is),
+Suggestion length and context. **All
 settings** (or `a`) adds the usage
 details and every row below, and Fewer settings (or `a` again) returns.
 Every open starts compact, and search always covers every setting. From the
@@ -84,7 +85,12 @@ dialog asks, h/l, arrows or Tab choose, Enter decides and Escape cancels. The
 footer shows the last result (`✓ Spelling on`, `✗ …`) or these keys.
 
 Settings writes use the broker's compare-and-swap API and fail visibly on a
-conflict instead of retrying over another change. `badi settings` toggles the
+conflict instead of retrying over another change. The panel writes only a
+settings document it fully understands: a key it does not know (from a newer
+broker) turns every change and the pause switch off, and the footer says to
+update the panel. A poll that changes nothing on screen keeps the rows as
+they are, so a site being typed survives it, and the cursor stays on its row
+while others appear or vanish. `badi settings` toggles the
 popout through the `badi-writing` IPC target, an Omarchy `ShellIpc` handler
 that `omarchy-shell` reaches over the shell's own socket (8 ms against about
 45 ms for a `qs ipc` client). The mark reads the broker only while the popout
@@ -138,7 +144,9 @@ cursor, and Fcitx never learns where the caret is.
 `BadiClient.qml` never reads document text, model state or settings files
 directly. Every command is a fixed argv array through Quickshell `Process`;
 settings JSON goes through the child's stdin, closed after writing. It runs at
-most one overview read and one settings write, and a write invalidates any older read. Deactivation terminates
+most one overview read and one settings write, and a write invalidates any older read.
+A failed read's message stays until the next good read, even on the open
+popout's polls, which otherwise keep the last result. Deactivation terminates
 every child (SIGTERM, then SIGKILL), stale exit handlers change nothing, and a
 reactivation during teardown queues exactly one fresh read.
 
@@ -161,18 +169,6 @@ The history keeps its counts across restarts, per local day and per app or
 site, for 90 days ([broker runbook](../../broker/README.md#usage-statistics)).
 Shown and words saved mean the same as above; **accepted** there counts
 acceptances the adapter reported landed (each word Tab took), not requests.
-
-On 2026-10-15 the popout was rendered in the real Omarchy session (Tokyo
-Night, square corners): j/k moved the cursor and scrolled, `l` on "On battery"
-wrote `battery_mode` through stdin (`h` restored it), `/ghost` left only the
-Ghostty row, and a restart from System showed `◌ LOADING` with
-`Loading the model… 3s` until the broker answered.
-
-On 2026-10-20 it was verified again on Omarchy 4.0.5-1 with Omarchy's
-Quickshell 0.3.2.r7.g2b4501a-1 and Qt declarative 6.12.0-1 (Tokyo Night): the
-ready mark drew in the theme accent, `badi settings` opened the popout, j/k
-and the arrows moved the cursor one row each, `/ghost` left only the Ghostty
-row, the first Escape left the search and the second closed the popout.
 
 ## Pinned host
 
@@ -206,12 +202,29 @@ bash ui/omarchy-plugin/tests/run-client-lifecycle.sh      # needs qs
   against a fake `badictl` that ignores TERM. When `qs` is present it also
   runs the headless client lifecycle.
 - **`run-client-lifecycle.sh`** loads the real `BadiClient.qml` offscreen with
-  a fake `badictl`. It covers settings validation, a compare-and-swap write that
-  keeps every subject and both list flags, teardown during a write, and
-  invalidation of an in-flight read.
+  a fake `badictl`. It covers settings validation (every optional key the
+  settings schema defines, kept equal to the schema's list), a
+  compare-and-swap write that keeps every subject and both list flags,
+  teardown during a write, invalidation of an in-flight read, a failed read
+  cleared by the next good one, and an unknown settings key explained. It
+  then loads the real `DesktopPanel.qml` through a fake `badi-desktop` and
+  checks the written documents for the language chips and the screen-share
+  choice.
 - **`tests/check-host.sh`** is CI's strict lane. It runs against an exact
   Omarchy checkout (`BADI_OMARCHY_ROOT`) with the official validator, host-file
   hashes, `qmllint` and the lifecycle.
 
 These checks prove source and process contracts, not the popout's look, focus,
 scaling or multi-monitor behavior, which need a real Omarchy session.
+
+## Tested with
+
+| Omarchy | Quickshell, Qt declarative | Lane | Result |
+| --- | --- | --- | --- |
+| 4.5.0rc1-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | `omarchy:check` and the strict `check-source.sh` (qmllint, validator, host hashes, lifecycle) | pass; `check-host.sh` not run, it pins quickshell 0.3.2-1 and qt6-declarative 6.12.0-1 |
+| 4.0.5-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-1 | live, Tokyo Night | accent mark, `badi settings`, j/k and arrows one row each, `/ghost` search, Escape twice |
+| not recorded | not recorded | live, Tokyo Night | `l`/`h` on On battery wrote `battery_mode`, a restart showed `◌ LOADING` with `Loading the model… 3s` |
+
+Not yet live: the unknown-settings message, the language chip that changes
+only its own language, and rows that survive a poll with the cursor on its
+row.

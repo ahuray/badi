@@ -6,6 +6,7 @@ import { runInNewContext } from 'node:vm';
 import { transform } from 'esbuild';
 import { writingLanguage } from '../shared/writing-language.mjs';
 import { validCorrection } from '../shared/text-safety.mjs';
+import { boundedContext } from '../shared/broker-client.mjs';
 
 const source = (await transform(await readFile(new URL('./main.mjs', import.meta.url), 'utf8'),
   { format: 'cjs', target: 'es2022' })).code;
@@ -46,6 +47,7 @@ async function harness(context) {
     '@codemirror/state': { Prec: { highest: value => value }, Transaction: { userEvent: { of: value => ({ userEvent: value }) } } },
     '@codemirror/commands': { isolateHistory: { of: value => ({ isolateHistory: value }) } },
     '@codemirror/autocomplete': { completionStatus: state => state.completion ?? null },
+    '../shared/broker-client.mjs': { boundedContext },
     '../shared/recovering-client.mjs': { RecoveringBrokerClient: Client },
     '../shared/activity.mjs': { recordActivity() {} },
     '../shared/writing-language.mjs': { writingLanguage },
@@ -143,6 +145,22 @@ test('Obsidian refuses a different replacement grant without changing the note',
   assert.equal(view.state.doc.toString(), 'Please check the adress ');
   assert.equal(view.transactions.length, 0);
   assert.deepEqual(client.reports, [{ text: 'address ', status: 'stale' }]);
+});
+
+test('Obsidian inserts only a grant for the text it shows', async context => {
+  const { controller, view, client, tick } = await harness(context);
+  await tick(250);
+  assert.equal(controller.text, ' for your time');
+  // The client adopted a longer streamed continuation this editor never drew.
+  for (const [mode, text] of [['all', ' for your time and more'], ['word', ' fur'], ['word', '']]) {
+    client.authorize = async () => ({ text });
+    await controller.accept(mode);
+    assert.equal(view.transactions.length, 0, `${mode} ${JSON.stringify(text)}`);
+    assert.deepEqual(client.reports.at(-1), { text, status: 'stale' });
+    assert.equal(controller.text, null, 'the preview goes with the refused grant');
+    await controller.request();
+    assert.equal(controller.text, ' for your time');
+  }
 });
 
 test('Obsidian preserves manual policy and refuses a grant after focus changes', async context => {

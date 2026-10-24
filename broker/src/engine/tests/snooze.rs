@@ -42,10 +42,7 @@ fn open_broker() -> (tempfile::TempDir, Broker) {
         .expect("settings");
     let broker = Broker::with_control_plane(
         std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
-        BrokerConfig {
-            debounce: Duration::ZERO,
-            ..BrokerConfig::default()
-        },
+        BrokerConfig::default(),
         control_plane,
     )
     .expect("controlled broker");
@@ -256,7 +253,7 @@ async fn snoozing_needs_one_focused_app_or_site_and_no_pause() {
 
     let (_temporary, broker) = open_broker();
     focused(&broker, native_target()).await;
-    broker.set_paused(true).await.expect("pause");
+    broker.set_paused(true).await;
     assert_eq!(
         broker.snooze_focused(Duration::from_secs(600)).await,
         Err(ReasonCode::Paused)

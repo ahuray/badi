@@ -46,6 +46,15 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     // Copied: retiring the candidate below releases its text.
     const std::string expected(binding->state.suggestionVisible() ? binding->state.visibleText()
                                                                   : binding->typeThroughRest);
+    // Only the literal-Tab chord asks whether Tab would be taken; the manual
+    // path's answer reads Fcitx's text, so other keys skip it.
+    const bool tabTaken = literalChord && unclaimed &&
+        (binding->heldTab ||
+         tabMayHoldForRest(!binding->typeThroughRest.empty(), binding->typeThroughAutomatic,
+                           hasForeignImeUi(panel), binding->state.suggestionVisible()) ||
+         manualTabRequests(binding->state.editPath(), binding->state.editingAvailable(),
+                           binding->broker.policyAllowed,
+                           hasForeignImeUi(panel) ? std::nullopt : currentContext(*binding)));
     const PreKey pressed{
         .modifier = key.isModifier(),
         .repeat = !!(event.key().states() & ::fcitx::KeyState::Repeat),
@@ -54,10 +63,7 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
         .chord = key.check(invokeChord()) || key.check(acceptChord()),
         .all = key.check(allKey()) && unclaimed,
         .literalTab = literalChord && unclaimed,
-        .tabTaken = binding->heldTab ||
-                    tabMayHoldForRest(!binding->typeThroughRest.empty(), binding->typeThroughAutomatic,
-                                      hasForeignImeUi(panel), binding->state.suggestionVisible()) ||
-                    (binding->state.editingAvailable() && binding->state.editPath() == NativeEditPath::Manual),
+        .tabTaken = tabTaken,
         .typesSuggestion = typesSuggestionStart(typed, expected),
     };
     const auto action = decidePreKey(pressed, binding->state.editingAvailable(), !binding->ownedAuxiliary.empty(),
@@ -158,7 +164,7 @@ void BadiAddon::literalTab(Binding &binding, int code) {
     clearTypeThrough(binding);
     cancelForInput(binding);
     // A Tab may complete or indent invisibly; follow what comes next.
-    binding.typedLine.restart();
+    binding.typedLine.clear();
     binding.literalTabs = std::min(binding.literalTabs + 1, kMaxLiteralTabs);
     binding.literalTabOnKeyRelease = !heldModifierKeys_.testAny(literalTabChord().states());
     binding.literalTabCode = code;
@@ -196,7 +202,7 @@ void BadiAddon::sendLiteralTabs(Binding &binding) {
     // was; the Tab changes it, so retire it like any edit.
     clearTypeThrough(binding);
     cancelForInput(binding);
-    binding.typedLine.restart();
+    binding.typedLine.clear();
     debug_.record("decision", binding.state.appId(), "literal_tab_sent");
 }
 
@@ -239,20 +245,16 @@ void BadiAddon::tabKey(::fcitx::KeyEvent &event, Binding &binding, const PanelOb
                   context ? context->before.size() : 0);
     switch (decideTabAction(tabEligibleContext(context), binding.state.suggestionVisible(), panel,
                             binding.state.editPath())) {
-    case LocalAction::AcceptWord:
+    case TabAction::AcceptWord:
         requestAcceptance(binding, true);
         break;
-    case LocalAction::AcceptAll:
-        requestAcceptance(binding);
-        break;
-    case LocalAction::Invoke:
+    case TabAction::Invoke:
         invoke(binding);
         break;
-    case LocalAction::PassThrough:
-    case LocalAction::Dismiss:
+    case TabAction::PassThrough:
         cancelForInput(binding);
         // Completion rewrites the line invisibly; follow what comes next.
-        binding.typedLine.restart();
+        binding.typedLine.clear();
         return;
     }
     event.filterAndAccept();
@@ -267,7 +269,7 @@ void BadiAddon::lineKey(Binding &binding, const ::fcitx::Key &key, std::string_v
     // the line restarts at every key and is followed from where it is once
     // the policy allows it, as a line that had text at focus is.
     if (!binding.broker.policyAllowed) {
-        binding.typedLine.restart();
+        binding.typedLine.clear();
         return;
     }
     binding.typedLine.apply(lineEditFor(key, typed), typed);
@@ -310,7 +312,7 @@ void BadiAddon::requestTypedLine(Binding &binding, bool explicitRequest) {
                   context->before.size());
 }
 
-// After the input method: Badi's chords, and Escape on its candidate.
+// After the input method: Badi's chords.
 void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
     if (event.isRelease() || !!(event.key().states() & ::fcitx::KeyState::Repeat)) return;
     auto *binding = bindingFor(*event.inputContext());
@@ -332,21 +334,15 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
                       binding->state.editingAvailable() ? "app_disabled" : "no_edit_path");
     }
     if (!binding->state.editingAvailable()) return;
+    // Escape, Tab and Ctrl+Right were decided before the input method.
     const bool liveOwnedCandidate = binding->state.suggestionVisible() && panel.candidatesOwnedByBadi;
-    switch (decideLocalAction(claimInvoke && invokeChordPressed, key.check(acceptChord()),
-                              key.check(::fcitx::Key(FcitxKey_Escape)),
-                              liveOwnedCandidate, panel)) {
+    switch (decideLocalAction(claimInvoke && invokeChordPressed, key.check(acceptChord()), liveOwnedCandidate,
+                              panel)) {
     case LocalAction::Invoke:
         invoke(*binding);
         break;
     case LocalAction::AcceptAll:
         requestAcceptance(*binding);
-        break;
-    case LocalAction::AcceptWord:
-        requestAcceptance(*binding, true);
-        break;
-    case LocalAction::Dismiss:
-        dismissSuggestion(*binding, panel);
         break;
     case LocalAction::PassThrough:
         if (liveOwnedCandidate && !key.isModifier()) {

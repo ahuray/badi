@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# step3_threads.sh LABEL — CPU-only thread sweep (brief Step 3) plus Badi-shaped and pinned variants.
+# step3_threads.sh LABEL — CPU-only thread sweep plus Badi-shaped and pinned variants.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 data=$(python3 -I "$here/bench_paths.py" data); cd "$data"
@@ -8,7 +8,7 @@ model=$(python3 -I "$here/bench_paths.py" model "$label")
 bench=builds/x64/llama-b11719/llama-bench
 out=results/step3; mkdir -p $out logs
 "$here/conditions.sh" "step3-start-$label" >/dev/null
-# The brief's sweep.
+# The thread sweep.
 $bench -m "$model" -ngl 0 -t 4,6,8,10,14,20 -p 512 -n 64 -r 5 -o jsonl 2>logs/step3-sweep.stderr >$out/sweep_$label.jsonl
 # Badi's shape: ~48-token prompt in 16-token ubatches, 8 generated tokens.
 $bench -m "$model" -ngl 0 -t 2,4,6,8,10 -p 48 -n 8 -ub 16 -b 16 -r 10 -o jsonl 2>>logs/step3-sweep.stderr >$out/badi_shape_$label.jsonl

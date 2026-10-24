@@ -275,9 +275,6 @@ impl SessionState {
             .map(|context| context.fingerprint.as_str())
     }
 
-    /// A spelling correction needs negotiated replacement and a field whose
-    /// identity the adapter knows. IME-parity apps stay append-only even when
-    /// the shared Fcitx connection advertises replacement for native fields.
     /// The Writer extension shows corrections only, so its requests never
     /// run a continuation.
     pub(super) fn spelling_only(&self) -> bool {
@@ -303,6 +300,9 @@ impl SessionState {
             })
     }
 
+    /// A spelling correction needs negotiated replacement and a field whose
+    /// identity the adapter knows, outside an app whose spelling another
+    /// channel owns.
     pub(super) fn allows_text_replacement(&self) -> bool {
         self.authority.grants(Capability::TextReplacement)
             && self

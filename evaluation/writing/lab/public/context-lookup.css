@@ -1,3 +1,8 @@
+.lab-tabs{display:flex;gap:5px;width:max-content;padding:4px;margin:0 0 24px;background:#111a15;border:1px solid var(--line);border-radius:10px}
+.lab-tabs [role=tab]{min-width:110px;padding:9px 18px;background:transparent;color:var(--muted)}
+.lab-tabs [aria-selected=true]{background:#2c3d32;color:var(--text);box-shadow:0 1px 4px #0004}
+.optional{font-weight:400;color:var(--muted)}
+@media(max-width:850px){.lab-tabs{width:100%}.lab-tabs [role=tab]{flex:1;min-width:0}}
 #lookup-language{margin-bottom:18px}
 #lookup-before{font-size:17px}
 #lookup-expected{margin-top:2px}

@@ -160,9 +160,17 @@ void BadiAddon::observerInvalidated(const Json &event) {
 
 void BadiAddon::retireObservedField(Binding &binding) {
     closeBrokerSession(binding);
-    binding.state.retireObservation();
     binding.observedFocus = nullptr;
     clearOwnedPanel(binding);
+    // The manual path gets a session of its own: a policy answer still owed
+    // to the observed field's session then finds no binding. Without fresh
+    // randomness the binding stops until the next focus.
+    const auto session = randomUuid();
+    const auto salt = randomSalt();
+    if (!session || !salt ||
+        !binding.state.retireObservation(*session, uuidString(binding.inputContext->uuid()), *salt)) {
+        binding.state.focusOut();
+    }
 }
 
 void BadiAddon::stopObserving(Binding &binding) {
@@ -195,15 +203,12 @@ void BadiAddon::requestObservedContext(Binding &binding, bool rediscover) {
     }
     const auto session = binding.state.coordinates().sessionId;
     const auto generation = binding.observationGeneration;
-    // The window is read once per field visit, and only while context is on.
+    // The window is read once per field visit, and only while context is on;
+    // a snapshot that fails leaves it to the next one.
     const bool window = binding.broker.contextWords && !binding.fieldVisitId.empty() &&
         binding.windowVisitId != binding.fieldVisitId;
-    if (window) {
-        binding.windowVisitId = binding.fieldVisitId;
-        binding.windowText.clear();
-    }
     const bool sent = accessibility_->request(snapshotRequest(binding.observedFocus, window),
-        [this, session, generation, rediscover, focus = binding.observedFocus](const Json &reply) {
+        [this, session, generation, rediscover, window, focus = binding.observedFocus](const Json &reply) {
             auto *current = bindingFor(session);
             if (!current || !current->inputContext->hasFocus() || current->observationGeneration != generation ||
                 !current->broker.policyAllowed) {
@@ -219,7 +224,7 @@ void BadiAddon::requestObservedContext(Binding &binding, bool rediscover) {
                     observeLater(*current, false, false, true);
                 return;
             }
-            publishObservedContext(*current, focus, reply, rediscover);
+            publishObservedContext(*current, focus, reply, rediscover, window);
         });
     if (!sent) {
         debug_.record("request_blocked", app, "observer_busy");
@@ -229,7 +234,7 @@ void BadiAddon::requestObservedContext(Binding &binding, bool rediscover) {
 }
 
 void BadiAddon::publishObservedContext(Binding &binding, const Json &focus, const Json &reply,
-                            bool caretMayMove) {
+                                       bool caretMayMove, bool windowAsked) {
     const auto &app = binding.state.appId();
     if (!observerAnswered(reply)) {
         return debug_.record("request_blocked", app, snapshotFailureReason(reply.value("error", Json())));
@@ -246,11 +251,12 @@ void BadiAddon::publishObservedContext(Binding &binding, const Json &focus, cons
     }
     // The visit's window text, kept even when this context asks nothing (an
     // empty field on focus): the window is read only once per visit.
-    if (const auto window = observedWindowText(observed); !window.empty() &&
-        binding.windowVisitId == binding.fieldVisitId) binding.windowText = window;
-    auto context = currentContext(binding);
+    if (windowAsked && !binding.fieldVisitId.empty()) {
+        binding.windowVisitId = binding.fieldVisitId;
+        binding.windowText = observedWindowText(observed);
+    }
+    auto context = currentContext(binding, observed);
     if (!context) return debug_.record("request_blocked", app, unavailableContextReason(binding));
-    if (app == "libreoffice") restoreObservedTrailingSpaces(*context, observed);
     // Escape declines one context. Deleting that text, including clearing
     // the field, ends the decline. An empty field still does not request.
     if (binding.dismissedContext == *context) return;

@@ -32,9 +32,6 @@ inline constexpr std::uint64_t kHeldTabTimeoutUs = 700'000;
 // so the compositor's modifier update reaches the input method first.
 inline constexpr std::uint64_t kLiteralTabDelayUs = 20'000;
 inline constexpr unsigned int kMaxLiteralTabs = 8;
-// Fcitx's sd-event loop treats a timer accuracy of 0 as its 250 ms default
-// slack, which delayed the 120 ms typing pause by up to 250 ms.
-inline constexpr std::uint64_t kTimerAccuracyUs = 1'000;
 
 inline std::uint64_t monotonicUs() {
     timespec now{};

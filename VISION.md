@@ -65,7 +65,7 @@ interaction, the exact editing authority and the policy around them.
   a terminal the user allows by exact rule, held in memory as that field's
   context ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)).
 
-Language quality work prioritizes English, German, French and Spanish, with
+Language quality work prioritizes English, German, French, Spanish and Portuguese, with
 independent evidence for each language before enabling its behavior. Existing
 Persian support keeps its safety and regression gates.
 
@@ -77,9 +77,14 @@ Persian support keeps its safety and regression gates.
    yields to foreign preedit and candidates, and its commit is dispatched,
    not verified.
 3. **IME-parity** for apps without an editor channel (Chromium-based apps, Zen,
-   LibreOffice Writer): the focused accessibility observer plus Fcitx. Acceptance is one append-only
-   commit that behaves like typed text; every identity, binding and denial
-   guard still applies. There is no browser extension.
+   LibreOffice Writer): the focused accessibility observer plus Fcitx. A
+   suggestion is accepted as one append-only commit that behaves like typed
+   text; a spelling fix deletes exactly the typed typo and reads the result
+   back ([ADR 0011](docs/decisions/0011-checked-corrections-in-append-only-apps.md)),
+   and a requested revision replaces exactly the selection
+   ([ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md)).
+   Every identity, binding and denial guard still applies. There is no
+   browser extension.
 4. **Unsupported** is the correct answer when identity, sensitivity, revision,
    placement or insertion cannot be established.
 

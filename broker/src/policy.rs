@@ -1,4 +1,4 @@
-use crate::protocol::{Activation, FieldDescriptor, FieldPurpose, TargetKind};
+use crate::protocol::{Activation, FieldDescriptor, FieldPurpose, ReasonCode, TargetKind};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PolicyReason {
@@ -10,6 +10,24 @@ pub enum PolicyReason {
     ManualRequired,
     Paused,
     PolicyNever,
+}
+
+impl PolicyReason {
+    /// The wire reason of a request refused for this reason. An allowing
+    /// reason never refuses; should one, it refuses as `policy_never`.
+    #[must_use]
+    pub const fn refusal_code(self) -> ReasonCode {
+        match self {
+            Self::Paused => ReasonCode::Paused,
+            Self::FieldSensitive => ReasonCode::FieldSensitive,
+            Self::FieldNotEditable => ReasonCode::FieldNotEditable,
+            Self::FieldAmbiguous => ReasonCode::FieldAmbiguous,
+            Self::ManualRequired => ReasonCode::ManualRequired,
+            Self::PolicyNever | Self::AllowedAlways | Self::AllowedExplicit => {
+                ReasonCode::PolicyNever
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

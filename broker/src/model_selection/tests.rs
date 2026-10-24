@@ -79,7 +79,6 @@ fn artifact_bytes_decide_each_use_case_on_its_own() {
     );
 }
 
-#[cfg(feature = "local-model")]
 #[test]
 fn installed_writing_model_survives_power_advice_changes() {
     let mut hardware = profile(16_384, 8_192, 20);
@@ -97,7 +96,6 @@ fn installed_writing_model_survives_power_advice_changes() {
     );
 }
 
-#[cfg(feature = "local-model")]
 #[test]
 fn installed_selection_prefers_advice_then_smaller_artifacts() {
     let mut hardware = profile(16_384, 8_192, 20);
@@ -119,7 +117,6 @@ fn installed_selection_prefers_advice_then_smaller_artifacts() {
     );
 }
 
-#[cfg(feature = "local-model")]
 #[test]
 fn installed_selection_uses_total_memory_and_keeps_compatibility_gates() {
     let balanced = super::WRITING_MODELS[1];
@@ -162,7 +159,6 @@ fn installed_selection_uses_total_memory_and_keeps_compatibility_gates() {
     );
 }
 
-#[cfg(feature = "local-model")]
 #[test]
 fn start_waits_until_the_model_and_host_reserve_fit_available_memory() {
     // 1224 MiB of weights, 768 + 306 MiB runtime headroom, 2048 MiB reserve.
@@ -175,7 +171,6 @@ fn start_waits_until_the_model_and_host_reserve_fit_available_memory() {
     assert!(!super::fits_available_memory(compact, 3_578));
 }
 
-#[cfg(feature = "local-model")]
 #[test]
 fn installed_selection_never_invents_a_model_or_accepts_an_unknown_artifact() {
     let hardware = profile(16_384, 8_192, 20);
@@ -483,7 +478,6 @@ fn the_recommendation_is_the_best_screened_model_that_fits() {
     assert!(compact.catalog.iter().any(|choice| !choice.fits));
 }
 
-#[cfg(feature = "local-model")]
 #[test]
 fn an_installed_chosen_model_wins_while_it_fits() {
     let hardware = profile(16_384, 8_192, 20);

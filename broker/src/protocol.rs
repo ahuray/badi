@@ -8,10 +8,7 @@ use uuid::{Uuid, Variant};
 
 use crate::metrics::{MetricsSnapshot, NoSuggestionReason};
 
-/// Protocol v1, the oldest version the broker negotiates. Envelope
-/// constructors start at it; [`WireEnvelope::at_version`] selects another.
-pub const PROTOCOL_VERSION: u8 = 1;
-pub const MIN_PROTOCOL_VERSION: u8 = PROTOCOL_VERSION;
+/// The one protocol version the broker speaks; v1 is retired (ADR 0007).
 pub const CURRENT_PROTOCOL_VERSION: u8 = 2;
 pub const MAX_SAFE_COUNTER: u64 = 9_007_199_254_740_991;
 pub const MAX_FRAME_BYTES: usize = 65_536;
@@ -34,11 +31,6 @@ impl SessionId {
     #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4())
-    }
-
-    #[must_use]
-    pub const fn as_uuid(self) -> Uuid {
-        self.0
     }
 }
 
@@ -87,7 +79,6 @@ impl<'de> Deserialize<'de> for SessionId {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdapterKind {
-    Browser,
     Obsidian,
     Fcitx,
     Cli,
@@ -423,7 +414,7 @@ impl WireEnvelope {
         payload: &P,
     ) -> Result<Self, ProtocolError> {
         let envelope = Self {
-            v: PROTOCOL_VERSION,
+            v: CURRENT_PROTOCOL_VERSION,
             id: None,
             message_type,
             session_id: Some(coordinates.session_id),
@@ -442,7 +433,7 @@ impl WireEnvelope {
         payload: &P,
     ) -> Result<Self, ProtocolError> {
         let envelope = Self {
-            v: PROTOCOL_VERSION,
+            v: CURRENT_PROTOCOL_VERSION,
             id: None,
             message_type,
             session_id: None,
@@ -456,7 +447,7 @@ impl WireEnvelope {
     }
 
     pub fn validate_shape(&self) -> Result<(), ProtocolError> {
-        if !(MIN_PROTOCOL_VERSION..=CURRENT_PROTOCOL_VERSION).contains(&self.v) {
+        if self.v != CURRENT_PROTOCOL_VERSION {
             return Err(ProtocolError::UnsupportedVersion(self.v));
         }
         if self.mono_ms > MAX_SAFE_COUNTER {
@@ -518,12 +509,6 @@ impl WireEnvelope {
         Ok(())
     }
 
-    pub fn at_version(mut self, version: u8) -> Result<Self, ProtocolError> {
-        self.v = version;
-        self.validate_shape()?;
-        Ok(self)
-    }
-
     pub fn coordinates(&self) -> Result<Coordinates, ProtocolError> {
         self.validate_shape()?;
         Ok(Coordinates {
@@ -556,8 +541,10 @@ pub struct HelloPayload {
 }
 
 impl HelloPayload {
+    /// The hello must name exactly the current version, a bounded adapter
+    /// and unique capabilities that its adapter kind may negotiate.
     pub fn validate(&self) -> Result<(), ProtocolError> {
-        if self.select_version().is_none() {
+        if self.min_v != CURRENT_PROTOCOL_VERSION || self.max_v != CURRENT_PROTOCOL_VERSION {
             return Err(ProtocolError::VersionNegotiationFailed);
         }
         if self.adapter.name.is_empty()
@@ -575,57 +562,18 @@ impl HelloPayload {
         if unique.len() != self.capabilities.len() {
             return Err(ProtocolError::InvalidPayload);
         }
-        Ok(())
-    }
-
-    #[must_use]
-    pub fn select_version(&self) -> Option<u8> {
-        if self.min_v > self.max_v {
-            return None;
-        }
-        let selected = self.max_v.min(CURRENT_PROTOCOL_VERSION);
-        (selected >= self.min_v.max(MIN_PROTOCOL_VERSION)).then_some(selected)
-    }
-
-    pub fn validate_for_frame(&self, frame_version: u8) -> Result<(), ProtocolError> {
-        self.validate()?;
-        if self.capabilities.contains(&Capability::LongReadingWindow)
-            && frame_version != CURRENT_PROTOCOL_VERSION
-        {
-            return Err(ProtocolError::InvalidPayload);
-        }
-        if matches!(
-            self.adapter.kind,
-            AdapterKind::Terminal
-                | AdapterKind::Session
-                | AdapterKind::Neovim
-                | AdapterKind::Libreoffice
-        ) && frame_version != CURRENT_PROTOCOL_VERSION
-        {
-            return Err(ProtocolError::InvalidPayload);
-        }
-        if (self.capabilities.contains(&Capability::DesktopSignals)
-            || self.capabilities.contains(&Capability::StyleKey))
-            && frame_version != CURRENT_PROTOCOL_VERSION
-        {
-            return Err(ProtocolError::InvalidPayload);
-        }
         if self.capabilities.contains(&Capability::EditorFocus)
-            && (self.adapter.kind != AdapterKind::Neovim
-                || frame_version != CURRENT_PROTOCOL_VERSION)
+            && self.adapter.kind != AdapterKind::Neovim
         {
             return Err(ProtocolError::InvalidPayload);
         }
         if self.capabilities.contains(&Capability::SelectionRevision)
-            && (!matches!(
+            && !matches!(
                 self.adapter.kind,
                 AdapterKind::Fcitx | AdapterKind::Test | AdapterKind::Cli
-            ) || frame_version != CURRENT_PROTOCOL_VERSION)
+            )
         {
             return Err(ProtocolError::InvalidPayload);
-        }
-        if self.min_v != frame_version || self.max_v != frame_version {
-            return Err(ProtocolError::VersionNegotiationFailed);
         }
         Ok(())
     }
@@ -647,7 +595,7 @@ pub struct HelloAckPayload {
 
 impl HelloAckPayload {
     pub fn validate(&self) -> Result<(), ProtocolError> {
-        if !(MIN_PROTOCOL_VERSION..=CURRENT_PROTOCOL_VERSION).contains(&self.selected_v)
+        if self.selected_v != CURRENT_PROTOCOL_VERSION
             || !valid_opaque_id(&self.connection_id)
             || self.enabled_capabilities.is_empty()
             || self.enabled_capabilities.len() > CAPABILITY_COUNT
@@ -731,20 +679,11 @@ impl TargetDescriptor {
         Ok(())
     }
 
-    pub fn validate_for_version(&self, version: u8) -> Result<(), ProtocolError> {
+    /// What a client may send: [`Self::validate`], and a browser target
+    /// names its origin.
+    pub fn validate_wire(&self) -> Result<(), ProtocolError> {
         self.validate()?;
-        if version == PROTOCOL_VERSION
-            && matches!(
-                self.kind,
-                TargetKind::DesktopApplication | TargetKind::Neovim | TargetKind::Libreoffice
-            )
-        {
-            return Err(ProtocolError::InvalidPayload);
-        }
-        if version == CURRENT_PROTOCOL_VERSION
-            && self.kind == TargetKind::Browser
-            && self.origin.is_none()
-        {
+        if self.kind == TargetKind::Browser && self.origin.is_none() {
             return Err(ProtocolError::InvalidPayload);
         }
         Ok(())
@@ -765,7 +704,7 @@ pub enum PolicyResolutionReason {
     /// An editor with its own Badi integration holds the focused terminal,
     /// so the native input-method path stays out of its way.
     EditorFocused,
-    /// Protocol v2: the user snoozed this app or site for a few minutes.
+    /// The user snoozed this app or site for a few minutes.
     Snoozed,
 }
 
@@ -777,11 +716,7 @@ pub struct PolicyQueryPayload {
 
 impl PolicyQueryPayload {
     pub fn validate(&self) -> Result<(), ProtocolError> {
-        self.target.validate()
-    }
-
-    pub fn validate_for_version(&self, version: u8) -> Result<(), ProtocolError> {
-        self.target.validate_for_version(version)
+        self.target.validate_wire()
     }
 }
 
@@ -956,10 +891,9 @@ pub struct Selection {
     pub unit: OffsetUnit,
 }
 
+/// Selections count Unicode scalar values; v1's UTF-16 units are retired.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum OffsetUnit {
-    #[serde(rename = "utf16_code_units")]
-    Utf16CodeUnits,
     #[serde(rename = "unicode_scalar_values")]
     UnicodeScalarValues,
 }
@@ -1028,15 +962,6 @@ impl ContextChangedPayload {
             return Err(ProtocolError::InvalidPayload);
         }
         Ok(())
-    }
-
-    pub fn validate_for_version(&self, version: u8) -> Result<(), ProtocolError> {
-        self.validate()?;
-        match (version, self.selection.unit) {
-            (PROTOCOL_VERSION, OffsetUnit::Utf16CodeUnits)
-            | (CURRENT_PROTOCOL_VERSION, OffsetUnit::UnicodeScalarValues) => Ok(()),
-            _ => Err(ProtocolError::InvalidPayload),
-        }
     }
 }
 
@@ -1120,20 +1045,6 @@ impl GlobalControlRequestPayload {
         } else {
             Err(ProtocolError::InvalidPayload)
         }
-    }
-
-    /// Snoozing arrived with protocol v2.
-    pub fn validate_for_version(&self, version: u8) -> Result<(), ProtocolError> {
-        self.validate()?;
-        if version < CURRENT_PROTOCOL_VERSION
-            && matches!(
-                self.action,
-                ControlAction::Snooze | ControlAction::SnoozeEnd
-            )
-        {
-            return Err(ProtocolError::InvalidPayload);
-        }
-        Ok(())
     }
 }
 
@@ -1799,15 +1710,15 @@ mod tests {
         AdapterDescriptor, AdapterKind, AutomaticScheduling, CURRENT_PROTOCOL_VERSION, Capability,
         DesktopSession, DesktopStatePayload, DesktopStatusPayload, HelloPayload,
         LIBREOFFICE_WRITER_APP_ID, MAX_SAFE_COUNTER, MessageType, Origin, OriginScheme,
-        PROTOCOL_VERSION, PolicyQueryPayload, ProtocolError, ScreenShare, SessionId,
-        TargetDescriptor, TargetKind, WireEnvelope, valid_language_tag,
+        PolicyQueryPayload, ProtocolError, ScreenShare, SessionId, TargetDescriptor, TargetKind,
+        WireEnvelope, valid_language_tag,
     };
 
     #[test]
-    fn hello_accepts_each_capability_declared_by_the_v1_schema() {
+    fn hello_accepts_each_base_capability() {
         let hello = HelloPayload {
-            min_v: PROTOCOL_VERSION,
-            max_v: PROTOCOL_VERSION,
+            min_v: CURRENT_PROTOCOL_VERSION,
+            max_v: CURRENT_PROTOCOL_VERSION,
             adapter: AdapterDescriptor {
                 kind: AdapterKind::Test,
                 name: "all-capabilities".to_owned(),
@@ -1874,54 +1785,14 @@ mod tests {
     }
 
     #[test]
-    fn long_reading_window_requires_v2_negotiation() {
-        let mut hello = HelloPayload {
-            min_v: 1,
-            max_v: 1,
+    fn a_hello_names_exactly_the_current_version() {
+        let hello = |kind, min_v, max_v| HelloPayload {
+            min_v,
+            max_v,
             adapter: AdapterDescriptor {
-                kind: AdapterKind::Fcitx,
-                name: "reading-window-test".to_owned(),
+                kind,
+                name: "adapter".to_owned(),
                 version: "1".to_owned(),
-            },
-            capabilities: vec![Capability::Context, Capability::LongReadingWindow],
-        };
-        assert!(hello.validate_for_frame(1).is_err());
-        hello.min_v = 2;
-        hello.max_v = 2;
-        hello.validate_for_frame(2).expect("v2 opt-in");
-    }
-
-    #[test]
-    fn shell_adapter_requires_v2_negotiation() {
-        let mut hello = HelloPayload {
-            min_v: 1,
-            max_v: 1,
-            adapter: AdapterDescriptor {
-                kind: AdapterKind::Terminal,
-                name: "badi-terminal".to_owned(),
-                version: "1".to_owned(),
-            },
-            capabilities: vec![
-                Capability::Context,
-                Capability::Suggestion,
-                Capability::CommitApplied,
-            ],
-        };
-        assert!(hello.validate_for_frame(1).is_err());
-        hello.min_v = 2;
-        hello.max_v = 2;
-        hello.validate_for_frame(2).expect("v2 shell adapter");
-    }
-
-    #[test]
-    fn neovim_adapter_and_targets_require_v2_negotiation() {
-        let mut hello = HelloPayload {
-            min_v: 1,
-            max_v: 1,
-            adapter: AdapterDescriptor {
-                kind: AdapterKind::Neovim,
-                name: "badi-neovim".to_owned(),
-                version: "0.1.0".to_owned(),
             },
             capabilities: vec![
                 Capability::Context,
@@ -1930,30 +1801,30 @@ mod tests {
                 Capability::LongReadingWindow,
             ],
         };
-        assert!(hello.validate_for_frame(1).is_err());
-        hello.min_v = 2;
-        hello.max_v = 2;
-        hello.validate_for_frame(2).expect("v2 Neovim adapter");
-
-        let query = PolicyQueryPayload {
-            target: TargetDescriptor {
-                kind: TargetKind::Neovim,
-                app_id: "nvim".to_owned(),
-                target_id: "buffer-1".to_owned(),
-                origin: None,
-            },
-        };
-        assert!(query.validate_for_version(PROTOCOL_VERSION).is_err());
-        query
-            .validate_for_version(CURRENT_PROTOCOL_VERSION)
-            .expect("a Neovim target is a v2 contract");
+        for kind in [
+            AdapterKind::Fcitx,
+            AdapterKind::Terminal,
+            AdapterKind::Neovim,
+            AdapterKind::Libreoffice,
+        ] {
+            hello(kind, 2, 2).validate().expect("the current version");
+            for (min_v, max_v) in [(1, 1), (1, 2), (2, 3), (3, 3)] {
+                assert!(
+                    matches!(
+                        hello(kind, min_v, max_v).validate(),
+                        Err(ProtocolError::VersionNegotiationFailed)
+                    ),
+                    "{kind:?} {min_v}..{max_v}"
+                );
+            }
+        }
     }
 
     #[test]
-    fn only_the_fcitx_addon_on_v2_negotiates_selection_revision() {
-        let hello = |kind, version| HelloPayload {
-            min_v: version,
-            max_v: version,
+    fn only_the_fcitx_addon_negotiates_selection_revision() {
+        let hello = |kind| HelloPayload {
+            min_v: CURRENT_PROTOCOL_VERSION,
+            max_v: CURRENT_PROTOCOL_VERSION,
             adapter: AdapterDescriptor {
                 kind,
                 name: "adapter".to_owned(),
@@ -1965,49 +1836,23 @@ mod tests {
                 Capability::SelectionRevision,
             ],
         };
-        hello(AdapterKind::Fcitx, 2)
-            .validate_for_frame(2)
-            .expect("the v2 Fcitx addon");
-        assert!(hello(AdapterKind::Fcitx, 1).validate_for_frame(1).is_err());
-        for kind in [
-            AdapterKind::Browser,
-            AdapterKind::Obsidian,
-            AdapterKind::Terminal,
-        ] {
-            assert!(hello(kind, 2).validate_for_frame(2).is_err(), "{kind:?}");
+        hello(AdapterKind::Fcitx)
+            .validate()
+            .expect("the Fcitx addon");
+        for kind in [AdapterKind::Obsidian, AdapterKind::Terminal] {
+            assert!(hello(kind).validate().is_err(), "{kind:?}");
         }
     }
 
     #[test]
-    fn libreoffice_writer_extension_is_v2_only_with_its_exact_app_id() {
-        let mut hello = HelloPayload {
-            min_v: 1,
-            max_v: 1,
-            adapter: AdapterDescriptor {
-                kind: AdapterKind::Libreoffice,
-                name: "badi-libreoffice".to_owned(),
-                version: "1".to_owned(),
-            },
-            capabilities: vec![
-                Capability::Context,
-                Capability::Suggestion,
-                Capability::CommitApplied,
-                Capability::TextReplacement,
-            ],
-        };
-        assert!(hello.validate_for_frame(1).is_err());
-        hello.min_v = 2;
-        hello.max_v = 2;
-        hello.validate_for_frame(2).expect("v2 LibreOffice adapter");
-
+    fn a_writer_target_names_its_exact_app_id_and_no_origin() {
         let mut target = TargetDescriptor {
             kind: TargetKind::Libreoffice,
             app_id: LIBREOFFICE_WRITER_APP_ID.to_owned(),
             target_id: "document".to_owned(),
             origin: None,
         };
-        target.validate_for_version(2).expect("exact Writer target");
-        assert!(target.validate_for_version(1).is_err());
+        target.validate_wire().expect("exact Writer target");
         target.app_id = "libreoffice".to_owned();
         assert!(target.validate().is_err());
         target.app_id = LIBREOFFICE_WRITER_APP_ID.to_owned();
@@ -2020,9 +1865,60 @@ mod tests {
     }
 
     #[test]
+    fn a_browser_target_on_the_wire_names_its_origin() {
+        let mut query = PolicyQueryPayload {
+            target: TargetDescriptor {
+                kind: TargetKind::Browser,
+                app_id: "chromium".to_owned(),
+                target_id: "field-1".to_owned(),
+                origin: None,
+            },
+        };
+        assert!(query.validate().is_err());
+        query.target.origin = Some(Origin {
+            scheme: OriginScheme::Https,
+            host: "example.com".to_owned(),
+            port: None,
+        });
+        query.validate().expect("a browser target with its origin");
+        for (kind, app_id) in [
+            (TargetKind::Neovim, "nvim"),
+            (TargetKind::DesktopApplication, "omawrite"),
+        ] {
+            PolicyQueryPayload {
+                target: TargetDescriptor {
+                    kind,
+                    app_id: app_id.to_owned(),
+                    target_id: "ic:42".to_owned(),
+                    origin: None,
+                },
+            }
+            .validate()
+            .expect("an editor or desktop target");
+        }
+    }
+
+    #[test]
+    fn an_envelope_of_any_other_version_is_unsupported() {
+        for version in [0, 1, 3] {
+            let envelope: WireEnvelope = serde_json::from_value(json!({
+                "v": version,
+                "type": "health.request",
+                "mono_ms": 4,
+                "payload": {}
+            }))
+            .expect("wire decoding should succeed before shape validation");
+            assert!(matches!(
+                envelope.validate_shape(),
+                Err(ProtocolError::UnsupportedVersion(v)) if v == version
+            ));
+        }
+    }
+
+    #[test]
     fn rejects_coordinates_on_global_message() {
         let envelope: WireEnvelope = serde_json::from_value(json!({
-            "v": 1,
+            "v": 2,
             "type": "health.request",
             "session_id": SessionId::new(),
             "focus_epoch": 0,
@@ -2043,7 +1939,7 @@ mod tests {
     fn authority_messages_reject_correlation_ids_for_schema_parity() {
         for message_type in ["authority.changed", "authority.ack"] {
             let envelope: WireEnvelope = serde_json::from_value(json!({
-                "v": 1,
+                "v": 2,
                 "id": "unexpected",
                 "type": message_type,
                 "mono_ms": 4,
@@ -2064,7 +1960,7 @@ mod tests {
     #[test]
     fn rejects_noncanonical_session_id() {
         let result = serde_json::from_value::<WireEnvelope>(json!({
-            "v": 1,
+            "v": 2,
             "type": "session.open",
             "session_id": "550E8400-E29B-41D4-A716-446655440000",
             "focus_epoch": 0,
@@ -2078,7 +1974,7 @@ mod tests {
     #[test]
     fn rejects_canonical_non_rfc_session_id_variant() {
         let result = serde_json::from_value::<WireEnvelope>(json!({
-            "v": 1,
+            "v": 2,
             "type": "session.open",
             "session_id": "550e8400-e29b-41d4-7716-446655440000",
             "focus_epoch": 0,
@@ -2092,7 +1988,7 @@ mod tests {
     #[test]
     fn addressed_control_rejects_unsafe_javascript_counter() {
         let base = json!({
-            "v": 1,
+            "v": 2,
             "type": "control.request",
             "session_id": SessionId::new(),
             "focus_epoch": 0,
@@ -2212,22 +2108,5 @@ mod tests {
             .is_err(),
             "no helper, no session hold"
         );
-    }
-
-    #[test]
-    fn desktop_policy_queries_require_protocol_v2() {
-        let query = PolicyQueryPayload {
-            target: TargetDescriptor {
-                kind: TargetKind::DesktopApplication,
-                app_id: "omawrite".to_owned(),
-                target_id: "ic:42".to_owned(),
-                origin: None,
-            },
-        };
-
-        assert!(query.validate_for_version(PROTOCOL_VERSION).is_err());
-        query
-            .validate_for_version(CURRENT_PROTOCOL_VERSION)
-            .expect("desktop policy query is a v2 contract");
     }
 }

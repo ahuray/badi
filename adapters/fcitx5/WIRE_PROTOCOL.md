@@ -14,15 +14,21 @@ observer's (`badi.accessibility.v1`) requests and reply checks are in
   event loop. Outbound buffering is capped at 32 frames / 1 MiB.
 - Frames are a four-byte little-endian length followed by 1..65,536 bytes of
   UTF-8 JSON. Malformed, oversized, unknown, or non-exact inbound shapes close
-  the connection. Comments and duplicate object keys are rejected.
+  the connection; a well-formed [refusal](#refusals) of one request does not.
+  Comments and duplicate object keys are rejected. A callback that closes the
+  connection ends its batch: the remaining frames are never dispatched.
 
 ## Negotiation and authority
 
 The first frame is `hello` with `v: 2`, `min_v: 2`, `max_v: 2`, adapter
 `{kind:"fcitx",name:"badi-fcitx5",version:"0.1.0"}`, and the exact capabilities
 `context`, `suggestion`, `commit.dispatched_unverified`, `text_replacement`,
-`control`, `policy`, `long_reading_window` and `selection_revision`. `text_replacement` is applied only for native exact
-fields; IME-parity sessions stay append-only. `selection_revision` is the
+`control`, `policy`, `long_reading_window` and `selection_revision`. With
+`text_replacement`, a native exact field deletes the exact typed suffix before
+its one commit; IME-parity apps but LibreOffice take a spelling correction the
+same way once the observer has re-confirmed the field, then read the app's
+text back ([ADR 0011](../../docs/decisions/0011-checked-corrections-in-append-only-apps.md)).
+Every other IME-parity edit stays append-only. `selection_revision` is the
 explicit revision below; `hello.ack` must enable exactly these.
 `long_reading_window` admits suggestion TTLs up to 15,000 ms. It needs an
 updated broker; older clients without it keep the five-second ceiling.
@@ -135,6 +141,31 @@ once and emits:
 ```
 
 No success claim stronger than dispatch is available at the Fcitx boundary.
+
+## Refusals
+
+The broker answers a request it refuses but recovers from (stale coordinates,
+a suggestion that expired before its acceptance, a pause) with an `error`
+frame and keeps the connection:
+
+```json
+{"v":2,"id":"<the request's id>","type":"error","mono_ms":0,"payload":{"code":"expired"}}
+```
+
+Exactly these keys, an opaque id and a known reason code are accepted; an
+`error` without an id, with any other field (the settings-only `committed`,
+`settings_revision` or `control_plane_degraded`), or before the handshake
+completes closes the connection. A refusal ends only what its id names:
+
+- an acceptance in flight (`fcitx.accept.<epoch>.<revision>`) retires its
+  suggestion, so a later grant for it is reported `stale`;
+- a revision request or its acceptance ends the revision with a notice;
+- the current context's `suggest.request` (`fcitx.suggest.<epoch>.<revision>`)
+  says the request failed if the user asked for it, and keeps the context;
+- a `policy.query` is owed nothing more, and its session may ask again.
+
+These ids carry a focus epoch and revision, not the session, so two sessions
+can share one; every binding holding the id retires it, which only withdraws.
 
 ## Revision
 

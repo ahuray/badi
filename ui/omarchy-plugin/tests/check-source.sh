@@ -22,8 +22,7 @@ jq -e '
 ' "$artifact_dir/manifest.json" >/dev/null
 
 jq -e '
-  .status == "disabled_repo_local_feasibility"
-  and .omarchy.package == "4.5.0rc1-1"
+  .omarchy.package == "4.5.0rc1-1"
   and .omarchy.source_repository == "https://github.com/omacom/omarchy.git"
   and .omarchy.source_tag == "v4.5.0-rc1"
   and .omarchy.source_commit == "03ff1eff3812933f7088484533784d2f63eaf19a"

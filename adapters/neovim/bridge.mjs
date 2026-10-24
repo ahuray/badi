@@ -4,12 +4,13 @@
 // client, one JSON line per message on stdin and stdout. It never prints
 // buffer text anywhere but its reply to Neovim, and logs nothing.
 import { createInterface } from 'node:readline';
+import { boundedContext, refusalReason } from '../shared/broker-client.mjs';
 import { RecoveringBrokerClient } from '../shared/recovering-client.mjs';
 import { recordActivity } from '../shared/activity.mjs';
-import { writingLanguage } from '../shared/writing-language.mjs';
+import { bridgeLanguage } from '../shared/writing-language.mjs';
 
 // Exit after this long without a command so an idle editor does not keep a
-// Node process (~45 MB); the plugin starts a new bridge when it next needs one.
+// Node process (about 60 MB); the plugin starts a new bridge when it next needs one.
 const IDLE_MS = /^[1-9][0-9]{0,8}$/.test(process.env.BADI_BRIDGE_IDLE_MS ?? '')
   ? Number(process.env.BADI_BRIDGE_IDLE_MS) : 10 * 60 * 1000;
 const LINE_LIMIT = 16384;
@@ -36,13 +37,14 @@ const armIdleExit = () => {
 // disconnect; Neovim withdraws the preview it shows for that candidate.
 client.on('clear', () => send({ event: 'clear' }));
 client.on('update', text => send({ event: 'update', text }));
+// Each state carries the policy as it now stands, so Neovim reads no buffer
+// text for a request the broker would refuse.
+const policy = () => ({ connected: client.connected, allowed: client.allowed, automatic: client.automaticAllowed });
 client.on('state', state => {
-  if (typeof state === 'string' && /^[a-z_]{1,48}$/.test(state)) send({ event: 'state', state });
+  if (typeof state === 'string' && /^[a-z_]{1,48}$/.test(state)) send({ event: 'state', state, ...policy() });
 });
 
-const reason = () => !client.connected ? 'model_offline'
-  : client.allowed ? 'expired_or_unavailable' : 'app_disabled_or_model_paused';
-const scalars = value => [...value];
+const reason = () => refusalReason(client);
 
 // A decoded line with U+FFFD came from bytes that were not UTF-8; refuse it
 // rather than ask for a continuation of text the buffer does not contain.
@@ -58,10 +60,8 @@ async function suggest(command) {
   if (!client.connected) await client.connect().catch(() => false);
   if (!client.allowed) return { ok: false, reason: reason() };
   if (!command.explicit && !client.automaticAllowed) return { ok: false, reason: 'manual_required' };
-  const before = scalars(command.before).slice(-512).join('');
-  const after = scalars(command.after ?? '').slice(0, 128).join('');
-  const language = writingLanguage(before,
-    command.language ?? process.env.BADI_LANGUAGE ?? Intl.DateTimeFormat().resolvedOptions().locale);
+  const { before, after } = boundedContext(command.before, command.after ?? '');
+  const language = bridgeLanguage(before, command.language);
   if (!language) return { ok: false, reason: 'language_unavailable' };
   recordActivity('neovim', 'context', command.explicit ? 'explicit_buffer' : 'automatic_buffer');
   grant = null;
@@ -104,7 +104,7 @@ async function handle(command) {
     }
     case 'status':
       if (!client.connected) await client.connect().catch(() => false);
-      return { ok: true, connected: client.connected, allowed: client.allowed, automatic: client.automaticAllowed };
+      return { ok: true, ...policy() };
     default:
       return { ok: false, reason: 'invalid_request' };
   }

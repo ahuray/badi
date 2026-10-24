@@ -205,12 +205,12 @@ INSTALLED_BROKER = ".local/lib/badi/badi-broker"
 # Broker no-suggestion classes; counters never include typed text.
 NO_SUGGESTION = {
     "request_abstained": "the field language is missing or unsupported, the caret splits a word, a word follows the caret while mid-sentence suggestions are off, nothing but spaces (or one unfinished English word) precedes it, or a Persian joiner is not yet between two letters",
-    "budget_prefill": "the writing budget (550 ms while typing, 1.2 s after Tab) ended before the model started answering (prompt prefill)",
-    "budget_stream": "the writing budget (550 ms while typing, 1.2 s after Tab) ended before a complete word arrived",
+    "budget_prefill": "the writing budget (550 ms while typing, 1.2 s after an explicit request) ended before the model started answering (prompt prefill)",
+    "budget_stream": "the writing budget (550 ms while typing, 1.2 s after an explicit request) ended before a complete word arrived",
     "model_abstained": "the model finished without a complete word",
     "output_rejected": "the output failed language, dictionary, number, shape or safety checks",
     "stale": "the text, focus or pause state changed before display",
-    "timeout": "the broker deadline (600 ms while typing, 1.25 s after Tab) expired",
+    "timeout": "the broker deadline (600 ms while typing, 1.25 s after an explicit request) expired",
     "provider_error": "the local model runtime failed or answered malformed",
     "low_confidence": "a word of the suggestion was too unlikely for the model to be sure, so it was withheld",
 }
@@ -1791,289 +1791,385 @@ def desktop_socket():
     return None
 
 
-def main(arguments):
-    if arguments in ([], ["--help"], ["-h"]):
-        print(HELP, end="")
-        return
-    if arguments == ["settings"]:
+def unknown_command():
+    return RuntimeError("Unknown command. Run: badi --help")
+
+
+def settings_command(arguments):
+    if arguments == []:
         if badi_install.desktop_platform() != badi_install.OMARCHY:
             raise RuntimeError("The settings panel is part of Omarchy's bar. On this desktop the badi commands "
                                "set the same things: badi --help lists them, badi doctor checks the setup.")
         subprocess.run(["omarchy-shell", "badi-writing", "toggle"], check=True, timeout=4)
-        return
-    if (arguments[:2] == ["debug", "expire"] and len(arguments) == 3
-            and re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", arguments[2])):
-        expire_debug(arguments[2])
-        return
-    if arguments[:1] == ["debug"] and arguments[1:] in (["on"], ["on", "--text"], ["off"], ["status"], ["watch"]):
+    elif arguments == ["--json"]:
+        print(control(["settings", "show", "--json"]), end="")
+    else:
+        raise unknown_command()
+
+
+def debug_command(arguments):
+    if (arguments[:1] == ["expire"] and len(arguments) == 2
+            and re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", arguments[1])):
+        expire_debug(arguments[1])
+    elif arguments in (["on"], ["on", "--text"], ["off"], ["status"], ["watch"]):
         try:
-            debug_mode(arguments[1], text=arguments[2:] == ["--text"])
+            debug_mode(arguments[0], text=arguments[1:] == ["--text"])
         except KeyboardInterrupt:
             pass
-        return
-    if arguments[:2] == ["debug", "log"] and arguments[2:] in ([], ["--json"]):
-        print_trace(as_json=arguments[2:] == ["--json"])
-        return
-    if arguments == ["settings", "--json"]:
-        print(control(["settings", "show", "--json"]), end="")
-        return
-    if arguments in (["status"], ["status", "--json"]):
-        health = json.loads(control(["status"]))
-        if arguments[-1] == "--json":
-            print(json.dumps(health))
-        else:
-            print(status_text(health, web_settings()))
-        return
-    if arguments == ["pause", "toggle"]:
+    elif arguments[:1] == ["log"] and arguments[1:] in ([], ["--json"]):
+        print_trace(as_json=arguments[1:] == ["--json"])
+    else:
+        raise unknown_command()
+
+
+def status_command(arguments):
+    if arguments not in ([], ["--json"]):
+        raise unknown_command()
+    health = json.loads(control(["status"]))
+    print(json.dumps(health) if arguments else status_text(health, web_settings()))
+
+
+def pause_command(arguments, paused):
+    if paused and arguments == ["toggle"]:
         outcome = {}
 
         def toggle(document):
             document["paused"] = outcome["paused"] = not document["paused"]
         update_settings(toggle)
-        if not outcome["paused"]:
-            end_snoozes()
-        print("Predictions paused." if outcome["paused"] else "Predictions resumed.")
-        return
-    if arguments[:1] == ["style"]:
-        style_command(arguments[1:])
-        return
-    if arguments[:1] == ["context"]:
-        context_command(arguments[1:])
-        return
-    if arguments[:1] == ["stats"]:
-        stats_command(arguments[1:])
-        return
-    if len(arguments) == 2 and arguments[0] == "battery" and arguments[1] in BATTERY_TEXT:
-        update_settings(lambda document: set_battery_mode(document, arguments[1]))
-        print(BATTERY_TEXT[arguments[1]])
-        return
-    if len(arguments) == 2 and arguments[0] == "screen-share" and arguments[1] in SCREEN_SHARE_TEXT:
-        update_settings(lambda document: set_screen_share(document, arguments[1]))
-        print(SCREEN_SHARE_TEXT[arguments[1]])
-        return
-    if len(arguments) == 2 and arguments[0] == "length" and arguments[1] in LENGTH_TEXT:
-        update_settings(lambda document: set_suggestion_length(document, arguments[1]))
-        print(LENGTH_TEXT[arguments[1]])
-        return
-    if arguments in (["pause"], ["resume"]):
-        paused = arguments == ["pause"]
+        paused = outcome["paused"]
+    elif arguments:
+        raise unknown_command()
+    else:
         update_settings(lambda document: document.update(paused=paused))
-        if not paused:
-            # Resuming also ends every snooze early.
-            end_snoozes()
-        print("Predictions paused." if paused else "Predictions resumed.")
-        return
-    if arguments == ["snooze", "end"]:
+    if not paused:
+        # Resuming also ends every snooze early.
+        end_snoozes()
+    print("Predictions paused." if paused else "Predictions resumed.")
+
+
+def choice_command(name, arguments):
+    """`badi battery|screen-share|length CHOICE`: set one choice and say what it means."""
+    texts, setter = CHOICES[name]
+    if len(arguments) != 1 or arguments[0] not in texts:
+        raise unknown_command()
+    update_settings(lambda document: setter(document, arguments[0]))
+    print(texts[arguments[0]])
+
+
+def snooze_command(arguments):
+    if arguments == ["end"]:
         end_snoozes()
         print("Every snooze ended. Badi suggests again wherever your settings allow it.")
         return
-    if arguments[:1] == ["snooze"] and len(arguments) <= 2:
-        value = arguments[1] if len(arguments) == 2 else str(SNOOZE_MINUTES)
-        if not (value.isascii() and value.isdigit() and 1 <= int(value) <= 1440):
-            raise RuntimeError("Usage: badi snooze [MINUTES]|end (MINUTES is 1-1440, default 10)")
-        status = snooze(int(value))
-        minutes = int(value)
-        print(f"Badi is snoozed in {identity_text(status['subject'])} for {minutes} minute"
-              f"{'' if minutes == 1 else 's'}. badi resume ends it sooner.")
-        return
-    if arguments in (["mid-line", "on"], ["mid-line", "off"]):
-        enabled = arguments[1] == "on"
-        update_settings(lambda document: set_mode(document, "mid_line", enabled))
-        print("Mid-sentence suggestions are on." if enabled
-              else "Mid-sentence suggestions are off. A word after the caret asks for nothing.")
-        return
-    if arguments in (["model"], ["model", "--json"], ["models"]):
+    if len(arguments) > 1:
+        raise unknown_command()
+    value = arguments[0] if arguments else str(SNOOZE_MINUTES)
+    if not (value.isascii() and value.isdigit() and 1 <= int(value) <= 1440):
+        raise RuntimeError("Usage: badi snooze [MINUTES]|end (MINUTES is 1-1440, default 10)")
+    status = snooze(int(value))
+    minutes = int(value)
+    print(f"Badi is snoozed in {identity_text(status['subject'])} for {minutes} minute"
+          f"{'' if minutes == 1 else 's'}. badi resume ends it sooner.")
+
+
+def mid_line_command(arguments):
+    if arguments not in (["on"], ["off"]):
+        raise unknown_command()
+    enabled = arguments == ["on"]
+    update_settings(lambda document: set_mode(document, "mid_line", enabled))
+    print("Mid-sentence suggestions are on." if enabled
+          else "Mid-sentence suggestions are off. A word after the caret asks for nothing.")
+
+
+def model_command(arguments):
+    if arguments in ([], ["--json"]):
         report = model_report(json.loads(control(["settings", "show", "--json"])))
-        print(json.dumps(report, indent=2) if arguments[1:] == ["--json"] else "", end="")
-        if arguments[1:] != ["--json"]:
+        if arguments:
+            print(json.dumps(report, indent=2), end="")
+        else:
             print_models(report)
-        return
-    if arguments[:2] == ["model", "use"] and len(arguments) in (3, 4) and arguments[3:] in ([], ["--accept-license"]):
-        model = use_model(arguments[2], arguments[3:] == ["--accept-license"])
+    elif arguments[:1] == ["use"] and len(arguments) in (2, 3) and arguments[2:] in ([], ["--accept-license"]):
+        model = use_model(arguments[1], arguments[2:] == ["--accept-license"])
         loaded = active_model_file()
         print(f"Badi now writes with {model['name']}." if loaded == model["filename"]
               else f"{model['name']} is chosen, but the broker loaded {loaded or 'no model'}; badi model explains why.")
-        return
-    if arguments in (["revise"], ["revise", "--json"]):
-        report, _model = revision_report()
-        print(json.dumps(report, indent=2) if arguments[1:] else "", end="")
-        if not arguments[1:]:
-            print_revision(report)
-        return
-    if arguments == ["revise", "install"]:
-        report, downloaded = install_revision_model()
-        print(f"{report['name']} is " + ("installed. Select text and press Ctrl+Shift+Space." if downloaded
-                                         else "already installed."))
-        return
-    if arguments == ["model", "auto"]:
+    elif arguments == ["auto"]:
         update_settings(lambda document: document.pop("writing_model", None))
         if not restart_service():
             raise RuntimeError("The model service did not answer after the restart. Run badi doctor.")
         print("Badi follows the device recommendation again.")
-        return
-    if arguments[:1] == ["spelling"] and arguments[1:] in ([], ["--json"]):
+    else:
+        raise unknown_command()
+
+
+def models_command(arguments):
+    if arguments:
+        raise unknown_command()
+    model_command([])
+
+
+def revise_command(arguments):
+    if arguments in ([], ["--json"]):
+        report, _model = revision_report()
+        if arguments:
+            print(json.dumps(report, indent=2), end="")
+        else:
+            print_revision(report)
+    elif arguments == ["install"]:
+        report, downloaded = install_revision_model()
+        print(f"{report['name']} is " + ("installed. Select text and press Ctrl+Shift+Space." if downloaded
+                                         else "already installed."))
+    else:
+        raise unknown_command()
+
+
+def spelling_command(arguments):
+    if arguments in ([], ["--json"]):
         report = spelling_report(json.loads(control(["settings", "show", "--json"])))
-        if arguments[1:]:
+        if arguments:
             print(json.dumps({"schema": "badi.spelling.v1", "languages": report}, indent=2))
         else:
             print_spelling(report)
-        return
-    if len(arguments) == 3 and arguments[0] == "spelling" and arguments[2] in ("on", "off"):
-        language = arguments[1]
-        update_settings(lambda document: set_spelling(document, language, arguments[2] == "on"))
+    elif len(arguments) == 2 and arguments[1] in ("on", "off"):
+        language = arguments[0]
+        update_settings(lambda document: set_spelling(document, language, arguments[1] == "on"))
         print_spelling(spelling_report(json.loads(control(["settings", "show", "--json"]))))
-        return
-    if arguments == ["languages"]:
-        print(languages_text(json.loads(control(["settings", "show", "--json"]))))
-        return
-    if arguments[:1] == ["languages"]:
-        update_settings(lambda document: set_languages(document, arguments[1:]))
-        print(languages_text(json.loads(control(["settings", "show", "--json"]))))
-        return
-    if arguments[:1] == ["suggest"] and arguments[1:] in ([], ["--json"]):
+    else:
+        raise unknown_command()
+
+
+def languages_command(arguments):
+    if arguments:
+        update_settings(lambda document: set_languages(document, arguments))
+    print(languages_text(json.loads(control(["settings", "show", "--json"]))))
+
+
+def suggest_command(arguments):
+    if arguments in ([], ["--json"]):
         name, model_default = model_healing()
         report = writing_report(json.loads(control(["settings", "show", "--json"])), model_default)
-        if arguments[1:]:
+        if arguments:
             print(json.dumps({"schema": "badi.writing-languages.v1", "model": name, "languages": report}, indent=2))
         else:
             print_writing(report, name)
         return
-    if len(arguments) == 3 and arguments[0] == "suggest" and arguments[2] in ("on", "off"):
-        language = arguments[1]
-        update_settings(lambda document: set_writing(document, language, arguments[2] == "on"))
-        name, model_default = model_healing()
-        print_writing(writing_report(json.loads(control(["settings", "show", "--json"])), model_default), name)
-        return
-    if len(arguments) == 4 and arguments[0] == "suggest" and arguments[2] == "healing":
-        language, choice = arguments[1], arguments[3]
+    if len(arguments) == 2 and arguments[1] in ("on", "off"):
+        language = arguments[0]
+        update_settings(lambda document: set_writing(document, language, arguments[1] == "on"))
+    elif len(arguments) == 3 and arguments[1] == "healing":
+        language, choice = arguments[0], arguments[2]
         update_settings(lambda document: set_healing(document, language, choice))
-        name, model_default = model_healing()
-        print_writing(writing_report(json.loads(control(["settings", "show", "--json"])), model_default), name)
-        return
-    if len(arguments) == 3 and arguments[0] == "language":
-        app, language = arguments[1:]
-        update_settings(lambda document: set_language(document, app, language))
-        print(f"{app}: " + ("automatic language selection restored." if language == "reset"
-                            else f"writing language is {language}. App and site permissions still apply."))
-        return
-    if len(arguments) == 2 and arguments[0] == "escape-quiet":
-        value = arguments[1]
-        if value == "off":
-            seconds = 0
-        elif value.isascii() and value.isdigit() and 1 <= int(value) <= 3600:
-            seconds = int(value)
-        else:
-            raise RuntimeError("Usage: badi escape-quiet SECONDS|off (SECONDS is 1-3600)")
-        update_settings(lambda document: set_escape_quiet(document, seconds))
-        print(f"Escape keeps a field quiet for {seconds} seconds after a dismissal. "
-              "Asking explicitly ends it sooner." if seconds
-              else "Escape quiet is off. A dismissal lasts only until the text changes.")
-        return
-    modes = {("apps", "allowlist"): ("all_linux_apps", False), ("apps", "blocklist"): ("all_linux_apps", True),
-             ("sites", "allowlist"): ("all_web_origins", False), ("sites", "blocklist"): ("all_web_origins", True),
-             ("app", "all", "off"): ("all_linux_apps", False), ("app", "all", "on"): ("all_linux_apps", True),
-             ("site", "all", "off"): ("all_web_origins", False), ("site", "all", "on"): ("all_web_origins", True)}
-    if tuple(arguments) in modes:
-        key, blocklist = modes[tuple(arguments)]
+    else:
+        raise unknown_command()
+    name, model_default = model_healing()
+    print_writing(writing_report(json.loads(control(["settings", "show", "--json"])), model_default), name)
+
+
+def language_command(arguments):
+    if len(arguments) != 2:
+        raise unknown_command()
+    app, language = arguments
+    update_settings(lambda document: set_language(document, app, language))
+    print(f"{app}: " + ("automatic language selection restored." if language == "reset"
+                        else f"writing language is {language}. App and site permissions still apply."))
+
+
+def escape_quiet_command(arguments):
+    if len(arguments) != 1:
+        raise unknown_command()
+    value = arguments[0]
+    if value == "off":
+        seconds = 0
+    elif value.isascii() and value.isdigit() and 1 <= int(value) <= 3600:
+        seconds = int(value)
+    else:
+        raise RuntimeError("Usage: badi escape-quiet SECONDS|off (SECONDS is 1-3600)")
+    update_settings(lambda document: set_escape_quiet(document, seconds))
+    print(f"Escape keeps a field quiet for {seconds} seconds after a dismissal. "
+          "Asking explicitly ends it sooner." if seconds
+          else "Escape quiet is off. A dismissal lasts only until the text changes.")
+
+
+# List modes: `badi apps|sites allowlist|blocklist`, or `badi app|site all on|off`.
+LIST_MODES = {("apps", "allowlist"): ("all_linux_apps", False), ("apps", "blocklist"): ("all_linux_apps", True),
+              ("sites", "allowlist"): ("all_web_origins", False), ("sites", "blocklist"): ("all_web_origins", True),
+              ("app", "all", "off"): ("all_linux_apps", False), ("app", "all", "on"): ("all_linux_apps", True),
+              ("site", "all", "off"): ("all_web_origins", False), ("site", "all", "on"): ("all_web_origins", True)}
+
+
+def rules_command(kind, arguments):
+    """`badi apps|sites MODE` and `badi app|site …`: list modes and per-subject rules."""
+    if (kind, *arguments) in LIST_MODES:
+        key, blocklist = LIST_MODES[(kind, *arguments)]
         update_settings(lambda document: set_mode(document, key, blocklist))
         if key == "all_web_origins":
             print(ALL_SITES_NOTE if blocklist else "Sites use the allowlist: only sites with their own allow rule.")
         else:
             print(ALL_APPS_NOTE if blocklist else "Apps use the allowlist: only apps with their own allow rule.")
-        return
-    if arguments in (["app", "list"], ["site", "list"]):
-        print(rule_list(json.loads(control(["settings", "show", "--json"])), arguments[0]))
-        return
-    if len(arguments) == 3 and arguments[0] == "app" and arguments[2] in ("on", "off"):
-        update_settings(lambda document: set_app(document, arguments[1], arguments[2] == "on"))
-        print(f"{arguments[1]} predictions {arguments[2]}.")
-        return
-    if len(arguments) == 3 and arguments[0] == "site" and arguments[2] in ("on", "off"):
-        update_settings(lambda document: set_site(document, arguments[1], arguments[2] == "on"))
-        print(f"{arguments[1]} predictions {arguments[2]}. The exact-origin rule applies to Badi's browser integrations.")
-        return
-    if len(arguments) == 3 and arguments[0] in ("app", "site") and arguments[2] == "reset":
-        identity = app_identity(arguments[1]) if arguments[0] == "app" else site_identity(arguments[1])
+    elif kind in ("app", "site") and arguments == ["list"]:
+        print(rule_list(json.loads(control(["settings", "show", "--json"])), kind))
+    elif kind == "app" and len(arguments) == 2 and arguments[1] in ("on", "off"):
+        update_settings(lambda document: set_app(document, arguments[0], arguments[1] == "on"))
+        print(f"{arguments[0]} predictions {arguments[1]}.")
+    elif kind == "site" and len(arguments) == 2 and arguments[1] in ("on", "off"):
+        update_settings(lambda document: set_site(document, arguments[0], arguments[1] == "on"))
+        print(f"{arguments[0]} predictions {arguments[1]}. The exact-origin rule applies to Badi's browser integrations.")
+    elif kind in ("app", "site") and len(arguments) == 2 and arguments[1] == "reset":
+        identity = app_identity(arguments[0]) if kind == "app" else site_identity(arguments[0])
         update_settings(lambda document: remove_rule(document, identity))
-        print(f"{arguments[1]} has no rule now and follows the {arguments[0]} list mode.")
-        return
-    if arguments == ["service", "status"]:
+        print(f"{arguments[0]} has no rule now and follows the {kind} list mode.")
+    else:
+        raise unknown_command()
+
+
+def service_command(arguments):
+    if arguments == ["status"]:
         state = service_state()
         if state["active"] == "failed":
             state["startup_problem"] = startup_problem()
         print(json.dumps(state))
-        return
-    if len(arguments) == 2 and arguments[0] == "service" and arguments[1] in ("start", "stop", "restart"):
-        if arguments[1] != "stop" and service_state()["active"] == "failed":
+    elif arguments in (["start"], ["stop"], ["restart"]):
+        if arguments[0] != "stop" and service_state()["active"] == "failed":
             subprocess.run(["systemctl", "--user", "reset-failed", SERVICE], check=True, timeout=4)
-        subprocess.run(["systemctl", "--user", arguments[1], SERVICE], check=True, timeout=15)
+        subprocess.run(["systemctl", "--user", arguments[0], SERVICE], check=True, timeout=15)
         print(json.dumps(service_state()))
-        return
-    if len(arguments) == 2 and arguments[0] == "autostart" and arguments[1] in ("on", "off"):
-        subprocess.run(["systemctl", "--user", "enable" if arguments[1] == "on" else "disable", SERVICE],
-                       check=True, capture_output=True, text=True, timeout=8)
-        print(json.dumps(service_state()))
-        return
-    if arguments == ["logs"]:
-        subprocess.run(["journalctl", "--user", "-u", SERVICE, "-n", "60", "--no-pager"], check=True, timeout=5)
-        return
-    if arguments in (["repair"], ["repair", "--omarchy"]):
-        # --omarchy is what Omarchy's post-boot and post-update hooks run:
-        # only the files Omarchy itself replaces, quietly unless it restored one.
-        omarchy = arguments[1:] == ["--omarchy"]
-        restored = badi_install.repair(Path.home(), omarchy_only=omarchy)
-        if restored:
-            print("Restored Badi's lines in " + ", ".join(restored) + ". A browser picks up its flag at its next start.")
-        elif not omarchy:
-            print("Nothing to repair: every file the desktop install changed still has Badi's lines.")
-        return
-    if arguments in (["doctor"], ["doctor", "--json"]):
-        report = health_report()
-        print(json.dumps(report, indent=2) if arguments[-1] == "--json" else doctor_text(report))
-        if report["problems"]:
-            raise SystemExit(1)
-        return
-    if len(arguments) == 2 and arguments[0] == "launch" and arguments[1] in APPS:
-        app = arguments[1]
-        subprocess.run(["systemctl", "--user", "start", "badi-broker.service"], check=True, timeout=10)
-        subprocess.run([
-            "systemd-run", "--user", "--collect", "--quiet",
-            f"--unit=badi-editor-{uuid.uuid4().hex}", "--property=Type=exec",
-            f"--setenv=WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '')}",
-            f"--setenv=XDG_RUNTIME_DIR={os.environ.get('XDG_RUNTIME_DIR', '')}",
-            "--setenv=GTK_IM_MODULE=fcitx", "--setenv=QT_IM_MODULE=fcitx",
-            app,
-        ], check=True, timeout=10)
-        return
-    if not arguments or arguments[0] != "ctl":
-        raise RuntimeError("Unknown command. Run: badi --help")
-    arguments = arguments[1:]
+    else:
+        raise unknown_command()
+
+
+def autostart_command(arguments):
+    if arguments not in (["on"], ["off"]):
+        raise unknown_command()
+    subprocess.run(["systemctl", "--user", "enable" if arguments == ["on"] else "disable", SERVICE],
+                   check=True, capture_output=True, text=True, timeout=8)
+    print(json.dumps(service_state()))
+
+
+def logs_command(arguments):
+    if arguments:
+        raise unknown_command()
+    subprocess.run(["journalctl", "--user", "-u", SERVICE, "-n", "60", "--no-pager"], check=True, timeout=5)
+
+
+def repair_command(arguments):
+    if arguments not in ([], ["--omarchy"]):
+        raise unknown_command()
+    # --omarchy is what Omarchy's post-boot and post-update hooks run:
+    # only the files Omarchy itself replaces, quietly unless it restored one.
+    omarchy = arguments == ["--omarchy"]
+    restored = badi_install.repair(Path.home(), omarchy_only=omarchy)
+    if restored:
+        print("Restored Badi's lines in " + ", ".join(restored) + ". A browser picks up its flag at its next start.")
+    elif not omarchy:
+        print("Nothing to repair: every file the desktop install changed still has Badi's lines.")
+
+
+def doctor_command(arguments):
+    if arguments not in ([], ["--json"]):
+        raise unknown_command()
+    report = health_report()
+    print(json.dumps(report, indent=2) if arguments else doctor_text(report))
+    if report["problems"]:
+        raise SystemExit(1)
+
+
+def launch_command(arguments):
+    if len(arguments) != 1 or arguments[0] not in APPS:
+        raise unknown_command()
+    subprocess.run(["systemctl", "--user", "start", "badi-broker.service"], check=True, timeout=10)
+    subprocess.run([
+        "systemd-run", "--user", "--collect", "--quiet",
+        f"--unit=badi-editor-{uuid.uuid4().hex}", "--property=Type=exec",
+        f"--setenv=WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '')}",
+        f"--setenv=XDG_RUNTIME_DIR={os.environ.get('XDG_RUNTIME_DIR', '')}",
+        "--setenv=GTK_IM_MODULE=fcitx", "--setenv=QT_IM_MODULE=fcitx",
+        arguments[0],
+    ], check=True, timeout=10)
+
+
+def ctl_command(arguments):
+    """Pass a control command to the persistent broker; the panel's overview
+    adds the desktop's counters, model file and statistics."""
     endpoint = desktop_socket()
     if endpoint is None:
-        raise RuntimeError("The Badi model is offline. Open a supported editor below to start the service.")
+        raise RuntimeError("Badi is offline. Run: badi service start")
     output = control(arguments, endpoint)
-    if arguments == ["overview", "--json"]:
-        overview = json.loads(output)
-        counters = json.loads(control(["status"], endpoint))["metrics"]
-        misses = no_suggestion_summary(counters)
-        if misses and misses["last"]:
-            misses["last_meaning"] = NO_SUGGESTION[misses["last"]]
-        overview["desktop"] = {
-            "requests": counters["provider_calls"], "suggestions": counters["suggestions_shown"],
-            "errors": counters["provider_errors"],
-            "accepted": counters.get("commits_prepared"),
-            "word_savings": counters.get("word_savings"),
-            "no_suggestion": misses,
-            "spelling": spelling_report(overview.get("settings") or {}),
-            "activity": debug_activity(),
-            # The file the running broker loaded; the advice's catalog names it.
-            "model_file": active_model_file(),
-            # Counts per day and app or site; None from a broker without them.
-            "stats": usage_stats(endpoint),
-        }
-        print(json.dumps(overview))
-    else:
+    if arguments != ["overview", "--json"]:
         print(output, end="")
+        return
+    overview = json.loads(output)
+    counters = json.loads(control(["status"], endpoint))["metrics"]
+    misses = no_suggestion_summary(counters)
+    if misses and misses["last"]:
+        misses["last_meaning"] = NO_SUGGESTION[misses["last"]]
+    overview["desktop"] = {
+        "requests": counters["provider_calls"], "suggestions": counters["suggestions_shown"],
+        "errors": counters["provider_errors"],
+        "accepted": counters.get("commits_prepared"),
+        "word_savings": counters.get("word_savings"),
+        "no_suggestion": misses,
+        "spelling": spelling_report(overview.get("settings") or {}),
+        "activity": debug_activity(),
+        # The file the running broker loaded; the advice's catalog names it.
+        "model_file": active_model_file(),
+        # Counts per day and app or site; None from a broker without them.
+        "stats": usage_stats(endpoint),
+    }
+    print(json.dumps(overview))
+
+
+CHOICES = {
+    "battery": (BATTERY_TEXT, set_battery_mode),
+    "screen-share": (SCREEN_SHARE_TEXT, set_screen_share),
+    "length": (LENGTH_TEXT, set_suggestion_length),
+}
+
+# `badi WORD …`: each handler takes the remaining arguments and raises
+# unknown_command() for a form it does not know.
+COMMANDS = {
+    "settings": settings_command,
+    "debug": debug_command,
+    "status": status_command,
+    "pause": lambda arguments: pause_command(arguments, True),
+    "resume": lambda arguments: pause_command(arguments, False),
+    "style": style_command,
+    "context": context_command,
+    "stats": stats_command,
+    "battery": lambda arguments: choice_command("battery", arguments),
+    "screen-share": lambda arguments: choice_command("screen-share", arguments),
+    "length": lambda arguments: choice_command("length", arguments),
+    "snooze": snooze_command,
+    "mid-line": mid_line_command,
+    "model": model_command,
+    "models": models_command,
+    "revise": revise_command,
+    "spelling": spelling_command,
+    "languages": languages_command,
+    "suggest": suggest_command,
+    "language": language_command,
+    "escape-quiet": escape_quiet_command,
+    "apps": lambda arguments: rules_command("apps", arguments),
+    "sites": lambda arguments: rules_command("sites", arguments),
+    "app": lambda arguments: rules_command("app", arguments),
+    "site": lambda arguments: rules_command("site", arguments),
+    "service": service_command,
+    "autostart": autostart_command,
+    "logs": logs_command,
+    "repair": repair_command,
+    "doctor": doctor_command,
+    "launch": launch_command,
+    "ctl": ctl_command,
+}
+
+
+def main(arguments):
+    if arguments in ([], ["--help"], ["-h"]):
+        print(HELP, end="")
+        return
+    command = COMMANDS.get(arguments[0])
+    if command is None:
+        raise unknown_command()
+    command(arguments[1:])
 
 
 if __name__ == "__main__":
