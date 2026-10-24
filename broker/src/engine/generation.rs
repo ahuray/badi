@@ -25,13 +25,52 @@ use crate::protocol::{
 };
 use crate::provider::{
     ProviderError, ProviderOutcome, ProviderReply, ProviderRequest, ProviderStats, RequestTrigger,
-    WritingProposal,
+    WritingProposal, continuation_shape_valid,
 };
-use crate::segment::{accept_word, sanitize_suggestion, validate_suggestion_shape};
+use crate::segment::{accept_word, sanitize_suggestion};
 use crate::settings::{SettingsV2, StableIdentity};
 use crate::stats::StatsEvent;
 
-type ProviderResult = Result<Result<ProviderReply, ProviderError>, time::error::Elapsed>;
+pub(super) type ProviderResult = Result<Result<ProviderReply, ProviderError>, time::error::Elapsed>;
+
+/// What one provider call produced, classified once for generation, its
+/// trace and diagnostic probes.
+pub(super) enum ProviderAnswer {
+    Proposal(WritingProposal),
+    NoSuggestion(NoSuggestionReason),
+    Cancelled,
+    Unavailable,
+    TimedOut,
+}
+
+impl ProviderAnswer {
+    /// The answer and the provider's counts, when it reported any.
+    pub(super) fn classify(result: ProviderResult) -> (Self, Option<ProviderStats>) {
+        match result {
+            Ok(Ok(ProviderReply {
+                outcome: ProviderOutcome::Proposal(raw),
+                stats,
+            })) => (Self::Proposal(raw), stats),
+            Ok(Ok(ProviderReply {
+                outcome: ProviderOutcome::NoSuggestion(reason),
+                stats,
+            })) => (Self::NoSuggestion(reason), stats),
+            Ok(Err(ProviderError::Cancelled)) => (Self::Cancelled, None),
+            Ok(Err(ProviderError::Unavailable)) => (Self::Unavailable, None),
+            Err(_elapsed) => (Self::TimedOut, None),
+        }
+    }
+
+    fn trace_name(&self) -> String {
+        match self {
+            Self::Proposal(_) => "proposal".to_owned(),
+            Self::NoSuggestion(reason) => trace_name(reason),
+            Self::Cancelled => "cancelled".to_owned(),
+            Self::Unavailable => "unavailable".to_owned(),
+            Self::TimedOut => "timeout".to_owned(),
+        }
+    }
+}
 /// A carried remainder with its deadline and outcome day, or its declining gate.
 type CarryOutcome = (Option<(String, Instant, Option<u64>)>, Option<CarryMiss>);
 
@@ -363,30 +402,23 @@ impl Broker {
             }
             result = provider => result,
         };
-        let (outcome, text, stats) = match &result {
-            Ok(Ok(ProviderReply {
-                outcome: ProviderOutcome::Proposal(raw),
-                stats,
-            })) => ("proposal".to_owned(), Some(raw.text.as_str()), *stats),
-            Ok(Ok(ProviderReply {
-                outcome: ProviderOutcome::NoSuggestion(reason),
-                stats,
-            })) => (trace_name(reason), None, *stats),
-            Ok(Err(ProviderError::Cancelled)) => ("cancelled".to_owned(), None, None),
-            Ok(Err(ProviderError::Unavailable)) => ("unavailable".to_owned(), None, None),
-            Err(_) => ("timeout".to_owned(), None, None),
+        let (answer, stats) = ProviderAnswer::classify(result);
+        let text = match &answer {
+            ProviderAnswer::Proposal(raw) => Some(raw.text.as_str()),
+            _ => None,
         };
-        let cancelled_before_first_token = matches!(outcome.as_str(), "cancelled" | "timeout")
-            && stats.is_none_or(|stats| stats.ttft.is_none());
+        let cancelled_before_first_token =
+            matches!(answer, ProviderAnswer::Cancelled | ProviderAnswer::TimedOut)
+                && stats.is_none_or(|stats| stats.ttft.is_none());
         trace_model_done(
             &binding,
             started,
-            &outcome,
+            &answer.trace_name(),
             text,
             stats.as_ref(),
             cancelled_before_first_token,
         );
-        self.finish_generation(binding, &cancellation, result).await;
+        self.finish_generation(binding, &cancellation, answer).await;
     }
 
     /// Every path records exactly one no-suggestion class or one shown result.
@@ -394,9 +426,9 @@ impl Broker {
         &self,
         binding: GenerationBinding,
         cancellation: &CancellationToken,
-        result: ProviderResult,
+        answer: ProviderAnswer,
     ) {
-        let proposal = match self.check_provider_result(&binding, cancellation, result) {
+        let proposal = match self.check_provider_answer(&binding, cancellation, answer) {
             Ok(proposal) => proposal,
             Err(Withheld::Clear(reason)) => {
                 return self.clear_failed_generation(binding, reason).await;
@@ -414,39 +446,33 @@ impl Broker {
         self.show_if_current(state, binding, cancellation, proposal, None);
     }
 
-    fn check_provider_result(
+    fn check_provider_answer(
         &self,
         binding: &GenerationBinding,
         cancellation: &CancellationToken,
-        result: ProviderResult,
+        answer: ProviderAnswer,
     ) -> Result<WritingProposal, Withheld> {
         let metrics = &self.inner.metrics;
         if Instant::now() >= binding.deadline {
             self.record_generation_timeout(cancellation);
             return Err(Withheld::Clear(ReasonCode::ProviderTimeout));
         }
-        let raw = match result {
-            Ok(Ok(ProviderReply {
-                outcome: ProviderOutcome::Proposal(raw),
-                ..
-            })) => raw,
-            Ok(Ok(ProviderReply {
-                outcome: ProviderOutcome::NoSuggestion(reason),
-                ..
-            })) => {
+        let raw = match answer {
+            ProviderAnswer::Proposal(raw) => raw,
+            ProviderAnswer::NoSuggestion(reason) => {
                 metrics.record_no_suggestion(reason);
                 return Err(Withheld::Clear(ReasonCode::NoSuggestion));
             }
-            Ok(Err(ProviderError::Cancelled)) => {
+            ProviderAnswer::Cancelled => {
                 metrics.record_no_suggestion(NoSuggestionReason::Stale);
                 return Err(Withheld::Silently);
             }
-            Ok(Err(ProviderError::Unavailable)) => {
+            ProviderAnswer::Unavailable => {
                 metrics.record_provider_error();
                 metrics.record_no_suggestion(NoSuggestionReason::ProviderError);
                 return Err(Withheld::Clear(ReasonCode::ProviderError));
             }
-            Err(_elapsed) => {
+            ProviderAnswer::TimedOut => {
                 self.record_generation_timeout(cancellation);
                 return Err(Withheld::Clear(ReasonCode::ProviderTimeout));
             }
@@ -842,19 +868,6 @@ pub(super) fn checked_proposal(
         text,
         replace_before,
     })
-}
-
-fn continuation_shape_valid(
-    provider_kind: ProviderKind,
-    before: &str,
-    after: &str,
-    text: &str,
-) -> bool {
-    if provider_kind == ProviderKind::LocalModel {
-        crate::writing::validate_suggestion_shape(before, after, text).is_ok()
-    } else {
-        validate_suggestion_shape(before, after, text).is_ok()
-    }
 }
 
 /// Counts and maps a request's policy decision; only `Allow` admits it.

@@ -108,11 +108,14 @@ std::string_view snapshotFailureReason(const nlohmann::json &error);
 // An invalidation that names no app concerns every app.
 bool invalidates(const nlohmann::json &event, std::string_view appId);
 
-// When the observer inspects the focused field again. Fcitx input (keys or
-// changed surrounding text) inspects once typing pauses. An invalidation
-// without input since the last inspection backs off (240, 480, 960 ms) and
-// then waits for input, so a busy page cannot drive an inspection loop; a
-// changed field always waits for input.
+// When the observer inspects the focused field again. Fcitx input (changed
+// surrounding text) inspects at once, so the model can run during the typing
+// pause, and so does an invalidation that follows input: apps whose field
+// reports its own edits invalidate on every key. After the observer declined
+// the field in this focus visit, input inspects once typing pauses. An
+// invalidation without input since the last inspection backs off (240, 480,
+// 960 ms) and then waits for input, so a busy page cannot drive an inspection
+// loop; a changed field waits for input.
 class InspectionSchedule {
 public:
     static constexpr std::uint64_t kTypingPauseUs = 120'000;
@@ -127,11 +130,30 @@ public:
     static constexpr std::uint64_t kBusyRetryUs = 20'000;
     static constexpr unsigned int kMaxBusyRetries = 25;
 
-    void input() {
+    void focusIn(std::uint64_t nowUs) {
+        declined_ = false;
+        editsReported_ = false;
+        input(nowUs);
+    }
+    void input(std::uint64_t nowUs) {
         ++inputSerial_;
         idleInvalidations_ = 0;
+        inputUs_ = nowUs;
     }
-    void inspecting() { inspectedSerial_ = inputSerial_; }
+    void inspecting(std::uint64_t nowUs) {
+        inspectedSerial_ = inputSerial_;
+        // Within the typing pause, the inspection can reach the observer
+        // before that input's own accessibility events.
+        inspectedEarly_ = nowUs < inputUs_ + kTypingPauseUs;
+    }
+    // Whether the inspection found a field; a declined one waits for pauses.
+    void found(bool field) { declined_ = !field; }
+    [[nodiscard]] bool inspectsOnInput() const { return !declined_; }
+    // The field reported the user's own edit (Chromium, Writer): each later
+    // keystroke is re-inspected when its report arrives, not re-read first.
+    void editReported() { editsReported_ = true; }
+    [[nodiscard]] bool fieldReportsEdits() const { return editsReported_; }
+    [[nodiscard]] bool inputSinceInspection() const { return inputSerial_ != inspectedSerial_; }
     [[nodiscard]] bool reinspectAfterInvalidation(bool fieldChanged);
     [[nodiscard]] std::uint64_t delayUs(bool immediate, bool typedThrough = false, bool busyRetry = false,
                                     bool early = false) const {
@@ -149,6 +171,10 @@ public:
 private:
     std::uint64_t inputSerial_ = 0;
     std::uint64_t inspectedSerial_ = 0;
+    std::uint64_t inputUs_ = 0;
+    bool inspectedEarly_ = false;
+    bool declined_ = false;
+    bool editsReported_ = false;
     unsigned int idleInvalidations_ = 0;
     unsigned int busyRetries_ = 0;
 };

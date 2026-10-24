@@ -1104,19 +1104,23 @@ void inspectionBacksOffWithoutInput() {
           "typing through a suggestion inspects after a short pause");
     check(schedule.delayUs(false, false, true) == 20'000 && schedule.delayUs(false, true, true) == 20'000,
           "a busy observer is retried soon, not after another typing pause");
-    schedule.input();
-    schedule.inspecting();
+    // Inspections here come after the typing pause; early ones are tested apart.
+    constexpr auto pause = InspectionSchedule::kTypingPauseUs;
+    schedule.input(1'000);
+    schedule.inspecting(1'000 + pause);
     for (const std::uint64_t delay : {240'000, 480'000, 960'000}) {
         check(schedule.reinspectAfterInvalidation(false) && schedule.delayUs(false) == delay,
               "idle invalidations back off");
     }
     check(!schedule.reinspectAfterInvalidation(false), "after three idle retries an invalidation waits for input");
     check(schedule.delayUs(true) == 1, "an explicit request is never delayed by the backoff");
-    schedule.input();
+    schedule.input(2'000'000);
+    check(schedule.inputSinceInspection(), "input after an inspection is the user's own change");
     check(schedule.delayUs(false) == 120'000 && schedule.reinspectAfterInvalidation(true),
           "input resets the backoff, and a changed field inspects after input");
-    schedule.inspecting();
-    check(!schedule.reinspectAfterInvalidation(true), "a changed field without input waits for input");
+    schedule.inspecting(2'000'000 + pause);
+    check(!schedule.inputSinceInspection() && !schedule.reinspectAfterInvalidation(true),
+          "a changed field without input waits for input");
 
     for (unsigned int attempt = 0; attempt < InspectionSchedule::kMaxBusyRetries; ++attempt) {
         check(schedule.retryWhileBusy(), "a busy observer is retried");
@@ -1124,6 +1128,33 @@ void inspectionBacksOffWithoutInput() {
     check(!schedule.retryWhileBusy(), "busy retries are bounded");
     schedule.resetBusyRetries();
     check(schedule.retryWhileBusy(), "a new request renews the busy retries");
+}
+
+void inspectionOnInputSurvivesItsOwnEdit() {
+    InspectionSchedule schedule;
+    schedule.focusIn(1'000);
+    check(schedule.inspectsOnInput(), "a new focus visit inspects on input");
+    schedule.input(10'000);
+    // Sent on the keystroke, the inspection can precede the key's own event.
+    schedule.inspecting(12'000);
+    check(!schedule.inputSinceInspection(), "the inspection covers the input before it");
+    check(schedule.reinspectAfterInvalidation(true) && schedule.delayUs(false) == 120'000,
+          "the first change after an early inspection inspects again after the pause");
+    check(!schedule.reinspectAfterInvalidation(true), "a second change without input waits for input");
+    schedule.input(500'000);
+    schedule.inspecting(500'000 + InspectionSchedule::kTypingPauseUs);
+    check(!schedule.reinspectAfterInvalidation(true), "after a paused inspection a change waits for input");
+
+    schedule.found(false);
+    check(!schedule.inspectsOnInput(), "a declined field waits for typing pauses");
+    schedule.found(true);
+    check(schedule.inspectsOnInput(), "a found field inspects on input again");
+    schedule.found(false);
+    schedule.editReported();
+    check(schedule.fieldReportsEdits(), "a field that reported the user's edit is awaited, not re-read");
+    schedule.focusIn(900'000);
+    check(schedule.inspectsOnInput() && schedule.inputSinceInspection(), "a new focus visit forgets the decline");
+    check(!schedule.fieldReportsEdits(), "a new focus visit re-reads its field again");
 }
 
 void shiftedLetterChordUsesFcitxNormalization() {
@@ -2039,6 +2070,7 @@ int main(int argc, char **argv) {
         {"observer replies fail closed", observerRepliesFailClosed},
         {"observer requests name the bound field", observerRequestsNameTheBoundField},
         {"inspection backoff without input", inspectionBacksOffWithoutInput},
+        {"inspection on input survives its own edit", inspectionOnInputSurvivesItsOwnEdit},
         {"pre-input keys consume only Badi UI", preInputKeysConsumeOnlyBadiUi},
         {"literal Tab where Badi would take Tab", literalTabIsARealTabWhereBadiWouldTakeTab},
         {"held Tab waits for the carried rest", heldTabWaitsForTheCarriedRest},

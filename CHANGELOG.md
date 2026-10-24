@@ -19,6 +19,20 @@ Unreleased in the same commit.
 - Zen Twilight (`zen-twilight`) gets suggestions and corrections like Zen.
 - Bash draws an accepted suggestion once instead of repeating the prompt
   mid-row.
+- Suggestions in observed apps appear sooner after you stop typing: a field
+  is inspected on the keystroke itself, and again at once when your own
+  typing changes it, so the model runs during the typing pause. A field
+  that reports your edits is not re-read first, which only started a model
+  run its report then cancelled.
+- Discord gets suggestions: `install-desktop.py --observed-app discord` adds
+  the renderer accessibility flag to a user copy of its launcher. The
+  `--screen-reader-accessibility` option is gone: it never exposed Discord's
+  composer, and at-spi2-core 2.62 no longer has that setting.
+- The broker's recorder replies and provider results, and the observer's
+  snapshot and preview drawing, are each split into shared or named steps;
+  behavior is unchanged.
+- The session helper looks up the keyring's style key asynchronously, so a
+  slow Secret Service can no longer delay a sleep or screen-share report.
 
 ## 0.2.0 (2026-10-24)
 

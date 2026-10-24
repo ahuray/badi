@@ -126,7 +126,7 @@ void BadiAddon::focusIn(::fcitx::InputContext &inputContext) {
     dropHeldTab(binding);
     binding.dismissedContext.reset();
     clearTypeThrough(binding);
-    binding.inspection.input();
+    binding.inspection.focusIn(monotonicUs());
     binding.revisionWaiting.reset();
     binding.revisionExpected.reset();
     // An IME-parity correction's read-back (correctionExpected) outlives
@@ -189,8 +189,8 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
         // delete/retype. This ends only the local until-edit decline;
         // the broker still enforces timed quiet and fresh edit authority.
         binding->dismissedContext.reset();
-        binding->inspection.input();
         const auto now = monotonicUs();
+        binding->inspection.input(now);
         if (now != 0) {
             const auto pause = binding->typedThrough ? InspectionSchedule::kTypeThroughPauseUs
                                                      : InspectionSchedule::kTypingPauseUs;
@@ -212,16 +212,22 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     invalidateChangedContext(*binding);
     // A field we already corroborate can start the model on this key.
     // Re-read that field directly; a second inspection would only repeat
-    // the round trip. A suggestion still waits out the typing pause.
+    // the round trip. Any other field is inspected on this key too, unless
+    // the observer declined it in this visit. A field that reports the
+    // user's edits is re-inspected when this key's report arrives, which
+    // ends its observation anyway; the typing pause is the fallback. A
+    // suggestion still waits out the typing pause.
     if (!unchangedObserved) {
+        const bool awaitReport = binding->observed() && binding->inspection.fieldReportsEdits();
         // Foreign preedit must go through inspection, which yields and
         // resumes when the composition clears. A direct read would skip that.
         if (binding->observed() && binding->broker.opened && binding->broker.policyAllowed &&
-            safeToObserve(*binding)) {
+            safeToObserve(*binding) && !awaitReport) {
             debug_.record("observer", binding->state.appId(), "same_field_snapshot");
             requestObservedContext(*binding, true);
         } else {
-            observeLater(*binding, false, false, binding->observed());
+            observeLater(*binding, false, false,
+                         !awaitReport && (binding->observed() || binding->inspection.inspectsOnInput()));
         }
     }
 }

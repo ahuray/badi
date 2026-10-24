@@ -56,7 +56,7 @@ void BadiAddon::inspectField(Binding &binding) {
         return;
     }
     binding.waitingForForeignUi = false;
-    binding.inspection.inspecting();
+    binding.inspection.inspecting(monotonicUs());
     debug_.record("observer", binding.state.appId(), "inspect_sent");
     const auto session = binding.state.coordinates().sessionId;
     const auto generation = binding.observationGeneration;
@@ -74,6 +74,7 @@ void BadiAddon::inspected(Binding &binding, const Json &reply) {
     if (!observerAnswered(reply)) return observerUnavailable(binding, reply.value("error", Json()));
     const auto &focus = reply["focus"];
     const auto editTarget = inspectedEditTarget(focus, binding.state.appId());
+    binding.inspection.found(editTarget.has_value());
     if (!editTarget) return denyEditing(binding);
     const bool unchanged = !binding.observationExplicit && binding.observed() &&
         matchesObservedFocus(binding.observedFocus, focus) &&
@@ -128,6 +129,7 @@ void BadiAddon::denyEditing(Binding &binding) {
 // IME-parity has no manual fallback, so an explicit request says why the
 // observer produced no field: the field's own purpose, or no observer.
 void BadiAddon::observerUnavailable(Binding &binding, const Json &error) {
+    binding.inspection.found(false);
     binding.fieldVisit = nullptr;
     binding.fieldVisitId.clear();
     // A failed inspection must not keep the previous field's grant.
@@ -153,7 +155,11 @@ void BadiAddon::observerInvalidated(const Json &event) {
         if (revisionActive(binding)) cancelRevision(binding);
         ++binding.observationGeneration;
         if (binding.observed()) retireObservedField(binding);
-        if (binding.inspection.reinspectAfterInvalidation(fieldChanged)) observeLater(binding);
+        // The user's own typing changed the field: inspect it again at once,
+        // as for the keystroke itself.
+        const bool typed = binding.inspection.inputSinceInspection() && binding.inspection.inspectsOnInput();
+        if (typed && fieldChanged) binding.inspection.editReported();
+        if (binding.inspection.reinspectAfterInvalidation(fieldChanged)) observeLater(binding, false, false, typed);
         else debug_.record("observer", binding.state.appId(), "observer_awaiting_input");
     }
 }

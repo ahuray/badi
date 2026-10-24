@@ -279,7 +279,7 @@ class StyleKeyTests(unittest.TestCase):
 
     def test_a_stored_key_reaches_every_new_broker_connection(self):
         key = ("ab" * 16, "cd" * 32)
-        fake, reporter = self.reporter(lambda: key)
+        fake, reporter = self.reporter(lambda done: done(key))
         reporter.publish()
         run_pending()
         reporter.publish()
@@ -291,10 +291,9 @@ class StyleKeyTests(unittest.TestCase):
         self.assertEqual(fake.keys, [key, key], "again after a reconnect")
 
     def test_the_report_never_waits_for_the_keyring(self):
-        # libsecret's lookup is synchronous and may wait for the Secret
-        # Service; a sleep report on a new connection must not wait with it.
+        # A sleep report on a new connection goes first; the key follows.
         lookups = []
-        fake, reporter = self.reporter(lambda: lookups.append(list(fake.sent)) or ("ab" * 16, "cd" * 32))
+        fake, reporter = self.reporter(lambda done: lookups.append(list(fake.sent)) or done(("ab" * 16, "cd" * 32)))
         reporter.sleeping = True
         self.assertTrue(reporter.publish())
         self.assertEqual((fake.sent, lookups), (["desktop.state"], []), "no lookup inside the report")
@@ -302,28 +301,55 @@ class StyleKeyTests(unittest.TestCase):
         self.assertEqual(lookups, [["desktop.state"]])
         self.assertEqual(fake.sent, ["desktop.state", "style.key"])
 
-    def test_a_locked_keyring_is_retried_later_and_never_prompts(self):
-        attempts = []
-
-        def locked():
-            attempts.append(1)
-            raise RuntimeError("keyring_locked")
-        fake, reporter = self.reporter(locked)
-        self.assertTrue(reporter.publish(), "the session report still goes through")
+    def test_a_slow_keyring_never_holds_a_later_report(self):
+        # The Secret Service may take seconds to answer, at login above all;
+        # a sleep or screen-share report meanwhile must not wait for it.
+        answers = []
+        fake, reporter = self.reporter(answers.append)
+        reporter.publish()
         run_pending()
-        self.assertEqual(fake.keys, [])
-        self.assertIsNotNone(reporter._key_retry)
-        self.assertEqual(len(attempts), 1)
+        self.assertEqual(len(answers), 1, "the lookup is asked and not yet answered")
+        reporter.sleeping = True
+        self.assertTrue(reporter.publish())
+        self.assertEqual(fake.reports[-1], ("sleeping", False, False, False))
+        key = ("ab" * 16, "cd" * 32)
+        answers[0](key)
+        self.assertEqual(fake.keys, [key])
+
+    def test_a_key_found_after_a_reconnect_goes_only_to_its_own_connection(self):
+        answers = []
+        fake, reporter = self.reporter(answers.append)
+        reporter.publish()
+        run_pending()
+        fake.connected = False
+        reporter.publish()
+        run_pending()
+        self.assertEqual(len(answers), 2)
+        key = ("ab" * 16, "cd" * 32)
+        answers[0](key)
+        self.assertEqual(fake.keys, [], "the first connection is gone")
+        answers[1](key)
+        self.assertEqual(fake.keys, [key])
+
+    def test_a_locked_keyring_is_retried_later_and_never_prompts(self):
+        for name, lookup in (("answered", lambda done: done(RuntimeError("keyring_locked"))),
+                             ("raised", lambda done: (_ for _ in ()).throw(RuntimeError("keyring_unavailable")))):
+            with self.subTest(name):
+                fake, reporter = self.reporter(lookup)
+                self.assertTrue(reporter.publish(), "the session report still goes through")
+                run_pending()
+                self.assertEqual(fake.keys, [])
+                self.assertIsNotNone(reporter._key_retry)
 
     def test_no_stored_key_sends_nothing(self):
-        fake, reporter = self.reporter(lambda: None)
+        fake, reporter = self.reporter(lambda done: done(None))
         reporter.publish()
         run_pending()
         self.assertEqual(fake.keys, [])
         self.assertIsNone(reporter._key_retry)
 
     def test_a_key_due_after_the_link_dropped_is_not_sent(self):
-        fake, reporter = self.reporter(lambda: ("ab" * 16, "cd" * 32))
+        fake, reporter = self.reporter(lambda done: done(("ab" * 16, "cd" * 32)))
         reporter.publish()
         fake.connected = False
         run_pending()

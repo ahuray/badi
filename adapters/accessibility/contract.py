@@ -230,6 +230,26 @@ class Observer:
         self.authorize(focus["binding"], metadata.get("node"))
         if selection:
             return {"focus": self.selected_window(metadata, focus)}
+        before, after, reaches_end, rich = self.text_window(metadata, focus)
+        native = not metadata.get("web")
+        self.caret_edge = "right" if ltr_caret_line(metadata.get("direction"), before, native) else None
+        # Words after the caret on its line: inline text would cover them.
+        self.text_follows = bool(after.split("\n", 1)[0].strip())
+        # Nothing visible after the caret in a plain field: the lines under
+        # it are empty, so a chip there covers no text. A rich editor's
+        # window is one block, which proves nothing about the blocks below.
+        self.text_ends = not rich and reaches_end and not after.strip()
+        focus.update(before=before, after=after, total_chars=metadata["total_chars"])
+        if request.get("window"):
+            window = self.backend.vocabulary_text(metadata)
+            if window:
+                focus["window_text"] = window
+        return {"focus": focus}
+
+    def text_window(self, metadata, focus):
+        """(before, after, reaches_end, rich): the caret's bounded text as
+        Fcitx sends it, whether it reaches the field's end, and whether the
+        field is a rich editor. Marks a rich editor's block scope on `focus`."""
         if metadata.get("sentence_bounded"):
             metadata["sentence_start"] = self.backend.sentence_start(metadata)
         caret = metadata["caret"]
@@ -245,24 +265,11 @@ class Observer:
         if margin:
             before, after = self.backend.serialized(metadata, start, before, after)
         before, after = before[-MAX_BEFORE:], after[:MAX_AFTER]
-        before, after = surrounding_text(metadata, before), surrounding_text(metadata, after)
         if scope == "block":
             # Only the caret's block serializes exactly: Fcitx's text must end with it.
             focus["scope"] = "block"
-        native = not metadata.get("web")
-        self.caret_edge = "right" if ltr_caret_line(metadata.get("direction"), before, native) else None
-        # Words after the caret on its line: inline text would cover them.
-        self.text_follows = bool(after.split("\n", 1)[0].strip())
-        # Nothing visible after the caret in a plain field: the lines under
-        # it are empty, so a chip there covers no text. A rich editor's
-        # window is one block, which proves nothing about the blocks below.
-        self.text_ends = not margin and end == metadata["total_chars"] and not after.strip()
-        focus.update(before=before, after=after, total_chars=metadata["total_chars"])
-        if request.get("window"):
-            window = self.backend.vocabulary_text(metadata)
-            if window:
-                focus["window_text"] = window
-        return {"focus": focus}
+        return (surrounding_text(metadata, before), surrounding_text(metadata, after),
+                end == metadata["total_chars"], bool(margin))
 
     def selected_window(self, metadata, focus):
         """The field's one selection on one line, with the text around it.

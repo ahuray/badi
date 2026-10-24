@@ -3,6 +3,7 @@
 #include "sanitizer.h"
 
 #include <string>
+#include <utility>
 
 namespace badi::fcitx5 {
 
@@ -254,6 +255,9 @@ bool invalidates(const Json &event, std::string_view appId) {
 
 bool InspectionSchedule::reinspectAfterInvalidation(bool fieldChanged) {
     if (inputSerial_ != inspectedSerial_) return true;
+    // The first change after an early inspection can be that input's own;
+    // it inspects again after the typing pause instead of waiting for input.
+    if (std::exchange(inspectedEarly_, false)) return true;
     if (fieldChanged || idleInvalidations_ == kMaxIdleReinspections) return false;
     ++idleInvalidations_;
     return true;

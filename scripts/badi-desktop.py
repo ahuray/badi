@@ -177,11 +177,10 @@ shows a correction for the word before the caret, Alt+F7 again replaces it in
 one undo step, Escape dismisses. badi app libreoffice covers the grey preview.
 For protocol commands: badictl --help
 """
-# Apps whose fields work today. Discord still needs a private composer trial
-# with desktop-wide accessibility; README "Not yet" is the same list.
+# Apps whose fields work today; README "Where it works" is the same list.
 WORKING_IME_APPS = (
     "Chromium", "Brave and its web apps", "Zen", "Codex", "VS Code", "Cursor",
-    "Grok Bot", "LibreOffice Writer",
+    "Discord", "Grok Bot", "LibreOffice Writer",
 )
 IME_APPS = ", ".join(WORKING_IME_APPS)
 HELP = HELP.format(IME_APPS=IME_APPS)
@@ -599,7 +598,7 @@ def vscode_edit_context_note():
 def health_report():
     report = {"schema": "badi.desktop-health.v1", "service": service_state(),
               "native_apps": list(APPS), "problems": [], "notes": []}
-    report["notes"].append(f"{IME_APPS} fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it. Discord still needs a private composer trial with desktop-wide accessibility.")
+    report["notes"].append(f"{IME_APPS} fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it.")
     problems = report["problems"]
     observer = report["accessibility"] = accessibility_state()
     if observer.get("loaded"):

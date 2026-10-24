@@ -439,32 +439,22 @@ app's flags file:
 A file that already has the flag is left alone. A reduced mode or
 `--disable-renderer-accessibility` is the user's choice and stops the installer
 before it changes anything. Changed files are backed up, and running windows
-keep their old flags until relaunched. Discord has no reliable mechanism: its
-web client resets its `chromiumSwitches` list after one launch, so the
-installer writes nothing to that file. The desktop-wide alternative is:
+keep their old flags until relaunched.
 
-```sh
-python3 scripts/install-desktop.py --screen-reader-accessibility
-```
-
-This explicitly enables AT-SPI `ScreenReaderEnabled` and the persistent
-`org.gnome.desktop.a11y.applications screen-reader-enabled` setting. It
-advertises accessibility to all desktop applications, including Discord;
-it does not install a screen reader or change Badi's app/site permissions.
-Applications may need relaunching. Prior values are saved privately in
-`accessibility-screen-reader.json` beside that install's backup, or under
-`install-backups/notes` if no file changed. An already enabled setting leaves
-the original note intact. File rollback does not change desktop settings.
-To undo this opt-in, use the two recorded values, in this order:
-
-```sh
-gsettings set org.gnome.desktop.a11y.applications screen-reader-enabled false
-busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status ScreenReaderEnabled b false
-```
-
-Replace each `false` if its recorded prior value was `true`. This setting
-alone does not prove Discord composer acquisition, suggestions or acceptance;
-those need a disposable private composer trial.
+Discord reads no flags file, and its web client resets the `chromiumSwitches`
+list it keeps after one launch. `--observed-app discord` instead writes the
+user's own copy of its launcher, `~/.local/share/applications/discord.desktop`,
+which shadows the packaged one: every `Exec` line gets the flag right after
+the program (after `env` and its assignments). An existing user copy is the
+base and is backed up; a quoted program or a conflicting accessibility switch
+stops the installer. Discord started some other way, such as from a terminal,
+needs the flag on its own command line. Desktop-wide AT-SPI
+`ScreenReaderEnabled` did not make Discord expose its composer (2026-10-24),
+and at-spi2-core 2.62 no longer has that property, so the installer no longer
+sets it; an earlier opt-in left
+`org.gnome.desktop.a11y.applications screen-reader-enabled` on, which
+`gsettings set org.gnome.desktop.a11y.applications screen-reader-enabled false`
+undoes.
 
 ## Tests
 

@@ -126,8 +126,9 @@ Standing user decisions:
   without more harm (2026-10-21, [comparison](broker/README.md#suggestion-limits));
 - distribution starts with an AUR package; publication and an Omarchy proposal
   still need approval after the naming review (the licence review is done);
-- Discord uses desktop-wide AT-SPI `ScreenReaderEnabled`, with recorded prior
-  settings and unchanged Badi app/site permissions.
+- Discord gets the renderer flag through a user copy of its launcher
+  (`--observed-app discord`), as other Chromium-based apps get it through
+  their flags files (2026-10-24).
 
 Open decisions, for the user:
 - **Terminal privacy.** A terminal cannot mark a password prompt, so a
@@ -182,7 +183,7 @@ publish need the user's go-ahead first; the rest can start at once.
    [context firewall](VISION.md#context-firewall)), sync and telemetry
    (non-goals), colon emoji (Fcitx owns emoji) and suggestions longer than
    four words (standing user decision above). Its app list's gaps here
-   (Firefox, VS Code's default EditContext, Google Docs, Slack, Discord)
+   (Firefox, VS Code's default EditContext, Google Docs, Slack)
    are under [Remaining surfaces](#remaining-surfaces). *Done when* each
    item ships or is declined in a recorded user decision.
 2. **Get the fcitx5-qt surrounding-text bug fixed upstream.** Since
@@ -429,8 +430,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Browser rich editors: a caret inside a list or quote, EditContext editors
       (VS Code's default, CodeMirror on recent Chromium), multi-paragraph fields
       in Zen (Gecko sends only the caret's paragraph) and Firefox.
-- [ ] Discord with desktop-wide accessibility; a composer trial needs a private
-      channel, since typing shows an indicator.
 - [ ] Grok Bot composer trial in the signed-in app after a relaunch with
       `grok-bot-flags.conf`.
 - [ ] More native toolkits through measured integrations.
@@ -458,38 +457,30 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       `badi debug on --text` and disposable text: a broker `error` frame
       ending only its request, one language chip on the panel's settings page
       (the trial machine still shows the first-run language question), rows
-      and the site draft surviving a poll, Writer superseding a slow spelling
-      request, Xournal++ (a recovery dialog was waiting for the user) and
-      Telegram.
+      and the site draft surviving a poll, and Writer superseding a slow
+      spelling request.
 - [ ] Broker `error` frames carry no session, and the Fcitx addon's request
       ids repeat across sessions, so the addon retires a refused id in every
       binding holding it (this only withdraws). Echo the session coordinates
       in `error`, or make ids per session, so the match is exact. A refused
       `session.open` also leaves the binding thinking it is open until the
       authority change that follows.
-- [ ] The session helper delivers the keyring's style key after its report
-      now, but libsecret's lookup is still synchronous on the main loop; make
-      it asynchronous.
 - [ ] Structure left by the review, each only when its file is next touched:
       the Fcitx `Binding` (about 50 fields, one expiry timer for notices,
       suggestions and revisions) as small reset-able parts and one retire
-      function for authority change and disconnect; `Observer.snapshot` and
-      `Preview._render`; a shared stdio and idle-exit module for the Bash
-      and Neovim bridges; and a tested `SettingsModel.js` with one status
-      ladder for the panel (new files need the installers' and the
-      PKGBUILD's lists, which a test now compares).
+      function for authority change and disconnect; a shared stdio and
+      idle-exit module for the Bash and Neovim bridges; and a tested
+      `SettingsModel.js` with one status ladder for the panel (new files
+      need the installers' and the PKGBUILD's lists, which a test now
+      compares).
 
 - [ ] [ADR 0007](docs/decisions/0007-retire-protocol-v1.md) step 4: once
       every known install has started a v2-only broker (0.2.0), delete the
       on-disk v1 settings migration, `badi.settings.v1.schema.json` and the
       panel lifecycle and schema tests that exercise it.
-- [ ] Broker structure left by the review: share the provider-result
-      classification between `engine/generation.rs` and `probe.rs`, fold the
-      five queue-and-reply copies in `outcomes.rs` into one, move the
-      provider-kind validator choice out of the engine, collapse
-      `complete`/`propose` once the Lab calls `propose_outcome`, and move the
-      remaining inline tests into `<module>/tests.rs` when those files are
-      next touched.
+- [ ] Broker structure left by the review: collapse `complete`/`propose`
+      once the Lab calls `propose_outcome`, and move the remaining inline
+      tests into `<module>/tests.rs` when those files are next touched.
 
 - [ ] The Lab test "process exit rejects the active request and a later
       request starts a fresh process" (`worker.test.mjs`) failed once in CI

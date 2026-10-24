@@ -264,17 +264,25 @@ provides an editor transaction.
 - **Inspection.** A keystroke in a field already under observation re-reads
   that field and reuses its session, so the model can run during the pause.
   It does not inspect again unless that read says the accessible changed.
-  The suggestion stays hidden until 120 ms after that keystroke, or 30 ms
-  after a typed-through key. The first look at a field, and an idle
-  invalidation, still wait (120 ms, then 240, 480 and 960 ms). A busy observer
-  is retried every 20 ms. Badi's timers ask for 1 ms accuracy, because Fcitx's
+  Any other field is inspected on the keystroke too, and so is a field the
+  user's own typing invalidated: Chromium and Writer report each edit of the
+  field, which ends the observation until the next inspection. Once a field
+  has reported an edit in this focus visit, a keystroke waits for that report
+  instead of re-reading the field first, whose model run the report would
+  cancel; the typing pause is the fallback. The suggestion
+  stays hidden until 120 ms after that keystroke, or 30 ms after a
+  typed-through key. After the observer declined the field in this focus
+  visit, input waits for the typing pause again; so does an idle invalidation
+  (120 ms, then 240, 480 and 960 ms). A busy observer is retried every 20 ms. Badi's timers ask for 1 ms accuracy, because Fcitx's
   sd-event loop otherwise allows 250 ms of slack. With debug on,
   `inspect_sent` and `inspect_answered` time each inspection in the
   [debug trace](../../README.md#debug-trace), beside each key's action and
   each suggestion shown as the `overlay` or the `panel`.
-- **Invalidations.** One without input re-inspects after 240, 480 and 960 ms
-  and then waits for input (`observer_awaiting_input`); a change of the field
-  itself always waits.
+- **Invalidations.** One after input re-inspects at once. One without input
+  re-inspects after 240, 480 and 960 ms and then waits for input
+  (`observer_awaiting_input`); a change of the field itself waits, except the
+  first after an inspection within the typing pause, which can be that key's
+  own late event and re-inspects after 120 ms.
 - **Paragraph ends.** Chromium ends every `<p>` with `"\n\n"` and every `<div>`
   line with `"\n"` when anything follows the editor. For an observed IME-parity
   field only, `normalizeObservedParagraphEnd()` treats exactly that suffix as
@@ -304,17 +312,18 @@ toolkit in general.
 
 | App (version, date) | Reaches Fcitx through | Result | Boundary |
 | --- | --- | --- | --- |
-| Chromium 154 (2026-10-19/20), 155 (2026-10-23/24) | text-input-v3 (`wayland_v2`); observed, IME-parity | On 155 (2026-10-24): a textarea, a contenteditable after a trailing space, Quill, ProseMirror and Lexical on their own sites, a typo fix, a selection revision, and a password field and search boxes refused. The installed-flow matrix below; as an Omarchy web app (`chrome-<site>__-Default`) 4/4 inline in 168–321 ms, with window words. On 155, `adress ` showed `→ address`; Tab corrected it, the read-back confirmed it and one Ctrl+Z restored the typo. A page that moves focus on the deletion split it, and the notice named it ([ADR 0011](../../docs/decisions/0011-checked-corrections-in-append-only-apps.md)) | Page fields carry no purpose hints, so the observer's checks deny passwords; the omnibox's `Url` purpose is denied before any observer request. Needs Fcitx 5.1.23 |
+| Chromium 154 (2026-10-19/20), 155 (2026-10-23/24) | text-input-v3 (`wayland_v2`); observed, IME-parity | On 155 (2026-10-24): a textarea, a contenteditable after a trailing space, Quill, ProseMirror and Lexical on their own sites, a typo fix, a selection revision, and a password field and search boxes refused. With inspection on the keystroke, a textarea showed 8/8 inline in 189–308 ms after the last key on a fresh focus (median 215, against 276 before). The installed-flow matrix below; as an Omarchy web app (`chrome-<site>__-Default`) 4/4 inline in 168–321 ms, with window words. On 155, `adress ` showed `→ address`; Tab corrected it, the read-back confirmed it and one Ctrl+Z restored the typo. A page that moves focus on the deletion split it, and the notice named it ([ADR 0011](../../docs/decisions/0011-checked-corrections-in-append-only-apps.md)) | Page fields carry no purpose hints, so the observer's checks deny passwords; the omnibox's `Url` purpose is denied before any observer request. Needs Fcitx 5.1.23 |
 | Brave Origin 1.97 (2026-10-20), 1.98 (2026-10-24) | as above | On 1.98: a textarea, a contenteditable and a confirmed typo fix; a password field sent nothing. On 1.97: 5/5 in a textarea, 3/3 in a contenteditable, 4/4 as an `--app` web app; Ctrl+→ takes all, Escape hides without editing | as above |
 | Zen 1.23.3b, Gecko 158 (2026-10-20) | `wayland_v2`, `zen` | Suggestions and window words | The urlbar shares the page's context with no `Url` hint, so the observer denies it. Gecko sends only the caret's paragraph. One Ctrl+Z undoes an acceptance alone. A fresh profile once showed the suggestion in Fcitx's candidate box |
 | Zen Twilight 1.24t (2026-10-24) | `wayland_v2`, `zen-twilight` | A textarea and a contenteditable suggested; a typo fix was confirmed by read-back | As Zen: the observer denies the urlbar; password and search fields refused |
 | VS Code 1.142 (2026-10-20), 1.143 (2026-10-24) | as Chromium | 3/3; the saved file read back exactly; on 1.143 a markdown buffer suggested and Tab committed a word | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. `wtype` trials need `"keyboard.dispatch": "keyCode"` |
-| LibreOffice Writer 26.8.1, GTK 3 (2026-10-20/24) | observed sentence | 2/3 inline in 169 and 241 ms; Tab commits one word; on 2026-10-24 inline again, and Alt+F7 turned `lsit` into `list`, undone by one Ctrl+Z | Writer sends only the caret's sentence. Spelling goes through the [extension](../libreoffice/README.md): Alt+F7 replaces, one Ctrl+Z restores |
+| LibreOffice Writer 26.8.1, GTK 3 (2026-10-20/24) | observed sentence | 2/3 inline in 169 and 241 ms; Tab commits one word; on 2026-10-24 inline again, and Alt+F7 turned `lsit` into `list`, undone by one Ctrl+Z; with inspection on the keystroke, 8/8 inline in 216–300 ms after the last key (median 241, against 359 before) | Writer sends only the caret's sentence. Spelling goes through the [extension](../libreoffice/README.md): Alt+F7 replaces, one Ctrl+Z restores |
 | Ghostty 1.3.1 (2026-10-20/24) | typed line ([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.md)) | 3/3 in the panel; one word per Tab; corrections erase the typo with DELs (`teh → the` on 2026-10-24) | Exact opt-in rule |
 | foot 1.28.0 (2026-10-20) | typed line | 4/4 in the panel in 118–307 ms; `adress → address` with DELs | Exact opt-in rule |
 | Omawrite 0.7.0 (2026-10-20), 0.7.2 (2026-10-24), Qt 6.12, fcitx5-qt 5.1.16 | `QT_IM_MODULE=fcitx`; observed native exact | 6/7 in 248–426 ms; Ctrl+→ takes all; one Ctrl+Z restores the exact prefix; on 0.7.2 a suggestion outlives the autosave's title change and Tab commits | Suggestions through the [surrounding echo](#contract); no spelling replacement until fcitx5-qt is fixed. 0.5.0 replaced a typo in two undo steps |
-| Xournal++ 1.3.7, GTK 3 text tool | `GTK_IM_MODULE=fcitx` launcher override | 20/20 | Tab requests; after Escape leaves text editing, one document undo restores the prefix |
-| Telegram (Qt) | `dbus`, canonicalized to `telegram` | Not retried since fcitx5-qt 5.1.16 | Probably needs the echo handling, like Omawrite |
+| Xournal++ 1.3.7, 1.3.8 (2026-10-24), GTK 3 text tool | `GTK_IM_MODULE=fcitx` launcher override | 20/20; on 1.3.8 a Tab request showed in the panel and Tab committed it | Tab requests; after Escape leaves text editing, one document undo restores the prefix |
+| Telegram 7.3.2, Qt 6, fcitx5-qt 5.1.16 (2026-10-24) | `dbus`, canonicalized to `telegram`; observed | The composer suggested inline through the [surrounding echo](#contract) and Tab committed a word | As Omawrite: no spelling replacement until fcitx5-qt is fixed |
+| Discord 1.0.166 (2026-10-24) | as Chromium; the flag on its launcher | Without the renderer flag the observer found no field; started with it, also from the launcher `--observed-app discord` writes, the composer suggested inline and Tab committed a word | Typing shows Discord's typing indicator, so trials use a private channel |
 
 The 2026-10-24 cells, their drivers and screenshots are in
 `output/native-trials/2026-10-24-full-trial/` (`results.jsonl`).

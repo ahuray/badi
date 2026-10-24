@@ -52,8 +52,8 @@ LOCK_FLAGS = ("locked", "secure", "requested", "pending", "sessionLocked")
 # "glib" is /usr/bin/chromium's GLib shell parsing, "words" strips # comments
 # and splits on whitespace without quote handling (Codex and Claude: read -a;
 # VS Code and Grok Bot: sed plus unquoted expansion), and "line" passes every non-comment
-# line as one argument (mapfile). Discord has no such file; see the
-# accessibility runbook.
+# line as one argument (mapfile). Discord has no such file; see
+# OBSERVED_LAUNCHERS.
 OBSERVED_APP_FLAGS = {
     "chromium": ("chromium-flags.conf", "glib"),
     "brave-origin": ("brave-origin-flags.conf", "line"),
@@ -68,6 +68,10 @@ OBSERVED_APP_FLAGS = {
 # needs. The bare switch also selects the complete mode. Native Wayland
 # text-input-v3 is the Chromium 152 / Electron 42 default, so no input flags.
 OBSERVED_FLAG = "--force-renderer-accessibility=complete"
+# Discord reads no flags file, and its web client resets the chromiumSwitches
+# it keeps after one launch. The switch goes on every Exec line of the user's
+# copy of its launcher instead, which shadows the packaged one.
+OBSERVED_LAUNCHERS = {"discord": "discord.desktop"}
 ACCESSIBILITY_SWITCH = "--force-renderer-accessibility"
 COMPLETE_ACCESSIBILITY = (ACCESSIBILITY_SWITCH, OBSERVED_FLAG)
 # The line hyprland.lua needs to load Badi's preview layer rule.
@@ -807,6 +811,39 @@ def observed_flags(text, app="chromium"):
         return None
     return text + ("\n" if text and not text.endswith("\n") else "") + \
         "# Badi: renderer accessibility for the focused-field observer\n" + OBSERVED_FLAG + "\n"
+
+
+def observed_launcher(text, app="discord"):
+    """`text`, a desktop entry, with the renderer switch after the program on
+    every Exec line; None when each line has it already.
+
+    `env` and its assignments before the program are kept in front. A reduced
+    or disabled accessibility choice, or a quoted program, is reported instead
+    of changed, as in observed_flags.
+    """
+    name = OBSERVED_LAUNCHERS[app]
+    lines, changed = [], False
+    for line in text.split("\n"):
+        if line.startswith("Exec="):
+            words = line[len("Exec="):].split(" ")
+            switches = [word for word in words if word.split("=", 1)[0] in
+                        (ACCESSIBILITY_SWITCH, "--disable-renderer-accessibility")]
+            if any(word not in COMPLETE_ACCESSIBILITY for word in switches):
+                raise RuntimeError(f"An existing renderer accessibility choice in {name} conflicts with the measured "
+                                   "complete accessibility mode; its launcher was not changed.")
+            if not switches:
+                program = 0
+                if words[0] == "env":
+                    program = 1
+                    while program < len(words) and "=" in words[program] and not words[program].startswith("-"):
+                        program += 1
+                if program >= len(words) or not words[program] or words[program].startswith('"'):
+                    raise RuntimeError(f"Inspect the Exec line in {name} before changing it: its program is "
+                                       "missing or quoted.")
+                words.insert(program + 1, OBSERVED_FLAG)
+                line, changed = "Exec=" + " ".join(words), True
+        lines.append(line)
+    return "\n".join(lines) if changed else None
 
 
 # Omarchy's own commands replace these files wholesale (omarchy-refresh-hyprland,

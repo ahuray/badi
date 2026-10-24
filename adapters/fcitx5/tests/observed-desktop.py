@@ -29,7 +29,9 @@ UNAVAILABLE_APPS = ('firefox', 'zen-browser', 'app.zen_browser.zen', 'librewolf'
 # Mixed-case Chromium- and Gecko-family programs fold to granted ids without an observer rule.
 UNOBSERVED_FAMILY_PROGRAMS = {'chrome': 'chrome', 'Google-chrome': 'google-chrome',
                               'brave': 'brave', 'Brave-browser': 'brave-browser',
-                              'chrome-app.hey.com__-Default': 'chrome-app.hey.com__-default',
+                              # An installed PWA; a --app window (chrome-<host>__-Default) is chromium.
+                              'chrome-agimnkijcaahngcdmfeangaknmldooml-Default':
+                                  'chrome-agimnkijcaahngcdmfeangaknmldooml-default',
                               'com.google.Chrome': 'com.google.chrome',
                               'Vivaldi-stable': 'vivaldi-stable', 'code-oss': 'code-oss',
                               # Gecko: another Zen build and a PWAsForFirefox window.
@@ -411,7 +413,7 @@ def session(root, report):
             assert not context.key(ord('Y'), 5), app + ' cannot accept unsupported native editing'
             assert auxiliary() == '', app + ' still shows no notice'
             assert 'Tab to accept' not in json.dumps(context.events)
-            assert backend.reads == reads and backend.inspections == inspections
+            assert backend.reads == reads and backend.inspections == inspections, app + ' is never inspected'
             assert context.candidate() is None and context.commits() == []
             assert control('status')['metrics']['context_updates'] == 0
             context.close()
@@ -1182,12 +1184,16 @@ def session(root, report):
                                      if rule['identity'].get('app_id') not in ('cursor', FIXTURE_APP)]}
         control('settings', 'replace', '--if-revision', str(listed['revision']), '--json', json.dumps(default_mode))
         required = reason_count('app_rule_required')
+        # The observer does not corroborate this field, so only the manual
+        # path is left; a corroborated field would open (the cursor case below).
+        backend.apps.discard(FIXTURE_APP)
         open_context(FIXTURE_APP)
         context.text(PREFIX)
         wait(lambda: reason_count('app_rule_required') > required, 'default-allowed manual app needs a rule')
         assert not context.key(desktop.TAB), 'the manual path keeps Tab without an exact app rule'
         quiet(.3)
         assert context.candidate() is None and context.commits() == []
+        backend.apps.add(FIXTURE_APP)
         backend.browser, backend.uri, backend.role = False, ALLOWED_URI, 'text'
         backend.apps.add('cursor')
         backend.value, backend.caret = PREFIX, len(PREFIX)

@@ -161,6 +161,8 @@ class Reporter:
         self.lookup_key = lookup_key
         self.backoff = backoff
         self._key_retry = None
+        # Counts broker connections: a key looked up for one goes to it only.
+        self._connection = 0
         self.session_active = True
         self.sleeping = False
         self.on_battery = False
@@ -180,9 +182,8 @@ class Reporter:
         """Sends the current state unless the broker already has it; returns
         whether the broker acknowledged it.
 
-        The report goes first on a new connection: the keyring lookup is
-        synchronous and may wait for the Secret Service, so the style key
-        follows once this call (a sleep announcement, say) has returned.
+        The report goes first on a new connection; the style key follows
+        once this call (a sleep announcement, say) has returned.
         """
         state = self.state()
         if self.link.connected and self.acknowledged == state:
@@ -191,6 +192,7 @@ class Reporter:
             connected = self.link.connected
             if not connected:
                 self.link.connect()
+                self._connection += 1
                 self._watch_link()
             status = self.link.send_report(*state)
         except LinkError as error:
@@ -218,27 +220,37 @@ class Reporter:
         self._key_retry = schedule(self._deliver_key)
 
     def _deliver_key(self):
-        """Hands the keyring's style key to the connected broker, which keeps
-        it in memory only. A locked keyring is retried later."""
+        """Asks the keyring for the style key for the connected broker, which
+        keeps it in memory only. The lookup runs without blocking the main
+        loop, so a slow Secret Service never holds a session report."""
         self._key_retry = None
         if not self.link.connected:
             return GLib.SOURCE_REMOVE
+        connection = self._connection
         try:
-            key = self.lookup_key()
-        except Exception as error:  # style_key.KeyringError, or a missing service
-            reason = str(error) if str(error).startswith("keyring_") else "keyring_unavailable"
+            self.lookup_key(lambda result: self._key_found(connection, result))
+        except Exception as error:  # a missing Secret Service binding
+            self._key_found(connection, error)
+        return GLib.SOURCE_REMOVE
+
+    def _key_found(self, connection, result):
+        """Sends a found key to the connection it was looked up for; a locked
+        or unavailable keyring is retried later."""
+        if connection != self._connection or not self.link.connected:
+            return
+        if isinstance(result, Exception):  # style_key.KeyringError, or a missing service
+            reason = str(result) if str(result).startswith("keyring_") else "keyring_unavailable"
             log(f"style key not delivered ({reason}); retrying in {KEY_RETRY_SECONDS} s")
             self._schedule_key(lambda deliver: GLib.timeout_add_seconds(KEY_RETRY_SECONDS, deliver))
-            return GLib.SOURCE_REMOVE
-        if key is None:
-            return GLib.SOURCE_REMOVE
+            return
+        if result is None:
+            return
         try:
-            state = self.link.send_style_key(*key)
+            state = self.link.send_style_key(*result)
         except LinkError as error:
             self._lost(str(error))
-            return GLib.SOURCE_REMOVE
+            return
         log(f"style key delivered; broker key state {state}")
-        return GLib.SOURCE_REMOVE
 
     def close(self):
         self._unwatch()

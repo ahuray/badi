@@ -458,6 +458,27 @@ class Preview:
             return {"reason": "uncalibrated_caret"}
         if not ltr_text(text):
             return {"reason": "right_to_left_text"}
+        monitor = self._caret_monitor(caret)
+        if monitor is None:
+            return {"reason": "monitor_unmatched"}
+        self.Layer.set_monitor(self.window, monitor)
+        font = focus.get("font") if isinstance(focus, dict) else None
+        self.label.set_attributes(self._font_attributes(caret, font))
+        self._refresh_layer_rule()
+        position, placement, width, height = self._place(caret, text, font)
+        if position is None:
+            self.label.set_text("")
+            return {"reason": "no_room"}
+        self.Layer.set_margin(self.window, self.Layer.Edge.LEFT, position[0])
+        self.Layer.set_margin(self.window, self.Layer.Edge.TOP, position[1])
+        self.window.set_visible(True)
+        self.timer = self.GLib.timeout_add(ttl_ms, self._expire)
+        # Monitor-local logical pixels, as `hyprctl layers` reports them.
+        return {"placement": placement, "monitor": caret.connector, "x": position[0], "y": position[1],
+                "width": width, "height": height, "ttl_ms": ttl_ms}
+
+    def _caret_monitor(self, caret):
+        """The one monitor with the caret's connector and geometry, or None."""
         monitors = self.Gdk.Display.get_default().get_monitors()
         matching = []
         for index in range(monitors.get_n_items()):
@@ -466,10 +487,10 @@ class Preview:
             if (monitor.get_connector() == caret.connector and
                     all(abs(a - b) <= 1 for a, b in zip((rect.x, rect.y, rect.width, rect.height), caret.monitor))):
                 matching.append(monitor)
-        if len(matching) != 1:
-            return {"reason": "monitor_unmatched"}
-        self.Layer.set_monitor(self.window, matching[0])
-        font = focus.get("font") if isinstance(focus, dict) else None
+        return matching[0] if len(matching) == 1 else None
+
+    def _font_attributes(self, caret, font):
+        """The field's size, and its family and weight when it reports them."""
         attributes = self.Pango.AttrList()
         attributes.insert(self.Pango.attr_size_new_absolute(round(font_pixels(caret, font) * self.Pango.SCALE)))
         if isinstance(font, dict):
@@ -479,8 +500,10 @@ class Preview:
             weight = font.get("weight")
             if isinstance(weight, int) and not isinstance(weight, bool):
                 attributes.insert(self.Pango.attr_weight_new(weight))
-        self.label.set_attributes(attributes)
-        self._refresh_layer_rule()
+        return attributes
+
+    def _place(self, caret, text, font):
+        """(position, placement, width, height); position is None without room."""
         position = None
         if not caret.text_follows or caret.following_x is not None:
             width, height, baseline = self._layout(text, chip=False)
@@ -500,13 +523,4 @@ class Preview:
         if position is None:
             width, height, _baseline = self._layout(text.lstrip(" "), chip=True)
             position, placement = place_edge_panel(caret, width, height), "edge_panel"
-        if position is None:
-            self.label.set_text("")
-            return {"reason": "no_room"}
-        self.Layer.set_margin(self.window, self.Layer.Edge.LEFT, position[0])
-        self.Layer.set_margin(self.window, self.Layer.Edge.TOP, position[1])
-        self.window.set_visible(True)
-        self.timer = self.GLib.timeout_add(ttl_ms, self._expire)
-        # Monitor-local logical pixels, as `hyprctl layers` reports them.
-        return {"placement": placement, "monitor": caret.connector, "x": position[0], "y": position[1],
-                "width": width, "height": height, "ttl_ms": ttl_ms}
+        return position, placement, width, height
