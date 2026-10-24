@@ -27,12 +27,16 @@ pub enum NoSuggestionReason {
     /// The runtime failed or returned a malformed response.
     ProviderError,
     /// A token of the suggestion was less likely than the confidence floor
-    /// (`writing::CONFIDENCE_FLOOR`), or its likelihood was unknown.
+    /// (`writing::CONFIDENCE_FLOOR`, or the app's stricter quiet floor), or
+    /// its likelihood was unknown.
     LowConfidence,
+    /// The writer turned down the same next word at the same spot in this
+    /// app or site before: Escape, or typing other letters twice.
+    Repeated,
 }
 
 impl NoSuggestionReason {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::RequestAbstained,
         Self::BudgetPrefill,
         Self::BudgetStream,
@@ -42,6 +46,7 @@ impl NoSuggestionReason {
         Self::Timeout,
         Self::ProviderError,
         Self::LowConfidence,
+        Self::Repeated,
     ];
 
     const fn index(self) -> usize {
@@ -55,6 +60,7 @@ impl NoSuggestionReason {
             Self::Timeout => 6,
             Self::ProviderError => 7,
             Self::LowConfidence => 8,
+            Self::Repeated => 9,
         }
     }
 }
@@ -120,7 +126,7 @@ pub struct Metrics {
     words_dispatched: AtomicU64,
     commit_failures: AtomicU64,
     provider_errors: AtomicU64,
-    no_suggestion: [AtomicU64; 9],
+    no_suggestion: [AtomicU64; 10],
     /// Zero until the first no-suggestion outcome; otherwise its index plus one.
     last_no_suggestion: AtomicU8,
     type_through_carried: AtomicU64,
@@ -143,6 +149,9 @@ pub struct NoSuggestionSnapshot {
     /// Absent from brokers that predate the confidence gate.
     #[serde(default)]
     pub low_confidence: u64,
+    /// Absent from brokers that predate turned-down words.
+    #[serde(default)]
+    pub repeated: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last: Option<NoSuggestionReason>,
 }
@@ -160,6 +169,7 @@ impl NoSuggestionSnapshot {
             NoSuggestionReason::Timeout => self.timeout,
             NoSuggestionReason::ProviderError => self.provider_error,
             NoSuggestionReason::LowConfidence => self.low_confidence,
+            NoSuggestionReason::Repeated => self.repeated,
         }
     }
 
@@ -373,6 +383,7 @@ impl Metrics {
                 timeout: count(NoSuggestionReason::Timeout),
                 provider_error: count(NoSuggestionReason::ProviderError),
                 low_confidence: count(NoSuggestionReason::LowConfidence),
+                repeated: count(NoSuggestionReason::Repeated),
                 last,
             }),
             type_through: Some(TypeThroughSnapshot {
@@ -416,7 +427,7 @@ mod tests {
         }
         assert_eq!(
             metrics.snapshot().no_suggestion.expect("breakdown").total(),
-            45
+            55
         );
     }
 

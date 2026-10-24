@@ -31,6 +31,17 @@ pub(super) struct CarryScope {
 }
 
 impl CarryScope {
+    /// A desktop app's scope, for tests of what is kept per app.
+    #[cfg(test)]
+    pub(super) fn desktop_app(app_id: &str) -> Self {
+        Self {
+            adapter_kind: AdapterKind::Fcitx,
+            kind: TargetKind::DesktopApplication,
+            app_id: app_id.to_owned(),
+            origin: None,
+        }
+    }
+
     pub(super) fn of(session: &SessionState) -> Self {
         let target = &session.target.target;
         Self {
@@ -52,6 +63,8 @@ pub(super) struct TypeThrough {
     pub(super) expires_at: Instant,
     /// The day of the `Shown` aggregate the original suggestion recorded.
     pub(super) aggregate_day: Option<u64>,
+    /// Typing other letters at it already counted it as turned down once.
+    pub(super) turned_down: bool,
 }
 
 impl TypeThrough {
@@ -141,6 +154,7 @@ mod tests {
             text: text.to_owned(),
             expires_at: Instant::now() + expires_in,
             aggregate_day: None,
+            turned_down: false,
         }
     }
 

@@ -1340,7 +1340,8 @@
         "stale",
         "timeout",
         "provider_error",
-        "low_confidence"
+        "low_confidence",
+        "repeated"
       ]
     },
     "carryMiss": {
@@ -1402,7 +1403,11 @@
         "provider_error": { "$ref": "#/$defs/counter" },
         "low_confidence": {
           "$ref": "#/$defs/counter",
-          "description": "Suggestions withheld because a token was less likely than the confidence floor. Optional for brokers that predate the confidence gate."
+          "description": "Suggestions withheld because a token was less likely than the confidence floor, or the app's stricter quiet floor. Optional for brokers that predate the confidence gate."
+        },
+        "repeated": {
+          "$ref": "#/$defs/counter",
+          "description": "Automatic suggestions withheld because the writer turned down that next word at the same spot in that app or site before. Optional for brokers that predate turned-down words."
         },
         "last": { "$ref": "#/$defs/noSuggestionReason" }
       }

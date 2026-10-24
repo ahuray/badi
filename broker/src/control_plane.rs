@@ -14,7 +14,7 @@ use crate::settings::{
     remove_private_temporary_files,
 };
 use crate::stats::{
-    STATS_FILE_NAME, StatsError, StatsEvent, StatsStore, StatsSummary, local_today,
+    STATS_FILE_NAME, StatsCounts, StatsError, StatsEvent, StatsStore, StatsSummary, local_today,
 };
 use crate::style::{STYLE_FILE_NAME, StyleError, StyleKey, StyleSample, StyleStatus, StyleStore};
 use crate::vocabulary::learned::{LEARNED_FILE_NAME, LearnedStatus, LearnedStore, OfferedWords};
@@ -156,6 +156,19 @@ impl ControlPlane {
 
     /// Deletes days past retention and writes pending counts. Returns whether
     /// the file changed.
+    /// One app or site's usage counts over the last seven days; `None`
+    /// while the statistics file is unreadable.
+    pub fn stats_last_7_days(
+        &self,
+        identity: &StableIdentity,
+    ) -> Result<Option<StatsCounts>, ControlPlaneError> {
+        let state = self.lock_state()?;
+        Ok(state
+            .stats
+            .as_ref()
+            .map(|store| store.last_7_days(identity, local_today())))
+    }
+
     pub fn persist_stats(&self) -> Result<bool, ControlPlaneError> {
         let mut state = self.lock_state()?;
         let Some(store) = state.stats.as_mut() else {

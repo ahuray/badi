@@ -103,6 +103,13 @@ struct GenerationBinding {
     /// Letters were typed at a word start in front of `after`'s first word,
     /// so the suggestion ends in the space that keeps them apart.
     separates_next_word: bool,
+    /// The app or site, for words the writer turned down there.
+    scope: CarryScope,
+    /// The writer asked: turned-down words and quiet floors do not apply.
+    explicit: bool,
+    /// The app's stricter confidence floor while its suggestions are seldom
+    /// taken; `None` keeps the provider's own.
+    quiet_floor: Option<f64>,
 }
 
 /// A type-through remainder keeps its original suggestion's deadline and
@@ -164,6 +171,7 @@ impl Broker {
     /// Checks the request against the session's current context and policy,
     /// retires any older generation, and either shows a type-through
     /// remainder (`None`) or takes provider capacity for a new generation.
+    #[allow(clippy::too_many_lines)]
     async fn admit_generation(
         &self,
         coordinates: Coordinates,
@@ -200,6 +208,9 @@ impl Broker {
         let separates_next_word = state.typed_at_word_start(&scope, &context);
         let carry = state.type_through.as_ref();
         let (carried, carry_miss) = consult_carry(carry, &scope, &context, payload.explicit);
+        if carry_miss == Some(CarryMiss::PrefixMismatch) {
+            state.record_typed_over(&scope, &context);
+        }
         let mid_line = state
             .settings
             .as_ref()
@@ -213,6 +224,11 @@ impl Broker {
         }
         let escape_quiet = state.quiet_request(coordinates, payload.explicit)?;
         let power_start_delay = state.power_start_delay(trigger);
+        let quiet_floor = if payload.explicit {
+            None
+        } else {
+            state.quiet_floor(self.inner.control_plane.as_deref(), &target)
+        };
         let session = state.session_with_data_access(coordinates.session_id)?;
         let mut binding = GenerationBinding {
             coordinates,
@@ -224,6 +240,9 @@ impl Broker {
             after: context.after.clone(),
             language: context.language.clone(),
             separates_next_word,
+            scope: scope.clone(),
+            explicit: payload.explicit,
+            quiet_floor,
         };
         if escape_quiet || session.nothing_to_correct(payload.explicit) {
             self.abstain_admitted(state, binding, generation_timeout)
@@ -418,7 +437,8 @@ impl Broker {
             stats.as_ref(),
             cancelled_before_first_token,
         );
-        self.finish_generation(binding, &cancellation, answer).await;
+        self.finish_generation(binding, &cancellation, answer, stats)
+            .await;
     }
 
     /// Every path records exactly one no-suggestion class or one shown result.
@@ -427,14 +447,16 @@ impl Broker {
         binding: GenerationBinding,
         cancellation: &CancellationToken,
         answer: ProviderAnswer,
+        provider_stats: Option<ProviderStats>,
     ) {
-        let proposal = match self.check_provider_answer(&binding, cancellation, answer) {
-            Ok(proposal) => proposal,
-            Err(Withheld::Clear(reason)) => {
-                return self.clear_failed_generation(binding, reason).await;
-            }
-            Err(Withheld::Silently) => return,
-        };
+        let proposal =
+            match self.check_provider_answer(&binding, cancellation, answer, provider_stats) {
+                Ok(proposal) => proposal,
+                Err(Withheld::Clear(reason)) => {
+                    return self.clear_failed_generation(binding, reason).await;
+                }
+                Err(Withheld::Silently) => return,
+            };
         let state = self.inner.state.lock().await;
         if Instant::now() >= binding.deadline {
             drop(state);
@@ -451,6 +473,7 @@ impl Broker {
         binding: &GenerationBinding,
         cancellation: &CancellationToken,
         answer: ProviderAnswer,
+        provider_stats: Option<ProviderStats>,
     ) -> Result<WritingProposal, Withheld> {
         let metrics = &self.inner.metrics;
         if Instant::now() >= binding.deadline {
@@ -478,6 +501,22 @@ impl Broker {
             }
         };
         metrics.record_provider_output(raw.text.len());
+        // An app whose suggestions are seldom taken shows only surer ones.
+        // A correction, or a proposal the model did not score, keeps its own.
+        if let (Some(floor), Some(minimum)) = (
+            binding.quiet_floor,
+            provider_stats.and_then(|stats| stats.min_logprob_hundredths),
+        ) {
+            if raw.replace_before.is_none() && f64::from(minimum) / 100.0 < floor {
+                metrics.record_no_suggestion(NoSuggestionReason::LowConfidence);
+                debug_trace::emit("suggestion withheld", |entry| {
+                    entry.put("sid", debug_trace::session(binding.coordinates.session_id));
+                    entry.put("reason", "quiet_app");
+                    entry.put("floor", floor);
+                });
+                return Err(Withheld::Clear(ReasonCode::NoSuggestion));
+            }
+        }
         let checked = if binding.separates_next_word && raw.replace_before.is_none() {
             separated_proposal(self.inner.provider_kind, binding, raw)
         } else {
@@ -517,6 +556,14 @@ impl Broker {
     ) {
         let metrics = &self.inner.metrics;
         let settings_revision = state.settings_revision;
+        // A remainder the writer is typing through, a correction or an asked
+        // suggestion is never a word they turned down.
+        let turned_down = carried.is_none()
+            && proposal.replace_before.is_none()
+            && !binding.explicit
+            && state
+                .rejections
+                .withholds(&binding.scope, &binding.before, &proposal.text);
         let Some(session) = session_awaiting(&mut state, &binding, cancellation) else {
             metrics.record_stale_result();
             metrics.record_no_suggestion(NoSuggestionReason::Stale);
@@ -532,8 +579,22 @@ impl Broker {
             before,
             after,
             language,
-            separates_next_word: _,
+            ..
         } = binding;
+        if turned_down {
+            metrics.record_no_suggestion(NoSuggestionReason::Repeated);
+            debug_trace::emit("suggestion withheld", |entry| {
+                entry.put("sid", debug_trace::session(coordinates.session_id));
+                entry.put("reason", "repeated");
+            });
+            let _ = session.sink.send(BrokerEvent::generation_withdrawn(
+                coordinates,
+                fingerprint,
+                ReasonCode::NoSuggestion,
+                request_id,
+            ));
+            return;
+        }
         if proposal.replace_before.is_none() && session.spelling_only() {
             metrics.record_no_suggestion(NoSuggestionReason::ModelAbstained);
             let _ = session.sink.send(BrokerEvent::generation_withdrawn(
@@ -607,6 +668,7 @@ impl Broker {
             text: payload.text.clone(),
             expires_at,
             aggregate_day,
+            turned_down: false,
         });
         session.visible = Some(VisibleSuggestion {
             payload,

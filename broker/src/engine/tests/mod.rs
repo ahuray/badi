@@ -38,6 +38,8 @@ mod generation;
 mod outcomes;
 mod policy;
 mod probe;
+mod quietness;
+mod rejections;
 mod revision;
 mod snooze;
 mod spelling;

@@ -212,6 +212,7 @@ NO_SUGGESTION = {
     "timeout": "the broker deadline (600 ms while typing, 1.25 s after an explicit request) expired",
     "provider_error": "the local model runtime failed or answered malformed",
     "low_confidence": "a word of the suggestion was too unlikely for the model to be sure, so it was withheld",
+    "repeated": "you turned down that next word at the same spot before (Escape, or typing other letters twice), so it was withheld",
 }
 
 
