@@ -187,15 +187,18 @@ as well. `python3 scripts/badi_install.py restore DIR` rolls one back, reloads
 user units when a service file was restored, and updates the install receipt
 to those restored bytes. The desktop install needs an unlocked desktop;
 `--broker-only` updates only the model service while locked.
-Without a writing model, the installer offers the one recommended for this
-device: it names the model, its size and any terms that come with it, and
-downloads it (pinned and hash-checked) only after you accept. Unattended,
-`--model ID` picks the model and `--accept-model-license` accepts its terms.
+Without a writing model, the installer lists the models that fit this
+device, the recommended one first, each with its size, its result in Badi's
+blind screen and its licence. You pick one; a model that comes with terms
+(Gemma, Llama) downloads only after you accept them, and every download is
+pinned and hash-checked. Unattended, `--model ID` picks the model and
+`--accept-model-license` accepts its terms; without either, the installer
+names the models that fit.
 After the install, `badi model` switches models ([below](#choose-the-writing-model)). The pinned
 llama.cpp runtime is `~/.local/share/badi/runtimes/llama-b11840`, with its
 archive in `runtimes/downloads/`; on a new machine, fetch both first as
 [Writing assets](packaging/aur/README.md#writing-assets) shows (the model
-there is optional, since the installer offers one). `install-desktop.py`
+there is optional, since the installer lists the models that fit). `install-desktop.py`
 checks those pinned hashes before it builds, and the broker checks them again
 before it starts.
 

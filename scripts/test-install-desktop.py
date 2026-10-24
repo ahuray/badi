@@ -132,16 +132,22 @@ class DesktopInstallTests(unittest.TestCase):
              'filename': 'c.gguf', 'download_bytes': 7, 'sha256': '2' * 64}]}
         reply = unittest.mock.Mock(stdout=json.dumps(catalog))
         record = Path('.local/state/badi/model-terms.json')
-        for model_id, accept, tty, answer, downloaded in (
-                ('gemma-3-1b', True, False, None, 'gemma-3-1b'),
-                ('qwen3-1.7b', False, False, None, 'qwen3-1.7b'),
-                (None, False, True, 'y', 'gemma-3-1b'),
-                (None, False, True, 'n', None),
-                ('too-big', True, False, None, None)):
-            with self.subTest(model=model_id, tty=tty, answer=answer), tempfile.TemporaryDirectory() as temporary, \
+        # On a terminal: Enter picks the recommended model, then its terms
+        # are asked; a number picks another; n or q stops.
+        for model_id, accept, tty, answers, downloaded in (
+                ('gemma-3-1b', True, False, [], 'gemma-3-1b'),
+                ('qwen3-1.7b', False, False, [], 'qwen3-1.7b'),
+                (None, False, True, ['', 'y'], 'gemma-3-1b'),
+                (None, False, True, ['2'], 'qwen3-1.7b'),
+                (None, False, True, ['1', 'n', 'q'], None),
+                (None, False, True, ['n'], None),
+                ('gemma-3-1b', False, True, ['y'], 'gemma-3-1b'),
+                ('too-big', True, False, [], None)):
+            with self.subTest(model=model_id, tty=tty, answers=answers), tempfile.TemporaryDirectory() as temporary, \
                  patch.object(installer.subprocess, 'run', return_value=reply), \
                  patch.object(installer.sys.stdin, 'isatty', return_value=tty), \
-                 patch('builtins.input', return_value=answer) as asked, \
+                 patch('builtins.input', side_effect=answers) as asked, \
+                 patch('builtins.print'), \
                  patch.object(installer.badi_install, 'download_model') as download:
                 home = Path(temporary)
                 if downloaded is None:
@@ -153,12 +159,52 @@ class DesktopInstallTests(unittest.TestCase):
                 self.assertEqual(installer.require_writing_model(home, 'badictl', model_id, accept)['id'], downloaded)
                 self.assertEqual(download.call_args.args[0]['id'], downloaded)
                 self.assertEqual(download.call_args.args[1], home / '.local/share/badi/models')
-                self.assertEqual(asked.called, tty)
+                self.assertEqual(asked.call_count, len(answers))
                 if downloaded == 'gemma-3-1b':
                     accepted, = json.loads((home / record).read_text())['accepted']
                     self.assertEqual((accepted['model'], accepted['terms']), ('gemma-3-1b', 'https://ai.google.dev/gemma/terms'))
                 else:
                     self.assertFalse((home / record).exists(), 'an Apache-2.0 model records no terms')
+
+    def test_a_new_user_picks_among_the_models_that_fit(self):
+        catalog = {'recommended': {'id': 'gemma-3-1b'}, 'catalog': [
+            {'id': 'qwen3-0.6b', 'name': 'Qwen3 0.6B', 'license': 'Apache-2.0', 'fits': True,
+             'filename': 'q.gguf', 'download_bytes': 639_446_688, 'sha256': '0' * 64, 'screen_useful': None},
+            {'id': 'qwen3-1.7b', 'name': 'Qwen3 1.7B', 'license': 'Apache-2.0', 'fits': True,
+             'filename': 'b.gguf', 'download_bytes': 1_282_439_264, 'sha256': '1' * 64, 'screen_useful': 33},
+            {'id': 'too-big', 'name': 'Too big', 'license': 'Apache-2.0', 'fits': False,
+             'filename': 'c.gguf', 'download_bytes': 7, 'sha256': '2' * 64, 'screen_useful': 60},
+            {'id': 'llama-3.2-1b', 'name': 'Llama 3.2 1B', 'license': 'Llama-3.2-Community', 'fits': True,
+             'filename': 'l.gguf', 'download_bytes': 807_690_208, 'sha256': '3' * 64, 'screen_useful': 41},
+            {'id': 'gemma-3-1b', 'name': 'Gemma 3 1B', 'license': 'Gemma', 'fits': True,
+             'filename': 'a.gguf', 'download_bytes': 806_056_736, 'sha256': '4' * 64, 'screen_useful': 46}]}
+        self.assertEqual([model['id'] for model in installer.writing_model_choices(catalog)],
+                         ['gemma-3-1b', 'llama-3.2-1b', 'qwen3-1.7b', 'qwen3-0.6b'],
+                         'recommended first, then by screen result, unscreened last; too large left out')
+        reply = unittest.mock.Mock(stdout=json.dumps(catalog))
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(installer.subprocess, 'run', return_value=reply), \
+             patch.object(installer.sys.stdin, 'isatty', return_value=True), \
+             patch('builtins.input', side_effect=['7', '3']) as asked, \
+             contextlib.redirect_stdout(output), \
+             patch.object(installer.badi_install, 'download_model') as download:
+            self.assertEqual(installer.require_writing_model(Path(temporary), 'badictl')['id'], 'qwen3-1.7b')
+        listing = output.getvalue()
+        self.assertIn('1  Gemma 3 1B    0.81 GB  46 of 135 useful   Gemma Terms of Use  recommended', listing)
+        self.assertIn('3  Qwen3 1.7B    1.28 GB  33 of 135 useful   Apache-2.0', listing)
+        self.assertIn('4  Qwen3 0.6B    0.64 GB  not screened       Apache-2.0', listing)
+        self.assertNotIn('Too big', listing)
+        self.assertEqual(asked.call_count, 2, 'a number out of range asks again; an Apache-2.0 model asks no terms')
+        self.assertEqual(download.call_args.args[0]['id'], 'qwen3-1.7b')
+        # Without a terminal the error names every model that fits.
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(installer.subprocess, 'run', return_value=reply), \
+             patch.object(installer.sys.stdin, 'isatty', return_value=False), \
+             self.assertRaisesRegex(RuntimeError, r'--model gemma-3-1b --accept-model-license to download it, or with '
+                                    r'another that fits: llama-3.2-1b \(Llama 3.2 Community License\), '
+                                    r'qwen3-1.7b \(Apache-2.0\), qwen3-0.6b \(Apache-2.0\)\.'):
+            installer.require_writing_model(Path(temporary), 'badictl')
 
     def test_changed_flags_abort_before_any_file_is_copied(self):
         with tempfile.TemporaryDirectory() as temporary:
