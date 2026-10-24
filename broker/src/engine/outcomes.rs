@@ -111,8 +111,49 @@ impl Broker {
         )
     }
 
-    /// Must be called under the broker state lock: a memory clear relies on
-    /// it to order every outcome before or after its barrier.
+    /// Queues `command` for `target`'s stable identity; false when there is
+    /// no recorder or identity, or the queue is full. Must be called under
+    /// the broker state lock: a memory clear relies on it to order every
+    /// outcome before or after its barrier.
+    fn queue_for(
+        &self,
+        target: &TargetDescriptor,
+        command: impl FnOnce(StableIdentity) -> OutcomeCommand,
+    ) -> bool {
+        let Ok(identity) = StableIdentity::from_target(target) else {
+            return false;
+        };
+        self.queue(command(identity))
+    }
+
+    /// Must be called under the broker state lock, like [`Self::queue_for`].
+    fn queue(&self, command: OutcomeCommand) -> bool {
+        self.inner
+            .outcome_recorder
+            .as_ref()
+            .is_some_and(|recorder| recorder.try_signal(command))
+    }
+
+    /// Sends the command `ask` builds behind every queued outcome and waits
+    /// for its reply.
+    async fn ask_recorder<T>(
+        &self,
+        ask: impl FnOnce(oneshot::Sender<Result<T, ControlPlaneError>>) -> OutcomeCommand,
+    ) -> Result<T, BrokerError> {
+        let recorder = self
+            .inner
+            .outcome_recorder
+            .as_ref()
+            .ok_or(BrokerError::ControlPlaneUnavailable)?;
+        let (response, receiver) = oneshot::channel();
+        recorder.send_waiting(ask(response)).await?;
+        receiver
+            .await
+            .map_err(|_| BrokerError::ControlPlaneTask)?
+            .map_err(BrokerError::from)
+    }
+
+    /// Must be called under the broker state lock, like [`Self::queue_for`].
     pub(super) fn queue_outcome(
         &self,
         target: &TargetDescriptor,
@@ -120,72 +161,52 @@ impl Broker {
         event_day: u64,
         signal: PersonalizationSignal,
     ) -> bool {
-        let Some(recorder) = self.inner.outcome_recorder.as_ref() else {
-            return false;
-        };
-        let Ok(identity) = StableIdentity::from_target(target) else {
-            return false;
-        };
-        recorder.try_signal(OutcomeCommand::Signal {
+        let provider = PersonalizationProvider::from(self.inner.provider_kind);
+        self.queue_for(target, |identity| OutcomeCommand::Signal {
             expected_settings_revision,
             event_day,
             identity,
-            provider: PersonalizationProvider::from(self.inner.provider_kind),
+            provider,
             signal,
         })
     }
 
-    /// Must be called under the broker state lock, like [`Self::queue_outcome`].
+    /// Must be called under the broker state lock, like [`Self::queue_for`].
     pub(super) fn queue_style_sample(
         &self,
         target: &TargetDescriptor,
         expected_settings_revision: u64,
         text: String,
     ) -> bool {
-        let Some(recorder) = self.inner.outcome_recorder.as_ref() else {
-            return false;
-        };
-        let Ok(identity) = StableIdentity::from_target(target) else {
-            return false;
-        };
-        recorder.try_signal(OutcomeCommand::Style {
+        self.queue_for(target, |identity| OutcomeCommand::Style {
             expected_settings_revision,
             identity,
             text,
         })
     }
 
-    /// Must be called under the broker state lock, like [`Self::queue_outcome`].
+    /// Must be called under the broker state lock, like [`Self::queue_for`].
     pub(super) fn queue_learned_words(
         &self,
         identity: StableIdentity,
         expected_settings_revision: u64,
         words: Vec<String>,
     ) -> bool {
-        let Some(recorder) = self.inner.outcome_recorder.as_ref() else {
-            return false;
-        };
-        recorder.try_signal(OutcomeCommand::Learned {
+        self.queue(OutcomeCommand::Learned {
             expected_settings_revision,
             identity,
             words,
         })
     }
 
-    /// Must be called under the broker state lock, like [`Self::queue_outcome`].
+    /// Must be called under the broker state lock, like [`Self::queue_for`].
     pub(super) fn queue_stats(
         &self,
         target: &TargetDescriptor,
         expected_settings_revision: u64,
         event: StatsEvent,
     ) -> bool {
-        let Some(recorder) = self.inner.outcome_recorder.as_ref() else {
-            return false;
-        };
-        let Ok(identity) = StableIdentity::from_target(target) else {
-            return false;
-        };
-        recorder.try_signal(OutcomeCommand::Stats {
+        self.queue_for(target, |identity| OutcomeCommand::Stats {
             expected_settings_revision,
             identity,
             event,
@@ -194,19 +215,9 @@ impl Broker {
 
     /// Usage statistics, including every count queued before the call.
     pub async fn stats_status(&self) -> Result<StatsStatusPayload, BrokerError> {
-        let recorder = self
-            .inner
-            .outcome_recorder
-            .as_ref()
-            .ok_or(BrokerError::ControlPlaneUnavailable)?;
-        let (response, receiver) = oneshot::channel();
-        recorder
-            .send_waiting(OutcomeCommand::StatsQuery { response })
+        let summary = self
+            .ask_recorder(|response| OutcomeCommand::StatsQuery { response })
             .await?;
-        let summary = receiver
-            .await
-            .map_err(|_| BrokerError::ControlPlaneTask)?
-            .map_err(BrokerError::from)?;
         Ok(StatsStatusPayload {
             available: summary.is_some(),
             summary: summary.unwrap_or_else(|| StatsStore::empty_summary(local_today())),
@@ -215,19 +226,9 @@ impl Broker {
 
     /// Deletes every usage count, including those queued before the call.
     pub async fn forget_stats(&self) -> Result<StatsStatusPayload, BrokerError> {
-        let recorder = self
-            .inner
-            .outcome_recorder
-            .as_ref()
-            .ok_or(BrokerError::ControlPlaneUnavailable)?;
-        let (response, receiver) = oneshot::channel();
-        recorder
-            .send_waiting(OutcomeCommand::StatsForget { response })
+        let summary = self
+            .ask_recorder(|response| OutcomeCommand::StatsForget { response })
             .await?;
-        let summary = receiver
-            .await
-            .map_err(|_| BrokerError::ControlPlaneTask)?
-            .map_err(BrokerError::from)?;
         Ok(StatsStatusPayload {
             available: true,
             summary,
@@ -259,19 +260,8 @@ impl Broker {
     pub async fn forget_learned(&self) -> Result<LearnedStatus, BrokerError> {
         // Forgetting also drops the words this run counted toward learning.
         self.inner.state.lock().await.learned_visits.clear();
-        let recorder = self
-            .inner
-            .outcome_recorder
-            .as_ref()
-            .ok_or(BrokerError::ControlPlaneUnavailable)?;
-        let (response, receiver) = oneshot::channel();
-        recorder
-            .send_waiting(OutcomeCommand::LearnedForget { response })
-            .await?;
-        receiver
+        self.ask_recorder(|response| OutcomeCommand::LearnedForget { response })
             .await
-            .map_err(|_| BrokerError::ControlPlaneTask)?
-            .map_err(BrokerError::from)
     }
 
     /// Holds the keyring's style key; it is never written anywhere.
@@ -297,35 +287,13 @@ impl Broker {
     }
 
     pub async fn forget_style(&self) -> Result<StyleStatus, BrokerError> {
-        let recorder = self
-            .inner
-            .outcome_recorder
-            .as_ref()
-            .ok_or(BrokerError::ControlPlaneUnavailable)?;
-        let (response, receiver) = oneshot::channel();
-        recorder
-            .send_waiting(OutcomeCommand::StyleForget { response })
-            .await?;
-        receiver
+        self.ask_recorder(|response| OutcomeCommand::StyleForget { response })
             .await
-            .map_err(|_| BrokerError::ControlPlaneTask)?
-            .map_err(BrokerError::from)
     }
 
     pub async fn export_style(&self) -> Result<Vec<StyleSample>, BrokerError> {
-        let recorder = self
-            .inner
-            .outcome_recorder
-            .as_ref()
-            .ok_or(BrokerError::ControlPlaneUnavailable)?;
-        let (response, receiver) = oneshot::channel();
-        recorder
-            .send_waiting(OutcomeCommand::StyleExport { response })
-            .await?;
-        receiver
+        self.ask_recorder(|response| OutcomeCommand::StyleExport { response })
             .await
-            .map_err(|_| BrokerError::ControlPlaneTask)?
-            .map_err(BrokerError::from)
     }
 
     pub(super) async fn flush_outcomes_before_pause_ack(&self) -> Result<(), BrokerError> {

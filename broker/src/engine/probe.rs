@@ -4,13 +4,11 @@ use std::time::Instant;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
-use super::generation::checked_proposal;
+use super::generation::{ProviderAnswer, checked_proposal};
 use super::{Broker, BrokerError, duration_millis};
 use crate::metrics::NoSuggestionReason;
 use crate::protocol::{ProbeRequestPayload, ProbeResultPayload};
-use crate::provider::{
-    ProviderError, ProviderOutcome, ProviderRequest, RequestTrigger, WritingProposal,
-};
+use crate::provider::{ProviderRequest, RequestTrigger, WritingProposal};
 
 impl Broker {
     /// Runs one private diagnostic request through the provider and the same
@@ -89,25 +87,23 @@ impl Broker {
                 ),
             ) => result,
         };
-        Ok(match result {
-            _ if Instant::now() >= generation_deadline => {
+        if Instant::now() >= generation_deadline {
+            cancellation.cancel();
+            return Ok(Err(NoSuggestionReason::Timeout));
+        }
+        Ok(match ProviderAnswer::classify(result).0 {
+            ProviderAnswer::TimedOut => {
                 cancellation.cancel();
                 Err(NoSuggestionReason::Timeout)
             }
-            Err(_) => {
-                cancellation.cancel();
-                Err(NoSuggestionReason::Timeout)
+            ProviderAnswer::Cancelled => Err(NoSuggestionReason::Stale),
+            ProviderAnswer::Unavailable => Err(NoSuggestionReason::ProviderError),
+            ProviderAnswer::NoSuggestion(reason) => Err(reason),
+            ProviderAnswer::Proposal(raw) => {
+                checked_proposal(self.inner.provider_kind, &before, &after, raw)
+                    .filter(|proposal| allow_replacement || proposal.replace_before.is_none())
+                    .ok_or(NoSuggestionReason::OutputRejected)
             }
-            Ok(Err(ProviderError::Cancelled)) => Err(NoSuggestionReason::Stale),
-            Ok(Err(ProviderError::Unavailable)) => Err(NoSuggestionReason::ProviderError),
-            Ok(Ok(reply)) => match reply.outcome {
-                ProviderOutcome::NoSuggestion(reason) => Err(reason),
-                ProviderOutcome::Proposal(raw) => {
-                    checked_proposal(self.inner.provider_kind, &before, &after, raw)
-                        .filter(|proposal| allow_replacement || proposal.replace_before.is_none())
-                        .ok_or(NoSuggestionReason::OutputRejected)
-                }
-            },
         })
     }
 }
