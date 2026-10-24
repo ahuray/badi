@@ -28,6 +28,17 @@ fn a_dismissed_next_word_is_withheld_at_its_spot_only() {
 }
 
 #[test]
+fn taking_a_word_forgets_its_turn_down_at_that_spot() {
+    let mut rejections = Rejections::default();
+    let before = "Thank you so much for your ";
+    rejections.record(&scope(), before, "interest in our products.", DISMISSED);
+    rejections.record(&scope(), "Kind regards, ", "Ahura", DISMISSED);
+    rejections.forget(&scope(), "thank you  SO much for your ", "Interest, really");
+    assert!(!rejections.withholds(&scope(), before, "interest in our products."));
+    assert!(rejections.withholds(&scope(), "Kind regards, ", "Ahura"));
+}
+
+#[test]
 fn typing_over_takes_two_turn_downs_and_names_the_word_being_typed() {
     let mut rejections = Rejections::default();
     let before = "Thank you so much for your ";

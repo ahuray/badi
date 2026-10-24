@@ -660,7 +660,9 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   carry's scope). One Escape, or other letters typed at two shown
   suggestions, withholds that next word there from later automatic requests
   (`repeated`). Words typed in full were taken, so only the word being typed
-  over is turned down, and an explicit request still shows it. Only keyed
+  over is turned down. An explicit request still shows it, and taking it
+  there, a word or all, forgets the turn-down. Neovim's dismissal on
+  leaving Insert mode turns nothing down. Only keyed
   hashes are kept, in memory, for 256 spots; a restart forgets them
   (`engine/rejections.rs`).
 - **Alternatives.** `control.request` `alternatives` on a shown

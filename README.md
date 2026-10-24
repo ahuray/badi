@@ -14,7 +14,7 @@ machine. Badi is pre-release software.
 | **Ctrl+→** | Accept all of it. |
 | Keep typing | Typing the suggestion's next letters keeps the rest. |
 | **Escape** | Dismiss. |
-| **Ctrl+Shift+Space** | Ask for a suggestion. On a shown one, show another that starts with a different word; after three, presses cycle through them. On selected text, check its grammar; press it again for a refined wording. **Tab** applies what it shows, **Escape** keeps your text. |
+| **Ctrl+Shift+Space** | Ask for a suggestion. On a shown one in a Fcitx app, show another that starts with a different word; after three, presses cycle through them. On selected text, check its grammar; press it again for a refined wording. **Tab** applies what it shows, **Escape** keeps your text. |
 | **Ctrl+Shift+Tab** | Type a real Tab instead of accepting: the suggestion goes away and the app gets Tab. Where Badi would not take Tab, it stays the app's key (a browser's previous tab). |
 
 Every surface uses that order: Obsidian with Ctrl/Command+→ for all of it,
@@ -31,8 +31,8 @@ narrow fields; Ctrl+Shift+Space still asks there. `badi escape-quiet 60` (or
 the settings panel) also keeps a dismissed field quiet for a minute across
 edits; asking explicitly ends that sooner. A next word you turned down (with
 Escape, or by typing other letters twice) is not offered again after the same
-three words in that app or site; Badi keeps only hashes of those spots, in
-memory, until it restarts.
+three words in that app or site, until you ask for it there and take it;
+Badi keeps only hashes of those spots, in memory, until it restarts.
 
 A revision works on one line of up to 600 characters in English, German,
 French, Spanish or Portuguese, wherever Badi may suggest (not in terminals).

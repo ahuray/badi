@@ -1,25 +1,35 @@
 //! Turned-down next words: Escape, or typing other letters twice, withholds
-//! the same automatic next word at the same spot in that app or site.
+//! the same automatic next word at the same spot in that app or site until
+//! the writer takes it there.
 
 use super::*;
 
-async fn dismiss(
+async fn control(
     broker: &Broker,
     session_id: SessionId,
     shown: &crate::protocol::SuggestionShowPayload,
+    action: ControlAction,
 ) {
     broker
         .session_control(
             coordinates(session_id, 1),
             SessionControlRequestPayload {
-                action: ControlAction::Dismiss,
+                action,
                 fingerprint: shown.fingerprint.clone(),
                 suggestion_id: Some(shown.suggestion_id.clone()),
             },
             None,
         )
         .await
-        .expect("dismiss");
+        .expect("control");
+}
+
+async fn dismiss(
+    broker: &Broker,
+    session_id: SessionId,
+    shown: &crate::protocol::SuggestionShowPayload,
+) {
+    control(broker, session_id, shown, ControlAction::Dismiss).await;
 }
 
 async fn asked_after(
@@ -87,8 +97,19 @@ async fn a_dismissed_next_word_is_not_offered_again_at_that_spot_unless_asked() 
     );
 
     let (third, mut events) = open_observed_session(&broker, "field-epoch-3").await;
-    let asked = asked_after(&broker, third, &mut events, "Hello").await;
-    assert_eq!(asked.expect("an explicit request").text, " revision Hello");
+    let asked = asked_after(&broker, third, &mut events, "Hello")
+        .await
+        .expect("an explicit request");
+    assert_eq!(asked.text, " revision Hello");
+    // Taking it there forgets the turn-down.
+    control(&broker, third, &asked, ControlAction::AcceptWord).await;
+    let (again, mut events) = open_observed_session(&broker, "field-epoch-3b").await;
+    assert!(
+        shown_after(&broker, again, &mut events, "Hello")
+            .await
+            .is_some(),
+        "a taken word is offered again"
+    );
 
     let (fourth, mut events) = open_observed_session(&broker, "field-epoch-4").await;
     assert!(
@@ -97,6 +118,22 @@ async fn a_dismissed_next_word_is_not_offered_again_at_that_spot_unless_asked() 
             .is_some(),
         "another spot still gets the word"
     );
+}
+
+#[tokio::test]
+async fn leaving_neovim_insert_mode_turns_no_word_down() {
+    let broker = Broker::new(
+        std::sync::Arc::new(CountingProvider::new(Duration::ZERO)),
+        BrokerConfig::default(),
+    );
+    for target in ["buffer-epoch-1", "buffer-epoch-2"] {
+        let (session, mut events) = open_session_as(&broker, target, AdapterKind::Neovim).await;
+        let shown = shown_after(&broker, session, &mut events, "Hello")
+            .await
+            .expect("shown again after InsertLeave");
+        dismiss(&broker, session, &shown).await;
+    }
+    assert_eq!(repeated(&broker), 0);
 }
 
 #[tokio::test]

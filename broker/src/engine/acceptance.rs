@@ -22,6 +22,29 @@ use crate::stats::StatsEvent;
 /// The UTC day and signal of one outcome aggregate to record.
 type OutcomeSignal = Option<(u64, PersonalizationSignal)>;
 
+/// Where answering `visible` turns its next word down or takes it: the
+/// carry's scope, the text before the caret and the suggestion. Escape turns
+/// down a continuation's next word at this spot, and taking it there forgets
+/// that. Neovim dismisses when the writer leaves Insert mode, which ends
+/// typing rather than turning a word down.
+fn rejection_spot(
+    session: &SessionState,
+    visible: &VisibleSuggestion,
+    acceptance: Option<Acceptance>,
+) -> Option<(CarryScope, String, String)> {
+    if visible.payload.replace_before.is_some()
+        || (acceptance.is_none() && session.authority.adapter_kind == AdapterKind::Neovim)
+    {
+        return None;
+    }
+    let context = session.context.as_ref()?;
+    Some((
+        CarryScope::of(session),
+        context.before.clone(),
+        visible.payload.text.clone(),
+    ))
+}
+
 impl Broker {
     pub async fn session_control(
         &self,
@@ -79,18 +102,7 @@ impl Broker {
             .as_deref()
             .ok_or(BrokerError::InvalidPayload)?;
         let visible = session.take_live_suggestion(suggestion_id, &self.inner.metrics)?;
-        // Escape turns down a continuation's next word at this spot.
-        let turned_down = (acceptance.is_none() && visible.payload.replace_before.is_none())
-            .then(|| {
-                session.context.as_ref().map(|context| {
-                    (
-                        CarryScope::of(session),
-                        context.before.clone(),
-                        visible.payload.text.clone(),
-                    )
-                })
-            })
-            .flatten();
+        let spot = rejection_spot(session, &visible, acceptance);
         let signal = match acceptance {
             None => self.dismiss(session, visible),
             Some(acceptance) => self.prepare_commit(session, visible, acceptance, request_id)?,
@@ -117,8 +129,12 @@ impl Broker {
         if let Some(quiet) = rebound_quiet {
             state.rebound_quiet = Some(quiet);
         }
-        if let Some((scope, before, text)) = turned_down {
-            state.rejections.record(&scope, &before, &text, DISMISSED);
+        if let Some((scope, before, text)) = spot {
+            if acceptance.is_some() {
+                state.rejections.forget(&scope, &before, &text);
+            } else {
+                state.rejections.record(&scope, &before, &text, DISMISSED);
+            }
         }
         if recorded {
             if let Some(carry) = state.type_through.as_mut() {

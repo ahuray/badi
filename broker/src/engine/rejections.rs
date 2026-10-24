@@ -1,8 +1,8 @@
 //! Next words the writer turned down: dismissed with Escape, or typed over
 //! with other letters. An automatic suggestion whose next word was turned
 //! down at the same spot in the same app or site is withheld, so Badi does
-//! not offer it again. Only keyed hashes are kept, never text, in memory, and
-//! the broker forgets them when it restarts.
+//! not offer it again unless the writer takes it there. Only keyed hashes are
+//! kept, never text, in memory, and the broker forgets them when it restarts.
 
 use std::collections::VecDeque;
 use std::hash::BuildHasher as _;
@@ -78,6 +78,14 @@ impl Rejections {
             .map_or(0, |index| index + 1);
         let spot = format!("{before}{}", &text[..word_start]);
         self.record(scope, &spot, &text[word_start..], TYPED_OVER);
+    }
+
+    /// Forgets any turn-down of the next word of `text` at this spot: the
+    /// writer took it there.
+    pub(super) fn forget(&mut self, scope: &CarryScope, before: &str, text: &str) {
+        if let Some(key) = self.key(scope, before, text) {
+            self.entries.retain(|(entry, _)| *entry != key);
+        }
     }
 
     /// Whether the next word of `text` was turned down at this spot.

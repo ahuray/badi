@@ -37,7 +37,9 @@ Unreleased in the same commit.
   before Zen moved its focus gets one more look on the next key, so its first
   suggestions are not held until typing pauses.
 - A next word you turned down, with Escape or by typing other letters twice,
-  is not offered again after the same words in that app or site.
+  is not offered again after the same words in that app or site, until you
+  ask for it there and take it. Leaving Neovim's Insert mode turns nothing
+  down.
 - Apps and sites where you seldom take a suggestion get fewer, surer ones,
   from the usage counts Badi already keeps; it never gets bolder there.
 - The grey preview draws the word Tab takes a step brighter than the rest,

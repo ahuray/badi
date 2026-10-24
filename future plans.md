@@ -157,7 +157,9 @@ publish need the user's go-ahead first; the rest can start at once.
      style samples are stored but not yet read, step 5);
    - a numbered list of alternative words for the next word, and synonyms
      for a selected word (added mid-2026; Badi's candidate panel and its
-     selection revision could carry both);
+     selection revision could carry both). Badi shows alternatives one at a
+     time on Ctrl+Shift+Space, in Fcitx apps only: Obsidian and Neovim send
+     no `alternatives` request yet;
    - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
      4B–30B): a llama.cpp Vulkan or CUDA runtime for machines with a GPU,
      measured with the [bench](evaluation/llm-bench/README.md) and the Lab.
@@ -165,8 +167,11 @@ publish need the user's go-ahead first; the rest can start at once.
    Badi already matches or beats it on:
    - words saved per day and per app or site, as counts only
      ([`badi stats`](README.md#usage-statistics));
-   - inline grey text in the field's font, Tab for a word, a key for all
-     of it, Escape quiet and a request key;
+   - inline grey text in the field's font with the word Tab takes drawn
+     brighter, Tab for a word, a key for all of it, Escape quiet and a
+     request key;
+   - no repeat of a next word turned down at the same spot, and fewer,
+     surer suggestions where they are seldom taken;
    - a length setting for one or two words (`badi length short`) or up to
      four;
    - mid-line completion, and typo correction in browsers and Electron apps
