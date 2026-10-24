@@ -32,6 +32,8 @@ full code review, whose fixes are part of this release:
   removed, and the runbooks keep the current contract and tested-with
   results instead of dated narrative.
 
+What 0.2.0 contains:
+
 - **Suggestions.** Grey continuations from a local model the broker picks
   for the device (Gemma 3 1B here), shown only when every token is likely
   enough, in English and German by default and French, Spanish and
