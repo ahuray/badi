@@ -8,6 +8,18 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Rich editors on websites (mail composers, ProseMirror, Lexical, Quill)
+  suggest after a space again: the observer reads a contenteditable's
+  no-break spaces as Chromium sends them, and a block-scoped snapshot agrees
+  with the paragraphs below the caret.
+- A suggestion survives a window title change, such as an editor's autosave
+  or a terminal's running command, instead of ending as it appears.
+- The grey preview ends instead of staying behind when its field scrolls in
+  a pane that reports no scroll, and a hidden preview is never drawn again.
+- Zen Twilight (`zen-twilight`) gets suggestions and corrections like Zen.
+- Bash draws an accepted suggestion once instead of repeating the prompt
+  mid-row.
+
 ## 0.2.0 (2026-10-24)
 
 The first release on a fresh history: the development before it, pull

@@ -76,8 +76,8 @@ around the caret.
 
 | App | Notes | Tested |
 | --- | --- | --- |
-| Chromium and Brave Origin, including Omarchy's web apps (HEY, X, Basecamp, Zoom) in either browser | Any website you allow, including rich editors (ProseMirror, Lexical, Slate, Draft.js, Quill, CKEditor 5, TinyMCE, CodeMirror), iframes and shadow roots | Chromium 152–154, Brave Origin 1.96–1.97 |
-| Zen | Grey preview; Ctrl+Z undoes an acceptance alone | Zen 1.23b, 1.23.3b |
+| Chromium and Brave Origin, including Omarchy's web apps (HEY, X, Basecamp, Zoom) in either browser | Any website you allow, including rich editors (ProseMirror, Lexical, Slate, Draft.js, Quill, CKEditor 5, TinyMCE, CodeMirror), iframes and shadow roots | Chromium 152–155, Brave Origin 1.96–1.98 |
+| Zen and Zen Twilight | Grey preview; Ctrl+Z undoes an acceptance alone | Zen 1.23b, 1.23.3b; Zen Twilight 1.24t |
 | VS Code, Cursor | Needs `"editor.editContext": false` in VS Code | VS Code 1.140 and 1.142, Cursor 3.21 |
 | Codex desktop | Composer | 26.930 |
 | LibreOffice Writer | Document paragraphs; Calc gets nothing. Spelling: the [Badi extension](adapters/libreoffice/README.md) shows a correction after a finished word, Alt+F7 shows one for the word at the caret, Alt+F7 again replaces it in one undo step | 26.8, 26.8.1 |
@@ -94,7 +94,7 @@ around the caret.
 
 **Not yet:**
 - Discord: desktop-wide accessibility can be enabled, but its composer is unverified.
-- Firefox and Gecko builds other than Zen.
+- Firefox and Gecko builds other than Zen and Zen Twilight.
 - Editors built on Chromium's EditContext (VS Code's default, CodeMirror on
   recent Chromium).
 - A caret inside a list or quote.

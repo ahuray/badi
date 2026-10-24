@@ -170,9 +170,9 @@ step, as it does for typing over a selection.
 | Class | App ids | Edit path |
 | --- | --- | --- |
 | Native exact | Any other granted id, e.g. `omawrite`, `com.github.xournalpp.xournalpp`, `telegram` | The manual unknown-identity contract, or an observed desktop field |
-| IME-parity browser | `chromium`, `chromium-browser`, `brave-origin`, `zen` | Observed browser field only; origin policy; append-only |
+| IME-parity browser | `chromium`, `chromium-browser`, `brave-origin`, `zen`, `zen-twilight` | Observed browser field only; origin policy; append-only |
 | IME-parity desktop | `chatgpt` (Codex), `code`, `com.anthropic.claude` (Claude), `cursor`, `discord`, `grok-bot`, `libreoffice` | Observed field of the same app only; app policy; append-only |
-| Unavailable | Other Gecko browsers (Firefox, other Zen builds, LibreWolf, Floorp, PWAsForFirefox, …), Chromium-family ids without an observer rule (Chrome, `brave`, `chrome-*`/`crx_*` web apps, Flatpak ids, Edge, Vivaldi, Opera, `electron*`, `code-oss`, `vscodium`, `vesktop`, …) and `obsidian`, whose plugin owns its fields | None |
+| Unavailable | Other Gecko browsers (Firefox, other Zen builds and Flatpak ids, LibreWolf, Floorp, PWAsForFirefox, …), Chromium-family ids without an observer rule (Chrome, `brave`, `chrome-*`/`crx_*` web apps, Flatpak ids, Edge, Vivaldi, Opera, `electron*`, `code-oss`, `vscodium`, `vesktop`, …) and `obsidian`, whose plugin owns its fields | None |
 
 Gecko mail clients such as Thunderbird stay native exact. An Electron app with
 an unrelated id can only use the native exact manual contract.
@@ -290,8 +290,9 @@ provides an editor transaction.
   meaning inside native text.
 - **Agreement** is exact with two equivalences: an empty Fcitx `after` matches
   an observed block end alone, and a `scope: "block"` snapshot (an opaque list,
-  quote or table in the window) matches when Fcitx's `before` ends with it
-  right after a line break.
+  quote, table or inline-markup paragraph in the window) matches when Fcitx's
+  `before` ends with its block text right after a line break and Fcitx's
+  `after` begins with its rest of block and block end.
 
 ## Tested with
 
@@ -303,16 +304,20 @@ toolkit in general.
 
 | App (version, date) | Reaches Fcitx through | Result | Boundary |
 | --- | --- | --- | --- |
-| Chromium 154 (2026-10-19/20), 155 (2026-10-23) | text-input-v3 (`wayland_v2`); observed, IME-parity | The installed-flow matrix below; as an Omarchy web app (`chrome-<site>__-Default`) 4/4 inline in 168–321 ms, with window words. On 155, `adress ` showed `→ address`; Tab corrected it, the read-back confirmed it and one Ctrl+Z restored the typo. A page that moves focus on the deletion split it, and the notice named it ([ADR 0011](../../docs/decisions/0011-checked-corrections-in-append-only-apps.md)) | Page fields carry no purpose hints, so the observer's checks deny passwords; the omnibox's `Url` purpose is denied before any observer request. Needs Fcitx 5.1.23 |
-| Brave Origin 1.97 (2026-10-20) | as above | 5/5 in a textarea, 3/3 in a contenteditable, 4/4 as an `--app` web app; Ctrl+→ takes all, Escape hides without editing | as above |
+| Chromium 154 (2026-10-19/20), 155 (2026-10-23/24) | text-input-v3 (`wayland_v2`); observed, IME-parity | On 155 (2026-10-24): a textarea, a contenteditable after a trailing space, Quill, ProseMirror and Lexical on their own sites, a typo fix, a selection revision, and a password field and search boxes refused. The installed-flow matrix below; as an Omarchy web app (`chrome-<site>__-Default`) 4/4 inline in 168–321 ms, with window words. On 155, `adress ` showed `→ address`; Tab corrected it, the read-back confirmed it and one Ctrl+Z restored the typo. A page that moves focus on the deletion split it, and the notice named it ([ADR 0011](../../docs/decisions/0011-checked-corrections-in-append-only-apps.md)) | Page fields carry no purpose hints, so the observer's checks deny passwords; the omnibox's `Url` purpose is denied before any observer request. Needs Fcitx 5.1.23 |
+| Brave Origin 1.97 (2026-10-20), 1.98 (2026-10-24) | as above | On 1.98: a textarea, a contenteditable and a confirmed typo fix; a password field sent nothing. On 1.97: 5/5 in a textarea, 3/3 in a contenteditable, 4/4 as an `--app` web app; Ctrl+→ takes all, Escape hides without editing | as above |
 | Zen 1.23.3b, Gecko 158 (2026-10-20) | `wayland_v2`, `zen` | Suggestions and window words | The urlbar shares the page's context with no `Url` hint, so the observer denies it. Gecko sends only the caret's paragraph. One Ctrl+Z undoes an acceptance alone. A fresh profile once showed the suggestion in Fcitx's candidate box |
-| VS Code 1.142 (2026-10-20) | as Chromium | 3/3; the saved file read back exactly | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. `wtype` trials need `"keyboard.dispatch": "keyCode"` |
-| LibreOffice Writer 26.8.1, GTK 3 (2026-10-20) | observed sentence | 2/3 inline in 169 and 241 ms; Tab commits one word | Writer sends only the caret's sentence. Spelling goes through the [extension](../libreoffice/README.md): Alt+F7 replaces, one Ctrl+Z restores |
-| Ghostty 1.3.1 (2026-10-20) | typed line ([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.md)) | 3/3 in the panel; one word per Tab; corrections erase the typo with DELs | Exact opt-in rule |
+| Zen Twilight 1.24t (2026-10-24) | `wayland_v2`, `zen-twilight` | A textarea and a contenteditable suggested; a typo fix was confirmed by read-back | As Zen: the observer denies the urlbar; password and search fields refused |
+| VS Code 1.142 (2026-10-20), 1.143 (2026-10-24) | as Chromium | 3/3; the saved file read back exactly; on 1.143 a markdown buffer suggested and Tab committed a word | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. `wtype` trials need `"keyboard.dispatch": "keyCode"` |
+| LibreOffice Writer 26.8.1, GTK 3 (2026-10-20/24) | observed sentence | 2/3 inline in 169 and 241 ms; Tab commits one word; on 2026-10-24 inline again, and Alt+F7 turned `lsit` into `list`, undone by one Ctrl+Z | Writer sends only the caret's sentence. Spelling goes through the [extension](../libreoffice/README.md): Alt+F7 replaces, one Ctrl+Z restores |
+| Ghostty 1.3.1 (2026-10-20/24) | typed line ([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.md)) | 3/3 in the panel; one word per Tab; corrections erase the typo with DELs (`teh → the` on 2026-10-24) | Exact opt-in rule |
 | foot 1.28.0 (2026-10-20) | typed line | 4/4 in the panel in 118–307 ms; `adress → address` with DELs | Exact opt-in rule |
-| Omawrite 0.7.0, Qt 6.12, fcitx5-qt 5.1.16 (2026-10-20) | `QT_IM_MODULE=fcitx`; observed native exact | 6/7 in 248–426 ms; Ctrl+→ takes all; one Ctrl+Z restores the exact prefix | Suggestions through the [surrounding echo](#contract); no spelling replacement until fcitx5-qt is fixed. 0.5.0 replaced a typo in two undo steps |
+| Omawrite 0.7.0 (2026-10-20), 0.7.2 (2026-10-24), Qt 6.12, fcitx5-qt 5.1.16 | `QT_IM_MODULE=fcitx`; observed native exact | 6/7 in 248–426 ms; Ctrl+→ takes all; one Ctrl+Z restores the exact prefix; on 0.7.2 a suggestion outlives the autosave's title change and Tab commits | Suggestions through the [surrounding echo](#contract); no spelling replacement until fcitx5-qt is fixed. 0.5.0 replaced a typo in two undo steps |
 | Xournal++ 1.3.7, GTK 3 text tool | `GTK_IM_MODULE=fcitx` launcher override | 20/20 | Tab requests; after Escape leaves text editing, one document undo restores the prefix |
 | Telegram (Qt) | `dbus`, canonicalized to `telegram` | Not retried since fcitx5-qt 5.1.16 | Probably needs the echo handling, like Omawrite |
+
+The 2026-10-24 cells, their drivers and screenshots are in
+`output/native-trials/2026-10-24-full-trial/` (`results.jsonl`).
 
 What the live trials established, beyond those cells:
 

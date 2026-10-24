@@ -121,7 +121,7 @@ impl StableIdentity {
             TargetKind::Browser
                 if matches!(
                     target.app_id.as_str(),
-                    "chromium" | "chromium-browser" | "brave-origin" | "zen"
+                    "chromium" | "chromium-browser" | "brave-origin" | "zen" | "zen-twilight"
                 ) =>
             {
                 let origin = target.origin.as_ref().ok_or(IdentityError::MissingOrigin)?;

@@ -323,6 +323,10 @@ class WindowEvents:
     def __init__(self, stream):
         self.stream = stream
         self.buffer = b""
+        # Hyprland repeats activewindowv2 for the same window whenever its
+        # title changes (an editor's unsaved mark or autosave, a terminal's
+        # running command), which is no focus change.
+        self.active = None
 
     @classmethod
     def connect(cls, directory):
@@ -354,7 +358,15 @@ class WindowEvents:
         if len(self.buffer) > MAX_WINDOW_EVENT_BUFFER:
             raise OSError("hyprland_events_flooded")
         *lines, self.buffer = self.buffer.split(b"\n")
-        return any(line.split(b">>", 1)[0] in WINDOW_EVENTS for line in lines)
+        changed = False
+        for line in lines:
+            name, _separator, value = line.partition(b">>")
+            if name == b"activewindowv2":
+                changed = changed or value != self.active
+                self.active = value
+            elif name in WINDOW_EVENTS:
+                changed = True
+        return changed
 
     def close(self):
         self.stream.close()

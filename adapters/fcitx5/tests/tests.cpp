@@ -1208,10 +1208,10 @@ void observedFieldsAreAppendOnly() {
     check(!state.authorizeCommit(prepare, 4, kOwnedPanel), "append grants remain one shot");
 }
 
-constexpr std::array kImeParityBrowsers{"chromium", "chromium-browser", "brave-origin", "zen"};
+constexpr std::array kImeParityBrowsers{"chromium", "chromium-browser", "brave-origin", "zen", "zen-twilight"};
 constexpr std::array kImeParityDesktop{"chatgpt", "code", "cursor", "discord"};
-// Only Zen's live-verified program() is IME-parity; other Gecko ids, including
-// other Zen builds and Flatpak ids, have no observer rule.
+// Only Zen's and Zen Twilight's live-verified program() ids are IME-parity;
+// other Gecko ids, including other Zen builds and Flatpak ids, have no observer rule.
 constexpr std::array kUnavailableApps{"firefox", "firefox-esr", "org.mozilla.firefox", "zen-browser",
                                       "zen-alpha", "zen-beta", "app.zen_browser.zen", "librewolf",
                                       "floorp", "obsidian", "md.obsidian.obsidian"};
@@ -1220,7 +1220,7 @@ constexpr std::array kUnavailableApps{"firefox", "firefox-esr", "org.mozilla.fir
 constexpr std::array kUnobservedGeckoFamily{
     "firefox-beta", "firefox-nightly", "firefox-developer-edition", "firefoxdeveloperedition",
     "org.mozilla.firefox_beta", "org.mozilla.firefox.nightly", "ffpwa-01hvy3f0gdt6dcg5v6ttrhk4bt",
-    "zen-twilight", "zen-browser-bin", "io.github.zen_browser.zen", "app.zen_browser.zen-twilight",
+    "zen-browser-bin", "io.github.zen_browser.zen", "app.zen_browser.zen-twilight",
     "librewolf-bin", "io.gitlab.librewolf-community", "one.ablaze.floorp", "waterfox-g",
     "net.waterfox.waterfox", "mullvadbrowser", "mullvad-browser", "net.mullvad.mullvadbrowser",
     "tor-browser", "torbrowser", "org.torproject.torbrowser-launcher", "icecat", "palemoon",
@@ -1416,6 +1416,7 @@ void canonicalAppIdsFoldAsciiCase() {
               classifyNativeApp(*canonicalAppId("Brave-Origin")) == NativeAppClass::ImeParityBrowser &&
               classifyNativeApp(*canonicalAppId("FIREFOX")) == NativeAppClass::Unavailable &&
               classifyNativeApp(*canonicalAppId("Zen")) == NativeAppClass::ImeParityBrowser &&
+              classifyNativeApp(*canonicalAppId("zen-twilight")) == NativeAppClass::ImeParityBrowser &&
               classifyNativeApp(*canonicalAppId("App.Zen_browser.Zen")) == NativeAppClass::Unavailable &&
               classifyNativeApp(*canonicalAppId("Telegram")) == NativeAppClass::NativeExact,
           "classification uses the folded identity");
@@ -1424,7 +1425,7 @@ void canonicalAppIdsFoldAsciiCase() {
     for (const auto program : {"chrome-app.hey.com__-Default", "chrome-nngceckbapebfimnlniiiahkandclblb-Default",
                                "com.google.Chrome", "org.chromium.Chromium", "com.brave.Browser",
                                "Microsoft-edge", "Vivaldi-stable", "Code-OSS", "VSCodium", "Electron",
-                               "FFPWA-01HVY3F0GDT6DCG5V6TTRHK4BT", "Zen-Twilight", "org.mozilla.Firefox",
+                               "FFPWA-01HVY3F0GDT6DCG5V6TTRHK4BT", "Zen-Alpha", "org.mozilla.Firefox",
                                "Firefox-Nightly", "LibreWolf"}) {
         const auto canonical = canonicalAppId(program);
         check(canonical && classifyNativeApp(*canonical) == NativeAppClass::Unavailable,
@@ -1816,6 +1817,16 @@ void observerRepliesFailClosed() {
               !observerAgrees({{"before", "Thanks for the"}, {"after", ""}, {"scope", "field"}}, *quoted) &&
               !observerAgrees({{"before", "Thanks for th"}, {"after", ""}, {"scope", "block"}}, *quoted),
           "a block-scoped snapshot must be Fcitx's text from a line start to the caret; whole-field scope stays exact");
+    // A paragraph with inline markup above makes the snapshot block-scoped;
+    // the blocks below the caret's are in Fcitx's text but not the observer's.
+    const auto between = captureContextWindow("Quoted list\n\nThanks for the world\n\nLater block", 27, 27, true, "en");
+    check(between && observerAgrees({{"before", "Thanks for the"}, {"after", " world\n\n"}, {"scope", "block"}}, *between) &&
+              !observerAgrees({{"before", "Thanks for the"}, {"after", " world\n\n"}}, *between) &&
+              !observerAgrees({{"before", "Thanks for the"}, {"after", " word\n\n"}, {"scope", "block"}}, *between) &&
+              !observerAgrees({{"before", "Thanks for the"}, {"after", ""}, {"scope", "block"}}, *between) &&
+              !observerAgrees({{"before", "Thanks for the"}, {"after", " world\n\nLater block and more"},
+                               {"scope", "block"}}, *between),
+          "a block-scoped snapshot's rest of block must begin Fcitx's text after the caret, never be empty");
     const auto midText = captureContextWindow("thank you all", 9, 9, true, "en");
     check(midText && !observerAgrees({{"before", "thank you"}, {"after", "\n"}}, *midText),
           "a block end never stands for text Fcitx still has after the caret");

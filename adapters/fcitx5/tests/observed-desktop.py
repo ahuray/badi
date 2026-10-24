@@ -32,8 +32,8 @@ UNOBSERVED_FAMILY_PROGRAMS = {'chrome': 'chrome', 'Google-chrome': 'google-chrom
                               'chrome-app.hey.com__-Default': 'chrome-app.hey.com__-default',
                               'com.google.Chrome': 'com.google.chrome',
                               'Vivaldi-stable': 'vivaldi-stable', 'code-oss': 'code-oss',
-                              # Gecko: Zen Twilight and a PWAsForFirefox window.
-                              'Zen-Twilight': 'zen-twilight',
+                              # Gecko: another Zen build and a PWAsForFirefox window.
+                              'Zen-Alpha': 'zen-alpha',
                               'FFPWA-01HVY3F0GDT6DCG5V6TTRHK4BT': 'ffpwa-01hvy3f0gdt6dcg5v6ttrhk4bt'}
 IME_PARITY_APPS = ('chromium', 'chromium-browser', 'brave-origin', 'zen', 'chatgpt', 'code', 'cursor', 'discord')
 RIGHT, CONTROL, SHIFT = 0xff53, 1 << 2, 1

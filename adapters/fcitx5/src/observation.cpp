@@ -186,10 +186,22 @@ void restoreObservedTrailingSpaces(ContextWindow &context, const Json &observed)
     context.head += spaces;
 }
 
+// Exactly Fcitx's text after the caret; or, for a block-scoped snapshot, the
+// rest of the caret's block and its block end beginning Fcitx's text, which
+// goes on with the blocks below.
+bool afterAgrees(const Json &observed, const std::string &after) {
+    const auto text = observed.value("after", Json());
+    if (text == after) return true;
+    if (!text.is_string() || observed.value("scope", Json()) != "block") return false;
+    const auto &block = text.get_ref<const std::string &>();
+    // Like an empty block before the caret, an empty one after it proves nothing.
+    return !block.empty() && after.size() > block.size() && after.starts_with(block);
+}
+
 bool observerAgrees(const Json &observed, const ContextWindow &context) {
     if (!observed.is_object() || !beforeAgrees(observed, context.before)) return false;
     const auto after = observed.value("after", Json());
-    if (after == observedAfter(context)) return true;
+    if (afterAgrees(observed, observedAfter(context))) return true;
     // Both name the end of the field when Fcitx has nothing after the caret and
     // the observer only its last block's end: an EditContext editor (CodeMirror)
     // sends its own text, and an editor last on its page gets no block end.

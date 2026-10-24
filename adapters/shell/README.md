@@ -71,3 +71,4 @@ and the bridge's `cancel` keeping the carried rest while `dismiss` ends it.
 | --- | --- | --- | --- |
 | 5.3.20, 8.3 | PTY (both lanes above) | controlled bridge, phrase fixture | pass |
 | 5.3.15, 8.3 | Ghostty 1.3.1 | real model | preview, acceptance, an `adress ` → `address ` correction and exact undo, nothing submitted |
+| 5.3.20, 8.3 | Ghostty 1.3.1 (2026-10-24) | real model | Ctrl-X Tab preview and acceptance drawn once (an acceptance used to redraw the prompt mid-row), one Ctrl-_ undo, nothing submitted |
