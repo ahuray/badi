@@ -37,26 +37,42 @@ def parse(value):
     return match.group(1), match.group(2)
 
 
-def lookup():
-    """The stored key as (key_id, key), or None when there is none. Never
-    prompts: a locked keyring raises ``keyring_locked`` so a background
+def lookup(done):
+    """Looks up the stored key without blocking the main loop: ``done``
+    receives (key_id, key), None when there is none, or a KeyringError.
+    Never prompts: a locked keyring is ``keyring_locked`` so a background
     caller can retry after the user unlocks it."""
-    try:
-        service = Secret.Service.get_sync(Secret.ServiceFlags.NONE, None)
-        items = service.search_sync(schema(), ATTRIBUTES, Secret.SearchFlags.NONE, None)
-    except GLib.Error:
-        raise KeyringError("keyring_unavailable") from None
-    if not items:
-        return None
-    item = items[0]
-    if item.get_locked():
-        raise KeyringError("keyring_locked")
-    try:
-        item.load_secret_sync(None)
-    except GLib.Error:
-        raise KeyringError("keyring_unavailable") from None
-    secret = item.get_secret()
-    return parse(secret.get_text() if secret is not None else None)
+    def failed(error):
+        done(error if isinstance(error, KeyringError) else KeyringError("keyring_unavailable"))
+
+    def loaded(item, result):
+        try:
+            item.load_secret_finish(result)
+            secret = item.get_secret()
+            key = parse(secret.get_text() if secret is not None else None)
+        except (GLib.Error, KeyringError) as error:
+            return failed(error)
+        done(key)
+
+    def searched(service, result):
+        try:
+            items = service.search_finish(result)
+        except GLib.Error as error:
+            return failed(error)
+        if not items:
+            return done(None)
+        if items[0].get_locked():
+            return failed(KeyringError("keyring_locked"))
+        items[0].load_secret(None, loaded)
+
+    def connected(_source, result):
+        try:
+            service = Secret.Service.get_finish(result)
+        except GLib.Error as error:
+            return failed(error)
+        service.search(schema(), ATTRIBUTES, Secret.SearchFlags.NONE, None, searched)
+
+    Secret.Service.get(Secret.ServiceFlags.NONE, None, connected)
 
 
 def ensure():

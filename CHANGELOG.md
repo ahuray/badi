@@ -28,6 +28,8 @@ Unreleased in the same commit.
   composer, and at-spi2-core 2.62 no longer has that setting.
 - The broker's recorder replies and provider results each go through one
   shared path; behavior is unchanged.
+- The session helper looks up the keyring's style key asynchronously, so a
+  slow Secret Service can no longer delay a sleep or screen-share report.
 
 ## 0.2.0 (2026-10-24)
 

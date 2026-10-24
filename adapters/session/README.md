@@ -47,8 +47,8 @@ inhibitor for `sleep`. On `PrepareForSleep(true)` it reports `sleeping`, waits
 for the broker's acknowledgement, then closes the inhibitor so sleep
 proceeds. Each exchange with the broker gives up after 1.5 s: one when the
 helper is connected, the hello first when it has to reconnect. The style key
-of a new connection is looked up only after the report, so the keyring never
-holds sleep. A restarted logind forgets inhibitors; the helper takes a new
+of a new connection is looked up only after the report, and asynchronously,
+so the keyring never holds sleep or a later report. A restarted logind forgets inhibitors; the helper takes a new
 one when the name returns.
 
 ## Screen sharing
@@ -128,7 +128,8 @@ reviewed count of fully accepted additions.
 
 When it connects to a broker, the helper first sends its report, then looks
 up the style-learning key in the Secret Service ([style_key.py](style_key.py),
-libsecret) from the main loop and hands it over with `style.key`. It never
+libsecret's asynchronous calls, so a slow keyring blocks no report) and hands
+it over with `style.key`, to the connection it was looked up for. It never
 prompts: a locked keyring is retried every two
 minutes, and no stored key sends nothing. The keyring item is labelled
 `Badi style learning key` with the single attribute `purpose=style-learning`;
