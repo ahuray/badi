@@ -465,29 +465,22 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       in `error`, or make ids per session, so the match is exact. A refused
       `session.open` also leaves the binding thinking it is open until the
       authority change that follows.
-- [ ] The session helper delivers the keyring's style key after its report
-      now, but libsecret's lookup is still synchronous on the main loop; make
-      it asynchronous.
 - [ ] Structure left by the review, each only when its file is next touched:
       the Fcitx `Binding` (about 50 fields, one expiry timer for notices,
       suggestions and revisions) as small reset-able parts and one retire
-      function for authority change and disconnect; `Observer.snapshot` and
-      `Preview._render`; a shared stdio and idle-exit module for the Bash
-      and Neovim bridges; and a tested `SettingsModel.js` with one status
-      ladder for the panel (new files need the installers' and the
-      PKGBUILD's lists, which a test now compares).
+      function for authority change and disconnect; a shared stdio and
+      idle-exit module for the Bash and Neovim bridges; and a tested
+      `SettingsModel.js` with one status ladder for the panel (new files
+      need the installers' and the PKGBUILD's lists, which a test now
+      compares).
 
 - [ ] [ADR 0007](docs/decisions/0007-retire-protocol-v1.md) step 4: once
       every known install has started a v2-only broker (0.2.0), delete the
       on-disk v1 settings migration, `badi.settings.v1.schema.json` and the
       panel lifecycle and schema tests that exercise it.
-- [ ] Broker structure left by the review: share the provider-result
-      classification between `engine/generation.rs` and `probe.rs`, fold the
-      five queue-and-reply copies in `outcomes.rs` into one, move the
-      provider-kind validator choice out of the engine, collapse
-      `complete`/`propose` once the Lab calls `propose_outcome`, and move the
-      remaining inline tests into `<module>/tests.rs` when those files are
-      next touched.
+- [ ] Broker structure left by the review: collapse `complete`/`propose`
+      once the Lab calls `propose_outcome`, and move the remaining inline
+      tests into `<module>/tests.rs` when those files are next touched.
 
 - [ ] The Lab test "process exit rejects the active request and a later
       request starts a fresh process" (`worker.test.mjs`) failed once in CI

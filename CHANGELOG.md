@@ -26,8 +26,9 @@ Unreleased in the same commit.
   the renderer accessibility flag to a user copy of its launcher. The
   `--screen-reader-accessibility` option is gone: it never exposed Discord's
   composer, and at-spi2-core 2.62 no longer has that setting.
-- The broker's recorder replies and provider results each go through one
-  shared path; behavior is unchanged.
+- The broker's recorder replies and provider results, and the observer's
+  snapshot and preview drawing, are each split into shared or named steps;
+  behavior is unchanged.
 - The session helper looks up the keyring's style key asynchronously, so a
   slow Secret Service can no longer delay a sleep or screen-share report.
 
