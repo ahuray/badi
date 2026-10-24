@@ -111,7 +111,7 @@ fn spot(before: &str) -> (String, bool) {
 }
 
 /// The first word of `text`, lowercased and without closing punctuation.
-fn next_word(text: &str) -> Option<String> {
+pub(super) fn next_word(text: &str) -> Option<String> {
     let word = text
         .split_whitespace()
         .next()?

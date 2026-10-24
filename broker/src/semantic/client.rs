@@ -46,6 +46,12 @@ const WARM_UP_PROMPT: &str = "Thank you for your";
 const WARM_UP_TOKENS: u16 = 2;
 // A non-streaming reply also echoes generation settings; its body is discarded.
 const MAX_WARM_UP_RESPONSE_BYTES: usize = 64 * 1_024;
+/// First-token candidates read for an alternative, and how many of them may
+/// be continued before giving up.
+const ALTERNATIVE_CANDIDATES: u8 = 8;
+const ALTERNATIVE_ATTEMPTS: usize = 3;
+// A non-streaming reply with candidate probabilities, and the settings echo.
+const MAX_CANDIDATES_RESPONSE_BYTES: usize = 64 * 1_024;
 /// Linux `sockaddr_un.sun_path` holds at most 108 bytes.
 const MAX_UNIX_SOCKET_BYTES: usize = 108;
 
@@ -671,6 +677,135 @@ impl SemanticClient {
         }
     }
 
+    /// An alternative continuation: the model's most likely first tokens
+    /// after the same prompt a suggestion gets, the best whose word is not in
+    /// `excluded`, continued greedily within the length setting. `None` when
+    /// none fits. Explicit, so no confidence floor applies.
+    async fn alternative_text(
+        &self,
+        request: &ProviderRequest,
+        excluded: &[String],
+        cancellation: &CancellationToken,
+        started: Instant,
+        budget: Duration,
+    ) -> Result<Option<String>, ClientError> {
+        if !matches!(validate_request(request)?, InputEligibility::Eligible) {
+            return Ok(None);
+        }
+        let preferences = self.preferences.read().map_or_else(
+            |poisoned| poisoned.into_inner().clone(),
+            |guard| guard.clone(),
+        );
+        if request
+            .language
+            .as_deref()
+            .and_then(crate::writing::WritingLanguage::from_tag)
+            .is_none_or(|language| !preferences.enables(language))
+        {
+            return Ok(None);
+        }
+        let healed = preferences.healed(&self.healing);
+        let plan = crate::writing::completion_plan(request, &healed);
+        if plan.sends_nothing() {
+            return Ok(None);
+        }
+        let echo = plan.echo.unwrap_or_default();
+        let length = self.suggestion_length();
+        let candidates = self
+            .first_token_candidates(&plan, cancellation, started, budget)
+            .await?;
+        let first_word = |text: &str| {
+            text.split_whitespace()
+                .next()
+                .map(|word| {
+                    word.trim_end_matches(|c: char| !c.is_alphanumeric())
+                        .to_lowercase()
+                })
+                .filter(|word| !word.is_empty())
+        };
+        // A token that is itself a word already shown is not continued.
+        let admissible = candidates.into_iter().filter(|token| {
+            token.len() > echo.len()
+                && token.starts_with(echo)
+                && !token.contains(['<', '>', '`', '\n', '\r'])
+                && (plan.digits || !token.chars().any(char::is_numeric))
+                && first_word(&token[echo.len()..]).is_none_or(|word| !excluded.contains(&word))
+        });
+        for token in admissible.take(ALTERNATIVE_ATTEMPTS) {
+            let prompt = format!("{}{token}", plan.prompt);
+            let follow = crate::writing::CompletionPlan {
+                prompt: &prompt,
+                echo: None,
+                max_tokens: plan.max_tokens.saturating_sub(1).max(1),
+                digits: plan.digits,
+                finished_word_prompt: None,
+            };
+            let shape = StreamShape {
+                length,
+                ..StreamShape::default()
+            };
+            let rest = self
+                .complete_plan(follow, cancellation, started, budget, shape)
+                .await?
+                .output
+                .unwrap_or_default();
+            let composed = format!("{token}{rest}");
+            let Some(text) = crate::writing::complete_word_prefix(
+                &composed[echo.len()..],
+                length.max_words(),
+                true,
+            ) else {
+                continue;
+            };
+            if first_word(&text).is_some_and(|word| !excluded.contains(&word)) {
+                return Ok(Some(text));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The model's most likely first tokens after `plan`'s prompt, best
+    /// first, read before sampling from one generated token.
+    async fn first_token_candidates(
+        &self,
+        plan: &crate::writing::CompletionPlan<'_>,
+        cancellation: &CancellationToken,
+        started: Instant,
+        budget: Duration,
+    ) -> Result<Vec<String>, ClientError> {
+        let mut payload = plan.payload();
+        payload["n_predict"] = serde_json::json!(1);
+        payload["n_probs"] = serde_json::json!(ALTERNATIVE_CANDIDATES);
+        payload["post_sampling_probs"] = serde_json::json!(false);
+        payload["stream"] = serde_json::json!(false);
+        let body = serde_json::to_vec(&payload).map_err(|_| ClientError::InvalidRequest)?;
+        let remaining = (started + budget).saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(Vec::new());
+        }
+        let exchange = async {
+            let response = self
+                .post_runtime("/completion", body, Some(remaining + WRITING_HTTP_GRACE))
+                .await?;
+            if response.status() != StatusCode::OK {
+                return Err(ClientError::UnexpectedStatus(response.status()));
+            }
+            ensure_content_type(&response, "application/json")?;
+            read_bounded_body(response, MAX_CANDIDATES_RESPONSE_BYTES).await
+        };
+        let body = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Err(ClientError::Cancelled),
+            result = tokio::time::timeout(remaining, exchange) => match result {
+                Ok(body) => body?,
+                Err(_) => return Ok(Vec::new()),
+            },
+        };
+        let reply: serde_json::Value =
+            serde_json::from_slice(&body).map_err(|_| ClientError::MalformedStream)?;
+        Ok(first_token_texts(&reply))
+    }
+
     /// The rest of the word at the caret from the request's vocabulary, in a
     /// language the person turned on. It needs no model, so it answers at
     /// once, and the model runs only when it abstains.
@@ -1098,6 +1233,54 @@ impl CompletionProvider for SemanticClient {
         })
     }
 
+    async fn alternative(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        trigger: RequestTrigger,
+        excluded: Vec<String>,
+    ) -> Result<ProviderReply, ProviderError> {
+        let started = Instant::now();
+        let budget = trigger.writing_budget();
+        if cancellation.is_cancelled() {
+            return Err(ProviderError::Cancelled);
+        }
+        let text = self
+            .alternative_text(&request, &excluded, &cancellation, started, budget)
+            .await
+            .map_err(|error| match error {
+                ClientError::Cancelled => ProviderError::Cancelled,
+                _ => ProviderError::Unavailable,
+            })?;
+        let outcome = text
+            .filter(|text| {
+                crate::writing::line_rest(&request.after).is_none()
+                    && request
+                        .language
+                        .as_deref()
+                        .and_then(crate::writing::WritingLanguage::from_tag)
+                        .is_some_and(|language| language.accepts_output(text))
+                    && !crate::writing::introduces_unsupported_fact(&request.before, text)
+                    && crate::writing::validate_proposal(
+                        &request.before,
+                        &request.after,
+                        text,
+                        request.language.as_deref(),
+                    )
+                    .is_ok()
+            })
+            .map_or(
+                ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained),
+                |text| {
+                    ProviderOutcome::Proposal(WritingProposal {
+                        text,
+                        replace_before: None,
+                    })
+                },
+            );
+        Ok(outcome.into())
+    }
+
     async fn complete(
         &self,
         request: ProviderRequest,
@@ -1476,6 +1659,42 @@ fn observed_completion(
         generated_tokens,
         first_token_bytes: accumulator.first_token_bytes(),
     }
+}
+
+/// The candidate texts of a non-streaming reply's first token, best first:
+/// its `top_logprobs`, each read from its bytes when they are valid UTF-8.
+fn first_token_texts(reply: &serde_json::Value) -> Vec<String> {
+    let Some(candidates) = reply
+        .get("completion_probabilities")
+        .and_then(|value| value.get(0))
+        .and_then(|first| first.get("top_logprobs"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let mut scored: Vec<(f64, String)> = candidates
+        .iter()
+        .filter_map(|candidate| {
+            let logprob = candidate
+                .get("logprob")?
+                .as_f64()
+                .filter(|value| value.is_finite())?;
+            let text = candidate
+                .get("bytes")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|bytes| {
+                    bytes
+                        .iter()
+                        .map(|byte| byte.as_u64().and_then(|byte| u8::try_from(byte).ok()))
+                        .collect::<Option<Vec<u8>>>()
+                })
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .or_else(|| candidate.get("token")?.as_str().map(str::to_owned))?;
+            Some((logprob, text))
+        })
+        .collect();
+    scored.sort_by(|left, right| right.0.total_cmp(&left.0));
+    scored.into_iter().map(|(_, text)| text).collect()
 }
 
 /// How a streamed completion becomes a suggestion: the healed echo to strip,

@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
+use super::alternatives;
 use super::authority::policy_status;
 use super::type_through::CarryScope;
 use super::{
@@ -249,6 +250,7 @@ impl SessionState {
             pending: None,
             revision: None,
             escape_quiet: None,
+            alternatives: alternatives::Alternatives::default(),
             sink,
         }
     }

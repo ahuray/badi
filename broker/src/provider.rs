@@ -190,6 +190,19 @@ pub trait CompletionProvider: Send + Sync + 'static {
                     .into()
             })
     }
+
+    /// For an explicit request for alternatives: the best continuation
+    /// whose first word is none of `excluded` (lowercased). A provider
+    /// without one abstains.
+    async fn alternative(
+        &self,
+        _request: ProviderRequest,
+        _cancellation: CancellationToken,
+        _trigger: RequestTrigger,
+        _excluded: Vec<String>,
+    ) -> Result<ProviderReply, ProviderError> {
+        Ok(ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained).into())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -219,6 +232,8 @@ impl ProviderOutcome {
 pub struct PhraseRule {
     trigger: String,
     completion: String,
+    /// Further continuations, offered in order as alternatives.
+    alternatives: Vec<String>,
 }
 
 impl PhraseRule {
@@ -227,7 +242,14 @@ impl PhraseRule {
         Self {
             trigger: suffix.into(),
             completion: completion.into(),
+            alternatives: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_alternatives(mut self, alternatives: &[&str]) -> Self {
+        self.alternatives = alternatives.iter().map(|text| (*text).to_owned()).collect();
+        self
     }
 }
 
@@ -240,7 +262,8 @@ impl Default for DeterministicPhraseProvider {
     fn default() -> Self {
         Self {
             rules: vec![
-                PhraseRule::new("thank you", " for your time"),
+                PhraseRule::new("thank you", " for your time")
+                    .with_alternatives(&[" so much", " again"]),
                 PhraseRule::new("looking forward", " to hearing from you"),
                 PhraseRule::new("the next step", " is to verify the result"),
                 PhraseRule::new("please", " let me know what you think"),
@@ -297,6 +320,39 @@ impl CompletionProvider for DeterministicPhraseProvider {
         }
         .into())
     }
+
+    async fn alternative(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        _trigger: RequestTrigger,
+        excluded: Vec<String>,
+    ) -> Result<ProviderReply, ProviderError> {
+        if cancellation.is_cancelled() {
+            return Err(ProviderError::Cancelled);
+        }
+        Ok(match self.rule(&request) {
+            Ok(rule) => rule
+                .alternatives
+                .iter()
+                .find(|text| {
+                    text.split_whitespace()
+                        .next()
+                        .is_some_and(|word| !excluded.contains(&word.to_lowercase()))
+                })
+                .map_or(
+                    ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained),
+                    |text| {
+                        ProviderOutcome::Proposal(WritingProposal {
+                            text: text.clone(),
+                            replace_before: None,
+                        })
+                    },
+                ),
+            Err(reason) => ProviderOutcome::NoSuggestion(reason),
+        }
+        .into())
+    }
 }
 
 /// The fixture shares the writing model's inference-free dictionary path: an
@@ -323,6 +379,10 @@ fn dictionary_correction(request: &ProviderRequest) -> Option<WritingProposal> {
 
 impl DeterministicPhraseProvider {
     fn phrase(&self, request: &ProviderRequest) -> Result<String, NoSuggestionReason> {
+        self.rule(request).map(|rule| rule.completion.clone())
+    }
+
+    fn rule(&self, request: &ProviderRequest) -> Result<&PhraseRule, NoSuggestionReason> {
         // Exact English triggers keep this deterministic integration provider
         // separate from model-backed writing inference.
         let Some(language) = request.language.as_deref() else {
@@ -347,7 +407,6 @@ impl DeterministicPhraseProvider {
         self.rules
             .iter()
             .find(|rule| before.eq_ignore_ascii_case(&rule.trigger))
-            .map(|rule| rule.completion.clone())
             .ok_or(NoSuggestionReason::ModelAbstained)
     }
 }

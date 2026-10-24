@@ -1047,7 +1047,7 @@
       "enum": ["pause", "resume", "pause_toggle", "snooze", "snooze_end"]
     },
     "sessionControlAction": {
-      "enum": ["request", "accept_word", "accept_all", "dismiss"]
+      "enum": ["request", "accept_word", "accept_all", "dismiss", "alternatives"]
     },
     "globalControlRequestPayload": {
       "type": "object",
@@ -1082,7 +1082,7 @@
           "additionalProperties": false,
           "required": ["action", "fingerprint", "suggestion_id"],
           "properties": {
-            "action": { "enum": ["accept_word", "accept_all", "dismiss"] },
+            "action": { "enum": ["accept_word", "accept_all", "dismiss", "alternatives"] },
             "fingerprint": { "$ref": "#/$defs/fingerprint" },
             "suggestion_id": { "$ref": "#/$defs/opaqueId" }
           }
@@ -1095,6 +1095,7 @@
         "accept_word",
         "accept_all",
         "dismiss",
+        "alternatives",
         "pause",
         "resume",
         "pause_toggle",

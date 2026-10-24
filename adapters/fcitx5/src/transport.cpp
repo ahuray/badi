@@ -137,7 +137,8 @@ bool sessionControlResult(const Json &value, const Json &payload) {
     const bool knownAction = payload.contains("action") &&
                              (payload["action"] == "accept_all" ||
                               payload["action"] == "accept_word" ||
-                              payload["action"] == "dismiss");
+                              payload["action"] == "dismiss" ||
+                              payload["action"] == "alternatives");
     return exactKeys(value, {"v", "id", "type", "mono_ms", "payload"}) &&
            value["v"] == 2 && value["type"] == "control.result" &&
            value["id"].is_string() &&
@@ -722,6 +723,16 @@ public:
             &request.coordinates));
     }
 
+    bool requestAlternative(const DismissRequest &request) {
+        if (!ready()) return false;
+        return queue(envelope(
+            "control.request", request.controlId, nowMs(),
+            Json{{"action", "alternatives"},
+                 {"fingerprint", request.coordinates.fingerprint},
+                 {"suggestion_id", request.suggestionId}},
+            &request.coordinates));
+    }
+
     bool requestDismissal(const DismissRequest &request) {
         if (!ready()) return false;
         return queue(envelope(
@@ -1285,6 +1296,10 @@ bool Transport::cancelRequest(const Coordinates &coordinates) {
 bool Transport::requestAcceptance(const AcceptRequest &request) {
     return impl_->requestAcceptance(request);
 }
+bool Transport::requestAlternative(const DismissRequest &request) {
+    return impl_->requestAlternative(request);
+}
+
 bool Transport::requestDismissal(const DismissRequest &request) {
     return impl_->requestDismissal(request);
 }

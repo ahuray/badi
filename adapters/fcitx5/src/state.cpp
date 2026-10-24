@@ -791,6 +791,20 @@ SessionState::requestDismissal(std::uint64_t nowMs,
     return request;
 }
 
+std::optional<DismissRequest>
+SessionState::requestAlternative(std::uint64_t nowMs, const PanelObservation &panel) {
+    if (!editingAvailable() || !hasOwnedCandidate(panel) || pendingAcceptance_ || !visible_ ||
+        visible_->replaceBefore || visible_->expiresAtMs <= nowMs || visible_->coordinates != coordinates_) {
+        return std::nullopt;
+    }
+    return DismissRequest{
+        .coordinates = visible_->coordinates,
+        .controlId = "fcitx.alternative." + std::to_string(visible_->coordinates.focusEpoch) + "." +
+                     std::to_string(visible_->coordinates.revision) + "." + std::to_string(++alternativeSerial_),
+        .suggestionId = visible_->suggestionId,
+    };
+}
+
 std::optional<CommitDispatch>
 SessionState::authorizeCommit(const CommitPrepare &prepare,
                               std::uint64_t nowMs,

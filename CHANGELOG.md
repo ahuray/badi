@@ -42,6 +42,9 @@ Unreleased in the same commit.
   from the usage counts Badi already keeps; it never gets bolder there.
 - The grey preview draws the word Tab takes a step brighter than the rest,
   in observed apps, Obsidian and Neovim, as Fcitx's panel already did.
+- Ctrl+Shift+Space on a shown suggestion shows another one that starts with
+  a different word, from the model's own next choices; after three, presses
+  cycle through them.
 
 ## 0.2.0 (2026-10-24)
 

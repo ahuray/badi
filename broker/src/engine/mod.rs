@@ -3,6 +3,7 @@
 //! `Broker` operations of one concern.
 
 mod acceptance;
+mod alternatives;
 mod authority;
 mod desktop;
 mod editor;
@@ -312,6 +313,8 @@ struct SessionState {
     /// An explicit revision of the selection, running or shown (ADR 0012).
     revision: Option<revision::SessionRevision>,
     escape_quiet: Option<EscapeQuiet>,
+    /// Continuations shown for this context on request (alternatives).
+    alternatives: alternatives::Alternatives,
     sink: BrokerEventSink,
 }
 

@@ -188,6 +188,9 @@ pub enum ControlAction {
     Snooze,
     /// Protocol v2: end every snooze early.
     SnoozeEnd,
+    /// Protocol v2: show the model's next-best continuation in place of the
+    /// shown one, or cycle through those already shown for this context.
+    Alternatives,
 }
 
 impl ControlAction {

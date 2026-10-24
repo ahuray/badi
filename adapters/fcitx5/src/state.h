@@ -597,6 +597,10 @@ public:
     requestAcceptance(std::uint64_t nowMs, const PanelObservation &panel, bool word = false);
     std::optional<DismissRequest>
     requestDismissal(std::uint64_t nowMs, const PanelObservation &panel);
+    // Asks for another continuation in place of the shown one (never a
+    // correction). The shown one stays until the broker replaces it.
+    std::optional<DismissRequest>
+    requestAlternative(std::uint64_t nowMs, const PanelObservation &panel);
     std::optional<CommitDispatch> authorizeCommit(const CommitPrepare &prepare,
                                                   std::uint64_t nowMs,
                                                   const PanelObservation &panel);
@@ -653,6 +657,7 @@ private:
     std::optional<ContextUpdate> lastContext_;
     std::optional<Suggestion> visible_;
     std::optional<AcceptRequest> pendingAcceptance_;
+    std::uint64_t alternativeSerial_ = 0;
     std::optional<RevisionUpdate> revisionRequest_;
     std::optional<Revision> revision_;
     std::optional<AcceptRequest> revisionAcceptance_;

@@ -40,6 +40,11 @@ impl Broker {
                     .request_suggestion(coordinates, request, request_id)
                     .await;
             }
+            ControlAction::Alternatives => {
+                return self
+                    .request_alternative(coordinates, payload, request_id)
+                    .await;
+            }
             ControlAction::Dismiss => None,
             ControlAction::AcceptWord => Some(Acceptance::Word),
             ControlAction::AcceptAll => Some(Acceptance::All),

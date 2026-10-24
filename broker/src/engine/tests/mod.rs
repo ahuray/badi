@@ -30,6 +30,7 @@ use crate::settings::{
     StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
 };
 
+mod alternatives;
 mod commit;
 mod context;
 mod desktop;

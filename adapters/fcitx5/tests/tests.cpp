@@ -747,6 +747,19 @@ void foreignImeAndManualKeysYieldCooperatively() {
     check(dismissal && dismissal->suggestionId == "suggestion-1" &&
               !dismissing.suggestionVisible(),
           "dismissal must be revision-bound and clear local authority");
+
+    auto asking = focusedState();
+    const auto askUpdate = explicitContext(asking);
+    check(asking.showSuggestion(suggestionFor(askUpdate), 100), "alternative setup should display");
+    const auto first = asking.requestAlternative(100, ownedCandidates);
+    const auto second = asking.requestAlternative(100, ownedCandidates);
+    check(first && second && first->suggestionId == "suggestion-1" && first->controlId != second->controlId &&
+              asking.suggestionVisible(),
+          "an alternative names the shown suggestion and keeps it until the broker replaces it");
+    check(!asking.requestAlternative(100, foreignCandidates), "a foreign panel keeps the chord from asking");
+    check(!asking.requestAlternative(600, ownedCandidates), "an expired suggestion has no alternative");
+    check(asking.requestAcceptance(100, ownedCandidates) && !asking.requestAlternative(100, ownedCandidates),
+          "an acceptance in flight is not replaced");
 }
 
 void preInputKeysConsumeOnlyBadiUi() {

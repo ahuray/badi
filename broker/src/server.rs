@@ -746,7 +746,8 @@ impl MessageHandler<'_> {
                 ControlAction::Request
                 | ControlAction::AcceptWord
                 | ControlAction::AcceptAll
-                | ControlAction::Dismiss => return Err(ServerError::InvalidMessage),
+                | ControlAction::Dismiss
+                | ControlAction::Alternatives => return Err(ServerError::InvalidMessage),
             };
             let result = ControlResultPayload {
                 action,
