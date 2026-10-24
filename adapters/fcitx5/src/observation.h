@@ -112,7 +112,8 @@ bool invalidates(const nlohmann::json &event, std::string_view appId);
 // surrounding text) inspects at once, so the model can run during the typing
 // pause, and so does an invalidation that follows input: apps whose field
 // reports its own edits invalidate on every key. After the observer declined
-// the field in this focus visit, input inspects once typing pauses. An
+// the field twice in a row in this focus visit, input inspects once typing
+// pauses. An
 // invalidation without input since the last inspection backs off (240, 480,
 // 960 ms) and then waits for input, so a busy page cannot drive an inspection
 // loop; a changed field waits for input.
@@ -132,6 +133,7 @@ public:
 
     void focusIn(std::uint64_t nowUs) {
         declined_ = false;
+        declinedAgain_ = false;
         editsReported_ = false;
         input(nowUs);
     }
@@ -146,9 +148,15 @@ public:
         // before that input's own accessibility events.
         inspectedEarly_ = nowUs < inputUs_ + kTypingPauseUs;
     }
-    // Whether the inspection found a field; a declined one waits for pauses.
-    void found(bool field) { declined_ = !field; }
-    [[nodiscard]] bool inspectsOnInput() const { return !declined_; }
+    // Whether the inspection found a field. A declined field still gets one
+    // look on the next keystroke, since a click can reach Fcitx before the
+    // app moves its accessible focus (Zen); declined again, it waits for
+    // typing pauses.
+    void found(bool field) {
+        declinedAgain_ = !field && declined_;
+        declined_ = !field;
+    }
+    [[nodiscard]] bool inspectsOnInput() const { return !declinedAgain_; }
     // The field reported the user's own edit (Chromium, Writer): each later
     // keystroke is re-inspected when its report arrives, not re-read first.
     void editReported() { editsReported_ = true; }
@@ -174,6 +182,7 @@ private:
     std::uint64_t inputUs_ = 0;
     bool inspectedEarly_ = false;
     bool declined_ = false;
+    bool declinedAgain_ = false;
     bool editsReported_ = false;
     unsigned int idleInvalidations_ = 0;
     unsigned int busyRetries_ = 0;
