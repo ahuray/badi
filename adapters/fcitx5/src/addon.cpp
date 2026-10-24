@@ -213,17 +213,21 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     // A field we already corroborate can start the model on this key.
     // Re-read that field directly; a second inspection would only repeat
     // the round trip. Any other field is inspected on this key too, unless
-    // the observer declined it in this visit. A suggestion still waits out
-    // the typing pause.
+    // the observer declined it in this visit. A field that reports the
+    // user's edits is re-inspected when this key's report arrives, which
+    // ends its observation anyway; the typing pause is the fallback. A
+    // suggestion still waits out the typing pause.
     if (!unchangedObserved) {
+        const bool awaitReport = binding->observed() && binding->inspection.fieldReportsEdits();
         // Foreign preedit must go through inspection, which yields and
         // resumes when the composition clears. A direct read would skip that.
         if (binding->observed() && binding->broker.opened && binding->broker.policyAllowed &&
-            safeToObserve(*binding)) {
+            safeToObserve(*binding) && !awaitReport) {
             debug_.record("observer", binding->state.appId(), "same_field_snapshot");
             requestObservedContext(*binding, true);
         } else {
-            observeLater(*binding, false, false, binding->observed() || binding->inspection.inspectsOnInput());
+            observeLater(*binding, false, false,
+                         !awaitReport && (binding->observed() || binding->inspection.inspectsOnInput()));
         }
     }
 }

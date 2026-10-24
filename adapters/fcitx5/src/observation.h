@@ -132,6 +132,7 @@ public:
 
     void focusIn(std::uint64_t nowUs) {
         declined_ = false;
+        editsReported_ = false;
         input(nowUs);
     }
     void input(std::uint64_t nowUs) {
@@ -148,6 +149,10 @@ public:
     // Whether the inspection found a field; a declined one waits for pauses.
     void found(bool field) { declined_ = !field; }
     [[nodiscard]] bool inspectsOnInput() const { return !declined_; }
+    // The field reported the user's own edit (Chromium, Writer): each later
+    // keystroke is re-inspected when its report arrives, not re-read first.
+    void editReported() { editsReported_ = true; }
+    [[nodiscard]] bool fieldReportsEdits() const { return editsReported_; }
     [[nodiscard]] bool inputSinceInspection() const { return inputSerial_ != inspectedSerial_; }
     [[nodiscard]] bool reinspectAfterInvalidation(bool fieldChanged);
     [[nodiscard]] std::uint64_t delayUs(bool immediate, bool typedThrough = false, bool busyRetry = false,
@@ -169,6 +174,7 @@ private:
     std::uint64_t inputUs_ = 0;
     bool inspectedEarly_ = false;
     bool declined_ = false;
+    bool editsReported_ = false;
     unsigned int idleInvalidations_ = 0;
     unsigned int busyRetries_ = 0;
 };

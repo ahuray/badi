@@ -1150,8 +1150,11 @@ void inspectionOnInputSurvivesItsOwnEdit() {
     schedule.found(true);
     check(schedule.inspectsOnInput(), "a found field inspects on input again");
     schedule.found(false);
+    schedule.editReported();
+    check(schedule.fieldReportsEdits(), "a field that reported the user's edit is awaited, not re-read");
     schedule.focusIn(900'000);
     check(schedule.inspectsOnInput() && schedule.inputSinceInspection(), "a new focus visit forgets the decline");
+    check(!schedule.fieldReportsEdits(), "a new focus visit re-reads its field again");
 }
 
 void shiftedLetterChordUsesFcitxNormalization() {

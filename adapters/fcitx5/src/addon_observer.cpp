@@ -158,6 +158,7 @@ void BadiAddon::observerInvalidated(const Json &event) {
         // The user's own typing changed the field: inspect it again at once,
         // as for the keystroke itself.
         const bool typed = binding.inspection.inputSinceInspection() && binding.inspection.inspectsOnInput();
+        if (typed && fieldChanged) binding.inspection.editReported();
         if (binding.inspection.reinspectAfterInvalidation(fieldChanged)) observeLater(binding, false, false, typed);
         else debug_.record("observer", binding.state.appId(), "observer_awaiting_input");
     }

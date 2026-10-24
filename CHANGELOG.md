@@ -21,7 +21,9 @@ Unreleased in the same commit.
   mid-row.
 - Suggestions in observed apps appear sooner after you stop typing: a field
   is inspected on the keystroke itself, and again at once when your own
-  typing changes it, so the model runs during the typing pause.
+  typing changes it, so the model runs during the typing pause. A field
+  that reports your edits is not re-read first, which only started a model
+  run its report then cancelled.
 - Discord gets suggestions: `install-desktop.py --observed-app discord` adds
   the renderer accessibility flag to a user copy of its launcher. The
   `--screen-reader-accessibility` option is gone: it never exposed Discord's

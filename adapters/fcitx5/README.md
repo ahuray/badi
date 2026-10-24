@@ -265,8 +265,11 @@ provides an editor transaction.
   that field and reuses its session, so the model can run during the pause.
   It does not inspect again unless that read says the accessible changed.
   Any other field is inspected on the keystroke too, and so is a field the
-  user's own typing invalidated: Writer reports each edit of its paragraph,
-  which ends the observation until the next inspection. The suggestion
+  user's own typing invalidated: Chromium and Writer report each edit of the
+  field, which ends the observation until the next inspection. Once a field
+  has reported an edit in this focus visit, a keystroke waits for that report
+  instead of re-reading the field first, whose model run the report would
+  cancel; the typing pause is the fallback. The suggestion
   stays hidden until 120 ms after that keystroke, or 30 ms after a
   typed-through key. After the observer declined the field in this focus
   visit, input waits for the typing pause again; so does an idle invalidation
