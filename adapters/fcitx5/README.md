@@ -264,17 +264,22 @@ provides an editor transaction.
 - **Inspection.** A keystroke in a field already under observation re-reads
   that field and reuses its session, so the model can run during the pause.
   It does not inspect again unless that read says the accessible changed.
-  The suggestion stays hidden until 120 ms after that keystroke, or 30 ms
-  after a typed-through key. The first look at a field, and an idle
-  invalidation, still wait (120 ms, then 240, 480 and 960 ms). A busy observer
-  is retried every 20 ms. Badi's timers ask for 1 ms accuracy, because Fcitx's
+  Any other field is inspected on the keystroke too, and so is a field the
+  user's own typing invalidated: Writer reports each edit of its paragraph,
+  which ends the observation until the next inspection. The suggestion
+  stays hidden until 120 ms after that keystroke, or 30 ms after a
+  typed-through key. After the observer declined the field in this focus
+  visit, input waits for the typing pause again; so does an idle invalidation
+  (120 ms, then 240, 480 and 960 ms). A busy observer is retried every 20 ms. Badi's timers ask for 1 ms accuracy, because Fcitx's
   sd-event loop otherwise allows 250 ms of slack. With debug on,
   `inspect_sent` and `inspect_answered` time each inspection in the
   [debug trace](../../README.md#debug-trace), beside each key's action and
   each suggestion shown as the `overlay` or the `panel`.
-- **Invalidations.** One without input re-inspects after 240, 480 and 960 ms
-  and then waits for input (`observer_awaiting_input`); a change of the field
-  itself always waits.
+- **Invalidations.** One after input re-inspects at once. One without input
+  re-inspects after 240, 480 and 960 ms and then waits for input
+  (`observer_awaiting_input`); a change of the field itself waits, except the
+  first after an inspection within the typing pause, which can be that key's
+  own late event and re-inspects after 120 ms.
 - **Paragraph ends.** Chromium ends every `<p>` with `"\n\n"` and every `<div>`
   line with `"\n"` when anything follows the editor. For an observed IME-parity
   field only, `normalizeObservedParagraphEnd()` treats exactly that suffix as
@@ -313,8 +318,9 @@ toolkit in general.
 | Ghostty 1.3.1 (2026-10-20/24) | typed line ([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.md)) | 3/3 in the panel; one word per Tab; corrections erase the typo with DELs (`teh → the` on 2026-10-24) | Exact opt-in rule |
 | foot 1.28.0 (2026-10-20) | typed line | 4/4 in the panel in 118–307 ms; `adress → address` with DELs | Exact opt-in rule |
 | Omawrite 0.7.0 (2026-10-20), 0.7.2 (2026-10-24), Qt 6.12, fcitx5-qt 5.1.16 | `QT_IM_MODULE=fcitx`; observed native exact | 6/7 in 248–426 ms; Ctrl+→ takes all; one Ctrl+Z restores the exact prefix; on 0.7.2 a suggestion outlives the autosave's title change and Tab commits | Suggestions through the [surrounding echo](#contract); no spelling replacement until fcitx5-qt is fixed. 0.5.0 replaced a typo in two undo steps |
-| Xournal++ 1.3.7, GTK 3 text tool | `GTK_IM_MODULE=fcitx` launcher override | 20/20 | Tab requests; after Escape leaves text editing, one document undo restores the prefix |
-| Telegram (Qt) | `dbus`, canonicalized to `telegram` | Not retried since fcitx5-qt 5.1.16 | Probably needs the echo handling, like Omawrite |
+| Xournal++ 1.3.7, 1.3.8 (2026-10-24), GTK 3 text tool | `GTK_IM_MODULE=fcitx` launcher override | 20/20; on 1.3.8 a Tab request showed in the panel and Tab committed it | Tab requests; after Escape leaves text editing, one document undo restores the prefix |
+| Telegram 7.3.2, Qt 6, fcitx5-qt 5.1.16 (2026-10-24) | `dbus`, canonicalized to `telegram`; observed | The composer suggested inline through the [surrounding echo](#contract) and Tab committed a word | As Omawrite: no spelling replacement until fcitx5-qt is fixed |
+| Discord 1.0.166 (2026-10-24) | as Chromium; the flag on its launcher | Without the renderer flag the observer found no field; relaunched with it, the composer suggested inline and Tab committed a word | Typing shows Discord's typing indicator, so trials use a private channel |
 
 The 2026-10-24 cells, their drivers and screenshots are in
 `output/native-trials/2026-10-24-full-trial/` (`results.jsonl`).

@@ -19,6 +19,9 @@ Unreleased in the same commit.
 - Zen Twilight (`zen-twilight`) gets suggestions and corrections like Zen.
 - Bash draws an accepted suggestion once instead of repeating the prompt
   mid-row.
+- Suggestions in observed apps appear sooner after you stop typing: a field
+  is inspected on the keystroke itself, and again at once when your own
+  typing changes it, so the model runs during the typing pause.
 
 ## 0.2.0 (2026-10-24)
 
