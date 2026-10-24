@@ -439,7 +439,7 @@ fn browser_target_resolution_is_exact_and_canonical() {
         StableIdentity::from_target(&target).expect("known browser origin"),
         identity("example.com")
     );
-    for app in ["chromium-browser", "brave-origin", "zen"] {
+    for app in ["chromium-browser", "brave-origin", "zen", "zen-twilight"] {
         assert_eq!(
             StableIdentity::from_target(&TargetDescriptor {
                 app_id: app.to_owned(),

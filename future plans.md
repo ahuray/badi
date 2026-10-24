@@ -12,7 +12,7 @@ links to it. A tested app version is not a claim about Linux in general.
 ## Where Badi stands (2026-10-24)
 
 - **Coverage** is ahead of every Linux alternative found: Chromium-based apps
-  and any website, Zen, Omarchy web apps in Chromium or Brave, Telegram,
+  and any website, Zen and Zen Twilight, Omarchy web apps in Chromium or Brave, Telegram,
   LibreOffice Writer
   (spelling as you type, Alt+F7), Obsidian, Bash, Neovim (live under LazyVim
   in foot and Ghostty) and, by an opt-in rule, the typed line in Ghostty and
@@ -454,14 +454,13 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 ### Engineering upkeep
 
-- [ ] Live-check what the 0.2.0 review fixed from source only, each with
-      `badi debug on --text` and disposable text: the grey preview following
-      a scroll, window words on a page with emoji and soft hyphens,
-      Ctrl+Shift+Tab staying the app's key in a native app with no rule, a
-      broker `error` frame ending only its request, the panel after `badi
-      screen-share suggest` (writes still enabled), one language chip, rows
-      and the site draft surviving a poll, Neovim reading no buffer while
-      paused, and Writer superseding a slow spelling request.
+- [ ] Live-check what the 2026-10-24 trial could not reach, each with
+      `badi debug on --text` and disposable text: a broker `error` frame
+      ending only its request, one language chip on the panel's settings page
+      (the trial machine still shows the first-run language question), rows
+      and the site draft surviving a poll, Writer superseding a slow spelling
+      request, Xournal++ (a recovery dialog was waiting for the user) and
+      Telegram.
 - [ ] Broker `error` frames carry no session, and the Fcitx addon's request
       ids repeat across sessions, so the addon retires a refused id in every
       binding holding it (this only withdraws). Echo the session coordinates

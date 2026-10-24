@@ -18,6 +18,7 @@ editing works ([coverage](../../README.md#where-it-works)).
 | `chromium-browser` | as above, started without `/usr/bin/chromium`'s `CHROME_DESKTOP` | `chromium-browser` | browser origin |
 | `brave-origin` | `/opt/brave-origin-bin/brave` | `brave-origin`, or an `--app` window `brave-<host>__<path>-<profile>` | browser origin |
 | `zen` (Gecko) | `/opt/zen-browser-bin/zen-bin` | `zen` | browser origin |
+| `zen-twilight` (Gecko, the nightly build) | `/opt/zen-browser-twilight-bin/zen-bin` | `zen-twilight` | browser origin |
 | `chatgpt` (Codex) | `/usr/lib/chatgpt/ChatGPT` | `chatgpt` | desktop app |
 | `code` (VS Code) | `/usr/share/code/code` | `code`, or `com.microsoft.VSCode` from 1.140 | desktop app |
 | `cursor` | `/usr/lib/electron42/electron` running exactly `/usr/share/cursor/resources/app/cursor.mjs` | `cursor` | desktop app |
@@ -142,13 +143,19 @@ serializes surrounding text:
 - **Inline objects** (`<strong>`, `<em>`, `<code>`, `<span>`, links, `<mark>`,
   `<sub>`, `<sup>`) are written as their own text.
 - **Opaque blocks:** any other block (a list, quote, table or image).
+- **Spaces.** An editor keeps a typed trailing space as a no-break space
+  (U+00A0), which AT-SPI reports and Chromium sends to Fcitx as a plain
+  space; the snapshot of any Chromium contenteditable (not an `input` or
+  `textarea`) does the same, character for character. Gecko keeps its text.
 
 `inspect` reads only roles, offsets, lengths and selection counts. `snapshot`
 reads, after the policy grant, the blocks in a window one character per block
 wider than 512/128, rereads them for the stale check and keeps the last 512
 characters before and 128 after the caret. When an opaque block overlaps that
 window, the snapshot covers only the caret's own block and says
-`scope: "block"`.
+`scope: "block"`: that block's text before the caret must end Fcitx's text
+at a line start, and its rest with its block end must begin Fcitx's text
+after the caret.
 
 Fails closed before prose:
 - `unsupported_field`: text directly in the root, more than 64 blocks, a caret
@@ -182,7 +189,9 @@ detect changes; the result is a snapshot, never an atomic edit transaction, so
 Fcitx compares its live text again before dispatch.
 
 Focus and window changes and the field's own events invalidate the epoch and
-hide the preview. After an approved snapshot, the field's events (text, caret,
+hide the preview. Hyprland repeats `activewindowv2` for the same window when
+its title changes (an editor's unsaved mark or autosave, a terminal's running
+command); only a different window address is a focus change. After an approved snapshot, the field's events (text, caret,
 selection, editable, showing, defunct, role) are subscribed on a separate
 D-Bus connection, matched to that exact sender and path, so other fields'
 events never arrive. Their payloads, including typed text, are never unpacked.
@@ -303,8 +312,12 @@ Unsolicited `{schema,event:"invalidate",epoch,reason,app_id}` messages name the
 previous app; a client must drop its candidate and inspect afresh. When the armed field, or a scroll-pane ancestor, reports
 `object:bounds-changed` or `object:visible-data-changed`, the grey preview
 moves to the caret's new position if the text offset is unchanged. If the
-caret moved or can no longer be drawn, the suggestion ends. A scroll the
-toolkit reports on neither the field nor a scroll pane does not.
+caret moved or can no longer be drawn, the suggestion ends. Chromium reports
+no scroll of an inner overflow pane at all, so while a preview shows the
+observer also rereads its caret every 250 ms, an operation of its own: a moved
+caret, field, window or monitor ends the suggestion rather than leaving grey
+text over other words. A `hide` request withdraws the preview for good; no
+later scroll draws it again.
 
 ## Caret geometry and preview
 

@@ -150,8 +150,8 @@ Where code lives inside the larger components:
   ([ADR 0011](docs/decisions/0011-checked-corrections-in-append-only-apps.md)):
   the observer confirms the field, then the exact typed typo is deleted, the
   fix committed and the app's text read back. Any other replacement stays
-  editor-owned. Only the exact `zen` identity covers Gecko, and the observer
-  alone denies its urlbar.
+  editor-owned. Only the exact `zen` and `zen-twilight` identities cover
+  Gecko, and the observer alone denies their urlbar.
 - **Type-through** ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md))
   carries suggestion text, never authority, into the next admitted request.
 - **Context words** ([ADR 0010](docs/decisions/0010-context-finishes-words.md))

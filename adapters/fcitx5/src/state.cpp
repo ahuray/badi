@@ -28,8 +28,8 @@ std::uint64_t mix(std::string_view value, std::uint64_t seed) {
 // observed-only rules (adapters/accessibility/daemon.py APPS);
 // tests/observer-identities.py keeps the lists equal, because an id without a
 // rule could never be observed.
-constexpr std::array<std::string_view, 4> kImeParityBrowsers{
-    "chromium", "chromium-browser", "brave-origin", "zen"};
+constexpr std::array<std::string_view, 5> kImeParityBrowsers{
+    "chromium", "chromium-browser", "brave-origin", "zen", "zen-twilight"};
 constexpr std::array<std::string_view, 6> kImeParityDesktopApps{"chatgpt", "code", "com.anthropic.claude", "cursor",
                                                                  "discord", "grok-bot"};
 // Native apps on the same observed, append-only contract: one Fcitx program
@@ -60,9 +60,9 @@ bool unobservedChromiumFamily(std::string_view appId) {
                        [appId](std::string_view prefix) { return appId.starts_with(prefix); });
 }
 
-// Gecko-family browser identities other than the observed "zen": Firefox and
-// its channels, Flatpak ids and PWAsForFirefox web-app windows (FFPWA-<id>),
-// other Zen builds (Twilight, Flatpak), and Firefox forks. Their commitString
+// Gecko-family browser identities other than the observed Zen builds: Firefox
+// and its channels, Flatpak ids and PWAsForFirefox web-app windows (FFPWA-<id>),
+// other Zen builds (alpha, beta, Flatpak), and Firefox forks. Their commitString
 // is as retargetable as Zen's, their urlbar need not carry a Url purpose, and
 // no observer rule corroborates their fields, so none may use the manual path.
 // Gecko mail clients (Thunderbird) are not browsers and keep the native contract.
@@ -142,19 +142,20 @@ NativeAppClass classifyNativeApp(std::string_view appId) {
     // Browser/Electron commitString behaves like a typed keystroke: page script
     // can retarget it during beforeinput and undo may coalesce it with typing.
     // These apps therefore accept only through an observed field, append-only.
-    // Zen is the one Gecko identity with an observer rule; its urlbar shares
-    // the page's input context without a Url purpose, so the observer, not
-    // allowsNativeContext(), keeps browser UI out.
+    // Zen and Zen Twilight are the Gecko identities with an observer rule,
+    // checked before the Gecko family their "zen-" prefix belongs to; the
+    // urlbar shares the page's input context without a Url purpose, so the
+    // observer, not allowsNativeContext(), keeps browser UI out.
     // Obsidian's editor plugin owns its fields, so a second integration would
     // double-suggest.
     constexpr std::array<std::string_view, 2> unavailable{"obsidian", "md.obsidian.obsidian"};
     const auto listed = [appId](const auto &ids) {
         return std::find(ids.begin(), ids.end(), appId) != ids.end();
     };
-    if (!validLinuxAppId(appId) || listed(unavailable) || unobservedGeckoFamily(appId))
-        return NativeAppClass::Unavailable;
+    if (!validLinuxAppId(appId) || listed(unavailable)) return NativeAppClass::Unavailable;
     if (listed(kTerminalApps)) return NativeAppClass::Terminal;
     if (listed(kImeParityBrowsers)) return NativeAppClass::ImeParityBrowser;
+    if (unobservedGeckoFamily(appId)) return NativeAppClass::Unavailable;
     if (listed(kImeParityDesktopApps) || listed(kImeParityNativeApps)) return NativeAppClass::ImeParityDesktop;
     if (unobservedChromiumFamily(appId)) return NativeAppClass::Unavailable;
     return NativeAppClass::NativeExact;

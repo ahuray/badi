@@ -35,6 +35,9 @@ APPS = {
                         web_apps="brave-"),
     # /usr/bin/zen-browser execs this binary; its Wayland app id and Fcitx program() are both "zen".
     "zen": App(frozenset({"/opt/zen-browser-bin/zen-bin"}), frozenset({"zen"}), browser=True, web=True, gecko=True),
+    # The Twilight (nightly) build's /usr/bin/zen-browser-twilight execs its own binary; app id "zen-twilight".
+    "zen-twilight": App(frozenset({"/opt/zen-browser-twilight-bin/zen-bin"}), frozenset({"zen-twilight"}),
+                        browser=True, web=True, gecko=True),
     "chatgpt": App(frozenset({"/usr/lib/chatgpt/ChatGPT"}), frozenset({"chatgpt"}), web=True),
     # VS Code 1.140 renamed its Wayland app id; the addon maps both to "code".
     "code": App(frozenset({"/usr/share/code/code"}), frozenset({"code", "com.microsoft.VSCode"}), web=True),
@@ -70,6 +73,8 @@ FIELD_EVENTS = ("object:text-changed", "object:text-caret-moved", "object:text-s
 SCROLL_ANCESTOR_ROLES = frozenset({"scroll pane"})
 SCROLL_SIGNALS = frozenset({"BoundsChanged", "VisibleDataChanged"})
 MAX_SCROLL_ANCESTORS = 3
+# How often a showing preview's caret is checked for a move no event reported.
+PREVIEW_CHECK_MS = 250
 
 
 def unique_object(pairs):
@@ -137,6 +142,7 @@ class Daemon:
         self.failed = False
         self.preview = None
         self.preview_retry_at = 0
+        self.preview_watch = None
         self.observer.render = self.render_preview
         self.observer.hide = self.hide_preview
         self.observer.authorize = self.arm_field_events
@@ -230,6 +236,25 @@ class Daemon:
         except Exception as error:
             print(f"badi-accessibility: {type(error).__name__}", file=sys.stderr)
             self.observer.invalidate("accessibility_unavailable")
+
+    def watch_preview(self):
+        """Check a showing preview on a timer until it is gone."""
+        if self.observer.preview_hold is not None and self.preview_watch is None:
+            self.preview_watch = self.GLib.timeout_add(PREVIEW_CHECK_MS, self.check_preview)
+
+    def check_preview(self):
+        """One timed check, as an operation of its own; False stops the timer."""
+        if self.observer.preview_hold is not None:
+            try:
+                with self.operation():
+                    self.observer.preview_moved()
+            except Exception as error:
+                print(f"badi-accessibility: {type(error).__name__}", file=sys.stderr)
+                self.observer.invalidate("accessibility_unavailable")
+        if self.observer.preview_hold is None:
+            self.preview_watch = None
+            return False
+        return True
 
     def disarm_field_events(self):
         if self.event_bus is not None:
@@ -474,6 +499,7 @@ class Daemon:
             print(f"badi-accessibility: {type(error).__name__}", file=sys.stderr)
             self.observer.invalidate("accessibility_unavailable")
             self.send(fd, self.failure(request, "accessibility_unavailable"))
+        self.watch_preview()
         return True
 
     def respond(self, fd, client, request):

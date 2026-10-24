@@ -194,6 +194,23 @@ class ContractTests(unittest.TestCase):
         self.assertEqual((snapshot["before"], snapshot["after"]), ("Same text", ""))
         self.assertTrue(all(start == 7 for start, _end in self.backend.reads))
 
+    def test_a_chromium_contenteditable_sends_no_break_spaces_as_spaces(self):
+        # An editor keeps a typed trailing space as U+00A0, which AT-SPI
+        # reports; Chromium's surrounding text gives Fcitx a plain space.
+        self.backend.content = "Thank you\u00a0for your\u00a0"
+        self.backend.meta.update(caret=19, total_chars=19)
+        cases = (({"tag": "div"}, "Thank you for your "),
+                 ({"tag": "textarea"}, "Thank you\u00a0for your\u00a0"),
+                 ({"tag": "input", "input_type": "text"}, "Thank you\u00a0for your\u00a0"),
+                 ({"tag": "div", "gecko": True}, "Thank you\u00a0for your\u00a0"),
+                 ({"tag": "", "web": False}, "Thank you\u00a0for your\u00a0"))
+        for change, before in cases:
+            with self.subTest(change=change):
+                self.backend.meta.update({"tag": "textarea", "input_type": "textarea", "web": True, "gecko": False,
+                                          **change})
+                snapshot = self.snapshot(self.inspect()["focus"])["focus"]
+                self.assertEqual((snapshot["before"], snapshot["after"], snapshot["total_chars"]), (before, "", 19))
+
     def test_invalidation_during_the_read_rejects(self):
         focus = self.inspect()["focus"]
         self.backend.change = lambda _backend: self.observer.invalidate("field_changed")
@@ -434,6 +451,14 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual((result["focus"]["before"], result["focus"]["selected"], result["focus"]["after"]),
                          ("Yesterday ", "i has went to the shop", " with Anna."))
         self.assertEqual(self.backend.reads[0], (0, len(self.backend.content)))
+
+    def test_a_contenteditable_selection_reads_no_break_spaces_as_fcitx_does(self):
+        self.backend.content = "Yesterday\u00a0i has went to the shop\u00a0with Anna."
+        self.backend.meta["tag"] = "div"
+        focus = self.request("inspect", app_id="chromium", selection=True)["focus"]
+        result = self.request("snapshot", binding=focus["binding"], policy_target=focus["target"], selection=True)
+        self.assertEqual((result["focus"]["before"], result["focus"]["selected"], result["focus"]["after"]),
+                         ("Yesterday ", "i has went to the shop", " with Anna."))
 
     def test_a_selection_across_lines_too_long_or_moving_is_refused(self):
         focus = self.request("inspect", app_id="chromium", selection=True)["focus"]

@@ -195,6 +195,17 @@ class PreviewTests(unittest.TestCase):
                 shell.buffer(prefix)
                 self.assertIn({'operation': 'result', 'applied': True}, shell.operations())
 
+    def test_accept_and_dismissal_draw_the_prompt_once(self):
+        # Bash clears the line before a bind -x command and redraws it after;
+        # the preview must not draw it a second time.
+        for keys in (REQUEST, '\x18\x1b'):
+            with self.subTest(keys=repr(keys)):
+                shell = self.shell()
+                shell.request('thank you for the')
+                shell.send(keys)
+                output = shell.read_for(.4)
+                self.assertEqual(output.count(b'TEST> '), 1, output)
+
     def test_unicode_caret_and_acceptance(self):
         shell = self.shell()
         shell.request('از همکاری', ' شما')

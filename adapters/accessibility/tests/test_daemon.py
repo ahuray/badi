@@ -36,6 +36,10 @@ class FakeGLib:
     def idle_add(*args):
         return 1
 
+    @staticmethod
+    def timeout_add(*args):
+        return 1
+
 
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
@@ -406,6 +410,35 @@ class EventOperationTests(unittest.TestCase):
         self.assertEqual([event["reason"] for event in self.events], ["accessibility_unavailable"])
         self.assertIsNone(self.daemon.observer.preview_hold)
 
+    def test_a_hidden_preview_is_not_drawn_again_by_a_scroll(self):
+        self.show()
+        self.assertTrue(self.request("hide")["hidden"])
+        self.scroll()
+        self.assertEqual(len(self.renders), 1, "a withdrawn preview stays withdrawn")
+        self.assertIsNone(self.daemon.observer.preview_hold)
+
+    def test_a_timed_check_keeps_an_unmoved_preview_and_ends_a_moved_one(self):
+        # Chromium reports no scroll of an overflow pane: only the timed
+        # check sees the caret move.
+        timers = []
+        self.daemon.GLib = SimpleNamespace(timeout_add=lambda ms, callback: timers.append((ms, callback)) or 7)
+        self.backend.meta["geometry"] = {"caret": {"x": 300, "y": 400, "height": 18}, "field": {"y": 380}}
+        self.show()
+        self.daemon.watch_preview()
+        self.daemon.watch_preview()
+        self.assertEqual([ms for ms, _callback in timers], [250], "one timer per showing preview")
+        check = timers[0][1]
+        self.backend.deadline = time.monotonic() - 1
+        self.assertTrue(check(), "an unmoved preview keeps its timer")
+        self.assertEqual((self.events, len(self.renders)), ([], 1), "and is neither ended nor redrawn")
+        self.assertEqual(self.backend.deadline, 0, "each check is an operation of its own")
+        self.backend.meta["geometry"] = {"caret": {"x": 300, "y": 280, "height": 18}, "field": {"y": 260}}
+        self.assertFalse(check(), "the timer stops with the suggestion")
+        self.assertEqual([event["reason"] for event in self.events], ["field_changed"])
+        self.assertIsNone(self.daemon.observer.preview_hold)
+        self.daemon.watch_preview()
+        self.assertEqual(len(timers), 1, "no timer without a preview")
+
     def test_an_event_that_overruns_its_own_budget_ends_the_suggestion(self):
         self.show()
         self.backend.failure = Denied("operation_timeout")
@@ -499,6 +532,16 @@ class FieldSubscriptionTests(unittest.TestCase):
         self.assertEqual(calls[6:], [("sync", "RegisterEvent", (event, [], ":1.7"))
                                      for event in observer_daemon.FIELD_EVENTS])
 
+    def test_a_title_change_of_the_same_window_is_no_focus_change(self):
+        # Omawrite marks a document unsaved and autosaves while the user types;
+        # each title change repeats activewindowv2 for the same address.
+        chunks = iter([b"activewindowv2>>55\n",
+                       b"windowtitle>>55\nwindowtitlev2>>55,* note.md - Omawrite\n"
+                       b"activewindow>>omawrite,* note.md - Omawrite\nactivewindowv2>>55\n",
+                       b"activewindowv2>>56\n", b"workspacev2>>2,2\n"])
+        events = WindowEvents(SimpleNamespace(recv=lambda _size: next(chunks)))
+        self.assertEqual([events.changed() for _ in range(4)], [True, False, True, True])
+
     def test_a_wake_up_without_events_keeps_following_the_desktop(self):
         def nothing(_size):
             raise BlockingIOError
@@ -567,13 +610,15 @@ class IdentityTests(unittest.TestCase):
         return binary
 
     def test_supported_ids_match_the_fcitx_addon(self):
-        self.assertEqual(set(APPS), {"chromium", "chromium-browser", "brave-origin", "zen", "chatgpt", "code",
+        self.assertEqual(set(APPS), {"chromium", "chromium-browser", "brave-origin", "zen", "zen-twilight", "chatgpt", "code",
                                      "com.anthropic.claude", "cursor", "discord", "grok-bot", "telegram",
                                      "omawrite", "libreoffice"})
         self.assertEqual({app for app, rule in APPS.items() if rule.browser},
-                         {"chromium", "chromium-browser", "brave-origin", "zen"})
-        self.assertEqual({app for app, rule in APPS.items() if rule.gecko}, {"zen"})
+                         {"chromium", "chromium-browser", "brave-origin", "zen", "zen-twilight"})
+        self.assertEqual({app for app, rule in APPS.items() if rule.gecko}, {"zen", "zen-twilight"})
         self.assertEqual((APPS["zen"].executables, APPS["zen"].classes), ({"/opt/zen-browser-bin/zen-bin"}, {"zen"}))
+        self.assertEqual((APPS["zen-twilight"].executables, APPS["zen-twilight"].classes),
+                         ({"/opt/zen-browser-twilight-bin/zen-bin"}, {"zen-twilight"}))
         self.assertEqual({app for app, rule in APPS.items() if not rule.web}, {"telegram", "omawrite", "libreoffice"})
         self.assertEqual({app for app, rule in APPS.items() if rule.observed_only}, {"libreoffice"})
         self.assertEqual((APPS["libreoffice"].classes, APPS["libreoffice"].roles),
@@ -584,6 +629,7 @@ class IdentityTests(unittest.TestCase):
     def test_exact_executables_and_owner(self):
         for app_id, executable in (("chromium", "/usr/lib/chromium/chromium"), ("brave-origin", "/opt/brave-origin-bin/brave"),
                                    ("zen", "/opt/zen-browser-bin/zen-bin"),
+                                   ("zen-twilight", "/opt/zen-browser-twilight-bin/zen-bin"),
                                    ("chatgpt", "/usr/lib/chatgpt/ChatGPT"), ("code", "/usr/share/code/code"),
                                    ("grok-bot", "/opt/Grok Bot/grok-bot"),
                                    ("com.anthropic.claude", "/usr/lib/claude-desktop/claude-desktop"),

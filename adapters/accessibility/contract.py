@@ -39,6 +39,8 @@ CARET_RECT_FIELDS = frozenset({"x", "y", "width", "height", "scale"})
 IDENTITY = ("bus", "path", "process_id", "app_id", "uri")
 BINDING_FIELDS = frozenset({"epoch", *IDENTITY})
 POSITION = ("caret", "total_chars", "selection_count")
+# Form controls whose value Chromium sends to Fcitx unchanged.
+FORM_CONTROLS = frozenset({"input", "textarea"})
 # A malformed request changes no field state; every other denial withdraws it.
 MALFORMED = frozenset({"invalid_request", "invalid_preview"})
 # Facts that quiet automatic suggestions only; the field stays eligible and an
@@ -165,6 +167,7 @@ class Observer:
         self.text_follows = False
         self.text_ends = False
         self.preview_hold = None
+        self.preview_place = None
         self.operations = {"status": self.status, "hide": self.hide_preview, "inspect": self.inspect,
                            "snapshot": self.snapshot, "preview": self.preview}
 
@@ -206,7 +209,9 @@ class Observer:
         return {"status": {"ready": True, "process_id": os.getpid(), "protocol_version": 1}}
 
     def hide_preview(self, _request):
+        # A hidden preview is withdrawn: no later scroll may draw it again.
         self.hide()
+        self.preview_hold = None
         return {"hidden": True, "epoch": self.epoch}
 
     def inspect(self, request):
@@ -240,6 +245,7 @@ class Observer:
         if margin:
             before, after = self.backend.serialized(metadata, start, before, after)
         before, after = before[-MAX_BEFORE:], after[:MAX_AFTER]
+        before, after = surrounding_text(metadata, before), surrounding_text(metadata, after)
         if scope == "block":
             # Only the caret's block serializes exactly: Fcitx's text must end with it.
             focus["scope"] = "block"
@@ -277,8 +283,9 @@ class Observer:
         selected = text[start - first:end - first]
         if "\n" in selected or "\r" in selected or not selected.strip():
             raise Denied("unsupported_selection")
-        focus.update(before=text[:start - first], selected=selected, after=text[end - first:],
-                     total_chars=total)
+        focus.update(before=surrounding_text(metadata, text[:start - first]),
+                     selected=surrounding_text(metadata, selected),
+                     after=surrounding_text(metadata, text[end - first:]), total_chars=total)
         return focus
 
     def preview(self, request):
@@ -299,6 +306,7 @@ class Observer:
             raise Denied("stale_binding")
         self.preview_hold = ((time.monotonic() + request["ttl_ms"] / 1000, request)
                              if focus["rendered"] else None)
+        self.preview_place = caret_place(focus) if focus["rendered"] else None
         return {"focus": focus}
 
     def reposition_preview(self):
@@ -323,6 +331,28 @@ class Observer:
             return
         if not result["focus"]["rendered"]:
             self.invalidate("field_changed")
+
+    def preview_moved(self):
+        """End the suggestion when a showing preview's caret moved unreported.
+
+        Chromium reports no scroll of an inner container (an overflow pane),
+        so the daemon checks a showing preview on a timer. Following an
+        unreported move could draw over other words; a moved caret, field,
+        window or monitor ends the suggestion instead. True when it ended.
+        """
+        if self.preview_hold is None:
+            return False
+        expires, request = self.preview_hold
+        if expires <= time.monotonic():
+            return False
+        try:
+            _metadata, focus = self.bound_focus(request, calibrate=True, caret_rect=request.get("caret_rect"))
+        except Denied:
+            focus = None
+        if focus is not None and caret_place(focus) == self.preview_place:
+            return False
+        self.invalidate("field_changed")
+        return True
 
     def bound_focus(self, request, calibrate=False, caret_rect=None, selection=False):
         """The field as it is now, which must still be the request's binding and policy target."""
@@ -441,6 +471,28 @@ def caret_rectangle(value):
 # spaces between words, one leading or trailing space at most.
 _SUGGESTION_SPACING = re.compile(r"^ ?\S(?: ?\S)* ?$")
 ZERO_WIDTH_NON_JOINER = "\u200c"
+
+
+def caret_place(focus):
+    """Where a preview is anchored on screen: the calibrated caret, its field,
+    window and monitor, or None for an uncalibrated field."""
+    geometry = focus.get("geometry")
+    if not isinstance(geometry, dict):
+        return None
+    return {key: geometry.get(key) for key in ("caret", "field", "window", "monitor", "scale")}
+
+
+def surrounding_text(metadata, value):
+    """`value` as Chromium's text-input-v3 surrounding text gives it to Fcitx.
+
+    A contenteditable's no-break spaces, which editors insert so that typed
+    spaces stay visible, arrive as plain spaces, one character for one, so
+    offsets are unchanged; a form control's value arrives as it is. Gecko is
+    unverified and keeps its text.
+    """
+    if metadata.get("web") and not metadata.get("gecko") and metadata.get("tag") not in FORM_CONTROLS:
+        return value.replace("\u00a0", " ")
+    return value
 
 
 def suggestion_text(text):

@@ -169,6 +169,4 @@ so they must run there.
 | 0.12.5 | foot, `nvim -u NONE` with the installed start package | real model | pause preview, Tab word by word, Ctrl+→, Insert-mode exit dismisses, streamed growth in the trace |
 | 0.12.5 | foot, this workstation's LazyVim through the installer's lazy.nvim spec | real model | as above, plus Ctrl+Shift+Space as an explicit request; no `output_rejected` in the trace |
 | 0.12.6 | Ghostty, the same LazyVim setup | real model | Tab, Ctrl+→ and Ctrl+Shift+Space |
-
-The policy gate (no text before the bridge reports an allowing policy) is
-covered by the scripted lane only; it has no live trial yet.
+| 0.12.6 | Ghostty, LazyVim (2026-10-24) | real model | a markdown buffer suggested and Tab took a word; while `badi pause` held, typing sent no request and no text to the broker, and suggestions came back after `badi resume` |

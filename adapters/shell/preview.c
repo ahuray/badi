@@ -107,6 +107,16 @@ static void hide(void) {
     redisplaying = 0;
 }
 
+/* `badi_preview clear` runs inside a bind -x command, which Bash has already
+ * cleared and redraws itself once it returns, from column 0. Drawing the old
+ * line here would leave the cursor after it, and Bash's redraw would then
+ * repeat the prompt mid-row. */
+static void erase(void) {
+    if (!painted) return;
+    painted = 0;
+    rl_clear_visible_line();
+}
+
 static int current(void) {
     double now = now_seconds();
     return preview && prefix && !rl_done && rl_point == rl_end && rl_line_buffer &&
@@ -166,7 +176,7 @@ static int badi_preview_builtin(WORD_LIST *list) {
     if (!list) return 2;
     const char *operation = list->word->word;
     list = list->next;
-    if (strcmp(operation, "clear") == 0 && !list) { hide(); forget(); disarm_event_hook(); return 0; }
+    if (strcmp(operation, "clear") == 0 && !list) { erase(); forget(); disarm_event_hook(); return 0; }
     if (strcmp(operation, "watching") == 0 && !list) return event_hook_installed ? 0 : 1;
     if (strcmp(operation, "active") == 0 && list && !list->next) {
         return displayed && current() && strcmp(prefix, list->word->word) == 0 ? 0 : 1;
