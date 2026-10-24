@@ -329,6 +329,11 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
     }
     const bool claimInvoke = claimInvokeChord(binding->state.editingAvailable(),
                                                binding->broker.policyAllowed, foreignIme);
+    // On a shown continuation the chord asks for another one.
+    if (invokeChordPressed && claimInvoke && requestAlternative(*binding, panel)) {
+        event.filterAndAccept();
+        return;
+    }
     if (invokeChordPressed && !claimInvoke && !foreignIme) {
         debug_.record("decision", binding->state.appId(),
                       binding->state.editingAvailable() ? "app_disabled" : "no_edit_path");
@@ -414,6 +419,15 @@ void BadiAddon::requestAcceptance(Binding &binding, bool word) {
     binding.heldSuggestion.reset();
     if (binding.holdTimer) binding.holdTimer->setEnabled(false);
     hidePreview();
+}
+
+bool BadiAddon::requestAlternative(Binding &binding, const PanelObservation &panel) {
+    const auto request = binding.state.requestAlternative(transport_.nowMs(), panel);
+    if (!request || !transport_.requestAlternative(*request)) return false;
+    // A press that finds nothing new says so, as any explicit request.
+    binding.requestExplicit = true;
+    debug_.record("request", binding.state.appId(), "alternative_requested");
+    return true;
 }
 
 void BadiAddon::dismissSuggestion(Binding &binding, const PanelObservation &panel) {

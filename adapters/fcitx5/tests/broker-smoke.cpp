@@ -226,6 +226,48 @@ void runTypeThrough(const std::string &socket, const std::string &appId) {
     transport.disconnect();
 }
 
+// Ctrl+Shift+Space on a shown continuation: the broker replaces it with the
+// fixture's next continuation, which starts with another word, then cycles.
+void runAlternatives(const std::string &socket, const std::string &appId) {
+    ::fcitx::EventLoop loop;
+    SessionState state;
+    require(state.focusIn("550e8400-e29b-41d4-a716-446655440003", "alternatives-context",
+                          appId, "0123456789abcdef0123456789abcdef"));
+    Transport *wire = nullptr;
+    const std::array<std::string, 4> expected{" for your time", " so much", " again", " for your time"};
+    std::size_t shown = 0;
+    Transport transport(loop, WireCallbacks{
+        .onReady = [&] {
+            require(wire->openSession(state.coordinates(), targetOf(state)));
+            const auto update = state.updateContext(ContextWindow{
+                .before = "thank you", .after = "", .anchor = 9, .head = 9, .language = "en", .multiline = true,
+            });
+            require(update && wire->publishContext(*update));
+        },
+        .onAuthority = [](const AuthoritySnapshot &authority) { require(authority.initial && !authority.paused); },
+        .onSuggestion = [&](Suggestion suggestion) {
+            require(shown < expected.size() && suggestion.text == expected[shown]);
+            require(state.showSuggestion(std::move(suggestion), wire->nowMs()));
+            if (++shown == expected.size()) return loop.exit();
+            const auto request = state.requestAlternative(wire->nowMs(), kPanel);
+            require(request && wire->requestAlternative(*request));
+        },
+        .onClear = [](const ClearNotice &) {},
+        .onCommitPrepare = [](const CommitPrepare &) { require(false); },
+        .onDisconnected = [&] { loop.exit(); },
+        .onPolicy = {},
+    }, socket);
+    wire = &transport;
+    auto deadline = loop.addTimeEvent(CLOCK_MONOTONIC, 0, 0,
+        [&](::fcitx::EventSourceTime *, std::uint64_t) { loop.exit(); return true; });
+    deadline->setNextInterval(8'000'000);
+    deadline->setOneShot();
+    require(transport.connect());
+    loop.exec();
+    require(shown == expected.size());
+    transport.disconnect();
+}
+
 // An explicit revision of one selection (ADR 0012), against the broker's
 // fixture reviser: shown, applied once over exactly the selection, refined
 // and dismissed, and "nothing to change" answered without a revision.
@@ -317,6 +359,10 @@ int main(int argc, char **argv) {
         } else if (argc == 4 && std::string(argv[1]) == "--revision") {
             runRevision(argv[2], argv[3]);
             std::cout << "Native transport: revision shown, applied, refined, dismissed, unchanged passed\n";
+            return 0;
+        } else if (argc == 4 && std::string(argv[1]) == "--alternatives") {
+            runAlternatives(argv[2], argv[3]);
+            std::cout << "Native transport: alternatives replaced and cycled passed\n";
             return 0;
         } else if (argc == 4 && std::string(argv[1]) == "--type-through") {
             runTypeThrough(argv[2], argv[3]);

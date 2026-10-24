@@ -274,6 +274,21 @@ impl StatsStore {
         }
     }
 
+    /// One app or site's counts over the seven days ending `today`.
+    #[must_use]
+    pub fn last_7_days(&self, identity: &StableIdentity, today: Date) -> StatsCounts {
+        let week_start = today
+            .checked_sub(jiff::Span::new().days(6))
+            .unwrap_or(Date::MIN);
+        let mut counts = StatsCounts::default();
+        for day in self.days.range(week_start..=today).map(|(_, day)| day) {
+            if let Some(subject) = day.subjects.get(identity) {
+                counts.add(*subject);
+            }
+        }
+        counts
+    }
+
     #[must_use]
     pub fn summary(&self, today: Date) -> StatsSummary {
         let week_start = today

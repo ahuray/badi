@@ -24,6 +24,9 @@ ROOT = Path(__file__).resolve().parents[3]
 PREFIX, SUFFIX = 'thank you', ' for your time'
 # The panel shows a suggestion without its separating space.
 SHOWN = SUFFIX.lstrip()
+# Erasing a letter changes the field without typing over the suggestion,
+# which the broker would count as turning its next word down.
+ERASED = PREFIX[:-1]
 FIXTURE_APP = 'badi-native-fixture'
 UNAVAILABLE_APPS = ('firefox', 'zen-browser', 'app.zen_browser.zen', 'librewolf', 'obsidian')
 # Mixed-case Chromium- and Gecko-family programs fold to granted ids without an observer rule.
@@ -201,7 +204,7 @@ def session(root, report):
     # candidate signal remains observable without a window or synthetic keys.
     render_calls = []
     render_result = {'value': False}
-    daemon.observer.render = lambda focus, _text, _ttl: render_calls.append(focus) or render_result['value']
+    daemon.observer.render = lambda focus, _text, _ttl, **_strong: render_calls.append(focus) or render_result['value']
     original_request = daemon.observer.request
     observer_calls = {'snapshot': 0, 'preview': 0, 'hide': 0}
     silent_change = {'op': None, 'call': 0, 'mode': 'repeat', 'triggered': False}
@@ -573,7 +576,7 @@ def session(root, report):
             checks.append('Commit dispatch is rejected when ' + detail)
 
         delayed_preview['enabled'] = True
-        change(PREFIX + ' x')
+        change(ERASED)
         quiet(.15)
         change(PREFIX)
         wait(lambda: delayed_preview['started'] > 0, 'delayed preview acknowledgement')
@@ -590,7 +593,7 @@ def session(root, report):
 
         delayed_preview['enabled'] = True
         started = delayed_preview['started']
-        change(PREFIX + ' x')
+        change(ERASED)
         quiet(.15)
         change(PREFIX)
         wait(lambda: delayed_preview['started'] > started, 'pending preview before field switch')
@@ -601,7 +604,7 @@ def session(root, report):
         assert context.commits() == previous_commits
         checks.append('A field switch during an observer RPC retries boundedly and automatically previews the new field')
 
-        change(PREFIX + ' x')
+        change(ERASED)
         quiet(.15)
         change(PREFIX)
         wait(lambda: context.candidate() == SHOWN, 'fresh suggestion before same-text field switch')
@@ -888,11 +891,14 @@ def session(root, report):
             # snapshot may skip the empty field even though Fcitx publishes it.
             change('')
             assert context.candidate() is None, label + ' clearing the field does not revive the dismissed suggestion'
+            # Escape turned that next word down after these words in this
+            # app: retyping them stays quiet until the writer asks for it.
+            repeated = control('status')['metrics']['no_suggestion']['repeated']
             change(PREFIX)
-            wait(lambda: context.candidate() == SHOWN,
-                 label + ' the same words suggest again after the dismissed text is deleted')
-            assert context.key(desktop.ESCAPE)
-            wait(lambda: context.candidate() is None, label + ' the repeated suggestion dismisses again')
+            wait(lambda: control('status')['metrics']['no_suggestion']['repeated'] > repeated,
+                 label + ' the dismissed next word is withheld after the same words')
+            quiet(.3)
+            assert context.candidate() is None, label + ' a withheld word shows nothing'
             inspections = backend.inspections
             assert not context.key(desktop.TAB), label + ' Tab without a suggestion stays the application Tab'
             assert context.candidate() is None and context.commits() == [SUFFIX]
@@ -901,8 +907,9 @@ def session(root, report):
             assert backend.inspections > inspections
             assert context.key(RIGHT, CONTROL)
             wait(lambda: context.commits() == [SUFFIX, SUFFIX], label + ' explicit acceptance')
-            checks.append(label + ': after Escape, Tab stays the application Tab; the explicit chord re-inspects '
-                          'the observed field and Ctrl+Right accepts it all once')
+            checks.append(label + ': after Escape, the same words withhold that next word and Tab stays the '
+                          'application Tab; the explicit chord re-inspects the observed field and shows it, and '
+                          'Ctrl+Right accepts it all once, which ends the turn-down')
 
             mismatch = reason_count('observer_context_mismatch')
             before = updates()
@@ -1021,7 +1028,13 @@ def session(root, report):
         # At most one hold per word acceptance: when the rest never returns
         # (the field is left unchanged), the held Tab times out and the next
         # Tab reaches the application instead of being held again.
+        # The Escape above turned that next word down after these words, so
+        # the step asks for it; its Tab takes the word, which ends that.
+        repeated = control('status')['metrics']['no_suggestion']['repeated']
         change(PREFIX)
+        wait(lambda: control('status')['metrics']['no_suggestion']['repeated'] > repeated,
+             'the dismissed next word is withheld after the same words')
+        assert context.key(ord(' '), 5), 'the explicit chord asks for the withheld word'
         wait(lambda: context.candidate() == SHOWN, 'candidate before the held-Tab timeout')
         commits = context.commits()
         assert context.key(desktop.TAB)
@@ -1139,9 +1152,10 @@ def session(root, report):
         for observed_after, fcitx_after in (('\n', '\n'), ('\n', '')):
             paragraph_end(observed_after, fcitx_after, new_field=True)
             wait(lambda: context.candidate() == SHOWN, 'chatgpt suggestion for ' + repr((observed_after, fcitx_after)))
-            assert context.key(desktop.ESCAPE)
-            quiet(.3)
-            assert context.candidate() is None and context.commits() == [SUFFIX]
+            # Erasing a letter clears it without turning its word down for the next case.
+            change(ERASED)
+            wait(lambda: context.candidate() is None, 'chatgpt suggestion clears for ' + repr((observed_after, fcitx_after)))
+            assert context.commits() == [SUFFIX]
         checks.append('IME-parity desktop (chatgpt): a <div> line end "\\n", and an empty Fcitx end against an '
                       'observed block end, are end of field')
 
@@ -1234,7 +1248,10 @@ def session(root, report):
         assert control('status')['metrics']['provider_calls'] == calls
         assert context.key(ord(' '), 5)
         wait(lambda: context.candidate() is not None, 'explicit request ends quiet across the rebind')
-        assert context.key(desktop.ESCAPE)
+        # Taking the asked suggestion ends the turn-down of the Escape above.
+        commits = context.commits()
+        assert context.key(RIGHT, CONTROL)
+        wait(lambda: len(context.commits()) > len(commits), 'the asked suggestion is taken')
         change(PREFIX, new_field=True)
         wait(lambda: context.candidate() == SHOWN, 'a different field is not quieted')
         restored = control('settings', 'show', '--json')

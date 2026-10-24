@@ -30,11 +30,13 @@ REQUEST_FIELDS = {"inspect": {"schema", "id", "op", "app_id"},
                               "expected_caret", "expected_total_chars"},
                   "status": {"schema", "id", "op"},
                   "hide": {"schema", "id", "op"}}
-# A preview may add the caret rectangle the app gave its input method.
+# A preview may add the caret rectangle the app gave its input method, and
+# how many of its characters Tab takes (drawn a step brighter).
 # A snapshot may ask once per field for the window's text (ADR 0010).
 # Inspect and snapshot may ask for the field's one selection instead of a
 # caret, for an explicit revision (ADR 0012).
-OPTIONAL_FIELDS = {"preview": {"caret_rect"}, "snapshot": {"window", "selection"}, "inspect": {"selection"}}
+OPTIONAL_FIELDS = {"preview": {"caret_rect", "strong"}, "snapshot": {"window", "selection"},
+                   "inspect": {"selection"}}
 CARET_RECT_FIELDS = frozenset({"x", "y", "width", "height", "scale"})
 IDENTITY = ("bus", "path", "process_id", "app_id", "uri")
 BINDING_FIELDS = frozenset({"epoch", *IDENTITY})
@@ -306,7 +308,8 @@ class Observer:
         if request["expected_caret"] != metadata["caret"] or request["expected_total_chars"] != metadata["total_chars"]:
             raise Denied("stale_binding")
         focus["total_chars"] = metadata["total_chars"]
-        focus["rendered"] = bool(self.render(focus, request["text"], request["ttl_ms"]))
+        strong = {"strong": request["strong"]} if "strong" in request else {}
+        focus["rendered"] = bool(self.render(focus, request["text"], request["ttl_ms"], **strong))
         if focus["binding"]["epoch"] != self.epoch:
             self.hide()
             self.preview_hold = None
@@ -461,7 +464,9 @@ def well_formed_preview(request):
     ttl, caret, total = request["ttl_ms"], request["expected_caret"], request["expected_total_chars"]
     return (suggestion_text(request["text"]) and type(ttl) is int and 1 <= ttl <= MAX_PREVIEW_TTL_MS
             and type(caret) is int and type(total) is int and 0 <= caret <= total <= MAX_POSITION
-            and ("caret_rect" not in request or caret_rectangle(request["caret_rect"])))
+            and ("caret_rect" not in request or caret_rectangle(request["caret_rect"]))
+            and ("strong" not in request
+                 or (type(request["strong"]) is int and 1 <= request["strong"] < len(request["text"]))))
 
 
 def caret_rectangle(value):

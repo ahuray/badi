@@ -38,6 +38,7 @@
         "timeout": 0,
         "provider_error": 0,
         "low_confidence": 2,
+        "repeated": 1,
         "last": "budget_prefill"
       },
       "type_through": {

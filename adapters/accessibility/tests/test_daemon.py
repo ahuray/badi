@@ -250,11 +250,14 @@ class PreviewLifecycleTests(unittest.TestCase):
     def test_warming_builds_once_and_rendering_reuses_it(self):
         calls = []
         preview = SimpleNamespace(warm=lambda: calls.append("warm"), hide=lambda: calls.append("hide"),
-                                  render=lambda focus, text, ttl: calls.append(("render", text, ttl)) or True)
+                                  render=lambda focus, text, ttl, strong: calls.append(("render", text, ttl, strong))
+                                  or True)
         with self.fake_module(preview):
             self.assertFalse(self.daemon.warm_preview(), "an idle callback runs once")
             self.assertTrue(self.daemon.render_preview({}, " text", 1000))
-        self.assertEqual((self.builds, calls), ([True], ["warm", ("render", " text", 1000)]))
+            self.assertTrue(self.daemon.render_preview({}, " text more", 1000, strong=5))
+        self.assertEqual((self.builds, calls), ([True], ["warm", ("render", " text", 1000, None),
+                                                          ("render", " text more", 1000, 5)]))
 
     def test_a_render_failure_hides_and_reports_no_preview(self):
         calls = []

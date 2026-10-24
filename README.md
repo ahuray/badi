@@ -10,11 +10,11 @@ machine. Badi is pre-release software.
 
 | Key | Action |
 | --- | --- |
-| **Tab** | Accept only the next word; the rest returns. Without a suggestion, Tab stays Tab. |
+| **Tab** | Accept only the next word, which the grey text draws a step brighter; the rest returns. Without a suggestion, Tab stays Tab. |
 | **Ctrl+→** | Accept all of it. |
 | Keep typing | Typing the suggestion's next letters keeps the rest. |
 | **Escape** | Dismiss. |
-| **Ctrl+Shift+Space** | Ask for a suggestion. On selected text, check its grammar; press it again for a refined wording. **Tab** applies what it shows, **Escape** keeps your text. |
+| **Ctrl+Shift+Space** | Ask for a suggestion. On a shown one in a Fcitx app, show another that starts with a different word; after three, presses cycle through them. On selected text, check its grammar; press it again for a refined wording. **Tab** applies what it shows, **Escape** keeps your text. |
 | **Ctrl+Shift+Tab** | Type a real Tab instead of accepting: the suggestion goes away and the app gets Tab. Where Badi would not take Tab, it stays the app's key (a browser's previous tab). |
 
 Every surface uses that order: Obsidian with Ctrl/Command+→ for all of it,
@@ -29,7 +29,10 @@ remove them immediately. Bash keeps its four-second preview. In the
 observed apps below, Badi stays quiet on its own in file dialogs and very
 narrow fields; Ctrl+Shift+Space still asks there. `badi escape-quiet 60` (or
 the settings panel) also keeps a dismissed field quiet for a minute across
-edits; asking explicitly ends that sooner.
+edits; asking explicitly ends that sooner. A next word you turned down (with
+Escape, or by typing other letters twice) is not offered again after the same
+three words in that app or site, until you ask for it there and take it;
+Badi keeps only hashes of those spots, in memory, until it restarts.
 
 A revision works on one line of up to 600 characters in English, German,
 French, Spanish or Portuguese, wherever Badi may suggest (not in terminals).
@@ -359,6 +362,13 @@ Badi is paused or in an app or site it may not suggest in. Counts reach the
 disk within a minute and whenever Badi pauses or stops, so a restart keeps
 them ([details](broker/README.md#usage-statistics)).
 
+Badi also uses them to stay quieter where its suggestions are seldom taken:
+an app or site with at least 50 suggestions shown in the last 7 days and
+fewer than 8 in 100 accepted gets only surer ones, and fewer than 4 in 100
+surer still. It never gets bolder than the default, Ctrl+Shift+Space is never
+quieted, and `badi stats forget` resets it with the counts
+([details](broker/README.md#suggestion-limits)).
+
 ## When nothing appears
 
 ```sh
@@ -388,6 +398,7 @@ what you typed:
 | `model_abstained`, `output_rejected` | The model declined, or its words failed a language, dictionary, number or safety check, or did not fit before the text after the caret. |
 | `stale`, `timeout`, `provider_error` | The text changed first, or the model was late or failed. |
 | `low_confidence` | A word of the suggestion was too unlikely for the model to be sure, so it was withheld ([confidence gate](broker/README.md#suggestion-limits)). |
+| `repeated` | You turned down that next word at the same spot in this app or site before: Escape once, or typing other letters twice ([turned-down words](broker/README.md#suggestion-limits)). |
 
 Debug mode expires after 15 minutes. A crashed model service restarts with
 backoff; a missing or oversized model stops it for `badi doctor` to explain.

@@ -115,6 +115,19 @@ fn respond(mut stream: UnixStream, token: &str, health: &[u8]) -> io::Result<()>
         {
             write_json(&mut stream, "200 OK", br#"{"tokens":[42]}"#)
         }
+        // An alternatives request asks for the likeliest first tokens.
+        ("POST", "/completion")
+            if request.body["stream"] == json!(false) && request.body["n_probs"] == json!(8) =>
+        {
+            let top = json!([
+                {"token": " for", "logprob": -0.2, "bytes": b" for"},
+                {"token": " so", "logprob": -0.4, "bytes": b" so"},
+            ]);
+            let reply = json!({"content": " for", "stop": true, "completion_probabilities": [
+                {"token": " for", "logprob": -0.2, "bytes": b" for", "top_logprobs": top},
+            ]});
+            write_json(&mut stream, "200 OK", reply.to_string().as_bytes())
+        }
         ("POST", "/completion") if request.body["stream"] == json!(true) => {
             stream.write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",

@@ -123,13 +123,17 @@ unavailable context revokes local authority before a broker response can act.
 ## Suggestion and commit
 
 `suggestion.show` (with `accept_word`, the next-word part of `text`),
-`suggestion.clear`, `control.request` (`accept_all`, `accept_word` or
-`dismiss`), `control.result`, `commit.prepare` (`acceptance` `all` or `word`)
+`suggestion.clear`, `control.request` (`accept_all`, `accept_word`,
+`dismiss` or `alternatives`), `control.result`, `commit.prepare` (`acceptance` `all` or `word`)
 and `commit.result` are matched
 on session UUID, focus epoch, revision, salted fingerprint, suggestion ID, exact
 text, and control ID. `suggestion.clear` accepts exactly the schema's two
 payload shapes: fingerprint and reason, or those fields plus a string suggestion
-ID. A missing optional ID is valid; `null`, an extra field, or a malformed ID
+ID. `alternatives` names the shown continuation (never a correction) and is
+answered like an explicit request: `suggestion.clear` `superseded` for it,
+then a `suggestion.show` with a new ID, the model's next continuation that
+starts with a word not shown yet for that context, or after three (or none),
+one already shown again. A missing optional ID is valid; `null`, an extra field, or a malformed ID
 closes the connection. A suggestion or commit grant carrying a replacement
 field closes it too.
 

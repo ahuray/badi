@@ -134,6 +134,7 @@ public:
     bool cancelRequest(const Coordinates &coordinates);
     bool requestAcceptance(const AcceptRequest &request);
     bool requestDismissal(const DismissRequest &request);
+    bool requestAlternative(const DismissRequest &request);
     bool reportCommit(const Coordinates &coordinates,
                       std::string_view controlId,
                       std::string_view suggestionId,

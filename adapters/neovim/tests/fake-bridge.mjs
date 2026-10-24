@@ -42,7 +42,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     if (rule?.[0] === 'slow') await delay(400);
     if (mine !== generation) { send({ id: command.id, ok: false, reason: 'expired_or_unavailable' }); continue; }
     candidate = rule ? rule[1] : null;
-    send({ id: command.id, ok: true, text: candidate });
+    send({ id: command.id, ok: true, text: candidate, word: candidate?.match(/^ ?\S+/u)?.[0] });
   } else if (command.op === 'accept') {
     const text = candidate === null ? null
       : command.acceptance === 'word' ? candidate.match(/^ ?\S+/u)[0] : candidate;

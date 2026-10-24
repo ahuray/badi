@@ -174,7 +174,8 @@ void BadiAddon::showObservedPreview(Binding &binding, const Suggestion &suggesti
     if (!safeToObserve(binding) || suggestion.expiresAtMs <= now) return;
     const auto &focus = binding.observedFocus;
     const bool sent = accessibility_->request(
-        previewRequest(focus, previewText(suggestion), suggestion.expiresAtMs - now, caretRect(*binding.inputContext)),
+        previewRequest(focus, previewText(suggestion), suggestion.expiresAtMs - now, caretRect(*binding.inputContext),
+                       previewStrong(suggestion)),
         [this, suggestion, focus, generation = binding.observationGeneration](const Json &reply) {
             const bool verified = observerAnswered(reply) && reply["focus"].is_object();
             const bool rendered = verified && reply["focus"].value("rendered", Json()) == true;

@@ -292,6 +292,22 @@ class ContractTests(unittest.TestCase):
         self.assertFalse(self.observer.request(request)["ok"])
         self.assertEqual(len(renders), 2)
 
+    def test_preview_passes_how_much_tab_takes_and_refuses_a_malformed_count(self):
+        focus = self.snapshot(self.inspect()["focus"])["focus"]
+        renders = []
+        self.observer.render = lambda f, t, ttl, **extra: renders.append((t, extra)) or True
+        request = self.preview_request(focus)
+        text = request["text"]
+        self.assertTrue(self.observer.request({**request, "strong": 1})["ok"])
+        self.assertEqual(renders[-1], (text, {"strong": 1}))
+        self.assertTrue(self.observer.request(request)["ok"])
+        self.assertEqual(renders[-1], (text, {}), "no count, no split")
+        for strong in (0, len(text), True, 1.0, "1"):
+            with self.subTest(strong=strong):
+                reply = self.observer.request({**request, "strong": strong})
+                self.assertEqual((reply["ok"], reply["error"]), (False, "invalid_preview"))
+        self.assertEqual(len(renders), 2)
+
     def test_preview_denies_missed_caret_and_length_changes_before_render(self):
         for change in ({"caret": 700}, {"total_chars": 1201}):
             with self.subTest(change=change):

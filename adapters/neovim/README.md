@@ -58,7 +58,8 @@ arrive, map `:BadiRequest` to one that does. `:BadiStatus` prints a
 content-free state, including the policy the bridge last reported
 (`automatic`, `manual`, `refused` or `unknown`), and `:BadiReconnect`
 restarts the bridge with fresh policy. The preview uses the `BadiSuggestion`
-highlight, linked to `Comment`.
+highlight, linked to `Comment`; the word Tab takes uses `BadiSuggestionWord`,
+the comment colour in bold. Set either group to restyle it.
 
 ## How it works
 

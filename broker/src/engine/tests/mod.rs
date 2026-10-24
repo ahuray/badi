@@ -30,6 +30,7 @@ use crate::settings::{
     StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
 };
 
+mod alternatives;
 mod commit;
 mod context;
 mod desktop;
@@ -38,6 +39,8 @@ mod generation;
 mod outcomes;
 mod policy;
 mod probe;
+mod quietness;
+mod rejections;
 mod revision;
 mod snooze;
 mod spelling;
@@ -462,6 +465,15 @@ async fn open_observed_session(
     broker: &Broker,
     target_id: &str,
 ) -> (SessionId, mpsc::Receiver<BrokerEvent>) {
+    open_session_as(broker, target_id, AdapterKind::Fcitx).await
+}
+
+/// The same field, opened by `adapter_kind`.
+async fn open_session_as(
+    broker: &Broker,
+    target_id: &str,
+    adapter_kind: AdapterKind,
+) -> (SessionId, mpsc::Receiver<BrokerEvent>) {
     let session_id = SessionId::new();
     let (sink, receiver) = mpsc::channel(32);
     broker
@@ -477,7 +489,7 @@ async fn open_observed_session(
                 activation: Activation::Always,
             },
             SessionAuthority {
-                adapter_kind: AdapterKind::Fcitx,
+                adapter_kind,
                 capabilities: vec![
                     Capability::Context,
                     Capability::Suggestion,

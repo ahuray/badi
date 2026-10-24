@@ -241,7 +241,8 @@ badictl models writing --json
 
 `status` counts each call that showed nothing once under `no_suggestion`
 (`request_abstained`, `budget_prefill`, `budget_stream`, `model_abstained`,
-`output_rejected`, `stale`, `timeout`, `provider_error`, `low_confidence`) and
+`output_rejected`, `stale`, `timeout`, `provider_error`, `low_confidence`,
+`repeated`) and
 names the latest.
 Its `type_through` counts requests answered from the carry (`carried`) and,
 for admitted requests that reached the provider although a carry existed,
@@ -653,6 +654,38 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   context and request already carries `explicit`, so no wire change is needed. During the
   quiet, adapters still inspect and publish context under their existing
   grants; the model is never called.
+- **Turned-down words.** Escape on a continuation, or typing other letters
+  at a shown one, turns its next word down at that spot: the last three words
+  before it, with the suggestion's leading space, in that app or site (the
+  carry's scope). One Escape, or other letters typed at two shown
+  suggestions, withholds that next word there from later automatic requests
+  (`repeated`). Words typed in full were taken, so only the word being typed
+  over is turned down. An explicit request still shows it, and taking it
+  there, a word or all, forgets the turn-down. Neovim's dismissal on
+  leaving Insert mode turns nothing down. Only keyed
+  hashes are kept, in memory, for 256 spots; a restart forgets them
+  (`engine/rejections.rs`).
+- **Alternatives.** `control.request` `alternatives` on a shown
+  continuation (Fcitx's Ctrl+Shift+Space) is an explicit request for the
+  same context. The runtime returns its eight most likely first tokens
+  (one generated token, `n_probs`, before sampling); the best that starts
+  with the healed echo, adds letters, passes the generation class and is no
+  word shown yet is continued greedily within the length setting, with up
+  to three tries. Each context (fingerprint) gets up to three alternatives;
+  after that, or once the model has none, presses cycle through those shown
+  with no model call, and the one shown again is not counted twice.
+  Corrections and mid-line continuations have none, and the editor
+  integrations do not ask yet (`engine/alternatives.rs`).
+- **Quiet apps.** Each app or site's last seven days of usage counts set
+  its quiet level, read again at most every ten minutes: with at least 50
+  suggestions shown and fewer than 8% accepted, an automatic suggestion
+  needs every token at −2.25 or better; under 4%, −1.75. A level loosens only
+  at 15% and 8%, and with fewer than 50 shown it stays as it was. It only
+  tightens `CONFIDENCE_FLOOR`; explicit requests, corrections and
+  completions the model did not score keep their own gates, and `badi stats
+  forget` resets it. A withheld suggestion counts as `low_confidence`, and
+  the trace's `suggestion withheld` names `quiet_app` and its floor
+  (`engine/quietness.rs`).
 - **Spelling** needs negotiated exact replacement of the word before the caret
   at the end of the field, in a language of `spelling_languages` (default
   `["en"]`). `spelling.rs` picks the language: a confident detection decides,

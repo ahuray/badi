@@ -19,7 +19,7 @@ use badi_broker::protocol::{
     Activation, AdapterKind, Capability, Coordinates, ProviderKind, SessionId, SessionOpenPayload,
     TargetDescriptor, TargetKind,
 };
-use badi_broker::provider::{CompletionProvider, ProviderRequest};
+use badi_broker::provider::{CompletionProvider, ProviderRequest, RequestTrigger};
 use badi_broker::semantic::client::CompletionDisposition;
 use badi_broker::semantic::provenance::{
     FileExpectation, ProvenanceError, VerifiedFile, verify_file,
@@ -55,6 +55,7 @@ fn main() -> ExitCode {
         owned_runtime_keeps_its_token_private_and_is_reaped,
         runtime_rejects_wrong_artifacts_bad_health_early_exit_and_orphans,
         failed_warm_up_leaves_the_owned_runtime_serving,
+        owned_runtime_serves_alternatives,
         owned_runtime_death_stops_broker_and_retires_sessions,
     ])
 }
@@ -160,6 +161,30 @@ async fn failed_warm_up_leaves_the_owned_runtime_serving() -> TestResult {
     let process_id = runtime.process_id().expect("owned child process");
     drop(runtime);
     assert!(!Path::new(&format!("/proc/{process_id}")).exists());
+    Ok(())
+}
+
+async fn owned_runtime_serves_alternatives() -> TestResult {
+    let fixture = OwnedFixture::new()?;
+    let runtime = fixture.launch(FixtureBehavior::Ready)?.spawn().await?;
+    let reply = CompletionProvider::alternative(
+        &runtime,
+        ProviderRequest {
+            before: "Thank you ".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+            vocabulary: None,
+        },
+        CancellationToken::new(),
+        RequestTrigger::Explicit,
+        vec!["for".to_owned()],
+    )
+    .await?;
+    let text = reply.outcome.into_proposal().map(|proposal| proposal.text);
+    assert!(
+        text.as_deref().is_some_and(|text| text.starts_with("so ")),
+        "the runtime's client continues the first token not shown yet: {text:?}"
+    );
     Ok(())
 }
 

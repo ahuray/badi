@@ -97,7 +97,19 @@ def run(args):
                         raise RuntimeError(
                             f"type-through generated instead of carrying: calls={calls} shown={shown}"
                         )
-                    earlier = status["metrics"]
+                    subprocess.run([args.client, "--alternatives", str(socket), "omawrite"],
+                                   env=environment, check=True, timeout=10)
+                    earlier = json.loads(subprocess.run(
+                        [args.cli, "status"], env=environment, check=True,
+                        capture_output=True, text=True, timeout=5,
+                    ).stdout)["metrics"]
+                    # The first suggestion and two alternatives were generated;
+                    # the third press found none and showed the first again.
+                    if (earlier["provider_calls"] - calls, earlier["suggestions_shown"] - shown) != (4, 3):
+                        raise RuntimeError(
+                            "unexpected alternatives counters: "
+                            f"calls={earlier['provider_calls'] - calls} shown={earlier['suggestions_shown'] - shown}"
+                        )
                     subprocess.run([args.client, "--revision", str(socket), "omawrite"],
                                    env=environment, check=True, timeout=10)
                     metrics = json.loads(subprocess.run(

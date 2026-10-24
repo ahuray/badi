@@ -36,7 +36,7 @@ const armIdleExit = () => {
 // The client clears its candidate on expiry, revocation, pause and
 // disconnect; Neovim withdraws the preview it shows for that candidate.
 client.on('clear', () => send({ event: 'clear' }));
-client.on('update', text => send({ event: 'update', text }));
+client.on('update', text => send({ event: 'update', text, word: client.acceptWord }));
 // Each state carries the policy as it now stands, so Neovim reads no buffer
 // text for a request the broker would refuse.
 const policy = () => ({ connected: client.connected, allowed: client.allowed, automatic: client.automaticAllowed });
@@ -66,7 +66,7 @@ async function suggest(command) {
   recordActivity('neovim', 'context', command.explicit ? 'explicit_buffer' : 'automatic_buffer');
   grant = null;
   const text = await client.suggest(before, { language, explicit: command.explicit, after });
-  return text ? { ok: true, text } : { ok: true, text: null };
+  return text ? { ok: true, text, word: client.acceptWord } : { ok: true, text: null };
 }
 
 async function handle(command) {

@@ -309,12 +309,12 @@ class Daemon:
                 preview.warm()
         return False
 
-    def render_preview(self, focus, text, ttl_ms):
+    def render_preview(self, focus, text, ttl_ms, strong=None):
         preview = self.load_preview()
         if preview is None:
             return False
         try:
-            return preview.render(focus, text, ttl_ms)
+            return preview.render(focus, text, ttl_ms, strong)
         except Exception:
             preview.hide()
             return False

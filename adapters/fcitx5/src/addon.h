@@ -168,6 +168,8 @@ private:
     void inspectOnRequest(Binding &binding);
     void requestManually(Binding &binding);
     void requestAcceptance(Binding &binding, bool word = false);
+    // True when the chord asked for another continuation than the shown one.
+    bool requestAlternative(Binding &binding, const PanelObservation &panel);
     void dismissSuggestion(Binding &binding, const PanelObservation &panel);
     void declineContext(Binding &binding);
     void lineKey(Binding &binding, const ::fcitx::Key &key, std::string_view typed);

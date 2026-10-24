@@ -8,6 +8,7 @@ use tokio::sync::{MutexGuard, OwnedSemaphorePermit};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
+use super::alternatives::Plan;
 use super::outcomes::current_unix_day;
 use super::session::evaluate_context;
 use super::type_through::{CarryScope, TypeThrough};
@@ -75,7 +76,7 @@ impl ProviderAnswer {
 type CarryOutcome = (Option<(String, Instant, Option<u64>)>, Option<CarryMiss>);
 
 /// A provider call admitted for one session generation.
-struct AdmittedGeneration {
+pub(super) struct AdmittedGeneration {
     request: ProviderRequest,
     allow_replacement: bool,
     trigger: RequestTrigger,
@@ -103,6 +104,16 @@ struct GenerationBinding {
     /// Letters were typed at a word start in front of `after`'s first word,
     /// so the suggestion ends in the space that keeps them apart.
     separates_next_word: bool,
+    /// The app or site, for words the writer turned down there.
+    scope: CarryScope,
+    /// The writer asked: turned-down words and quiet floors do not apply.
+    explicit: bool,
+    /// The app's stricter confidence floor while its suggestions are seldom
+    /// taken; `None` keeps the provider's own.
+    quiet_floor: Option<f64>,
+    /// An alternative on request: first words already shown, which this
+    /// continuation must not start with, and what to show without one.
+    alternative: Option<(Vec<String>, String)>,
 }
 
 /// A type-through remainder keeps its original suggestion's deadline and
@@ -136,7 +147,7 @@ impl Broker {
             return Err(BrokerError::InvalidPayload);
         }
         if let Some(admitted) = self
-            .admit_generation(coordinates, payload, request_id)
+            .admit_generation(coordinates, payload, request_id, None)
             .await?
         {
             tokio::spawn(self.clone().run_generation(admitted));
@@ -164,11 +175,13 @@ impl Broker {
     /// Checks the request against the session's current context and policy,
     /// retires any older generation, and either shows a type-through
     /// remainder (`None`) or takes provider capacity for a new generation.
-    async fn admit_generation(
+    #[allow(clippy::too_many_lines)]
+    pub(super) async fn admit_generation(
         &self,
         coordinates: Coordinates,
         payload: SuggestRequestPayload,
         request_id: Option<String>,
+        alternative: Option<Plan>,
     ) -> Result<Option<AdmittedGeneration>, BrokerError> {
         let metrics = &self.inner.metrics;
         let mut state = self.inner.state.lock().await;
@@ -200,6 +213,9 @@ impl Broker {
         let separates_next_word = state.typed_at_word_start(&scope, &context);
         let carry = state.type_through.as_ref();
         let (carried, carry_miss) = consult_carry(carry, &scope, &context, payload.explicit);
+        if carry_miss == Some(CarryMiss::PrefixMismatch) {
+            state.record_typed_over(&scope, &context);
+        }
         let mid_line = state
             .settings
             .as_ref()
@@ -213,6 +229,11 @@ impl Broker {
         }
         let escape_quiet = state.quiet_request(coordinates, payload.explicit)?;
         let power_start_delay = state.power_start_delay(trigger);
+        let quiet_floor = if payload.explicit {
+            None
+        } else {
+            state.quiet_floor(self.inner.control_plane.as_deref(), &target)
+        };
         let session = state.session_with_data_access(coordinates.session_id)?;
         let mut binding = GenerationBinding {
             coordinates,
@@ -224,7 +245,24 @@ impl Broker {
             after: context.after.clone(),
             language: context.language.clone(),
             separates_next_word,
+            scope: scope.clone(),
+            explicit: payload.explicit,
+            quiet_floor,
+            alternative: None,
         };
+        match alternative {
+            Some(Plan::Show(text)) => {
+                // Cycling through alternatives already shown asks no model.
+                let expires_at =
+                    Instant::now() + self.inner.config.suggestion_ttl_for(&session.authority);
+                self.show_carried(state, binding, (text, expires_at, None), generation_timeout)?;
+                return Ok(None);
+            }
+            Some(Plan::Generate { excluded, fallback }) => {
+                binding.alternative = Some((excluded, fallback));
+            }
+            None => {}
+        }
         if escape_quiet || session.nothing_to_correct(payload.explicit) {
             self.abstain_admitted(state, binding, generation_timeout)
                 .await;
@@ -327,7 +365,7 @@ impl Broker {
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn run_generation(self, admitted: AdmittedGeneration) {
+    pub(super) async fn run_generation(self, admitted: AdmittedGeneration) {
         let AdmittedGeneration {
             mut request,
             allow_replacement,
@@ -378,15 +416,21 @@ impl Broker {
         });
         let provider_deadline = Instant::now() + self.inner.config.provider_timeout_for(trigger);
         let deadline = binding.deadline.min(provider_deadline);
-        let provider = time::timeout_at(
-            deadline.into(),
-            self.inner.provider.propose_outcome(
+        let call = match &binding.alternative {
+            Some((excluded, _)) => self.inner.provider.alternative(
+                request,
+                cancellation.clone(),
+                trigger,
+                excluded.clone(),
+            ),
+            None => self.inner.provider.propose_outcome(
                 request,
                 cancellation.clone(),
                 allow_replacement,
                 trigger,
             ),
-        );
+        };
+        let provider = time::timeout_at(deadline.into(), call);
         let result = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
@@ -418,7 +462,8 @@ impl Broker {
             stats.as_ref(),
             cancelled_before_first_token,
         );
-        self.finish_generation(binding, &cancellation, answer).await;
+        self.finish_generation(binding, &cancellation, answer, stats)
+            .await;
     }
 
     /// Every path records exactly one no-suggestion class or one shown result.
@@ -427,14 +472,19 @@ impl Broker {
         binding: GenerationBinding,
         cancellation: &CancellationToken,
         answer: ProviderAnswer,
+        provider_stats: Option<ProviderStats>,
     ) {
-        let proposal = match self.check_provider_answer(&binding, cancellation, answer) {
-            Ok(proposal) => proposal,
-            Err(Withheld::Clear(reason)) => {
-                return self.clear_failed_generation(binding, reason).await;
-            }
-            Err(Withheld::Silently) => return,
-        };
+        let proposal =
+            match self.check_provider_answer(&binding, cancellation, answer, provider_stats) {
+                Ok(proposal) => proposal,
+                Err(Withheld::Clear(reason)) => {
+                    if let Some((_, fallback)) = binding.alternative.clone() {
+                        return self.show_fallback(binding, cancellation, fallback).await;
+                    }
+                    return self.clear_failed_generation(binding, reason).await;
+                }
+                Err(Withheld::Silently) => return,
+            };
         let state = self.inner.state.lock().await;
         if Instant::now() >= binding.deadline {
             drop(state);
@@ -451,6 +501,7 @@ impl Broker {
         binding: &GenerationBinding,
         cancellation: &CancellationToken,
         answer: ProviderAnswer,
+        provider_stats: Option<ProviderStats>,
     ) -> Result<WritingProposal, Withheld> {
         let metrics = &self.inner.metrics;
         if Instant::now() >= binding.deadline {
@@ -478,6 +529,29 @@ impl Broker {
             }
         };
         metrics.record_provider_output(raw.text.len());
+        // An app whose suggestions are seldom taken shows only surer ones.
+        // A correction, or a proposal the model did not score, keeps its own.
+        if let (Some(floor), Some(minimum)) = (
+            binding.quiet_floor,
+            provider_stats.and_then(|stats| stats.min_logprob_hundredths),
+        ) {
+            if raw.replace_before.is_none() && f64::from(minimum) / 100.0 < floor {
+                metrics.record_no_suggestion(NoSuggestionReason::LowConfidence);
+                debug_trace::emit("suggestion withheld", |entry| {
+                    entry.put("sid", debug_trace::session(binding.coordinates.session_id));
+                    entry.put("reason", "quiet_app");
+                    entry.put("floor", floor);
+                });
+                return Err(Withheld::Clear(ReasonCode::NoSuggestion));
+            }
+        }
+        // An alternative must start with a word not shown yet.
+        if let Some((excluded, _)) = &binding.alternative {
+            if super::rejections::next_word(&raw.text).is_none_or(|word| excluded.contains(&word)) {
+                metrics.record_no_suggestion(NoSuggestionReason::ModelAbstained);
+                return Err(Withheld::Clear(ReasonCode::NoSuggestion));
+            }
+        }
         let checked = if binding.separates_next_word && raw.replace_before.is_none() {
             separated_proposal(self.inner.provider_kind, binding, raw)
         } else {
@@ -493,6 +567,31 @@ impl Broker {
             metrics.record_no_suggestion(NoSuggestionReason::OutputRejected);
             Withheld::Clear(ReasonCode::InvalidOutput)
         })
+    }
+
+    /// The model had no further alternative: the context's alternatives are
+    /// exhausted, and `fallback`, one already shown, is shown again.
+    async fn show_fallback(
+        &self,
+        binding: GenerationBinding,
+        cancellation: &CancellationToken,
+        fallback: String,
+    ) {
+        let mut state = self.inner.state.lock().await;
+        let Ok(session) = state.session_with_data_access(binding.coordinates.session_id) else {
+            return;
+        };
+        session.alternatives.exhaust();
+        let expires_at = Instant::now() + self.inner.config.suggestion_ttl_for(&session.authority);
+        let proposal = WritingProposal {
+            text: fallback,
+            replace_before: None,
+        };
+        let carried = Carried {
+            expires_at,
+            aggregate_day: None,
+        };
+        self.show_if_current(state, binding, cancellation, proposal, Some(carried));
     }
 
     fn record_generation_timeout(&self, cancellation: &CancellationToken) {
@@ -517,6 +616,14 @@ impl Broker {
     ) {
         let metrics = &self.inner.metrics;
         let settings_revision = state.settings_revision;
+        // A remainder the writer is typing through, a correction or an asked
+        // suggestion is never a word they turned down.
+        let turned_down = carried.is_none()
+            && proposal.replace_before.is_none()
+            && !binding.explicit
+            && state
+                .rejections
+                .withholds(&binding.scope, &binding.before, &proposal.text);
         let Some(session) = session_awaiting(&mut state, &binding, cancellation) else {
             metrics.record_stale_result();
             metrics.record_no_suggestion(NoSuggestionReason::Stale);
@@ -532,8 +639,22 @@ impl Broker {
             before,
             after,
             language,
-            separates_next_word: _,
+            ..
         } = binding;
+        if turned_down {
+            metrics.record_no_suggestion(NoSuggestionReason::Repeated);
+            debug_trace::emit("suggestion withheld", |entry| {
+                entry.put("sid", debug_trace::session(coordinates.session_id));
+                entry.put("reason", "repeated");
+            });
+            let _ = session.sink.send(BrokerEvent::generation_withdrawn(
+                coordinates,
+                fingerprint,
+                ReasonCode::NoSuggestion,
+                request_id,
+            ));
+            return;
+        }
         if proposal.replace_before.is_none() && session.spelling_only() {
             metrics.record_no_suggestion(NoSuggestionReason::ModelAbstained);
             let _ = session.sink.send(BrokerEvent::generation_withdrawn(
@@ -607,6 +728,7 @@ impl Broker {
             text: payload.text.clone(),
             expires_at,
             aggregate_day,
+            turned_down: false,
         });
         session.visible = Some(VisibleSuggestion {
             payload,

@@ -1794,3 +1794,126 @@ async fn each_suggestion_length_shows_its_words_within_the_same_budget()
     }
     Ok(())
 }
+
+/// Serves an alternative: one non-streaming reply with first-token
+/// candidates, then one streamed continuation per further request. Returns
+/// the payloads the client sent and the provider's outcome.
+async fn alternative_exchange(
+    before: &str,
+    candidates: &[(&str, f64)],
+    pieces: &[&str],
+    excluded: &[&str],
+) -> Result<(Vec<serde_json::Value>, ProviderOutcome), Box<dyn Error>> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let endpoint = listener.local_addr()?;
+    let top: Vec<serde_json::Value> = candidates
+        .iter()
+        .map(|(token, logprob)| serde_json::json!({"token": token, "logprob": logprob, "bytes": token.as_bytes()}))
+        .collect();
+    let reply = serde_json::json!({"content": candidates[0].0, "stop": true,
+        "completion_probabilities": [{"token": candidates[0].0, "logprob": candidates[0].1, "top_logprobs": top}]})
+    .to_string();
+    let pieces: Vec<String> = pieces.iter().map(|piece| (*piece).to_owned()).collect();
+    let server = tokio::spawn(async move {
+        let mut payloads = Vec::new();
+        while let Ok(Ok((mut socket, _))) =
+            tokio::time::timeout(Duration::from_millis(300), listener.accept()).await
+        {
+            let payload = read_payload(&mut socket).await;
+            if payload["stream"] == false {
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    reply.len()
+                );
+                let _ = socket.write_all(format!("{head}{reply}").as_bytes()).await;
+            } else {
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")
+                    .await;
+                for piece in &pieces {
+                    let _ = socket
+                        .write_all(format!("data: {}\n\n", token_event(piece)).as_bytes())
+                        .await;
+                }
+                let stop =
+                    serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"eos"});
+                let _ = socket
+                    .write_all(format!("data: {stop}\n\n").as_bytes())
+                    .await;
+            }
+            payloads.push(payload);
+        }
+        payloads
+    });
+    let client = fixture_client(SemanticClientConfig::new(
+        endpoint,
+        "space-fixture",
+        "public-fixture-token",
+    )?)?;
+    let outcome = client
+        .alternative(
+            request(before, Some("en")),
+            CancellationToken::new(),
+            RequestTrigger::Explicit,
+            excluded.iter().map(|word| (*word).to_owned()).collect(),
+        )
+        .await?
+        .outcome;
+    Ok((server.await?, outcome))
+}
+
+#[tokio::test]
+async fn an_alternative_continues_the_best_first_token_not_shown_yet() -> Result<(), Box<dyn Error>>
+{
+    let before = "Thanks for sharing the draft. I will ";
+    let (payloads, outcome) = alternative_exchange(
+        before,
+        &[
+            (" read", -0.3),
+            ("<b>", -0.9),
+            (" 5", -1.0),
+            (" send", -1.2),
+            (" check", -1.5),
+        ],
+        &[" it", " tonight"],
+        &["read"],
+    )
+    .await?;
+    assert_eq!(payloads.len(), 2, "the candidates, then one continuation");
+    let (candidates, continuation) = (&payloads[0], &payloads[1]);
+    assert_eq!(candidates["prompt"], "Thanks for sharing the draft. I will");
+    assert_eq!(
+        (
+            candidates["n_predict"].clone(),
+            candidates["n_probs"].clone()
+        ),
+        (1.into(), 8.into())
+    );
+    assert_eq!(candidates["post_sampling_probs"], false);
+    assert_eq!(
+        continuation["prompt"], "Thanks for sharing the draft. I will send",
+        "markup, an absent digit and a shown word are skipped"
+    );
+    assert_eq!(continuation["grammar"], format!("root ::= {NO_DIGITS}"));
+    let text = outcome.into_proposal().map(|proposal| proposal.text);
+    assert_eq!(
+        text.as_deref(),
+        Some("send it tonight"),
+        "the healed space is not echoed"
+    );
+
+    // Every candidate already shown: nothing to continue.
+    let (payloads, outcome) = alternative_exchange(
+        before,
+        &[(" read", -0.3), (" send", -1.2)],
+        &[],
+        &["read", "send"],
+    )
+    .await?;
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(
+        outcome,
+        ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained)
+    );
+    Ok(())
+}

@@ -743,7 +743,8 @@ fn validate_control_response(
             | ControlAction::Request
             | ControlAction::AcceptWord
             | ControlAction::AcceptAll
-            | ControlAction::Dismiss => payload.paused,
+            | ControlAction::Dismiss
+            | ControlAction::Alternatives => payload.paused,
         }
     {
         return Err(CliError::UnexpectedResponse);

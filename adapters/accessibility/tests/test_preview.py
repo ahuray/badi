@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from field import font_facts
-from preview import (Preview, disable_preview_animation, field_box_ends_before_caret, font_pixels, ltr_text,
+from preview import (REST_ALPHA, STRONG_ALPHA, Preview, disable_preview_animation, field_box_ends_before_caret, font_pixels, ltr_text,
                      mapped_caret, place_chip, place_edge_panel, place_inline, place_on_caret_line)
 
 
@@ -294,7 +294,8 @@ class PreviewGeometryTests(unittest.TestCase):
         preview.Pango = SimpleNamespace(SCALE=1024, AttrList=lambda: SimpleNamespace(insert=lambda attr: calls.append(("attr", attr))),
                                         attr_size_new_absolute=lambda size: ("size", size),
                                         attr_family_new=lambda family: ("family", family),
-                                        attr_weight_new=lambda weight: ("weight", weight))
+                                        attr_weight_new=lambda weight: ("weight", weight),
+                                        attr_foreground_alpha_new=lambda alpha: SimpleNamespace(alpha=alpha))
         preview.Layer = SimpleNamespace(Edge=SimpleNamespace(LEFT="left", TOP="top"),
                                         set_monitor=lambda _window, chosen: calls.append(("monitor", chosen)),
                                         set_margin=lambda _window, edge, value: calls.append((edge, value)))
@@ -323,6 +324,29 @@ class PreviewGeometryTests(unittest.TestCase):
         self.assertIn(("top", 147), calls)
         self.assertEqual(calls[-2:], [("visible", True), ("timer", 1500)])
         self.assertEqual(preview.timer, 7)
+
+    def test_the_word_tab_takes_is_drawn_opaque_and_the_rest_lighter(self):
+        def alphas(calls):
+            return [(attr.start_index, attr.end_index, attr.alpha) for kind, attr in calls
+                    if kind == "attr" and isinstance(attr, SimpleNamespace)]
+        preview, calls, _monitor = self.render_fixture()
+        self.assertTrue(preview.render(focus(), " next wörds", 1500, strong=5))
+        self.assertEqual(alphas(calls), [(0, 5, STRONG_ALPHA), (5, 12, REST_ALPHA)], "byte offsets")
+        self.assertLess(REST_ALPHA, STRONG_ALPHA)
+
+        data = focus()
+        data["geometry"]["text_follows"] = True
+        data["geometry"]["field"]["height"] = 200
+        preview, calls, _monitor = self.render_fixture((120, 24))
+        self.assertTrue(preview.render(data, " final words", 1500, strong=6))
+        self.assertIn(("text", "final words"), calls)
+        self.assertEqual(alphas(calls), [(0, 5, STRONG_ALPHA), (5, 11, REST_ALPHA)],
+                         "a chip drops the leading space")
+
+        for strong in (None, 11):
+            preview, calls, _monitor = self.render_fixture()
+            self.assertTrue(preview.render(focus(), " next words", 1500, strong=strong))
+            self.assertEqual(alphas(calls), [], "no split without a rest")
 
     def test_render_traces_its_placement_and_hide_cause_or_why_it_declined(self):
         preview, _calls, _monitor = self.render_fixture()

@@ -3,6 +3,7 @@
 //! `Broker` operations of one concern.
 
 mod acceptance;
+mod alternatives;
 mod authority;
 mod desktop;
 mod editor;
@@ -11,6 +12,8 @@ mod events;
 mod generation;
 mod outcomes;
 mod probe;
+mod quietness;
+mod rejections;
 mod revision;
 mod session;
 mod settings;
@@ -275,6 +278,10 @@ struct BrokerState {
     /// An observed field reopens its session as it changes; its target id
     /// stays for the visit.
     learned_visits: std::collections::VecDeque<(String, std::collections::BTreeSet<String>)>,
+    /// Next words the writer turned down, as keyed hashes (memory only).
+    rejections: rejections::Rejections,
+    /// Each app or site's quiet level and when its counts were last read.
+    quietness: HashMap<StableIdentity, (quietness::QuietLevel, Instant)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -306,6 +313,8 @@ struct SessionState {
     /// An explicit revision of the selection, running or shown (ADR 0012).
     revision: Option<revision::SessionRevision>,
     escape_quiet: Option<EscapeQuiet>,
+    /// Continuations shown for this context on request (alternatives).
+    alternatives: alternatives::Alternatives,
     sink: BrokerEventSink,
 }
 
@@ -324,6 +333,59 @@ struct WordStart {
 const WORD_START_LIFETIME: Duration = Duration::from_secs(30);
 
 impl BrokerState {
+    /// Counts the shown continuation as turned down once when `context`
+    /// typed other letters at it in its app or site; never twice for one.
+    fn record_typed_over(
+        &mut self,
+        scope: &type_through::CarryScope,
+        context: &ContextChangedPayload,
+    ) {
+        let Some(carry) = self.type_through.as_mut() else {
+            return;
+        };
+        if carry.turned_down || carry.scope != *scope || carry.after != context.after {
+            return;
+        }
+        let Some(typed) = context.before.strip_prefix(carry.before.as_str()) else {
+            return;
+        };
+        if typed.is_empty() {
+            return;
+        }
+        carry.turned_down = true;
+        self.rejections
+            .record_typed_over(scope, &carry.before, &carry.text, typed);
+    }
+
+    /// The stricter confidence floor for `target` while its suggestions are
+    /// seldom taken, from its last seven days of counts. Counts are read
+    /// again at most every [`quietness::REFRESH`]; without them the level
+    /// stays as it was.
+    fn quiet_floor(
+        &mut self,
+        control_plane: Option<&ControlPlane>,
+        target: &crate::protocol::TargetDescriptor,
+    ) -> Option<f64> {
+        const MAX_SUBJECTS: usize = 256;
+        let identity = StableIdentity::from_target(target).ok()?;
+        let now = Instant::now();
+        let known = self.quietness.get(&identity).copied();
+        if let Some((level, read_at)) = known {
+            if now.saturating_duration_since(read_at) < quietness::REFRESH {
+                return level.floor();
+            }
+        }
+        let previous = known.map(|(level, _)| level).unwrap_or_default();
+        let level = control_plane
+            .and_then(|control_plane| control_plane.stats_last_7_days(&identity).ok().flatten())
+            .map_or(previous, |counts| previous.next(counts));
+        if self.quietness.len() >= MAX_SUBJECTS && known.is_none() {
+            self.quietness.clear();
+        }
+        self.quietness.insert(identity, (level, now));
+        level.floor()
+    }
+
     /// Whether `context`, in `scope`, holds letters typed at the last word
     /// start in front of another word.
     fn typed_at_word_start(

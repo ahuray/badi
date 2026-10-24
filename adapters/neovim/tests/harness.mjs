@@ -49,6 +49,7 @@ function _G.badi_test_state()
     lines = vim.api.nvim_buf_get_lines(0, 0, -1, true),
     cursor = cursor,
     preview = badi._preview() or vim.NIL,
+    chunks = badi._preview_chunks() or vim.NIL,
     status = badi.status(),
     screen = table.concat(screen):gsub('%s+$', ''),
     messages = vim.fn.execute('messages'),
