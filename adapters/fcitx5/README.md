@@ -271,8 +271,10 @@ provides an editor transaction.
   instead of re-reading the field first, whose model run the report would
   cancel; the typing pause is the fallback. The suggestion
   stays hidden until 120 ms after that keystroke, or 30 ms after a
-  typed-through key. After the observer declined the field in this focus
-  visit, input waits for the typing pause again; so does an idle invalidation
+  typed-through key. A declined field gets one more look on the next key,
+  since a click can reach Fcitx before Zen moves its accessible focus;
+  declined twice in a row in this focus visit, input waits for the typing
+  pause again, and so does an idle invalidation
   (120 ms, then 240, 480 and 960 ms). A busy observer is retried every 20 ms. Badi's timers ask for 1 ms accuracy, because Fcitx's
   sd-event loop otherwise allows 250 ms of slack. With debug on,
   `inspect_sent` and `inspect_answered` time each inspection in the
@@ -315,7 +317,7 @@ toolkit in general.
 | Chromium 154 (2026-10-19/20), 155 (2026-10-23/24) | text-input-v3 (`wayland_v2`); observed, IME-parity | On 155 (2026-10-24): a textarea, a contenteditable after a trailing space, Quill, ProseMirror and Lexical on their own sites, a typo fix, a selection revision, and a password field and search boxes refused. With inspection on the keystroke, a textarea showed 8/8 inline in 189–308 ms after the last key on a fresh focus (median 215, against 276 before). The installed-flow matrix below; as an Omarchy web app (`chrome-<site>__-Default`) 4/4 inline in 168–321 ms, with window words. On 155, `adress ` showed `→ address`; Tab corrected it, the read-back confirmed it and one Ctrl+Z restored the typo. A page that moves focus on the deletion split it, and the notice named it ([ADR 0011](../../docs/decisions/0011-checked-corrections-in-append-only-apps.md)) | Page fields carry no purpose hints, so the observer's checks deny passwords; the omnibox's `Url` purpose is denied before any observer request. Needs Fcitx 5.1.23 |
 | Brave Origin 1.97 (2026-10-20), 1.98 (2026-10-24) | as above | On 1.98: a textarea, a contenteditable and a confirmed typo fix; a password field sent nothing. On 1.97: 5/5 in a textarea, 3/3 in a contenteditable, 4/4 as an `--app` web app; Ctrl+→ takes all, Escape hides without editing | as above |
 | Zen 1.23.3b, Gecko 158 (2026-10-20) | `wayland_v2`, `zen` | Suggestions and window words | The urlbar shares the page's context with no `Url` hint, so the observer denies it. Gecko sends only the caret's paragraph. One Ctrl+Z undoes an acceptance alone. A fresh profile once showed the suggestion in Fcitx's candidate box |
-| Zen Twilight 1.24t (2026-10-24) | `wayland_v2`, `zen-twilight` | A textarea and a contenteditable suggested; a typo fix was confirmed by read-back | As Zen: the observer denies the urlbar; password and search fields refused |
+| Zen Twilight 1.24t (2026-10-24) | `wayland_v2`, `zen-twilight` | A textarea and a contenteditable suggested; a typo fix was confirmed by read-back; chatgpt.com's composer suggested and Tab committed a word, Google's search box was refused | As Zen: the observer denies the urlbar; password and search fields refused. After Tab accepts a word the rest shows only after the next key: Gecko keeps Fcitx's text at the pre-commit text, which the observer's read no longer matches |
 | VS Code 1.142 (2026-10-20), 1.143 (2026-10-24) | as Chromium | 3/3; the saved file read back exactly; on 1.143 a markdown buffer suggested and Tab committed a word | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. `wtype` trials need `"keyboard.dispatch": "keyCode"` |
 | LibreOffice Writer 26.8.1, GTK 3 (2026-10-20/24) | observed sentence | 2/3 inline in 169 and 241 ms; Tab commits one word; on 2026-10-24 inline again, and Alt+F7 turned `lsit` into `list`, undone by one Ctrl+Z; with inspection on the keystroke, 8/8 inline in 216–300 ms after the last key (median 241, against 359 before) | Writer sends only the caret's sentence. Spelling goes through the [extension](../libreoffice/README.md): Alt+F7 replaces, one Ctrl+Z restores |
 | Ghostty 1.3.1 (2026-10-20/24) | typed line ([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.md)) | 3/3 in the panel; one word per Tab; corrections erase the typo with DELs (`teh → the` on 2026-10-24) | Exact opt-in rule |

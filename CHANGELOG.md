@@ -33,6 +33,9 @@ Unreleased in the same commit.
   behavior is unchanged.
 - The session helper looks up the keyring's style key asynchronously, so a
   slow Secret Service can no longer delay a sleep or screen-share report.
+- In Zen, a field the observer first declines because a click reached Badi
+  before Zen moved its focus gets one more look on the next key, so its first
+  suggestions are not held until typing pauses.
 
 ## 0.2.0 (2026-10-24)
 

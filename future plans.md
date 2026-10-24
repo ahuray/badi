@@ -430,6 +430,14 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Browser rich editors: a caret inside a list or quote, EditContext editors
       (VS Code's default, CodeMirror on recent Chromium), multi-paragraph fields
       in Zen (Gecko sends only the caret's paragraph) and Firefox.
+- [ ] Zen: after Tab accepts a word, the rest shows only after the next key.
+      Gecko keeps the surrounding text it gives Fcitx at the pre-commit text
+      until the next key, while the observer already reads the committed word,
+      so the agreement check refuses (`observer_context_mismatch`, 27 against
+      35 characters on 2026-10-24). Accepting an observed text that is exactly
+      Fcitx's text plus the committed string would show it, but relaxes the
+      agreement rule ([ADR 0003](docs/decisions/0003-ime-parity-append-only.md))
+      and needs the user's decision first.
 - [ ] Grok Bot composer trial in the signed-in app after a relaunch with
       `grok-bot-flags.conf`.
 - [ ] More native toolkits through measured integrations.

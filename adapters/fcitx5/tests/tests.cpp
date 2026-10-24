@@ -1146,9 +1146,15 @@ void inspectionOnInputSurvivesItsOwnEdit() {
     check(!schedule.reinspectAfterInvalidation(true), "after a paused inspection a change waits for input");
 
     schedule.found(false);
-    check(!schedule.inspectsOnInput(), "a declined field waits for typing pauses");
+    check(schedule.inspectsOnInput(), "a declined field gets one more look on the next keystroke");
+    schedule.found(false);
+    check(!schedule.inspectsOnInput(), "declined again, it waits for typing pauses");
+    schedule.found(false);
+    check(!schedule.inspectsOnInput(), "further declines keep waiting for pauses");
     schedule.found(true);
     check(schedule.inspectsOnInput(), "a found field inspects on input again");
+    schedule.found(false);
+    check(schedule.inspectsOnInput(), "a decline after a found field gets its own look");
     schedule.found(false);
     schedule.editReported();
     check(schedule.fieldReportsEdits(), "a field that reported the user's edit is awaited, not re-read");
