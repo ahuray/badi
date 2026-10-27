@@ -1,6 +1,6 @@
 # Selection revision
 
-Select one line of text and press Ctrl+Shift+Space: Badi checks its grammar, and the same chord again offers a refined wording. The panel shows the change with removed words struck through and new ones bold. Tab applies it as one edit over the selection, Escape keeps the text ([ADR 0012](../../../../docs/decisions/0012-explicit-revision-of-one-selection.md)).
+Select one line of text and press Ctrl+Shift+Space: Badi checks its grammar, and the same chord again offers a refined wording. Fcitx's candidate list shows the change with removed words struck through and new ones bold. Tab applies it as one edit over the selection, Escape keeps the text ([ADR 0012](../../../../docs/decisions/0012-explicit-revision-of-one-selection.md)).
 
 ## Sub-features
 
@@ -13,7 +13,7 @@ Select one line of text and press Ctrl+Shift+Space: Badi checks its grammar, and
 ## How to get to it (user POV)
 
 - In an allowed Chromium-based app's plain text field, or a native exact field, select a line of disposable text with an error ("She dont know where is the station") and press Ctrl+Shift+Space.
-- The first request starts the revision model and takes a few seconds; later ones take about a second for grammar and two for a refinement.
+- The first request starts the revision model and takes a few seconds. The model stops after ten idle minutes.
 - `badi revise` says whether the model is installed; `badi revise install` downloads it.
 
 ## Driving it with verify-badi
@@ -24,7 +24,7 @@ Preconditions:
 - `badi doctor` names the installed commit and `badi revise` reports the model installed.
 - A throwaway browser profile on a disposable local page, and `badi debug on --text` for the trace.
 
-- **Grammar fix and apply.** Select the sentence, press the chord, check the panel's marked change, press Tab. The trace shows `revision_dispatched_unverified` then `revision_confirmed`, and the field reads the fixed sentence.
+- **Grammar fix and apply.** Select the sentence, press the chord, check the marked change in Fcitx's candidate list, press Tab. The trace shows `revision_dispatched_unverified` then `revision_confirmed`, and the field reads the fixed sentence.
 - **Refine and dismiss.** Press the chord twice, then Escape. The field and the selection are unchanged.
 - **Nothing to change.** A correct selection shows "Badi found nothing to change" (`no_change`).
 - **Refusal.** In a password field the trace shows no `revision.request` and no key lines.

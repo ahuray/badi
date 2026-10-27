@@ -25,7 +25,7 @@ Preconditions:
 
 - The panel is installed with `python3 scripts/install-omarchy-ui.py` on Omarchy, with the bar visible.
 - The broker it talks to is the user service, not a verify-badi run id.
-- A cloud VM has no Omarchy bar. The journey fails there because the mark is not on a display. On a machine without `omarchy-shell`, `python3 scripts/install-omarchy-ui.py` exits 1 before writing any panel file and prints `The Badi panel lives in Omarchy's bar, and this desktop has no omarchy-shell; nothing was changed.` The line `plugin source gate: pinned official manifest validator is required` is a later gate, when host checks are required and that validator is missing. Record the line this machine prints. Do not substitute a source check.
+- A cloud VM has no Omarchy bar. The journey fails there because the mark is not on a display. On a machine without `omarchy-shell`, `python3 scripts/install-omarchy-ui.py` exits 1 before writing any panel file and prints `The Badi panel lives in Omarchy's bar, and this desktop has no omarchy-shell; nothing was changed. The badi commands set the same things (badi --help).` The line `plugin source gate: pinned official manifest validator is required` is a later gate, when host checks are required and that validator is missing. Record the line this machine prints. Do not substitute a source check.
 
 - **Open.** Left-click the **b** mark. A screenshot shows the popout with the model pill and the pause switch.
 - **Pause from the mark.** Right-click the mark. The mark dims, and `badi status` reports paused. Right-click again, and status reports the model ready.
@@ -36,5 +36,5 @@ Preconditions:
 ## Gotchas
 
 - The popout polls the broker only while it is open. A status change made while it is closed shows up on the next open.
-- Installing the panel is a separate step from `install-desktop.py`. A locked desktop exits with `Desktop locked: no UI files changed` unless `--wait-for-unlock SECONDS` is set.
+- Installing the panel is a separate step from `install-desktop.py`. A locked desktop exits with `Desktop locked: no UI files changed. Unlock and rerun this command.` `--wait-for-unlock SECONDS` waits for an unlock before that exit.
 - Keyboard navigation is the popout's own model. Driving `badictl` does not prove j, k, or `/`.
