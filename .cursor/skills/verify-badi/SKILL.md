@@ -117,6 +117,8 @@ Headless evidence is `/tmp/badi-verify-evidence/$BADI_VERIFY_RUN_ID/`. Cleanup n
 | `status-before-<feature>.json`, `status-after-<feature>.json` | Broker counters around the drive |
 | `cleanup.txt` | Which pid was signaled, and this evidence path |
 
+`word-suggestion`, `spelling`, `pause` and `length` write the bridge files in that table. `length` also writes `settings-short.json` and `settings-normal.json`. `stats` writes `stats-before-forget.json`, `stats-forget.json` and `stats-after-forget.json`, and does not write `drive-stats.txt`. `snooze` writes `drive-snooze-idle.err`, `drive-snooze.txt`, `status-idle-snooze.json`, `status-snoozed.json` and `status-after-snooze.json`.
+
 A proof cites the feature id, the entry point, the command, and the exit code. For `word-suggestion` the transcript's `SUGGEST` and `INSERT` payloads both decode to ` for your time`, and `commits_applied` is one higher afterwards. For `spelling`, both payloads are `address ` replacing `adress `. For `pause`, the transcript contains `BLOCKED app_disabled_or_model_paused` while status says paused, and status says not paused after resume.
 
 Phrase-broker output is fixture evidence. It is not a local-model score and not a live-app trial. Report those three separately when more than one exists.

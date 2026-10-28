@@ -1,6 +1,6 @@
 # Suggestion length
 
-Suggestion length chooses how many words a continuation may show. Normal, the default, shows up to four. Short shows one or two. The panel's Writing row sets the same choice.
+Suggestion length chooses how many words a continuation may show. Normal, the default, shows up to four. Short shows one or two. The popout's Suggestion length row sets the same choice. In All settings that row sits under Writing; the compact popout shows the row with no section header.
 
 ## Sub-features
 
@@ -12,7 +12,7 @@ Suggestion length chooses how many words a continuation may show. Normal, the de
 
 - Run `badi length short`. The next local-model suggestion is one or two words.
 - Run `badi length normal`. Suggestions may be up to four words again.
-- In the Omarchy popout, set the Writing row to Short or Normal.
+- In the Omarchy popout, set Suggestion length to Short or Normal.
 
 ## Driving it with verify-badi
 
