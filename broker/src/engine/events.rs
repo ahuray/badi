@@ -4,8 +4,8 @@ use tokio_util::sync::CancellationToken;
 use super::{BrokerError, PendingCommit, VisibleSuggestion};
 use crate::protocol::{
     CommitPreparePayload, Coordinates, MessageType, ProtocolError, ReasonCode,
-    RevisionClearPayload, RevisionShowPayload, SuggestionClearPayload, SuggestionShowPayload,
-    WireEnvelope,
+    RevisionClearPayload, RevisionShowPayload, SuggestionClearPayload, SuggestionListPayload,
+    SuggestionShowPayload, WireEnvelope,
 };
 
 #[derive(Clone)]
@@ -44,6 +44,11 @@ pub enum BrokerEvent {
     SuggestionClear {
         coordinates: Coordinates,
         payload: SuggestionClearPayload,
+        request_id: Option<String>,
+    },
+    SuggestionList {
+        coordinates: Coordinates,
+        payload: SuggestionListPayload,
         request_id: Option<String>,
     },
     CommitPrepare {
@@ -85,6 +90,14 @@ impl BrokerEvent {
                     mono_ms,
                     &payload,
                 )?,
+                request_id,
+            ),
+            Self::SuggestionList {
+                coordinates,
+                payload,
+                request_id,
+            } => (
+                WireEnvelope::session(MessageType::SuggestionList, coordinates, mono_ms, &payload)?,
                 request_id,
             ),
             Self::CommitPrepare {

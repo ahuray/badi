@@ -138,6 +138,7 @@ async fn paused_and_stale_addressed_accepts_emit_no_commit_prepare() {
         action: ControlAction::AcceptAll,
         fingerprint: first.fingerprint.clone(),
         suggestion_id: Some(payload.suggestion_id.clone()),
+        word: None,
     };
 
     assert!(broker.set_paused(true).await);
@@ -207,6 +208,7 @@ async fn accept_without_a_landed_commit_capability_emits_no_commit_prepare() {
                     action: ControlAction::AcceptAll,
                     fingerprint: update.fingerprint,
                     suggestion_id: Some(payload.suggestion_id),
+                    word: None,
                 },
                 None,
             )
@@ -271,6 +273,7 @@ async fn expired_suggestion_is_cleared_and_ineligible() {
                     action: ControlAction::AcceptAll,
                     fingerprint: update.fingerprint,
                     suggestion_id: Some(payload.suggestion_id),
+                    word: None,
                 },
                 None,
             )
@@ -322,6 +325,7 @@ async fn ignored_commit_authorization_expires_and_becomes_ineligible() {
                 action: ControlAction::AcceptAll,
                 fingerprint: update.fingerprint.clone(),
                 suggestion_id: Some(payload.suggestion_id.clone()),
+                word: None,
             },
             Some("ignored-authorization".to_owned()),
         )
@@ -564,6 +568,7 @@ async fn commit_result_rechecks_expired_lease_before_timer_runs() {
                 action: ControlAction::AcceptAll,
                 fingerprint: update.fingerprint.clone(),
                 suggestion_id: Some(payload.suggestion_id.clone()),
+                word: None,
             },
             Some("delayed-result".to_owned()),
         )
@@ -688,6 +693,7 @@ async fn failed_commit_prepare_enqueue_rejects_without_pending_state() {
                     action: ControlAction::AcceptAll,
                     fingerprint: update.fingerprint.clone(),
                     suggestion_id: Some(payload.suggestion_id.clone()),
+                    word: None,
                 },
                 Some("closed-sink".to_owned()),
             )
@@ -754,6 +760,7 @@ async fn pause_revokes_a_pending_commit_and_rejects_its_result() {
                 action: ControlAction::AcceptAll,
                 fingerprint: update.fingerprint.clone(),
                 suggestion_id: Some(payload.suggestion_id.clone()),
+                word: None,
             },
             Some("accept-before-pause".to_owned()),
         )

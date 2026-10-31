@@ -103,9 +103,9 @@ def run(args):
                         [args.cli, "status"], env=environment, check=True,
                         capture_output=True, text=True, timeout=5,
                     ).stdout)["metrics"]
-                    # The first suggestion and two alternatives were generated;
-                    # the third press found none and showed the first again.
-                    if (earlier["provider_calls"] - calls, earlier["suggestions_shown"] - shown) != (4, 3):
+                    # The first suggestion, two lists and two picks were
+                    # generated; the three continuations were shown.
+                    if (earlier["provider_calls"] - calls, earlier["suggestions_shown"] - shown) != (5, 3):
                         raise RuntimeError(
                             "unexpected alternatives counters: "
                             f"calls={earlier['provider_calls'] - calls} shown={earlier['suggestions_shown'] - shown}"

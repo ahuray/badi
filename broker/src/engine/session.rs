@@ -252,6 +252,7 @@ impl SessionState {
             synonym_history: None,
             escape_quiet: None,
             alternatives: alternatives::Alternatives::default(),
+            alternative_list: None,
             sink,
         }
     }

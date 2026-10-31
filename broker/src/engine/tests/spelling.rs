@@ -64,6 +64,7 @@ async fn assert_spelling_replacement_commits(
                 action,
                 fingerprint: update.fingerprint,
                 suggestion_id: Some(payload.suggestion_id),
+                word: None,
             },
             None,
         )
@@ -233,6 +234,7 @@ async fn spelling_after_space_is_revoked_when_typing_continues() {
                     action: ControlAction::AcceptWord,
                     fingerprint: update.fingerprint,
                     suggestion_id: Some(payload.suggestion_id),
+                    word: None,
                 },
                 None,
             )

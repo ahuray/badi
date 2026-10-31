@@ -762,6 +762,29 @@ void foreignImeAndManualKeysYieldCooperatively() {
           "an acceptance in flight is not replaced");
 }
 
+void alternativeListBindsAndPicks() {
+    const PanelObservation ownedCandidates{.candidates = true, .candidatesOwnedByBadi = true};
+    auto listing = focusedState();
+    const auto listUpdate = explicitContext(listing);
+    const auto shown = suggestionFor(listUpdate);
+    check(listing.showSuggestion(shown, 100), "alternative list setup should display");
+    const AlternativeList list{shown.coordinates, "request-1", "suggestion-1", {"so", "again"}, 500};
+    check(listing.showAlternativeList(list, 100) && listing.alternativeList() &&
+              !listing.suggestionVisible(),
+          "a list replaces the shown suggestion");
+    check(alternativeListPick(list.words, '2') == std::optional<std::string>{"again"},
+          "a digit names its listed word");
+    check(!alternativeListPick(list.words, '3'), "a digit past the list types normally");
+    check(!listing.requestAlternativePick("never", 100, ownedCandidates),
+          "an unlisted word is never picked");
+    const auto pick = listing.requestAlternativePick("again", 100, ownedCandidates);
+    check(pick && pick->word == "again" && pick->suggestionId == "suggestion-1" &&
+              !listing.alternativeList(),
+          "a pick names its word and spends the list");
+    check(!listing.requestAlternativePick("again", 100, ownedCandidates),
+          "a spent list cannot pick twice");
+}
+
 void preInputKeysConsumeOnlyBadiUi() {
     const PanelObservation owned{.candidates = true, .candidatesOwnedByBadi = true};
     const PanelObservation foreign{.preedit = true};
@@ -2137,6 +2160,7 @@ int main(int argc, char **argv) {
         {"stale and duplicate commit", staleAndDuplicateCommitsCannotDispatch},
         {"missing candidate ownership", missingCandidateCannotAuthorizeAcceptance},
         {"foreign IME and manual keys", foreignImeAndManualKeysYieldCooperatively},
+        {"alternative list binds and picks", alternativeListBindsAndPicks},
         {"shifted letter chord normalization",
          shiftedLetterChordUsesFcitxNormalization},
     };

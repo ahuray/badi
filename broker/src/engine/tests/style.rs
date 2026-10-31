@@ -211,6 +211,7 @@ async fn accept(broker: &Broker, status: CommitStatus) {
                 action: ControlAction::AcceptAll,
                 fingerprint: fingerprint.clone(),
                 suggestion_id: Some(payload.suggestion_id.clone()),
+                word: None,
             },
             Some("accept".to_owned()),
         )

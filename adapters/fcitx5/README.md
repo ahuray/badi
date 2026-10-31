@@ -26,8 +26,9 @@ observer wire details.
   | --- | --- |
   | Tab | Accepts the next word of a visible suggestion (a spelling correction whole). While that word's remainder is still returning on an observed or typed-line field, one Tab is held for it instead of reaching the app. On the manual path it also requests at the end of a phrase. Otherwise it stays the app's Tab. |
   | Ctrl+Right | Accepts all of Badi's live candidate; otherwise the app's key. |
-  | Escape | Dismisses the suggestion or closes a notice. |
-  | Ctrl+Shift+Space, Ctrl+Shift+Y | Request, or on a shown continuation show another one that starts with a different word (then cycle through those shown); accept. |
+  | Escape | Dismisses the suggestion, an alternative list or a notice. |
+  | 1–9 | While Badi's numbered alternative list is up, shows the continuation of the word it numbers (a candidate click does the same); any other digit types normally. |
+  | Ctrl+Shift+Space, Ctrl+Shift+Y | Request, or on a shown continuation list up to four other first words as numbered candidates (ADR 0014); accept. |
   | Ctrl+Shift+Tab | Wherever Badi would take Tab (a suggestion shows, a Tab is held for its remainder, or Tab would request on the manual path: a granted app at an eligible caret): retires the suggestion and sends the app a real Tab. Otherwise, as in an app without a grant, it stays the app's key. |
 
 - **Literal Tab.** Ctrl+Shift+Tab is Cotypist's Option+Tab; Omarchy 4.0.6

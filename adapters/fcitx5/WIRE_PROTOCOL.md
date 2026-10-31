@@ -23,7 +23,8 @@ observer's (`badi.accessibility.v1`) requests and reply checks are in
 The first frame is `hello` with `v: 2`, `min_v: 2`, `max_v: 2`, adapter
 `{kind:"fcitx",name:"badi-fcitx5",version:"0.1.0"}`, and the exact capabilities
 `context`, `suggestion`, `commit.dispatched_unverified`, `text_replacement`,
-`control`, `policy`, `long_reading_window` and `selection_revision`. With
+`control`, `policy`, `long_reading_window`, `selection_revision` and
+`alternative_list`. With
 `text_replacement`, a native exact field deletes the exact typed suffix before
 its one commit; IME-parity apps but LibreOffice take a spelling correction the
 same way once the observer has re-confirmed the field, then read the app's
@@ -129,11 +130,16 @@ and `commit.result` are matched
 on session UUID, focus epoch, revision, salted fingerprint, suggestion ID, exact
 text, and control ID. `suggestion.clear` accepts exactly the schema's two
 payload shapes: fingerprint and reason, or those fields plus a string suggestion
-ID. `alternatives` names the shown continuation (never a correction) and is
-answered like an explicit request: `suggestion.clear` `superseded` for it,
-then a `suggestion.show` with a new ID, the model's next continuation that
-starts with a word not shown yet for that context, or after three (or none),
-one already shown again. A missing optional ID is valid; `null`, an extra field, or a malformed ID
+ID. `alternatives` names the shown continuation (never a correction). The
+addon negotiates `alternative_list`, so it is answered with a
+`suggestion.clear` `superseded` for the shown continuation, then a
+`suggestion.list` naming it with up to four other first words; a further
+`alternatives` control carrying one listed `word` is answered like an
+explicit request with a `suggestion.show` (new ID) of that word's
+continuation. A session without the capability instead gets the show
+directly: the model's next continuation that starts with a word not shown
+yet for that context, or after three (or none), one already shown again.
+A missing optional ID is valid; `null`, an extra field, or a malformed ID
 closes the connection. A suggestion or commit grant carrying a replacement
 field closes it too.
 

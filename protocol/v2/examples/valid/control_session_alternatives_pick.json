@@ -1,0 +1,15 @@
+{
+  "v": 2,
+  "id": "ctl:alternatives-pick",
+  "type": "control.request",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 1,
+  "revision": 1,
+  "mono_ms": 60,
+  "payload": {
+    "action": "alternatives",
+    "fingerprint": "fingerprint_000000000001",
+    "suggestion_id": "s:1234",
+    "word": "again"
+  }
+}

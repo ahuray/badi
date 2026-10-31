@@ -249,6 +249,7 @@ async fn cancelling_a_shown_suggestion_revokes_its_acceptance() {
                     action: ControlAction::AcceptAll,
                     fingerprint: update.fingerprint,
                     suggestion_id: Some(shown.suggestion_id),
+                    word: None,
                 },
                 None
             )
@@ -309,6 +310,7 @@ async fn one_hundred_supersessions_never_show_or_commit_stale_text() {
                 action: ControlAction::AcceptAll,
                 fingerprint,
                 suggestion_id: active.suggestion_id,
+                word: None,
             },
             Some("commit-latest".to_owned()),
         )
@@ -715,6 +717,7 @@ async fn escape_quiet_abstains_automatically_across_edits_until_asked() {
                 action: ControlAction::Dismiss,
                 fingerprint: first.fingerprint,
                 suggestion_id: Some(payload.suggestion_id),
+                word: None,
             },
             None,
         )
@@ -997,6 +1000,7 @@ async fn control_requests_and_explicit_probes_are_explicit() {
                 action: ControlAction::Request,
                 fingerprint: update.fingerprint,
                 suggestion_id: None,
+                word: None,
             },
             None,
         )

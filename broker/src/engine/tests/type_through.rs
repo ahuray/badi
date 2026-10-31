@@ -131,6 +131,7 @@ async fn escape_whole_acceptance_and_pause_end_type_through() {
                         action,
                         fingerprint: shown.fingerprint.clone(),
                         suggestion_id: Some(shown.suggestion_id.clone()),
+                        word: None,
                     },
                     None,
                 )
@@ -164,6 +165,7 @@ async fn the_remainder_after_a_word_acceptance_carries() {
                 action: ControlAction::AcceptWord,
                 fingerprint: shown.fingerprint.clone(),
                 suggestion_id: Some(shown.suggestion_id.clone()),
+                word: None,
             },
             Some("word".to_owned()),
         )

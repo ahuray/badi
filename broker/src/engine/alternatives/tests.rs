@@ -6,6 +6,7 @@ fn generate(excluded: &[&str], fallback: &str) -> Plan {
         ask: AlternativeAsk {
             excluded: excluded.iter().map(|word| (*word).to_owned()).collect(),
             new_word: true,
+            desired: None,
         },
         fallback: fallback.to_owned(),
     }
@@ -66,6 +67,7 @@ fn the_first_suggestion_tells_whether_alternatives_start_a_new_word() {
         AlternativeAsk {
             excluded: vec!["interest".to_owned()],
             new_word: false,
+            desired: None,
         },
         "after a space the word at the caret is the one to choose"
     );

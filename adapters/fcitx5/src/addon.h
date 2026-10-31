@@ -196,6 +196,7 @@ private:
     void onPolicy(std::string_view session, bool allowed, const std::string &reason, std::string language,
                   bool contextWords);
     void onSuggestion(Suggestion suggestion);
+    void onAlternativeList(AlternativeList list);
     void presentSuggestion(Binding &binding, Suggestion suggestion);
     void previewIfCorroborated(Binding &binding, const Suggestion &suggestion, const Json &focus, const Json &reply);
     void showObservedPreview(Binding &binding, const Suggestion &suggestion);
@@ -203,6 +204,8 @@ private:
                    bool verified, bool rendered);
     void displaySuggestion(Suggestion suggestion, bool overlay = false);
     void showCandidate(Binding &binding, const Suggestion &suggestion);
+    void showAlternativeCandidates(Binding &binding, const AlternativeList &list);
+    bool requestAlternativePick(Binding &binding, std::string word, const PanelObservation &panel);
     void onClear(const ClearNotice &clear);
     void onCommitPrepare(const CommitPrepare &prepare);
     void corroborateCommit(Binding &binding, const CommitPrepare &prepare, std::uint64_t deadline);

@@ -180,6 +180,7 @@ async fn owned_runtime_serves_alternatives() -> TestResult {
         AlternativeAsk {
             excluded: vec!["for".to_owned()],
             new_word: false,
+            desired: None,
         },
     )
     .await?;

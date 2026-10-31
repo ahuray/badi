@@ -318,6 +318,8 @@ struct SessionState {
     escape_quiet: Option<EscapeQuiet>,
     /// Continuations shown for this context on request (alternatives).
     alternatives: alternatives::Alternatives,
+    /// A numbered list of alternative next words on offer (ADR 0014).
+    alternative_list: Option<alternatives::LiveList>,
     sink: BrokerEventSink,
 }
 

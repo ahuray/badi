@@ -95,6 +95,9 @@ struct WireCallbacks {
     std::function<void()> onReady;
     std::function<void(const AuthoritySnapshot &)> onAuthority;
     std::function<void(Suggestion)> onSuggestion;
+    // Alternative next words for a numbered list (ADR 0014); adapters that
+    // leave this empty never negotiate alternative_list.
+    std::function<void(AlternativeList)> onAlternativeList = {};
     std::function<void(const ClearNotice &)> onClear;
     std::function<void(const CommitPrepare &)> onCommitPrepare;
     std::function<void()> onDisconnected;
@@ -135,6 +138,7 @@ public:
     bool requestAcceptance(const AcceptRequest &request);
     bool requestDismissal(const DismissRequest &request);
     bool requestAlternative(const DismissRequest &request);
+    bool requestAlternativePick(const AlternativePickRequest &request);
     bool reportCommit(const Coordinates &coordinates,
                       std::string_view controlId,
                       std::string_view suggestionId,

@@ -141,6 +141,26 @@ struct DismissRequest {
     std::string suggestionId;
 };
 
+// Alternative next words offered for one shown suggestion (ADR 0014).
+struct AlternativeList {
+    Coordinates coordinates;
+    std::string requestId;
+    std::string suggestionId;
+    std::vector<std::string> words;
+    std::uint64_t expiresAtMs = 0;
+};
+
+struct AlternativePickRequest {
+    Coordinates coordinates;
+    std::string controlId;
+    std::string suggestionId;
+    std::string word;
+};
+
+// The listed word a digit picks: '1' is the first word. No word for any
+// other key or a digit past the list's end.
+std::optional<std::string> alternativeListPick(const std::vector<std::string> &words, char digit);
+
 // A selection's scalar anchor and head, as a revision's grant names them.
 struct SelectionRange {
     std::uint64_t anchor = 0;
@@ -601,6 +621,17 @@ public:
     // correction). The shown one stays until the broker replaces it.
     std::optional<DismissRequest>
     requestAlternative(std::uint64_t nowMs, const PanelObservation &panel);
+    // Offers the broker's numbered list for the shown suggestion. The
+    // suggestion it alternatives to was retired by the list's own
+    // admission, so the list binds by its coordinates and id alone.
+    bool showAlternativeList(AlternativeList list, std::uint64_t nowMs);
+    // Asks for the continuation of one listed word; the list is spent.
+    std::optional<AlternativePickRequest>
+    requestAlternativePick(std::string word, std::uint64_t nowMs, const PanelObservation &panel);
+    void clearAlternativeList();
+    [[nodiscard]] const std::optional<AlternativeList> &alternativeList() const {
+        return alternativeList_;
+    }
     std::optional<CommitDispatch> authorizeCommit(const CommitPrepare &prepare,
                                                   std::uint64_t nowMs,
                                                   const PanelObservation &panel);
@@ -658,6 +689,7 @@ private:
     std::optional<Suggestion> visible_;
     std::optional<AcceptRequest> pendingAcceptance_;
     std::uint64_t alternativeSerial_ = 0;
+    std::optional<AlternativeList> alternativeList_;
     std::optional<RevisionUpdate> revisionRequest_;
     std::optional<Revision> revision_;
     std::optional<AcceptRequest> revisionAcceptance_;

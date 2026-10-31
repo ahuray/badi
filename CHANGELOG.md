@@ -8,6 +8,10 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Ctrl+Shift+Space on a shown suggestion in an Fcitx app now lists up to
+  four other first words as numbered candidates; a digit or a click shows
+  that word's continuation, bound and accepted like any suggestion. The
+  editor clients keep cycling one at a time (ADR 0014).
 - A selected word or short phrase can take a synonym: Ctrl+Shift+Space
   cycles grammar, a refined wording, then a synonym that fits the
   sentence — and another on each further press — shown with its change

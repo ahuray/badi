@@ -202,6 +202,19 @@ pub trait CompletionProvider: Send + Sync + 'static {
     ) -> Result<ProviderReply, ProviderError> {
         Ok(ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained).into())
     }
+
+    /// Alternative next words for a numbered list (ADR 0014), best first,
+    /// at most `MAX_ALTERNATIVE_LIST_WORDS`. A provider without them
+    /// offers none.
+    async fn alternative_words(
+        &self,
+        _request: ProviderRequest,
+        _cancellation: CancellationToken,
+        _trigger: RequestTrigger,
+        _ask: AlternativeAsk,
+    ) -> Result<Vec<String>, ProviderError> {
+        Ok(Vec::new())
+    }
 }
 
 /// What an alternative must differ from.
@@ -214,6 +227,8 @@ pub struct AlternativeAsk {
     /// showed ` latest`), so the alternative starts one too instead of
     /// finishing the word at the caret another way.
     pub new_word: bool,
+    /// A listed word the writer picked: the alternative starts with it.
+    pub desired: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -347,9 +362,13 @@ impl CompletionProvider for DeterministicPhraseProvider {
                 .alternatives
                 .iter()
                 .find(|text| {
-                    text.split_whitespace()
-                        .next()
-                        .is_some_and(|word| !ask.excluded.contains(&word.to_lowercase()))
+                    text.split_whitespace().next().is_some_and(|word| {
+                        let word = word.to_lowercase();
+                        ask.desired.as_deref().map_or_else(
+                            || !ask.excluded.contains(&word),
+                            |desired| word == desired.to_lowercase(),
+                        )
+                    })
                 })
                 .map_or(
                     ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained),
@@ -363,6 +382,39 @@ impl CompletionProvider for DeterministicPhraseProvider {
             Err(reason) => ProviderOutcome::NoSuggestion(reason),
         }
         .into())
+    }
+
+    async fn alternative_words(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        _trigger: RequestTrigger,
+        ask: AlternativeAsk,
+    ) -> Result<Vec<String>, ProviderError> {
+        if cancellation.is_cancelled() {
+            return Err(ProviderError::Cancelled);
+        }
+        let Ok(rule) = self.rule(&request) else {
+            return Ok(Vec::new());
+        };
+        let mut words: Vec<String> = Vec::new();
+        for text in &rule.alternatives {
+            let Some(word) = text.split_whitespace().next() else {
+                continue;
+            };
+            if ask.excluded.contains(&word.to_lowercase())
+                || words
+                    .iter()
+                    .any(|shown: &String| shown.eq_ignore_ascii_case(word))
+            {
+                continue;
+            }
+            words.push(word.to_owned());
+            if words.len() == crate::protocol::MAX_ALTERNATIVE_LIST_WORDS {
+                break;
+            }
+        }
+        Ok(words)
     }
 }
 

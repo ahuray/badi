@@ -41,7 +41,7 @@ struct Runtime {
 
 const Json capabilities = Json::array({"context", "suggestion",
     "commit.dispatched_unverified", "text_replacement", "control", "policy", "long_reading_window",
-    "selection_revision"});
+    "selection_revision", "alternative_list"});
 
 Json message(const char *type) {
     Json payload{{"fingerprint", "0123456789abcdef0123456789abcdef"},

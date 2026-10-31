@@ -69,6 +69,7 @@ async fn broker_records_only_content_free_shown_and_dismissed_aggregates() {
                 action: ControlAction::Dismiss,
                 fingerprint: private_context.fingerprint,
                 suggestion_id: Some(payload.suggestion_id),
+                word: None,
             },
             None,
         )
@@ -161,6 +162,7 @@ async fn memory_clear_detaches_live_suggestions_from_deleted_aggregates() {
                 action: ControlAction::Dismiss,
                 fingerprint: update.fingerprint,
                 suggestion_id: Some(payload.suggestion_id),
+                word: None,
             },
             None,
         )

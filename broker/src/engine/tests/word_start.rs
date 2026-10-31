@@ -217,7 +217,8 @@ impl Field {
             BrokerEvent::SuggestionClear { .. } => None,
             other @ (BrokerEvent::CommitPrepare { .. }
             | BrokerEvent::RevisionShow { .. }
-            | BrokerEvent::RevisionClear { .. }) => panic!("unexpected {other:?}"),
+            | BrokerEvent::RevisionClear { .. }
+            | BrokerEvent::SuggestionList { .. }) => panic!("unexpected {other:?}"),
         }
     }
 
