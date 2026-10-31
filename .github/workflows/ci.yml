@@ -243,7 +243,11 @@ jobs:
       - name: Exercise the session helper on a private bus against the real broker
         env:
           BADI_SESSION_REQUIRE_KEYRING: "1"
-        run: PYTHONDONTWRITEBYTECODE=1 python adapters/session/tests/integration.py
+        run: |
+          # gnome-keyring-daemon refuses to run as root, and the container is root.
+          useradd --create-home builder
+          runuser -u builder -- env PYTHONDONTWRITEBYTECODE=1 BADI_SESSION_REQUIRE_KEYRING=1 \
+            python adapters/session/tests/integration.py
       - name: Exercise isolated accessibility buses and actual addon event flow
         run: |
           PYTHONDONTWRITEBYTECODE=1 python adapters/accessibility/tests/run-isolated.py
@@ -302,7 +306,7 @@ jobs:
             'Server = https://archive.archlinux.org/repos/2026/10/18/$repo/os/$arch' \
             > /etc/pacman.d/mirrorlist
           pacman -Syyu --noconfirm
-          pacman -S --needed --noconfirm ca-certificates git hunspell-en_us libreoffice-fresh python
+          pacman -S --needed --noconfirm ca-certificates gcc git hunspell-en_us libreoffice-fresh python
           pacman -Q libreoffice-fresh python
           soffice --version
       - name: Check out source
