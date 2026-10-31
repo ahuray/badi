@@ -319,7 +319,10 @@ jobs:
         run: |
           command -v soffice unopkg
           cargo build -p badi-broker --bins --locked
-          PYTHONDONTWRITEBYTECODE=1 python adapters/libreoffice/tests/integration.py
+          # unopkg refuses to run as root, and the container is root.
+          useradd --create-home builder
+          runuser -u builder -- env PYTHONDONTWRITEBYTECODE=1 \
+            python adapters/libreoffice/tests/integration.py
 
   checks:
     name: Repository checks / Node 24
