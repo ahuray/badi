@@ -68,7 +68,10 @@ def broker_only_install(root):
     native_project(project)
 
     def execute(command, **kwargs):
-        output = str(root / 'runtime') if command[0] == 'loginctl' else 'loaded' if '--property=LoadState' in command else '{}'
+        output = (str(root / 'runtime') if command[0] == 'loginctl'
+                  else 'loaded' if '--property=LoadState' in command
+                  else 'active' if '--property=ActiveState' in command
+                  else 'enabled' if '--property=UnitFileState' in command else '{}')
         return subprocess.CompletedProcess(command, 0, output, '')
 
     with patch.object(installer, 'ROOT', project), \
@@ -288,7 +291,10 @@ class DesktopInstallTests(unittest.TestCase):
             native_project(project)
 
             def execute(command, **kwargs):
-                output = str(root / 'runtime') if command[0] == 'loginctl' else 'loaded' if '--property=LoadState' in command else '{}'
+                output = (str(root / 'runtime') if command[0] == 'loginctl'
+                          else 'loaded' if '--property=LoadState' in command
+                          else 'active' if '--property=ActiveState' in command
+                          else 'enabled' if '--property=UnitFileState' in command else '{}')
                 return subprocess.CompletedProcess(command, 0, output, '')
 
             with patch.object(installer, 'ROOT', project), \
@@ -593,7 +599,10 @@ class DesktopInstallTests(unittest.TestCase):
 
             def execute(command, **kwargs):
                 calls.append(command)
-                output = str(root / 'runtime') if command[0] == 'loginctl' else 'loaded' if '--property=LoadState' in command else '{}'
+                output = (str(root / 'runtime') if command[0] == 'loginctl'
+                          else 'loaded' if '--property=LoadState' in command
+                          else 'active' if '--property=ActiveState' in command
+                          else 'enabled' if '--property=UnitFileState' in command else '{}')
                 return subprocess.CompletedProcess(command, 0, output, '')
 
             with patch.object(installer, 'ROOT', project), \
@@ -891,7 +900,9 @@ class DesktopInstallTests(unittest.TestCase):
                         return subprocess.CompletedProcess(command, 0, str(root / 'runtime'), '')
                     if '--property=UnitFileState' in command and 'badi-session.service' in command:
                         return subprocess.CompletedProcess(command, 0, state, '')
-                    output = 'loaded' if '--property=LoadState' in command else '{}'
+                    output = ('loaded' if '--property=LoadState' in command
+                              else 'active' if '--property=ActiveState' in command
+                              else 'enabled' if '--property=UnitFileState' in command else '{}')
                     return subprocess.CompletedProcess(command, 0, output, '')
 
                 with patch.object(installer, 'ROOT', project), \
@@ -937,7 +948,10 @@ class DesktopInstallTests(unittest.TestCase):
                 calls = []
                 def execute(command, **kwargs):
                     calls.append(command)
-                    output = str(runtime) if command[0] == 'loginctl' else 'loaded' if '--property=LoadState' in command else 'enabled' if '--property=UnitFileState' in command else '{}'
+                    output = (str(runtime) if command[0] == 'loginctl'
+                              else 'loaded' if '--property=LoadState' in command
+                              else 'active' if '--property=ActiveState' in command
+                              else 'enabled' if '--property=UnitFileState' in command else '{}')
                     return subprocess.CompletedProcess(command, 0, output, '')
                 def ready(script, socket_path):
                     self.assertEqual(script, helper)
@@ -997,7 +1011,9 @@ class FullInstall:
             calls.append(command)
             if command[0] == 'loginctl':
                 return subprocess.CompletedProcess(command, 0, str(runtime), '')
-            output = 'loaded' if '--property=LoadState' in command else 'enabled' if '--property=UnitFileState' in command else '{}'
+            output = ('loaded' if '--property=LoadState' in command
+                      else 'active' if '--property=ActiveState' in command
+                      else 'enabled' if '--property=UnitFileState' in command else '{}')
             return subprocess.CompletedProcess(command, 0, output, '')
 
         with patch.object(installer, 'ROOT', project), \
@@ -1187,7 +1203,10 @@ class GenericInstallTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, str(runtime), '')
             if command[:2] == ['fcitx5', '--version']:
                 return subprocess.CompletedProcess(command, 0, '5.1.12\n', '')
-            output = 'loaded' if '--property=LoadState' in command else 'disabled' if '--property=UnitFileState' in command and 'badi-accessibility.service' in command else 'enabled' if '--property=UnitFileState' in command else '{}'
+            output = ('loaded' if '--property=LoadState' in command
+                      else 'active' if '--property=ActiveState' in command
+                      else 'disabled' if '--property=UnitFileState' in command and 'badi-accessibility.service' in command
+                      else 'enabled' if '--property=UnitFileState' in command else '{}')
             return subprocess.CompletedProcess(command, 0, output, '')
 
         with patch.object(receipts, 'desktop_platform', return_value=receipts.GENERIC), \
@@ -1267,6 +1286,33 @@ class GenericInstallTests(unittest.TestCase):
             self.assertIn(['systemctl', '--user', 'restart', 'badi-accessibility.service'], calls)
             self.assertTrue(self.observer_waited and self.runtime_checked)
             self.assertNotIn('runs only in a Hyprland session', self.output)
+            self.assertIn('hl.layer_rule({ name = "badi-preview-noanim"', self.output)
+            self.assertIn('layerrule = noanim, badi-writing-preview', self.output)
+
+    def test_broker_enable_recovers_an_interrupted_install_but_preserves_autostart_off(self):
+        cases = (
+            (False, False, True, 'an interrupted first install is enabled'),
+            (False, True, False, 'a completed install preserves badi autostart off'),
+            (True, False, False, 'an enabled unit stays enabled'),
+            (True, True, False, 'an enabled completed install is untouched'))
+        for enabled, installed_before, expected, message in cases:
+            with self.subTest(enabled=enabled, installed_before=installed_before):
+                plan = SimpleNamespace(broker_enabled=enabled, broker_installed_before=installed_before)
+                self.assertIs(installer.broker_needs_enable(plan), expected, message)
+
+    def test_an_inactive_graphical_session_target_is_reported_with_recovery_steps(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            plan = installer.Plan(
+                args=SimpleNamespace(broker_only=False, observed_app=[]),
+                home=home, config_home=home / '.config', runtime=home / 'runtime',
+                flag_updates={}, flags_present=[], broker_updating=True,
+                accessibility_enabled=True, graphical_session=False)
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                installer.report(plan, {'paused': False})
+        self.assertIn('graphical-session.target is not active', output.getvalue())
+        self.assertIn('uwsm start hyprland.desktop', output.getvalue())
+        self.assertIn('after the next login it starts only once', output.getvalue())
 
     def test_desktop_wide_accessibility_options_are_refused_before_any_change(self):
         for argv in (['--observed-app', 'chromium'], ['--observed-app', 'discord']):

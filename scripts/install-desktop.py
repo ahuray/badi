@@ -428,6 +428,16 @@ class Plan:
     # the installed addon (None when no Fcitx runs or it cannot be inspected).
     fcitx_process: int | None = None
     addon_loaded: bool | None = None
+    # Whether graphical-session.target, which every Badi unit is WantedBy,
+    # is active in this session (a tty-launched compositor without uwsm
+    # never activates it, so enabled units would not start at login).
+    graphical_session: bool = True
+    # Broker enablement at preflight, and whether a completed install
+    # already happened (its receipt exists). Disabled with a receipt is the
+    # user's `badi autostart off`; disabled without one is an interrupted
+    # first install that must still be enabled.
+    broker_enabled: bool = False
+    broker_installed_before: bool = False
 
     @property
     def native(self):
@@ -460,7 +470,9 @@ def preflight(args):
     """Check the session and decide every change before building or touching a file."""
     home = Path.home().resolve()
     if not os.environ.get("WAYLAND_DISPLAY") or not os.environ.get("XDG_RUNTIME_DIR"):
-        raise RuntimeError("Run the installer from your graphical session")
+        raise RuntimeError("Run the installer from your graphical session: Badi needs a Wayland session "
+                           "(WAYLAND_DISPLAY and XDG_RUNTIME_DIR are not set here, and an X11 session is "
+                           "not supported). Nothing was changed.")
     platform = badi_install.desktop_platform()
     observer_session = bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
     system_addons = None
@@ -511,10 +523,15 @@ def preflight(args):
             if updated is not None:
                 hypr_update = (hyprland, original, updated)
     session_disabled = badi_install.unit_value(SESSION_SERVICE, "UnitFileState", timeout=4) == "disabled"
+    graphical_session = badi_install.unit_value(
+        "graphical-session.target", "ActiveState", timeout=4) == "active"
     return Plan(args, home, config_home, runtime, flag_updates, flags_present,
                 broker_updating, accessibility_enabled, hypr_update=hypr_update,
                 session_disabled=session_disabled, platform=platform, system_addons=system_addons,
-                observer_session=observer_session or platform == badi_install.OMARCHY)
+                observer_session=observer_session or platform == badi_install.OMARCHY,
+                graphical_session=graphical_session,
+                broker_enabled=unit_enabled("badi-broker.service"),
+                broker_installed_before=badi_install.receipt_path(home, "desktop").exists())
 
 
 def unit_enabled(unit):
@@ -823,6 +840,13 @@ def install_prepared_files(plan, installation):
     return installation
 
 
+def broker_needs_enable(plan):
+    """Enable the broker on a first install and after an interrupted one;
+    disabled after a completed install (receipt exists) is the user's
+    `badi autostart off` and stays off."""
+    return not plan.broker_enabled and not plan.broker_installed_before
+
+
 def restart(plan, installation):
     """Apply the installed files to the running services; returns the model's health."""
     home, runtime = plan.home, plan.runtime
@@ -832,8 +856,9 @@ def restart(plan, installation):
     if plan.native:
         run(["systemd-analyze", "--user", "verify", str(units / "badi-accessibility.service")])
     run(["systemctl", "--user", "daemon-reload"])
-    if not plan.broker_updating:
+    if broker_needs_enable(plan):
         run(["systemctl", "--user", "enable", "badi-broker.service"])
+        plan.broker_enabled = True
     run(["systemctl", "--user", "reset-failed", "badi-broker.service"])
     run(["systemctl", "--user", "restart", "badi-broker.service"])
     probe = wait_model(home / ".local/lib/badi/badictl", runtime / "badi/broker.sock")
@@ -906,9 +931,21 @@ def generic_report(plan):
               "Fcitx's manual fields (Tab requests in apps you allow with badi app ID on), the editors "
               "(Obsidian, Neovim, Bash: scripts/install-editors.py) and the LibreOffice Writer spelling extension "
               "work without it. The observer is installed and starts by itself in a Hyprland session.")
+    else:
+        print("Grey preview: Hyprland animates new layers, so the preview fades in until a layer rule exempts "
+              "it. Add one line — hyprland.lua: "
+              "hl.layer_rule({ name = \"badi-preview-noanim\", match = { namespace = \"^badi-writing-preview$\" }, "
+              "no_anim = true }); hyprland.conf: layerrule = noanim, badi-writing-preview. "
+              "Suggestions work either way.")
 
 
 def report(plan, probe):
+    if not plan.graphical_session:
+        print("Warning: graphical-session.target is not active in this session, and every Badi service starts "
+              "with it. Badi runs now, but after the next login it starts only once the session activates that "
+              "target: log in through a display manager, start the compositor with uwsm "
+              "(uwsm start hyprland.desktop), or run `systemctl --user start graphical-session.target` "
+              "from your compositor's startup.", flush=True)
     if plan.session_disabled:
         print("The session helper is disabled (systemctl --user enable --now badi-session.service turns it on); "
               "suspend, session switches, battery modes and screen sharing are not reported to the broker.")

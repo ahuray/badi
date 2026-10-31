@@ -35,8 +35,10 @@ whenever one changes; the reply is `desktop.status`
 - Unknown is permissive only where nothing is at stake: without logind the
   session counts as active (adapters keep their own focus, lock and expiry
   checks), and without UPower or power-profiles-daemon the machine counts as
-  on mains power. Without PipeWire the screen counts as not shared, because
-  a portal screencast cannot exist without it.
+  on mains power. The screen counts as not shared only when `pw-dump` ran
+  and could not reach PipeWire, because a portal screencast cannot exist
+  without it; a missing or stalled `pw-dump` proves nothing, so the screen
+  stays counted as shared (suggestions held) while it is retried.
 - `LockedHint` is not used. It is a hint, not proof of unlock; the observer
   keeps its fresh Omarchy lock check.
 

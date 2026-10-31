@@ -482,6 +482,10 @@ struct PendingCommit {
 }
 
 impl Broker {
+    /// A settings-free, in-memory broker for tests and deterministic
+    /// fixtures: with no installed settings it enforces no target policy,
+    /// so every target it is asked about is allowed. The production broker
+    /// is [`Broker::with_control_plane`], whose settings deny by default.
     #[must_use]
     pub fn new(provider: Arc<dyn CompletionProvider>, config: BrokerConfig) -> Self {
         Self::build(provider, config, None, None, None)

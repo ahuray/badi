@@ -32,7 +32,7 @@ deps)
     git config --global --add safe.directory "$PWD"
     ;;
 addon)
-    cmake -S adapters/fcitx5 -B adapters/fcitx5/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+    cmake -S adapters/fcitx5 -B adapters/fcitx5/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DBADI_WERROR=ON
     cmake --build adapters/fcitx5/build
     ctest --test-dir adapters/fcitx5/build --output-on-failure
     ;;

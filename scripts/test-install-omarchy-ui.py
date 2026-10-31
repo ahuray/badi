@@ -15,6 +15,15 @@ installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 
 
+def fake_run(enabled=True, font=None):
+    """A subprocess.run stand-in answering Omarchy's plugin listing."""
+    def run(command, *args, **kwargs):
+        if list(command[:3]) == ['omarchy', 'plugin', 'list']:
+            return unittest.mock.Mock(stdout=json.dumps([{'id': 'io.github.ahuray.badi', 'enabled': enabled}]))
+        return font if font is not None else unittest.mock.Mock(stdout='')
+    return run
+
+
 def setUpModule():
     # These tests describe Omarchy; the host running them may be another desktop.
     platform = patch.object(installer.badi_install, 'desktop_platform', return_value=installer.badi_install.OMARCHY)
@@ -65,14 +74,14 @@ class UpdateTests(unittest.TestCase):
                  patch.dict(os.environ, {'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_STATE_HOME': str(home / '.local/state'),
                                           'XDG_DATA_HOME': str(home / '.local/share')}), \
                  patch.object(installer, 'ipc', side_effect=lambda *call: answers[call]), \
-                 patch.object(installer.subprocess, 'run') as run, \
+                 patch.object(installer.subprocess, 'run', side_effect=fake_run(enabled=True)) as run, \
                  patch('sys.argv', ['install-omarchy-ui.py']), \
                  contextlib.redirect_stdout(io.StringIO()):
                 installer.main()
-            # Only the source gate and the supported shell restart run; no real shell is touched.
+            # Only the source gate, the plugin listing and the supported shell restart run; no real shell is touched.
             self.assertEqual([call.args[0][:2] for call in run.call_args_list if call.args[0][0] != 'git'],
                              [['bash', 'ui/omarchy-plugin/tests/check-source.sh'], ['busctl', '--user'],
-                              ['omarchy', 'restart']])
+                              ['omarchy', 'plugin'], ['omarchy', 'restart']])
             self.assertCountEqual([path.name for path in target.iterdir()], installer.FILES)
             self.assertFalse((target / 'Old.qml').exists())
             for name in installer.FILES:
@@ -94,7 +103,7 @@ class UpdateTests(unittest.TestCase):
                  patch.dict(os.environ, {'XDG_CONFIG_HOME': str(config), 'XDG_STATE_HOME': str(home / '.local/state'),
                                           'XDG_DATA_HOME': str(home / '.local/share')}), \
                  patch.object(installer, 'ipc', side_effect=lambda *call: answers[call]), \
-                 patch.object(installer.subprocess, 'run') as run, \
+                 patch.object(installer.subprocess, 'run', side_effect=fake_run(enabled=False)) as run, \
                  patch('sys.argv', ['install-omarchy-ui.py']), \
                  contextlib.redirect_stdout(io.StringIO()):
                 installer.main()
@@ -102,10 +111,47 @@ class UpdateTests(unittest.TestCase):
                              [['bash', 'ui/omarchy-plugin/tests/check-source.sh'],
                               ['busctl', '--user'],
                               ['omarchy', 'plugin'],
+                              ['omarchy', 'plugin'],
                               ['omarchy', 'restart']])
-            self.assertEqual(run.call_args_list[2].args[0][2:], ['enable', 'io.github.ahuray.badi'])
+            plugin_calls = [call.args[0] for call in run.call_args_list if call.args[0][:2] == ['omarchy', 'plugin']]
+            self.assertEqual(plugin_calls, [['omarchy', 'plugin', 'list', '--json'],
+                                            ['omarchy', 'plugin', 'enable', 'io.github.ahuray.badi']])
             self.assertCountEqual([path.name for path in target.iterdir()], installer.FILES)
             self.assertTrue((home / '.local/state/badi/receipts/omarchy-ui.json').is_file())
+
+    def run_update(self, home, *, enabled, panel_answers=True):
+        target = home / '.config/omarchy/plugins/io.github.ahuray.badi'
+        target.mkdir(parents=True)
+        (target / 'manifest.json').write_text(json.dumps({'id': 'io.github.ahuray.badi', 'kinds': ['panel']}))
+        unlocked = dict.fromkeys(('locked', 'secure', 'requested', 'pending', 'sessionLocked'), False)
+        answers = {('lock', 'status'): unlocked,
+                   ('badi-writing', 'state'): {'page': 0, 'service': {}} if panel_answers else {}}
+        with patch.object(installer.Path, 'home', return_value=home), \
+             patch.dict(os.environ, {'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_STATE_HOME': str(home / '.local/state'),
+                                      'XDG_DATA_HOME': str(home / '.local/share')}), \
+             patch.object(installer, 'ipc', side_effect=lambda *call: answers[call]), \
+             patch.object(installer.subprocess, 'run', side_effect=fake_run(enabled=enabled)) as run, \
+             patch.object(installer.badi_install, 'poll', lambda check, timeout, interval: check()), \
+             patch('sys.argv', ['install-omarchy-ui.py']), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()) as errors:
+            installer.main()
+        return run, errors.getvalue()
+
+    def test_an_update_enables_a_plugin_an_earlier_run_left_disabled(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run, _errors = self.run_update(Path(temporary), enabled=False)
+            plugin_calls = [call.args[0] for call in run.call_args_list if call.args[0][:2] == ['omarchy', 'plugin']]
+            self.assertIn(['omarchy', 'plugin', 'enable', 'io.github.ahuray.badi'], plugin_calls,
+                          'an update retries the enable an earlier failed run never reached')
+
+    def test_a_panel_that_never_answers_gets_no_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            with self.assertRaisesRegex(RuntimeError, 'did not answer IPC'):
+                self.run_update(home, enabled=True, panel_answers=False)
+            self.assertFalse((home / '.local/state/badi/receipts/omarchy-ui.json').exists(),
+                             'the receipt records an answering panel, not files merely written')
 
 
 class FcitxThemeTests(unittest.TestCase):
@@ -126,7 +172,7 @@ class FcitxThemeTests(unittest.TestCase):
              patch.dict(os.environ, {'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_STATE_HOME': str(home / '.local/state'),
                                      'XDG_DATA_HOME': str(home / '.local/share')}), \
              patch.object(installer, 'ipc', side_effect=lambda *call: answers[call]), \
-             patch.object(installer.subprocess, 'run', return_value=font), \
+             patch.object(installer.subprocess, 'run', side_effect=fake_run(enabled=True, font=font)), \
              patch('sys.argv', ['install-omarchy-ui.py']), \
              contextlib.redirect_stdout(io.StringIO()):
             installer.main()
