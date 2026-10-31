@@ -161,10 +161,15 @@ python3 scripts/install-editors.py --vault /path/to/vault --bash --neovim   # op
 python3 scripts/install-editors.py --libreoffice   # optional: Writer spelling; close LibreOffice first
 ```
 
-Prerequisites on the machine: Rust, cmake, ninja, a C++20 compiler, Fcitx 5
+Prerequisites on the machine: a Wayland session whose user services run
+under systemd (X11 is not supported; Badi's units start with
+`graphical-session.target`, so a compositor launched from a tty needs
+uwsm or a display manager), PipeWire with `pw-dump` (the screen-share
+hold), Rust, cmake, ninja, a C++20 compiler, Fcitx 5
 headers, PyGObject, GTK 4 and gtk4-layer-shell; Node.js for the editor
 integrations (the Bash and Neovim bridges, the Obsidian plugin's build) and
-the checks, not for the desktop install.
+the checks, not for the desktop install. The pinned llama.cpp runtime
+needs x86_64 with AVX2 and glibc 2.34 or later.
 
 ### Debian and Ubuntu
 

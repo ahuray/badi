@@ -167,6 +167,63 @@ async fn paused_and_stale_addressed_accepts_emit_no_commit_prepare() {
 }
 
 #[tokio::test]
+async fn accept_without_a_landed_commit_capability_emits_no_commit_prepare() {
+    let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
+    let (broker, session_id, mut events) = setup_with_capabilities(
+        provider,
+        BrokerConfig::default(),
+        vec![Capability::Context, Capability::Suggestion],
+    )
+    .await;
+    let update = context(1, FieldPurpose::Normal);
+    broker
+        .update_context(coordinates(session_id, 1), update.clone())
+        .await
+        .expect("context");
+    broker
+        .request_suggestion(
+            coordinates(session_id, 1),
+            SuggestRequestPayload {
+                fingerprint: update.fingerprint.clone(),
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("request");
+    let shown = timeout(Duration::from_millis(50), events.recv())
+        .await
+        .expect("show timeout")
+        .expect("show event");
+    let BrokerEvent::SuggestionShow { payload, .. } = shown else {
+        panic!("expected show")
+    };
+
+    assert!(matches!(
+        broker
+            .session_control(
+                coordinates(session_id, 1),
+                SessionControlRequestPayload {
+                    action: ControlAction::AcceptAll,
+                    fingerprint: update.fingerprint,
+                    suggestion_id: Some(payload.suggestion_id),
+                },
+                None,
+            )
+            .await,
+        Err(BrokerError::InvalidCapability)
+    ));
+    assert!(events.try_recv().is_err(), "no commit grant was sent");
+    let state = broker.inner.state.lock().await;
+    let session = state.sessions.get(&session_id).expect("session");
+    assert!(session.pending.is_none());
+    drop(state);
+    let metrics = broker.metrics().snapshot();
+    assert_eq!(metrics.commits_prepared, 0);
+    assert_eq!(metrics.commit_failures, 1);
+}
+
+#[tokio::test]
 async fn expired_suggestion_is_cleared_and_ineligible() {
     let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
     let (broker, session_id, mut events) = setup(
@@ -326,6 +383,44 @@ async fn applied_all_retires_pre_mutation_context_without_continuation() {
     assert_eq!(metrics.word_savings.unwrap().applied, 2);
     assert_eq!(metrics.word_savings.unwrap().dispatched_unverified, 0);
     assert_eq!(metrics.commit_failures, 0);
+}
+
+#[tokio::test]
+async fn an_invalid_landed_status_consumes_the_exact_commit_grant() {
+    let provider = std::sync::Arc::new(CountingProvider::new(Duration::ZERO));
+    let (broker, session_id, mut events) = setup(provider, BrokerConfig::default()).await;
+    let (update, suggestion_id) =
+        prepare_commit_result_case(&broker, session_id, &mut events, ControlAction::AcceptAll)
+            .await;
+    let invalid = CommitResultPayload {
+        fingerprint: update.fingerprint.clone(),
+        suggestion_id: suggestion_id.clone(),
+        status: CommitStatus::DispatchedUnverified,
+    };
+    assert!(matches!(
+        broker
+            .commit_result(coordinates(session_id, 1), invalid)
+            .await,
+        Err(BrokerError::InvalidCapability)
+    ));
+    assert!(matches!(
+        broker
+            .commit_result(
+                coordinates(session_id, 1),
+                CommitResultPayload {
+                    fingerprint: update.fingerprint,
+                    suggestion_id,
+                    status: CommitStatus::Applied,
+                },
+            )
+            .await,
+        Err(BrokerError::NoPendingCommit)
+    ));
+    assert_pre_mutation_state_retired(&broker, session_id).await;
+    let metrics = broker.metrics().snapshot();
+    assert_eq!(metrics.commits_prepared, 1);
+    assert_eq!(metrics.commit_failures, 1);
+    assert_eq!(metrics.commits_applied, 0);
 }
 
 #[tokio::test]

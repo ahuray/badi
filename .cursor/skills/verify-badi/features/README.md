@@ -49,7 +49,7 @@ Each feature file starts with an H1 and one paragraph of user-visible behavior, 
 
 ## Features
 
-- [Word suggestion](./word-suggestion.md) covers grey text, the next word, the whole suggestion, dismissal, an explicit request, and a literal Tab.
+- [Word suggestion](./word-suggestion.md) covers grey text, the next word, the whole suggestion, another continuation, dismissal, an explicit request, and a literal Tab.
 - [Suggestion length](./suggestion-length.md) covers one or two words versus up to four.
 - [Spelling](./spelling.md) covers an unambiguous English correction on the Bash path, and the real-model and Writer paths that a VM cannot stand in for.
 - [Selection revision](./selection-revision.md) covers the grammar fix and refined wording of one selected line, applying and dismissing them, and the refusals.
@@ -58,4 +58,4 @@ Each feature file starts with an H1 and one paragraph of user-visible behavior, 
 - [Screen-share hold](./screen-share-hold.md) covers holding every suggestion while the screen is shared, and keeping them on request.
 - [Usage statistics](./usage-stats.md) covers the content-free counts of suggestions, acceptances and words saved.
 - [Omarchy panel](./omarchy-panel.md) covers the bar mark and the settings popout.
-- [Prediction Lab](./prediction-lab.md) covers comparing a draft on the local model without changing the installed broker.
+- [Prediction Lab](./prediction-lab.md) covers the two-tab page: a local-model comparison, and word completion from text you supply, without changing the installed broker.

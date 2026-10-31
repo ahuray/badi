@@ -12,6 +12,35 @@ Unreleased in the same commit.
   cycles grammar, a refined wording, then a synonym that fits the
   sentence — and another on each further press — shown with its change
   marked and applied by Tab like any revision (ADR 0013).
+- A quality and portability pass from a full audit, each fix with a
+  regression test. The screen-share hold no longer lifts when `pw-dump` is
+  missing (only a `pw-dump` that ran and could not reach PipeWire settles
+  the screen as unshared), a stalled `pw-dump` is restarted, compact
+  one-line dumps are read, and the Debian package now depends on
+  `pipewire-bin`. Obsidian accepts a spelling correction mid-note, with
+  text after the caret. A missing preview extent or a client that vanishes
+  before its credentials are read can no longer crash the field observer.
+- The broker sends a commit grant only to an adapter that can report a
+  landed commit, an invalid landed status consumes its one-shot grant and
+  retires the pre-commit context, and a desktop hold is reported to the
+  session helper even when the outcome fence fails. Failed connections
+  and writers leave a content-free journal line.
+- Other desktops, named sooner: the installers say Badi needs a Wayland
+  session (not X11) and warn when `graphical-session.target` is inactive,
+  an interrupted first install no longer leaves the broker disabled at
+  login, a generic Hyprland session is told the grey preview's layer rule
+  in both config syntaxes, `badi doctor` names a systemd-skipped broker
+  and a pre-5.1.23 Fcitx on Hyprland or Sway, the Fcitx build floor is the
+  tested 5.1.7, and the AUR candidate no longer forces Hyprland and
+  Quickshell on every Arch user (they are optdepends now).
+- The Omarchy panel updater enables the plugin whenever Omarchy reports
+  it disabled — a run that once stopped after writing files finishes the
+  job — and writes its receipt only after the restarted panel answers.
+- CI now runs the LibreOffice Writer integration lane and the keyring
+  style-key delivery test (which fails instead of skipping without a
+  keyring), builds the Fcitx addon with warnings as errors on Arch,
+  Debian and Ubuntu, and checks out full history for the agent-rules gate,
+  which now counts only a changelog line under the newest heading.
 - Rich editors on websites (mail composers, ProseMirror, Lexical, Quill)
   suggest after a space again: the observer reads a contenteditable's
   no-break spaces as Chromium sends them, and a block-scoped snapshot agrees

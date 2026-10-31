@@ -9,10 +9,10 @@ When an item is done, delete it and record what is now true in the
 keeps the history of what shipped. Evidence lives in the runbooks; this file
 links to it. A tested app version is not a claim about Linux in general.
 
-## Where Badi stands (2026-10-24)
+## Where Badi stands (2026-10-26)
 
 - **Coverage** is ahead of every Linux alternative found: Chromium-based apps
-  and any website, Zen and Zen Twilight, Omarchy web apps in Chromium or Brave, Telegram,
+  and any website, Zen and Zen Twilight, Omarchy web apps in Chromium or Brave, Telegram, Discord,
   LibreOffice Writer
   (spelling as you type, Alt+F7), Obsidian, Bash, Neovim (live under LazyVim
   in foot and Ghostty) and, by an opt-in rule, the typed line in Ghostty and
@@ -39,7 +39,9 @@ links to it. A tested app version is not a claim about Linux in general.
   typos in Chromium-based apps are corrected after checks
   ([ADR 0011](docs/decisions/0011-checked-corrections-in-append-only-apps.md)); the inline
   preview ([ADR 0006](docs/decisions/0006-grey-preview-is-an-overlay.md))
-  reaches VS Code, iframe editors, Qt apps and Writer.
+  reaches VS Code, iframe editors, Qt apps and Writer. Ctrl+Shift+Space on
+  a shown suggestion cycles alternatives that start with another word, in
+  Fcitx apps, Obsidian and Neovim.
 - **Desktop signals:** the installed [session helper](adapters/session/README.md)
   holds grants across sleep and session switches and while the screen is
   shared (a portal screencast in PipeWire), and defers automatic requests on
@@ -86,7 +88,9 @@ links to it. A tested app version is not a claim about Linux in general.
 - **Distribution:** an Arch package candidate (step 6) and a
   [Debian 13 and Ubuntu 24.04 package](packaging/debian/README.md), which CI
   builds, lints and installs in containers (2026-10-23); neither is
-  published, and no GNOME or KDE session has run Badi (step 7).
+  published, and no GNOME or KDE session has run Badi (step 7). Without an
+  installed writing model, the desktop installer lists the models that fit
+  the device and lets the user pick one.
 - **Code health:** a full review before the 0.2.0 fresh start (2026-10-24)
   fixed every correctness finding it confirmed, with regression tests, and
   removed dormant paths and failed experiments; what it could not check live

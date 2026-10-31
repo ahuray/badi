@@ -64,6 +64,18 @@ class RuntimeTests(unittest.TestCase):
         self.daemon.accept(None, None)
         return client, (set(self.daemon.clients) - before).pop()
 
+    def test_a_client_gone_before_its_credentials_keeps_the_accept_watch(self):
+        gone = unittest.mock.Mock()
+        gone.getsockopt.side_effect = OSError("connection reset")
+        server, self.daemon.server = self.daemon.server, unittest.mock.Mock()
+        self.daemon.server.accept.return_value = (gone, None)
+        try:
+            self.assertTrue(self.daemon.accept(None, None), "the watch stays for the next client")
+        finally:
+            self.daemon.server = server
+        gone.close.assert_called_once()
+        self.assertEqual(self.daemon.clients, {})
+
     def test_private_socket_and_parent_modes(self):
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.path.parent.stat().st_mode & 0o777, 0o700)
@@ -1657,6 +1669,10 @@ class GeometryWiringTests(unittest.TestCase):
         self.setUp()
         self.monitors = {"not": "a list"}
         self.assertIsNone(self.backend.geometry(self.field, self.text, 12, self.window))
+        self.setUp()
+        self.text.get_character_extents = lambda offset, kind: None
+        self.assertIsNone(self.backend.geometry(self.field, self.text, 12, self.window),
+                          "a missing glyph extent falls back to the panel, never a KeyError")
 
     def test_gecko_fields_use_the_gecko_rule(self):
         # The Chromium-shaped extents here fail Gecko's window-relative frame check.

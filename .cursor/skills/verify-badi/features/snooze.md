@@ -12,7 +12,7 @@ Snooze turns Badi off for a few minutes in the app or site of the field you are 
 ## How to get to it (user POV)
 
 - While typing in an allowed field, run `badi snooze`. That app or site stays quiet for 10 minutes. `badi snooze 5` uses five minutes.
-- Bind the session helper's Snooze shortcut, or use the panel's Snoozed row to end it.
+- The session helper's Snooze shortcut runs `badi snooze` for the focused app or site. The panel's Snoozed row ends that snooze.
 - Run `badi resume` or `badi snooze end` to end every snooze now.
 - Ctrl+Shift+Tab is a different key: it types a real Tab. It does not snooze.
 

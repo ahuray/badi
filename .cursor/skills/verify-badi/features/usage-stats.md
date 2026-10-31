@@ -5,7 +5,7 @@ Usage statistics count suggestions shown, acceptances that landed, and words tho
 ## Sub-features
 
 - `stats-show` reads today's counts, the last seven days, and the leading apps and sites.
-- `stats-after-accept` increases shown, accepted, and words after an acceptance lands.
+- `stats-after-accept` counts a suggestion when it is shown, and counts the acceptance and the words it saved when that acceptance lands.
 - `stats-forget` deletes every count.
 - `stats-paused` adds nothing while Badi is paused or the app may not suggest.
 

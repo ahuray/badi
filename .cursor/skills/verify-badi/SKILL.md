@@ -7,7 +7,7 @@ description: Drive Badi, the local Linux writing assistant, and capture proof. U
 
 Badi suggests the next few words while someone types, on one machine. The primary surface is a Hyprland session with Fcitx 5: grey text in a field, accepted from the keyboard. The same keys exist in Bash, Neovim and Obsidian. LibreOffice Writer has its own spelling replacement. The Omarchy bar opens settings. `badi` is the desktop command; Prediction Lab compares models on drafts the user supplies.
 
-A cloud VM or GitHub-hosted runner has no Hyprland seat and no Fcitx. It can prove the headless journeys below. It cannot prove grey text, a real key, an accessibility field, or the bar. Say which one a proof is.
+A cloud VM or GitHub-hosted runner has no Hyprland seat and no Fcitx. It can prove the headless journeys below, including the Bash PTY's grey ANSI preview when Bash and Readline headers are installed. It cannot prove grey text in a Hyprland window, a real key, an accessibility field, or the bar. Say which one a proof is.
 
 The map in [features/README.md](features/README.md) is the maintained list. Driving one entry point does not verify the others.
 
@@ -81,6 +81,8 @@ The harness is `.cursor/skills/verify-badi/verify-badi.sh`. Headless drives spea
 
 `word-suggestion` types `thank you`, accepts ` for your time`, and checks `commits_applied` increased by one. `spelling` types `We need an adress `, accepts replacement `address ` for `adress `, and checks the same counter. `pause` turns pause on, shows the bridge refuse the suggestion with `BLOCKED app_disabled_or_model_paused`, checks the context counter did not move, then turns pause off. `length` sets `suggestion_length` to `short`, checks the phrase fixture is still ` for your time`, and restores normal. `stats` reads today's counts after `word-suggestion` has applied one acceptance, then forgets them. `snooze` refuses with `rejected:no_context` while idle, snoozes Bash while the bridge holds a focused field, and ends that snooze. Each drive waits until `sessions` is 0 again. After snooze ends, status omits `snoozes`; `badictl status` leaves that key out when nothing is snoozed.
 
+None of these drives asks for another continuation. On a shown suggestion, Ctrl+Shift+Space does that in Fcitx, Obsidian and Neovim, then cycles after three new ones. The Bash bridge has no alternatives operation. The phrase fixture's later texts for `thank you` are ` so much` and ` again`.
+
 Doctor must have exited 0 for this run id first. The helper enforces that.
 
 These drives prove the broker's reply and the bridge's authorized insert. They do not prove grey pixels, a physical key, or `commitString` landing in an app. Fcitx `commitString` is dispatched, not applied.
@@ -114,6 +116,8 @@ Headless evidence is `/tmp/badi-verify-evidence/$BADI_VERIFY_RUN_ID/`. Cleanup n
 | `drive-<feature>.txt`, `drive-<feature>.err`, `drive-<feature>.exit` | The bridge transcript and exit code |
 | `status-before-<feature>.json`, `status-after-<feature>.json` | Broker counters around the drive |
 | `cleanup.txt` | Which pid was signaled, and this evidence path |
+
+`word-suggestion`, `spelling`, `pause` and `length` write the bridge files in that table. `length` also writes `settings-short.json` and `settings-normal.json`. `stats` writes `stats-before-forget.json`, `stats-forget.json` and `stats-after-forget.json`, and does not write `drive-stats.txt`. `snooze` writes `drive-snooze-idle.err`, `drive-snooze.txt`, `status-idle-snooze.json`, `status-snoozed.json` and `status-after-snooze.json`.
 
 A proof cites the feature id, the entry point, the command, and the exit code. For `word-suggestion` the transcript's `SUGGEST` and `INSERT` payloads both decode to ` for your time`, and `commits_applied` is one higher afterwards. For `spelling`, both payloads are `address ` replacing `adress `. For `pause`, the transcript contains `BLOCKED app_disabled_or_model_paused` while status says paused, and status says not paused after resume.
 

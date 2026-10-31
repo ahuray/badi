@@ -168,6 +168,20 @@ test('Obsidian replaces exactly the misspelled suffix including a typed space in
   assert.deepEqual(client.reports, [{ text: 'address ', status: 'applied' }]);
 });
 
+test('Obsidian accepts a correction mid-note with text after the caret', async context => {
+  const { controller, view, client, state } = await harness(context);
+  controller.invalidate();
+  const text = 'Please check the adress please';
+  view.state = state(text, 'Please check the adress '.length);
+  client.suggest = async () => { client.replacementBefore = 'adress '; return 'address '; };
+  client.authorize = async () => ({ text: 'address ', replaceBefore: 'adress ' });
+  await controller.request();
+  assert.equal(controller.text, 'address ');
+  await controller.accept('word');
+  assert.equal(view.state.doc.toString(), 'Please check the address please');
+  assert.deepEqual(client.reports, [{ text: 'address ', status: 'applied' }]);
+});
+
 test('Obsidian refuses a different replacement grant without changing the note', async context => {
   const { controller, view, client, state } = await harness(context);
   controller.invalidate();

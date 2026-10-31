@@ -104,7 +104,9 @@ impl Broker {
         }
         self.publish_authority_change(state);
         if held {
-            self.flush_outcomes_before_pause_ack().await?;
+            // A failed fence is already logged; the hold is in force, so its
+            // status must still reach the helper (see `finish_pause_transition`).
+            let _ = self.flush_outcomes_before_pause_ack().await;
         }
         Ok(status)
     }

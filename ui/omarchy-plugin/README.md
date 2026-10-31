@@ -116,9 +116,14 @@ The updater runs the source checks, waits for an explicitly unlocked desktop
 `~/.local/state/badi/ui-backups/<UTC time>/` (newest three kept, plus the
 original backup), removes files the manifest no longer loads, restarts the
 Omarchy shell the supported way and checks that the new popout answers IPC.
-A missing plugin directory is created and enabled with `omarchy plugin enable
-io.github.ahuray.badi`; `XDG_CONFIG_HOME` selects that directory. `omarchy
-plugin disable io.github.ahuray.badi` hides the mark.
+A missing plugin directory is created; every run checks `omarchy plugin
+list` and enables the plugin with `omarchy plugin enable io.github.ahuray.badi`
+when it is not enabled (so a run that once stopped after writing files still
+finishes the job, and running the updater undoes a `plugin disable`).
+`XDG_CONFIG_HOME` selects that directory. `omarchy plugin disable
+io.github.ahuray.badi` hides the mark until the next updater run. The install
+receipt is written only after the restarted panel answers IPC; a failed run
+names its backup and the restore command instead.
 
 ## Suggestion panel theme
 

@@ -205,6 +205,10 @@ impl Broker {
         saved_words: u64,
         revision: bool,
     ) -> Result<(), BrokerError> {
+        if !has_landed_commit_authority(&session.authority) {
+            self.inner.metrics.record_commit_failure();
+            return Err(BrokerError::InvalidCapability);
+        }
         let coordinates = session.coordinates;
         let lease = self.inner.config.commit_result_lease;
         let expires_at = Instant::now() + lease;
@@ -276,7 +280,14 @@ impl Broker {
             metrics.record_commit_failure();
             return Err(BrokerError::CommitLeaseExpired);
         }
-        validate_commit_authority(&session.authority, payload.status)?;
+        if let Err(error) = validate_commit_authority(&session.authority, payload.status) {
+            // This exact grant's one result is unusable, and the adapter may
+            // already have changed the document: consume the grant and retire
+            // everything derived from the pre-commit revision.
+            session.pending = None;
+            retire_committed_context(session, CommitStatus::Failed, metrics);
+            return Err(error);
+        }
         match payload.status {
             CommitStatus::Applied => metrics.record_word_savings(pending.saved_words, 0),
             CommitStatus::DispatchedUnverified => {
@@ -412,6 +423,11 @@ fn retire_committed_context(session: &mut SessionState, status: CommitStatus, me
             metrics.record_commit_failure();
         }
     }
+}
+
+fn has_landed_commit_authority(authority: &SessionAuthority) -> bool {
+    validate_commit_authority(authority, CommitStatus::Applied).is_ok()
+        || validate_commit_authority(authority, CommitStatus::DispatchedUnverified).is_ok()
 }
 
 fn validate_commit_authority(

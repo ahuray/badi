@@ -62,8 +62,8 @@ opens that panel. The addon compiles in the release's own nlohmann-json
 
 | Field | Packages |
 | --- | --- |
-| Depends | The computed libraries (`libc6`, `libgcc-s1`, `libstdc++6`, `libfcitx5core7`, `libfcitx5utils2`), `python3 (>= 3.12)`, `python3-gi` for the session helper, `fcitx5 (>= 5.1.7)`, `systemd` for the user services |
-| Recommends | `dbus-user-session` for the services' session bus, `ca-certificates` and `curl` for the downloads, `gir1.2-secret-1` for the keyring key of context and style learning, `pipewire-bin` for the screen-share hold, `xdg-desktop-portal` for the shortcuts; for the observer `python3-gi-cairo`, `gir1.2-atspi-2.0`, `gir1.2-gtk-4.0` and, on Debian, `gir1.2-gtk4layershell-1.0` (Ubuntu 24.04 does not package gtk4-layer-shell) |
+| Depends | The computed libraries (`libc6`, `libgcc-s1`, `libstdc++6`, `libfcitx5core7`, `libfcitx5utils2`), `python3 (>= 3.12)`, `python3-gi` for the session helper, `fcitx5 (>= 5.1.7)`, `systemd` for the user services, `pipewire-bin` so the session helper can prove the screen is not shared (without `pw-dump` it holds suggestions) |
+| Recommends | `dbus-user-session` for the services' session bus, `ca-certificates` and `curl` for the downloads, `gir1.2-secret-1` plus a Secret Service provider (`gnome-keyring`) for the keyring key of context and style learning, `xdg-desktop-portal` for the shortcuts; for the observer `python3-gi-cairo`, `gir1.2-atspi-2.0`, `gir1.2-gtk-4.0` and, on Debian, `gir1.2-gtk4layershell-1.0` (Ubuntu 24.04 does not package gtk4-layer-shell) |
 | Suggests | `hunspell-de-de`, `hunspell-fr`, `hunspell-es`, `hunspell-it`, `hunspell-nl`, `hunspell-pl` for `badi spelling` |
 
 The package has no maintainer scripts: installing it starts no service,
@@ -124,6 +124,12 @@ with the build dependencies above and no Node.js. It finds no
 - installs and enables the observer, starting and verifying it only in a
   Hyprland session, and refuses `--observed-app`, which needs Omarchy's lock
   status;
+- in a Hyprland session, prints the grey preview's no-animation layer rule
+  for both `hyprland.lua` and `hyprland.conf`, leaving compositor
+  configuration for the user to edit;
+- warns when `graphical-session.target` is inactive: Badi's enabled units
+  start with that target, so a tty-launched compositor needs a display
+  manager, uwsm, or its own startup command to activate it at login;
 - leaves out the launcher, the Omarchy hooks and `hyprland.lua`.
 
 Backups and rollback are those of the
