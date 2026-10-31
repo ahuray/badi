@@ -852,7 +852,8 @@ void SessionState::clearSuggestion() {
 }
 
 std::optional<RevisionUpdate> SessionState::requestRevision(SelectionWindow selection, std::string mode) {
-    if (!focused_ || !editingAvailable() || (mode != "grammar" && mode != "refine") ||
+    if (!focused_ || !editingAvailable() ||
+        (mode != "grammar" && mode != "refine" && mode != "synonyms") ||
         (imeParityApp(appId_) && !selection.identityKnown) || !validLanguageTag(selection.language) ||
         !safeRevisionText(selection.selected, kMaxSelectedScalars) || !validContextText(selection.before) ||
         !validContextText(selection.after) || selection.anchor == selection.head) {

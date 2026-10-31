@@ -23,6 +23,25 @@ pub const REVISION_TIMEOUT: Duration = Duration::from_secs(40);
 /// How long a shown revision may be applied.
 pub const REVISION_TTL: Duration = Duration::from_millis(crate::revision::REVISION_TTL_MS);
 
+/// Synonyms already shown for one exact selection, so a repeated synonyms
+/// request asks for another one instead of the same greedy answer again.
+pub(super) struct SynonymHistory {
+    before: String,
+    selected: String,
+    after: String,
+    shown: Vec<String>,
+    expires_at: Instant,
+}
+
+/// The most synonyms kept for one selection before offers start over.
+const MAX_SYNONYMS_SHOWN: usize = 8;
+
+impl SynonymHistory {
+    fn matches(&self, before: &str, selected: &str, after: &str) -> bool {
+        self.before == before && self.selected == selected && self.after == after
+    }
+}
+
 /// A session's revision, from its request until it is applied or retired.
 pub(super) struct SessionRevision {
     revision_id: String,
@@ -80,6 +99,8 @@ struct AdmittedRevision {
     before: String,
     selected: String,
     after: String,
+    /// Synonyms already shown for this selection, not to offer again.
+    excluded: Vec<String>,
     request_id: Option<String>,
     cancellation: CancellationToken,
     reviser: Arc<dyn Reviser>,
@@ -140,18 +161,23 @@ impl Broker {
             .or(payload.language.as_deref())
             .or(preferred)
             .and_then(crate::revision::language);
+        // Synonyms replace a word or short phrase only; anything longer is
+        // answered like any other refusal, never an error.
+        let invalid_synonyms = payload.mode == RevisionMode::Synonyms
+            && !crate::revision::synonym_selection(&payload.selected);
         let reviser = self.inner.reviser.get().cloned();
         let (language, reviser) = match (refused, language, reviser) {
-            (None, Some(language), Some(reviser)) => (language, reviser),
+            (None, Some(language), Some(reviser)) if !invalid_synonyms => (language, reviser),
             (refused, language, _) => {
-                let reason = refused.map_or(
-                    if language.is_none() {
-                        ReasonCode::UnsupportedLanguage
-                    } else {
-                        ReasonCode::RevisionUnavailable
-                    },
-                    PolicyReason::refusal_code,
-                );
+                let reason = if let Some(refused) = refused {
+                    PolicyReason::refusal_code(refused)
+                } else if invalid_synonyms {
+                    ReasonCode::InvalidOutput
+                } else if language.is_none() {
+                    ReasonCode::UnsupportedLanguage
+                } else {
+                    ReasonCode::RevisionUnavailable
+                };
                 trace_outcome(coordinates, payload.mode, None, reason_name(reason), None);
                 let _ = session.sink.send(clear(
                     coordinates,
@@ -182,6 +208,7 @@ impl Broker {
             entry.put("language", language.tag);
             entry.put("chars", payload.selected.chars().count());
         });
+        let excluded = session.synonym_exclusions(&payload);
         let admitted = AdmittedRevision {
             coordinates,
             revision_id,
@@ -191,6 +218,7 @@ impl Broker {
             before: payload.before,
             selected: payload.selected,
             after: payload.after,
+            excluded,
             request_id,
             cancellation,
             reviser,
@@ -217,6 +245,7 @@ impl Broker {
             language: admitted.language,
             before: &admitted.before,
             selected: &admitted.selected,
+            excluded: &admitted.excluded,
             timeout: REVISION_TIMEOUT.saturating_sub(started.elapsed()),
         };
         let reply = admitted
@@ -256,6 +285,9 @@ impl Broker {
         match outcome {
             Ok(text) => {
                 let expires_at = Instant::now() + REVISION_TTL;
+                if admitted.mode == RevisionMode::Synonyms {
+                    session.record_synonym_shown(&admitted, &text, expires_at);
+                }
                 if let Some(revision) = session.revision.as_mut() {
                     revision.shown = Some((text.clone(), expires_at));
                 }
@@ -303,22 +335,35 @@ fn gate(
             Err((ReasonCode::ProviderError, "failed"))
         }
         Ok(reply) if reply.truncated => Err((ReasonCode::InvalidOutput, "truncated")),
-        Ok(reply) => accept(
-            admitted.mode,
-            admitted.language,
-            &admitted.before,
-            &admitted.selected,
-            &admitted.after,
-            &reply.output,
-        )
-        .map_err(|abstain| {
-            let reason = if abstain == RevisionAbstain::Unchanged {
-                ReasonCode::NoChange
-            } else {
-                ReasonCode::InvalidOutput
-            };
-            (reason, abstain.name())
-        }),
+        Ok(reply) => {
+            let text = accept(
+                admitted.mode,
+                admitted.language,
+                &admitted.before,
+                &admitted.selected,
+                &admitted.after,
+                &reply.output,
+            )
+            .map_err(|abstain| {
+                let reason = if abstain == RevisionAbstain::Unchanged {
+                    ReasonCode::NoChange
+                } else {
+                    ReasonCode::InvalidOutput
+                };
+                (reason, abstain.name())
+            })?;
+            // The prompt names shown synonyms as words to avoid; one that
+            // comes back anyway is no new offer.
+            if admitted.mode == RevisionMode::Synonyms
+                && admitted
+                    .excluded
+                    .iter()
+                    .any(|shown| shown.eq_ignore_ascii_case(text.trim()))
+            {
+                return Err((ReasonCode::NoChange, "repeat"));
+            }
+            Ok(text)
+        }
     }
 }
 
@@ -370,6 +415,69 @@ fn detect_selection_language(payload: &RevisionRequestPayload) -> Option<&'stati
 }
 
 impl SessionState {
+    /// Synonyms already shown for exactly this request's selection, not to
+    /// offer again; a new selection starts over, as does one whose offers
+    /// ran past the kept bound or outlived their showing.
+    fn synonym_exclusions(&mut self, payload: &RevisionRequestPayload) -> Vec<String> {
+        if payload.mode != RevisionMode::Synonyms {
+            return Vec::new();
+        }
+        let now = Instant::now();
+        match self.synonym_history.as_mut() {
+            Some(history)
+                if history.expires_at > now
+                    && history.matches(&payload.before, &payload.selected, &payload.after)
+                    && history.shown.len() < MAX_SYNONYMS_SHOWN =>
+            {
+                history.expires_at = now + REVISION_TIMEOUT + REVISION_TTL;
+                history.shown.clone()
+            }
+            _ => {
+                self.synonym_history = Some(SynonymHistory {
+                    before: payload.before.clone(),
+                    selected: payload.selected.clone(),
+                    after: payload.after.clone(),
+                    shown: Vec::new(),
+                    expires_at: now + REVISION_TIMEOUT + REVISION_TTL,
+                });
+                Vec::new()
+            }
+        }
+    }
+
+    /// Keeps a shown synonym out of this selection's later offers.
+    fn record_synonym_shown(
+        &mut self,
+        admitted: &AdmittedRevision,
+        text: &str,
+        expires_at: Instant,
+    ) {
+        let shown = text.trim().to_owned();
+        match self.synonym_history.as_mut() {
+            Some(history)
+                if history.matches(&admitted.before, &admitted.selected, &admitted.after) =>
+            {
+                if !history
+                    .shown
+                    .iter()
+                    .any(|offer| offer.eq_ignore_ascii_case(&shown))
+                {
+                    history.shown.push(shown);
+                }
+                history.expires_at = expires_at;
+            }
+            _ => {
+                self.synonym_history = Some(SynonymHistory {
+                    before: admitted.before.clone(),
+                    selected: admitted.selected.clone(),
+                    after: admitted.after.clone(),
+                    shown: vec![shown],
+                    expires_at,
+                });
+            }
+        }
+    }
+
     /// Whether `suggestion_id` names this session's revision.
     pub(super) fn has_revision(&self, suggestion_id: Option<&str>) -> bool {
         self.revision

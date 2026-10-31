@@ -187,6 +187,67 @@ fn a_refinement_may_reword_but_keeps_language_and_facts() {
 }
 
 #[test]
+fn a_synonym_replaces_only_the_selected_word_and_keeps_its_sentence() {
+    let [system, _, _, selection] = messages(
+        RevisionMode::Synonyms,
+        english(),
+        "The view from the hill is ",
+        "beautiful",
+    );
+    assert!(system.1.to_lowercase().contains("synonym"));
+    assert_eq!(selection.1, "The view from the hill is beautiful");
+    assert_eq!(
+        accept(
+            RevisionMode::Synonyms,
+            english(),
+            "The view from the hill is ",
+            "beautiful",
+            " today",
+            "The view from the hill is lovely."
+        )
+        .as_deref(),
+        Ok("lovely"),
+        "only the selected word is replaced, with no added final mark"
+    );
+    assert_eq!(
+        accept(
+            RevisionMode::Synonyms,
+            english(),
+            "",
+            "one two three four",
+            "",
+            "uno dos tres cuatro"
+        ),
+        Err(RevisionAbstain::Shape),
+        "synonyms are for a word or short phrase, not a whole selection"
+    );
+    assert_eq!(
+        accept(
+            RevisionMode::Synonyms,
+            english(),
+            "The view from the hill is ",
+            "beautiful",
+            " today",
+            "The view from the hill is beautiful lovely"
+        ),
+        Err(RevisionAbstain::Shape),
+        "a synonym replaces its word instead of keeping it"
+    );
+    assert_eq!(
+        accept(
+            RevisionMode::Synonyms,
+            english(),
+            "She gave a ",
+            "fast",
+            " answer",
+            "She gave a lovely"
+        ),
+        Err(RevisionAbstain::Shape),
+        "the worked example's synonym is no answer for another word"
+    );
+}
+
+#[test]
 fn a_mid_sentence_selection_is_read_with_its_sentence_start() {
     use super::sentence_lead;
     assert_eq!(sentence_lead(""), "");

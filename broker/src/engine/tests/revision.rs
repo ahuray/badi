@@ -100,12 +100,22 @@ async fn revising(
 }
 
 fn request(revision: u64, before: &str, selected: &str, after: &str) -> RevisionRequestPayload {
+    request_mode(revision, before, selected, after, RevisionMode::Grammar)
+}
+
+fn request_mode(
+    revision: u64,
+    before: &str,
+    selected: &str,
+    after: &str,
+    mode: RevisionMode,
+) -> RevisionRequestPayload {
     let anchor = u64::try_from(before.chars().count()).expect("small fixture");
     let head = anchor + u64::try_from(selected.chars().count()).expect("small fixture");
     let field = context(revision, FieldPurpose::Normal).field;
     RevisionRequestPayload {
         fingerprint: format!("revision_fingerprint_{revision:08}"),
-        mode: RevisionMode::Grammar,
+        mode,
         before: before.to_owned(),
         selected: selected.to_owned(),
         after: after.to_owned(),
@@ -230,6 +240,87 @@ async fn a_revision_is_shown_then_applied_once_over_exactly_its_selection() {
         savings.is_none_or(|savings| savings.dispatched_unverified == 0),
         "a revision saves no words"
     );
+}
+
+#[tokio::test]
+async fn a_synonym_is_shown_and_a_repeat_request_offers_another() {
+    let (broker, id, mut events) = revising(Some(Arc::new(FixtureReviser))).await;
+    let synonym = |revision| {
+        request_mode(
+            revision,
+            "The view from the hill is ",
+            "beautiful",
+            " today",
+            RevisionMode::Synonyms,
+        )
+    };
+    broker
+        .request_revision(coordinates(id, 2), synonym(2), None)
+        .await
+        .expect("admitted");
+    let BrokerEvent::RevisionShow { payload: shown, .. } = next(&mut events).await else {
+        panic!("expected a synonym")
+    };
+    assert_eq!(shown.mode, RevisionMode::Synonyms);
+    assert_eq!(shown.original, "beautiful");
+    assert_eq!(shown.text, "lovely");
+    shown.validate().expect("a valid synonym payload");
+
+    broker
+        .request_revision(coordinates(id, 3), synonym(3), None)
+        .await
+        .expect("admitted again");
+    // The new request first supersedes the synonym still shown.
+    let BrokerEvent::RevisionClear {
+        payload: cleared, ..
+    } = next(&mut events).await
+    else {
+        panic!("expected the shown synonym to be superseded")
+    };
+    assert_eq!(cleared.reason, ReasonCode::Superseded);
+    let BrokerEvent::RevisionShow { payload: shown, .. } = next(&mut events).await else {
+        panic!("expected another synonym")
+    };
+    assert_eq!(
+        shown.text, "pretty",
+        "the shown synonym is not offered again"
+    );
+
+    broker
+        .request_revision(coordinates(id, 4), synonym(4), None)
+        .await
+        .expect("answered");
+    let BrokerEvent::RevisionClear {
+        payload: cleared, ..
+    } = next(&mut events).await
+    else {
+        panic!("expected the shown synonym to be superseded")
+    };
+    assert_eq!(cleared.reason, ReasonCode::Superseded);
+    let BrokerEvent::RevisionClear {
+        payload: cleared, ..
+    } = next(&mut events).await
+    else {
+        panic!("expected no further synonym")
+    };
+    assert_eq!(cleared.reason, ReasonCode::NoChange);
+
+    // A whole clause is no synonym request: answered, never an error.
+    broker
+        .request_revision(
+            coordinates(id, 5),
+            request_mode(5, "", "one two three four", "", RevisionMode::Synonyms),
+            None,
+        )
+        .await
+        .expect("answered");
+    let BrokerEvent::RevisionClear {
+        payload: cleared, ..
+    } = next(&mut events).await
+    else {
+        panic!("expected a refusal")
+    };
+    assert_eq!(cleared.reason, ReasonCode::InvalidOutput);
 }
 
 #[tokio::test]

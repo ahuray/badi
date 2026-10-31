@@ -336,7 +336,8 @@ std::optional<Json> revisionEnvelope(const RevisionUpdate &update, std::uint64_t
     if (!validLinuxAppId(update.appId) || !validOpaqueId(update.targetId) ||
         !validSessionId(coordinates.sessionId) || coordinates.fingerprint.size() < 16 ||
         !validOpaqueId(coordinates.fingerprint) || !validOpaqueId(update.requestId) ||
-        (update.mode != "grammar" && update.mode != "refine") || !validLanguageTag(selection.language) ||
+        (update.mode != "grammar" && update.mode != "refine" && update.mode != "synonyms") ||
+        !validLanguageTag(selection.language) ||
         !validContextText(selection.before) || !validContextText(selection.after) || !before ||
         before->size() > kMaxBeforeScalars || !after || after->size() > kMaxAfterScalars || !selected ||
         !safeRevisionText(selection.selected, kMaxSelectedScalars) || span != selected->size()) {
@@ -1111,7 +1112,8 @@ private:
             !exactKeys(payload, {"fingerprint", "revision_id", "mode", "original", "text", "ttl_ms", "provider"}) ||
             !payload["revision_id"].is_string() ||
             !validOpaqueId(payload["revision_id"].get_ref<const std::string &>()) ||
-            (payload["mode"] != "grammar" && payload["mode"] != "refine") || !payload["original"].is_string() ||
+            (payload["mode"] != "grammar" && payload["mode"] != "refine" &&
+             payload["mode"] != "synonyms") || !payload["original"].is_string() ||
             !payload["text"].is_string() ||
             !safeRevisionText(payload["original"].get_ref<const std::string &>(), kMaxSelectedScalars) ||
             !safeRevisionText(payload["text"].get_ref<const std::string &>(), kMaxRevisedScalars) ||

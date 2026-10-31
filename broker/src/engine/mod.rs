@@ -312,6 +312,9 @@ struct SessionState {
     pending: Option<PendingCommit>,
     /// An explicit revision of the selection, running or shown (ADR 0012).
     revision: Option<revision::SessionRevision>,
+    /// Synonyms already shown for one selection, so a repeated request
+    /// offers another (ADR 0013). Memory only; expires with its showing.
+    synonym_history: Option<revision::SynonymHistory>,
     escape_quiet: Option<EscapeQuiet>,
     /// Continuations shown for this context on request (alternatives).
     alternatives: alternatives::Alternatives,

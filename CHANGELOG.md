@@ -8,6 +8,10 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- A selected word or short phrase can take a synonym: Ctrl+Shift+Space
+  cycles grammar, a refined wording, then a synonym that fits the
+  sentence — and another on each further press — shown with its change
+  marked and applied by Tab like any revision (ADR 0013).
 - A quality and portability pass from a full audit, each fix with a
   regression test. The screen-share hold no longer lifts when `pw-dump` is
   missing (only a `pw-dump` that ran and could not reach PipeWire settles

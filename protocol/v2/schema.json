@@ -1207,8 +1207,8 @@
       }
     },
     "revisionMode": {
-      "enum": ["grammar", "refine"],
-      "description": "grammar fixes grammar, spelling, capitalization and punctuation and keeps the wording; refine rewrites for clarity and keeps meaning, names and numbers."
+      "enum": ["grammar", "refine", "synonyms"],
+      "description": "grammar fixes grammar, spelling, capitalization and punctuation and keeps the wording; refine rewrites for clarity and keeps meaning, names and numbers; synonyms replaces a selected word or short phrase (at most three words, no digit, address or sentence mark) with one synonym that fits its sentence and keeps everything else."
     },
     "revisionText": {
       "type": "string",

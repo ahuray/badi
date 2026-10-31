@@ -20,6 +20,9 @@ pub struct RevisionCall<'a> {
     pub before: &'a str,
     /// The selection as the field holds it.
     pub selected: &'a str,
+    /// Synonyms already shown for this selection, not to use again
+    /// (`RevisionMode::Synonyms` only).
+    pub excluded: &'a [String],
     /// The bound on the whole call, a cold start included.
     pub timeout: Duration,
 }
@@ -64,6 +67,13 @@ pub trait Reviser: Send + Sync {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FixtureReviser;
 
+/// Fixture synonyms, in the order repeated requests offer them.
+const FIXTURE_SYNONYMS: [(&str, &[&str]); 3] = [
+    ("beautiful", &["lovely", "pretty"]),
+    ("big", &["large", "huge"]),
+    ("fast", &["quick", "rapid"]),
+];
+
 const FIXTURE_FIXES: [(&str, &str); 7] = [
     ("has went", "went"),
     ("buyed", "bought"),
@@ -87,6 +97,39 @@ impl Reviser for FixtureReviser {
     ) -> Result<RevisionReply, RevisionError> {
         if cancellation.is_cancelled() {
             return Err(RevisionError::Cancelled);
+        }
+        if call.mode == RevisionMode::Synonyms {
+            let lead = super::sentence_lead(call.before);
+            let core = call.selected.trim();
+            let synonym = FIXTURE_SYNONYMS
+                .iter()
+                .find(|(word, _)| word.eq_ignore_ascii_case(core))
+                .and_then(|(_, synonyms)| {
+                    synonyms.iter().find(|synonym| {
+                        !call
+                            .excluded
+                            .iter()
+                            .any(|shown| shown.eq_ignore_ascii_case(synonym))
+                    })
+                });
+            let output = match synonym {
+                Some(synonym) => {
+                    let mut synonym = (*synonym).to_owned();
+                    if core.chars().next().is_some_and(char::is_uppercase) {
+                        if let Some(first) = synonym.chars().next() {
+                            let upper: String = first.to_uppercase().collect();
+                            synonym.replace_range(..first.len_utf8(), &upper);
+                        }
+                    }
+                    format!("{lead}{synonym}").trim().to_owned()
+                }
+                // No other fixture synonym: the gate reads this as unchanged.
+                None => format!("{lead}{core}").trim().to_owned(),
+            };
+            return Ok(RevisionReply {
+                output,
+                ..RevisionReply::default()
+            });
         }
         let mut output = format!("{}{}", super::sentence_lead(call.before), call.selected)
             .trim()

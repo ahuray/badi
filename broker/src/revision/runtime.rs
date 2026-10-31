@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::service::{Reviser, RevisionCall, RevisionError, RevisionReply};
-use super::{chatml_prompt, messages};
+use super::{chatml_prompt, messages_excluding};
 use crate::model_selection::{
     ModelArtifact, ModelUseCase, catalog, current_memory, required_memory_mib,
 };
@@ -297,11 +297,12 @@ pub async fn complete(
     call: RevisionCall<'_>,
     timeout: Duration,
 ) -> Result<RevisionReply, RevisionError> {
-    let prompt = chatml_prompt(&messages(
+    let prompt = chatml_prompt(&messages_excluding(
         call.mode,
         call.language,
         call.before,
         call.selected,
+        call.excluded,
     ));
     let body = serde_json::to_vec(&serde_json::json!({
         "prompt": prompt,
