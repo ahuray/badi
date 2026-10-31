@@ -218,11 +218,11 @@ class WritingView {
       // show; a grant inserts only what is on screen (all of it, or its start).
       const showsGrant = (acceptance === 'all' || replaceBefore !== undefined)
         ? grant.text === shown : typeof grant.text === 'string' && grant.text !== '' && shown.startsWith(grant.text);
+      const end = snapshot.selection.main.head;
       if (generation !== this.generation || !this.matches(snapshot) || grant.replaceBefore !== replaceBefore || !showsGrant ||
-          (replaceBefore !== undefined && !validCorrection(snapshot.doc.toString(), replaceBefore, grant.text))) {
+          (replaceBefore !== undefined && !validCorrection(snapshot.doc.sliceString(0, end), replaceBefore, grant.text))) {
         this.client.report(grant, 'stale'); return;
       }
-      const end = snapshot.selection.main.head;
       const from = end - (replaceBefore?.length ?? 0);
       this.applying = true;
       try {

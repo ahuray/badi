@@ -94,7 +94,11 @@ pub async fn run(socket_path: &Path, broker: Broker) -> Result<(), ServerError> 
                 let connection_shutdown = shutdown.clone();
                 connections.spawn(async move {
                     let _permit = permit;
-                    let _ = serve_connection(stream, connection_broker, connection_shutdown).await;
+                    if let Err(error) =
+                        serve_connection(stream, connection_broker, connection_shutdown).await
+                    {
+                        log_connection_error(&error);
+                    }
                 });
             }
             completed = connections.join_next(), if !connections.is_empty() => {
@@ -360,6 +364,18 @@ async fn refuse_hello(
     error
 }
 
+/// One content-free journal line when a connection ends in failure.
+fn log_connection_error(error: &ServerError) {
+    let class = match error {
+        ServerError::Protocol(error) | ServerError::Frame(FrameError::Protocol(error)) => {
+            error.to_string()
+        }
+        ServerError::Frame(error) => error.to_string(),
+        error => error.to_string(),
+    };
+    eprintln!("badi-broker: connection ended: {class}");
+}
+
 /// One content-free journal line per refused hello: the failure's class.
 fn log_refused_hello(error: &ServerError) {
     let class = match error {
@@ -470,11 +486,14 @@ async fn serve_connection_with_timeouts(
                 // before notifying them, including transient pause/resume.
                 broker.close_owned_sessions(&owned_sessions).await;
                 owned_sessions.clear();
-                let envelope = WireEnvelope::global(
+                let envelope = match WireEnvelope::global(
                     MessageType::AuthorityChanged,
                     broker.mono_ms(),
                     &event,
-                )?;
+                ) {
+                    Ok(envelope) => envelope,
+                    Err(error) => break Err(ServerError::Protocol(error)),
+                };
                 if wire_tx.try_send(envelope).is_err() {
                     break Ok(());
                 }
@@ -547,12 +566,18 @@ async fn serve_connection_with_timeouts(
     drop(event_sink);
     drop(event_tx);
     drop(wire_tx);
-    if time::timeout(WRITER_DRAIN_TIMEOUT, &mut writer_task)
-        .await
-        .is_err()
-    {
-        writer_task.abort();
-        let _ = writer_task.await;
+    match time::timeout(WRITER_DRAIN_TIMEOUT, &mut writer_task).await {
+        Ok(Ok(Err(error))) => {
+            eprintln!("badi-broker: connection writer ended: {error}");
+        }
+        Ok(Err(error)) if !error.is_cancelled() => {
+            eprintln!("badi-broker: connection writer task failed");
+        }
+        Ok(_) => {}
+        Err(_) => {
+            writer_task.abort();
+            let _ = writer_task.await;
+        }
     }
     outcome
 }

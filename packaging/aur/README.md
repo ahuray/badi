@@ -25,8 +25,12 @@ MPL-2.0 (spellbook, whose source is linked from the notices), Zlib
 llama.cpp, the Prediction Lab or editor plugins. No install hook starts a
 service, changes accessibility, edits a home directory or downloads anything.
 
-The current desktop contract still requires Omarchy/Hyprland and its lock
-IPC. This is not general Linux desktop support. The package requires Fcitx
+The full desktop contract (field observer, grey preview, settings panel)
+still requires Omarchy/Hyprland and its lock IPC, so those parts are
+optdepends (`hyprland`, `gtk4-layer-shell`, `quickshell`,
+`qt6-declarative`): the base package — broker, session helper, Fcitx addon
+and commands — installs on any Arch Wayland desktop, but that is not yet
+general Linux desktop support. The package requires Fcitx
 5.1.23 or later, whose Wayland frontend keeps Chromium's surrounding text
 current; it does not replace the system frontend.
 

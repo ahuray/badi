@@ -57,6 +57,21 @@ def unlocked():
     return badi_install.explicitly_unlocked(ipc("lock", "status"))
 
 
+PLUGIN_ID = "io.github.ahuray.badi"
+
+
+def plugin_enabled():
+    """Whether Omarchy reports the plugin enabled; a failed or unreadable
+    listing is an error, never a guess either way."""
+    result = subprocess.run(["omarchy", "plugin", "list", "--json"],
+                            capture_output=True, text=True, check=True, timeout=10)
+    entries = json.loads(result.stdout)
+    if not isinstance(entries, list):
+        raise RuntimeError("Omarchy's plugin listing is unreadable; nothing was enabled or restarted")
+    return any(isinstance(entry, dict) and entry.get("id") == PLUGIN_ID and entry.get("enabled") is True
+               for entry in entries)
+
+
 def panel_ready():
     try:
         state = ipc("badi-writing", "state")
@@ -100,25 +115,32 @@ def main():
         if not badi_install.poll(unlocked, args.wait_for_unlock, 2):
             raise RuntimeError("Desktop locked: no UI files changed. Unlock and rerun this command.")
     installation = badi_install.Installation(home, "omarchy-ui")
-    target.mkdir(parents=True, exist_ok=True)
-    for name, (data, mode) in staged.items():
-        # Atomic replacement avoids the shell reading a partially written QML
-        # file; a development link to a checkout file is replaced (and saved).
-        installation.write(target / name, data, mode, replace_link=True)
-    for child in target.iterdir():
-        if child.name not in FILES and child.is_file() and not child.is_symlink():
-            installation.remove(child)
-    install_fcitx_theme(installation, home, generator)
-    installation.finish()
-    fcitx_theme().reload()
-    if fresh:
-        subprocess.run(["omarchy", "plugin", "enable", "io.github.ahuray.badi"], check=True, timeout=30)
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        for name, (data, mode) in staged.items():
+            # Atomic replacement avoids the shell reading a partially written QML
+            # file; a development link to a checkout file is replaced (and saved).
+            installation.write(target / name, data, mode, replace_link=True)
+        for child in target.iterdir():
+            if child.name not in FILES and child.is_file() and not child.is_symlink():
+                installation.remove(child)
+        install_fcitx_theme(installation, home, generator)
+        installation.finish()
+        fcitx_theme().reload()
+        # Running this installer asks for the panel: make sure it is enabled
+        # even when an earlier run wrote the files but never got it enabled.
+        if not plugin_enabled():
+            subprocess.run(["omarchy", "plugin", "enable", PLUGIN_ID], check=True, timeout=30)
+        # The supported restart performs its own lock check. It also clears Qt's
+        # cached nested components, which a plugin rescan alone may retain.
+        subprocess.run(["omarchy", "restart", "shell"], check=True, timeout=30)
+        if not badi_install.poll(panel_ready, 20, .25):
+            raise RuntimeError("Updated panel did not answer IPC; inspect the Omarchy shell log")
+    except Exception:
+        badi_install.announce_stopped(installation)
+        raise
+    # The receipt records a panel that answered, not files merely written.
     badi_install.write_receipt(home, "omarchy-ui", badi_install.source_identity(ROOT), installation.current)
-    # The supported restart performs its own lock check. It also clears Qt's
-    # cached nested components, which a plugin rescan alone may retain.
-    subprocess.run(["omarchy", "restart", "shell"], check=True, timeout=30)
-    if not badi_install.poll(panel_ready, 20, .25):
-        raise RuntimeError("Updated panel did not answer IPC; inspect the Omarchy shell log")
     print("Badi writing, application and system controls loaded in the Omarchy bar.", flush=True)
 
 

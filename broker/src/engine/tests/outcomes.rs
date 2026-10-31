@@ -368,6 +368,27 @@ async fn a_pause_whose_outcome_fence_times_out_still_reports_the_pause() {
     assert!(broker.is_paused().await);
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_desktop_hold_whose_outcome_fence_times_out_still_reports_the_status() {
+    let (broker, _commands) = broker_with_stalled_recorder(4);
+    // The hold is already in force when the fence runs; reporting its
+    // failure would make the session helper treat a live hold as rejected.
+    let status = broker
+        .report_desktop_state(
+            "stalled-fence-helper",
+            crate::protocol::DesktopStatePayload {
+                session: crate::protocol::DesktopSession::Sleeping,
+                on_battery: false,
+                power_saver: false,
+                screen_shared: false,
+            },
+        )
+        .await
+        .expect("desktop status after the logged fence failure");
+    assert_eq!(status.session, crate::protocol::DesktopSession::Sleeping);
+    assert!(broker.is_paused().await);
+}
+
 #[tokio::test]
 async fn memory_clear_cannot_downgrade_an_unknown_settings_commit() {
     let temporary = tempdir().expect("temporary directory");

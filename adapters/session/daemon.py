@@ -88,6 +88,9 @@ DUMP_LIMIT = 16 * 1024 * 1024
 # preview becomes the share some milliseconds later), so a share ends only
 # when no stream has returned for this long.
 RELEASE_SECONDS = 1.0
+# A pw-dump that has shown no complete dump this long is stuck, not slow:
+# restart it instead of holding the startup assumption forever.
+SYNC_SECONDS = 10.0
 DBUS_TIMEOUT_MS = 2000
 # While the keyring is locked, look again this often; never prompt.
 KEY_RETRY_SECONDS = 120
@@ -438,6 +441,48 @@ def screencast_stream(entry):
             or (type(media) is str and media.startswith(SCREENCAST_MEDIA_PREFIX)))
 
 
+def _complete_dump_end(buffer):
+    """Byte offset just past the last complete top-level JSON value in
+    ``buffer``, or 0 when none is complete yet. Pretty-printed and compact
+    pw-dump output both count. Raises ``ValueError`` on unbalanced brackets."""
+    depth = []
+    in_string = False
+    escaped = False
+    token = False
+    end = 0
+    for index, byte in enumerate(buffer):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:  # backslash
+                escaped = True
+            elif byte == 0x22:  # quote
+                in_string = False
+                if not depth:
+                    end = index + 1
+            continue
+        if byte == 0x22:
+            in_string = True
+            token = False
+        elif byte in (0x5B, 0x7B):  # [ {
+            depth.append(byte)
+            token = False
+        elif byte in (0x5D, 0x7D):  # ] }
+            if not depth or depth[-1] != (0x5B if byte == 0x5D else 0x7B):
+                raise ValueError("dump_unbalanced")
+            depth.pop()
+            if not depth:
+                end = index + 1
+        elif not depth:
+            if byte in b" \t\r\n":
+                if token:
+                    end = index
+                    token = False
+            else:
+                token = True
+    return end
+
+
 class Streams:
     """The screencast streams one pw-dump process has shown so far.
 
@@ -462,11 +507,10 @@ class Streams:
         if len(self._buffer) > DUMP_LIMIT:
             raise ValueError("dump_too_large")
         before = set(self.ids)
-        # An array ends with a bracket alone on its line; nested ones are indented.
-        end = self._buffer.rfind(b"\n]\n")
-        if end < 0:
+        end = _complete_dump_end(self._buffer)
+        if end == 0:
             return False
-        text, self._buffer = self._buffer[:end + 3].decode(), self._buffer[end + 3:]
+        text, self._buffer = self._buffer[:end].decode(), self._buffer[end:]
         decoder, position = json.JSONDecoder(), 0
         while (position := len(text) - len(text[position:].lstrip())) < len(text):
             entries, position = decoder.raw_decode(text, position)
@@ -503,17 +547,21 @@ class ScreenCast:
     that changes streams is never released in between. A pw-dump that ends
     after showing anything is restarted with backoff and the streams it saw
     stay until a new dump replaces them, so a crash never ends a hold early.
-    One that ends without any output could not reach PipeWire, where no
-    portal stream can exist.
+    One that ran and ended without any output could not reach PipeWire,
+    where no portal stream can exist; only that settles the screen as
+    unshared. A pw-dump that cannot even start (the tool is missing) or
+    never finishes a first dump proves nothing about PipeWire, so the
+    current hold stays while it is retried.
     """
 
     def __init__(self, reporter, command=None, refresh=refresh_bar, backoff=BACKOFF_SECONDS,
-                 release_seconds=RELEASE_SECONDS):
+                 release_seconds=RELEASE_SECONDS, sync_seconds=SYNC_SECONDS):
         self.reporter = reporter
         self.command = command or pipewire_dump_command()
         self.refresh = refresh
         self.backoff = backoff
         self.release_seconds = release_seconds
+        self.sync_seconds = sync_seconds
         self.reporter.screen_shared = True
         self.known = False
         self.streams = Streams()
@@ -522,6 +570,7 @@ class ScreenCast:
         self._received = False
         self._retry = None
         self._release = None
+        self._sync_watch = None
         self._attempt = 0
         self.problem = None
         self._start()
@@ -538,8 +587,22 @@ class ScreenCast:
             self._ended("pw-dump unavailable")
             return GLib.SOURCE_REMOVE
         self._cancellable = Gio.Cancellable()
+        self._sync_watch = GLib.timeout_add(
+            int(self.sync_seconds * 1000), self._sync_timed_out, self.process)
         self._read(self.process)
         return GLib.SOURCE_REMOVE
+
+    def _sync_timed_out(self, process):
+        self._sync_watch = None
+        if process is self.process and not self.streams.synced:
+            self._stop()
+            self._ended("pw-dump stalled")
+        return GLib.SOURCE_REMOVE
+
+    def _drop_sync_watch(self):
+        if self._sync_watch is not None:
+            GLib.source_remove(self._sync_watch)
+            self._sync_watch = None
 
     def _read(self, process):
         process.get_stdout_pipe().read_bytes_async(
@@ -554,7 +617,7 @@ class ScreenCast:
             data = b""
         if not data:
             self._stop()
-            self._ended("pw-dump ended")
+            self._ended("pw-dump ended", pipewire_unreachable=not self._received)
             return
         self._received = True
         try:
@@ -564,6 +627,7 @@ class ScreenCast:
             self._ended("pw-dump output unreadable")
             return
         if self.streams.synced:
+            self._drop_sync_watch()
             self._attempt = 0
             if self.problem is not None:
                 log("watching PipeWire for screen sharing again")
@@ -602,9 +666,10 @@ class ScreenCast:
             if self.reporter.publish():
                 self.refresh()
 
-    def _ended(self, reason):
-        if not self._received:
-            # It never reached PipeWire, so no portal stream can be live.
+    def _ended(self, reason, pipewire_unreachable=False):
+        self._drop_sync_watch()
+        if pipewire_unreachable and not self._received:
+            # It ran and never reached PipeWire, so no portal stream can be live.
             self.streams.ids.clear()
             self.known = True
             self._keep()
@@ -617,6 +682,7 @@ class ScreenCast:
         self._retry = GLib.timeout_add_seconds(delay, self._start)
 
     def _stop(self):
+        self._drop_sync_watch()
         if self._cancellable is not None:
             self._cancellable.cancel()
             self._cancellable = None

@@ -424,6 +424,17 @@ class StreamsTests(unittest.TestCase):
         self.assertTrue(streams.feed(b"[]\n" + dump(SCREENCAST)), "a compact empty array is read too")
         self.assertEqual(streams.ids, {123})
 
+    def test_a_compact_dump_on_one_line_is_read(self):
+        streams = daemon.Streams()
+        compact = json.dumps([SCREENCAST]).encode() + b"\n"
+        self.assertTrue(streams.feed(compact), "a compact array syncs like a pretty one")
+        self.assertTrue(streams.synced)
+        self.assertEqual(streams.ids, {123})
+        # Split mid-array, a compact dump still waits for its other half.
+        streams.restart()
+        self.assertFalse(streams.feed(compact[:30]))
+        self.assertFalse(streams.feed(compact[30:]))
+
     def test_output_that_is_not_pw_dumps_is_refused(self):
         for output in (b"{\n]\n", b"\"text\"\n]\n", b'{"id": 1}\n]\n'):
             with self.assertRaises(ValueError):
@@ -523,7 +534,7 @@ class ScreenCastTests(unittest.TestCase):
         self.assertNotIn(("active", False, False, False), self.fake.reports[1:-1],
                          "the hold never lapsed between the two dumps")
 
-    def test_pipewire_down_ends_the_share_and_a_missing_tool_reports_none(self):
+    def test_pipewire_down_ends_the_share(self):
         screencast = self.watch()
         self.until(lambda: screencast.streams.synced, "the first dump")
         self.change(SCREENCAST)
@@ -532,12 +543,32 @@ class ScreenCastTests(unittest.TestCase):
         (self.controls / "exit").touch()
         self.until(lambda: not self.reporter.screen_shared, "PipeWire gone")
         self.assertGreaterEqual(self.starts(), 2)
-        missing = daemon.ScreenCast(self.reporter, [str(self.controls / "no-such-pw-dump")], refresh=lambda: None,
+
+    def test_a_missing_tool_keeps_the_hold_instead_of_reporting_unshared(self):
+        fake = FakeLink()
+        self.addCleanup(fake.release)
+        reporter = daemon.Reporter(fake, backoff=(0, 0, 0))
+        self.addCleanup(reporter.close)
+        missing = daemon.ScreenCast(reporter, [str(self.controls / "no-such-pw-dump")], refresh=lambda: None,
                                     backoff=(0, 0, 0))
         self.addCleanup(missing.close)
         self.assertIsNone(missing.process)
         self.assertEqual(missing.problem, "pw-dump unavailable")
-        self.assertFalse(self.reporter.screen_shared, "nothing to watch settles it at once")
+        self.assertFalse(missing.known, "a missing tool proves nothing about PipeWire")
+        self.assertTrue(reporter.screen_shared, "the startup hold stays while the tool is missing")
+        self.assertEqual(fake.reports, [], "unshared is never reported without looking")
+
+    def test_a_stalled_dump_is_restarted_and_the_hold_stays(self):
+        fake = FakeLink()
+        self.addCleanup(fake.release)
+        reporter = daemon.Reporter(fake, backoff=(0, 0, 0))
+        self.addCleanup(reporter.close)
+        stalled = daemon.ScreenCast(reporter, [sys.executable, "-B", "-c", "import time; time.sleep(60)"],
+                                    refresh=lambda: None, backoff=(0, 0, 0), sync_seconds=0.2)
+        self.addCleanup(stalled.close)
+        self.until(lambda: stalled.problem == "pw-dump stalled", "the stall to be noticed")
+        self.assertTrue(reporter.screen_shared, "a stalled dump never settles the screen as unshared")
+        self.assertEqual(fake.reports, [])
 
     def test_a_dump_that_shows_a_share_at_start_keeps_the_startup_hold(self):
         (self.controls / "graph.json").write_text(json.dumps([AUDIO, SCREENCAST]))

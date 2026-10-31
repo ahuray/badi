@@ -756,6 +756,8 @@ class FieldBackend:
             return None
         rects = {name: {"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}
                  for name, rect in extents.items() if rect is not None}
+        if not {"frame", "document", "field", "glyph"} <= rects.keys():
+            return None
         offset = caret if reported is None else reported
         if gecko:
             return gecko_calibrated_geometry(rects["frame"], rects["document"], rects["field"], rects["glyph"],
