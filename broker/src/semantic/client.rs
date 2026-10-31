@@ -690,37 +690,14 @@ impl SemanticClient {
         started: Instant,
         budget: Duration,
     ) -> Result<Option<String>, ClientError> {
-        if !matches!(validate_request(request)?, InputEligibility::Eligible) {
+        let Some((plan, admissible)) = self
+            .alternative_candidates(request, ask, cancellation, started, budget)
+            .await?
+        else {
             return Ok(None);
-        }
-        let preferences = self.preferences.read().map_or_else(
-            |poisoned| poisoned.into_inner().clone(),
-            |guard| guard.clone(),
-        );
-        if request
-            .language
-            .as_deref()
-            .and_then(crate::writing::WritingLanguage::from_tag)
-            .is_none_or(|language| !preferences.enables(language))
-        {
-            return Ok(None);
-        }
-        // After a finished word (`the` showed ` latest`), alternatives start
-        // the next word; otherwise they finish the word at the caret.
-        let plan = if ask.new_word {
-            crate::writing::next_word_plan(request)
-        } else {
-            crate::writing::completion_plan(request, &preferences.healed(&self.healing))
         };
-        if plan.sends_nothing() {
-            return Ok(None);
-        }
-        let excluded = &ask.excluded;
         let echo = plan.echo.unwrap_or_default();
         let length = self.suggestion_length();
-        let candidates = self
-            .first_token_candidates(&plan, cancellation, started, budget)
-            .await?;
         let first_word = |text: &str| {
             text.split_whitespace()
                 .next()
@@ -730,13 +707,15 @@ impl SemanticClient {
                 })
                 .filter(|word| !word.is_empty())
         };
-        // A token that is itself a word already shown is not continued.
-        let admissible = candidates.into_iter().filter(|token| {
-            token.len() > echo.len()
-                && token.starts_with(echo)
-                && !token.contains(['<', '>', '`', '\n', '\r'])
-                && (plan.digits || !token.chars().any(char::is_numeric))
-                && first_word(&token[echo.len()..]).is_none_or(|word| !excluded.contains(&word))
+        // A pick continues only a token that can still become its word.
+        let desired = ask.desired.as_deref().map(str::to_lowercase);
+        let admissible = admissible.into_iter().filter(|token| {
+            desired.as_deref().is_none_or(|want| {
+                let fragment = token[echo.len()..].trim().to_lowercase();
+                !fragment.is_empty()
+                    && (first_word(&token[echo.len()..]).is_some_and(|word| word == want)
+                        || want.starts_with(&fragment))
+            })
         });
         for token in admissible.take(ALTERNATIVE_ATTEMPTS) {
             let prompt = format!("{}{token}", plan.prompt);
@@ -764,11 +743,152 @@ impl SemanticClient {
             ) else {
                 continue;
             };
-            if first_word(&text).is_some_and(|word| !excluded.contains(&word)) {
+            let fits = first_word(&text).is_some_and(|word| {
+                desired
+                    .as_deref()
+                    .map_or_else(|| !ask.excluded.contains(&word), |want| word == want)
+            });
+            if fits {
                 return Ok(Some(text));
             }
         }
         Ok(None)
+    }
+
+    /// The plan an alternative answers from and its admissible first
+    /// tokens: best first, starting with the plan's echo, none of them a
+    /// word `ask` already showed.
+    async fn alternative_candidates<'r>(
+        &self,
+        request: &'r ProviderRequest,
+        ask: &AlternativeAsk,
+        cancellation: &CancellationToken,
+        started: Instant,
+        budget: Duration,
+    ) -> Result<Option<(crate::writing::CompletionPlan<'r>, Vec<String>)>, ClientError> {
+        if !matches!(validate_request(request)?, InputEligibility::Eligible) {
+            return Ok(None);
+        }
+        let preferences = self.preferences.read().map_or_else(
+            |poisoned| poisoned.into_inner().clone(),
+            |guard| guard.clone(),
+        );
+        if request
+            .language
+            .as_deref()
+            .and_then(crate::writing::WritingLanguage::from_tag)
+            .is_none_or(|language| !preferences.enables(language))
+        {
+            return Ok(None);
+        }
+        // After a finished word (`the` showed ` latest`), alternatives start
+        // the next word; otherwise they finish the word at the caret.
+        let plan = if ask.new_word {
+            crate::writing::next_word_plan(request)
+        } else {
+            crate::writing::completion_plan(request, &preferences.healed(&self.healing))
+        };
+        if plan.sends_nothing() {
+            return Ok(None);
+        }
+        let echo = plan.echo.unwrap_or_default();
+        let candidates = self
+            .first_token_candidates(&plan, cancellation, started, budget)
+            .await?;
+        let first_word = |text: &str| {
+            text.split_whitespace()
+                .next()
+                .map(|word| {
+                    word.trim_end_matches(|c: char| !c.is_alphanumeric())
+                        .to_lowercase()
+                })
+                .filter(|word| !word.is_empty())
+        };
+        // A token that is itself a word already shown is not continued.
+        let admissible = candidates
+            .into_iter()
+            .filter(|token| {
+                token.len() > echo.len()
+                    && token.starts_with(echo)
+                    && !token.contains(['<', '>', '`', '\n', '\r'])
+                    && (plan.digits || !token.chars().any(char::is_numeric))
+                    && first_word(&token[echo.len()..])
+                        .is_none_or(|word| !ask.excluded.contains(&word))
+            })
+            .collect();
+        Ok(Some((plan, admissible)))
+    }
+
+    /// Alternative next words for a numbered list: each admissible first
+    /// token continued just far enough to finish its first word. Best
+    /// first, distinct, at most `MAX_ALTERNATIVE_LIST_WORDS`; a failure
+    /// after some words keeps those.
+    async fn alternative_words_text(
+        &self,
+        request: &ProviderRequest,
+        ask: &AlternativeAsk,
+        cancellation: &CancellationToken,
+        started: Instant,
+        budget: Duration,
+    ) -> Result<Vec<String>, ClientError> {
+        let Some((plan, admissible)) = self
+            .alternative_candidates(request, ask, cancellation, started, budget)
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+        let echo = plan.echo.unwrap_or_default();
+        let mut words: Vec<String> = Vec::new();
+        for token in admissible {
+            if words.len() == crate::protocol::MAX_ALTERNATIVE_LIST_WORDS {
+                break;
+            }
+            let prompt = format!("{}{token}", plan.prompt);
+            let follow = crate::writing::CompletionPlan {
+                prompt: &prompt,
+                echo: None,
+                max_tokens: plan.max_tokens.saturating_sub(1).max(1),
+                digits: plan.digits,
+                finished_word_prompt: None,
+            };
+            let shape = StreamShape {
+                length: crate::writing::SuggestionLength::Short,
+                ..StreamShape::default()
+            };
+            let rest = match self
+                .complete_plan(follow, cancellation, started, budget, shape)
+                .await
+            {
+                Ok(observed) => observed.output.unwrap_or_default(),
+                Err(error) if words.is_empty() => return Err(error),
+                Err(_) => break,
+            };
+            let composed = format!("{token}{rest}");
+            let Some(text) = crate::writing::complete_word_prefix(&composed[echo.len()..], 1, true)
+            else {
+                continue;
+            };
+            let Some(word) = text
+                .split_whitespace()
+                .next()
+                .map(|word| {
+                    word.trim_end_matches(|c: char| !c.is_alphanumeric())
+                        .to_owned()
+                })
+                .filter(|word| crate::protocol::valid_alternative_word(word))
+            else {
+                continue;
+            };
+            if ask.excluded.contains(&word.to_lowercase())
+                || words
+                    .iter()
+                    .any(|listed: &String| listed.eq_ignore_ascii_case(&word))
+            {
+                continue;
+            }
+            words.push(word);
+        }
+        Ok(words)
     }
 
     /// The model's most likely first tokens after `plan`'s prompt, best
@@ -1286,6 +1406,26 @@ impl CompletionProvider for SemanticClient {
                 },
             );
         Ok(outcome.into())
+    }
+
+    async fn alternative_words(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        trigger: RequestTrigger,
+        ask: AlternativeAsk,
+    ) -> Result<Vec<String>, ProviderError> {
+        let started = Instant::now();
+        let budget = trigger.writing_budget();
+        if cancellation.is_cancelled() {
+            return Err(ProviderError::Cancelled);
+        }
+        self.alternative_words_text(&request, &ask, &cancellation, started, budget)
+            .await
+            .map_err(|error| match error {
+                ClientError::Cancelled => ProviderError::Cancelled,
+                _ => ProviderError::Unavailable,
+            })
     }
 
     async fn complete(

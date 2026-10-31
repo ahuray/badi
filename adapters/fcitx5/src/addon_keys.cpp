@@ -66,6 +66,31 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
         .tabTaken = tabTaken,
         .typesSuggestion = typesSuggestionStart(typed, expected),
     };
+    // A live numbered list takes its digits and Escape here, before a typed
+    // line could record the digit as text; no other key is captured.
+    if (binding->state.alternativeList() && !hasForeignImeUi(panel) && unclaimed) {
+        if (pressed.escape) {
+            binding->state.clearAlternativeList();
+            clearOwnedPanel(*binding);
+            event.filterAndAccept();
+            return;
+        }
+        const auto sym = static_cast<int>(key.sym());
+        const int first = static_cast<int>(FcitxKey_1);
+        const bool plain = !(key.states() & ::fcitx::KeyState::Ctrl) &&
+                           !(key.states() & ::fcitx::KeyState::Alt) &&
+                           !(key.states() & ::fcitx::KeyState::Super) &&
+                           !(key.states() & ::fcitx::KeyState::Shift);
+        if (plain && sym >= first && sym <= first + 8) {
+            if (const auto word = alternativeListPick(
+                    binding->state.alternativeList()->words,
+                    static_cast<char>('1' + (sym - first)));
+                word && requestAlternativePick(*binding, *word, panel)) {
+                event.filterAndAccept();
+                return;
+            }
+        }
+    }
     const auto action = decidePreKey(pressed, binding->state.editingAvailable(), !binding->ownedAuxiliary.empty(),
                                      binding->state.suggestionVisible(), panel);
     // A password field's keys leave no line at all: even without text,
@@ -350,7 +375,9 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
         requestAcceptance(*binding);
         break;
     case LocalAction::PassThrough:
-        if (liveOwnedCandidate && !key.isModifier()) {
+        if ((liveOwnedCandidate ||
+             (binding->state.alternativeList() && panel.candidatesOwnedByBadi)) &&
+            !key.isModifier()) {
             binding->state.invalidateContext();
             clearOwnedPanel(*binding);
         }

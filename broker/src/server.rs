@@ -624,6 +624,7 @@ impl MessageHandler<'_> {
             | MessageType::HelloAck
             | MessageType::SuggestionShow
             | MessageType::SuggestionClear
+            | MessageType::SuggestionList
             | MessageType::ControlResult
             | MessageType::CommitPrepare
             | MessageType::HealthStatus

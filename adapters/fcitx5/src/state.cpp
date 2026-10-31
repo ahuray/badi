@@ -738,10 +738,68 @@ bool SessionState::showSuggestion(Suggestion suggestion, std::uint64_t nowMs) {
             return false;
         }
     }
+    alternativeList_.reset();
     visible_ = std::move(suggestion);
     pendingAcceptance_.reset();
     return true;
 }
+
+std::optional<std::string> alternativeListPick(const std::vector<std::string> &words, char digit) {
+    if (digit < '1' || digit > '9') return std::nullopt;
+    const auto index = static_cast<std::size_t>(digit - '1');
+    if (index >= words.size()) return std::nullopt;
+    return words[index];
+}
+
+bool SessionState::showAlternativeList(AlternativeList list, std::uint64_t nowMs) {
+    if (!focused_ || !editingAvailable() || pendingAcceptance_ || list.words.empty() ||
+        list.words.size() > 4 || list.expiresAtMs <= nowMs ||
+        list.expiresAtMs > kMaxSafeCounter || !validOpaqueId(list.requestId) ||
+        !validOpaqueId(list.suggestionId) || list.coordinates != coordinates_ ||
+        !visible_ || visible_->suggestionId != list.suggestionId) {
+        return false;
+    }
+    std::vector<std::string> words;
+    for (const auto &word : list.words) {
+        const auto clean = sanitizeSuggestion(word);
+        if (!clean || clean->starts_with(' ') || clean->find(' ') != std::string::npos ||
+            std::find(words.begin(), words.end(), *clean) != words.end()) {
+            return false;
+        }
+        words.push_back(*clean);
+    }
+    list.words = std::move(words);
+    alternativeList_ = std::move(list);
+    // The broker retired the shown suggestion when it listed its words.
+    visible_.reset();
+    return true;
+}
+
+std::optional<AlternativePickRequest>
+SessionState::requestAlternativePick(std::string word, std::uint64_t nowMs,
+                                      const PanelObservation &panel) {
+    if (!editingAvailable() || !hasOwnedCandidate(panel) || pendingAcceptance_ ||
+        !alternativeList_ || alternativeList_->expiresAtMs <= nowMs ||
+        alternativeList_->coordinates != coordinates_ ||
+        std::find(alternativeList_->words.begin(), alternativeList_->words.end(), word) ==
+            alternativeList_->words.end()) {
+        if (alternativeList_ && alternativeList_->expiresAtMs <= nowMs) clearAlternativeList();
+        return std::nullopt;
+    }
+    AlternativePickRequest request{
+        .coordinates = alternativeList_->coordinates,
+        .controlId = "fcitx.alternative." +
+                     std::to_string(alternativeList_->coordinates.focusEpoch) + "." +
+                     std::to_string(alternativeList_->coordinates.revision) + "." +
+                     std::to_string(++alternativeSerial_),
+        .suggestionId = alternativeList_->suggestionId,
+        .word = std::move(word),
+    };
+    clearAlternativeList();
+    return request;
+}
+
+void SessionState::clearAlternativeList() { alternativeList_.reset(); }
 
 std::optional<AcceptRequest>
 SessionState::requestAcceptance(std::uint64_t nowMs,
@@ -849,6 +907,7 @@ bool SessionState::clearSuggestionIf(
 void SessionState::clearSuggestion() {
     visible_.reset();
     pendingAcceptance_.reset();
+    alternativeList_.reset();
 }
 
 std::optional<RevisionUpdate> SessionState::requestRevision(SelectionWindow selection, std::string mode) {

@@ -142,6 +142,7 @@ fn control(action: ControlAction, fingerprint: &str, id: &str) -> SessionControl
         action,
         fingerprint: fingerprint.to_owned(),
         suggestion_id: Some(id.to_owned()),
+        word: None,
     }
 }
 

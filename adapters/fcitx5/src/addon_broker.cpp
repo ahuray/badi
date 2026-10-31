@@ -34,10 +34,11 @@ namespace {
 class BadiCandidate final : public ::fcitx::CandidateWord {
 public:
     BadiCandidate(::fcitx::Text text,
-                  std::function<void(::fcitx::InputContext *)> selected)
+                  std::function<void(::fcitx::InputContext *)> selected,
+                  std::string label = {})
         : CandidateWord(std::move(text)),
           selected_(std::move(selected)) {
-        setCustomLabel(::fcitx::Text());
+        setCustomLabel(::fcitx::Text(label));
     }
 
     void select(::fcitx::InputContext *inputContext) const override {
@@ -270,6 +271,67 @@ void BadiAddon::showCandidate(Binding &binding, const Suggestion &suggestion) {
     panel.setAuxUp(::fcitx::Text(binding.ownedAuxiliary));
     panel.setCandidateList(std::move(list));
     binding.ownedCandidates = panel.candidateList();
+}
+
+void BadiAddon::onAlternativeList(AlternativeList list) {
+    auto *binding = bindingFor(list.coordinates.sessionId);
+    if (!binding || !safeToObserve(*binding) || binding->state.acceptancePending() ||
+        hasForeignImeUi(observePanel(*binding)) ||
+        !binding->state.showAlternativeList(list, transport_.nowMs())) {
+        return;
+    }
+    const auto &live = *binding->state.alternativeList();
+    showAlternativeCandidates(*binding, live);
+    // Hide the list when its lease ends, as for a suggestion.
+    const auto now = transport_.nowMs();
+    const auto suggestionId = live.suggestionId;
+    binding->expiryTimer = oneShot(
+        (live.expiresAtMs > now ? live.expiresAtMs - now : 0) * 1000,
+        [this, coordinates = live.coordinates, suggestionId] {
+            auto *current = bindingFor(coordinates.sessionId);
+            if (current && current->state.alternativeList() &&
+                current->state.alternativeList()->suggestionId == suggestionId) {
+                current->state.clearAlternativeList();
+                clearOwnedPanel(*current);
+            }
+        });
+    binding->inputContext->updateUserInterface(::fcitx::UserInterfaceComponent::InputPanel);
+    debug_.record("suggestion", binding->state.appId(), "alternative_list_shown");
+}
+
+void BadiAddon::showAlternativeCandidates(Binding &binding, const AlternativeList &list) {
+    auto candidates = std::make_unique<::fcitx::CommonCandidateList>();
+    candidates->setPageSize(static_cast<int>(list.words.size()));
+    candidates->setLayoutHint(::fcitx::CandidateLayoutHint::Horizontal);
+    for (std::size_t index = 0; index < list.words.size(); ++index) {
+        candidates->append(std::make_unique<BadiCandidate>(
+            ::fcitx::Text(list.words[index]),
+            [this, sessionId = list.coordinates.sessionId, word = list.words[index]](
+                ::fcitx::InputContext *selected) {
+                auto *current = bindingFor(sessionId);
+                if (current && current->inputContext == selected && selected->hasFocus())
+                    requestAlternativePick(*current, word, observePanel(*current));
+            },
+            std::to_string(index + 1) + "."));
+    }
+    candidates->setGlobalCursorIndex(-1);
+    auto &panel = binding.inputContext->inputPanel();
+    binding.ownedAuxiliary.clear();
+    panel.setAuxUp(::fcitx::Text(binding.ownedAuxiliary));
+    panel.setCandidateList(std::move(candidates));
+    binding.ownedCandidates = panel.candidateList();
+}
+
+bool BadiAddon::requestAlternativePick(Binding &binding, std::string word,
+                                       const PanelObservation &panel) {
+    const auto request = binding.state.requestAlternativePick(std::move(word), transport_.nowMs(), panel);
+    if (!request || !transport_.requestAlternativePick(*request)) {
+        clearOwnedPanel(binding);
+        return false;
+    }
+    binding.requestExplicit = true;
+    debug_.record("request", binding.state.appId(), "alternative_pick_requested");
+    return true;
 }
 
 void BadiAddon::onClear(const ClearNotice &clear) {

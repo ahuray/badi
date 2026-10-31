@@ -226,16 +226,20 @@ void runTypeThrough(const std::string &socket, const std::string &appId) {
     transport.disconnect();
 }
 
-// Ctrl+Shift+Space on a shown continuation: the broker replaces it with the
-// fixture's next continuation, which starts with another word, then cycles.
+// Ctrl+Shift+Space on a shown continuation: the broker lists the fixture's
+// other first words, a pick shows that word's continuation, then again.
 void runAlternatives(const std::string &socket, const std::string &appId) {
     ::fcitx::EventLoop loop;
     SessionState state;
     require(state.focusIn("550e8400-e29b-41d4-a716-446655440003", "alternatives-context",
                           appId, "0123456789abcdef0123456789abcdef"));
     Transport *wire = nullptr;
-    const std::array<std::string, 4> expected{" for your time", " so much", " again", " for your time"};
+    const std::array<std::string, 3> expected{" for your time", " again", " so much"};
+    const std::array<std::vector<std::string>, 2> lists{std::vector<std::string>{"so", "again"},
+                                                        std::vector<std::string>{"so"}};
+    const std::array<std::string, 2> picks{"again", "so"};
     std::size_t shown = 0;
+    std::size_t listed = 0;
     Transport transport(loop, WireCallbacks{
         .onReady = [&] {
             require(wire->openSession(state.coordinates(), targetOf(state)));
@@ -252,6 +256,12 @@ void runAlternatives(const std::string &socket, const std::string &appId) {
             const auto request = state.requestAlternative(wire->nowMs(), kPanel);
             require(request && wire->requestAlternative(*request));
         },
+        .onAlternativeList = [&](AlternativeList list) {
+            require(listed < lists.size() && list.words == lists[listed]);
+            require(state.showAlternativeList(list, wire->nowMs()));
+            const auto pick = state.requestAlternativePick(picks[listed++], wire->nowMs(), kPanel);
+            require(pick && wire->requestAlternativePick(*pick));
+        },
         .onClear = [](const ClearNotice &) {},
         .onCommitPrepare = [](const CommitPrepare &) { require(false); },
         .onDisconnected = [&] { loop.exit(); },
@@ -264,7 +274,7 @@ void runAlternatives(const std::string &socket, const std::string &appId) {
     deadline->setOneShot();
     require(transport.connect());
     loop.exec();
-    require(shown == expected.size());
+    require(shown == expected.size() && listed == lists.size());
     transport.disconnect();
 }
 
@@ -384,7 +394,7 @@ int main(int argc, char **argv) {
             return 0;
         } else if (argc == 4 && std::string(argv[1]) == "--alternatives") {
             runAlternatives(argv[2], argv[3]);
-            std::cout << "Native transport: alternatives replaced and cycled passed\n";
+            std::cout << "Native transport: alternatives listed and picked passed\n";
             return 0;
         } else if (argc == 4 && std::string(argv[1]) == "--type-through") {
             runTypeThrough(argv[2], argv[3]);

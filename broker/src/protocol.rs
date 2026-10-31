@@ -18,9 +18,11 @@ pub const MAX_AFTER_CHARS: usize = 128;
 pub const MAX_WINDOW_TEXT_CHARS: usize = 2048;
 pub const MAX_SUGGESTION_CHARS: usize = 64;
 pub const MAX_SUGGESTION_WORDS: usize = 8;
+/// The most alternative next words one list offers (ADR 0014).
+pub const MAX_ALTERNATIVE_LIST_WORDS: usize = 4;
 pub const MAX_ID_CHARS: usize = 128;
 pub const DEFAULT_SUGGESTION_TTL_MS: u64 = 600;
-pub const CAPABILITY_COUNT: usize = 14;
+pub const CAPABILITY_COUNT: usize = 15;
 /// The only app id the Writer extension target may claim.
 pub const LIBREOFFICE_WRITER_APP_ID: &str = "libreoffice-writer";
 
@@ -128,6 +130,10 @@ pub enum Capability {
     /// addon only, protocol v2.
     #[serde(rename = "selection_revision")]
     SelectionRevision,
+    /// Shows a numbered list of alternative next words and picks one
+    /// (ADR 0014): the Fcitx addon only, protocol v2.
+    #[serde(rename = "alternative_list")]
+    AlternativeList,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -287,6 +293,8 @@ pub enum MessageType {
     SuggestionShow,
     #[serde(rename = "suggestion.clear")]
     SuggestionClear,
+    #[serde(rename = "suggestion.list")]
+    SuggestionList,
     #[serde(rename = "control.request")]
     ControlRequest,
     #[serde(rename = "control.result")]
@@ -375,6 +383,7 @@ impl MessageType {
                 | Self::SuggestCancel
                 | Self::SuggestionShow
                 | Self::SuggestionClear
+                | Self::SuggestionList
                 | Self::CommitPrepare
                 | Self::CommitResult
                 | Self::RevisionRequest
@@ -575,6 +584,11 @@ impl HelloPayload {
                 self.adapter.kind,
                 AdapterKind::Fcitx | AdapterKind::Test | AdapterKind::Cli
             )
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        if self.capabilities.contains(&Capability::AlternativeList)
+            && !matches!(self.adapter.kind, AdapterKind::Fcitx | AdapterKind::Test)
         {
             return Err(ProtocolError::InvalidPayload);
         }
@@ -995,6 +1009,53 @@ pub struct SuggestionShowPayload {
     pub provider: ProviderKind,
 }
 
+/// Alternative next words for the shown suggestion, best first, offered
+/// as a numbered list by an adapter that negotiated `alternative_list`
+/// (ADR 0014). Picking one asks for its continuation; nothing is applied
+/// by the list itself.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestionListPayload {
+    pub fingerprint: String,
+    /// The shown suggestion these words are alternatives to.
+    pub suggestion_id: String,
+    pub words: Vec<String>,
+    pub ttl_ms: u64,
+    pub provider: ProviderKind,
+}
+
+impl SuggestionListPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fingerprint(&self.fingerprint)?;
+        let mut unique: Vec<String> = self.words.iter().map(|word| word.to_lowercase()).collect();
+        unique.sort_unstable();
+        unique.dedup();
+        if !valid_opaque_id(&self.suggestion_id)
+            || self.words.is_empty()
+            || self.words.len() > MAX_ALTERNATIVE_LIST_WORDS
+            || unique.len() != self.words.len()
+            || !self.words.iter().all(|word| valid_alternative_word(word))
+            || !(1..=120_000).contains(&self.ttl_ms)
+        {
+            return Err(ProtocolError::InvalidPayload);
+        }
+        Ok(())
+    }
+}
+
+/// One word an alternative list may offer or a pick may name: a single
+/// token of at most 32 scalars, no whitespace, control or format marks.
+#[must_use]
+pub fn valid_alternative_word(word: &str) -> bool {
+    let mut scalars = 0usize;
+    word.chars().all(|character| {
+        scalars += 1;
+        !character.is_whitespace()
+            && !character.is_control()
+            && !matches!(character, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{feff}')
+    }) && (1..=32).contains(&scalars)
+}
+
 /// The replacement route owns exactly one word of 2-32 characters with case
 /// (Unicode's Lowercase or Uppercase property) and, optionally, the one space
 /// just typed after it. Neither form can add, remove, or alter spacing. The
@@ -1058,6 +1119,10 @@ pub struct SessionControlRequestPayload {
     pub fingerprint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestion_id: Option<String>,
+    /// The listed word an `alternatives` pick asks to continue; present
+    /// only for that pick (ADR 0014).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub word: Option<String>,
 }
 
 impl SessionControlRequestPayload {
@@ -1070,6 +1135,9 @@ impl SessionControlRequestPayload {
                     .suggestion_id
                     .as_deref()
                     .is_none_or(|id| !valid_opaque_id(id)))
+            || self.word.as_deref().is_some_and(|word| {
+                self.action != ControlAction::Alternatives || !valid_alternative_word(word)
+            })
         {
             Err(ProtocolError::InvalidPayload)
         } else {

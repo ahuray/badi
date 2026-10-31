@@ -113,7 +113,7 @@ struct GenerationBinding {
     quiet_floor: Option<f64>,
     /// An alternative on request: what it must differ from, and what to
     /// show without one.
-    alternative: Option<(crate::provider::AlternativeAsk, String)>,
+    alternative: Option<super::alternatives::AlternativeBinding>,
 }
 
 /// A type-through remainder keeps its original suggestion's deadline and
@@ -259,7 +259,19 @@ impl Broker {
                 return Ok(None);
             }
             Some(Plan::Generate { ask, fallback }) => {
-                binding.alternative = Some((ask, fallback));
+                binding.alternative =
+                    Some(super::alternatives::AlternativeBinding::Generate { ask, fallback });
+            }
+            Some(Plan::List {
+                ask,
+                fallback,
+                suggestion_id,
+            }) => {
+                binding.alternative = Some(super::alternatives::AlternativeBinding::List {
+                    ask,
+                    fallback,
+                    suggestion_id,
+                });
             }
             None => {}
         }
@@ -416,11 +428,52 @@ impl Broker {
         });
         let provider_deadline = Instant::now() + self.inner.config.provider_timeout_for(trigger);
         let deadline = binding.deadline.min(provider_deadline);
-        let call = match &binding.alternative {
-            Some((ask, _)) => {
+        if let Some(super::alternatives::AlternativeBinding::List {
+            ask,
+            fallback,
+            suggestion_id,
+        }) = &binding.alternative
+        {
+            let (ask, fallback, suggestion_id) =
+                (ask.clone(), fallback.clone(), suggestion_id.clone());
+            let words =
                 self.inner
                     .provider
-                    .alternative(request, cancellation.clone(), trigger, ask.clone())
+                    .alternative_words(request, cancellation.clone(), trigger, ask);
+            let result = tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
+                    trace_model_done(&binding, started, "cancelled", None, None, true);
+                    return;
+                }
+                () = shutdown.cancelled() => {
+                    self.inner.metrics.record_no_suggestion(NoSuggestionReason::Stale);
+                    trace_model_done(&binding, started, "shutdown", None, None, true);
+                    return;
+                }
+                result = time::timeout_at(deadline.into(), words) => result,
+            };
+            match result {
+                Ok(Ok(words)) if !words.is_empty() => {
+                    trace_model_done(&binding, started, "list", None, None, false);
+                    self.show_list(binding, &cancellation, suggestion_id, words)
+                        .await;
+                }
+                _ => {
+                    trace_model_done(&binding, started, "no_list", None, None, false);
+                    self.show_fallback(binding, &cancellation, fallback).await;
+                }
+            }
+            return;
+        }
+        let call = match &binding.alternative {
+            Some(super::alternatives::AlternativeBinding::Generate { ask, .. }) => self
+                .inner
+                .provider
+                .alternative(request, cancellation.clone(), trigger, ask.clone()),
+            Some(super::alternatives::AlternativeBinding::List { .. }) => {
+                unreachable!("a list binding answered above")
             }
             None => self.inner.provider.propose_outcome(
                 request,
@@ -477,7 +530,11 @@ impl Broker {
             match self.check_provider_answer(&binding, cancellation, answer, provider_stats) {
                 Ok(proposal) => proposal,
                 Err(Withheld::Clear(reason)) => {
-                    if let Some((_, fallback)) = binding.alternative.clone() {
+                    if let Some(fallback) = binding
+                        .alternative
+                        .as_ref()
+                        .map(|binding| binding.fallback().to_owned())
+                    {
                         return self.show_fallback(binding, cancellation, fallback).await;
                     }
                     return self.clear_failed_generation(binding, reason).await;
@@ -544,11 +601,17 @@ impl Broker {
                 return Err(Withheld::Clear(ReasonCode::NoSuggestion));
             }
         }
-        // An alternative must start with a word not shown yet.
-        if let Some((ask, _)) = &binding.alternative {
-            if super::rejections::next_word(&raw.text)
-                .is_none_or(|word| ask.excluded.contains(&word))
-            {
+        // An alternative must start with a word not shown yet, or with the
+        // listed word the writer picked.
+        if let Some(super::alternatives::AlternativeBinding::Generate { ask, .. }) =
+            &binding.alternative
+        {
+            let word = super::rejections::next_word(&raw.text);
+            let fits = match &ask.desired {
+                Some(desired) => word.as_deref() == Some(desired.as_str()),
+                None => word.is_some_and(|word| !ask.excluded.contains(&word)),
+            };
+            if !fits {
                 metrics.record_no_suggestion(NoSuggestionReason::ModelAbstained);
                 return Err(Withheld::Clear(ReasonCode::NoSuggestion));
             }
@@ -593,6 +656,64 @@ impl Broker {
             aggregate_day: None,
         };
         self.show_if_current(state, binding, cancellation, proposal, Some(carried));
+    }
+
+    /// Offers the numbered list for the suggestion it alternatives to:
+    /// the words are live for the session until they expire, a pick
+    /// spends them, or the context moves on.
+    async fn show_list(
+        &self,
+        binding: GenerationBinding,
+        cancellation: &CancellationToken,
+        suggestion_id: String,
+        words: Vec<String>,
+    ) {
+        let metrics = &self.inner.metrics;
+        let mut state = self.inner.state.lock().await;
+        if Instant::now() >= binding.deadline {
+            drop(state);
+            self.record_generation_timeout(cancellation);
+            return self
+                .clear_failed_generation(binding, ReasonCode::ProviderTimeout)
+                .await;
+        }
+        let Some(session) = session_awaiting(&mut state, &binding, cancellation) else {
+            metrics.record_stale_result();
+            metrics.record_no_suggestion(NoSuggestionReason::Stale);
+            return;
+        };
+        let ttl = self.inner.config.suggestion_ttl_for(&session.authority);
+        let expires_at = Instant::now() + ttl;
+        let payload = crate::protocol::SuggestionListPayload {
+            fingerprint: binding.fingerprint.clone(),
+            suggestion_id: suggestion_id.clone(),
+            words: words.clone(),
+            ttl_ms: u64::try_from(ttl.as_millis()).unwrap_or(1),
+            provider: self.inner.provider_kind,
+        };
+        if payload.validate().is_err() {
+            metrics.record_provider_error();
+            metrics.record_no_suggestion(NoSuggestionReason::OutputRejected);
+            let _ = session.sink.send(BrokerEvent::generation_withdrawn(
+                binding.coordinates,
+                binding.fingerprint,
+                ReasonCode::InvalidOutput,
+                binding.request_id,
+            ));
+            return;
+        }
+        session.cancellation = None;
+        session.alternative_list = Some(super::alternatives::LiveList {
+            fingerprint: binding.fingerprint,
+            suggestion_id,
+            words,
+            expires_at,
+        });
+        let _ = session.sink.send(BrokerEvent::SuggestionList {
+            coordinates: binding.coordinates,
+            payload,
+            request_id: binding.request_id,
+        });
     }
 
     fn record_generation_timeout(&self, cancellation: &CancellationToken) {
@@ -731,6 +852,8 @@ impl Broker {
             aggregate_day,
             turned_down: false,
         });
+        // A new showing spends any list offered for the one it replaced.
+        session.alternative_list = None;
         session.visible = Some(VisibleSuggestion {
             payload,
             expires_at,

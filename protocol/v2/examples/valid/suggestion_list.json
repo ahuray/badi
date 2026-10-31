@@ -1,0 +1,16 @@
+{
+  "v": 2,
+  "id": "suggest-1",
+  "type": "suggestion.list",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 1,
+  "revision": 1,
+  "mono_ms": 52,
+  "payload": {
+    "fingerprint": "fingerprint_000000000001",
+    "suggestion_id": "s:1234",
+    "words": ["so", "again"],
+    "ttl_ms": 5000,
+    "provider": "phrase_v1"
+  }
+}

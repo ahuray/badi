@@ -158,12 +158,15 @@ publish need the user's go-ahead first; the rest can start at once.
    still Mac-only, defaults to Gemma 4 E2B, and offers these, which Badi does
    not yet:
    - global and per-app instructions, and personalized word choice (Badi's
-     style samples are stored but not yet read, step 5);
-   - a numbered list of alternative words for the next word (added
-     mid-2026; Badi's candidate panel could carry it). Badi shows
-     alternatives, and synonyms for a selected word or short phrase, one
-     at a time on Ctrl+Shift+Space
-     ([ADR 0013](docs/decisions/0013-synonyms-for-one-short-selection.md));
+     style samples are stored but not yet read, step 5). Instructions wait
+     for the larger-model work below: paired Lab probes found neither the
+     raw-continuation prompt nor an instructed variant follows them on the
+     current models;
+   - a numbered list of alternative words in the editor clients too. Fcitx
+     apps list up to four other first words on Ctrl+Shift+Space, picked by
+     digit or click ([ADR 0014](docs/decisions/0014-numbered-alternative-words.md));
+     Obsidian and Neovim still cycle one at a time, as synonyms do
+     everywhere ([ADR 0013](docs/decisions/0013-synonyms-for-one-short-selection.md));
    - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
      4B–30B): a llama.cpp Vulkan or CUDA runtime for machines with a GPU,
      measured with the [bench](evaluation/llm-bench/README.md) and the Lab.

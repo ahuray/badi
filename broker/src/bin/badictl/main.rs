@@ -661,6 +661,7 @@ fn addressed_control(
             action,
             fingerprint: active.fingerprint,
             suggestion_id: active.suggestion_id,
+            word: None,
         },
     )?)
 }

@@ -693,7 +693,15 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   again is not counted twice. Corrections and mid-line continuations have
   none (`engine/alternatives.rs`). The suggestion an alternative replaces is
   cleared first; the shared editor client expects that clear and keeps its
-  preview until the answer arrives.
+  preview until the answer arrives. A session that negotiated
+  `alternative_list` instead gets those candidates' finished first words
+  (up to four) in one `suggestion.list`, from one provider call; a further
+  `alternatives` control naming one listed `word` generates that word's
+  continuation, shown and bound as usual, and spends the list. The list
+  names the suggestion it replaced and lives for the suggestion lifetime;
+  an unlisted or stale pick is answered `stale`, and a pick the model
+  cannot continue falls back to the last shown continuation
+  ([ADR 0014](../docs/decisions/0014-numbered-alternative-words.md)).
 - **Quiet apps.** Each app or site's last seven days of usage counts set
   its quiet level, read again at most every ten minutes: with at least 50
   suggestions shown and fewer than 8% accepted, an automatic suggestion
